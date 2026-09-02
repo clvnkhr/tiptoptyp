@@ -31,6 +31,7 @@ const EXIT_TIMEOUT: Duration = Duration::from_millis(200);
 const MAX_HEADER_LINE_BYTES: usize = 8 * 1024;
 const MAX_HEADER_BYTES: usize = 32 * 1024;
 const MAX_MESSAGE_BYTES: usize = 32 * 1024 * 1024;
+const DEFAULT_PREVIEW_TASK_ID: &str = "default_preview";
 
 pub type Result<T> = std::result::Result<T, TinymistError>;
 
@@ -122,7 +123,12 @@ impl Default for PreviewOptions {
         Self {
             mode: PreviewMode::Document,
             invert_colors: InvertColors::Auto,
-            partial_rendering: true,
+            // Tinymist labels this optimisation experimental. In long
+            // documents its visible-page cache can fail to refill after large
+            // scroll/zoom jumps, leaving a blank viewer. A desktop editor can
+            // afford the complete document representation and prioritises
+            // deterministic navigation.
+            partial_rendering: false,
         }
     }
 }
@@ -135,9 +141,7 @@ impl PreviewOptions {
             format!("--preview-mode={}", self.mode.as_arg()),
             format!("--invert-colors={}", self.invert_colors.as_arg()),
         ];
-        if self.partial_rendering {
-            arguments.push("--partial-rendering=true".to_owned());
-        }
+        arguments.push(format!("--partial-rendering={}", self.partial_rendering));
         // This is a native application: opening the system browser would be a
         // surprising side effect and could expose a stale preview tab.
         arguments.push("--no-open".to_owned());
@@ -311,7 +315,7 @@ pub enum TinymistEvent {
         level: Option<u32>,
         message: String,
     },
-    /// A notification not interpreted by this version of mytypst.
+    /// A notification not interpreted by this version of tiptoptyp.
     Notification {
         generation: Generation,
         method: String,
@@ -429,6 +433,28 @@ impl TinymistSidecar {
         )
     }
 
+    /// Reveals one source position in the bundled interactive preview.
+    ///
+    /// Tinymist's current preview resolver consumes a zero-based Unicode
+    /// scalar column here (despite the LSP transport otherwise using UTF-16).
+    pub fn scroll_preview(
+        &self,
+        generation: Generation,
+        path: impl Into<PathBuf>,
+        line: u32,
+        character: u32,
+    ) -> Result<()> {
+        self.send_for_generation(
+            generation,
+            WorkerCommand::ScrollPreview {
+                generation,
+                path: path.into(),
+                line,
+                character,
+            },
+        )
+    }
+
     pub fn stop_workspace(&self, generation: Generation) -> Result<()> {
         self.send_for_generation(generation, WorkerCommand::Stop { generation })
     }
@@ -510,6 +536,12 @@ enum WorkerCommand {
         generation: Generation,
         uri: String,
     },
+    ScrollPreview {
+        generation: Generation,
+        path: PathBuf,
+        line: u32,
+        character: u32,
+    },
     Stop {
         generation: Generation,
     },
@@ -534,6 +566,7 @@ impl SessionPhase {
 enum PendingRequest {
     Initialize,
     StartPreview,
+    ScrollPreview,
 }
 
 enum Incoming {
@@ -645,7 +678,7 @@ impl Session {
         let params = json!({
             "processId": std::process::id(),
             "clientInfo": {
-                "name": "mytypst",
+                "name": "tiptoptyp",
                 "version": env!("CARGO_PKG_VERSION"),
             },
             "rootPath": self.root_path_for_legacy_servers(),
@@ -1111,6 +1144,44 @@ fn worker_loop(
                     );
                 }
             }
+            WorkerCommand::ScrollPreview {
+                generation,
+                path,
+                line,
+                character,
+            } => {
+                let Some(active) = matching_session(session.as_mut(), generation) else {
+                    continue;
+                };
+                if active.phase != SessionPhase::Running {
+                    emit(
+                        &events,
+                        &context,
+                        &current_generation,
+                        TinymistEvent::Error {
+                            generation,
+                            stage: "navigation",
+                            message: "the interactive preview is not ready yet".to_owned(),
+                            fatal: false,
+                        },
+                    );
+                    continue;
+                }
+                if let Err(error) = active.send_request(
+                    "workspace/executeCommand",
+                    scroll_preview_params(&path, line, character),
+                    PendingRequest::ScrollPreview,
+                ) {
+                    fail_active_session(
+                        &mut session,
+                        "write",
+                        error,
+                        &events,
+                        &context,
+                        &current_generation,
+                    );
+                }
+            }
             WorkerCommand::Stop { generation } => {
                 if session.as_ref().map(|active| active.generation) == Some(generation) {
                     let active = session.take().expect("matching session disappeared");
@@ -1263,6 +1334,20 @@ fn handle_rpc_message(
                 );
                 return Ok(());
             }
+            PendingRequest::ScrollPreview => {
+                emit(
+                    events,
+                    context,
+                    current_generation,
+                    TinymistEvent::Error {
+                        generation: session.generation,
+                        stage: "navigation",
+                        message,
+                        fatal: false,
+                    },
+                );
+                return Ok(());
+            }
         }
     }
 
@@ -1335,8 +1420,24 @@ fn handle_rpc_message(
                 }
             }
         }
+        PendingRequest::ScrollPreview => {}
     }
     Ok(())
+}
+
+fn scroll_preview_params(path: &Path, line: u32, character: u32) -> Value {
+    json!({
+        "command": "tinymist.scrollPreview",
+        "arguments": [
+            DEFAULT_PREVIEW_TASK_ID,
+            {
+                "event": "panelScrollTo",
+                "filepath": path.to_string_lossy(),
+                "line": line,
+                "character": character,
+            }
+        ],
+    })
 }
 
 fn parse_port(value: &Value) -> Option<u16> {
@@ -1434,7 +1535,7 @@ fn handle_server_request(
             id,
             json!({
                 "applied": false,
-                "failureReason": "mytypst does not support server-initiated workspace edits",
+                "failureReason": "tiptoptyp does not support server-initiated workspace edits",
             }),
         ),
         _ => session.reply_error(id, -32601, format!("unsupported server request {method}")),
@@ -1872,9 +1973,20 @@ mod tests {
         assert!(args.contains(&"--control-plane-host=127.0.0.1:0"));
         assert!(args.contains(&"--preview-mode=document"));
         assert!(args.contains(&"--invert-colors=auto"));
-        assert!(args.contains(&"--partial-rendering=true"));
+        assert!(args.contains(&"--partial-rendering=false"));
         assert!(args.contains(&"--no-open"));
         assert_eq!(settings["customizedShowDocument"], false);
+    }
+
+    #[test]
+    fn preview_scroll_uses_tinymists_default_task_and_source_location_schema() {
+        let params = scroll_preview_params(Path::new("/tmp/chapter.typ"), 7, 11);
+        assert_eq!(params["command"], "tinymist.scrollPreview");
+        assert_eq!(params["arguments"][0], DEFAULT_PREVIEW_TASK_ID);
+        assert_eq!(params["arguments"][1]["event"], "panelScrollTo");
+        assert_eq!(params["arguments"][1]["filepath"], "/tmp/chapter.typ");
+        assert_eq!(params["arguments"][1]["line"], 7);
+        assert_eq!(params["arguments"][1]["character"], 11);
     }
 
     #[test]

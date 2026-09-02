@@ -1,6 +1,6 @@
-# mytypst
+# tiptoptyp
 
-`mytypst` is a native Typst editor written in Rust. It keeps a long-running
+`tiptoptyp` is a native Typst editor written in Rust. It keeps a long-running
 `typst watch` process for canonical PDF builds and, when Tinymist is installed,
 embeds Tinymist's interactive vector preview.
 
@@ -9,9 +9,12 @@ embeds Tinymist's interactive vector preview.
 - Official `typst-syntax` parsing and incremental syntax highlighting
 - Persistent `typst watch` compilation with a 60 ms editor debounce
 - Tinymist SVG preview on macOS and Windows, including hover feedback and
-  preview-to-source navigation
+  bidirectional preview/source navigation
 - Continuous multi-page native fallback with trackpad pinch zoom,
-  pointer-anchored scaling, visible page edges, and dark-page rendering
+  pointer-anchored scaling, visible page edges, clickable PDF links, and
+  dark-page rendering
+- Editable UTF-8 text files with Syntect highlighting, direct image previews,
+  and direct native PDF viewing
 - Inline error/warning line decoration, virtual diagnostic text, and full
   hover tooltips
 - Independently toggled Explorer and Problems panels
@@ -40,7 +43,8 @@ and
 
 - Rust 1.95 or newer
 - `curl` and `tar` when fetching the pinned sidecars for a development build
-- Poppler's `pdftoppm` on `PATH` for the native PDF recovery viewer
+- Poppler's `pdftoppm` on `PATH` for native PDF rendering; `pdftohtml` from the
+  same package enables clickable link hotspots
 
 Packaged releases include Typst 0.15.1 and Tinymist 0.15.2. For a source-tree
 run, fetch those exact, hash-verified binaries once:
@@ -51,9 +55,10 @@ cargo run --manifest-path xtask/Cargo.toml -- fetch-sidecars
 
 The downloaded archives, staged executables, licenses, and provenance records
 are generated under `toolchain/` and ignored by Git. If they are absent during
-development, mytypst tries `MYTYPST_TYPST` / `MYTYPST_TINYMIST` and then
-`PATH`; every such fallback is labelled in the fixed bottom status bar and
-Settings.
+development, tiptoptyp checks `PATH`. For backward compatibility it still
+accepts the legacy `MYTYPST_*` variable names, so existing automation keeps
+working; `MYTYPST_TYPST` / `MYTYPST_TINYMIST` are checked before `PATH`. Every
+fallback is labelled in the fixed bottom status bar and Settings.
 
 Each binary can instead be set to **Custom path** in Settings. This persisted
 choice has priority over the bundled sidecar. An invalid custom path falls back
@@ -103,7 +108,7 @@ cargo run --manifest-path xtask/Cargo.toml -- verify-package
 
 The package hook downloads and verifies the pinned platform archives, checks
 both reported versions, performs the release build, and installs Typst and
-Tinymist as external sidecars beside `mytypst`. Typst's `LICENSE`/`NOTICE`,
+Tinymist as external sidecars beside `tiptoptyp`. Typst's `LICENSE`/`NOTICE`,
 Tinymist's `LICENSE`, and per-artifact provenance are included as resources.
 The committed target/URL/hash matrix is
 [`toolchain/manifest.tsv`](toolchain/manifest.tsv).
@@ -143,24 +148,25 @@ shadow beside the source preserves relative imports; the nearest ancestor with
 `typst.toml` or `.git` is used as the project root. Successful builds provide
 the exact PDF bytes used by Export PDF.
 
-Tinymist runs as a separate LSP sidecar. mytypst sends `didOpen` and full-buffer
+Tinymist runs as a separate LSP sidecar. tiptoptyp sends `didOpen` and full-buffer
 `didChange` notifications, starts Tinymist's documented default preview, and
 embeds the localhost frontend it returns. Tinymist therefore owns incremental
-SVG rendering, source spans, hover behavior, and click mapping. mytypst handles
+SVG rendering, source spans, hover behavior, and click mapping. tiptoptyp handles
 `window/showDocument` to reveal and select the corresponding native editor
 range.
 
 The fallback is intentionally a recovery viewer. egui has no built-in PDF
-renderer, so Poppler rasterizes the watched PDF at 144 DPI. It cannot recover
-Typst source spans, but it does provide continuous pages, stable scroll state,
-pinch zoom, explicit boundaries, and a preview-only dark transform. Exported
-PDF bytes are never rasterized or colour-modified.
+renderer, so Poppler rasterizes the watched PDF at 144 DPI and extracts link
+rectangles for native interaction. It cannot recover Typst source spans, but it
+does provide continuous pages, stable scroll state, pinch zoom, explicit
+boundaries, and a preview-only dark transform. Exported PDF bytes are never
+rasterized or colour-modified.
 
 The shadow source and generated preview directories are removed when their
-session ends. A forced process termination can leave a
-`mytypst-preview-*.typ` recovery artifact beside the document; it is ignored by
-the Explorer and Git and is safe to inspect or remove. The real `.typ` file is
-only changed by Save or Save As.
+session ends. A forced process termination can leave temporary recovery
+artifacts beside the document; they are ignored by the Explorer and Git and are
+safe to inspect or remove. The real `.typ` file is only changed by Save or Save
+As.
 
 ## Development
 

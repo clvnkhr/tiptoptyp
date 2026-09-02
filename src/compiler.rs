@@ -13,6 +13,10 @@ use std::{
 };
 
 use eframe::egui;
+use quick_xml::{
+    Decoder, Reader, XmlVersion,
+    events::{BytesStart, Event},
+};
 
 /// Resolution used only by the native recovery viewer. The primary Tinymist
 /// viewer is vector-based. 144 DPI keeps the fallback crisp at 100% on a 2×
@@ -35,6 +39,14 @@ pub struct CompileRequest {
 pub struct PreviewPage {
     pub size: [usize; 2],
     pub rgba: Vec<u8>,
+    pub links: Vec<PreviewLink>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreviewLink {
+    /// Link rectangle normalized to the page's width and height.
+    pub rect: [f32; 4],
+    pub target: String,
 }
 
 #[derive(Debug)]
@@ -574,12 +586,29 @@ fn render_pdf(
     // bytes are guaranteed to describe the exact same build.
     let pdf = fs::read(pdf_path)
         .map_err(|error| format!("Could not snapshot the compiled PDF: {error}"))?;
+    let pages = rasterize_pdf(&pdf, || {
+        shutdown.load(Ordering::Acquire) || latest_revision.load(Ordering::Acquire) != revision
+    })?;
+    Ok(CompiledDocument {
+        pdf,
+        pages,
+        diagnostics,
+    })
+}
+
+/// Rasterize already-snapshotted PDF bytes for either a Typst build or a PDF
+/// opened directly from the project tree. The caller owns cancellation, which
+/// lets the compiler and the asset loader discard obsolete long documents.
+pub(crate) fn rasterize_pdf(
+    pdf: &[u8],
+    mut cancelled: impl FnMut() -> bool,
+) -> Result<Vec<PreviewPage>, String> {
     let render_dir = tempfile::Builder::new()
         .prefix("mytypst-pages-")
         .tempdir()
         .map_err(|error| format!("Could not create a page-rendering directory: {error}"))?;
     let snapshot_path = render_dir.path().join("snapshot.pdf");
-    fs::write(&snapshot_path, &pdf)
+    fs::write(&snapshot_path, pdf)
         .map_err(|error| format!("Could not stage the PDF preview: {error}"))?;
     let page_prefix = render_dir.path().join("page");
     let mut render_child = Command::new("pdftoppm")
@@ -615,9 +644,7 @@ fn render_pdf(
     };
 
     let render_status = loop {
-        let cancelled =
-            shutdown.load(Ordering::Acquire) || latest_revision.load(Ordering::Acquire) != revision;
-        if cancelled {
+        if cancelled() {
             let _ = render_child.kill();
             let _ = render_child.wait();
             let _ = stderr_reader.join();
@@ -658,9 +685,12 @@ fn render_pdf(
         return Err("The PDF renderer produced no preview pages".to_owned());
     }
 
+    // Link extraction is best-effort: raster rendering remains useful when an
+    // older/minimal Poppler installation lacks `pdftohtml`.
+    let mut page_links = extract_pdf_links(&snapshot_path, render_dir.path(), &mut cancelled);
     let mut pages = Vec::with_capacity(page_paths.len());
-    for page_path in page_paths {
-        if shutdown.load(Ordering::Acquire) || latest_revision.load(Ordering::Acquire) != revision {
+    for (index, page_path) in page_paths.into_iter().enumerate() {
+        if cancelled() {
             return Err("Preview decoding was superseded by a newer edit".to_owned());
         }
         let encoded = fs::read(&page_path)
@@ -672,14 +702,190 @@ fn render_pdf(
         pages.push(PreviewPage {
             size: [width as usize, height as usize],
             rgba: decoded.into_raw(),
+            links: page_links
+                .get_mut(index)
+                .map(std::mem::take)
+                .unwrap_or_default(),
         });
     }
 
-    Ok(CompiledDocument {
-        pdf,
-        pages,
-        diagnostics,
-    })
+    Ok(pages)
+}
+
+fn extract_pdf_links(
+    snapshot_path: &Path,
+    render_dir: &Path,
+    cancelled: &mut impl FnMut() -> bool,
+) -> Vec<Vec<PreviewLink>> {
+    let xml_path = render_dir.join("links.xml");
+    let mut child = match Command::new("pdftohtml")
+        .arg("-xml")
+        .arg("-hidden")
+        .arg("-i")
+        .arg("-q")
+        .arg("-zoom")
+        .arg("1")
+        .arg(snapshot_path)
+        .arg(&xml_path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return Vec::new(),
+    };
+
+    let status = loop {
+        if cancelled() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Vec::new();
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => thread::sleep(Duration::from_millis(10)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Vec::new();
+            }
+        }
+    };
+    if !status.success() {
+        return Vec::new();
+    }
+
+    let Ok(xml) = fs::read_to_string(&xml_path) else {
+        return Vec::new();
+    };
+    let generated_stem = xml_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("links");
+    parse_pdf_links(&xml, generated_stem).unwrap_or_default()
+}
+
+fn parse_pdf_links(xml: &str, generated_stem: &str) -> Result<Vec<Vec<PreviewLink>>, String> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    let mut pages = Vec::<Vec<PreviewLink>>::new();
+    let mut current_page = None;
+    let mut page_size = [0.0_f32; 2];
+    let mut text_rect = None;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(element)) => match element.name().as_ref() {
+                b"page" => {
+                    let number = xml_attr(&element, b"number", reader.decoder())
+                        .and_then(|value| value.parse::<usize>().ok())
+                        .unwrap_or(pages.len() + 1)
+                        .saturating_sub(1);
+                    let width = xml_attr(&element, b"width", reader.decoder())
+                        .and_then(|value| value.parse::<f32>().ok())
+                        .unwrap_or(0.0);
+                    let height = xml_attr(&element, b"height", reader.decoder())
+                        .and_then(|value| value.parse::<f32>().ok())
+                        .unwrap_or(0.0);
+                    if pages.len() <= number {
+                        pages.resize_with(number + 1, Vec::new);
+                    }
+                    current_page = Some(number);
+                    page_size = [width, height];
+                }
+                b"text" => {
+                    let left = xml_f32_attr(&element, b"left", reader.decoder());
+                    let top = xml_f32_attr(&element, b"top", reader.decoder());
+                    let width = xml_f32_attr(&element, b"width", reader.decoder());
+                    let height = xml_f32_attr(&element, b"height", reader.decoder());
+                    text_rect = match (left, top, width, height) {
+                        (Some(left), Some(top), Some(width), Some(height))
+                            if page_size[0] > 0.0
+                                && page_size[1] > 0.0
+                                && width > 0.0
+                                && height > 0.0 =>
+                        {
+                            Some([
+                                (left / page_size[0]).clamp(0.0, 1.0),
+                                (top / page_size[1]).clamp(0.0, 1.0),
+                                ((left + width) / page_size[0]).clamp(0.0, 1.0),
+                                ((top + height) / page_size[1]).clamp(0.0, 1.0),
+                            ])
+                        }
+                        _ => None,
+                    };
+                }
+                b"a" => {
+                    if let (Some(page), Some(rect), Some(target)) = (
+                        current_page,
+                        text_rect,
+                        xml_attr(&element, b"href", reader.decoder()),
+                    ) {
+                        pages[page].push(PreviewLink {
+                            rect,
+                            target: normalize_pdftohtml_target(&target, generated_stem),
+                        });
+                    }
+                }
+                _ => {}
+            },
+            Ok(Event::End(element)) => match element.name().as_ref() {
+                b"text" => text_rect = None,
+                b"page" => {
+                    current_page = None;
+                    page_size = [0.0; 2];
+                }
+                _ => {}
+            },
+            Ok(Event::Empty(element)) if element.name().as_ref() == b"page" => {
+                let number = xml_attr(&element, b"number", reader.decoder())
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(pages.len() + 1)
+                    .saturating_sub(1);
+                if pages.len() <= number {
+                    pages.resize_with(number + 1, Vec::new);
+                }
+            }
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(error) => return Err(format!("Could not parse PDF links: {error}")),
+        }
+    }
+    Ok(pages)
+}
+
+fn xml_attr(element: &BytesStart<'_>, name: &[u8], decoder: Decoder) -> Option<String> {
+    element
+        .attributes()
+        .flatten()
+        .find(|attribute| attribute.key.as_ref() == name)
+        .and_then(|attribute| {
+            attribute
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)
+                .ok()
+        })
+        .map(|value| value.into_owned())
+}
+
+fn xml_f32_attr(element: &BytesStart<'_>, name: &[u8], decoder: Decoder) -> Option<f32> {
+    xml_attr(element, name, decoder)?.parse().ok()
+}
+
+fn normalize_pdftohtml_target(target: &str, generated_stem: &str) -> String {
+    let Some((path, fragment)) = target.rsplit_once('#') else {
+        return target.to_owned();
+    };
+    let generated_internal = Path::new(path)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("html"))
+        && Path::new(path)
+            .file_stem()
+            .is_some_and(|stem| stem == generated_stem);
+    if generated_internal && fragment.parse::<usize>().is_ok() {
+        format!("#page={fragment}")
+    } else {
+        target.to_owned()
+    }
 }
 
 fn write_shadow(shadow: &Path, source: &str) -> Result<(), String> {
@@ -783,7 +989,7 @@ fn send_result(results: &Sender<CompileResult>, context: &egui::Context, result:
 #[cfg(test)]
 mod tests {
     use super::{
-        CompileRequest, CompileResult, Compiler, WatchLine, classify_watch_line,
+        CompileRequest, CompileResult, Compiler, WatchLine, classify_watch_line, parse_pdf_links,
         preview_page_number, watch_context_matches,
     };
     use std::{
@@ -796,6 +1002,25 @@ mod tests {
         assert_eq!(preview_page_number(Path::new("page-2.png")), 2);
         assert_eq!(preview_page_number(Path::new("page-11.png")), 11);
         assert_eq!(preview_page_number(Path::new("preview.pdf")), u32::MAX);
+    }
+
+    #[test]
+    fn poppler_link_rectangles_are_normalized_and_internal_pages_are_preserved() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<pdf2xml>
+  <page number="1" top="0" left="0" height="200" width="100">
+    <text top="40" left="10" width="30" height="20"><a href="https://example.com/?a=1&amp;b=2">External</a></text>
+    <text top="80" left="10" width="30" height="20"><a href="links.html#2">Internal</a></text>
+  </page>
+  <page number="2" top="0" left="0" height="200" width="100" />
+</pdf2xml>"#;
+        let pages = parse_pdf_links(xml, "links").unwrap();
+
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0][0].rect, [0.1, 0.2, 0.4, 0.3]);
+        assert_eq!(pages[0][0].target, "https://example.com/?a=1&b=2");
+        assert_eq!(pages[0][1].target, "#page=2");
+        assert!(pages[1].is_empty());
     }
 
     #[test]

@@ -2,7 +2,7 @@
 #set text(size: 11pt)
 #set heading(numbering: "1.")
 
-= Welcome to mytypst
+= Welcome to tiptoptyp
 
 Edit this document on the left. The PDF preview updates as you type.
 

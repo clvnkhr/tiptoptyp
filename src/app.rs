@@ -1,27 +1,37 @@
 use std::{
     collections::{BTreeMap, hash_map::DefaultHasher},
     fs,
+    future::Future,
     hash::{Hash, Hasher},
     io::Write,
     ops::Range,
     path::{Path, PathBuf},
+    pin::Pin,
+    sync::{Arc, mpsc},
+    task::{Context as TaskContext, Poll, Wake, Waker},
     time::{Duration, Instant},
 };
 
 use eframe::egui::{
     self, Align, Color32, ColorImage, FontFamily, FontId, KeyboardShortcut, Layout, Modifiers,
     Pos2, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Vec2,
-    text::{CCursor, CCursorRange},
+    text::{CCursor, CCursorRange, LayoutJob, TextFormat},
 };
 use egui_ltreeview::{Action as TreeAction, TreeView, TreeViewBuilder};
-use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
+use rfd::{
+    AsyncFileDialog, FileDialog, FileHandle, MessageButtons, MessageDialog, MessageDialogResult,
+    MessageLevel,
+};
 
 use crate::{
-    compiler::{CompileRequest, Compiler, PreviewPage},
+    asset::{AssetLoader, LoadedAsset},
+    compiler::{CompileRequest, Compiler, PreviewLink, PreviewPage},
     diagnostics::{
         Diagnostic, DiagnosticLocation, DiagnosticSeverity, DiagnosticSource,
         parse_typst_short_output,
     },
+    document::DocumentKind,
+    generic_highlight::GenericSyntaxHighlighter,
     highlight::SyntaxHighlighter,
     preview::{
         PAGE_MARGIN, dark_preview_rgba, page_stack_geometry, stack_height, visible_page,
@@ -29,7 +39,8 @@ use crate::{
     },
     search::{SearchState, find, find_all},
     settings::{
-        AppSettings, DocumentTheme, InterfaceTheme, PreviewPreference, ToolMode, ToolPreference,
+        AppSettings, DocumentTheme, InterfaceTheme, PreviewPreference, SourcePreviewTrigger,
+        ToolMode, ToolPreference,
     },
     tinymist::{
         DiagnosticSeverity as TinymistDiagnosticSeverity, Generation, InvertColors, LspPosition,
@@ -41,18 +52,19 @@ use crate::{
 
 const COMPILE_DEBOUNCE: Duration = Duration::from_millis(60);
 const WORKSPACE_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
-const TOOLBAR_HEIGHT: f32 = 44.0;
-const STATUS_HEIGHT: f32 = 27.0;
-const PREVIEW_HEADER_HEIGHT: f32 = 43.0;
+const TOOLBAR_HEIGHT: f32 = 30.0;
+const STATUS_HEIGHT: f32 = 24.0;
+const PANEL_HEADER_HEIGHT: f32 = 28.0;
 const SETTINGS_PANEL_WIDTH: f32 = 390.0;
 const MIN_PREVIEW_ZOOM: f32 = 0.2;
 const MAX_PREVIEW_ZOOM: f32 = 6.0;
+const EDITOR_ATTENTION_DURATION: Duration = Duration::from_millis(900);
 
 const DEFAULT_SOURCE: &str = r##"#set page(paper: "a4", margin: 2.2cm)
 #set text(size: 11pt)
 #set heading(numbering: "1.")
 
-= Welcome to mytypst
+= Welcome to tiptoptyp
 
 Edit this document on the left. The PDF preview updates as you type.
 
@@ -145,9 +157,25 @@ impl ServiceState {
 }
 
 struct PreviewTexture {
+    /// Logical layout size. Images may deliberately differ from PDF raster
+    /// pixels so one image pixel maps to one UI point at 100%.
     size: [usize; 2],
+    raster_size: [usize; 2],
     rgba: Vec<u8>,
+    links: Vec<PreviewLink>,
     texture: TextureHandle,
+}
+
+struct EguiFutureWake(egui::Context);
+
+impl Wake for EguiFutureWake {
+    fn wake(self: Arc<Self>) {
+        self.0.request_repaint();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.request_repaint();
+    }
 }
 
 #[derive(Clone)]
@@ -158,15 +186,31 @@ struct LineDiagnostic {
     detail: String,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct EditorAttention {
+    char_index: usize,
+    started: Instant,
+}
+
+struct PendingExport {
+    path: PathBuf,
+    revision: u64,
+}
+
 pub struct EditorApp {
     source: String,
     path: Option<PathBuf>,
     revision: u64,
     saved_revision: u64,
     disk_fingerprint: Option<u64>,
+    document_kind: DocumentKind,
     highlighter: SyntaxHighlighter,
+    generic_highlighter: GenericSyntaxHighlighter,
 
     compiler: Compiler,
+    asset_loader: AssetLoader,
+    asset_token: u64,
+    pending_asset_page: Option<usize>,
     compile_deadline: Option<Instant>,
     status: PreviewStatus,
     raw_diagnostics: String,
@@ -205,8 +249,10 @@ pub struct EditorApp {
     search: SearchState,
     focus_find: bool,
     pending_editor_selection: Option<Range<usize>>,
+    editor_attention: Option<EditorAttention>,
 
-    pending_export: Option<PathBuf>,
+    pending_export: Option<PendingExport>,
+    pending_export_dialog: Option<Pin<Box<dyn Future<Output = Option<FileHandle>>>>>,
     notice: Option<Notice>,
     last_title: String,
     allow_close: bool,
@@ -223,6 +269,10 @@ pub struct EditorApp {
     webview: Option<wry::WebView>,
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     webview_url: Option<String>,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    web_link_sender: mpsc::Sender<String>,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    web_link_receiver: mpsc::Receiver<String>,
 }
 
 impl EditorApp {
@@ -241,6 +291,8 @@ impl EditorApp {
             .set_theme(settings.interface_theme.egui_preference());
         let preview_dark =
             settings.document_theme.resolve(context.egui_ctx.theme()) == egui::Theme::Dark;
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        let (web_link_sender, web_link_receiver) = mpsc::channel();
 
         let mut app = Self {
             source: DEFAULT_SOURCE.to_owned(),
@@ -248,8 +300,13 @@ impl EditorApp {
             revision: 0,
             saved_revision: 0,
             disk_fingerprint: None,
+            document_kind: DocumentKind::Typst,
             highlighter: SyntaxHighlighter::default(),
+            generic_highlighter: GenericSyntaxHighlighter::default(),
             compiler: Compiler::new(context.egui_ctx.clone()),
+            asset_loader: AssetLoader::new(context.egui_ctx.clone()),
+            asset_token: 0,
+            pending_asset_page: None,
             compile_deadline: Some(Instant::now()),
             status: PreviewStatus::Waiting,
             raw_diagnostics: String::new(),
@@ -286,7 +343,9 @@ impl EditorApp {
             search: SearchState::default(),
             focus_find: false,
             pending_editor_selection: None,
+            editor_attention: None,
             pending_export: None,
+            pending_export_dialog: None,
             notice: None,
             last_title: String::new(),
             allow_close: false,
@@ -303,6 +362,10 @@ impl EditorApp {
             webview: None,
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             webview_url: None,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            web_link_sender,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            web_link_receiver,
         };
 
         if let Some(path) = initial_path {
@@ -314,7 +377,7 @@ impl EditorApp {
     }
 
     fn is_dirty(&self) -> bool {
-        self.revision != self.saved_revision
+        self.document_kind.is_editable() && self.revision != self.saved_revision
     }
 
     fn document_name(&self) -> String {
@@ -327,7 +390,7 @@ impl EditorApp {
 
     fn title(&self) -> String {
         let dirty = if self.is_dirty() { "*" } else { "" };
-        format!("{}{dirty} — mytypst", self.document_name())
+        format!("{}{dirty} — tiptoptyp", self.document_name())
     }
 
     fn update_title(&mut self, context: &egui::Context) {
@@ -354,14 +417,21 @@ impl EditorApp {
 
     fn mark_edited(&mut self) {
         self.revision = self.revision.wrapping_add(1);
-        self.compile_deadline = Some(Instant::now() + COMPILE_DEBOUNCE);
-        self.status = PreviewStatus::Waiting;
         self.notice = None;
-        self.sync_tinymist_change();
+        if self.document_kind.is_typst() {
+            self.compile_deadline = Some(Instant::now() + COMPILE_DEBOUNCE);
+            self.status = PreviewStatus::Waiting;
+            self.sync_tinymist_change();
+        } else {
+            self.compile_deadline = None;
+        }
     }
 
     fn request_compile(&mut self) {
         self.compile_deadline = None;
+        if !self.document_kind.is_typst() {
+            return;
+        }
         let source_dir = self
             .current_directory()
             .unwrap_or_else(|| PathBuf::from("."));
@@ -394,7 +464,7 @@ impl EditorApp {
 
     fn receive_compile_results(&mut self, context: &egui::Context) {
         while let Some(result) = self.compiler.try_recv() {
-            if result.revision != self.revision {
+            if !self.document_kind.is_typst() || result.revision != self.revision {
                 continue;
             }
 
@@ -434,6 +504,62 @@ impl EditorApp {
         }
     }
 
+    fn receive_asset_results(&mut self, context: &egui::Context) {
+        while let Some(result) = self.asset_loader.try_recv() {
+            if result.token != self.asset_token || !self.document_kind.preview_only() {
+                continue;
+            }
+            match result.output {
+                Ok(LoadedAsset::Image(page)) => {
+                    let image_size = page.size;
+                    let mut texture = make_preview_texture(context, self.revision, 0, page, false);
+                    // Native PDF pages are 144-DPI rasters interpreted in
+                    // 72-point coordinates. Doubling the image's logical
+                    // raster size cancels that conversion and makes 100% mean
+                    // one source image pixel per UI point.
+                    texture.size = [
+                        image_size[0].saturating_mul(2),
+                        image_size[1].saturating_mul(2),
+                    ];
+                    self.pages = vec![texture];
+                    self.pdf = None;
+                    self.compiled_revision = Some(self.revision);
+                    self.status = PreviewStatus::Ready(Duration::ZERO);
+                }
+                Ok(LoadedAsset::Pdf { bytes, pages }) => {
+                    self.pages = pages
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, page)| {
+                            make_preview_texture(
+                                context,
+                                self.revision,
+                                index,
+                                page,
+                                self.preview_dark,
+                            )
+                        })
+                        .collect();
+                    self.pdf = Some(bytes);
+                    self.compiled_revision = Some(self.revision);
+                    self.status = PreviewStatus::Ready(Duration::ZERO);
+                    if let Some(page) = self.pending_asset_page.take() {
+                        self.requested_page = Some(page.min(self.pages.len().saturating_sub(1)));
+                    }
+                    self.complete_pending_export();
+                }
+                Err(error) => {
+                    self.pending_export = None;
+                    self.status = PreviewStatus::Error;
+                    self.notice = Some(Notice {
+                        message: error,
+                        kind: NoticeKind::Error,
+                    });
+                }
+            }
+        }
+    }
+
     fn set_compile_error(&mut self, error: String) {
         self.compiled_revision = None;
         self.status = PreviewStatus::Error;
@@ -447,11 +573,17 @@ impl EditorApp {
     }
 
     fn schedule_compile_now(&mut self) {
+        if !self.document_kind.is_typst() {
+            self.compile_deadline = None;
+            return;
+        }
         self.compile_deadline = Some(Instant::now());
         self.status = PreviewStatus::Waiting;
     }
 
     fn clear_preview_for_document(&mut self) {
+        self.asset_token = self.asset_token.wrapping_add(1);
+        self.asset_loader.cancel_before(self.asset_token);
         self.compiled_revision = None;
         self.pdf = None;
         self.pages.clear();
@@ -459,6 +591,9 @@ impl EditorApp {
         self.raw_diagnostics.clear();
         self.diagnostics.clear();
         self.tinymist_diagnostics.clear();
+        self.pending_asset_page = None;
+        self.pending_export = None;
+        self.pending_export_dialog = None;
     }
 
     fn handle_shortcuts(&mut self, context: &egui::Context) {
@@ -611,10 +746,7 @@ impl EditorApp {
                 .dropped_files
                 .iter()
                 .map(|file| file.path().to_path_buf())
-                .find(|path| {
-                    !path.as_os_str().is_empty()
-                        && path.extension().is_some_and(|extension| extension == "typ")
-                })
+                .find(|path| !path.as_os_str().is_empty() && path.is_file())
         });
         if let Some(path) = path
             && self.confirm_before_replacing("opening another document")
@@ -627,7 +759,7 @@ impl EditorApp {
         let close_requested = context.input(|input| input.viewport().close_requested());
         if close_requested && self.is_dirty() && !self.allow_close {
             context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            if self.confirm_before_replacing("closing mytypst") {
+            if self.confirm_before_replacing("closing tiptoptyp") {
                 self.allow_close = true;
                 context.send_viewport_cmd(egui::ViewportCommand::Close);
             }
@@ -641,6 +773,7 @@ impl EditorApp {
         self.source = DEFAULT_SOURCE.to_owned();
         self.path = None;
         self.disk_fingerprint = None;
+        self.document_kind = DocumentKind::Typst;
         self.revision = self.revision.wrapping_add(1);
         self.saved_revision = self.revision;
         self.clear_preview_for_document();
@@ -654,8 +787,23 @@ impl EditorApp {
             return;
         }
         let mut dialog = FileDialog::new()
+            .add_filter(
+                "Supported documents",
+                &[
+                    "typ", "pdf", "txt", "md", "rs", "toml", "json", "yaml", "yml", "xml", "html",
+                    "css", "js", "ts", "py", "c", "cpp", "h", "png", "jpg", "jpeg", "gif", "webp",
+                    "bmp", "ico", "tif", "tiff",
+                ],
+            )
             .add_filter("Typst documents", &["typ"])
-            .set_title("Open Typst document");
+            .add_filter("PDF documents", &["pdf"])
+            .add_filter(
+                "Images",
+                &[
+                    "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tif", "tiff",
+                ],
+            )
+            .set_title("Open document");
         if let Some(directory) = self.current_directory() {
             dialog = dialog.set_directory(directory);
         }
@@ -665,25 +813,58 @@ impl EditorApp {
     }
 
     fn load_path(&mut self, path: PathBuf) {
-        match fs::read_to_string(&path) {
-            Ok(source) => {
-                self.disk_fingerprint = Some(fingerprint(source.as_bytes()));
-                self.source = source;
-                self.path = Some(path.canonicalize().unwrap_or(path));
-                self.revision = self.revision.wrapping_add(1);
-                self.saved_revision = self.revision;
-                self.clear_preview_for_document();
-                self.search.clear();
-                self.reset_document_services();
-                self.schedule_compile_now();
-            }
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
             Err(error) => {
-                self.show_file_error(format!("Could not open {}: {error}", path.display()))
+                self.show_file_error(format!("Could not open {}: {error}", path.display()));
+                return;
             }
+        };
+        let kind = match DocumentKind::detect(&path, &bytes) {
+            Ok(kind) => kind,
+            Err(error) => {
+                self.show_file_error(error);
+                return;
+            }
+        };
+        let source = if kind.is_editable() {
+            // DocumentKind::detect already validated UTF-8.
+            String::from_utf8(bytes.clone()).expect("validated UTF-8 document")
+        } else {
+            String::new()
+        };
+        let path = path.canonicalize().unwrap_or(path);
+
+        self.document_kind = kind;
+        self.disk_fingerprint = kind.is_editable().then(|| fingerprint(&bytes));
+        self.source = source;
+        self.path = Some(path.clone());
+        self.revision = self.revision.wrapping_add(1);
+        self.saved_revision = self.revision;
+        self.clear_preview_for_document();
+        self.search.clear();
+        self.reset_document_services();
+
+        if kind.is_typst() {
+            self.schedule_compile_now();
+        } else if kind.preview_only() {
+            self.status = PreviewStatus::Compiling;
+            if let Err(error) = self.asset_loader.request(self.asset_token, path, kind) {
+                self.status = PreviewStatus::Error;
+                self.notice = Some(Notice {
+                    message: error,
+                    kind: NoticeKind::Error,
+                });
+            }
+        } else {
+            self.status = PreviewStatus::Ready(Duration::ZERO);
         }
     }
 
     fn save_document(&mut self) -> bool {
+        if !self.document_kind.is_editable() {
+            return true;
+        }
         if let Some(path) = self.path.clone() {
             self.save_to(path)
         } else {
@@ -692,17 +873,26 @@ impl EditorApp {
     }
 
     fn save_as(&mut self) -> bool {
-        let mut dialog = FileDialog::new()
-            .add_filter("Typst documents", &["typ"])
-            .set_title("Save Typst document")
-            .set_file_name(self.document_name());
+        if !self.document_kind.is_editable() {
+            return false;
+        }
+        let mut dialog = FileDialog::new().set_file_name(self.document_name());
+        dialog = if self.document_kind.is_typst() {
+            dialog
+                .add_filter("Typst documents", &["typ"])
+                .set_title("Save Typst document")
+        } else {
+            dialog
+                .add_filter("Text files", &["txt"])
+                .set_title("Save text file")
+        };
         if let Some(directory) = self.current_directory() {
             dialog = dialog.set_directory(directory);
         }
         let Some(mut path) = dialog.save_file() else {
             return false;
         };
-        if path.extension().is_none() {
+        if self.document_kind.is_typst() && path.extension().is_none() {
             path.set_extension("typ");
         }
         self.save_to(path)
@@ -718,6 +908,12 @@ impl EditorApp {
                 self.path = Some(path.canonicalize().unwrap_or(path));
                 self.disk_fingerprint = Some(fingerprint(self.source.as_bytes()));
                 if path_changed {
+                    self.document_kind = self
+                        .path
+                        .as_deref()
+                        .and_then(|path| DocumentKind::detect(path, self.source.as_bytes()).ok())
+                        .filter(|kind| kind.is_editable())
+                        .unwrap_or(DocumentKind::Text);
                     self.revision = self.revision.wrapping_add(1);
                     self.compiled_revision = None;
                     self.reset_document_services();
@@ -747,7 +943,7 @@ impl EditorApp {
             ),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 format!(
-                    "{} was deleted outside mytypst. Create it again?",
+                    "{} was deleted outside tiptoptyp. Create it again?",
                     path.display()
                 )
             }
@@ -770,22 +966,53 @@ impl EditorApp {
     }
 
     fn export_pdf(&mut self) {
+        if !matches!(self.document_kind, DocumentKind::Typst | DocumentKind::Pdf) {
+            self.notice = Some(Notice {
+                message: "PDF export is available for Typst and PDF documents".to_owned(),
+                kind: NoticeKind::Info,
+            });
+            return;
+        }
+        if self.pending_export_dialog.is_some() {
+            return;
+        }
         let default_name = self
             .path
             .as_ref()
             .and_then(|path| path.file_stem())
             .map(|stem| format!("{}.pdf", stem.to_string_lossy()))
             .unwrap_or_else(|| "document.pdf".to_owned());
-        let mut dialog = FileDialog::new()
+        let mut dialog = AsyncFileDialog::new()
             .add_filter("PDF documents", &["pdf"])
             .set_title("Export PDF")
             .set_file_name(default_name);
         if let Some(directory) = self.current_directory() {
             dialog = dialog.set_directory(directory);
         }
-        let Some(mut path) = dialog.save_file() else {
+        // NSSavePanel's synchronous `runModal` spins a nested AppKit loop from
+        // inside winit's event callback. Dragging a folder across the panel can
+        // then re-enter winit and trigger a non-unwinding panic. The async panel
+        // uses a completion handler and is polled by normal egui frames instead.
+        self.pending_export_dialog = Some(Box::pin(dialog.save_file()));
+    }
+
+    fn poll_export_dialog(&mut self, context: &egui::Context) {
+        let Some(future) = self.pending_export_dialog.as_mut() else {
             return;
         };
+        let waker = Waker::from(Arc::new(EguiFutureWake(context.clone())));
+        let mut task_context = TaskContext::from_waker(&waker);
+        let Poll::Ready(selection) = future.as_mut().poll(&mut task_context) else {
+            context.request_repaint_after(Duration::from_millis(50));
+            return;
+        };
+        self.pending_export_dialog = None;
+        if let Some(file) = selection {
+            self.finish_export_selection(file.path().to_path_buf());
+        }
+    }
+
+    fn finish_export_selection(&mut self, mut path: PathBuf) {
         if path.extension().is_none() {
             path.set_extension("pdf");
         }
@@ -804,16 +1031,24 @@ impl EditorApp {
             return;
         }
 
-        self.pending_export = Some(path);
+        self.pending_export = Some(PendingExport {
+            path,
+            revision: self.revision,
+        });
         self.notice = Some(Notice {
             message: "Export queued for the next successful build".to_owned(),
             kind: NoticeKind::Info,
         });
-        self.schedule_compile_now();
+        if self.document_kind.is_typst() {
+            self.schedule_compile_now();
+        }
     }
 
     fn complete_pending_export(&mut self) {
-        let (Some(path), Some(pdf)) = (self.pending_export.take(), self.pdf.as_deref()) else {
+        let (Some(path), Some(pdf)) = (
+            take_matching_export(&mut self.pending_export, self.revision),
+            self.pdf.as_deref(),
+        ) else {
             return;
         };
         if let Err(error) = atomic_write(&path, pdf) {
@@ -855,7 +1090,7 @@ impl EditorApp {
         });
         MessageDialog::new()
             .set_level(MessageLevel::Error)
-            .set_title("mytypst")
+            .set_title("tiptoptyp")
             .set_description(message)
             .set_buttons(MessageButtons::Ok)
             .show();
@@ -918,6 +1153,13 @@ impl EditorApp {
             self.webview = None;
             self.webview_url = None;
         }
+        if !self.document_kind.is_typst() {
+            self.tinymist_state =
+                ServiceState::Disabled("The selected file is not a Typst document".to_owned());
+            self.webview_state =
+                ServiceState::Disabled("Binary files use the native preview".to_owned());
+            return;
+        }
         if self.settings.preview_preference == PreviewPreference::Native {
             self.tinymist_state = ServiceState::Disabled("Native watched PDF selected".to_owned());
             self.webview_state =
@@ -977,6 +1219,9 @@ impl EditorApp {
     }
 
     fn sync_tinymist_change(&mut self) {
+        if !self.document_kind.is_typst() {
+            return;
+        }
         let (Some(generation), Some(uri)) = (self.tinymist_generation, self.tinymist_uri.clone())
         else {
             return;
@@ -993,7 +1238,9 @@ impl EditorApp {
 
     fn receive_tinymist_events(&mut self) {
         while let Some(event) = self.tinymist.try_recv() {
-            if self.settings.preview_preference == PreviewPreference::Native {
+            if !self.document_kind.is_typst()
+                || self.settings.preview_preference == PreviewPreference::Native
+            {
                 // A delayed Stopped event from a deliberately disabled sidecar
                 // must not turn the explicit Native choice into a failure.
                 continue;
@@ -1059,6 +1306,128 @@ impl EditorApp {
         }
     }
 
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    fn receive_web_links(&mut self) {
+        let targets = self.web_link_receiver.try_iter().collect::<Vec<_>>();
+        for target in targets {
+            self.handle_web_link(&target);
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    fn receive_web_links(&mut self) {}
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    fn handle_web_link(&mut self, target: &str) {
+        self.follow_preview_link(target);
+    }
+
+    fn follow_preview_link(&mut self, target: &str) {
+        if let Some(page) = internal_pdf_page_target(target) {
+            self.requested_page = Some(page.min(self.pages.len().saturating_sub(1)));
+            return;
+        }
+
+        let target = if target.starts_with("www.") {
+            format!("https://{target}")
+        } else {
+            target.to_owned()
+        };
+        let url = match url::Url::parse(&target) {
+            Ok(url) => url,
+            Err(_) => {
+                let Some(directory) = self.current_directory() else {
+                    self.notice = Some(Notice {
+                        message: format!("Could not resolve link: {target}"),
+                        kind: NoticeKind::Error,
+                    });
+                    return;
+                };
+                let Ok(base) = url::Url::from_directory_path(directory) else {
+                    return;
+                };
+                let Ok(url) = base.join(&target) else {
+                    self.notice = Some(Notice {
+                        message: format!("Could not follow malformed link: {target}"),
+                        kind: NoticeKind::Error,
+                    });
+                    return;
+                };
+                url
+            }
+        };
+
+        if url.scheme() == "file" {
+            self.follow_file_link(&url);
+            return;
+        }
+
+        if matches!(url.scheme(), "http" | "https" | "mailto" | "tel") {
+            if let Err(error) = open_in_system_browser(url.as_str()) {
+                self.notice = Some(Notice {
+                    message: error,
+                    kind: NoticeKind::Error,
+                });
+            }
+        } else {
+            self.notice = Some(Notice {
+                message: format!("Unsupported link scheme: {}", url.scheme()),
+                kind: NoticeKind::Error,
+            });
+        }
+    }
+
+    fn follow_file_link(&mut self, url: &url::Url) {
+        let page = pdf_page_from_url(url);
+        let source_position = source_position_from_url(url);
+        let Ok(path) = url.to_file_path() else {
+            return;
+        };
+        if !DocumentKind::supports_path(&path) && path.extension().is_some() {
+            self.notice = Some(Notice {
+                message: format!("Unsupported linked file: {}", path.display()),
+                kind: NoticeKind::Error,
+            });
+            return;
+        }
+        let same_document = self
+            .path
+            .as_ref()
+            .is_some_and(|current| same_path(current, &path));
+        if !same_document {
+            if !self.confirm_before_replacing("following a document link") {
+                return;
+            }
+            self.load_path(path.clone());
+            if !self
+                .path
+                .as_ref()
+                .is_some_and(|current| same_path(current, &path))
+            {
+                return;
+            }
+        }
+        if self.document_kind == DocumentKind::Pdf {
+            if self.pages.is_empty() {
+                self.pending_asset_page = page;
+            } else if let Some(page) = page {
+                self.requested_page = Some(page.min(self.pages.len().saturating_sub(1)));
+            }
+        } else if self.document_kind.is_editable()
+            && let Some((line, column)) = source_position
+        {
+            let char_index = char_index_at_line_column(&self.source, line, column);
+            self.pending_editor_selection = Some(char_index..char_index);
+            self.editor_attention = Some(EditorAttention {
+                char_index,
+                started: Instant::now(),
+            });
+            if self.document_kind.is_typst() {
+                self.view_mode = ViewMode::Split;
+            }
+        }
+    }
+
     fn follow_tinymist_location(&mut self, uri: &str, selection: Option<&LspRange>) {
         let Ok(url) = url::Url::parse(uri) else {
             return;
@@ -1081,9 +1450,38 @@ impl EditorApp {
             self.load_path(path);
         }
         if let Some(selection) = selection {
-            self.pending_editor_selection = Some(lsp_range_to_char_range(&self.source, selection));
+            let range = lsp_range_to_char_range(&self.source, selection);
+            self.editor_attention = Some(EditorAttention {
+                char_index: range.start,
+                started: Instant::now(),
+            });
+            self.pending_editor_selection = Some(range);
         }
         self.view_mode = ViewMode::Split;
+    }
+
+    fn jump_source_to_preview(&mut self, char_index: usize) {
+        if !self.document_kind.is_typst() || !self.interactive_preview_active() {
+            return;
+        }
+        let Some(generation) = self.tinymist_generation else {
+            return;
+        };
+        let (line, character) = source_position_at_char(&self.source, char_index);
+        let path = self.tinymist_document_path();
+        if let Err(error) = self
+            .tinymist
+            .scroll_preview(generation, path, line, character)
+        {
+            self.notice = Some(Notice {
+                message: format!("Could not reveal source in preview: {error}"),
+                kind: NoticeKind::Error,
+            });
+            return;
+        }
+        if self.view_mode == ViewMode::Code {
+            self.view_mode = ViewMode::Split;
+        }
     }
 
     fn receive_tinymist_diagnostics(
@@ -1110,14 +1508,16 @@ impl EditorApp {
     }
 
     fn interactive_preview_active(&self) -> bool {
-        self.settings.preview_preference == PreviewPreference::Interactive
+        self.document_kind.is_typst()
+            && self.settings.preview_preference == PreviewPreference::Interactive
             && self.tinymist_url.is_some()
             && self.webview_state.is_ready()
             && cfg!(any(target_os = "macos", target_os = "windows"))
     }
 
     fn should_attempt_interactive_preview(&self) -> bool {
-        self.settings.preview_preference == PreviewPreference::Interactive
+        self.document_kind.is_typst()
+            && self.settings.preview_preference == PreviewPreference::Interactive
             && self.tinymist_url.is_some()
             && !matches!(
                 self.webview_state,
@@ -1127,6 +1527,9 @@ impl EditorApp {
     }
 
     fn preview_fallback_reason(&self) -> Option<String> {
+        if !self.document_kind.is_typst() {
+            return None;
+        }
         preview_fallback_reason_for(
             self.settings.preview_preference,
             self.interactive_preview_active(),
@@ -1137,6 +1540,14 @@ impl EditorApp {
     }
 
     fn preview_backend_label(&self) -> &'static str {
+        if !self.document_kind.is_typst() {
+            return match self.document_kind {
+                DocumentKind::Pdf => "Native PDF",
+                DocumentKind::Image => "Native image",
+                DocumentKind::Text => "Text editor",
+                DocumentKind::Typst => unreachable!(),
+            };
+        }
         preview_backend_label_for(
             self.settings.preview_preference,
             self.interactive_preview_active(),
@@ -1184,76 +1595,175 @@ impl EditorApp {
 
     fn rebuild_preview_textures(&mut self, context: &egui::Context) {
         let revision = self.compiled_revision.unwrap_or(self.revision);
+        let dark = self.preview_dark && self.document_kind != DocumentKind::Image;
         for (index, page) in self.pages.iter_mut().enumerate() {
-            let pixels = if self.preview_dark {
+            let pixels = if dark {
                 dark_preview_rgba(&page.rgba)
             } else {
                 page.rgba.clone()
             };
             page.texture = context.load_texture(
-                format!("preview-{revision}-{index}-{}", self.preview_dark),
-                ColorImage::from_rgba_unmultiplied(page.size, &pixels),
+                format!("preview-{revision}-{index}-{dark}"),
+                preview_color_image(page.raster_size, &pixels),
                 TextureOptions::LINEAR,
             );
         }
     }
 
-    fn show_toolbar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.strong("mytypst");
-            ui.separator();
-            ui.menu_button("File", |ui| {
-                if ui.button("New                 ⌘N").clicked() {
-                    ui.close();
-                    self.new_document();
-                }
-                if ui.button("Open…              ⌘O").clicked() {
-                    ui.close();
-                    self.open_dialog();
-                }
-                if ui.button("Save                 ⌘S").clicked() {
-                    ui.close();
-                    self.save_document();
-                }
-                if ui.button("Save As…          ⇧⌘S").clicked() {
-                    ui.close();
-                    self.save_as();
-                }
+    fn show_toolbar(&mut self, ui: &mut egui::Ui, _frame: &eframe::Frame) {
+        #[cfg(target_os = "macos")]
+        {
+            // The toolbar occupies the native title-bar row. Controls start to
+            // the right of the traffic lights, while empty toolbar space stays
+            // draggable.
+            let drag = ui.interact(
+                ui.max_rect(),
+                ui.id().with("window-title-drag"),
+                Sense::drag(),
+            );
+            if drag.drag_started() {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+        }
+
+        ui.horizontal_centered(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.spacing_mut().button_padding = egui::vec2(6.0, 2.0);
+
+            #[cfg(target_os = "macos")]
+            {
+                use raw_window_handle::HasWindowHandle as _;
+
+                let traffic_lights_width = _frame
+                    .window_handle()
+                    .ok()
+                    .and_then(|handle| {
+                        eframe::WindowChromeMetrics::from_window_handle(&handle.as_raw())
+                    })
+                    .map(|metrics| metrics.traffic_lights_size.x / ui.ctx().zoom_factor().max(0.1))
+                    .unwrap_or(64.0);
+                ui.add_space(traffic_lights_width + 4.0);
+            }
+
+            let toolbar_width = ui.available_width();
+            let compact = toolbar_width < 430.0;
+            if compact {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                ui.spacing_mut().button_padding.x = 4.0;
+            }
+            if toolbar_width >= 940.0 {
+                ui.strong("tiptoptyp");
                 ui.separator();
-                if ui.button("Export PDF…").clicked() {
-                    ui.close();
-                    self.export_pdf();
+            }
+
+            self.show_file_menu(ui);
+
+            if toolbar_width >= 720.0 {
+                if ui
+                    .selectable_label(self.problems_visible, "Problems")
+                    .on_hover_text("Toggle compiler diagnostics")
+                    .clicked()
+                {
+                    self.problems_visible = !self.problems_visible;
                 }
-            });
+                if ui
+                    .selectable_label(self.settings_visible, "Settings")
+                    .on_hover_text("Appearance and backend status · ⌘,")
+                    .clicked()
+                {
+                    self.settings_visible = !self.settings_visible;
+                }
+                if ui.button("Find").on_hover_text("Find · ⌘F").clicked() {
+                    self.open_find(false);
+                }
+            } else {
+                ui.menu_button("☰", |ui| {
+                    if ui
+                        .selectable_label(self.problems_visible, "Problems")
+                        .clicked()
+                    {
+                        self.problems_visible = !self.problems_visible;
+                        ui.close();
+                    }
+                    if ui
+                        .selectable_label(self.settings_visible, "Settings")
+                        .clicked()
+                    {
+                        self.settings_visible = !self.settings_visible;
+                        ui.close();
+                    }
+                    if ui.button("Find                 ⌘F").clicked() {
+                        self.open_find(false);
+                        ui.close();
+                    }
+                })
+                .response
+                .on_hover_text("Problems, settings, and find");
+            }
+
+            ui.separator();
+            let explorer_label = if compact { "▤" } else { "Explorer" };
             if ui
-                .selectable_label(self.filesystem_visible, "Explorer")
-                .on_hover_text("Toggle the project filesystem")
+                .selectable_label(self.filesystem_visible, explorer_label)
+                .on_hover_text("Toggle the file explorer")
                 .clicked()
             {
                 self.filesystem_visible = !self.filesystem_visible;
             }
-            if ui
-                .selectable_label(self.problems_visible, "Problems")
-                .on_hover_text("Toggle compiler diagnostics")
-                .clicked()
-            {
-                self.problems_visible = !self.problems_visible;
-            }
-            if ui
-                .selectable_label(self.settings_visible, "Settings")
-                .on_hover_text("Appearance and backend status · ⌘,")
-                .clicked()
-            {
-                self.settings_visible = !self.settings_visible;
-            }
-            if ui.button("Find").on_hover_text("Find · ⌘F").clicked() {
-                self.open_find(false);
+            if compact {
+                ui.selectable_value(&mut self.view_mode, ViewMode::Code, "C")
+                    .on_hover_text("Code");
+                ui.selectable_value(&mut self.view_mode, ViewMode::Split, "S")
+                    .on_hover_text("Split");
+                ui.selectable_value(&mut self.view_mode, ViewMode::Preview, "P")
+                    .on_hover_text("Preview");
+            } else {
+                ui.selectable_value(&mut self.view_mode, ViewMode::Code, "Code");
+                ui.selectable_value(&mut self.view_mode, ViewMode::Split, "Split");
+                ui.selectable_value(&mut self.view_mode, ViewMode::Preview, "Preview");
             }
 
+            let title = format!(
+                "{}{}",
+                self.document_name(),
+                if self.is_dirty() { "*" } else { "" }
+            );
+            if ui.available_width() > 12.0 {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.add(
+                        egui::Label::new(RichText::new(&title).strong())
+                            .truncate()
+                            .halign(Align::RIGHT),
+                    )
+                    .on_hover_text(self.title());
+                });
+            }
+        });
+    }
+
+    fn show_file_menu(&mut self, ui: &mut egui::Ui) {
+        ui.menu_button("File", |ui| {
+            if ui.button("New                 ⌘N").clicked() {
+                ui.close();
+                self.new_document();
+            }
+            if ui.button("Open…              ⌘O").clicked() {
+                ui.close();
+                self.open_dialog();
+            }
+            if ui.button("Save                 ⌘S").clicked() {
+                ui.close();
+                self.save_document();
+            }
+            if ui.button("Save As…          ⇧⌘S").clicked() {
+                ui.close();
+                self.save_as();
+            }
             ui.separator();
-            ui.selectable_value(&mut self.view_mode, ViewMode::Code, "Code");
-            ui.selectable_value(&mut self.view_mode, ViewMode::Split, "Split");
-            ui.selectable_value(&mut self.view_mode, ViewMode::Preview, "Preview");
+            if ui.button("Export PDF…").clicked() {
+                ui.close();
+                self.export_pdf();
+            }
         });
     }
 
@@ -1340,8 +1850,22 @@ impl EditorApp {
                 ui.heading("Editor");
                 ui.checkbox(&mut edited.line_wrap, "Wrap long lines");
                 ui.checkbox(&mut edited.line_numbers, "Show line numbers");
+                ui.horizontal(|ui| {
+                    ui.label("Jump from source to preview");
+                    egui::ComboBox::from_id_salt("source-preview-trigger")
+                        .selected_text(edited.source_preview_trigger.label())
+                        .show_ui(ui, |ui| {
+                            for trigger in SourcePreviewTrigger::ALL {
+                                ui.selectable_value(
+                                    &mut edited.source_preview_trigger,
+                                    trigger,
+                                    trigger.label(),
+                                );
+                            }
+                        });
+                });
                 ui.label(
-                    RichText::new("Both are enabled by default and apply immediately.")
+                    RichText::new(edited.source_preview_trigger.description())
                         .small()
                         .color(ui.visuals().weak_text_color()),
                 );
@@ -1447,6 +1971,9 @@ impl EditorApp {
     }
 
     fn compiler_service_state(&self) -> ServiceState {
+        if !self.document_kind.is_typst() {
+            return ServiceState::Disabled("The selected file is not compiled as Typst".to_owned());
+        }
         match self.status {
             PreviewStatus::Waiting => {
                 ServiceState::Starting("Build queued for persistent `typst watch`".to_owned())
@@ -1477,6 +2004,12 @@ impl EditorApp {
     }
 
     fn rasterizer_service_state(&self) -> ServiceState {
+        if self.document_kind == DocumentKind::Text {
+            return ServiceState::Disabled("Text files do not need a preview renderer".to_owned());
+        }
+        if self.document_kind == DocumentKind::Image && !self.pages.is_empty() {
+            return ServiceState::Ready("The selected image decoded successfully".to_owned());
+        }
         if !self.pages.is_empty() && self.compiled_revision == Some(self.revision) {
             return ServiceState::Ready(format!(
                 "Poppler rendered {} page(s) at {} DPI",
@@ -1501,30 +2034,45 @@ impl EditorApp {
     }
 
     fn show_workspace(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("PROJECT").small().strong());
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .small_button("↻")
-                    .on_hover_text("Refresh filesystem")
-                    .clicked()
-                {
-                    self.refresh_workspace();
-                }
-            });
+        let root = self
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.root().display().to_string())
+            .unwrap_or_else(|| self.project_root().display().to_string());
+        let generation = self.workspace.as_ref().map(WorkspaceTree::generation);
+        show_panel_header(ui, "workspace-header", |ui| {
+            let refresh_width = 24.0;
+            let path_width =
+                (ui.available_width() - refresh_width - ui.spacing().item_spacing.x).max(1.0);
+            let max_chars = approximate_char_capacity(path_width, 12.0);
+            let response = ui.add_sized(
+                [path_width, 20.0],
+                egui::Label::new(
+                    RichText::new(tail_elide(&root, max_chars))
+                        .small()
+                        .color(ui.visuals().weak_text_color()),
+                )
+                .truncate(),
+            );
+            let hover = generation.map_or_else(
+                || root.clone(),
+                |generation| format!("{root}\nFilesystem snapshot generation {generation}"),
+            );
+            response.on_hover_text(hover);
+            if ui
+                .small_button("↻")
+                .on_hover_text("Refresh filesystem")
+                .clicked()
+            {
+                self.refresh_workspace();
+            }
         });
-        if let Some(workspace) = &self.workspace {
-            ui.label(
-                RichText::new(workspace.root().display().to_string())
-                    .small()
-                    .color(ui.visuals().weak_text_color()),
-            )
-            .on_hover_text(format!(
-                "Filesystem snapshot generation {}",
-                workspace.generation()
-            ));
-        }
-        ui.separator();
+
+        // A tree row can be much wider than the pane. Keep the body width in a
+        // clipped child UI so it becomes scrollable content instead of feeding
+        // back into `PanelState` and growing the resizable explorer each frame.
+        let mut content_ui = clipped_panel_content_ui(ui, "workspace-clipped-content");
+        let ui = &mut content_ui;
 
         let snapshot = self.workspace.as_ref().map(|tree| tree.snapshot().clone());
         let active = snapshot.as_ref().and_then(|snapshot| {
@@ -1548,7 +2096,10 @@ impl EditorApp {
                     for action in actions {
                         if let TreeAction::Activate(activate) = action {
                             open_path = activate.selected.into_iter().find(|path| {
-                                path.extension().is_some_and(|extension| extension == "typ")
+                                path.strip_prefix(&snapshot.root)
+                                    .ok()
+                                    .and_then(|relative| snapshot.find(relative))
+                                    .is_some_and(WorkspaceNode::is_file)
                             });
                         }
                     }
@@ -1662,34 +2213,30 @@ impl EditorApp {
     }
 
     fn show_editor(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(self.document_name()).strong());
-            if self.is_dirty() {
-                ui.label(
-                    RichText::new("modified")
-                        .small()
-                        .color(warning_color(ui.visuals().dark_mode)),
-                );
-            }
-        });
-        ui.label(
-            RichText::new(self.path.as_ref().map_or_else(
-                || "Unsaved · relative imports use the project folder".to_owned(),
-                |path| path.display().to_string(),
-            ))
-            .small()
-            .color(ui.visuals().weak_text_color()),
+        let full_path = self.path.as_ref().map_or_else(
+            || "Untitled.typ".to_owned(),
+            |path| path.display().to_string(),
         );
+        show_panel_header(ui, "editor-header", |ui| {
+            let width = ui.available_width().max(1.0);
+            let job = document_path_layout_job(ui, self.path.as_deref(), self.is_dirty(), width);
+            let response = ui.add_sized([width, 20.0], egui::Label::new(job).truncate());
+            paint_bold_filename_overlay(ui, response.rect, self.path.as_deref(), self.is_dirty());
+            response.on_hover_text(if self.is_dirty() {
+                format!("{full_path} (unsaved changes)")
+            } else {
+                full_path.clone()
+            });
+        });
         if self.find_visible {
-            ui.separator();
             self.show_find_bar(ui);
+            ui.separator();
         }
-        ui.separator();
 
         let line_diagnostics = self.line_diagnostics();
         let available = ui.available_size();
         let line_count = logical_line_count(&self.source);
-        let editor_height = (line_count as f32 * 20.0 + 32.0).max(available.y - 4.0);
+        let editor_height = (line_count as f32 * 20.0 + 8.0).max(available.y);
         let longest_line = self
             .source
             .lines()
@@ -1709,9 +2256,25 @@ impl EditorApp {
         let line_numbers = self.settings.line_numbers;
         let gutter_width = line_number_gutter_width(line_count, line_numbers);
         let dark_mode = ui.visuals().dark_mode;
+        let document_kind = self.document_kind;
+        let highlight_path = self.path.clone();
+        let source_preview_trigger = self.settings.source_preview_trigger;
+        let preview_jump_enabled = document_kind.is_typst() && self.interactive_preview_active();
         let highlighter = &mut self.highlighter;
+        let generic_highlighter = &mut self.generic_highlighter;
         let pending_selection = self.pending_editor_selection.take();
+        let attention = self.editor_attention.and_then(|attention| {
+            let elapsed = Instant::now().saturating_duration_since(attention.started);
+            let strength = editor_attention_strength(elapsed);
+            (strength > 0.0).then_some((attention.char_index, strength))
+        });
+        if attention.is_some() {
+            ui.ctx().request_repaint_after(Duration::from_millis(16));
+        } else {
+            self.editor_attention = None;
+        }
         let mut changed = false;
+        let mut preview_jump_char = None;
 
         egui::ScrollArea::new([!line_wrap, true])
             .id_salt("source-editor-scroll")
@@ -1722,13 +2285,23 @@ impl EditorApp {
                 } else {
                     unwrapped_editor_width
                 };
+                let editor_base_slot = ui.painter().add(egui::Shape::Noop);
+                let current_line_slot = ui.painter().add(egui::Shape::Noop);
                 let background_slots = line_diagnostics
                     .iter()
                     .map(|_| ui.painter().add(egui::Shape::Noop))
                     .collect::<Vec<_>>();
                 let mut layouter =
                     |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, wrap_width: f32| {
-                        let mut job = highlighter.highlight(buffer.as_str(), dark_mode);
+                        let mut job = if document_kind.is_typst() {
+                            highlighter.highlight(buffer.as_str(), dark_mode)
+                        } else {
+                            generic_highlighter.highlight(
+                                buffer.as_str(),
+                                highlight_path.as_deref(),
+                                dark_mode,
+                            )
+                        };
                         job.wrap.max_width = if line_wrap { wrap_width } else { f32::INFINITY };
                         ui.fonts_mut(|fonts| fonts.layout_job(job))
                     };
@@ -1736,6 +2309,12 @@ impl EditorApp {
                     .id_salt("typst-source")
                     .code_editor()
                     .desired_width(editor_width)
+                    .min_size(Vec2::new(editor_width, editor_height))
+                    // The normal opaque TextEdit frame would cover the line
+                    // decoration slots inserted immediately before it. Paint
+                    // the same base explicitly, then keep the widget frame
+                    // transparent so backgrounds remain behind glyphs.
+                    .background_color(Color32::TRANSPARENT)
                     .margin(egui::Margin {
                         left: gutter_width,
                         right: 4,
@@ -1745,17 +2324,26 @@ impl EditorApp {
                     .layouter(&mut layouter);
                 let mut output = editor.show(ui);
                 changed = output.response.changed();
-
-                paint_line_diagnostics(ui, &output, &line_diagnostics, background_slots);
-                if line_numbers {
-                    paint_line_numbers(ui, &output);
-                }
+                ui.painter().set(
+                    editor_base_slot,
+                    egui::Shape::rect_filled(
+                        output.response.rect,
+                        0.0,
+                        ui.visuals().text_edit_bg_color(),
+                    ),
+                );
+                let mut current_char = output
+                    .state
+                    .cursor
+                    .char_range()
+                    .map(|range| range.primary.index.0);
 
                 if let Some(range) = pending_selection {
                     let cursor_range =
                         CCursorRange::two(CCursor::new(range.start), CCursor::new(range.end));
                     output.state.cursor.set_char_range(Some(cursor_range));
-                    output.state.store(ui.ctx(), output.response.id);
+                    current_char = Some(range.end);
+                    output.state.clone().store(ui.ctx(), output.response.id);
                     output.response.request_focus();
                     let cursor_rect = output
                         .galley
@@ -1764,16 +2352,46 @@ impl EditorApp {
                     ui.scroll_to_rect(cursor_rect, Some(Align::Center));
                 }
 
-                let used = output.response.rect.size();
-                ui.allocate_space(Vec2::new(
-                    (editor_width - used.x).max(0.0),
-                    (editor_height - used.y).max(0.0),
-                ));
+                paint_editor_line_backgrounds(
+                    ui,
+                    &output,
+                    &self.source,
+                    current_char,
+                    attention,
+                    current_line_slot,
+                );
+                paint_line_diagnostics(ui, &output, &line_diagnostics, background_slots);
+                if line_numbers {
+                    paint_line_numbers(ui, &output);
+                }
+
+                let jump_gesture = match source_preview_trigger {
+                    SourcePreviewTrigger::DoubleClick => output.response.double_clicked(),
+                    SourcePreviewTrigger::ModifierClick => {
+                        output.response.clicked() && ui.input(|input| input.modifiers.command)
+                    }
+                    SourcePreviewTrigger::Disabled => false,
+                };
+                if preview_jump_enabled
+                    && jump_gesture
+                    && let Some(pointer) = output.response.interact_pointer_pos()
+                {
+                    preview_jump_char = Some(
+                        output
+                            .galley
+                            .cursor_from_pos(pointer - output.galley_pos)
+                            .index
+                            .0,
+                    );
+                }
             });
 
         if changed {
             self.search.clear();
             self.mark_edited();
+        }
+        if let Some(char_index) = preview_jump_char {
+            self.jump_source_to_preview(char_index);
         }
     }
 
@@ -1830,18 +2448,9 @@ impl EditorApp {
         // This fixed-height strip contains controls only. Transient build,
         // stale, and fallback state belongs exclusively in the bottom bar so
         // it can never alter the preview viewport's origin or extent.
-        let header = ui.allocate_ui_with_layout(
-            Vec2::new(ui.available_width(), PREVIEW_HEADER_HEIGHT),
-            Layout::left_to_right(Align::Center),
-            |ui| self.show_preview_header_controls(ui),
-        );
-        ui.painter().line_segment(
-            [
-                header.response.rect.left_bottom(),
-                header.response.rect.right_bottom(),
-            ],
-            Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
-        );
+        show_panel_header(ui, "preview-header", |ui| {
+            self.show_preview_header_controls(ui);
+        });
 
         if self.should_attempt_interactive_preview() {
             let rect = ui.available_rect_before_wrap();
@@ -1859,78 +2468,79 @@ impl EditorApp {
     }
 
     fn show_preview_header_controls(&mut self, ui: &mut egui::Ui) {
-        ui.label(RichText::new("Preview").strong());
-        ui.separator();
-        if ui
-            .selectable_label(
-                self.settings.preview_preference == PreviewPreference::Interactive,
-                "Interactive",
-            )
-            .on_hover_text("Tinymist vector preview with hover and source navigation")
-            .clicked()
-        {
-            self.queue_preview_preference(PreviewPreference::Interactive, ui.ctx());
-        }
-        if ui
-            .selectable_label(
-                self.settings.preview_preference == PreviewPreference::Native,
-                "Native",
-            )
-            .on_hover_text("Raster recovery viewer using the canonical watched PDF")
-            .clicked()
-        {
-            self.queue_preview_preference(PreviewPreference::Native, ui.ctx());
+        let header_width = ui.available_width();
+        if self.document_kind.is_typst() {
+            let (label, next, hover) = match self.settings.preview_preference {
+                PreviewPreference::Interactive => (
+                    "Interactive",
+                    PreviewPreference::Native,
+                    "Interactive vector preview · click for the native PDF viewer",
+                ),
+                PreviewPreference::Native => (
+                    "Native",
+                    PreviewPreference::Interactive,
+                    "Native PDF viewer · click for the interactive vector preview",
+                ),
+            };
+            if ui
+                .selectable_label(true, label)
+                .on_hover_text(hover)
+                .clicked()
+            {
+                self.queue_preview_preference(next, ui.ctx());
+            }
+        } else {
+            ui.label(RichText::new("Native").strong())
+                .on_hover_text("This file opens directly in the native viewer");
         }
 
         if !self.interactive_preview_active() {
-            ui.separator();
             let page_count = self.pages.len();
-            if ui
-                .add_enabled(self.visible_page > 0, egui::Button::new("‹"))
-                .on_hover_text("Previous page")
-                .clicked()
-            {
-                self.requested_page = Some(self.visible_page - 1);
+            if header_width >= 185.0 {
+                ui.separator();
+                if ui
+                    .add_enabled(self.visible_page > 0, egui::Button::new("‹"))
+                    .on_hover_text("Previous page")
+                    .clicked()
+                {
+                    self.requested_page = Some(self.visible_page - 1);
+                }
+                ui.label(if page_count == 0 {
+                    "–/–".to_owned()
+                } else {
+                    format!("{}/{page_count}", self.visible_page + 1)
+                });
+                if ui
+                    .add_enabled(self.visible_page + 1 < page_count, egui::Button::new("›"))
+                    .on_hover_text("Next page")
+                    .clicked()
+                {
+                    self.requested_page = Some(self.visible_page + 1);
+                }
             }
-            ui.label(if page_count == 0 {
-                "– / –".to_owned()
-            } else {
-                format!("{} / {page_count}", self.visible_page + 1)
-            });
-            if ui
-                .add_enabled(self.visible_page + 1 < page_count, egui::Button::new("›"))
-                .on_hover_text("Next page")
-                .clicked()
-            {
-                self.requested_page = Some(self.visible_page + 1);
+            if header_width >= 315.0 {
+                ui.separator();
+                if ui.small_button("−").on_hover_text("Zoom out").clicked() {
+                    self.requested_zoom =
+                        Some((self.zoom / 1.15).clamp(MIN_PREVIEW_ZOOM, MAX_PREVIEW_ZOOM));
+                    self.fit_width = false;
+                }
+                if ui.small_button("+").on_hover_text("Zoom in").clicked() {
+                    self.requested_zoom =
+                        Some((self.zoom * 1.15).clamp(MIN_PREVIEW_ZOOM, MAX_PREVIEW_ZOOM));
+                    self.fit_width = false;
+                }
+                if header_width >= 400.0 {
+                    ui.label(format!("{:.0}%", self.zoom * 100.0));
+                }
+                if ui
+                    .selectable_label(self.fit_width, "⇔")
+                    .on_hover_text("Fit page width")
+                    .clicked()
+                {
+                    self.fit_width = !self.fit_width;
+                }
             }
-            ui.separator();
-            if ui.small_button("−").clicked() {
-                self.requested_zoom =
-                    Some((self.zoom / 1.15).clamp(MIN_PREVIEW_ZOOM, MAX_PREVIEW_ZOOM));
-                self.fit_width = false;
-            }
-            if ui.small_button("+").clicked() {
-                self.requested_zoom =
-                    Some((self.zoom * 1.15).clamp(MIN_PREVIEW_ZOOM, MAX_PREVIEW_ZOOM));
-                self.fit_width = false;
-            }
-            ui.label(format!("{:.0}%", self.zoom * 100.0));
-            ui.checkbox(&mut self.fit_width, "Fit");
-        }
-
-        let mut dark_page = self.preview_dark;
-        if ui.checkbox(&mut dark_page, "Dark page").changed() {
-            let mut settings = self
-                .pending_settings
-                .clone()
-                .unwrap_or_else(|| self.settings.clone());
-            settings.document_theme = if dark_page {
-                DocumentTheme::Dark
-            } else {
-                DocumentTheme::Light
-            };
-            self.queue_settings(settings, ui.ctx());
         }
     }
 
@@ -1995,6 +2605,7 @@ impl EditorApp {
             + PAGE_MARGIN * 2.0;
         let content_height = stack_height(&geometries);
         let requested_page = self.requested_page.take();
+        let mut clicked_link = None;
 
         let output = egui::ScrollArea::both()
             .id_salt("pdf-preview-scroll")
@@ -2037,6 +2648,36 @@ impl EditorApp {
                             .fit_to_exact_size(geometry.size)
                             .alt_text(format!("PDF page {}", geometry.index + 1)),
                     );
+                    for (link_index, link) in page.links.iter().enumerate() {
+                        let [left, top, right, bottom] = link.rect;
+                        let link_rect = Rect::from_min_max(
+                            Pos2::new(
+                                rect.left() + left * rect.width(),
+                                rect.top() + top * rect.height(),
+                            ),
+                            Pos2::new(
+                                rect.left() + right * rect.width(),
+                                rect.top() + bottom * rect.height(),
+                            ),
+                        )
+                        .expand(2.0)
+                        .intersect(rect);
+                        if !link_rect.is_positive() {
+                            continue;
+                        }
+                        let response = ui.interact(
+                            link_rect,
+                            ui.id().with(("pdf-link", geometry.index, link_index)),
+                            Sense::click(),
+                        );
+                        if response.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        if response.clicked() {
+                            clicked_link = Some(link.target.clone());
+                        }
+                        response.on_hover_text(&link.target);
+                    }
                     if requested_page == Some(geometry.index) {
                         ui.scroll_to_rect(rect, Some(Align::Min));
                     }
@@ -2047,6 +2688,9 @@ impl EditorApp {
             output.state.offset.y,
             output.inner_rect.height(),
         );
+        if let Some(target) = clicked_link {
+            self.follow_preview_link(&target);
+        }
     }
 
     fn show_problems(&self, ui: &mut egui::Ui) {
@@ -2096,57 +2740,52 @@ impl EditorApp {
     }
 
     fn show_status_bar(&self, ui: &mut egui::Ui) {
-        let non_preview_fallbacks = self.non_preview_fallback_details(ui.ctx().system_theme());
+        let mut fallbacks = self.non_preview_fallback_details(ui.ctx().system_theme());
+        if let Some(reason) = self.preview_fallback_reason() {
+            fallbacks.insert(0, format!("Preview: {reason}"));
+        }
         ui.horizontal(|ui| {
             let (status, color) = self.status_label(ui.visuals().dark_mode);
-            ui.label(RichText::new(status).small().color(color));
-            ui.separator();
-            ui.label(
-                RichText::new(format!(
-                    "{} lines · {} chars",
-                    self.source.lines().count().max(1),
-                    self.source.chars().count()
-                ))
-                .small(),
-            );
-            if let Some(notice) = &self.notice {
-                ui.separator();
-                let color = match notice.kind {
-                    NoticeKind::Info => info_color(ui.visuals().dark_mode),
-                    NoticeKind::Success => success_color(ui.visuals().dark_mode),
-                    NoticeKind::Error => error_color(ui.visuals().dark_mode),
-                };
-                ui.label(RichText::new(&notice.message).small().color(color));
-            }
+            ui.label(RichText::new(status).small().strong().color(color))
+                .on_hover_text(self.status_detail());
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let fallback = self.preview_fallback_reason();
-                let color = if fallback.is_some() {
-                    warning_color(ui.visuals().dark_mode)
-                } else {
-                    ui.visuals().strong_text_color()
-                };
-                let response = ui.label(
-                    RichText::new(self.preview_backend_label())
-                        .small()
-                        .strong()
-                        .color(color),
-                );
-                if let Some(reason) = fallback {
-                    response.on_hover_text(reason);
-                }
-                if !non_preview_fallbacks.is_empty() {
-                    ui.separator();
-                    let count = non_preview_fallbacks.len();
+                if self.document_kind.is_editable() {
+                    // This is intentionally the first right-to-left item: its
+                    // position is pinned to the window edge regardless of
+                    // status or notice length.
                     ui.label(
                         RichText::new(format!(
-                            "⚠ {count} fallback{}",
-                            if count == 1 { "" } else { "s" }
+                            "{} lines · {} chars",
+                            logical_line_count(&self.source),
+                            self.source.chars().count()
                         ))
-                        .small()
-                        .strong()
-                        .color(warning_color(ui.visuals().dark_mode)),
+                        .small(),
+                    );
+                }
+                if !fallbacks.is_empty() {
+                    ui.separator();
+                    let count = fallbacks.len();
+                    ui.label(
+                        RichText::new(format!("⚠ {count}"))
+                            .small()
+                            .strong()
+                            .color(warning_color(ui.visuals().dark_mode)),
                     )
-                    .on_hover_text(non_preview_fallbacks.join("\n"));
+                    .on_hover_text(fallbacks.join("\n"));
+                }
+                if let Some(notice) = &self.notice {
+                    ui.separator();
+                    let color = match notice.kind {
+                        NoticeKind::Info => info_color(ui.visuals().dark_mode),
+                        NoticeKind::Success => success_color(ui.visuals().dark_mode),
+                        NoticeKind::Error => error_color(ui.visuals().dark_mode),
+                    };
+                    ui.add(
+                        egui::Label::new(RichText::new(&notice.message).small().color(color))
+                            .truncate()
+                            .halign(Align::RIGHT),
+                    )
+                    .on_hover_text(&notice.message);
                 }
             });
         });
@@ -2154,13 +2793,48 @@ impl EditorApp {
 
     fn status_label(&self, dark_mode: bool) -> (String, Color32) {
         match self.status {
-            PreviewStatus::Waiting => ("PDF build queued…".to_owned(), neutral_color(dark_mode)),
-            PreviewStatus::Compiling => ("PDF compiling…".to_owned(), info_color(dark_mode)),
-            PreviewStatus::Ready(elapsed) => (
-                format!("PDF ready in {:.0} ms", elapsed.as_secs_f64() * 1000.0),
-                success_color(dark_mode),
-            ),
-            PreviewStatus::Error => ("PDF build error".to_owned(), error_color(dark_mode)),
+            PreviewStatus::Waiting => ("○".to_owned(), neutral_color(dark_mode)),
+            PreviewStatus::Compiling => ("↻".to_owned(), info_color(dark_mode)),
+            PreviewStatus::Ready(elapsed) => {
+                let label = if self.document_kind.is_typst() {
+                    format!("✓ {:.0} ms", elapsed.as_secs_f64() * 1000.0)
+                } else {
+                    "✓".to_owned()
+                };
+                (label, success_color(dark_mode))
+            }
+            PreviewStatus::Error => ("⚠".to_owned(), error_color(dark_mode)),
+        }
+    }
+
+    fn status_detail(&self) -> String {
+        if !self.document_kind.is_typst() {
+            return match (self.document_kind, self.status) {
+                (DocumentKind::Text, _) => "Text file ready".to_owned(),
+                (DocumentKind::Image, PreviewStatus::Compiling) => "Decoding image".to_owned(),
+                (DocumentKind::Image, PreviewStatus::Ready(_)) => "Image ready".to_owned(),
+                (DocumentKind::Pdf, PreviewStatus::Compiling) => "Rendering PDF".to_owned(),
+                (DocumentKind::Pdf, PreviewStatus::Ready(_)) => "PDF ready".to_owned(),
+                (_, PreviewStatus::Error) => self
+                    .notice
+                    .as_ref()
+                    .map(|notice| notice.message.clone())
+                    .unwrap_or_else(|| "Could not open file".to_owned()),
+                _ => "Opening file".to_owned(),
+            };
+        }
+        match self.status {
+            PreviewStatus::Waiting => "PDF build queued".to_owned(),
+            PreviewStatus::Compiling => "Compiling PDF".to_owned(),
+            PreviewStatus::Ready(elapsed) => {
+                format!("PDF ready in {:.0} ms", elapsed.as_secs_f64() * 1000.0)
+            }
+            PreviewStatus::Error => self
+                .raw_diagnostics
+                .lines()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("PDF build failed")
+                .to_owned(),
         }
     }
 
@@ -2184,9 +2858,47 @@ impl EditorApp {
                 );
                 return false;
             };
+            let navigation_base = url.clone();
+            let navigation_sender = self.web_link_sender.clone();
+            let navigation_root = self.project_root();
+            let navigation_dir = self.current_directory();
+            let popup_base = url.clone();
+            let popup_sender = self.web_link_sender.clone();
+            let popup_root = navigation_root.clone();
+            let popup_dir = navigation_dir.clone();
             match wry::WebViewBuilder::new()
                 .with_url(&url)
                 .with_bounds(bounds)
+                .with_navigation_handler(move |candidate| {
+                    if candidate == "about:blank" {
+                        true
+                    } else if same_web_origin(&navigation_base, &candidate) {
+                        if let Some(target) = preview_document_file_url(
+                            &candidate,
+                            &navigation_root,
+                            navigation_dir.as_deref(),
+                        ) {
+                            let _ = navigation_sender.send(target);
+                            false
+                        } else {
+                            true
+                        }
+                    } else {
+                        let _ = navigation_sender.send(candidate);
+                        false
+                    }
+                })
+                .with_new_window_req_handler(move |candidate, _features| {
+                    let target = if same_web_origin(&popup_base, &candidate) {
+                        preview_document_file_url(&candidate, &popup_root, popup_dir.as_deref())
+                    } else {
+                        Some(candidate)
+                    };
+                    if let Some(target) = target {
+                        let _ = popup_sender.send(target);
+                    }
+                    wry::NewWindowResponse::Deny
+                })
                 .build_as_child(window.as_ref())
             {
                 Ok(webview) => {
@@ -2273,7 +2985,10 @@ impl eframe::App for EditorApp {
         let context = ui.ctx().clone();
         self.sync_runtime_settings(&context);
         self.receive_compile_results(&context);
+        self.receive_asset_results(&context);
+        self.poll_export_dialog(&context);
         self.receive_tinymist_events();
+        self.receive_web_links();
         self.record_current_fallbacks(&context);
         self.handle_shortcuts(&context);
         self.handle_dropped_file(&context);
@@ -2283,7 +2998,7 @@ impl eframe::App for EditorApp {
 
         egui::Panel::top("toolbar")
             .exact_size(TOOLBAR_HEIGHT)
-            .show(ui, |ui| self.show_toolbar(ui));
+            .show(ui, |ui| self.show_toolbar(ui, frame));
         egui::Panel::bottom("status-bar")
             .exact_size(STATUS_HEIGHT)
             .show(ui, |ui| self.show_status_bar(ui));
@@ -2297,32 +3012,59 @@ impl eframe::App for EditorApp {
         }
         if self.filesystem_visible {
             egui::Panel::left("filesystem")
+                .frame(compact_content_panel_frame(ui.style()))
                 .resizable(true)
                 .default_size(230.0)
-                .min_size(150.0)
+                .min_size(0.0)
                 .max_size(420.0)
                 .show(ui, |ui| self.show_workspace(ui));
         }
         if self.settings_visible {
             self.hide_webview();
-            egui::CentralPanel::default().show(ui, |ui| self.show_settings(ui));
+            egui::CentralPanel::default()
+                .frame(compact_content_panel_frame(ui.style()))
+                .show(ui, |ui| self.show_settings(ui));
+        } else if self.document_kind.preview_only() {
+            // This presentation override intentionally does not mutate
+            // `view_mode`: returning to a source file restores the user's Code,
+            // Split, or Preview preference.
+            egui::CentralPanel::default()
+                .frame(compact_content_panel_frame(ui.style()))
+                .show(ui, |ui| self.show_preview(ui, frame));
+        } else if self.document_kind == DocumentKind::Text {
+            self.hide_webview();
+            egui::CentralPanel::default()
+                .frame(compact_content_panel_frame(ui.style()))
+                .show(ui, |ui| self.show_editor(ui));
         } else {
             match self.view_mode {
                 ViewMode::Code => {
                     self.hide_webview();
-                    egui::CentralPanel::default().show(ui, |ui| self.show_editor(ui));
+                    egui::CentralPanel::default()
+                        .frame(compact_content_panel_frame(ui.style()))
+                        .show(ui, |ui| self.show_editor(ui));
                 }
                 ViewMode::Split => {
-                    let editor_width = (ui.available_width() * 0.52).max(320.0);
+                    let available = ui.available_width();
+                    let preview_reserve = 96.0_f32.min((available * 0.48).max(40.0));
+                    let max_editor = (available - preview_reserve).max(40.0);
+                    let min_editor = 100.0_f32.min(max_editor);
+                    let editor_width = (available * 0.52).clamp(min_editor, max_editor);
                     egui::Panel::left("editor")
+                        .frame(compact_content_panel_frame(ui.style()))
                         .resizable(true)
                         .default_size(editor_width)
-                        .min_size(280.0)
+                        .min_size(min_editor)
+                        .max_size(max_editor)
                         .show(ui, |ui| self.show_editor(ui));
-                    egui::CentralPanel::default().show(ui, |ui| self.show_preview(ui, frame));
+                    egui::CentralPanel::default()
+                        .frame(compact_content_panel_frame(ui.style()))
+                        .show(ui, |ui| self.show_preview(ui, frame));
                 }
                 ViewMode::Preview => {
-                    egui::CentralPanel::default().show(ui, |ui| self.show_preview(ui, frame));
+                    egui::CentralPanel::default()
+                        .frame(compact_content_panel_frame(ui.style()))
+                        .show(ui, |ui| self.show_preview(ui, frame));
                 }
             }
         }
@@ -2337,21 +3079,127 @@ fn make_preview_texture(
     page: PreviewPage,
     dark: bool,
 ) -> PreviewTexture {
+    let PreviewPage { size, rgba, links } = page;
     let pixels = if dark {
-        dark_preview_rgba(&page.rgba)
+        dark_preview_rgba(&rgba)
     } else {
-        page.rgba.clone()
+        rgba.clone()
     };
     let texture = context.load_texture(
         format!("preview-{revision}-{index}-{dark}"),
-        ColorImage::from_rgba_unmultiplied(page.size, &pixels),
+        preview_color_image(size, &pixels),
         TextureOptions::LINEAR,
     );
     PreviewTexture {
-        size: page.size,
-        rgba: page.rgba,
+        size,
+        raster_size: size,
+        rgba,
+        links,
         texture,
     }
+}
+
+fn preview_color_image(size: [usize; 2], rgba: &[u8]) -> ColorImage {
+    ColorImage::from_rgba_unmultiplied(size, rgba)
+}
+
+fn take_matching_export(pending: &mut Option<PendingExport>, revision: u64) -> Option<PathBuf> {
+    pending
+        .take()
+        .filter(|export| export.revision == revision)
+        .map(|export| export.path)
+}
+
+fn paint_editor_line_backgrounds(
+    ui: &egui::Ui,
+    output: &egui::text_edit::TextEditOutput,
+    source: &str,
+    current_char: Option<usize>,
+    attention: Option<(usize, f32)>,
+    slot: egui::layers::ShapeIdx,
+) {
+    let line_rows = logical_line_row_ranges(&output.galley.rows);
+    let mut shapes = Vec::new();
+
+    if let Some(char_index) = current_char {
+        let line = line_index_at_char(source, char_index);
+        let fill = if ui.visuals().dark_mode {
+            Color32::from_rgba_unmultiplied(91, 143, 190, 25)
+        } else {
+            Color32::from_rgba_unmultiplied(55, 122, 181, 18)
+        };
+        push_editor_line_fill(&mut shapes, output, &line_rows, line, fill, None);
+    }
+
+    if let Some((char_index, strength)) = attention {
+        let line = line_index_at_char(source, char_index);
+        let alpha = (38.0 + 96.0 * strength).round().clamp(0.0, 255.0) as u8;
+        let fill = if ui.visuals().dark_mode {
+            Color32::from_rgba_unmultiplied(65, 185, 226, alpha)
+        } else {
+            Color32::from_rgba_unmultiplied(16, 126, 184, alpha.min(105))
+        };
+        push_editor_line_fill(
+            &mut shapes,
+            output,
+            &line_rows,
+            line,
+            fill,
+            Some(fill.gamma_multiply(1.35)),
+        );
+    }
+
+    ui.painter().set(slot, egui::Shape::Vec(shapes));
+}
+
+fn push_editor_line_fill(
+    shapes: &mut Vec<egui::Shape>,
+    output: &egui::text_edit::TextEditOutput,
+    line_rows: &[Range<usize>],
+    line: usize,
+    fill: Color32,
+    marker: Option<Color32>,
+) {
+    let Some(rows) = line_rows.get(line) else {
+        return;
+    };
+    let mut combined = Rect::NOTHING;
+    for row in &output.galley.rows[rows.clone()] {
+        let row_rect = row.rect().translate(output.galley_pos.to_vec2());
+        let rect = Rect::from_min_max(
+            Pos2::new(output.response.rect.left(), row_rect.top()),
+            Pos2::new(output.response.rect.right(), row_rect.bottom()),
+        );
+        combined = combined.union(rect);
+        shapes.push(egui::Shape::rect_filled(rect, 0.0, fill));
+    }
+    if let Some(marker) = marker
+        && combined.is_positive()
+    {
+        let marker_rect = Rect::from_min_max(
+            combined.left_top(),
+            Pos2::new(combined.left() + 3.0, combined.bottom()),
+        );
+        shapes.push(egui::Shape::rect_filled(marker_rect, 1.5, marker));
+    }
+}
+
+fn line_index_at_char(source: &str, char_index: usize) -> usize {
+    source
+        .chars()
+        .take(char_index)
+        .filter(|character| *character == '\n')
+        .count()
+}
+
+fn editor_attention_strength(elapsed: Duration) -> f32 {
+    if elapsed >= EDITOR_ATTENTION_DURATION {
+        return 0.0;
+    }
+    let progress = elapsed.as_secs_f32() / EDITOR_ATTENTION_DURATION.as_secs_f32();
+    let fade = (1.0 - progress).powi(2);
+    let pulse = 0.72 + 0.28 * (progress * std::f32::consts::TAU).sin().abs();
+    fade * pulse
 }
 
 fn paint_line_diagnostics(
@@ -2379,11 +3227,7 @@ fn paint_line_diagnostics(
             background.push(egui::Shape::rect_filled(
                 line_rect,
                 0.0,
-                color.gamma_multiply(0.11),
-            ));
-            background.push(egui::Shape::line_segment(
-                [line_rect.left_bottom(), line_rect.right_bottom()],
-                Stroke::new(1.0, color.gamma_multiply(0.8)),
+                color.gamma_multiply(0.15),
             ));
         }
         painter.set(slot, egui::Shape::Vec(background));
@@ -2401,13 +3245,22 @@ fn paint_line_diagnostics(
         let annotation_rect = Rect::from_min_size(annotation_pos, galley.size());
         hover_rect = hover_rect.union(annotation_rect);
         painter.galley(annotation_pos, galley, color);
-        ui.interact(
+        let response = ui.interact(
             hover_rect,
             output.response.id.with(("diagnostic", diagnostic.line)),
             Sense::hover(),
-        )
-        .on_hover_ui_at_pointer(|ui| {
-            ui.set_max_width(440.0);
+        );
+        let clip = ui.clip_rect();
+        let safe_right = clip.right() - 8.0;
+        let tooltip_width = (safe_right - clip.left() - 16.0).clamp(48.0, 440.0);
+        let mut tooltip = egui::Tooltip::for_enabled(&response).width(tooltip_width);
+        const LEFT_ALTERNATIVES: &[egui::RectAlign] = &[egui::RectAlign::LEFT_END];
+        tooltip.popup = tooltip
+            .popup
+            .anchor(Pos2::new(safe_right, hover_rect.top()))
+            .align(egui::RectAlign::LEFT_START)
+            .align_alternatives(LEFT_ALTERNATIVES);
+        tooltip.show(|ui| {
             ui.label(
                 RichText::new(diagnostic.severity.label())
                     .strong()
@@ -2529,8 +3382,8 @@ fn add_workspace_nodes(
 
 fn configure_theme_styles(context: &egui::Context) {
     context.all_styles_mut(|style| {
-        style.spacing.item_spacing = egui::vec2(8.0, 7.0);
-        style.spacing.button_padding = egui::vec2(9.0, 4.0);
+        style.spacing.item_spacing = egui::vec2(6.0, 4.0);
+        style.spacing.button_padding = egui::vec2(7.0, 3.0);
         style.text_styles.insert(
             egui::TextStyle::Monospace,
             FontId::new(15.0, FontFamily::Monospace),
@@ -2538,8 +3391,212 @@ fn configure_theme_styles(context: &egui::Context) {
     });
 }
 
+fn compact_content_panel_frame(style: &egui::Style) -> egui::Frame {
+    egui::Frame::side_top_panel(style).inner_margin(egui::Margin::symmetric(8, 0))
+}
+
+fn show_panel_header(
+    ui: &mut egui::Ui,
+    id_salt: &'static str,
+    add_contents: impl FnOnce(&mut egui::Ui),
+) -> Rect {
+    // `allocate_ui_with_layout` sizes itself from its children, which made
+    // labels, small buttons, and selectable labels produce three different
+    // header heights. A nested exact-size panel owns its geometry, clips
+    // overflowing children, and advances the body directly to its separator.
+    let fill = ui.visuals().panel_fill;
+    let available = ui.available_rect_before_wrap();
+    let response = egui::Panel::top(ui.id().with(id_salt))
+        .exact_size(PANEL_HEADER_HEIGHT)
+        .frame(egui::Frame::NONE.fill(fill))
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.spacing_mut().button_padding = egui::vec2(6.0, 2.0);
+            ui.with_layout(Layout::left_to_right(Align::Center), add_contents);
+        });
+    response.response.rect.intersect(available)
+}
+
+fn clipped_panel_content_ui(ui: &mut egui::Ui, id_salt: &'static str) -> egui::Ui {
+    let viewport = ui.available_rect_before_wrap();
+    let clip_rect = ui.clip_rect().intersect(viewport);
+    ui.allocate_rect(viewport, Sense::hover());
+    let mut content = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt(id_salt)
+            .max_rect(viewport)
+            .layout(Layout::top_down(Align::Min)),
+    );
+    content.set_clip_rect(clip_rect);
+    content
+}
+
 fn preview_background(ui: &egui::Ui) -> Color32 {
     ui.visuals().panel_fill
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn same_web_origin(base: &str, candidate: &str) -> bool {
+    let (Ok(base), Ok(candidate)) = (url::Url::parse(base), url::Url::parse(candidate)) else {
+        return false;
+    };
+    base.scheme() == candidate.scheme()
+        && base.host_str() == candidate.host_str()
+        && base.port_or_known_default() == candidate.port_or_known_default()
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn preview_document_file_url(
+    candidate: &str,
+    project_root: &Path,
+    source_dir: Option<&Path>,
+) -> Option<String> {
+    let candidate_url = url::Url::parse(candidate).ok()?;
+    let decoded_path = percent_decode_url_path(candidate_url.path())?;
+    let relative = Path::new(decoded_path.trim_start_matches('/'));
+    if relative.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::ParentDir
+                | std::path::Component::RootDir
+                | std::path::Component::Prefix(_)
+        )
+    }) {
+        return None;
+    }
+    let filename = relative.file_name().map(PathBuf::from);
+    let mut candidates = vec![project_root.join(relative)];
+    if let Some(source_dir) = source_dir {
+        candidates.push(source_dir.join(relative));
+        if let Some(filename) = filename {
+            candidates.push(source_dir.join(filename));
+        }
+    }
+    let canonical_root = project_root
+        .canonicalize()
+        .unwrap_or_else(|_| project_root.to_path_buf());
+    let path = candidates.into_iter().find_map(|path| {
+        let path = path.canonicalize().ok()?;
+        (path.is_file() && path.starts_with(&canonical_root) && DocumentKind::supports_path(&path))
+            .then_some(path)
+    })?;
+    let mut file_url = url::Url::from_file_path(path).ok()?;
+    file_url.set_query(candidate_url.query());
+    file_url.set_fragment(candidate_url.fragment());
+    Some(file_url.into())
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn percent_decode_url_path(path: &str) -> Option<String> {
+    let bytes = path.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let high = *bytes.get(index + 1)?;
+            let low = *bytes.get(index + 2)?;
+            decoded.push(hex_digit(high)? << 4 | hex_digit(low)?);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn pdf_page_from_url(url: &url::Url) -> Option<usize> {
+    let from_query = url
+        .query_pairs()
+        .find(|(key, _)| key.eq_ignore_ascii_case("page"))
+        .and_then(|(_, value)| value.parse::<usize>().ok());
+    let from_fragment = url.fragment().and_then(|fragment| {
+        let value = fragment
+            .strip_prefix("page=")
+            .or_else(|| fragment.strip_prefix("page"))
+            .unwrap_or(fragment)
+            .trim_start_matches(['=', ':']);
+        value.parse::<usize>().ok()
+    });
+    from_query
+        .or(from_fragment)
+        .map(|page| page.saturating_sub(1))
+}
+
+fn internal_pdf_page_target(target: &str) -> Option<usize> {
+    target
+        .strip_prefix("#page=")
+        .or_else(|| target.strip_prefix("#page"))
+        .and_then(|page| page.trim_start_matches(['=', ':']).parse::<usize>().ok())
+        .map(|page| page.saturating_sub(1))
+}
+
+fn source_position_from_url(url: &url::Url) -> Option<(usize, usize)> {
+    let mut line = None;
+    let mut column = 1;
+    for (key, value) in url.query_pairs() {
+        if key.eq_ignore_ascii_case("line") {
+            line = value.parse::<usize>().ok();
+        } else if key.eq_ignore_ascii_case("column") {
+            column = value.parse::<usize>().unwrap_or(1);
+        }
+    }
+    if line.is_none()
+        && let Some(fragment) = url.fragment()
+    {
+        let fragment = fragment
+            .strip_prefix("line=")
+            .or_else(|| fragment.strip_prefix("line"))
+            .or_else(|| fragment.strip_prefix('L'))
+            .unwrap_or(fragment)
+            .trim_start_matches(['=', ':']);
+        let mut parts = fragment.split([':', ',']);
+        line = parts.next().and_then(|value| value.parse::<usize>().ok());
+        column = parts
+            .next()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(column);
+    }
+    line.map(|line| (line.max(1), column.max(1)))
+}
+
+fn char_index_at_line_column(source: &str, line: usize, column: usize) -> usize {
+    let target_line = line.saturating_sub(1);
+    let target_column = column.saturating_sub(1);
+    let mut absolute = 0;
+    for (index, segment) in source.split_inclusive('\n').enumerate() {
+        if index == target_line {
+            let line = segment.strip_suffix('\n').unwrap_or(segment);
+            return absolute + line.chars().count().min(target_column);
+        }
+        absolute += segment.chars().count();
+    }
+    source.chars().count()
+}
+
+fn open_in_system_browser(target: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open").arg(target).spawn();
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("rundll32.exe")
+        .arg("url.dll,FileProtocolHandler")
+        .arg(target)
+        .spawn();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let result = std::process::Command::new("xdg-open").arg(target).spawn();
+    result
+        .map(|_| ())
+        .map_err(|error| format!("Could not open the link in the system browser: {error}"))
 }
 
 fn diagnostic_color(severity: DiagnosticSeverity, dark_mode: bool) -> Color32 {
@@ -2808,6 +3865,137 @@ fn lsp_position_to_char(source: &str, position: &LspPosition) -> usize {
     source.chars().count()
 }
 
+fn source_position_at_char(source: &str, char_index: usize) -> (u32, u32) {
+    let mut line = 0_u32;
+    let mut character = 0_u32;
+    for value in source.chars().take(char_index) {
+        if value == '\n' {
+            line = line.saturating_add(1);
+            character = 0;
+        } else {
+            character = character.saturating_add(1);
+        }
+    }
+    (line, character)
+}
+
+fn approximate_char_capacity(width: f32, font_size: f32) -> usize {
+    (width.max(0.0) / (font_size * 0.56).max(1.0)).floor() as usize
+}
+
+fn tail_elide(text: &str, max_chars: usize) -> String {
+    let count = text.chars().count();
+    if count <= max_chars {
+        return text.to_owned();
+    }
+    if max_chars == 0 {
+        return String::new();
+    }
+    if max_chars == 1 {
+        return "…".to_owned();
+    }
+
+    let tail = text
+        .chars()
+        .rev()
+        .take(max_chars - 1)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<String>();
+    format!("…{tail}")
+}
+
+fn elided_document_path_parts(path: Option<&Path>, max_chars: usize) -> (String, String) {
+    let full = path.map_or_else(
+        || "Untitled.typ".to_owned(),
+        |path| path.display().to_string(),
+    );
+    let filename = path
+        .and_then(Path::file_name)
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Untitled.typ".to_owned());
+    let prefix = full.strip_suffix(&filename).unwrap_or("");
+
+    if full.chars().count() <= max_chars {
+        return (prefix.to_owned(), filename);
+    }
+
+    let filename_chars = filename.chars().count();
+    if filename_chars >= max_chars {
+        return (String::new(), tail_elide(&filename, max_chars));
+    }
+
+    let prefix_chars = max_chars - filename_chars;
+    (tail_elide(prefix, prefix_chars), filename)
+}
+
+fn document_path_layout_job(
+    ui: &egui::Ui,
+    path: Option<&Path>,
+    dirty: bool,
+    max_width: f32,
+) -> LayoutJob {
+    let font_id = egui::TextStyle::Small.resolve(ui.style());
+    let max_chars =
+        approximate_char_capacity(max_width, font_id.size).saturating_sub(usize::from(dirty));
+    let (prefix, filename) = elided_document_path_parts(path, max_chars);
+    let mut job = LayoutJob::default();
+    job.append(
+        &prefix,
+        0.0,
+        TextFormat {
+            font_id: font_id.clone(),
+            color: ui.visuals().weak_text_color(),
+            ..Default::default()
+        },
+    );
+    job.append(
+        &filename,
+        0.0,
+        TextFormat {
+            font_id: font_id.clone(),
+            color: ui.visuals().strong_text_color(),
+            ..Default::default()
+        },
+    );
+    if dirty {
+        job.append(
+            "*",
+            0.0,
+            TextFormat {
+                font_id,
+                color: warning_color(ui.visuals().dark_mode),
+                ..Default::default()
+            },
+        );
+    }
+    job
+}
+
+fn paint_bold_filename_overlay(ui: &egui::Ui, rect: Rect, path: Option<&Path>, dirty: bool) {
+    let font_id = egui::TextStyle::Small.resolve(ui.style());
+    let max_chars =
+        approximate_char_capacity(rect.width(), font_id.size).saturating_sub(usize::from(dirty));
+    let (prefix, filename) = elided_document_path_parts(path, max_chars);
+    if filename.is_empty() {
+        return;
+    }
+    let painter = ui.painter().with_clip_rect(rect);
+    let prefix_galley =
+        painter.layout_no_wrap(prefix, font_id.clone(), ui.visuals().weak_text_color());
+    let filename_galley =
+        painter.layout_no_wrap(filename, font_id, ui.visuals().strong_text_color());
+    let pos = Pos2::new(
+        rect.left() + prefix_galley.size().x + 0.55,
+        rect.center().y - filename_galley.size().y * 0.5,
+    );
+    // egui's bundled proportional face has no bold variant. A sub-pixel
+    // overprint gives only the filename a genuine heavier stroke while the
+    // prefix remains visually quiet.
+    painter.galley(pos, filename_galley, ui.visuals().strong_text_color());
+}
+
 fn same_path(left: &Path, right: &Path) -> bool {
     match (left.canonicalize(), right.canonicalize()) {
         (Ok(left), Ok(right)) => left == right,
@@ -2871,6 +4059,102 @@ fn discover_project_root(source_dir: &Path) -> PathBuf {
 mod tests {
     use super::*;
 
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn web_navigation_keeps_preview_routes_embedded_but_rejects_other_origins() {
+        let base = "http://127.0.0.1:4173/preview/index.html";
+        assert!(same_web_origin(
+            base,
+            "http://127.0.0.1:4173/assets/page.svg"
+        ));
+        assert!(same_web_origin(base, "http://127.0.0.1:4173/#page=12"));
+        assert!(!same_web_origin(base, "https://typst.app/docs"));
+        assert!(!same_web_origin(base, "http://127.0.0.1:4174/preview"));
+    }
+
+    #[test]
+    fn linked_pdf_pages_are_converted_from_one_based_urls() {
+        assert_eq!(
+            pdf_page_from_url(&url::Url::parse("file:///tmp/paper.pdf#page=7").unwrap()),
+            Some(6)
+        );
+        assert_eq!(
+            pdf_page_from_url(&url::Url::parse("file:///tmp/paper.pdf?page=3").unwrap()),
+            Some(2)
+        );
+        assert_eq!(
+            pdf_page_from_url(&url::Url::parse("file:///tmp/paper.pdf#section").unwrap()),
+            None
+        );
+        assert_eq!(internal_pdf_page_target("#page=9"), Some(8));
+    }
+
+    #[test]
+    fn image_texture_rebuild_uses_raster_not_logical_dimensions() {
+        let rgba = vec![255; 2 * 3 * 4];
+        let image = preview_color_image([2, 3], &rgba);
+        assert_eq!(image.size, [2, 3]);
+        assert_eq!(image.pixels.len(), 6);
+    }
+
+    #[test]
+    fn queued_exports_never_cross_document_revisions() {
+        let mut pending = Some(PendingExport {
+            path: PathBuf::from("old-document.pdf"),
+            revision: 7,
+        });
+        assert_eq!(take_matching_export(&mut pending, 8), None);
+        assert!(pending.is_none());
+
+        let mut pending = Some(PendingExport {
+            path: PathBuf::from("current-document.pdf"),
+            revision: 8,
+        });
+        assert_eq!(
+            take_matching_export(&mut pending, 8),
+            Some(PathBuf::from("current-document.pdf"))
+        );
+    }
+
+    #[test]
+    fn typst_link_fragments_map_to_unicode_source_positions() {
+        let url = url::Url::parse("file:///tmp/chapter.typ#line=2:2").unwrap();
+        assert_eq!(source_position_from_url(&url), Some((2, 2)));
+        assert_eq!(char_index_at_line_column("one\n🦀two\n", 2, 2), 5);
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn preview_server_document_links_route_back_to_project_files() {
+        let project = tempfile::tempdir().unwrap();
+        let source_dir = project.path().join("chapters");
+        let linked = project.path().join("assets/other paper.pdf");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::create_dir_all(linked.parent().unwrap()).unwrap();
+        std::fs::write(&linked, b"%PDF-test").unwrap();
+
+        let routed = preview_document_file_url(
+            "http://127.0.0.1:4173/assets/other%20paper.pdf#page=4",
+            project.path(),
+            Some(&source_dir),
+        )
+        .unwrap();
+        let routed = url::Url::parse(&routed).unwrap();
+        assert_eq!(
+            routed.to_file_path().unwrap(),
+            linked.canonicalize().unwrap()
+        );
+        assert_eq!(routed.fragment(), Some("page=4"));
+        assert!(
+            preview_document_file_url(
+                "http://127.0.0.1:4173/assets/viewer.js",
+                project.path(),
+                Some(&source_dir),
+            )
+            .is_none()
+        );
+    }
+
     #[test]
     fn atomic_write_replaces_a_file_with_exact_bytes() {
         let directory = tempfile::tempdir().unwrap();
@@ -2888,6 +4172,149 @@ mod tests {
         std::fs::create_dir_all(project.join(".git")).unwrap();
         std::fs::create_dir_all(&source).unwrap();
         assert_eq!(discover_project_root(&source), project);
+    }
+
+    #[test]
+    fn compact_paths_keep_the_tail_and_unicode_character_budget() {
+        let path = "/Users/example/Documents/文稿/chapters/introduction.typ";
+        let compact = tail_elide(path, 18);
+        assert!(compact.starts_with('…'));
+        assert!(compact.ends_with("introduction.typ"));
+        assert_eq!(compact.chars().count(), 18);
+    }
+
+    #[test]
+    fn compact_document_path_keeps_the_filename_separate_for_bold_styling() {
+        let path = Path::new("/Users/example/a/very/long/project/chapter.typ");
+        let (prefix, filename) = elided_document_path_parts(Some(path), 20);
+        assert!(prefix.starts_with('…'));
+        assert_eq!(filename, "chapter.typ");
+        assert_eq!(prefix.chars().count() + filename.chars().count(), 20);
+    }
+
+    #[test]
+    fn pane_headers_have_equal_exact_and_gapless_geometry() {
+        let context = egui::Context::default();
+        configure_theme_styles(&context);
+        let style = context.style_of(context.theme());
+        let frame = compact_content_panel_frame(&style);
+        assert_eq!(frame.inner_margin.left, 8);
+        assert_eq!(frame.inner_margin.right, 8);
+        assert_eq!(frame.inner_margin.top, 0);
+        assert_eq!(frame.inner_margin.bottom, 0);
+
+        let mut measurements = Vec::new();
+        for (id, content) in [
+            ("geometry-workspace-header", 0),
+            ("geometry-editor-header", 1),
+            ("geometry-preview-header", 2),
+        ] {
+            context
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(320.0, 180.0))),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let top = ui.available_rect_before_wrap().top();
+                        let mut control_center = 0.0;
+                        let header = show_panel_header(ui, id, |ui| {
+                            let response = match content {
+                                0 => ui.add_sized([180.0, 20.0], egui::Label::new("…/project")),
+                                1 => ui.label(RichText::new("chapter.typ").strong()),
+                                _ => ui.selectable_label(true, "Interactive"),
+                            };
+                            control_center = response.rect.center().y;
+                        });
+                        measurements.push((
+                            top,
+                            header,
+                            ui.available_rect_before_wrap().top(),
+                            control_center,
+                        ));
+                    },
+                )
+                .drop_without_applying_deltas();
+        }
+
+        for (top, header, body_top, control_center) in &measurements {
+            assert!((header.top() - top).abs() < 0.01, "{measurements:?}");
+            assert!(
+                (header.height() - PANEL_HEADER_HEIGHT).abs() < 0.01,
+                "{measurements:?}"
+            );
+            assert!(
+                (body_top - header.bottom()).abs() < 0.01,
+                "{measurements:?}"
+            );
+            assert!(
+                (control_center - header.center().y).abs() <= 0.51,
+                "{measurements:?}"
+            );
+        }
+        assert!(
+            measurements.windows(2).all(|pair| {
+                (pair[0].1.bottom() - pair[1].1.bottom()).abs() < 0.01
+                    && (pair[0].3 - pair[1].3).abs() < 0.01
+            }),
+            "{measurements:?}"
+        );
+    }
+
+    #[test]
+    fn wide_explorer_header_and_body_cannot_grow_the_resized_panel() {
+        let context = egui::Context::default();
+        let mut widths = Vec::new();
+        let mut header_geometry = Vec::new();
+        for _ in 0..4 {
+            context
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0))),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let response = egui::Panel::left("narrow-explorer-test")
+                            .default_size(42.0)
+                            .min_size(0.0)
+                            .max_size(300.0)
+                            .show(ui, |ui| {
+                                let header =
+                                    show_panel_header(ui, "narrow-explorer-header-test", |ui| {
+                                        let _ = ui.add_sized(
+                                            [500.0, 60.0],
+                                            egui::Label::new("an overflowing explorer header"),
+                                        );
+                                    });
+                                header_geometry
+                                    .push((header, ui.available_rect_before_wrap().top()));
+                                let mut content =
+                                    clipped_panel_content_ui(ui, "narrow-explorer-content-test");
+                                content.add_sized(
+                                    [500.0, 20.0],
+                                    egui::Label::new("a deliberately very wide tree row"),
+                                );
+                            });
+                        widths.push(response.response.rect.width());
+                    },
+                )
+                .drop_without_applying_deltas();
+        }
+        assert!(widths.iter().all(|width| *width <= 43.0), "{widths:?}");
+        assert!(
+            header_geometry.iter().all(|(header, body_top)| {
+                (header.height() - PANEL_HEADER_HEIGHT).abs() < 0.01
+                    && (body_top - header.bottom()).abs() < 0.01
+            }),
+            "{header_geometry:?}"
+        );
+        assert!(
+            header_geometry
+                .iter()
+                .zip(&widths)
+                .all(|((header, _), panel_width)| header.width() <= *panel_width + 0.01),
+            "headers={header_geometry:?}, panels={widths:?}"
+        );
     }
 
     #[test]
@@ -2926,6 +4353,14 @@ mod tests {
     }
 
     #[test]
+    fn egui_scalar_offsets_map_to_tinymist_preview_source_positions() {
+        let source = "a🦀b\nsecond";
+        assert_eq!(source_position_at_char(source, 2), (0, 2));
+        assert_eq!(source_position_at_char(source, 7), (1, 3));
+        assert_eq!(source_position_at_char(source, usize::MAX), (1, 6));
+    }
+
+    #[test]
     fn revision_versions_saturate_for_lsp() {
         assert_eq!(revision_as_i32(42), 42);
         assert_eq!(revision_as_i32(u64::MAX), i32::MAX);
@@ -2936,6 +4371,18 @@ mod tests {
         assert_eq!(logical_line_count(""), 1);
         assert_eq!(logical_line_count("a\n"), 2);
         assert_eq!(logical_line_count("a\n\n🙂"), 3);
+        assert_eq!(line_index_at_char("first\nsecond", 5), 0);
+        assert_eq!(line_index_at_char("first\nsecond", 6), 1);
+    }
+
+    #[test]
+    fn editor_attention_pulse_fades_out_on_schedule() {
+        assert!(editor_attention_strength(Duration::ZERO) > 0.0);
+        assert!(
+            editor_attention_strength(Duration::from_millis(450))
+                < editor_attention_strength(Duration::ZERO)
+        );
+        assert_eq!(editor_attention_strength(EDITOR_ATTENTION_DURATION), 0.0);
     }
 
     #[test]
@@ -3054,8 +4501,8 @@ mod tests {
 
         assert_eq!(dark.spacing, light.spacing);
         assert_eq!(dark.text_styles, light.text_styles);
-        assert_eq!(dark.spacing.item_spacing, egui::vec2(8.0, 7.0));
-        assert_eq!(dark.spacing.button_padding, egui::vec2(9.0, 4.0));
+        assert_eq!(dark.spacing.item_spacing, egui::vec2(6.0, 4.0));
+        assert_eq!(dark.spacing.button_padding, egui::vec2(7.0, 3.0));
         assert_eq!(
             dark.text_styles.get(&egui::TextStyle::Monospace),
             Some(&FontId::new(15.0, FontFamily::Monospace))

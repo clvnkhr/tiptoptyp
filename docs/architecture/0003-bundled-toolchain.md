@@ -16,7 +16,7 @@ decision:
 - [Typst 0.15.1](https://github.com/typst/typst/releases/tag/v0.15.1) publishes
   platform CLI archives containing its binary, license, and notice.
 - [Tinymist 0.15.2](https://github.com/Myriad-Dreamin/tinymist/releases/tag/v0.15.2)
-  publishes separate `tinymist` and `tinymist-viewer` artifacts. mytypst needs
+  publishes separate `tinymist` and `tinymist-viewer` artifacts. tiptoptyp needs
   the former: its LSP process embeds and serves the interactive preview.
 - [cargo-packager external binaries](https://docs.rs/cargo-packager/latest/cargo_packager/config/struct.Config.html)
   use target-suffixed staging files, remove the suffix in the package, and put

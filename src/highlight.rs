@@ -68,7 +68,15 @@ fn append_node(job: &mut LayoutJob, node: &LinkedNode<'_>, inherited: Option<Tag
             append_node(job, &child, tag, dark);
         }
     } else {
-        job.append(text, 0.0, format_for(tag, dark));
+        let mut format = format_for(tag, dark);
+        if matches!(tag, Some(Tag::String))
+            && let Some(color) = parse_hex_color_string(text)
+        {
+            let swatch = composite_over_editor(color, dark);
+            format.background = swatch;
+            format.color = contrast_text(swatch);
+        }
+        job.append(text, 0.0, format);
     }
 }
 
@@ -130,11 +138,99 @@ fn format_for(tag: Option<Tag>, dark: bool) -> TextFormat {
     match tag {
         Some(Tag::Emph) => format.italics = true,
         Some(Tag::Link) => format.underline = Stroke::new(1.0, color),
-        Some(Tag::Error) => format.underline = Stroke::new(1.0, color),
+        Some(Tag::Error) => {
+            format.background = if dark {
+                Color32::from_rgba_unmultiplied(237, 135, 150, 34)
+            } else {
+                Color32::from_rgba_unmultiplied(190, 36, 54, 24)
+            };
+        }
         _ => {}
     }
 
     format
+}
+
+fn parse_hex_color_string(text: &str) -> Option<Color32> {
+    let hex = text
+        .strip_prefix('"')?
+        .strip_suffix('"')?
+        .strip_prefix('#')?;
+    let expand = |digit: u8| (digit << 4) | digit;
+    let nibble = |byte: u8| match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    };
+    let byte = |pair: &[u8]| Some((nibble(pair[0])? << 4) | nibble(pair[1])?);
+    let bytes = hex.as_bytes();
+
+    let (red, green, blue, alpha) = match bytes.len() {
+        3 => (
+            expand(nibble(bytes[0])?),
+            expand(nibble(bytes[1])?),
+            expand(nibble(bytes[2])?),
+            255,
+        ),
+        4 => (
+            expand(nibble(bytes[0])?),
+            expand(nibble(bytes[1])?),
+            expand(nibble(bytes[2])?),
+            expand(nibble(bytes[3])?),
+        ),
+        6 => (
+            byte(&bytes[0..2])?,
+            byte(&bytes[2..4])?,
+            byte(&bytes[4..6])?,
+            255,
+        ),
+        8 => (
+            byte(&bytes[0..2])?,
+            byte(&bytes[2..4])?,
+            byte(&bytes[4..6])?,
+            byte(&bytes[6..8])?,
+        ),
+        _ => return None,
+    };
+    Some(Color32::from_rgba_unmultiplied(red, green, blue, alpha))
+}
+
+fn composite_over_editor(color: Color32, dark: bool) -> Color32 {
+    if color.a() == 255 {
+        return color;
+    }
+    let base = if dark { [30, 34, 43] } else { [250, 250, 252] };
+    let alpha = color.a() as u16;
+    let blend = |foreground: u8, background: u8| {
+        ((foreground as u16 * alpha + background as u16 * (255 - alpha) + 127) / 255) as u8
+    };
+    Color32::from_rgb(
+        blend(color.r(), base[0]),
+        blend(color.g(), base[1]),
+        blend(color.b(), base[2]),
+    )
+}
+
+fn contrast_text(background: Color32) -> Color32 {
+    let linear = |channel: u8| {
+        let channel = channel as f32 / 255.0;
+        if channel <= 0.04045 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let luminance = 0.2126 * linear(background.r())
+        + 0.7152 * linear(background.g())
+        + 0.0722 * linear(background.b());
+    let white_contrast = 1.05 / (luminance + 0.05);
+    let black_contrast = (luminance + 0.05) / 0.05;
+    if white_contrast >= black_contrast {
+        Color32::WHITE
+    } else {
+        Color32::BLACK
+    }
 }
 
 #[cfg(test)]
@@ -230,5 +326,32 @@ mod tests {
         let mut highlighter = SyntaxHighlighter::default();
         let job = highlighter.highlight("", true);
         assert_exact_mapping(&job, "");
+    }
+
+    #[test]
+    fn hex_color_strings_become_readable_color_swatches() {
+        let source = r##"#let accent = rgb("#4f8cff")"##;
+        let mut highlighter = SyntaxHighlighter::default();
+        let job = highlighter.highlight(source, true);
+        let format = format_at(&job, source.find("#4f8cff").unwrap());
+
+        assert_eq!(format.background, Color32::from_rgb(0x4f, 0x8c, 0xff));
+        assert_eq!(format.color, Color32::BLACK);
+        assert_exact_mapping(&job, source);
+    }
+
+    #[test]
+    fn shorthand_and_alpha_hex_colors_are_parsed_safely() {
+        assert_eq!(
+            parse_hex_color_string(r##""#abc""##),
+            Some(Color32::from_rgb(0xaa, 0xbb, 0xcc))
+        );
+        assert_eq!(
+            parse_hex_color_string(r##""#10203080""##),
+            Some(Color32::from_rgba_unmultiplied(0x10, 0x20, 0x30, 0x80))
+        );
+        assert_eq!(parse_hex_color_string(r##""#not-a-color""##), None);
+        assert_eq!(contrast_text(Color32::BLACK), Color32::WHITE);
+        assert_eq!(contrast_text(Color32::WHITE), Color32::BLACK);
     }
 }

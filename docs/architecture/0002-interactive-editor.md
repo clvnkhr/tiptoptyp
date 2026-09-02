@@ -54,7 +54,7 @@ under the pointer and a pinch exits fit-to-width mode.
 
 ### 2. Tinymist owns interactive document rendering
 
-When a compatible `tinymist` executable is available, mytypst starts one LSP
+When a compatible `tinymist` executable is available, tiptoptyp starts one LSP
 sidecar per workspace, synchronizes in-memory buffers with `didOpen` and
 `didChange`, invokes `tinymist.startDefaultPreview`, and embeds the returned
 server URL in a Wry child webview.

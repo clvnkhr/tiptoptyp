@@ -1,5 +1,5 @@
 [package]
-name = "mytypst"
+name = "tiptoptyp"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
@@ -8,15 +8,18 @@ description = "A fast, native Typst editor with live PDF preview"
 [dependencies]
 eframe = { version = "0.36.1", default-features = false, features = ["default_fonts", "glow", "persistence", "wayland", "x11"] }
 egui_ltreeview = "0.9.0"
-image = { version = "0.25.10", default-features = false, features = ["png"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff"] }
+quick-xml = "0.41"
 rfd = "0.17.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+syntect = { version = "5.3.0", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy"] }
 tempfile = "3.21.0"
 typst-syntax = "0.15.1"
 url = "2.5"
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+raw-window-handle = "0.6.2"
 wry = "0.56.1"
 
 [dev-dependencies]
@@ -28,8 +31,8 @@ codegen-units = 1
 strip = true
 
 [package.metadata.packager]
-product-name = "mytypst"
-identifier = "dev.mytypst.editor"
+product-name = "tiptoptyp"
+identifier = "dev.tiptoptyp.editor"
 category = "DeveloperTool"
 before-packaging-command = "cargo run --manifest-path xtask/Cargo.toml -- package-build"
 external-binaries = ["toolchain/bin/typst", "toolchain/bin/tinymist"]

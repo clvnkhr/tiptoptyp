@@ -1,6 +1,6 @@
 //! Resolves the compiler and language-server sidecars.
 //!
-//! Packaged builds prefer the pinned binaries shipped beside mytypst. A user
+//! Packaged builds prefer the pinned binaries shipped beside tiptoptyp. A user
 //! may select an explicit executable instead. Development-only environment and
 //! `PATH` discovery remain recovery routes, but are surfaced as fallbacks.
 

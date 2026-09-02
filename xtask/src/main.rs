@@ -101,7 +101,7 @@ fn run() -> Result<(), String> {
         }
         "help" | "--help" | "-h" => {
             println!(
-                "mytypst packaging tasks\n\n  fetch-sidecars [--target TRIPLE]\n  package-build [--target TRIPLE]\n  verify-package [--target TRIPLE]\n\n{PACKAGE_TARGET_ENV} supplies the target to cargo-packager's hook."
+                "tiptoptyp packaging tasks\n\n  fetch-sidecars [--target TRIPLE]\n  package-build [--target TRIPLE]\n  verify-package [--target TRIPLE]\n\n{PACKAGE_TARGET_ENV} supplies the target to cargo-packager's hook."
             );
             Ok(())
         }
@@ -115,13 +115,15 @@ fn verify_package(target: &str) -> Result<(), String> {
     }
     let root = repository_root();
     let app = if target == host_target()? {
-        root.join("target/release/mytypst.app")
+        root.join("target/release/tiptoptyp.app")
     } else {
-        root.join("target").join(target).join("release/mytypst.app")
+        root.join("target")
+            .join(target)
+            .join("release/tiptoptyp.app")
     };
     let executable_dir = app.join("Contents/MacOS");
     let resources = app.join("Contents/Resources");
-    require_file(&executable_dir.join("mytypst"))?;
+    require_file(&executable_dir.join("tiptoptyp"))?;
 
     let artifacts = parse_manifest(MANIFEST)?;
     for artifact in artifacts

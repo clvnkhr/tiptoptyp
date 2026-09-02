@@ -1,11 +1,12 @@
 use eframe::{Storage, egui};
 use serde::{Deserialize, Serialize};
 
+// Preserve the pre-rename key so existing installations keep their settings.
 const STORAGE_KEY: &str = "mytypst.settings.v1";
 
 /// The interface appearance selected by the user.
 ///
-/// This is deliberately owned by mytypst rather than inferred from egui's
+/// This is deliberately owned by tiptoptyp rather than inferred from egui's
 /// persisted memory, so the Settings panel remains the single source of truth.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum InterfaceTheme {
@@ -88,6 +89,43 @@ pub(crate) enum PreviewPreference {
     Native,
 }
 
+/// Mouse gesture used for an explicit source-to-preview jump.
+///
+/// Keeping this separate from automatic cursor synchronization makes the
+/// interaction deliberate and gives trackpad users a gesture that does not
+/// require a modifier key.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum SourcePreviewTrigger {
+    #[default]
+    DoubleClick,
+    ModifierClick,
+    Disabled,
+}
+
+impl SourcePreviewTrigger {
+    pub(crate) const ALL: [Self; 3] = [Self::DoubleClick, Self::ModifierClick, Self::Disabled];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::DoubleClick => "Double-click",
+            Self::ModifierClick => "Command/Ctrl-click",
+            Self::Disabled => "Disabled",
+        }
+    }
+
+    pub(crate) fn description(self) -> &'static str {
+        match self {
+            Self::DoubleClick => {
+                "Double-click source text to reveal it in the interactive preview."
+            }
+            Self::ModifierClick => {
+                "Command-click on macOS or Ctrl-click elsewhere to reveal source in the preview."
+            }
+            Self::Disabled => "Source-to-preview mouse navigation is disabled.",
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum ToolMode {
     #[default]
@@ -145,6 +183,7 @@ pub(crate) struct AppSettings {
     pub(crate) preview_preference: PreviewPreference,
     pub(crate) line_wrap: bool,
     pub(crate) line_numbers: bool,
+    pub(crate) source_preview_trigger: SourcePreviewTrigger,
     pub(crate) typst: ToolPreference,
     pub(crate) tinymist: ToolPreference,
 }
@@ -157,6 +196,7 @@ impl Default for AppSettings {
             preview_preference: PreviewPreference::Interactive,
             line_wrap: true,
             line_numbers: true,
+            source_preview_trigger: SourcePreviewTrigger::DoubleClick,
             typst: ToolPreference::default(),
             tinymist: ToolPreference::default(),
         }
@@ -211,6 +251,10 @@ mod tests {
         assert_eq!(settings.preview_preference, PreviewPreference::Interactive);
         assert!(settings.line_wrap);
         assert!(settings.line_numbers);
+        assert_eq!(
+            settings.source_preview_trigger,
+            SourcePreviewTrigger::DoubleClick
+        );
         assert_eq!(settings.typst.mode, ToolMode::Bundled);
         assert_eq!(settings.tinymist.mode, ToolMode::Bundled);
     }
@@ -274,6 +318,7 @@ mod tests {
             preview_preference: PreviewPreference::Native,
             line_wrap: false,
             line_numbers: false,
+            source_preview_trigger: SourcePreviewTrigger::ModifierClick,
             typst: ToolPreference {
                 mode: ToolMode::Custom,
                 custom_path: "/opt/typst".to_owned(),
@@ -294,6 +339,10 @@ mod tests {
         assert_eq!(partial.preview_preference, PreviewPreference::Interactive);
         assert!(partial.line_wrap);
         assert!(partial.line_numbers);
+        assert_eq!(
+            partial.source_preview_trigger,
+            SourcePreviewTrigger::DoubleClick
+        );
         assert_eq!(partial.typst, ToolPreference::default());
         assert_eq!(partial.tinymist, ToolPreference::default());
     }
