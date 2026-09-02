@@ -1,0 +1,13 @@
+# tool app-target asset-target version archive sha256
+typst aarch64-apple-darwin aarch64-apple-darwin 0.15.1 typst-aarch64-apple-darwin.tar.xz 48f62ed034aa3a7978309579ac6ca00045e2ef0da73114e8af27cfd8e74dc05a
+tinymist aarch64-apple-darwin aarch64-apple-darwin 0.15.2 tinymist-aarch64-apple-darwin.tar.gz 16241868c6752aa5e8f9c162562293c7cdf69e82f54687d7886336daf2c51915
+typst x86_64-apple-darwin x86_64-apple-darwin 0.15.1 typst-x86_64-apple-darwin.tar.xz 7f9fdd9584866245de9a79e0add8f9236fae6f40a8a45e2c4771ccc14db4e0fa
+tinymist x86_64-apple-darwin x86_64-apple-darwin 0.15.2 tinymist-x86_64-apple-darwin.tar.gz fcfcfd01376394048443f81de349d165c271c17c36579eb9a08b889b30b8c3b2
+typst aarch64-pc-windows-msvc aarch64-pc-windows-msvc 0.15.1 typst-aarch64-pc-windows-msvc.zip 4ab28e1b71ec3184d38d580ab797f499b6770d952b6b19167be5cea5c2662e14
+tinymist aarch64-pc-windows-msvc aarch64-pc-windows-msvc 0.15.2 tinymist-aarch64-pc-windows-msvc.zip ed120fc474a07c5614bb8a7ecd17a649360cba26c2d9f1f96b14a8bc7b3afc11
+typst x86_64-pc-windows-msvc x86_64-pc-windows-msvc 0.15.1 typst-x86_64-pc-windows-msvc.zip 19ce3551153c2fe7ee9fa2f95208310c8f4d3209fedb699e0333faf8913f6736
+tinymist x86_64-pc-windows-msvc x86_64-pc-windows-msvc 0.15.2 tinymist-x86_64-pc-windows-msvc.zip 91edb0d21edca5841b896d702d8086622792d52b71a9b444d8befb0e937969ae
+typst aarch64-unknown-linux-gnu aarch64-unknown-linux-musl 0.15.1 typst-aarch64-unknown-linux-musl.tar.xz 5aa8d74a3d906e60ea12a66ac2f37f8eef1b14cbad7182a745e393a10c23dcee
+tinymist aarch64-unknown-linux-gnu aarch64-unknown-linux-gnu 0.15.2 tinymist-aarch64-unknown-linux-gnu.tar.gz eba8e14338cf211906d77be6b18102736222da6721e98161133fa0d8ff5ab599
+typst x86_64-unknown-linux-gnu x86_64-unknown-linux-musl 0.15.1 typst-x86_64-unknown-linux-musl.tar.xz a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c
+tinymist x86_64-unknown-linux-gnu x86_64-unknown-linux-gnu 0.15.2 tinymist-x86_64-unknown-linux-gnu.tar.gz 9b8a1aea6bb3fc9c39cb70496f0082bd518cfede555757bc3cb5225b05abc99b

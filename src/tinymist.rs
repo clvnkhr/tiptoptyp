@@ -1,0 +1,2066 @@
+//! Optional Tinymist language-server and interactive-preview sidecar.
+//!
+//! The sidecar deliberately speaks only public LSP commands. Tinymist serves
+//! its own version-matched preview frontend, so this module never needs to
+//! understand Tinymist's private vector-diff protocol.
+
+use std::{
+    collections::HashMap,
+    ffi::OsString,
+    fmt,
+    io::{self, BufRead, BufReader, Read, Write},
+    path::{Path, PathBuf},
+    process::{Child, ChildStdin, Command, ExitStatus, Stdio},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+        mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError},
+    },
+    thread,
+    time::{Duration, Instant},
+};
+
+use eframe::egui;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use url::Url;
+
+const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(300);
+const EXIT_TIMEOUT: Duration = Duration::from_millis(200);
+const MAX_HEADER_LINE_BYTES: usize = 8 * 1024;
+const MAX_HEADER_BYTES: usize = 32 * 1024;
+const MAX_MESSAGE_BYTES: usize = 32 * 1024 * 1024;
+
+pub type Result<T> = std::result::Result<T, TinymistError>;
+
+/// Identifies one workspace process. Generations are never reused.
+///
+/// Every document command includes its generation. This prevents a queued
+/// edit from one workspace from being applied after the user opens another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Generation(pub u64);
+
+#[derive(Debug)]
+pub enum TinymistError {
+    WorkerStopped,
+    StaleGeneration {
+        requested: Generation,
+        current: Option<Generation>,
+    },
+    InvalidFilePath(PathBuf),
+}
+
+impl fmt::Display for TinymistError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::WorkerStopped => formatter.write_str("the Tinymist worker has stopped"),
+            Self::StaleGeneration { requested, current } => write!(
+                formatter,
+                "Tinymist generation {} is stale (current generation: {})",
+                requested.0,
+                current
+                    .map(|generation| generation.0.to_string())
+                    .unwrap_or_else(|| "none".to_owned())
+            ),
+            Self::InvalidFilePath(path) => {
+                write!(formatter, "cannot convert {} to a file URI", path.display())
+            }
+        }
+    }
+}
+
+impl std::error::Error for TinymistError {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PreviewMode {
+    #[default]
+    Document,
+    #[expect(
+        dead_code,
+        reason = "supported by Tinymist; the MVP UI exposes document mode"
+    )]
+    Slide,
+}
+
+impl PreviewMode {
+    fn as_arg(self) -> &'static str {
+        match self {
+            Self::Document => "document",
+            Self::Slide => "slide",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InvertColors {
+    Never,
+    #[default]
+    Auto,
+    Always,
+}
+
+impl InvertColors {
+    fn as_arg(self) -> &'static str {
+        match self {
+            Self::Never => "never",
+            Self::Auto => "auto",
+            Self::Always => "always",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviewOptions {
+    pub mode: PreviewMode,
+    pub invert_colors: InvertColors,
+    pub partial_rendering: bool,
+}
+
+impl Default for PreviewOptions {
+    fn default() -> Self {
+        Self {
+            mode: PreviewMode::Document,
+            invert_colors: InvertColors::Auto,
+            partial_rendering: true,
+        }
+    }
+}
+
+impl PreviewOptions {
+    fn command_line(&self) -> Vec<String> {
+        let mut arguments = vec![
+            "--data-plane-host=127.0.0.1:0".to_owned(),
+            "--control-plane-host=127.0.0.1:0".to_owned(),
+            format!("--preview-mode={}", self.mode.as_arg()),
+            format!("--invert-colors={}", self.invert_colors.as_arg()),
+        ];
+        if self.partial_rendering {
+            arguments.push("--partial-rendering=true".to_owned());
+        }
+        // This is a native application: opening the system browser would be a
+        // surprising side effect and could expose a stale preview tab.
+        arguments.push("--no-open".to_owned());
+        arguments
+    }
+
+    fn settings(&self) -> Value {
+        json!({
+            "preview": {
+                "browsing": {
+                    "args": self.command_line(),
+                }
+            },
+            // False tells Tinymist to use standard window/showDocument, which
+            // is advertised and handled below.
+            "customizedShowDocument": false,
+        })
+    }
+}
+
+/// Configuration for one Tinymist process.
+#[derive(Debug, Clone)]
+pub struct TinymistConfig {
+    pub workspace_root: PathBuf,
+    pub preview: PreviewOptions,
+    program: PathBuf,
+    arguments: Vec<OsString>,
+}
+
+impl TinymistConfig {
+    pub fn new(workspace_root: impl Into<PathBuf>) -> Self {
+        Self {
+            workspace_root: workspace_root.into(),
+            preview: PreviewOptions::default(),
+            program: PathBuf::from("tinymist"),
+            arguments: vec![OsString::from("lsp")],
+        }
+    }
+
+    /// Overrides the executable while retaining the default `lsp` argument.
+    pub fn with_executable(mut self, executable: impl Into<PathBuf>) -> Self {
+        self.program = executable.into();
+        self
+    }
+
+    #[cfg(test)]
+    fn with_command(
+        mut self,
+        program: impl Into<PathBuf>,
+        arguments: impl IntoIterator<Item = OsString>,
+    ) -> Self {
+        self.program = program.into();
+        self.arguments = arguments.into_iter().collect();
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextDocument {
+    pub uri: String,
+    pub language_id: String,
+    pub version: i32,
+    pub text: String,
+}
+
+impl TextDocument {
+    pub fn typst(uri: impl Into<String>, version: i32, text: impl Into<String>) -> Self {
+        Self {
+            uri: uri.into(),
+            language_id: "typst".to_owned(),
+            version,
+            text: text.into(),
+        }
+    }
+
+    pub fn from_path(path: &Path, version: i32, text: impl Into<String>) -> Result<Self> {
+        Ok(Self::typst(path_to_file_uri(path)?, version, text))
+    }
+}
+
+/// Converts an existing or prospective path to an absolute `file:` URI.
+/// Unlike canonicalization, this also works for a not-yet-created file.
+pub fn path_to_file_uri(path: &Path) -> Result<String> {
+    let absolute = if path.is_absolute() {
+        path.to_owned()
+    } else {
+        std::env::current_dir()
+            .map_err(|_| TinymistError::InvalidFilePath(path.to_owned()))?
+            .join(path)
+    };
+    Url::from_file_path(&absolute)
+        .map(Into::into)
+        .map_err(|()| TinymistError::InvalidFilePath(path.to_owned()))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LspPosition {
+    /// Zero-based line number.
+    pub line: u32,
+    /// Zero-based UTF-16 code-unit offset, as required by LSP.
+    pub character: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LspRange {
+    pub start: LspPosition,
+    pub end: LspPosition,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticSeverity {
+    Error,
+    Warning,
+    Information,
+    Hint,
+    Other(u64),
+}
+
+impl DiagnosticSeverity {
+    fn from_lsp(value: u64) -> Self {
+        match value {
+            1 => Self::Error,
+            2 => Self::Warning,
+            3 => Self::Information,
+            4 => Self::Hint,
+            other => Self::Other(other),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TinymistDiagnostic {
+    pub range: LspRange,
+    pub severity: Option<DiagnosticSeverity>,
+    pub code: Option<Value>,
+    pub source: Option<String>,
+    pub message: String,
+    /// The complete diagnostic, including related information, tags and data.
+    pub raw: Value,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TinymistEvent {
+    Starting {
+        generation: Generation,
+    },
+    Initialized {
+        generation: Generation,
+    },
+    PreviewReady {
+        generation: Generation,
+        url: String,
+    },
+    ShowDocument {
+        generation: Generation,
+        uri: String,
+        selection: Option<LspRange>,
+        external: Option<bool>,
+        take_focus: Option<bool>,
+        raw: Value,
+    },
+    PublishDiagnostics {
+        generation: Generation,
+        uri: String,
+        version: Option<i32>,
+        diagnostics: Vec<TinymistDiagnostic>,
+        raw: Value,
+    },
+    Log {
+        generation: Generation,
+        level: Option<u32>,
+        message: String,
+    },
+    /// A notification not interpreted by this version of mytypst.
+    Notification {
+        generation: Generation,
+        method: String,
+        params: Value,
+    },
+    Error {
+        generation: Generation,
+        stage: &'static str,
+        message: String,
+        fatal: bool,
+    },
+    Stopped {
+        generation: Generation,
+        code: Option<i32>,
+        reason: String,
+    },
+}
+
+impl TinymistEvent {
+    pub fn generation(&self) -> Generation {
+        match self {
+            Self::Starting { generation }
+            | Self::Initialized { generation }
+            | Self::PreviewReady { generation, .. }
+            | Self::ShowDocument { generation, .. }
+            | Self::PublishDiagnostics { generation, .. }
+            | Self::Log { generation, .. }
+            | Self::Notification { generation, .. }
+            | Self::Error { generation, .. }
+            | Self::Stopped { generation, .. } => *generation,
+        }
+    }
+}
+
+/// Nonblocking controller for an optional Tinymist process.
+pub struct TinymistSidecar {
+    commands: Option<Sender<WorkerCommand>>,
+    events: Receiver<TinymistEvent>,
+    worker: Option<thread::JoinHandle<()>>,
+    next_generation: AtomicU64,
+    current_generation: Arc<AtomicU64>,
+}
+
+impl TinymistSidecar {
+    pub fn new(context: egui::Context) -> Self {
+        let (command_tx, command_rx) = mpsc::channel();
+        let (event_tx, event_rx) = mpsc::channel();
+        let current_generation = Arc::new(AtomicU64::new(0));
+        let worker_generation = current_generation.clone();
+        let worker = thread::Builder::new()
+            .name("mytypst-tinymist".to_owned())
+            .spawn(move || worker_loop(command_rx, event_tx, context, worker_generation))
+            .expect("failed to start Tinymist worker");
+
+        Self {
+            commands: Some(command_tx),
+            events: event_rx,
+            worker: Some(worker),
+            next_generation: AtomicU64::new(1),
+            current_generation,
+        }
+    }
+
+    /// Queues a workspace start and returns immediately.
+    pub fn start_workspace(&self, config: TinymistConfig) -> Result<Generation> {
+        let generation = Generation(self.next_generation.fetch_add(1, Ordering::Relaxed));
+        self.current_generation
+            .store(generation.0, Ordering::Release);
+        if self
+            .send(WorkerCommand::Start { generation, config })
+            .is_err()
+        {
+            self.current_generation.store(0, Ordering::Release);
+            return Err(TinymistError::WorkerStopped);
+        }
+        Ok(generation)
+    }
+
+    pub fn did_open(&self, generation: Generation, document: TextDocument) -> Result<()> {
+        self.send_for_generation(
+            generation,
+            WorkerCommand::DidOpen {
+                generation,
+                document,
+            },
+        )
+    }
+
+    /// Sends a full-buffer LSP change. The version must increase monotonically.
+    pub fn did_change(
+        &self,
+        generation: Generation,
+        uri: impl Into<String>,
+        version: i32,
+        text: impl Into<String>,
+    ) -> Result<()> {
+        self.send_for_generation(
+            generation,
+            WorkerCommand::DidChange {
+                generation,
+                uri: uri.into(),
+                version,
+                text: text.into(),
+            },
+        )
+    }
+
+    pub fn did_close(&self, generation: Generation, uri: impl Into<String>) -> Result<()> {
+        self.send_for_generation(
+            generation,
+            WorkerCommand::DidClose {
+                generation,
+                uri: uri.into(),
+            },
+        )
+    }
+
+    pub fn stop_workspace(&self, generation: Generation) -> Result<()> {
+        self.send_for_generation(generation, WorkerCommand::Stop { generation })
+    }
+
+    pub fn current_generation(&self) -> Option<Generation> {
+        match self.current_generation.load(Ordering::Acquire) {
+            0 => None,
+            generation => Some(Generation(generation)),
+        }
+    }
+
+    /// Returns the next event for the current workspace without blocking.
+    /// Events already queued for an older generation are discarded here too.
+    pub fn try_recv(&self) -> Option<TinymistEvent> {
+        loop {
+            let event = self.events.try_recv().ok()?;
+            if self.current_generation() == Some(event.generation()) {
+                if matches!(event, TinymistEvent::Stopped { .. }) {
+                    let _ = self.current_generation.compare_exchange(
+                        event.generation().0,
+                        0,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    );
+                }
+                return Some(event);
+            }
+        }
+    }
+
+    fn send_for_generation(&self, generation: Generation, command: WorkerCommand) -> Result<()> {
+        let current = self.current_generation();
+        if current != Some(generation) {
+            return Err(TinymistError::StaleGeneration {
+                requested: generation,
+                current,
+            });
+        }
+        self.send(command)
+    }
+
+    fn send(&self, command: WorkerCommand) -> Result<()> {
+        self.commands
+            .as_ref()
+            .ok_or(TinymistError::WorkerStopped)?
+            .send(command)
+            .map_err(|_| TinymistError::WorkerStopped)
+    }
+}
+
+impl Drop for TinymistSidecar {
+    fn drop(&mut self) {
+        if let Some(commands) = self.commands.take() {
+            let _ = commands.send(WorkerCommand::Shutdown);
+            drop(commands);
+        }
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+enum WorkerCommand {
+    Start {
+        generation: Generation,
+        config: TinymistConfig,
+    },
+    DidOpen {
+        generation: Generation,
+        document: TextDocument,
+    },
+    DidChange {
+        generation: Generation,
+        uri: String,
+        version: i32,
+        text: String,
+    },
+    DidClose {
+        generation: Generation,
+        uri: String,
+    },
+    Stop {
+        generation: Generation,
+    },
+    Shutdown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionPhase {
+    Initializing,
+    Initialized,
+    StartingPreview,
+    Running,
+}
+
+impl SessionPhase {
+    fn can_sync_documents(self) -> bool {
+        self != Self::Initializing
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PendingRequest {
+    Initialize,
+    StartPreview,
+}
+
+enum Incoming {
+    Message(Value),
+    Stderr(String),
+    EndOfStream,
+    ReadError(String),
+}
+
+struct Session {
+    generation: Generation,
+    phase: SessionPhase,
+    child: Child,
+    stdin: Option<ChildStdin>,
+    incoming: Receiver<Incoming>,
+    stdout_reader: Option<thread::JoinHandle<()>>,
+    stderr_reader: Option<thread::JoinHandle<()>>,
+    next_request_id: u64,
+    pending: HashMap<u64, PendingRequest>,
+    documents: HashMap<String, TextDocument>,
+    settings: Value,
+    root_uri: String,
+    workspace_name: String,
+}
+
+impl Session {
+    fn spawn(generation: Generation, config: TinymistConfig) -> std::result::Result<Self, String> {
+        let root = absolute_path(&config.workspace_root)
+            .map_err(|error| format!("could not resolve workspace root: {error}"))?;
+        let root_uri = Url::from_directory_path(&root)
+            .map(String::from)
+            .map_err(|()| format!("could not convert {} to a directory URI", root.display()))?;
+        let workspace_name = root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or("workspace")
+            .to_owned();
+
+        let mut command = Command::new(&config.program);
+        command
+            .args(&config.arguments)
+            .current_dir(&root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command.spawn().map_err(|error| {
+            format!(
+                "could not start `{}`: {error}",
+                config.program.to_string_lossy()
+            )
+        })?;
+
+        let stdio = (child.stdin.take(), child.stdout.take(), child.stderr.take());
+        let (Some(stdin), Some(stdout), Some(stderr)) = stdio else {
+            // Child does not kill-on-drop. Reap it explicitly even for the
+            // theoretically impossible case of a missing piped handle.
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("could not open Tinymist standard streams".to_owned());
+        };
+
+        let (incoming_tx, incoming_rx) = mpsc::channel();
+        let stdout_tx = incoming_tx.clone();
+        let stdout_reader = match thread::Builder::new()
+            .name(format!("mytypst-tinymist-stdout-{}", generation.0))
+            .spawn(move || stdout_loop(stdout, stdout_tx))
+        {
+            Ok(reader) => reader,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("could not start Tinymist stdout reader: {error}"));
+            }
+        };
+        let stderr_reader = match thread::Builder::new()
+            .name(format!("mytypst-tinymist-stderr-{}", generation.0))
+            .spawn(move || stderr_loop(stderr, incoming_tx))
+        {
+            Ok(reader) => reader,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = stdout_reader.join();
+                return Err(format!("could not start Tinymist stderr reader: {error}"));
+            }
+        };
+
+        let mut session = Self {
+            generation,
+            phase: SessionPhase::Initializing,
+            child,
+            stdin: Some(stdin),
+            incoming: incoming_rx,
+            stdout_reader: Some(stdout_reader),
+            stderr_reader: Some(stderr_reader),
+            next_request_id: 1,
+            pending: HashMap::new(),
+            documents: HashMap::new(),
+            settings: config.preview.settings(),
+            root_uri,
+            workspace_name,
+        };
+        session.send_initialize()?;
+        Ok(session)
+    }
+
+    fn send_initialize(&mut self) -> std::result::Result<(), String> {
+        let params = json!({
+            "processId": std::process::id(),
+            "clientInfo": {
+                "name": "mytypst",
+                "version": env!("CARGO_PKG_VERSION"),
+            },
+            "rootPath": self.root_path_for_legacy_servers(),
+            "rootUri": self.root_uri,
+            "capabilities": {
+                "workspace": {
+                    "configuration": true,
+                    "workspaceFolders": true,
+                    "executeCommand": { "dynamicRegistration": false },
+                },
+                "textDocument": {
+                    "synchronization": {
+                        "dynamicRegistration": false,
+                        "didSave": false,
+                    },
+                    "publishDiagnostics": {
+                        "relatedInformation": true,
+                        "versionSupport": true,
+                        "tagSupport": { "valueSet": [1, 2] },
+                        "codeDescriptionSupport": true,
+                        "dataSupport": true,
+                    },
+                },
+                "window": {
+                    "showDocument": { "support": true },
+                    "workDoneProgress": true,
+                },
+                "general": {
+                    "positionEncodings": ["utf-16"],
+                },
+            },
+            "initializationOptions": {
+                "rootPath": self.root_path_for_legacy_servers(),
+            },
+            "trace": "off",
+            "workspaceFolders": [{
+                "uri": self.root_uri,
+                "name": self.workspace_name,
+            }],
+        });
+        self.send_request("initialize", params, PendingRequest::Initialize)?;
+        Ok(())
+    }
+
+    fn root_path_for_legacy_servers(&self) -> String {
+        Url::parse(&self.root_uri)
+            .ok()
+            .and_then(|uri| uri.to_file_path().ok())
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn send_request(
+        &mut self,
+        method: &str,
+        params: Value,
+        pending: PendingRequest,
+    ) -> std::result::Result<u64, String> {
+        let id = self.next_request_id;
+        self.next_request_id = self
+            .next_request_id
+            .checked_add(1)
+            .ok_or_else(|| "Tinymist request ID overflow".to_owned())?;
+        self.write(&json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params,
+        }))?;
+        self.pending.insert(id, pending);
+        Ok(id)
+    }
+
+    fn notify(&mut self, method: &str, params: Value) -> std::result::Result<(), String> {
+        self.write(&json!({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+        }))
+    }
+
+    fn write(&mut self, message: &Value) -> std::result::Result<(), String> {
+        let stdin = self
+            .stdin
+            .as_mut()
+            .ok_or_else(|| "Tinymist stdin is closed".to_owned())?;
+        write_lsp_message(stdin, message)
+            .map_err(|error| format!("could not write to Tinymist: {error}"))
+    }
+
+    fn send_did_open(&mut self, document: &TextDocument) -> std::result::Result<(), String> {
+        self.notify(
+            "textDocument/didOpen",
+            json!({
+                "textDocument": {
+                    "uri": document.uri,
+                    "languageId": document.language_id,
+                    "version": document.version,
+                    "text": document.text,
+                }
+            }),
+        )
+    }
+
+    fn send_did_change(&mut self, document: &TextDocument) -> std::result::Result<(), String> {
+        self.notify(
+            "textDocument/didChange",
+            json!({
+                "textDocument": {
+                    "uri": document.uri,
+                    "version": document.version,
+                },
+                "contentChanges": [{ "text": document.text }],
+            }),
+        )
+    }
+
+    fn send_did_close(&mut self, uri: &str) -> std::result::Result<(), String> {
+        self.notify(
+            "textDocument/didClose",
+            json!({ "textDocument": { "uri": uri } }),
+        )
+    }
+
+    fn reply_result(&mut self, id: Value, result: Value) -> std::result::Result<(), String> {
+        self.write(&json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+    }
+
+    fn reply_error(
+        &mut self,
+        id: Value,
+        code: i64,
+        message: impl Into<String>,
+    ) -> std::result::Result<(), String> {
+        self.write(&json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": { "code": code, "message": message.into() },
+        }))
+    }
+}
+
+fn absolute_path(path: &Path) -> io::Result<PathBuf> {
+    if path.is_absolute() {
+        Ok(path.to_owned())
+    } else {
+        Ok(std::env::current_dir()?.join(path))
+    }
+}
+
+fn stdout_loop(stdout: impl Read, messages: Sender<Incoming>) {
+    let mut reader = BufReader::new(stdout);
+    loop {
+        match read_lsp_message(&mut reader) {
+            Ok(Some(message)) => {
+                if messages.send(Incoming::Message(message)).is_err() {
+                    break;
+                }
+            }
+            Ok(None) => {
+                let _ = messages.send(Incoming::EndOfStream);
+                break;
+            }
+            Err(error) => {
+                let _ = messages.send(Incoming::ReadError(error.to_string()));
+                break;
+            }
+        }
+    }
+}
+
+fn stderr_loop(stderr: impl Read, messages: Sender<Incoming>) {
+    let reader = BufReader::new(stderr);
+    for line in reader.lines() {
+        match line {
+            Ok(line) if !line.trim().is_empty() => {
+                if messages.send(Incoming::Stderr(line)).is_err() {
+                    break;
+                }
+            }
+            Ok(_) => {}
+            Err(error) => {
+                let _ = messages.send(Incoming::Stderr(format!(
+                    "could not read Tinymist stderr: {error}"
+                )));
+                break;
+            }
+        }
+    }
+}
+
+fn worker_loop(
+    commands: Receiver<WorkerCommand>,
+    events: Sender<TinymistEvent>,
+    context: egui::Context,
+    current_generation: Arc<AtomicU64>,
+) {
+    let mut session: Option<Session> = None;
+
+    'worker: loop {
+        let mut session_failure = None;
+        if let Some(active) = session.as_mut() {
+            for _ in 0..128 {
+                match active.incoming.try_recv() {
+                    Ok(message) => {
+                        if let Err((stage, error)) =
+                            handle_incoming(active, message, &events, &context, &current_generation)
+                        {
+                            session_failure = Some((stage, error));
+                            break;
+                        }
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        session_failure = Some((
+                            "protocol",
+                            "Tinymist output channels closed unexpectedly".to_owned(),
+                        ));
+                        break;
+                    }
+                }
+            }
+        }
+
+        if let Some((stage, error)) = session_failure
+            && let Some(active) = session.take()
+        {
+            emit(
+                &events,
+                &context,
+                &current_generation,
+                TinymistEvent::Error {
+                    generation: active.generation,
+                    stage,
+                    message: error.clone(),
+                    fatal: true,
+                },
+            );
+            finish_session(
+                active,
+                false,
+                format!("Tinymist {stage} failure: {error}"),
+                &events,
+                &context,
+                &current_generation,
+            );
+        }
+
+        if let Some(active) = session.as_mut() {
+            match active.child.try_wait() {
+                Ok(Some(status)) => {
+                    let active = session.take().expect("active session disappeared");
+                    finish_exited_session(
+                        active,
+                        status,
+                        "Tinymist exited unexpectedly".to_owned(),
+                        &events,
+                        &context,
+                        &current_generation,
+                    );
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    let active = session.take().expect("active session disappeared");
+                    emit(
+                        &events,
+                        &context,
+                        &current_generation,
+                        TinymistEvent::Error {
+                            generation: active.generation,
+                            stage: "process",
+                            message: format!("could not inspect Tinymist process: {error}"),
+                            fatal: true,
+                        },
+                    );
+                    finish_session(
+                        active,
+                        false,
+                        "could not inspect Tinymist process".to_owned(),
+                        &events,
+                        &context,
+                        &current_generation,
+                    );
+                }
+            }
+        }
+
+        let command = match commands.recv_timeout(WORKER_POLL_INTERVAL) {
+            Ok(command) => command,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => break,
+        };
+
+        match command {
+            WorkerCommand::Start { generation, config } => {
+                if current_generation.load(Ordering::Acquire) != generation.0 {
+                    continue;
+                }
+                if let Some(active) = session.take() {
+                    finish_session(
+                        active,
+                        true,
+                        "workspace replaced".to_owned(),
+                        &events,
+                        &context,
+                        &current_generation,
+                    );
+                }
+                emit(
+                    &events,
+                    &context,
+                    &current_generation,
+                    TinymistEvent::Starting { generation },
+                );
+                match Session::spawn(generation, config) {
+                    Ok(active) => session = Some(active),
+                    Err(error) => {
+                        emit(
+                            &events,
+                            &context,
+                            &current_generation,
+                            TinymistEvent::Error {
+                                generation,
+                                stage: "spawn",
+                                message: error.clone(),
+                                fatal: true,
+                            },
+                        );
+                        emit(
+                            &events,
+                            &context,
+                            &current_generation,
+                            TinymistEvent::Stopped {
+                                generation,
+                                code: None,
+                                reason: error,
+                            },
+                        );
+                    }
+                }
+            }
+            WorkerCommand::DidOpen {
+                generation,
+                document,
+            } => {
+                let Some(active) = matching_session(session.as_mut(), generation) else {
+                    continue;
+                };
+                if let Some(previous) = active.documents.get(&document.uri)
+                    && document.version <= previous.version
+                {
+                    emit(
+                        &events,
+                        &context,
+                        &current_generation,
+                        TinymistEvent::Error {
+                            generation,
+                            stage: "document",
+                            message: format!(
+                                "ignored non-monotonic open version {} for {}; current version is {}",
+                                document.version, document.uri, previous.version
+                            ),
+                            fatal: false,
+                        },
+                    );
+                    continue;
+                }
+                let previous = active
+                    .documents
+                    .insert(document.uri.clone(), document.clone());
+                let result = if active.phase.can_sync_documents() {
+                    if previous.is_some() {
+                        active.send_did_change(&document)
+                    } else {
+                        active.send_did_open(&document)
+                    }
+                } else {
+                    Ok(())
+                };
+                if let Err(error) = result {
+                    fail_active_session(
+                        &mut session,
+                        "write",
+                        error,
+                        &events,
+                        &context,
+                        &current_generation,
+                    );
+                }
+            }
+            WorkerCommand::DidChange {
+                generation,
+                uri,
+                version,
+                text,
+            } => {
+                let Some(active) = matching_session(session.as_mut(), generation) else {
+                    continue;
+                };
+                let Some(document) = active.documents.get_mut(&uri) else {
+                    emit(
+                        &events,
+                        &context,
+                        &current_generation,
+                        TinymistEvent::Error {
+                            generation,
+                            stage: "document",
+                            message: format!("ignored change for unopened document {uri}"),
+                            fatal: false,
+                        },
+                    );
+                    continue;
+                };
+                if version <= document.version {
+                    emit(
+                        &events,
+                        &context,
+                        &current_generation,
+                        TinymistEvent::Error {
+                            generation,
+                            stage: "document",
+                            message: format!(
+                                "ignored non-monotonic version {version} for {uri}; current version is {}",
+                                document.version
+                            ),
+                            fatal: false,
+                        },
+                    );
+                    continue;
+                }
+                document.version = version;
+                document.text = text;
+                let changed = document.clone();
+                if active.phase.can_sync_documents()
+                    && let Err(error) = active.send_did_change(&changed)
+                {
+                    fail_active_session(
+                        &mut session,
+                        "write",
+                        error,
+                        &events,
+                        &context,
+                        &current_generation,
+                    );
+                }
+            }
+            WorkerCommand::DidClose { generation, uri } => {
+                let Some(active) = matching_session(session.as_mut(), generation) else {
+                    continue;
+                };
+                if active.documents.remove(&uri).is_some()
+                    && active.phase.can_sync_documents()
+                    && let Err(error) = active.send_did_close(&uri)
+                {
+                    fail_active_session(
+                        &mut session,
+                        "write",
+                        error,
+                        &events,
+                        &context,
+                        &current_generation,
+                    );
+                }
+            }
+            WorkerCommand::Stop { generation } => {
+                if session.as_ref().map(|active| active.generation) == Some(generation) {
+                    let active = session.take().expect("matching session disappeared");
+                    finish_session(
+                        active,
+                        true,
+                        "stopped".to_owned(),
+                        &events,
+                        &context,
+                        &current_generation,
+                    );
+                }
+            }
+            WorkerCommand::Shutdown => break 'worker,
+        }
+    }
+
+    if let Some(active) = session.take() {
+        finish_session(
+            active,
+            true,
+            "application shutdown".to_owned(),
+            &events,
+            &context,
+            &current_generation,
+        );
+    }
+}
+
+fn matching_session(session: Option<&mut Session>, generation: Generation) -> Option<&mut Session> {
+    session.filter(|active| active.generation == generation)
+}
+
+fn fail_active_session(
+    session: &mut Option<Session>,
+    stage: &'static str,
+    error: String,
+    events: &Sender<TinymistEvent>,
+    context: &egui::Context,
+    current_generation: &AtomicU64,
+) {
+    let Some(active) = session.take() else {
+        return;
+    };
+    emit(
+        events,
+        context,
+        current_generation,
+        TinymistEvent::Error {
+            generation: active.generation,
+            stage,
+            message: error.clone(),
+            fatal: true,
+        },
+    );
+    finish_session(
+        active,
+        false,
+        format!("Tinymist {stage} failure: {error}"),
+        events,
+        context,
+        current_generation,
+    );
+}
+
+fn handle_incoming(
+    session: &mut Session,
+    incoming: Incoming,
+    events: &Sender<TinymistEvent>,
+    context: &egui::Context,
+    current_generation: &AtomicU64,
+) -> std::result::Result<(), (&'static str, String)> {
+    match incoming {
+        Incoming::Message(message) => {
+            handle_rpc_message(session, message, events, context, current_generation)
+                .map_err(|error| ("protocol", error))
+        }
+        Incoming::Stderr(message) => {
+            emit(
+                events,
+                context,
+                current_generation,
+                TinymistEvent::Log {
+                    generation: session.generation,
+                    level: None,
+                    message,
+                },
+            );
+            Ok(())
+        }
+        Incoming::EndOfStream => Err(("protocol", "Tinymist closed its output stream".to_owned())),
+        Incoming::ReadError(error) => Err(("framing", error)),
+    }
+}
+
+fn handle_rpc_message(
+    session: &mut Session,
+    message: Value,
+    events: &Sender<TinymistEvent>,
+    context: &egui::Context,
+    current_generation: &AtomicU64,
+) -> std::result::Result<(), String> {
+    let object = message
+        .as_object()
+        .ok_or_else(|| "Tinymist sent a non-object JSON-RPC message".to_owned())?;
+
+    if let Some(method) = object.get("method").and_then(Value::as_str) {
+        let params = object.get("params").cloned().unwrap_or(Value::Null);
+        if let Some(id) = object.get("id").cloned() {
+            return handle_server_request(
+                session,
+                id,
+                method,
+                params,
+                events,
+                context,
+                current_generation,
+            );
+        }
+        handle_server_notification(session, method, params, events, context, current_generation);
+        return Ok(());
+    }
+
+    let id = object
+        .get("id")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "Tinymist sent a response without a numeric request ID".to_owned())?;
+    let Some(pending) = session.pending.remove(&id) else {
+        // Late cancellation responses are harmless; do not make an optional
+        // sidecar fatal because a server raced a workspace transition.
+        return Ok(());
+    };
+
+    if let Some(error) = object.get("error").filter(|error| !error.is_null()) {
+        let message = rpc_error_message(error);
+        match pending {
+            PendingRequest::Initialize => return Err(format!("initialize failed: {message}")),
+            PendingRequest::StartPreview => {
+                session.phase = SessionPhase::Initialized;
+                emit(
+                    events,
+                    context,
+                    current_generation,
+                    TinymistEvent::Error {
+                        generation: session.generation,
+                        stage: "preview",
+                        message,
+                        fatal: false,
+                    },
+                );
+                return Ok(());
+            }
+        }
+    }
+
+    let result = object.get("result").cloned().unwrap_or(Value::Null);
+    match pending {
+        PendingRequest::Initialize => {
+            session.notify("initialized", json!({}))?;
+            session.notify(
+                "workspace/didChangeConfiguration",
+                json!({ "settings": session.settings }),
+            )?;
+            session.phase = SessionPhase::Initialized;
+
+            let documents: Vec<_> = session.documents.values().cloned().collect();
+            for document in &documents {
+                session.send_did_open(document)?;
+            }
+            emit(
+                events,
+                context,
+                current_generation,
+                TinymistEvent::Initialized {
+                    generation: session.generation,
+                },
+            );
+
+            session.phase = SessionPhase::StartingPreview;
+            session.send_request(
+                "workspace/executeCommand",
+                json!({
+                    "command": "tinymist.startDefaultPreview",
+                    "arguments": [],
+                }),
+                PendingRequest::StartPreview,
+            )?;
+        }
+        PendingRequest::StartPreview => {
+            let port = result
+                .get("staticServerPort")
+                .and_then(parse_port)
+                .ok_or_else(|| {
+                    "tinymist.startDefaultPreview returned no valid staticServerPort".to_owned()
+                });
+            match port {
+                Ok(port) => {
+                    session.phase = SessionPhase::Running;
+                    emit(
+                        events,
+                        context,
+                        current_generation,
+                        TinymistEvent::PreviewReady {
+                            generation: session.generation,
+                            url: format!("http://127.0.0.1:{port}"),
+                        },
+                    );
+                }
+                Err(message) => {
+                    session.phase = SessionPhase::Initialized;
+                    emit(
+                        events,
+                        context,
+                        current_generation,
+                        TinymistEvent::Error {
+                            generation: session.generation,
+                            stage: "preview",
+                            message,
+                            fatal: false,
+                        },
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn parse_port(value: &Value) -> Option<u16> {
+    let port = value
+        .as_u64()
+        .or_else(|| value.as_str()?.parse::<u64>().ok())?;
+    let port = u16::try_from(port).ok()?;
+    (port != 0).then_some(port)
+}
+
+fn rpc_error_message(error: &Value) -> String {
+    let message = error
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown JSON-RPC error");
+    match error.get("code").and_then(Value::as_i64) {
+        Some(code) => format!("{message} (JSON-RPC error {code})"),
+        None => message.to_owned(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ShowDocumentParams {
+    uri: String,
+    external: Option<bool>,
+    take_focus: Option<bool>,
+    selection: Option<LspRange>,
+}
+
+fn handle_server_request(
+    session: &mut Session,
+    id: Value,
+    method: &str,
+    params: Value,
+    events: &Sender<TinymistEvent>,
+    context: &egui::Context,
+    current_generation: &AtomicU64,
+) -> std::result::Result<(), String> {
+    match method {
+        "window/showDocument" => {
+            let parsed = serde_json::from_value::<ShowDocumentParams>(params.clone());
+            match parsed {
+                Ok(request) => {
+                    emit(
+                        events,
+                        context,
+                        current_generation,
+                        TinymistEvent::ShowDocument {
+                            generation: session.generation,
+                            uri: request.uri,
+                            selection: request.selection,
+                            external: request.external,
+                            take_focus: request.take_focus,
+                            raw: params,
+                        },
+                    );
+                    // Queueing the app event is the successful handling of this
+                    // request. The UI applies it on its next frame.
+                    session.reply_result(id, json!({ "success": true }))
+                }
+                Err(error) => {
+                    emit(
+                        events,
+                        context,
+                        current_generation,
+                        TinymistEvent::Error {
+                            generation: session.generation,
+                            stage: "showDocument",
+                            message: error.to_string(),
+                            fatal: false,
+                        },
+                    );
+                    session.reply_error(id, -32602, format!("invalid showDocument params: {error}"))
+                }
+            }
+        }
+        "workspace/configuration" => {
+            let result = configuration_response(&params, &session.settings);
+            session.reply_result(id, result)
+        }
+        "workspace/workspaceFolders" => session.reply_result(
+            id,
+            json!([{ "uri": session.root_uri, "name": session.workspace_name }]),
+        ),
+        "client/registerCapability"
+        | "client/unregisterCapability"
+        | "window/workDoneProgress/create"
+        | "workspace/semanticTokens/refresh"
+        | "workspace/diagnostic/refresh"
+        | "workspace/codeLens/refresh"
+        | "workspace/inlayHint/refresh" => session.reply_result(id, Value::Null),
+        "window/showMessageRequest" => session.reply_result(id, Value::Null),
+        "workspace/applyEdit" => session.reply_result(
+            id,
+            json!({
+                "applied": false,
+                "failureReason": "mytypst does not support server-initiated workspace edits",
+            }),
+        ),
+        _ => session.reply_error(id, -32601, format!("unsupported server request {method}")),
+    }
+}
+
+fn configuration_response(params: &Value, settings: &Value) -> Value {
+    let Some(items) = params.get("items").and_then(Value::as_array) else {
+        return Value::Array(Vec::new());
+    };
+    Value::Array(
+        items
+            .iter()
+            .map(|item| {
+                item.get("section")
+                    .and_then(Value::as_str)
+                    .map(|section| configuration_section(settings, section))
+                    .unwrap_or_else(|| settings.clone())
+            })
+            .collect(),
+    )
+}
+
+fn configuration_section(settings: &Value, section: &str) -> Value {
+    if section.is_empty() || section == "tinymist" {
+        return settings.clone();
+    }
+    let section = section.strip_prefix("tinymist.").unwrap_or(section);
+    section
+        .split('.')
+        .try_fold(settings, |value, component| value.get(component))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+fn handle_server_notification(
+    session: &Session,
+    method: &str,
+    params: Value,
+    events: &Sender<TinymistEvent>,
+    context: &egui::Context,
+    current_generation: &AtomicU64,
+) {
+    match method {
+        "textDocument/publishDiagnostics" => {
+            let Some(uri) = params.get("uri").and_then(Value::as_str) else {
+                emit(
+                    events,
+                    context,
+                    current_generation,
+                    TinymistEvent::Notification {
+                        generation: session.generation,
+                        method: method.to_owned(),
+                        params,
+                    },
+                );
+                return;
+            };
+            let version = params
+                .get("version")
+                .and_then(Value::as_i64)
+                .and_then(|version| i32::try_from(version).ok());
+            let diagnostics = params
+                .get("diagnostics")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(parse_diagnostic)
+                .collect();
+            emit(
+                events,
+                context,
+                current_generation,
+                TinymistEvent::PublishDiagnostics {
+                    generation: session.generation,
+                    uri: uri.to_owned(),
+                    version,
+                    diagnostics,
+                    raw: params,
+                },
+            );
+        }
+        "window/logMessage" | "window/showMessage" | "$/logTrace" => {
+            let message = params
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let level = params
+                .get("type")
+                .and_then(Value::as_u64)
+                .and_then(|level| u32::try_from(level).ok());
+            emit(
+                events,
+                context,
+                current_generation,
+                TinymistEvent::Log {
+                    generation: session.generation,
+                    level,
+                    message,
+                },
+            );
+        }
+        _ => emit(
+            events,
+            context,
+            current_generation,
+            TinymistEvent::Notification {
+                generation: session.generation,
+                method: method.to_owned(),
+                params,
+            },
+        ),
+    }
+}
+
+fn parse_diagnostic(raw: &Value) -> Option<TinymistDiagnostic> {
+    let range = serde_json::from_value(raw.get("range")?.clone()).ok()?;
+    let message = raw.get("message")?.as_str()?.to_owned();
+    let severity = raw
+        .get("severity")
+        .and_then(Value::as_u64)
+        .map(DiagnosticSeverity::from_lsp);
+    let code = raw.get("code").filter(|code| !code.is_null()).cloned();
+    let source = raw
+        .get("source")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    Some(TinymistDiagnostic {
+        range,
+        severity,
+        code,
+        source,
+        message,
+        raw: raw.clone(),
+    })
+}
+
+fn emit(
+    events: &Sender<TinymistEvent>,
+    context: &egui::Context,
+    current_generation: &AtomicU64,
+    event: TinymistEvent,
+) {
+    if current_generation.load(Ordering::Acquire) != event.generation().0 {
+        return;
+    }
+    if events.send(event).is_ok() {
+        context.request_repaint();
+    }
+}
+
+fn finish_session(
+    mut session: Session,
+    graceful: bool,
+    reason: String,
+    events: &Sender<TinymistEvent>,
+    context: &egui::Context,
+    current_generation: &AtomicU64,
+) {
+    if graceful && session.phase != SessionPhase::Initializing {
+        let shutdown_id = session.next_request_id;
+        session.next_request_id = session.next_request_id.saturating_add(1);
+        let shutdown_sent = session
+            .write(&json!({
+                "jsonrpc": "2.0",
+                "id": shutdown_id,
+                "method": "shutdown",
+                "params": null,
+            }))
+            .is_ok();
+        if shutdown_sent {
+            let deadline = Instant::now() + GRACEFUL_SHUTDOWN_TIMEOUT;
+            let mut acknowledged = false;
+            while Instant::now() < deadline {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                match session
+                    .incoming
+                    .recv_timeout(remaining.min(Duration::from_millis(20)))
+                {
+                    Ok(Incoming::Message(message)) => {
+                        if message.get("id").and_then(Value::as_u64) == Some(shutdown_id)
+                            && message.get("method").is_none()
+                        {
+                            acknowledged = true;
+                            break;
+                        }
+                        // Answer server requests while it is winding down so
+                        // shutdown cannot deadlock behind one of them.
+                        if message.get("method").is_some() && message.get("id").is_some() {
+                            let _ = handle_rpc_message(
+                                &mut session,
+                                message,
+                                events,
+                                context,
+                                current_generation,
+                            );
+                        }
+                    }
+                    Ok(Incoming::Stderr(message)) => emit(
+                        events,
+                        context,
+                        current_generation,
+                        TinymistEvent::Log {
+                            generation: session.generation,
+                            level: None,
+                            message,
+                        },
+                    ),
+                    Ok(Incoming::EndOfStream | Incoming::ReadError(_))
+                    | Err(RecvTimeoutError::Disconnected) => break,
+                    Err(RecvTimeoutError::Timeout) => {}
+                }
+            }
+            if acknowledged {
+                let _ = session.notify("exit", Value::Null);
+            }
+        }
+    }
+
+    // Closing stdin also releases test/failure servers that wait for EOF.
+    session.stdin.take();
+    let status = reap_child(&mut session.child);
+    join_readers(&mut session);
+    emit(
+        events,
+        context,
+        current_generation,
+        TinymistEvent::Stopped {
+            generation: session.generation,
+            code: status.and_then(|status| status.code()),
+            reason,
+        },
+    );
+}
+
+fn finish_exited_session(
+    mut session: Session,
+    status: ExitStatus,
+    reason: String,
+    events: &Sender<TinymistEvent>,
+    context: &egui::Context,
+    current_generation: &AtomicU64,
+) {
+    session.stdin.take();
+    let _ = session.child.wait();
+    join_readers(&mut session);
+    emit(
+        events,
+        context,
+        current_generation,
+        TinymistEvent::Stopped {
+            generation: session.generation,
+            code: status.code(),
+            reason,
+        },
+    );
+}
+
+fn reap_child(child: &mut Child) -> Option<ExitStatus> {
+    let deadline = Instant::now() + EXIT_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status),
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+            Ok(None) => {
+                let _ = child.kill();
+                return child.wait().ok();
+            }
+            Err(_) => {
+                let _ = child.kill();
+                return child.wait().ok();
+            }
+        }
+    }
+}
+
+fn join_readers(session: &mut Session) {
+    if let Some(reader) = session.stdout_reader.take() {
+        let _ = reader.join();
+    }
+    if let Some(reader) = session.stderr_reader.take() {
+        let _ = reader.join();
+    }
+}
+
+fn write_lsp_message(writer: &mut impl Write, message: &Value) -> io::Result<()> {
+    let payload = serde_json::to_vec(message)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    if payload.len() > MAX_MESSAGE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "JSON-RPC message is too large",
+        ));
+    }
+    write!(writer, "Content-Length: {}\r\n\r\n", payload.len())?;
+    writer.write_all(&payload)?;
+    writer.flush()
+}
+
+fn read_lsp_message(reader: &mut impl BufRead) -> io::Result<Option<Value>> {
+    let mut content_length = None;
+    let mut total_header_bytes = 0usize;
+    let mut saw_header = false;
+
+    loop {
+        let mut line = Vec::new();
+        let read = reader.read_until(b'\n', &mut line)?;
+        if read == 0 {
+            if !saw_header {
+                return Ok(None);
+            }
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "EOF in JSON-RPC headers",
+            ));
+        }
+        saw_header = true;
+        total_header_bytes = total_header_bytes.saturating_add(read);
+        if line.len() > MAX_HEADER_LINE_BYTES || total_header_bytes > MAX_HEADER_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "JSON-RPC headers are too large",
+            ));
+        }
+
+        while matches!(line.last(), Some(b'\n' | b'\r')) {
+            line.pop();
+        }
+        if line.is_empty() {
+            break;
+        }
+        let header = std::str::from_utf8(&line)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        let (name, value) = header.split_once(':').ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "malformed JSON-RPC header")
+        })?;
+        if name.trim().eq_ignore_ascii_case("content-length") {
+            if content_length.is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "duplicate Content-Length header",
+                ));
+            }
+            let length = value.trim().parse::<usize>().map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "invalid Content-Length header")
+            })?;
+            if length == 0 || length > MAX_MESSAGE_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "JSON-RPC payload length is outside the accepted range",
+                ));
+            }
+            content_length = Some(length);
+        }
+    }
+
+    let content_length = content_length.ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidData, "missing Content-Length header")
+    })?;
+    let mut payload = vec![0; content_length];
+    reader.read_exact(&mut payload)?;
+    serde_json::from_slice(&payload)
+        .map(Some)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs,
+        io::Cursor,
+        sync::{Arc, atomic::AtomicU64, mpsc},
+    };
+
+    use super::*;
+
+    fn frame(value: &Value) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        write_lsp_message(&mut bytes, value).unwrap();
+        bytes
+    }
+
+    #[test]
+    fn lsp_framing_round_trips_multiple_messages() {
+        let first = json!({"jsonrpc":"2.0", "id":1, "result":{"hello":"λ"}});
+        let second = json!({"jsonrpc":"2.0", "method":"initialized", "params":{}});
+        let mut bytes = frame(&first);
+        bytes.extend(frame(&second));
+        let mut reader = Cursor::new(bytes);
+
+        assert_eq!(read_lsp_message(&mut reader).unwrap(), Some(first));
+        assert_eq!(read_lsp_message(&mut reader).unwrap(), Some(second));
+        assert_eq!(read_lsp_message(&mut reader).unwrap(), None);
+    }
+
+    #[test]
+    fn framing_accepts_case_insensitive_headers_and_lf() {
+        let payload = br#"{"jsonrpc":"2.0","id":1,"result":null}"#;
+        let bytes = format!(
+            "content-type: application/vscode-jsonrpc; charset=utf-8\ncontent-length: {}\n\n",
+            payload.len()
+        )
+        .into_bytes()
+        .into_iter()
+        .chain(payload.iter().copied())
+        .collect::<Vec<_>>();
+
+        let message = read_lsp_message(&mut Cursor::new(bytes)).unwrap().unwrap();
+        assert_eq!(message["id"], 1);
+    }
+
+    #[test]
+    fn framing_rejects_missing_duplicate_and_truncated_lengths() {
+        for bytes in [
+            b"Content-Type: application/json\r\n\r\n{}".as_slice(),
+            b"Content-Length: 2\r\nContent-Length: 2\r\n\r\n{}".as_slice(),
+            b"Content-Length: 10\r\n\r\n{}".as_slice(),
+        ] {
+            assert!(read_lsp_message(&mut Cursor::new(bytes)).is_err());
+        }
+    }
+
+    #[test]
+    fn preview_settings_are_safe_and_interactive() {
+        let settings = PreviewOptions::default().settings();
+        let args = settings["preview"]["browsing"]["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(Value::as_str)
+            .collect::<Option<Vec<_>>>()
+            .unwrap();
+        assert!(args.contains(&"--data-plane-host=127.0.0.1:0"));
+        assert!(args.contains(&"--control-plane-host=127.0.0.1:0"));
+        assert!(args.contains(&"--preview-mode=document"));
+        assert!(args.contains(&"--invert-colors=auto"));
+        assert!(args.contains(&"--partial-rendering=true"));
+        assert!(args.contains(&"--no-open"));
+        assert_eq!(settings["customizedShowDocument"], false);
+    }
+
+    #[test]
+    fn configuration_requests_resolve_tinymist_sections() {
+        let settings = PreviewOptions::default().settings();
+        let params = json!({
+            "items": [
+                {"section":"tinymist"},
+                {"section":"tinymist.preview"},
+                {"section":"tinymist.preview.browsing"},
+                {"section":"tinymist.doesNotExist"},
+            ]
+        });
+        let response = configuration_response(&params, &settings);
+        assert_eq!(response[0], settings);
+        assert_eq!(response[1], settings["preview"]);
+        assert_eq!(response[2], settings["preview"]["browsing"]);
+        assert!(response[3].is_null());
+    }
+
+    #[test]
+    fn diagnostics_keep_typed_fields_and_raw_extensions() {
+        let raw = json!({
+            "range": {
+                "start": {"line": 3, "character": 4},
+                "end": {"line": 3, "character": 9}
+            },
+            "severity": 1,
+            "code": "unknown-variable",
+            "source": "typst",
+            "message": "unknown variable: name",
+            "data": {"future": true}
+        });
+        let diagnostic = parse_diagnostic(&raw).unwrap();
+        assert_eq!(diagnostic.range.start.line, 3);
+        assert_eq!(diagnostic.severity, Some(DiagnosticSeverity::Error));
+        assert_eq!(diagnostic.code, Some(json!("unknown-variable")));
+        assert_eq!(diagnostic.raw["data"]["future"], true);
+    }
+
+    #[test]
+    fn prospective_unicode_paths_become_file_uris_without_existing() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("not created").join("λ.typ");
+        let document = TextDocument::from_path(&path, 4, "Hello").unwrap();
+        let round_trip = Url::parse(&document.uri).unwrap().to_file_path().unwrap();
+        assert_eq!(round_trip, path);
+        assert_eq!(document.language_id, "typst");
+        assert_eq!(document.version, 4);
+    }
+
+    #[test]
+    fn stale_events_are_not_delivered_or_repainted() {
+        let (tx, rx) = mpsc::channel();
+        let generation = Arc::new(AtomicU64::new(2));
+        let context = egui::Context::default();
+        emit(
+            &tx,
+            &context,
+            &generation,
+            TinymistEvent::Starting {
+                generation: Generation(1),
+            },
+        );
+        assert!(rx.try_recv().is_err());
+        emit(
+            &tx,
+            &context,
+            &generation,
+            TinymistEvent::Starting {
+                generation: Generation(2),
+            },
+        );
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            TinymistEvent::Starting {
+                generation: Generation(2)
+            }
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fake_server_completes_preview_and_source_mapping_handshake() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("fake-tinymist.sh");
+        let captured_input = directory.path().join("client-input.bin");
+        let messages = [
+            json!({"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}}),
+            json!({"jsonrpc":"2.0","id":2,"result":{"staticServerPort":41723}}),
+            json!({
+                "jsonrpc":"2.0",
+                "method":"textDocument/publishDiagnostics",
+                "params":{
+                    "uri":"file:///tmp/main.typ",
+                    "version":7,
+                    "diagnostics":[{
+                        "range":{"start":{"line":1,"character":2},"end":{"line":1,"character":3}},
+                        "severity":2,
+                        "message":"fake warning"
+                    }]
+                }
+            }),
+            json!({
+                "jsonrpc":"2.0",
+                "id":99,
+                "method":"window/showDocument",
+                "params":{
+                    "uri":"file:///tmp/main.typ",
+                    "takeFocus":true,
+                    "selection":{"start":{"line":4,"character":5},"end":{"line":4,"character":8}}
+                }
+            }),
+        ];
+        let mut script_source = String::from("#!/bin/sh\n");
+        for message in messages {
+            let payload = serde_json::to_string(&message).unwrap();
+            script_source.push_str(&format!(
+                "printf '%s\\r\\n\\r\\n%s' 'Content-Length: {}' '{}'\n",
+                payload.len(),
+                payload
+            ));
+        }
+        script_source.push_str(&format!(
+            "while IFS= read -r line || [ -n \"$line\" ]; do printf '%s\\n' \"$line\" >> '{}'; done\n",
+            captured_input.display()
+        ));
+        fs::write(&script, script_source).unwrap();
+        let mut permissions = fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script, permissions).unwrap();
+
+        let sidecar = TinymistSidecar::new(egui::Context::default());
+        let config = TinymistConfig::new(directory.path())
+            .with_command(&script, std::iter::empty::<OsString>());
+        let generation = sidecar.start_workspace(config).unwrap();
+        sidecar
+            .did_open(
+                generation,
+                TextDocument::typst("file:///tmp/main.typ", 7, "Hello"),
+            )
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut preview_url = None;
+        let mut diagnostic = None;
+        let mut jump = None;
+        while Instant::now() < deadline
+            && (preview_url.is_none() || diagnostic.is_none() || jump.is_none())
+        {
+            while let Some(event) = sidecar.try_recv() {
+                match event {
+                    TinymistEvent::PreviewReady { url, .. } => preview_url = Some(url),
+                    TinymistEvent::PublishDiagnostics { diagnostics, .. } => {
+                        diagnostic = diagnostics.into_iter().next()
+                    }
+                    TinymistEvent::ShowDocument { selection, .. } => jump = selection,
+                    _ => {}
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        assert_eq!(preview_url.as_deref(), Some("http://127.0.0.1:41723"));
+        assert_eq!(diagnostic.unwrap().message, "fake warning");
+        assert_eq!(jump.unwrap().start.line, 4);
+
+        // Add another frame so the shell's line-oriented capture observes the
+        // preceding response body even though LSP payloads have no delimiter.
+        sidecar
+            .did_change(generation, "file:///tmp/main.typ", 8, "Hello again")
+            .unwrap();
+
+        let reply_deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let captured = fs::read_to_string(&captured_input).unwrap_or_default();
+            if captured.contains("\"id\":99") && captured.contains("\"success\":true") {
+                break;
+            }
+            assert!(
+                Instant::now() < reply_deadline,
+                "client never acknowledged window/showDocument; captured {captured:?}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+}

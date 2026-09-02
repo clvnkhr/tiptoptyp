@@ -1,0 +1,10 @@
+/target/
+.mytypst-preview-*.typ
+mytypst-preview-*.typ
+.mytypst-write-*.typ
+.DS_Store
+/toolchain/bin/
+/toolchain/cache/
+/toolchain/licenses/
+/toolchain/provenance/
+/xtask/target/
