@@ -167,6 +167,10 @@ impl PreviewOptions {
 pub struct TinymistConfig {
     pub workspace_root: PathBuf,
     pub preview: PreviewOptions,
+    /// Whether this LSP session should also launch Tinymist's interactive
+    /// preview server. Document synchronization and formatting remain
+    /// available when this is false.
+    pub start_preview: bool,
     program: PathBuf,
     arguments: Vec<OsString>,
 }
@@ -176,6 +180,7 @@ impl TinymistConfig {
         Self {
             workspace_root: workspace_root.into(),
             preview: PreviewOptions::default(),
+            start_preview: true,
             program: PathBuf::from("tinymist"),
             arguments: vec![OsString::from("lsp")],
         }
@@ -251,6 +256,14 @@ pub struct LspRange {
     pub end: LspPosition,
 }
 
+/// A standard LSP text edit returned by `textDocument/formatting`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LspTextEdit {
+    pub range: LspRange,
+    pub new_text: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticSeverity {
     Error,
@@ -310,6 +323,17 @@ pub enum TinymistEvent {
         diagnostics: Vec<TinymistDiagnostic>,
         raw: Value,
     },
+    /// The result of formatting one exact version of an open document.
+    ///
+    /// `None` preserves the LSP distinction between a `null` result (formatting
+    /// is unavailable) and `Some(Vec::new())` (the document is already
+    /// formatted). The caller must discard results whose version is stale.
+    Formatted {
+        generation: Generation,
+        uri: String,
+        version: i32,
+        edits: Option<Vec<LspTextEdit>>,
+    },
     Log {
         generation: Generation,
         level: Option<u32>,
@@ -342,6 +366,7 @@ impl TinymistEvent {
             | Self::PreviewReady { generation, .. }
             | Self::ShowDocument { generation, .. }
             | Self::PublishDiagnostics { generation, .. }
+            | Self::Formatted { generation, .. }
             | Self::Log { generation, .. }
             | Self::Notification { generation, .. }
             | Self::Error { generation, .. }
@@ -429,6 +454,27 @@ impl TinymistSidecar {
             WorkerCommand::DidClose {
                 generation,
                 uri: uri.into(),
+            },
+        )
+    }
+
+    /// Requests whole-document formatting for one exact open-document version.
+    ///
+    /// The eventual [`TinymistEvent::Formatted`] repeats the URI and version so
+    /// the UI can reject an edit set if the buffer changed while Tinymist was
+    /// computing it.
+    pub fn format_document(
+        &self,
+        generation: Generation,
+        uri: impl Into<String>,
+        version: i32,
+    ) -> Result<()> {
+        self.send_for_generation(
+            generation,
+            WorkerCommand::FormatDocument {
+                generation,
+                uri: uri.into(),
+                version,
             },
         )
     }
@@ -536,6 +582,11 @@ enum WorkerCommand {
         generation: Generation,
         uri: String,
     },
+    FormatDocument {
+        generation: Generation,
+        uri: String,
+        version: i32,
+    },
     ScrollPreview {
         generation: Generation,
         path: PathBuf,
@@ -562,11 +613,12 @@ impl SessionPhase {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum PendingRequest {
     Initialize,
     StartPreview,
     ScrollPreview,
+    FormatDocument { uri: String, version: i32 },
 }
 
 enum Incoming {
@@ -588,6 +640,7 @@ struct Session {
     pending: HashMap<u64, PendingRequest>,
     documents: HashMap<String, TextDocument>,
     settings: Value,
+    start_preview: bool,
     root_uri: String,
     workspace_name: String,
 }
@@ -667,6 +720,7 @@ impl Session {
             pending: HashMap::new(),
             documents: HashMap::new(),
             settings: config.preview.settings(),
+            start_preview: config.start_preview,
             root_uri,
             workspace_name,
         };
@@ -693,6 +747,9 @@ impl Session {
                     "synchronization": {
                         "dynamicRegistration": false,
                         "didSave": false,
+                    },
+                    "formatting": {
+                        "dynamicRegistration": false,
                     },
                     "publishDiagnostics": {
                         "relatedInformation": true,
@@ -1144,6 +1201,77 @@ fn worker_loop(
                     );
                 }
             }
+            WorkerCommand::FormatDocument {
+                generation,
+                uri,
+                version,
+            } => {
+                let Some(active) = matching_session(session.as_mut(), generation) else {
+                    continue;
+                };
+                let Some(current_version) =
+                    active.documents.get(&uri).map(|document| document.version)
+                else {
+                    emit(
+                        &events,
+                        &context,
+                        &current_generation,
+                        TinymistEvent::Error {
+                            generation,
+                            stage: "formatting",
+                            message: format!(
+                                "cannot format unopened document {uri} at version {version}"
+                            ),
+                            fatal: false,
+                        },
+                    );
+                    continue;
+                };
+                if current_version != version {
+                    emit(
+                        &events,
+                        &context,
+                        &current_generation,
+                        TinymistEvent::Error {
+                            generation,
+                            stage: "formatting",
+                            message: format!(
+                                "ignored stale formatting request for {uri} at version {version}; current version is {current_version}"
+                            ),
+                            fatal: false,
+                        },
+                    );
+                    continue;
+                }
+                if !active.phase.can_sync_documents() {
+                    emit(
+                        &events,
+                        &context,
+                        &current_generation,
+                        TinymistEvent::Error {
+                            generation,
+                            stage: "formatting",
+                            message: "Tinymist is not initialized yet".to_owned(),
+                            fatal: false,
+                        },
+                    );
+                    continue;
+                }
+                if let Err(error) = active.send_request(
+                    "textDocument/formatting",
+                    format_document_params(&uri),
+                    PendingRequest::FormatDocument { uri, version },
+                ) {
+                    fail_active_session(
+                        &mut session,
+                        "write",
+                        error,
+                        &events,
+                        &context,
+                        &current_generation,
+                    );
+                }
+            }
             WorkerCommand::ScrollPreview {
                 generation,
                 path,
@@ -1348,6 +1476,20 @@ fn handle_rpc_message(
                 );
                 return Ok(());
             }
+            PendingRequest::FormatDocument { .. } => {
+                emit(
+                    events,
+                    context,
+                    current_generation,
+                    TinymistEvent::Error {
+                        generation: session.generation,
+                        stage: "formatting",
+                        message,
+                        fatal: false,
+                    },
+                );
+                return Ok(());
+            }
         }
     }
 
@@ -1374,15 +1516,17 @@ fn handle_rpc_message(
                 },
             );
 
-            session.phase = SessionPhase::StartingPreview;
-            session.send_request(
-                "workspace/executeCommand",
-                json!({
-                    "command": "tinymist.startDefaultPreview",
-                    "arguments": [],
-                }),
-                PendingRequest::StartPreview,
-            )?;
+            if session.start_preview {
+                session.phase = SessionPhase::StartingPreview;
+                session.send_request(
+                    "workspace/executeCommand",
+                    json!({
+                        "command": "tinymist.startDefaultPreview",
+                        "arguments": [],
+                    }),
+                    PendingRequest::StartPreview,
+                )?;
+            }
         }
         PendingRequest::StartPreview => {
             let port = result
@@ -1421,8 +1565,50 @@ fn handle_rpc_message(
             }
         }
         PendingRequest::ScrollPreview => {}
+        PendingRequest::FormatDocument { uri, version } => {
+            match parse_format_document_result(result) {
+                Ok(edits) => emit(
+                    events,
+                    context,
+                    current_generation,
+                    TinymistEvent::Formatted {
+                        generation: session.generation,
+                        uri,
+                        version,
+                        edits,
+                    },
+                ),
+                Err(error) => emit(
+                    events,
+                    context,
+                    current_generation,
+                    TinymistEvent::Error {
+                        generation: session.generation,
+                        stage: "formatting",
+                        message: format!("invalid textDocument/formatting response: {error}"),
+                        fatal: false,
+                    },
+                ),
+            }
+        }
     }
     Ok(())
+}
+
+fn format_document_params(uri: &str) -> Value {
+    json!({
+        "textDocument": { "uri": uri },
+        "options": {
+            "tabSize": 2,
+            "insertSpaces": true,
+        },
+    })
+}
+
+fn parse_format_document_result(
+    result: Value,
+) -> std::result::Result<Option<Vec<LspTextEdit>>, serde_json::Error> {
+    serde_json::from_value(result)
 }
 
 fn scroll_preview_params(path: &Path, line: u32, character: u32) -> Value {
@@ -1990,6 +2176,86 @@ mod tests {
     }
 
     #[test]
+    fn formatting_request_uses_standard_lsp_params() {
+        let params = format_document_params("file:///tmp/chapter.typ");
+        assert_eq!(
+            params,
+            json!({
+                "textDocument": { "uri": "file:///tmp/chapter.typ" },
+                "options": {
+                    "tabSize": 2,
+                    "insertSpaces": true,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn formatting_results_preserve_null_empty_and_utf16_edits() {
+        assert_eq!(parse_format_document_result(Value::Null).unwrap(), None);
+        assert_eq!(
+            parse_format_document_result(json!([])).unwrap(),
+            Some(Vec::new())
+        );
+
+        let edits = parse_format_document_result(json!([{
+            "range": {
+                "start": { "line": 2, "character": 4 },
+                "end": { "line": 2, "character": 6 }
+            },
+            "newText": "🦀 formatted"
+        }]))
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            edits,
+            vec![LspTextEdit {
+                range: LspRange {
+                    start: LspPosition {
+                        line: 2,
+                        character: 4,
+                    },
+                    end: LspPosition {
+                        line: 2,
+                        character: 6,
+                    },
+                },
+                new_text: "🦀 formatted".to_owned(),
+            }]
+        );
+        assert!(parse_format_document_result(json!({ "edits": [] })).is_err());
+    }
+
+    #[test]
+    fn public_formatting_api_routes_uri_and_version_to_the_worker() {
+        let (commands, received_commands) = mpsc::channel();
+        let (_events, received_events) = mpsc::channel();
+        let sidecar = TinymistSidecar {
+            commands: Some(commands),
+            events: received_events,
+            worker: None,
+            next_generation: AtomicU64::new(8),
+            current_generation: Arc::new(AtomicU64::new(7)),
+        };
+
+        sidecar
+            .format_document(Generation(7), "file:///tmp/chapter.typ", 19)
+            .unwrap();
+        match received_commands.recv().unwrap() {
+            WorkerCommand::FormatDocument {
+                generation,
+                uri,
+                version,
+            } => {
+                assert_eq!(generation, Generation(7));
+                assert_eq!(uri, "file:///tmp/chapter.typ");
+                assert_eq!(version, 19);
+            }
+            _ => panic!("format_document queued the wrong worker command"),
+        }
+    }
+
+    #[test]
     fn configuration_requests_resolve_tinymist_sections() {
         let settings = PreviewOptions::default().settings();
         let params = json!({
@@ -2066,6 +2332,78 @@ mod tests {
                 generation: Generation(2)
             }
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lsp_only_session_formats_without_starting_preview() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("fake-lsp-only-tinymist.sh");
+        let captured_input = directory.path().join("client-input.bin");
+        let initialize = json!({"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}});
+        let payload = serde_json::to_string(&initialize).unwrap();
+        let script_source = format!(
+            "#!/bin/sh\nprintf '%s\\r\\n\\r\\n%s' 'Content-Length: {}' '{}'\nwhile IFS= read -r line || [ -n \"$line\" ]; do printf '%s\\n' \"$line\" >> '{}'; done\n",
+            payload.len(),
+            payload,
+            captured_input.display()
+        );
+        fs::write(&script, script_source).unwrap();
+        let mut permissions = fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script, permissions).unwrap();
+
+        let sidecar = TinymistSidecar::new(egui::Context::default());
+        let mut config = TinymistConfig::new(directory.path())
+            .with_command(&script, std::iter::empty::<OsString>());
+        config.start_preview = false;
+        let generation = sidecar.start_workspace(config).unwrap();
+        let uri = "file:///tmp/main.typ";
+        sidecar
+            .did_open(generation, TextDocument::typst(uri, 7, "Hello"))
+            .unwrap();
+
+        let initialize_deadline = Instant::now() + Duration::from_secs(3);
+        let mut initialized = false;
+        while Instant::now() < initialize_deadline && !initialized {
+            while let Some(event) = sidecar.try_recv() {
+                match event {
+                    TinymistEvent::Initialized { .. } => initialized = true,
+                    TinymistEvent::PreviewReady { .. } => {
+                        panic!("LSP-only session unexpectedly started a preview")
+                    }
+                    _ => {}
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(initialized, "LSP-only session never initialized");
+
+        sidecar.format_document(generation, uri, 7).unwrap();
+        sidecar.stop_workspace(generation).unwrap();
+
+        let stop_deadline = Instant::now() + Duration::from_secs(3);
+        let mut stopped = false;
+        while Instant::now() < stop_deadline && !stopped {
+            while let Some(event) = sidecar.try_recv() {
+                match event {
+                    TinymistEvent::Stopped { .. } => stopped = true,
+                    TinymistEvent::PreviewReady { .. } => {
+                        panic!("LSP-only session unexpectedly started a preview")
+                    }
+                    _ => {}
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(stopped, "LSP-only session never stopped");
+
+        let captured = fs::read_to_string(captured_input).unwrap();
+        assert!(captured.contains("textDocument/didOpen"), "{captured:?}");
+        assert!(captured.contains("textDocument/formatting"), "{captured:?}");
+        assert!(!captured.contains("tinymist.startDefaultPreview"));
     }
 
     #[cfg(unix)]

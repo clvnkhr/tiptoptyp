@@ -20,16 +20,24 @@ impl DocumentKind {
             .and_then(|extension| extension.to_str())
             .map(str::to_ascii_lowercase);
 
+        // Content signatures take precedence over a misleading extension. In
+        // particular, renaming an already-open PDF/image must never turn its
+        // empty editor buffer into an editable text document.
+        if bytes.starts_with(b"%PDF-") {
+            return Ok(Self::Pdf);
+        }
+        if image::guess_format(bytes).is_ok() {
+            return Ok(Self::Image);
+        }
         if extension.as_deref() == Some("typ") {
             return utf8_document(bytes, Self::Typst, path);
         }
-        if extension.as_deref() == Some("pdf") || bytes.starts_with(b"%PDF-") {
+        if extension.as_deref() == Some("pdf") {
             return Ok(Self::Pdf);
         }
         if extension
             .as_deref()
             .is_some_and(is_supported_image_extension)
-            || image::guess_format(bytes).is_ok()
         {
             return Ok(Self::Image);
         }
@@ -166,6 +174,19 @@ mod tests {
         assert_eq!(
             DocumentKind::detect(Path::new("download"), b"%PDF-2.0\n").unwrap(),
             DocumentKind::Pdf
+        );
+    }
+
+    #[test]
+    fn binary_magic_wins_after_renaming_to_a_text_extension() {
+        assert_eq!(
+            DocumentKind::detect(Path::new("renamed.typ"), b"%PDF-2.0\n").unwrap(),
+            DocumentKind::Pdf
+        );
+        let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
+        assert_eq!(
+            DocumentKind::detect(Path::new("renamed.txt"), png).unwrap(),
+            DocumentKind::Image
         );
     }
 }

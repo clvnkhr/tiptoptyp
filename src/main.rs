@@ -22,7 +22,10 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1400.0, 900.0])
-            .with_min_inner_size([360.0, 260.0])
+            .with_min_inner_size([220.0, 160.0])
+            // Child popup viewports use real alpha so rounded cards can sit
+            // above WKWebView without opaque corner wedges.
+            .with_transparent(true)
             // On macOS the normal title bar becomes part of the app toolbar. The
             // traffic-light controls remain native, while the otherwise empty
             // title strip no longer costs a row of vertical space.

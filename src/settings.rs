@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use eframe::{Storage, egui};
 use serde::{Deserialize, Serialize};
 
@@ -184,6 +186,10 @@ pub(crate) struct AppSettings {
     pub(crate) line_wrap: bool,
     pub(crate) line_numbers: bool,
     pub(crate) source_preview_trigger: SourcePreviewTrigger,
+    pub(crate) auto_save: bool,
+    pub(crate) auto_save_delay_ms: u64,
+    /// Last successfully opened source document, keyed by canonical project root.
+    pub(crate) last_opened_files: BTreeMap<String, String>,
     pub(crate) typst: ToolPreference,
     pub(crate) tinymist: ToolPreference,
 }
@@ -197,6 +203,9 @@ impl Default for AppSettings {
             line_wrap: true,
             line_numbers: true,
             source_preview_trigger: SourcePreviewTrigger::DoubleClick,
+            auto_save: true,
+            auto_save_delay_ms: 750,
+            last_opened_files: BTreeMap::new(),
             typst: ToolPreference::default(),
             tinymist: ToolPreference::default(),
         }
@@ -255,6 +264,9 @@ mod tests {
             settings.source_preview_trigger,
             SourcePreviewTrigger::DoubleClick
         );
+        assert!(settings.auto_save);
+        assert_eq!(settings.auto_save_delay_ms, 750);
+        assert!(settings.last_opened_files.is_empty());
         assert_eq!(settings.typst.mode, ToolMode::Bundled);
         assert_eq!(settings.tinymist.mode, ToolMode::Bundled);
     }
@@ -319,6 +331,12 @@ mod tests {
             line_wrap: false,
             line_numbers: false,
             source_preview_trigger: SourcePreviewTrigger::ModifierClick,
+            auto_save: false,
+            auto_save_delay_ms: 1_500,
+            last_opened_files: BTreeMap::from([(
+                "/workspace".to_owned(),
+                "/workspace/main.typ".to_owned(),
+            )]),
             typst: ToolPreference {
                 mode: ToolMode::Custom,
                 custom_path: "/opt/typst".to_owned(),
@@ -343,6 +361,9 @@ mod tests {
             partial.source_preview_trigger,
             SourcePreviewTrigger::DoubleClick
         );
+        assert!(partial.auto_save);
+        assert_eq!(partial.auto_save_delay_ms, 750);
+        assert!(partial.last_opened_files.is_empty());
         assert_eq!(partial.typst, ToolPreference::default());
         assert_eq!(partial.tinymist, ToolPreference::default());
     }

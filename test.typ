@@ -6,8 +6,8 @@
 
 Edit this document on the left. The PDF preview updates as you type.
 
-#let accent = rgb("#4f8cff")
-#text(fill: accent, weight: "bold")[A small, fast Typst workspace.]
+#let accent = rgb("#4f8cff") 
+#text(fill: accent, weight: "bold")[A small, fast Typst workspace.] #{
 
 == Math and code
 
