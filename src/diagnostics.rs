@@ -1,4 +1,8 @@
-use std::path::{Path, PathBuf};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 /// Severity emitted by Typst's short diagnostic format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -52,6 +56,7 @@ pub(crate) struct Diagnostic {
 }
 
 impl Diagnostic {
+    #[cfg(test)]
     pub(crate) fn is_for_main_file(&self) -> bool {
         self.source == DiagnosticSource::Main
     }
@@ -60,17 +65,116 @@ impl Diagnostic {
         self.location.map(|location| location.line)
     }
 
-    pub(crate) fn full_message(&self) -> String {
-        if self.details.is_empty() {
-            return self.message.clone();
+    /// Put CLI and language-server diagnostics into the same compact display
+    /// shape: one headline followed by distinct, labelled detail lines.
+    ///
+    /// Tinymist sometimes embeds the severity, hints and provider in its
+    /// multiline `message`, while Typst's short CLI format emits those as
+    /// continuation lines. Keeping that difference out of the UI means the
+    /// Problems panel and hover card can render `message` and `details`
+    /// identically. File/line/column information remains on the diagnostic and
+    /// is never folded into its text.
+    pub(crate) fn normalize(&mut self) {
+        let original_message = std::mem::take(&mut self.message);
+        let original_details = std::mem::take(&mut self.details);
+        let mut message = None;
+        let mut details = Vec::new();
+
+        for line in original_message.lines() {
+            let line = clean_continuation(line);
+            if line.is_empty() || is_provider_metadata(line) {
+                continue;
+            }
+
+            if message.is_none() {
+                let headline = strip_primary_severity(line, self.severity);
+                if headline.is_empty() {
+                    continue;
+                }
+                message = Some(headline.to_owned());
+            } else if let Some(detail) = normalize_detail(line, self.severity, message.as_deref()) {
+                push_distinct(&mut details, detail);
+            }
         }
 
-        let mut full = self.message.clone();
-        for detail in &self.details {
-            full.push('\n');
-            full.push_str(detail);
+        for detail in original_details {
+            for line in detail.lines() {
+                if let Some(detail) = normalize_detail(line, self.severity, message.as_deref()) {
+                    push_distinct(&mut details, detail);
+                }
+            }
         }
-        full
+
+        self.message = message.unwrap_or_default();
+        self.details = details;
+    }
+
+    pub(crate) fn full_message(&self) -> String {
+        let capacity = self.message.len()
+            + self.details.iter().map(String::len).sum::<usize>()
+            + self.details.len();
+        let mut message = String::with_capacity(capacity);
+        for line in self.display_lines() {
+            if !message.is_empty() {
+                message.push('\n');
+            }
+            message.push_str(line);
+        }
+        message
+    }
+
+    /// The exact text lines shared by compact and expanded diagnostic views.
+    pub(crate) fn display_lines(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.message.as_str())
+            .filter(|line| !line.is_empty())
+            .chain(self.details.iter().map(String::as_str))
+    }
+}
+
+/// Normalize a batch and combine only exact repeats. Diagnostics at distinct
+/// locations deliberately remain distinct so navigation never loses a target.
+pub(crate) fn normalize_diagnostics(diagnostics: &mut Vec<Diagnostic>) {
+    let mut positions: HashMap<DiagnosticIdentity, usize> =
+        HashMap::with_capacity(diagnostics.len());
+    let mut normalized: Vec<Diagnostic> = Vec::with_capacity(diagnostics.len());
+
+    for mut diagnostic in diagnostics.drain(..) {
+        diagnostic.normalize();
+        if diagnostic.message.is_empty() && diagnostic.details.is_empty() {
+            continue;
+        }
+
+        let identity = DiagnosticIdentity::from(&diagnostic);
+        if let Some(index) = positions.get(&identity).copied() {
+            let existing = &mut normalized[index];
+            for detail in diagnostic.details {
+                push_distinct(&mut existing.details, detail);
+            }
+        } else {
+            positions.insert(identity, normalized.len());
+            normalized.push(diagnostic);
+        }
+    }
+
+    *diagnostics = normalized;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct DiagnosticIdentity {
+    severity: DiagnosticSeverity,
+    source: DiagnosticSource,
+    location: Option<DiagnosticLocation>,
+    message: String,
+}
+
+impl From<&Diagnostic> for DiagnosticIdentity {
+    fn from(diagnostic: &Diagnostic) -> Self {
+        Self {
+            severity: diagnostic.severity,
+            source: diagnostic.source.clone(),
+            location: diagnostic.location,
+            message: diagnostic.message.clone(),
+        }
     }
 }
 
@@ -128,15 +232,16 @@ pub(crate) fn parse_typst_short_output(output: &str, main_path: Option<&Path>) -
         }
     }
 
+    normalize_diagnostics(&mut diagnostics);
     diagnostics
 }
 
-struct ParsedLine<'a> {
+struct ParsedLine {
     diagnostic: Diagnostic,
-    original_severity: &'a str,
+    original_severity: &'static str,
 }
 
-impl ParsedLine<'_> {
+impl ParsedLine {
     fn belongs_to(&self, previous: &Diagnostic) -> bool {
         match (&self.diagnostic.source, &previous.source) {
             (DiagnosticSource::Global, _) => true,
@@ -150,28 +255,60 @@ impl ParsedLine<'_> {
     }
 }
 
-fn parse_structured_line<'a>(line: &'a str, main_path: Option<&Path>) -> Option<ParsedLine<'a>> {
-    const SEVERITIES: [(&str, DiagnosticSeverity); 5] = [
-        ("error", DiagnosticSeverity::Error),
-        ("warning", DiagnosticSeverity::Warning),
-        ("hint", DiagnosticSeverity::Help),
-        ("help", DiagnosticSeverity::Help),
-        ("note", DiagnosticSeverity::Note),
-    ];
+#[derive(Clone, Copy)]
+struct SeverityPattern {
+    name: &'static str,
+    prefix: &'static str,
+    marker: &'static str,
+    severity: DiagnosticSeverity,
+}
 
+const SEVERITY_PATTERNS: [SeverityPattern; 5] = [
+    SeverityPattern {
+        name: "error",
+        prefix: "error:",
+        marker: ": error:",
+        severity: DiagnosticSeverity::Error,
+    },
+    SeverityPattern {
+        name: "warning",
+        prefix: "warning:",
+        marker: ": warning:",
+        severity: DiagnosticSeverity::Warning,
+    },
+    SeverityPattern {
+        name: "hint",
+        prefix: "hint:",
+        marker: ": hint:",
+        severity: DiagnosticSeverity::Help,
+    },
+    SeverityPattern {
+        name: "help",
+        prefix: "help:",
+        marker: ": help:",
+        severity: DiagnosticSeverity::Help,
+    },
+    SeverityPattern {
+        name: "note",
+        prefix: "note:",
+        marker: ": note:",
+        severity: DiagnosticSeverity::Note,
+    },
+];
+
+fn parse_structured_line(line: &str, main_path: Option<&Path>) -> Option<ParsedLine> {
     // First handle unlocated messages such as `error: failed to load package`.
-    for (name, severity) in SEVERITIES {
-        let prefix = format!("{name}:");
-        if let Some(message) = line.strip_prefix(&prefix) {
+    for pattern in SEVERITY_PATTERNS {
+        if let Some(message) = line.strip_prefix(pattern.prefix) {
             return Some(ParsedLine {
                 diagnostic: Diagnostic {
-                    severity,
+                    severity: pattern.severity,
                     source: DiagnosticSource::Global,
                     location: None,
                     message: message.trim_start().to_owned(),
                     details: Vec::new(),
                 },
-                original_severity: name,
+                original_severity: pattern.name,
             });
         }
     }
@@ -179,23 +316,22 @@ fn parse_structured_line<'a>(line: &'a str, main_path: Option<&Path>) -> Option<
     // Find a severity marker whose prefix is a valid path:line:column. Merely
     // splitting at the first colon would break both Windows paths and messages
     // containing colons.
-    for (name, severity) in SEVERITIES {
-        let marker = format!(": {name}:");
-        for (marker_start, _) in line.match_indices(&marker) {
+    for pattern in SEVERITY_PATTERNS {
+        for (marker_start, _) in line.match_indices(pattern.marker) {
             let location_prefix = &line[..marker_start];
             let Some((path, location)) = parse_location_from_right(location_prefix) else {
                 continue;
             };
-            let message = line[marker_start + marker.len()..].trim_start();
+            let message = line[marker_start + pattern.marker.len()..].trim_start();
             return Some(ParsedLine {
                 diagnostic: Diagnostic {
-                    severity,
+                    severity: pattern.severity,
                     source: classify_source(path, main_path),
                     location: Some(location),
                     message: message.to_owned(),
                     details: Vec::new(),
                 },
-                original_severity: name,
+                original_severity: pattern.name,
             });
         }
     }
@@ -249,6 +385,102 @@ fn clean_continuation(line: &str) -> &str {
         .trim()
 }
 
+fn strip_primary_severity(mut line: &str, severity: DiagnosticSeverity) -> &str {
+    loop {
+        let trimmed = line.trim();
+        if severity_names(severity)
+            .iter()
+            .any(|name| trimmed.eq_ignore_ascii_case(name))
+        {
+            return "";
+        }
+
+        let Some((label, value)) = trimmed.split_once(':') else {
+            return trimmed;
+        };
+        if !severity_names(severity)
+            .iter()
+            .any(|name| label.trim().eq_ignore_ascii_case(name))
+        {
+            return trimmed;
+        }
+        line = value;
+    }
+}
+
+fn severity_names(severity: DiagnosticSeverity) -> &'static [&'static str] {
+    match severity {
+        DiagnosticSeverity::Error => &["error"],
+        DiagnosticSeverity::Warning => &["warning"],
+        DiagnosticSeverity::Help => &["hint", "help"],
+        DiagnosticSeverity::Note => &["note", "info", "information"],
+        DiagnosticSeverity::Unknown => &["diagnostic"],
+    }
+}
+
+fn normalize_detail(
+    line: &str,
+    severity: DiagnosticSeverity,
+    headline: Option<&str>,
+) -> Option<String> {
+    let line = clean_continuation(line);
+    if line.is_empty() || is_provider_metadata(line) {
+        return None;
+    }
+
+    let line = strip_repeated_primary_detail(line, severity);
+    if line.is_empty() || headline.is_some_and(|headline| line.eq_ignore_ascii_case(headline)) {
+        return None;
+    }
+
+    let Some((label, value)) = line.split_once(':') else {
+        return Some(line.to_owned());
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    let canonical_label = match label.trim().to_ascii_lowercase().as_str() {
+        "hint" | "help" => "Hint",
+        "note" | "info" | "information" => "Note",
+        "warning" => "Warning",
+        "error" => "Error",
+        "code" => "Code",
+        _ => return Some(line.to_owned()),
+    };
+    Some(format!("{canonical_label}: {value}"))
+}
+
+fn strip_repeated_primary_detail(mut line: &str, severity: DiagnosticSeverity) -> &str {
+    loop {
+        let Some((label, value)) = line.split_once(':') else {
+            return line.trim();
+        };
+        if !severity_names(severity)
+            .iter()
+            .any(|name| label.trim().eq_ignore_ascii_case(name))
+        {
+            return line.trim();
+        }
+        line = value.trim();
+    }
+}
+
+fn is_provider_metadata(line: &str) -> bool {
+    line.split_once(':')
+        .is_some_and(|(label, _)| label.trim().eq_ignore_ascii_case("source"))
+}
+
+fn push_distinct(lines: &mut Vec<String>, candidate: String) {
+    if !lines
+        .iter()
+        .any(|line| line.eq_ignore_ascii_case(&candidate))
+    {
+        lines.push(candidate);
+    }
+}
+
 fn strip_watch_timestamp(line: &str) -> &str {
     if line.starts_with('[')
         && let Some(closing) = line.find("] ")
@@ -260,36 +492,39 @@ fn strip_watch_timestamp(line: &str) -> &str {
 
 /// Remove ANSI Control Sequence Introducer escapes without depending on the
 /// terminal's colour configuration. Non-CSI escapes are preserved verbatim.
-fn strip_ansi_csi(input: &str) -> String {
-    if !input.as_bytes().contains(&0x1b) {
-        return input.to_owned();
-    }
-
+fn strip_ansi_csi(input: &str) -> Cow<'_, str> {
     let bytes = input.as_bytes();
-    let mut output = String::with_capacity(input.len());
+    let mut output = None::<String>;
     let mut copied_until = 0;
-    let mut index = 0;
+    let mut search_from = 0;
 
-    while index + 1 < bytes.len() {
-        if bytes[index] != 0x1b || bytes[index + 1] != b'[' {
-            index += 1;
-            continue;
-        }
-
-        output.push_str(&input[copied_until..index]);
-        index += 2;
-        while index < bytes.len() {
-            let byte = bytes[index];
-            index += 1;
-            if (0x40..=0x7e).contains(&byte) {
-                break;
-            }
-        }
-        copied_until = index;
+    while let Some(relative_start) = bytes[search_from..]
+        .windows(2)
+        .position(|pair| pair == [0x1b, b'['])
+    {
+        let start = search_from + relative_start;
+        let parameters_start = start + 2;
+        let Some(relative_end) = bytes[parameters_start..]
+            .iter()
+            .position(|byte| (0x40..=0x7e).contains(byte))
+        else {
+            break;
+        };
+        let end = parameters_start + relative_end + 1;
+        output
+            .get_or_insert_with(|| String::with_capacity(input.len()))
+            .push_str(&input[copied_until..start]);
+        copied_until = end;
+        search_from = end;
     }
 
-    output.push_str(&input[copied_until..]);
-    output
+    match output {
+        Some(mut output) => {
+            output.push_str(&input[copied_until..]);
+            Cow::Owned(output)
+        }
+        None => Cow::Borrowed(input),
+    }
 }
 
 #[cfg(test)]
@@ -367,12 +602,106 @@ mod tests {
         assert_eq!(
             diagnostics[0].details,
             [
-                "hint: did you mean `value`?",
+                "Hint: did you mean `value`?",
                 "check the spelling",
-                "note: names are case-sensitive",
+                "Note: names are case-sensitive",
             ]
         );
         assert!(diagnostics[0].full_message().contains("check the spelling"));
+    }
+
+    #[test]
+    fn keeps_duplicate_hash_errors_at_their_locations_but_trims_redundant_details() {
+        let output = concat!(
+            "paper.typ:9:29: error: the character `#` is not valid in code\n",
+            "paper.typ:9:30: error: the character `#` is not valid in code\n",
+            "Hint: you are already in code mode\n",
+            "Hint: try removing the `#`\n",
+            "source: typst",
+        );
+        let diagnostics = parse_typst_short_output(output, Some(Path::new("paper.typ")));
+
+        assert_eq!(diagnostics.len(), 2);
+        assert_eq!(diagnostics[0].location.unwrap().column, 29);
+        assert_eq!(diagnostics[1].location.unwrap().column, 30);
+        assert_eq!(
+            diagnostics[0].message,
+            "the character `#` is not valid in code"
+        );
+        assert!(diagnostics[0].details.is_empty());
+        assert_eq!(
+            diagnostics[1].details,
+            [
+                "Hint: you are already in code mode",
+                "Hint: try removing the `#`",
+            ]
+        );
+        assert!(!diagnostics[1].full_message().contains("source:"));
+    }
+
+    #[test]
+    fn normalizes_multiline_tinymist_messages_to_the_cli_display_shape() {
+        let mut diagnostics = vec![Diagnostic {
+            severity: DiagnosticSeverity::Error,
+            source: DiagnosticSource::Main,
+            location: Some(DiagnosticLocation {
+                line: 9,
+                column: 30,
+            }),
+            message: concat!(
+                "error\n",
+                "error: the character `#` is not valid in code\n",
+                "hint: you are already in code mode\n",
+                "Hint: try removing the `#`\n",
+                "source: typst",
+            )
+            .to_owned(),
+            details: vec![
+                "source: typst".to_owned(),
+                "hint: try removing the `#`".to_owned(),
+                "code: invalid-code".to_owned(),
+            ],
+        }];
+
+        normalize_diagnostics(&mut diagnostics);
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].message,
+            "the character `#` is not valid in code"
+        );
+        assert_eq!(
+            diagnostics[0].details,
+            [
+                "Hint: you are already in code mode",
+                "Hint: try removing the `#`",
+                "Code: invalid-code",
+            ]
+        );
+        assert_eq!(
+            diagnostics[0].full_message(),
+            concat!(
+                "the character `#` is not valid in code\n",
+                "Hint: you are already in code mode\n",
+                "Hint: try removing the `#`\n",
+                "Code: invalid-code",
+            )
+        );
+    }
+
+    #[test]
+    fn merges_exact_cli_repeats_without_merging_distinct_columns() {
+        let output = concat!(
+            "paper.typ:3:4: error: error: broken expression\n",
+            "paper.typ:3:4: error: broken expression\n",
+            "paper.typ:3:5: error: broken expression",
+        );
+        let diagnostics = parse_typst_short_output(output, Some(Path::new("paper.typ")));
+
+        assert_eq!(diagnostics.len(), 2);
+        assert_eq!(diagnostics[0].message, "broken expression");
+        assert_eq!(diagnostics[0].location.unwrap().column, 4);
+        assert_eq!(diagnostics[1].location.unwrap().column, 5);
     }
 
     #[test]
@@ -438,5 +767,65 @@ mod tests {
             "paper.typ:not-a-line:2: error: malformed"
         );
         assert_eq!(diagnostics[0].details, ["paper.typ:0:0: error: zero"]);
+    }
+
+    #[test]
+    fn normalization_preserves_first_seen_order_when_merging_non_adjacent_repeats() {
+        let diagnostics = parse_typst_short_output(
+            concat!(
+                "paper.typ:3:4: error: first\n",
+                "Hint: first detail\n",
+                "paper.typ:8:2: warning: second\n",
+                "paper.typ:3:4: error: first\n",
+                "hint: FIRST DETAIL\n",
+                "Note: later detail",
+            ),
+            Some(Path::new("paper.typ")),
+        );
+
+        assert_eq!(diagnostics.len(), 2);
+        assert_eq!(diagnostics[0].message, "first");
+        assert_eq!(
+            diagnostics[0].details,
+            ["Hint: first detail", "Note: later detail"]
+        );
+        assert_eq!(diagnostics[1].message, "second");
+    }
+
+    #[test]
+    fn metadata_only_diagnostics_disappear_without_reordering_real_diagnostics() {
+        let mut diagnostics = vec![
+            Diagnostic {
+                severity: DiagnosticSeverity::Unknown,
+                source: DiagnosticSource::Global,
+                location: None,
+                message: "source: typst".to_owned(),
+                details: vec![],
+            },
+            Diagnostic {
+                severity: DiagnosticSeverity::Error,
+                source: DiagnosticSource::Main,
+                location: None,
+                message: "error: retained".to_owned(),
+                details: vec!["source: tinymist".to_owned()],
+            },
+        ];
+
+        normalize_diagnostics(&mut diagnostics);
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].message, "retained");
+        assert!(diagnostics[0].details.is_empty());
+    }
+
+    #[test]
+    fn ansi_stripping_preserves_non_csi_escapes_and_incomplete_sequences() {
+        assert_eq!(strip_ansi_csi("plain"), "plain");
+        assert_eq!(strip_ansi_csi("a\u{1b}]title"), "a\u{1b}]title");
+        assert_eq!(
+            strip_ansi_csi("before\u{1b}[31mred\u{1b}[0m after"),
+            "beforered after"
+        );
+        assert_eq!(strip_ansi_csi("tail\u{1b}["), "tail\u{1b}[");
     }
 }

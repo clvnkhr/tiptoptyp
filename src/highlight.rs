@@ -1,5 +1,7 @@
-use eframe::egui::{Color32, FontFamily, FontId, Stroke, TextFormat, text::LayoutJob};
+use eframe::egui::{Color32, Stroke, TextFormat, text::LayoutJob};
 use typst_syntax::{LinkedNode, Source, Tag};
+
+use crate::theme::{self, METRICS};
 
 /// Syntax highlighting backed by Typst's own error-tolerant parser.
 ///
@@ -26,6 +28,10 @@ impl Default for SyntaxHighlighter {
 }
 
 impl SyntaxHighlighter {
+    pub fn invalidate_theme(&mut self) {
+        self.has_cache = false;
+    }
+
     pub fn highlight(&mut self, source: &str, dark_mode: bool) -> LayoutJob {
         let source_changed = self.parsed_source.text() != source;
         if self.has_cache && !source_changed && self.cached_dark_mode == dark_mode {
@@ -81,70 +87,34 @@ fn append_node(job: &mut LayoutJob, node: &LinkedNode<'_>, inherited: Option<Tag
 }
 
 fn format_for(tag: Option<Tag>, dark: bool) -> TextFormat {
-    let plain = if dark {
-        Color32::from_rgb(214, 219, 230)
-    } else {
-        Color32::from_rgb(52, 58, 70)
-    };
-
-    let color = if dark {
-        match tag {
-            None => plain,
-            Some(Tag::Comment) => Color32::from_rgb(106, 122, 144),
-            Some(Tag::Punctuation | Tag::MathGroupingParens | Tag::Operator) => {
-                Color32::from_rgb(145, 215, 227)
-            }
-            Some(Tag::Escape | Tag::Number) => Color32::from_rgb(245, 169, 127),
-            Some(Tag::Strong | Tag::Emph | Tag::MathDelimiter | Tag::MathOperator) => {
-                Color32::from_rgb(244, 184, 228)
-            }
-            Some(Tag::Link | Tag::Function) => Color32::from_rgb(125, 196, 228),
-            Some(Tag::Raw | Tag::String) => Color32::from_rgb(166, 218, 149),
-            Some(Tag::Label | Tag::Ref) => Color32::from_rgb(139, 213, 202),
-            Some(Tag::Heading | Tag::ListMarker | Tag::ListTerm) => {
-                Color32::from_rgb(238, 212, 159)
-            }
-            Some(Tag::Keyword) => Color32::from_rgb(198, 160, 246),
-            Some(Tag::Interpolated) => Color32::from_rgb(183, 189, 248),
-            Some(Tag::Error) => Color32::from_rgb(237, 135, 150),
-        }
-    } else {
-        match tag {
-            None => plain,
-            Some(Tag::Comment) => Color32::from_rgb(120, 126, 140),
-            Some(Tag::Punctuation | Tag::MathGroupingParens | Tag::Operator) => {
-                Color32::from_rgb(26, 112, 146)
-            }
-            Some(Tag::Escape | Tag::Number) => Color32::from_rgb(190, 88, 40),
-            Some(Tag::Strong | Tag::Emph | Tag::MathDelimiter | Tag::MathOperator) => {
-                Color32::from_rgb(158, 53, 137)
-            }
-            Some(Tag::Link | Tag::Function) => Color32::from_rgb(26, 112, 146),
-            Some(Tag::Raw | Tag::String) => Color32::from_rgb(58, 128, 78),
-            Some(Tag::Label | Tag::Ref) => Color32::from_rgb(20, 122, 111),
-            Some(Tag::Heading | Tag::ListMarker | Tag::ListTerm) => Color32::from_rgb(145, 93, 16),
-            Some(Tag::Keyword) => Color32::from_rgb(126, 69, 174),
-            Some(Tag::Interpolated) => Color32::from_rgb(89, 77, 150),
-            Some(Tag::Error) => Color32::from_rgb(190, 36, 54),
-        }
+    let colors = theme::syntax_palette(dark);
+    let color = match tag {
+        None => colors.plain,
+        Some(Tag::Comment) => colors.comment,
+        Some(Tag::Punctuation | Tag::MathGroupingParens | Tag::Operator) => colors.operator,
+        Some(Tag::Escape | Tag::Number) => colors.number,
+        Some(Tag::Strong | Tag::Emph | Tag::MathDelimiter | Tag::MathOperator) => colors.emphasis,
+        Some(Tag::Link | Tag::Function) => colors.link,
+        Some(Tag::Raw | Tag::String) => colors.string,
+        Some(Tag::Label | Tag::Ref) => colors.label,
+        Some(Tag::Heading | Tag::ListMarker | Tag::ListTerm) => colors.heading,
+        Some(Tag::Keyword) => colors.keyword,
+        Some(Tag::Interpolated) => colors.interpolated,
+        Some(Tag::Error) => colors.error,
     };
 
     let mut format = TextFormat {
-        font_id: FontId::new(15.0, FontFamily::Monospace),
+        font_id: theme::editor_font(),
         color,
         ..Default::default()
     };
 
     match tag {
         Some(Tag::Emph) => format.italics = true,
-        Some(Tag::Link) => format.underline = Stroke::new(1.0, color),
-        Some(Tag::Error) => {
-            format.background = if dark {
-                Color32::from_rgba_unmultiplied(237, 135, 150, 34)
-            } else {
-                Color32::from_rgba_unmultiplied(190, 36, 54, 24)
-            };
+        Some(Tag::Link) => {
+            format.underline = Stroke::new(METRICS.syntax.link_underline_width, color);
         }
+        Some(Tag::Error) => format.background = colors.error_background,
         _ => {}
     }
 
@@ -200,15 +170,15 @@ fn composite_over_editor(color: Color32, dark: bool) -> Color32 {
     if color.a() == 255 {
         return color;
     }
-    let base = if dark { [30, 34, 43] } else { [250, 250, 252] };
+    let base = theme::syntax_palette(dark).editor_background;
     let alpha = color.a() as u16;
     let blend = |foreground: u8, background: u8| {
         ((foreground as u16 * alpha + background as u16 * (255 - alpha) + 127) / 255) as u8
     };
     Color32::from_rgb(
-        blend(color.r(), base[0]),
-        blend(color.g(), base[1]),
-        blend(color.b(), base[2]),
+        blend(color.r(), base.r()),
+        blend(color.g(), base.g()),
+        blend(color.b(), base.b()),
     )
 }
 
@@ -286,6 +256,19 @@ mod tests {
             format_at(&job, as_byte).color,
             format_for(Some(Tag::Keyword), true).color
         );
+    }
+
+    #[test]
+    fn typst_formats_use_the_shared_editor_font_role() {
+        for tag in [
+            None,
+            Some(Tag::Keyword),
+            Some(Tag::String),
+            Some(Tag::Error),
+        ] {
+            assert_eq!(format_for(tag, true).font_id, theme::editor_font());
+            assert_eq!(format_for(tag, false).font_id, theme::editor_font());
+        }
     }
 
     #[test]

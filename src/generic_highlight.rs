@@ -1,18 +1,21 @@
 use std::path::Path;
 
-use eframe::egui::{Color32, FontFamily, FontId, Stroke, TextFormat, text::LayoutJob};
+use eframe::egui::{Color32, Stroke, TextFormat, text::LayoutJob};
 use syntect::{
     easy::HighlightLines,
-    highlighting::{FontStyle, ThemeSet},
+    highlighting::{FontStyle, Theme, ThemeSet},
     parsing::SyntaxSet,
     util::LinesWithEndings,
 };
+
+use crate::theme::{self, METRICS};
 
 /// Syntax highlighting for non-Typst text files, backed by Syntect's bundled
 /// Sublime grammars. Typst keeps using its own incremental parser.
 pub struct GenericSyntaxHighlighter {
     syntaxes: SyntaxSet,
     themes: ThemeSet,
+    custom_theme: Option<Theme>,
     cached_source: String,
     cached_extension: Option<String>,
     cached_dark_mode: bool,
@@ -25,6 +28,7 @@ impl Default for GenericSyntaxHighlighter {
         Self {
             syntaxes: SyntaxSet::load_defaults_newlines(),
             themes: ThemeSet::load_defaults(),
+            custom_theme: None,
             cached_source: String::new(),
             cached_extension: None,
             cached_dark_mode: true,
@@ -35,6 +39,11 @@ impl Default for GenericSyntaxHighlighter {
 }
 
 impl GenericSyntaxHighlighter {
+    pub fn set_custom_theme(&mut self, theme: Option<Theme>) {
+        self.custom_theme = theme;
+        self.has_cache = false;
+    }
+
     pub fn highlight(&mut self, source: &str, path: Option<&Path>, dark_mode: bool) -> LayoutJob {
         let extension = path
             .and_then(Path::extension)
@@ -58,13 +67,11 @@ impl GenericSyntaxHighlighter {
                     .and_then(|line| self.syntaxes.find_syntax_by_first_line(line))
             })
             .unwrap_or_else(|| self.syntaxes.find_syntax_plain_text());
-        let theme_name = if dark_mode {
-            "base16-ocean.dark"
-        } else {
-            "InspiredGitHub"
-        };
-        let theme = &self.themes.themes[theme_name];
-        let mut highlighter = HighlightLines::new(syntax, theme);
+        let selected_theme = self
+            .custom_theme
+            .as_ref()
+            .unwrap_or_else(|| &self.themes.themes[theme::generic_syntax_theme_name(dark_mode)]);
+        let mut highlighter = HighlightLines::new(syntax, selected_theme);
         let mut job = LayoutJob::default();
 
         for line in LinesWithEndings::from(source) {
@@ -77,13 +84,14 @@ impl GenericSyntaxHighlighter {
                             style.foreground.b,
                         );
                         let mut format = TextFormat {
-                            font_id: FontId::new(15.0, FontFamily::Monospace),
+                            font_id: theme::editor_font(),
                             color,
                             italics: style.font_style.contains(FontStyle::ITALIC),
                             ..Default::default()
                         };
                         if style.font_style.contains(FontStyle::UNDERLINE) {
-                            format.underline = Stroke::new(1.0, color);
+                            format.underline =
+                                Stroke::new(METRICS.syntax.link_underline_width, color);
                         }
                         job.append(text, 0.0, format);
                     }
@@ -106,12 +114,8 @@ impl GenericSyntaxHighlighter {
 
 fn plain_format(dark_mode: bool) -> TextFormat {
     TextFormat {
-        font_id: FontId::new(15.0, FontFamily::Monospace),
-        color: if dark_mode {
-            Color32::from_rgb(214, 219, 230)
-        } else {
-            Color32::from_rgb(52, 58, 70)
-        },
+        font_id: theme::editor_font(),
+        color: theme::syntax_palette(dark_mode).plain,
         ..Default::default()
     }
 }
@@ -147,5 +151,42 @@ mod tests {
             text.sections[0].format.color,
             light.sections[0].format.color
         );
+    }
+
+    #[test]
+    fn generic_formats_use_shared_theme_and_font_roles() {
+        let mut highlighter = GenericSyntaxHighlighter::default();
+        let source = "let value = 1;\n";
+
+        for dark_mode in [false, true] {
+            assert!(
+                highlighter
+                    .themes
+                    .themes
+                    .contains_key(theme::generic_syntax_theme_name(dark_mode))
+            );
+            let job = highlighter.highlight(source, Some(Path::new("main.rs")), dark_mode);
+            assert!(
+                job.sections
+                    .iter()
+                    .all(|section| section.format.font_id == theme::editor_font())
+            );
+            assert_eq!(plain_format(dark_mode).font_id, theme::editor_font());
+        }
+    }
+
+    #[test]
+    fn a_custom_sublime_theme_replaces_the_bundled_syntax_theme() {
+        let mut highlighter = GenericSyntaxHighlighter::default();
+        let mut custom = Theme::default();
+        custom.settings.foreground = Some(syntect::highlighting::Color {
+            r: 12,
+            g: 34,
+            b: 56,
+            a: 255,
+        });
+        highlighter.set_custom_theme(Some(custom));
+        let job = highlighter.highlight("plain text\n", Some(Path::new("notes.txt")), false);
+        assert_eq!(job.sections[0].format.color, Color32::from_rgb(12, 34, 56));
     }
 }

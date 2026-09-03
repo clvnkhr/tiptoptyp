@@ -49,9 +49,11 @@ target expected by the packager. Tinymist continues to use its matching GNU
 payload. macOS packages are architecture-specific for now; a universal app
 would require combining all three executables before signing.
 
-Cross-target packaging sets `MYTYPST_PACKAGE_TARGET` to the same triple passed
+Cross-target packaging sets `TIPTOPTYP_PACKAGE_TARGET` to the same triple passed
 to cargo-packager. This explicitly propagates the target to the package hook;
 cargo-packager itself exposes formats, but not its CLI target, to hook commands.
+The pre-rename `MYTYPST_PACKAGE_TARGET` name remains a lower-priority alias for
+existing release automation.
 
 ### 2. Bundled is a preference, not an invisible assumption
 
@@ -62,17 +64,19 @@ environment override, and finally `PATH`. Commands receive a resolved absolute
 path whenever a real executable exists.
 
 Any route other than the requested one retains a reason. Settings displays the
-requested/effective source and executable path, the fixed bottom status bar
-gains a warning, and the bounded session fallback history records the event.
-An invalid custom path therefore never fails or changes preference silently.
-Changing Typst causes the next compile request to replace the persistent
-watcher; changing Tinymist restarts its LSP generation.
+requested/effective source and executable path, and the fixed bottom status bar
+gains a warning. An invalid custom path therefore never fails or changes
+preference silently.
+Changing Typst causes the next compile request to replace the watcher; changing
+Tinymist restarts its LSP generation.
 
 ### 3. Keep `typst watch` authoritative
 
 Bundling changes only how the executable is selected. The canonical compile
-pipeline remains one persistent `typst watch` process against the in-memory
-shadow document. Tinymist remains a separate interactive-preview sidecar.
+pipeline remains `typst watch` against the project-local in-memory shadow
+document. Sessions persist where filesystem notifications support the private
+path and restart for buffer edits on macOS. Tinymist remains a separate
+interactive-preview sidecar.
 
 ### 4. Treat Poppler as an explicit recovery dependency
 

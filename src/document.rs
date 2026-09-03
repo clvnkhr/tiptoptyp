@@ -15,11 +15,6 @@ pub enum DocumentKind {
 
 impl DocumentKind {
     pub fn detect(path: &Path, bytes: &[u8]) -> Result<Self, String> {
-        let extension = path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .map(str::to_ascii_lowercase);
-
         // Content signatures take precedence over a misleading extension. In
         // particular, renaming an already-open PDF/image must never turn its
         // empty editor buffer into an editable text document.
@@ -29,20 +24,13 @@ impl DocumentKind {
         if image::guess_format(bytes).is_ok() {
             return Ok(Self::Image);
         }
-        if extension.as_deref() == Some("typ") {
-            return utf8_document(bytes, Self::Typst, path);
-        }
-        if extension.as_deref() == Some("pdf") {
-            return Ok(Self::Pdf);
-        }
-        if extension
-            .as_deref()
-            .is_some_and(is_supported_image_extension)
-        {
-            return Ok(Self::Image);
-        }
-        if extension.as_deref().is_some_and(is_text_extension) || looks_like_text(bytes) {
-            return utf8_document(bytes, Self::Text, path);
+
+        match extension_kind(path) {
+            Some(Self::Typst) => return utf8_document(bytes, Self::Typst, path),
+            Some(Self::Text) => return utf8_document(bytes, Self::Text, path),
+            Some(kind) => return Ok(kind),
+            None if looks_like_text(bytes) => return Ok(Self::Text),
+            None => {}
         }
 
         Err(format!(
@@ -64,16 +52,7 @@ impl DocumentKind {
     }
 
     pub fn supports_path(path: &Path) -> bool {
-        path.extension()
-            .and_then(|extension| extension.to_str())
-            .map(str::to_ascii_lowercase)
-            .as_deref()
-            .is_some_and(|extension| {
-                extension == "typ"
-                    || extension == "pdf"
-                    || is_text_extension(extension)
-                    || is_supported_image_extension(extension)
-            })
+        extension_kind(path).is_some()
     }
 }
 
@@ -87,58 +66,37 @@ fn looks_like_text(bytes: &[u8]) -> bool {
     !bytes.contains(&0) && std::str::from_utf8(bytes).is_ok()
 }
 
-fn is_supported_image_extension(extension: &str) -> bool {
-    matches!(
-        extension,
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "tif" | "tiff"
-    )
+fn extension_kind(path: &Path) -> Option<DocumentKind> {
+    let extension = path.extension()?.to_str()?;
+    if extension.eq_ignore_ascii_case("typ") {
+        Some(DocumentKind::Typst)
+    } else if extension.eq_ignore_ascii_case("pdf") {
+        Some(DocumentKind::Pdf)
+    } else if IMAGE_EXTENSIONS
+        .iter()
+        .any(|known| extension.eq_ignore_ascii_case(known))
+    {
+        Some(DocumentKind::Image)
+    } else if TEXT_EXTENSIONS
+        .iter()
+        .any(|known| extension.eq_ignore_ascii_case(known))
+    {
+        Some(DocumentKind::Text)
+    } else {
+        None
+    }
 }
 
-fn is_text_extension(extension: &str) -> bool {
-    matches!(
-        extension,
-        "txt"
-            | "md"
-            | "markdown"
-            | "rs"
-            | "toml"
-            | "json"
-            | "jsonc"
-            | "yaml"
-            | "yml"
-            | "xml"
-            | "html"
-            | "htm"
-            | "css"
-            | "scss"
-            | "js"
-            | "jsx"
-            | "ts"
-            | "tsx"
-            | "py"
-            | "rb"
-            | "go"
-            | "java"
-            | "c"
-            | "h"
-            | "cc"
-            | "cpp"
-            | "hpp"
-            | "sh"
-            | "bash"
-            | "zsh"
-            | "fish"
-            | "sql"
-            | "csv"
-            | "tsv"
-            | "ini"
-            | "cfg"
-            | "conf"
-            | "log"
-            | "tex"
-            | "bib"
-    )
-}
+const IMAGE_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tif", "tiff",
+];
+
+const TEXT_EXTENSIONS: &[&str] = &[
+    "txt", "md", "markdown", "rs", "toml", "json", "jsonc", "yaml", "yml", "xml", "html", "htm",
+    "css", "scss", "js", "jsx", "ts", "tsx", "py", "rb", "go", "java", "c", "h", "cc", "cpp",
+    "hpp", "sh", "bash", "zsh", "fish", "sql", "csv", "tsv", "ini", "cfg", "conf", "log", "tex",
+    "bib",
+];
 
 #[cfg(test)]
 mod tests {
@@ -188,5 +146,30 @@ mod tests {
             DocumentKind::detect(Path::new("renamed.txt"), png).unwrap(),
             DocumentKind::Image
         );
+    }
+
+    #[test]
+    fn advertised_paths_and_detection_share_one_case_insensitive_extension_policy() {
+        for (path, expected) in [
+            ("main.TyP", DocumentKind::Typst),
+            ("notes.JsOnC", DocumentKind::Text),
+            ("photo.WeBp", DocumentKind::Image),
+            ("paper.PdF", DocumentKind::Pdf),
+        ] {
+            let path = Path::new(path);
+            assert!(DocumentKind::supports_path(path));
+            assert_eq!(
+                DocumentKind::detect(path, b"plain utf-8 text").unwrap(),
+                expected
+            );
+        }
+        assert!(!DocumentKind::supports_path(Path::new("archive.zip")));
+    }
+
+    #[test]
+    fn declared_text_files_still_require_valid_utf8() {
+        let error = DocumentKind::detect(Path::new("broken.toml"), b"\xff\xfe").unwrap_err();
+        assert!(error.contains("UTF-8"));
+        assert!(error.contains("broken.toml"));
     }
 }

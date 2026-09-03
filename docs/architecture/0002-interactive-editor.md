@@ -71,14 +71,16 @@ native fallback until that work is completed.
 
 ### 3. `typst watch` remains authoritative
 
-The existing persistent `typst watch` session remains the source of compiler
-diagnostics and exact PDF bytes. Export always writes those bytes and never a
-Tinymist approximation. Unsaved documents compile through a private temporary
-shadow source, so PDF export does not require saving the `.typ` file.
+`typst watch` remains the source of compiler diagnostics and exact PDF bytes.
+Export always writes those bytes and never a Tinymist approximation. Unsaved
+documents compile through a project-local `.tiptoptyp` shadow source, so PDF
+export does not require saving the `.typ` file. Sessions are reused where
+filesystem notifications support the private path; macOS restarts the watcher
+for buffer edits because dot-directory changes are suppressed.
 
 Running both pipelines costs extra memory when interactive preview is enabled,
 but separates concerns cleanly: Tinymist supplies interaction while the stock
-Typst CLI supplies the canonical artifact. The native PDF fallback is retained
+Typst CLI supplies the canonical artifact. The rasterised PDF fallback is retained
 for machines without Tinymist and for recovery if its preview server fails.
 
 ### 4. Syntax highlighting comes from Typst
@@ -125,12 +127,11 @@ exported bytes.
 
 The requested preview backend and effective backend are separate state. A
 Tinymist, preview-server, or embedded-webview failure must never rewrite the
-user's Interactive preference to Native. While the native watched-PDF viewer is
+user's Interactive preference to Rasterised PDF. While the watched-PDF viewer is
 being used automatically, only the fixed bottom status bar shows the live
 fallback badge and reason; the preview header contains controls only. Settings
-reports the requested and effective backends, structured service status, and a
-bounded session fallback history. Explicitly choosing Native is not classified
-as a fallback.
+reports the requested and effective backends plus structured service status.
+Explicitly choosing Rasterised PDF is not classified as a fallback.
 
 ## Rejected alternatives
 

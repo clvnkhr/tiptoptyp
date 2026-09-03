@@ -1,10 +1,11 @@
 use std::{
+    ffi::OsStr,
     fs,
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
-        Arc,
+        Arc, LazyLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, RecvTimeoutError, Sender},
     },
@@ -18,12 +19,27 @@ use quick_xml::{
     events::{BytesStart, Event},
 };
 
+use crate::{
+    private_workspace::{PrivateTypstDocument, PrivateWorkspace},
+    toolchain::renamed_environment_value,
+};
+
 /// Resolution used only by the native recovery viewer. The primary Tinymist
 /// viewer is vector-based. 144 DPI keeps the fallback crisp at 100% on a 2×
 /// display without making every incremental build excessively expensive.
 pub const PREVIEW_DPI: f32 = 144.0;
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(15);
 const WATCH_LOG_QUIET_PERIOD: Duration = Duration::from_millis(40);
+const IGNORE_SYSTEM_FONTS_ENV: (&str, &str) = (
+    "TIPTOPTYP_IGNORE_SYSTEM_FONTS",
+    "MYTYPST_IGNORE_SYSTEM_FONTS",
+);
+const TRACE_WATCH_ENV: (&str, &str) = ("TIPTOPTYP_TRACE_WATCH", "MYTYPST_TRACE_WATCH");
+static IGNORE_SYSTEM_FONTS: LazyLock<bool> = LazyLock::new(|| {
+    renamed_environment_value(IGNORE_SYSTEM_FONTS_ENV.0, IGNORE_SYSTEM_FONTS_ENV.1).is_some()
+});
+static TRACE_WATCH: LazyLock<bool> =
+    LazyLock::new(|| renamed_environment_value(TRACE_WATCH_ENV.0, TRACE_WATCH_ENV.1).is_some());
 
 #[derive(Debug, Clone)]
 pub struct CompileRequest {
@@ -33,6 +49,44 @@ pub struct CompileRequest {
     pub project_root: PathBuf,
     pub display_name: String,
     pub typst_executable: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WatchContext {
+    source_dir: PathBuf,
+    project_root: PathBuf,
+    typst_executable: PathBuf,
+    display_name: String,
+}
+
+impl WatchContext {
+    fn resolve(request: &CompileRequest) -> Result<Self, String> {
+        let source_dir = request.source_dir.canonicalize().map_err(|error| {
+            format!(
+                "Could not use source directory {}: {error}",
+                request.source_dir.display()
+            )
+        })?;
+        let project_root = request.project_root.canonicalize().map_err(|error| {
+            format!(
+                "Could not use project root {}: {error}",
+                request.project_root.display()
+            )
+        })?;
+        if !source_dir.starts_with(&project_root) {
+            return Err(format!(
+                "Source directory {} is outside project root {}",
+                source_dir.display(),
+                project_root.display()
+            ));
+        }
+        Ok(Self {
+            source_dir,
+            project_root,
+            typst_executable: request.typst_executable.clone(),
+            display_name: request.display_name.clone(),
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -83,7 +137,7 @@ impl Compiler {
         let worker_latest_revision = latest_revision.clone();
 
         let worker = thread::Builder::new()
-            .name("mytypst-compiler".to_owned())
+            .name("tiptoptyp-compiler".to_owned())
             .spawn(move || {
                 worker_loop(
                     request_rx,
@@ -139,12 +193,9 @@ struct WatchLog {
 
 struct WatchSession {
     id: u64,
-    source_dir: PathBuf,
-    project_root: PathBuf,
-    typst_executable: PathBuf,
-    shadow: tempfile::TempPath,
-    // Kept alive for the lifetime of the watcher. Its PDF is updated in-place.
-    _output_dir: tempfile::TempDir,
+    context: WatchContext,
+    // Owns the project-local mirror and removes it after the child is reaped.
+    shadow: PrivateTypstDocument,
     pdf_path: PathBuf,
     child: Child,
     reader: Option<thread::JoinHandle<()>>,
@@ -168,78 +219,58 @@ impl WatchSession {
     fn start(
         id: u64,
         request: &CompileRequest,
+        context: WatchContext,
         watch_logs: Sender<WatchLog>,
     ) -> Result<Self, String> {
-        let source_dir = request.source_dir.canonicalize().map_err(|error| {
+        let private = PrivateWorkspace::open(&context.project_root).map_err(|error| {
             format!(
-                "Could not use source directory {}: {error}",
-                request.source_dir.display()
+                "Could not prepare private editor storage in {}: {error}",
+                context.project_root.display()
             )
         })?;
-        let project_root = request.project_root.canonicalize().map_err(|error| {
-            format!(
-                "Could not use project root {}: {error}",
-                request.project_root.display()
+        let shadow = private
+            .mirrored_typst_document(
+                &context.source_dir,
+                &context.display_name,
+                &request.source,
             )
-        })?;
-        if !source_dir.starts_with(&project_root) {
-            return Err(format!(
-                "Source directory {} is outside project root {}",
-                source_dir.display(),
-                project_root.display()
-            ));
-        }
-        let shadow_file = tempfile::Builder::new()
-            // Some filesystem watcher backends suppress hidden-file events.
-            // Keep this private by filtering it from the project tree instead
-            // of giving it a leading dot.
-            .prefix("mytypst-preview-")
-            .suffix(".typ")
-            .tempfile_in(&source_dir)
             .map_err(|error| {
                 format!(
-                    "Could not create a live-preview file in {}: {error}. Save the document in a writable folder.",
-                    source_dir.display()
+                    "Could not create a private live-preview document in {}: {error}. Ensure the project is writable.",
+                    private.path().display()
                 )
             })?;
-        // TempPath keeps cleanup ownership without holding an open descriptor.
-        // Updates must retain this inode: Typst 0.15 watches the source file
-        // itself on macOS, so atomically replacing it detaches the watcher.
-        let shadow = shadow_file.into_temp_path();
-        write_shadow(&shadow, &request.source)?;
+        let output_dir = shadow.session_dir().join("watch-output");
+        fs::create_dir(&output_dir)
+            .map_err(|error| format!("Could not create a private preview directory: {error}"))?;
+        let pdf_path = output_dir.join("preview.pdf");
 
-        let output_dir = tempfile::Builder::new()
-            .prefix("mytypst-watch-")
-            .tempdir()
-            .map_err(|error| format!("Could not create a preview directory: {error}"))?;
-        let pdf_path = output_dir.path().join("preview.pdf");
-
-        let mut command = Command::new(&request.typst_executable);
+        let mut command = Command::new(&context.typst_executable);
         command.arg("watch").arg("--diagnostic-format").arg("short");
-        if std::env::var_os("MYTYPST_IGNORE_SYSTEM_FONTS").is_some() {
+        if *IGNORE_SYSTEM_FONTS {
             // This only affects watcher startup; subsequent incremental builds
             // reuse the same font book and stay fast.
             command.arg("--ignore-system-fonts");
         }
-        let shadow_path: &Path = shadow.as_ref();
+        let shadow_path = shadow.path();
         let mut child = command
             .arg("--root")
-            .arg(&project_root)
+            .arg(&context.project_root)
             .arg(shadow_path)
             .arg(&pdf_path)
-            .current_dir(&source_dir)
+            .current_dir(&context.source_dir)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|error| typst_command_error(&request.typst_executable, error))?;
+            .map_err(|error| typst_command_error(&context.typst_executable, error))?;
 
         let stderr = child
             .stderr
             .take()
             .ok_or_else(|| "Could not read output from `typst watch`".to_owned())?;
         let reader = match thread::Builder::new()
-            .name(format!("mytypst-watch-log-{id}"))
+            .name(format!("tiptoptyp-watch-log-{id}"))
             .spawn(move || {
                 for line in BufReader::new(stderr).lines() {
                     let Ok(line) = line else {
@@ -268,11 +299,8 @@ impl WatchSession {
 
         Ok(Self {
             id,
-            source_dir,
-            project_root,
-            typst_executable: request.typst_executable.clone(),
+            context,
             shadow,
-            _output_dir: output_dir,
             pdf_path,
             child,
             reader: Some(reader),
@@ -287,40 +315,35 @@ impl WatchSession {
     }
 
     fn update(&mut self, request: &CompileRequest) -> Result<(), String> {
-        write_shadow(&self.shadow, &request.source)?;
+        self.shadow.update(&request.source).map_err(|error| {
+            format!("Could not update the private live-preview document: {error}")
+        })?;
         self.pending_revision = request.revision;
         self.pending_display_name.clone_from(&request.display_name);
         Ok(())
     }
 
-    fn matches_context(
-        &self,
-        source_dir: &Path,
-        project_root: &Path,
-        typst_executable: &Path,
-    ) -> bool {
-        watch_context_matches(
-            &self.source_dir,
-            &self.project_root,
-            &self.typst_executable,
-            source_dir,
-            project_root,
-            typst_executable,
-        )
+    fn matches_context(&self, context: &WatchContext) -> bool {
+        self.context == *context
+            && self.shadow.path().file_name() == Some(OsStr::new(&context.display_name))
     }
 
     fn clean_diagnostic(&self, line: &str) -> String {
-        let shadow: &Path = self.shadow.as_ref();
+        let shadow = self.shadow.path();
         let shadow_path = shadow.to_string_lossy();
+        let mirror_root = self.shadow.mirror_root().to_string_lossy();
+        let project_root = self.context.project_root.to_string_lossy();
         let shadow_name = shadow
             .file_name()
             .map(|name| name.to_string_lossy())
             .unwrap_or_default();
         line.replace(shadow_path.as_ref(), &self.active_display_name)
             .replace(shadow_name.as_ref(), &self.active_display_name)
+            .replace(mirror_root.as_ref(), project_root.as_ref())
     }
 }
 
+#[cfg(test)]
 fn watch_context_matches(
     current_source_dir: &Path,
     current_project_root: &Path,
@@ -340,8 +363,8 @@ fn watch_context_matches(
 
 impl Drop for WatchSession {
     fn drop(&mut self) {
-        // Both files belong to this session. Killing the child first releases
-        // its handles, then NamedTempFile/TempDir remove the private artifacts.
+        // Killing the child first releases its handles, then the private
+        // document's TempDir removes the complete mirrored session.
         let _ = self.child.kill();
         let _ = self.child.wait();
         if let Some(reader) = self.reader.take() {
@@ -373,8 +396,8 @@ fn worker_loop(
 
         match requests.recv_timeout(WORKER_POLL_INTERVAL) {
             Ok(mut request) => {
-                if std::env::var_os("MYTYPST_TRACE_WATCH").is_some() {
-                    eprintln!("mytypst watcher request revision {}", request.revision);
+                if *TRACE_WATCH {
+                    eprintln!("tiptoptyp watcher request revision {}", request.revision);
                 }
                 // Never make the watcher step through obsolete editor snapshots.
                 while let Ok(newer) = requests.try_recv() {
@@ -392,22 +415,39 @@ fn worker_loop(
                     &latest_revision,
                 );
 
-                let reuse = session.as_ref().is_some_and(|current| {
-                    current.matches_context(
-                        &request.source_dir,
-                        &request.project_root,
-                        &request.typst_executable,
-                    )
-                });
-                let update_result = if reuse {
-                    session.as_mut().unwrap().update(&request)
+                // macOS filesystem notifications intentionally suppress
+                // updates below dot-directories for this watcher path. All
+                // editor-private files must remain in `.tiptoptyp`, so start a
+                // fresh watcher for an edited buffer there; its initial build
+                // is deterministic. Tinymist remains the low-latency primary
+                // preview, while other platforms can keep the watcher alive.
+                let resolved_context = match WatchContext::resolve(&request) {
+                    Ok(context) => context,
+                    Err(error) => {
+                        send_result(
+                            &results,
+                            &context,
+                            CompileResult {
+                                revision: request.revision,
+                                elapsed: Duration::ZERO,
+                                output: Some(Err(error)),
+                            },
+                        );
+                        continue;
+                    }
+                };
+                let reuse = !cfg!(target_os = "macos")
+                    && session
+                        .as_ref()
+                        .is_some_and(|current| current.matches_context(&resolved_context));
+                let update_result = if let (true, Some(current)) = (reuse, session.as_mut()) {
+                    current.update(&request)
                 } else {
                     session = None;
                     let id = next_session_id;
                     next_session_id = next_session_id.wrapping_add(1);
-                    WatchSession::start(id, &request, watch_log_tx.clone()).map(|new_session| {
-                        session = Some(new_session);
-                    })
+                    WatchSession::start(id, &request, resolved_context, watch_log_tx.clone())
+                        .map(|new_session| session = Some(new_session))
                 };
 
                 if let Err(error) = update_result {
@@ -458,9 +498,9 @@ fn drain_watch_logs(
     context: &egui::Context,
 ) {
     while let Ok(log) = logs.try_recv() {
-        if std::env::var_os("MYTYPST_TRACE_WATCH").is_some() {
+        if *TRACE_WATCH {
             eprintln!(
-                "mytypst watcher log session {}: {}",
+                "tiptoptyp watcher log session {}: {}",
                 log.session_id, log.line
             );
         }
@@ -553,6 +593,7 @@ fn finish_settled_completion(
     let output = if completion.succeeded {
         render_pdf(
             &current.pdf_path,
+            &current.context.project_root,
             diagnostics,
             completion.revision,
             shutdown,
@@ -576,6 +617,7 @@ fn finish_settled_completion(
 
 fn render_pdf(
     pdf_path: &Path,
+    project_root: &Path,
     diagnostics: String,
     revision: u64,
     shutdown: &AtomicBool,
@@ -586,7 +628,7 @@ fn render_pdf(
     // bytes are guaranteed to describe the exact same build.
     let pdf = fs::read(pdf_path)
         .map_err(|error| format!("Could not snapshot the compiled PDF: {error}"))?;
-    let pages = rasterize_pdf(&pdf, || {
+    let pages = rasterize_pdf(&pdf, project_root, || {
         shutdown.load(Ordering::Acquire) || latest_revision.load(Ordering::Acquire) != revision
     })?;
     Ok(CompiledDocument {
@@ -601,12 +643,18 @@ fn render_pdf(
 /// lets the compiler and the asset loader discard obsolete long documents.
 pub(crate) fn rasterize_pdf(
     pdf: &[u8],
+    project_root: &Path,
     mut cancelled: impl FnMut() -> bool,
 ) -> Result<Vec<PreviewPage>, String> {
-    let render_dir = tempfile::Builder::new()
-        .prefix("mytypst-pages-")
-        .tempdir()
-        .map_err(|error| format!("Could not create a page-rendering directory: {error}"))?;
+    let private = PrivateWorkspace::open(project_root).map_err(|error| {
+        format!(
+            "Could not prepare private PDF-rendering storage in {}: {error}",
+            project_root.display()
+        )
+    })?;
+    let render_dir = private
+        .temp_dir("pages-")
+        .map_err(|error| format!("Could not create a private page-rendering directory: {error}"))?;
     let snapshot_path = render_dir.path().join("snapshot.pdf");
     fs::write(&snapshot_path, pdf)
         .map_err(|error| format!("Could not stage the PDF preview: {error}"))?;
@@ -627,7 +675,7 @@ pub(crate) fn rasterize_pdf(
         .take()
         .ok_or_else(|| "Could not read output from `pdftoppm`".to_owned())?;
     let stderr_reader = match thread::Builder::new()
-        .name("mytypst-pdf-render-log".to_owned())
+        .name("tiptoptyp-pdf-render-log".to_owned())
         .spawn(move || {
             let mut bytes = Vec::new();
             let _ = BufReader::new(stderr).read_to_end(&mut bytes);
@@ -888,30 +936,6 @@ fn normalize_pdftohtml_target(target: &str, generated_stem: &str) -> String {
     }
 }
 
-fn write_shadow(shadow: &Path, source: &str) -> Result<(), String> {
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .truncate(true)
-        .open(shadow)
-        .map_err(|error| format!("Could not open the live-preview file: {error}"))?;
-    file.write_all(source.as_bytes())
-        .map_err(|error| format!("Could not update the live-preview file: {error}"))?;
-    file.flush()
-        .map_err(|error| format!("Could not flush the live-preview file: {error}"))?;
-    file.sync_data()
-        .map_err(|error| format!("Could not sync the live-preview file: {error}"))?;
-    if std::env::var_os("MYTYPST_TRACE_WATCH").is_some() {
-        let metadata = fs::metadata(shadow).ok();
-        eprintln!(
-            "mytypst wrote {} bytes to {} (modified {:?})",
-            source.len(),
-            shadow.display(),
-            metadata.and_then(|metadata| metadata.modified().ok())
-        );
-    }
-    Ok(())
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WatchLine {
     CompileStarted,
@@ -993,6 +1017,7 @@ mod tests {
         preview_page_number, watch_context_matches,
     };
     use std::{
+        fs,
         path::{Path, PathBuf},
         time::{Duration, Instant},
     };
@@ -1061,14 +1086,52 @@ mod tests {
         ));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn watch_context_accepts_canonical_and_symlink_aliases_but_not_missing_paths() {
+        use std::os::unix::fs::symlink;
+
+        let project = tempfile::tempdir().unwrap();
+        let source = project.path().join("source");
+        fs::create_dir(&source).unwrap();
+        let alias = project.path().join("alias");
+        symlink(&source, &alias).unwrap();
+        let root = project.path().canonicalize().unwrap();
+        let source = source.canonicalize().unwrap();
+        let typst = PathBuf::from("/tools/typst");
+
+        assert!(watch_context_matches(
+            &source, &root, &typst, &source, &root, &typst
+        ));
+        assert!(watch_context_matches(
+            &source,
+            &root,
+            &typst,
+            &alias,
+            project.path(),
+            &typst
+        ));
+        assert!(!watch_context_matches(
+            &source,
+            &root,
+            &typst,
+            &project.path().join("missing"),
+            project.path(),
+            &typst
+        ));
+    }
+
     #[test]
     #[ignore = "requires typst, pdftoppm, and real filesystem notifications"]
     fn persistent_watcher_compiles_errors_and_recovers() {
         let root = tempfile::tempdir().unwrap();
         let compiler = Compiler::new(eframe::egui::Context::default());
-        let typst_executable = std::env::var_os("MYTYPST_TEST_TYPST")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("typst"));
+        let typst_executable = crate::toolchain::renamed_environment_value(
+            "TIPTOPTYP_TEST_TYPST",
+            "MYTYPST_TEST_TYPST",
+        )
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("typst"));
         let request = |revision, source: &str| CompileRequest {
             revision,
             source: source.to_owned(),

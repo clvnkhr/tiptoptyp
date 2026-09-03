@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
 description = "A fast, native Typst editor with live PDF preview"
+repository = "https://github.com/calvinkhor/tiptoptyp"
 
 [dependencies]
 eframe = { version = "0.36.1", default-features = false, features = ["default_fonts", "glow", "persistence", "wayland", "x11"] }
@@ -13,7 +14,7 @@ quick-xml = "0.41"
 rfd = "0.17.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-syntect = { version = "5.3.0", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy"] }
+syntect = { version = "5.3.0", default-features = false, features = ["default-syntaxes", "default-themes", "plist-load", "regex-fancy"] }
 tempfile = "3.21.0"
 typst-syntax = "0.15.1"
 url = "2.5"
@@ -21,6 +22,13 @@ url = "2.5"
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 raw-window-handle = "0.6.2"
 wry = "0.56.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.4"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSArray", "NSObject", "NSString", "NSURL"] }
+# Keep this exact: the application-open bridge augments this release's
+# existing delegate instead of replacing winit's lifecycle integration.
+winit = { version = "=0.30.13", default-features = false, features = ["rwh_06"] }
 
 [dev-dependencies]
 egui_kittest = "0.36.1"
@@ -39,6 +47,12 @@ external-binaries = ["toolchain/bin/typst", "toolchain/bin/tinymist"]
 resources = [
     { src = "toolchain/licenses", target = "licenses" },
     { src = "toolchain/provenance", target = "toolchain-provenance" },
+]
+file-associations = [
+    { extensions = ["typ"], name = "Typst document", role = "editor" },
+    { extensions = ["txt", "md", "markdown", "json", "toml", "yaml", "yml", "xml", "html", "css", "js", "ts", "rs", "py", "sh"], name = "Text document", role = "editor" },
+    { extensions = ["pdf"], name = "PDF document", role = "viewer" },
+    { extensions = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tif", "tiff"], name = "Image", role = "viewer" },
 ]
 
 [package.metadata.packager.macos]

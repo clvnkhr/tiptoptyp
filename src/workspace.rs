@@ -11,7 +11,7 @@ use std::{
 /// Symlinks are surfaced so the filesystem panel does not silently hide them,
 /// but they are never followed. Callers should only open `File` nodes as
 /// project files.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum WorkspaceNodeKind {
     Directory,
     File,
@@ -53,6 +53,9 @@ impl WorkspaceNode {
         if self.relative_path == relative_path {
             return Some(self);
         }
+        if !relative_path.starts_with(&self.relative_path) {
+            return None;
+        }
         self.children
             .iter()
             .find_map(|child| child.find(relative_path))
@@ -68,8 +71,11 @@ pub struct WorkspaceSnapshot {
 
 impl WorkspaceSnapshot {
     pub fn scan(root: impl AsRef<Path>) -> io::Result<Self> {
-        let root = root.as_ref().canonicalize()?;
-        if !root.is_dir() {
+        Self::scan_canonical(root.as_ref().canonicalize()?)
+    }
+
+    fn scan_canonical(root: PathBuf) -> io::Result<Self> {
+        if !fs::metadata(&root)?.is_dir() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("workspace root is not a directory: {}", root.display()),
@@ -119,8 +125,10 @@ impl WorkspaceTree {
     /// Rescan the root, retaining the old cache if scanning fails. Returns
     /// whether the visible tree changed.
     pub fn refresh(&mut self) -> io::Result<bool> {
-        let next = WorkspaceSnapshot::scan(&self.snapshot.root)?;
-        if next == self.snapshot {
+        // `snapshot.root` is already canonical, so periodic refreshes do not
+        // need another filesystem canonicalization pass.
+        let next = WorkspaceSnapshot::scan_canonical(self.snapshot.root.clone())?;
+        if next.nodes == self.snapshot.nodes {
             return Ok(false);
         }
 
@@ -184,27 +192,23 @@ fn scan_directory(
         });
     }
 
-    nodes.sort_by(|left, right| {
-        kind_order(left.kind)
-            .cmp(&kind_order(right.kind))
+    nodes.sort_unstable_by(|left, right| {
+        left.kind
+            .cmp(&right.kind)
             .then_with(|| left.name.cmp(&right.name))
     });
     Ok(nodes)
 }
 
-fn kind_order(kind: WorkspaceNodeKind) -> u8 {
-    match kind {
-        WorkspaceNodeKind::Directory => 0,
-        WorkspaceNodeKind::File => 1,
-        WorkspaceNodeKind::Symlink => 2,
-    }
-}
-
 fn is_excluded(name: &OsStr) -> bool {
-    if name == OsStr::new(".git") || name == OsStr::new("target") {
+    if matches!(name.to_str(), Some(".git" | "target"))
+        || name == OsStr::new(crate::private_workspace::PRIVATE_DIRECTORY_NAME)
+    {
         return true;
     }
 
+    // Hide scratch files left by versions released before `.tiptoptyp`
+    // project-local storage. These names stay recognized during migration.
     let name = name.to_string_lossy();
     name.starts_with(".mytypst-preview-")
         || name.starts_with("mytypst-preview-")
@@ -231,7 +235,7 @@ mod tests {
         fn new(label: &str) -> Self {
             let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
             let path = std::env::temp_dir().join(format!(
-                "mytypst-workspace-{label}-{}-{id}",
+                "tiptoptyp-workspace-{label}-{}-{id}",
                 std::process::id()
             ));
             fs::create_dir(&path).unwrap();
@@ -311,6 +315,8 @@ mod tests {
         project.file("nested/.mytypst-preview-456.typ", "preview");
         project.file(".mytypst-write-document.typ", "write");
         project.file("nested/.mytypst-write-789", "write");
+        project.file(".tiptoptyp/private/preview.typ", "private");
+        project.file("nested/.tiptoptyp/private/preview.typ", "private");
         project.file("target.typ", "useful");
         project.file(".mytypst-preview", "useful");
 
@@ -323,6 +329,8 @@ mod tests {
         assert!(snapshot.find("nested/.mytypst-preview-456.typ").is_none());
         assert!(snapshot.find(".mytypst-write-document.typ").is_none());
         assert!(snapshot.find("nested/.mytypst-write-789").is_none());
+        assert!(snapshot.find(".tiptoptyp").is_none());
+        assert!(snapshot.find("nested/.tiptoptyp").is_none());
         assert!(snapshot.find("target.typ").is_some());
         assert!(snapshot.find(".mytypst-preview").is_some());
     }
@@ -398,6 +406,54 @@ mod tests {
         project.file("main.typ", "main");
         let error = WorkspaceSnapshot::scan(project.path().join("main.typ")).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn find_distinguishes_nested_paths_with_similar_prefixes() {
+        let project = TempProject::new("find-prefixes");
+        project.file("a/deep/one.typ", "one");
+        project.file("ab/deep/two.typ", "two");
+
+        let snapshot = WorkspaceSnapshot::scan(project.path()).unwrap();
+        assert_eq!(
+            snapshot.find("a/deep/one.typ").unwrap().display_name(),
+            "one.typ"
+        );
+        assert_eq!(
+            snapshot.find("ab/deep/two.typ").unwrap().display_name(),
+            "two.typ"
+        );
+        assert!(snapshot.find("a/deep/two.typ").is_none());
+        assert!(snapshot.find("").is_none());
+        assert!(
+            snapshot
+                .find(project.path().join("a/deep/one.typ"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_failed_refresh_preserves_the_cached_snapshot_and_generation() {
+        let project = TempProject::new("failed-refresh");
+        project.file("main.typ", "main");
+        let mut tree = WorkspaceTree::new(project.path()).unwrap();
+        let cached = tree.snapshot().clone();
+
+        fs::remove_dir_all(project.path()).unwrap();
+        assert_eq!(tree.refresh().unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert_eq!(tree.snapshot(), &cached);
+        assert_eq!(tree.generation(), 0);
+    }
+
+    #[test]
+    fn private_directory_exclusion_is_exact() {
+        let project = TempProject::new("private-exclusion");
+        project.file(".tiptoptyp/hidden.typ", "hidden");
+        project.file(".tiptoptyp-notes/visible.typ", "visible");
+
+        let snapshot = WorkspaceSnapshot::scan(project.path()).unwrap();
+        assert!(snapshot.find(".tiptoptyp").is_none());
+        assert!(snapshot.find(".tiptoptyp-notes/visible.typ").is_some());
     }
 
     #[cfg(unix)]

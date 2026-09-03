@@ -1,22 +1,20 @@
 use std::{
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
-        mpsc::{self, Receiver, RecvTimeoutError, Sender},
+        mpsc::{self, Receiver, Sender},
     },
     thread,
-    time::Duration,
 };
 
 use crate::{
     compiler::{PreviewPage, rasterize_pdf},
     document::DocumentKind,
+    private_workspace::project_root_for_path,
 };
 use eframe::egui;
-
-const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 #[derive(Debug)]
 pub enum LoadedAsset {
@@ -116,14 +114,10 @@ fn worker_loop(
     shutdown: Arc<AtomicBool>,
     latest_token: Arc<AtomicU64>,
 ) {
-    while !shutdown.load(Ordering::Acquire) {
-        let mut request = match requests.recv_timeout(POLL_INTERVAL) {
-            Ok(request) => request,
-            Err(RecvTimeoutError::Timeout) => continue,
-            Err(RecvTimeoutError::Disconnected) => break,
-        };
-        while let Ok(newer) = requests.try_recv() {
-            request = newer;
+    while let Ok(request) = requests.recv() {
+        let request = take_latest_queued(request, &requests);
+        if shutdown.load(Ordering::Acquire) {
+            break;
         }
 
         let cancelled = || {
@@ -150,7 +144,17 @@ fn worker_loop(
     }
 }
 
-fn load_image(path: &PathBuf, cancelled: &impl Fn() -> bool) -> Result<LoadedAsset, String> {
+fn take_latest_queued(
+    mut request: AssetRequest,
+    requests: &Receiver<AssetRequest>,
+) -> AssetRequest {
+    while let Ok(newer) = requests.try_recv() {
+        request = newer;
+    }
+    request
+}
+
+fn load_image(path: &Path, cancelled: &impl Fn() -> bool) -> Result<LoadedAsset, String> {
     let encoded = fs::read(path)
         .map_err(|error| format!("Could not read image {}: {error}", path.display()))?;
     if cancelled() {
@@ -167,12 +171,43 @@ fn load_image(path: &PathBuf, cancelled: &impl Fn() -> bool) -> Result<LoadedAss
     }))
 }
 
-fn load_pdf(path: &PathBuf, mut cancelled: impl FnMut() -> bool) -> Result<LoadedAsset, String> {
+fn load_pdf(path: &Path, mut cancelled: impl FnMut() -> bool) -> Result<LoadedAsset, String> {
     let bytes = fs::read(path)
         .map_err(|error| format!("Could not read PDF {}: {error}", path.display()))?;
     if cancelled() {
         return Err("PDF loading was superseded by another file".to_owned());
     }
-    let pages = rasterize_pdf(&bytes, &mut cancelled)?;
+    let project_root = project_root_for_path(path).map_err(|error| {
+        format!(
+            "Could not locate private workspace storage for {}: {error}",
+            path.display()
+        )
+    })?;
+    let pages = rasterize_pdf(&bytes, &project_root, &mut cancelled)?;
     Ok(LoadedAsset::Pdf { bytes, pages })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(token: u64) -> AssetRequest {
+        AssetRequest {
+            token,
+            path: PathBuf::from(format!("asset-{token}.pdf")),
+            kind: DocumentKind::Pdf,
+        }
+    }
+
+    #[test]
+    fn queued_asset_requests_collapse_to_the_newest() {
+        let (sender, receiver) = mpsc::channel();
+        sender.send(request(2)).unwrap();
+        sender.send(request(3)).unwrap();
+
+        let latest = take_latest_queued(request(1), &receiver);
+
+        assert_eq!(latest.token, 3);
+        assert_eq!(latest.path, PathBuf::from("asset-3.pdf"));
+    }
 }

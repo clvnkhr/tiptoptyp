@@ -25,6 +25,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use url::Url;
 
+use crate::private_workspace::{PrivateTypstDocument, PrivateWorkspace};
+#[cfg(test)]
+use crate::toolchain::renamed_environment_value;
+
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(300);
 const EXIT_TIMEOUT: Duration = Duration::from_millis(200);
@@ -50,6 +54,10 @@ pub enum TinymistError {
         current: Option<Generation>,
     },
     InvalidFilePath(PathBuf),
+    PrivateDocument {
+        project_root: PathBuf,
+        message: String,
+    },
 }
 
 impl fmt::Display for TinymistError {
@@ -67,6 +75,14 @@ impl fmt::Display for TinymistError {
             Self::InvalidFilePath(path) => {
                 write!(formatter, "cannot convert {} to a file URI", path.display())
             }
+            Self::PrivateDocument {
+                project_root,
+                message,
+            } => write!(
+                formatter,
+                "cannot prepare an unsaved Typst document in {}: {message}",
+                project_root.display()
+            ),
         }
     }
 }
@@ -204,12 +220,44 @@ impl TinymistConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TextDocument {
     pub uri: String,
     pub language_id: String,
     pub version: i32,
     pub text: String,
+}
+
+#[derive(Serialize)]
+struct Notification<'a, Params> {
+    jsonrpc: &'static str,
+    method: &'a str,
+    params: Params,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DidOpenParams<'a> {
+    text_document: &'a TextDocument,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DidChangeParams<'a> {
+    text_document: VersionedDocument<'a>,
+    content_changes: [ContentChange<'a>; 1],
+}
+
+#[derive(Serialize)]
+struct VersionedDocument<'a> {
+    uri: &'a str,
+    version: i32,
+}
+
+#[derive(Serialize)]
+struct ContentChange<'a> {
+    text: &'a str,
 }
 
 impl TextDocument {
@@ -224,6 +272,73 @@ impl TextDocument {
 
     pub fn from_path(path: &Path, version: i32, text: impl Into<String>) -> Result<Self> {
         Ok(Self::typst(path_to_file_uri(path)?, version, text))
+    }
+}
+
+/// Filesystem backing for an unsaved buffer opened through Tinymist.
+///
+/// Tinymist can format a `didOpen` buffer only when its `file:` URI resolves to
+/// a real file. This guard provides that file below the project's private
+/// directory, preserves relative-import layout, and removes the complete
+/// mirror when dropped. The app should retain it until after `didClose`.
+#[derive(Debug)]
+pub struct UnsavedTextDocument {
+    project_root: PathBuf,
+    backing: PrivateTypstDocument,
+    uri: String,
+}
+
+impl UnsavedTextDocument {
+    pub fn create(
+        project_root: impl AsRef<Path>,
+        source_dir: impl AsRef<Path>,
+        display_name: impl AsRef<std::ffi::OsStr>,
+        source: &str,
+    ) -> Result<Self> {
+        let requested_root = project_root.as_ref();
+        let private = PrivateWorkspace::open(requested_root).map_err(|error| {
+            TinymistError::PrivateDocument {
+                project_root: requested_root.to_owned(),
+                message: error.to_string(),
+            }
+        })?;
+        let project_root = private.project_root().to_owned();
+        let backing = private
+            .mirrored_typst_document(source_dir, display_name, source)
+            .map_err(|error| TinymistError::PrivateDocument {
+                project_root: project_root.clone(),
+                message: error.to_string(),
+            })?;
+        let uri = path_to_file_uri(backing.path())?;
+        Ok(Self {
+            project_root,
+            backing,
+            uri,
+        })
+    }
+
+    pub fn path(&self) -> &Path {
+        self.backing.path()
+    }
+
+    #[cfg(test)]
+    pub fn uri(&self) -> &str {
+        &self.uri
+    }
+
+    pub fn text_document(&self, version: i32, text: impl Into<String>) -> TextDocument {
+        TextDocument::typst(self.uri.clone(), version, text)
+    }
+
+    /// Keeps the real backing file current before a formatting request. LSP
+    /// `didChange` remains the authority for Tinymist's in-memory contents.
+    pub fn update_backing_source(&self, source: &str) -> Result<()> {
+        self.backing
+            .update(source)
+            .map_err(|error| TinymistError::PrivateDocument {
+                project_root: self.project_root.clone(),
+                message: error.to_string(),
+            })
     }
 }
 
@@ -391,7 +506,7 @@ impl TinymistSidecar {
         let current_generation = Arc::new(AtomicU64::new(0));
         let worker_generation = current_generation.clone();
         let worker = thread::Builder::new()
-            .name("mytypst-tinymist".to_owned())
+            .name("tiptoptyp-tinymist".to_owned())
             .spawn(move || worker_loop(command_rx, event_tx, context, worker_generation))
             .expect("failed to start Tinymist worker");
 
@@ -685,7 +800,7 @@ impl Session {
         let (incoming_tx, incoming_rx) = mpsc::channel();
         let stdout_tx = incoming_tx.clone();
         let stdout_reader = match thread::Builder::new()
-            .name(format!("mytypst-tinymist-stdout-{}", generation.0))
+            .name(format!("tiptoptyp-tinymist-stdout-{}", generation.0))
             .spawn(move || stdout_loop(stdout, stdout_tx))
         {
             Ok(reader) => reader,
@@ -696,7 +811,7 @@ impl Session {
             }
         };
         let stderr_reader = match thread::Builder::new()
-            .name(format!("mytypst-tinymist-stderr-{}", generation.0))
+            .name(format!("tiptoptyp-tinymist-stderr-{}", generation.0))
             .spawn(move || stderr_loop(stderr, incoming_tx))
         {
             Ok(reader) => reader,
@@ -818,7 +933,7 @@ impl Session {
         }))
     }
 
-    fn write(&mut self, message: &Value) -> std::result::Result<(), String> {
+    fn write(&mut self, message: &impl Serialize) -> std::result::Result<(), String> {
         let stdin = self
             .stdin
             .as_mut()
@@ -828,30 +943,33 @@ impl Session {
     }
 
     fn send_did_open(&mut self, document: &TextDocument) -> std::result::Result<(), String> {
-        self.notify(
-            "textDocument/didOpen",
-            json!({
-                "textDocument": {
-                    "uri": document.uri,
-                    "languageId": document.language_id,
-                    "version": document.version,
-                    "text": document.text,
-                }
-            }),
-        )
+        self.write(&Notification {
+            jsonrpc: "2.0",
+            method: "textDocument/didOpen",
+            params: DidOpenParams {
+                text_document: document,
+            },
+        })
     }
 
     fn send_did_change(&mut self, document: &TextDocument) -> std::result::Result<(), String> {
-        self.notify(
-            "textDocument/didChange",
-            json!({
-                "textDocument": {
-                    "uri": document.uri,
-                    "version": document.version,
-                },
-                "contentChanges": [{ "text": document.text }],
-            }),
-        )
+        self.send_did_change_parts(&document.uri, document.version, &document.text)
+    }
+
+    fn send_did_change_parts(
+        &mut self,
+        uri: &str,
+        version: i32,
+        text: &str,
+    ) -> std::result::Result<(), String> {
+        self.write(&Notification {
+            jsonrpc: "2.0",
+            method: "textDocument/didChange",
+            params: DidChangeParams {
+                text_document: VersionedDocument { uri, version },
+                content_changes: [ContentChange { text }],
+            },
+        })
     }
 
     fn send_did_close(&mut self, uri: &str) -> std::result::Result<(), String> {
@@ -1104,11 +1222,10 @@ fn worker_loop(
                     );
                     continue;
                 }
-                let previous = active
-                    .documents
-                    .insert(document.uri.clone(), document.clone());
+                let uri = document.uri.clone();
+                let replacing = active.documents.contains_key(&uri);
                 let result = if active.phase.can_sync_documents() {
-                    if previous.is_some() {
+                    if replacing {
                         active.send_did_change(&document)
                     } else {
                         active.send_did_open(&document)
@@ -1125,6 +1242,8 @@ fn worker_loop(
                         &context,
                         &current_generation,
                     );
+                } else {
+                    active.documents.insert(uri, document);
                 }
             }
             WorkerCommand::DidChange {
@@ -1136,7 +1255,7 @@ fn worker_loop(
                 let Some(active) = matching_session(session.as_mut(), generation) else {
                     continue;
                 };
-                let Some(document) = active.documents.get_mut(&uri) else {
+                let Some(document) = active.documents.get(&uri) else {
                     emit(
                         &events,
                         &context,
@@ -1167,12 +1286,12 @@ fn worker_loop(
                     );
                     continue;
                 }
-                document.version = version;
-                document.text = text;
-                let changed = document.clone();
-                if active.phase.can_sync_documents()
-                    && let Err(error) = active.send_did_change(&changed)
-                {
+                let result = if active.phase.can_sync_documents() {
+                    active.send_did_change_parts(&uri, version, &text)
+                } else {
+                    Ok(())
+                };
+                if let Err(error) = result {
                     fail_active_session(
                         &mut session,
                         "write",
@@ -1181,6 +1300,9 @@ fn worker_loop(
                         &context,
                         &current_generation,
                     );
+                } else if let Some(document) = active.documents.get_mut(&uri) {
+                    document.version = version;
+                    document.text = text;
                 }
             }
             WorkerCommand::DidClose { generation, uri } => {
@@ -1503,10 +1625,11 @@ fn handle_rpc_message(
             )?;
             session.phase = SessionPhase::Initialized;
 
-            let documents: Vec<_> = session.documents.values().cloned().collect();
-            for document in &documents {
+            let documents = std::mem::take(&mut session.documents);
+            for document in documents.values() {
                 session.send_did_open(document)?;
             }
+            session.documents = documents;
             emit(
                 events,
                 context,
@@ -2008,7 +2131,7 @@ fn join_readers(session: &mut Session) {
     }
 }
 
-fn write_lsp_message(writer: &mut impl Write, message: &Value) -> io::Result<()> {
+fn write_lsp_message(writer: &mut impl Write, message: &impl Serialize) -> io::Result<()> {
     let payload = serde_json::to_vec(message)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     if payload.len() > MAX_MESSAGE_BYTES {
@@ -2162,6 +2285,179 @@ mod tests {
         assert!(args.contains(&"--partial-rendering=false"));
         assert!(args.contains(&"--no-open"));
         assert_eq!(settings["customizedShowDocument"], false);
+    }
+
+    #[test]
+    fn unsaved_document_has_real_private_backing_for_formatting() {
+        let project = tempfile::tempdir().unwrap();
+        fs::write(project.path().join("shared.typ"), "#let shared = 1").unwrap();
+        let private_path = {
+            let unsaved = UnsavedTextDocument::create(
+                project.path(),
+                project.path(),
+                "Untitled.typ",
+                "#include \"shared.typ\"",
+            )
+            .unwrap();
+            assert!(unsaved.path().is_file());
+            assert!(
+                unsaved
+                    .path()
+                    .starts_with(project.path().canonicalize().unwrap().join(".tiptoptyp"))
+            );
+            assert_eq!(
+                fs::read_to_string(unsaved.path().parent().unwrap().join("shared.typ")).unwrap(),
+                "#let shared = 1"
+            );
+            let document = unsaved.text_document(7, "changed in memory");
+            assert_eq!(document.uri, unsaved.uri());
+            assert_eq!(document.version, 7);
+            assert_eq!(document.text, "changed in memory");
+            unsaved.update_backing_source("changed on disk").unwrap();
+            assert_eq!(
+                fs::read_to_string(unsaved.path()).unwrap(),
+                "changed on disk"
+            );
+            unsaved.path().to_owned()
+        };
+        assert!(!private_path.exists());
+    }
+
+    #[test]
+    #[ignore = "requires a real Tinymist executable; set TIPTOPTYP_TEST_TINYMIST to override discovery"]
+    fn real_tinymist_formats_private_backing_for_unsaved_document() {
+        use crate::{
+            settings::ToolPreference,
+            toolchain::{ToolKind, resolve_tool},
+        };
+
+        let program = renamed_environment_value("TIPTOPTYP_TEST_TINYMIST", "MYTYPST_TEST_TINYMIST")
+            .map(PathBuf::from)
+            .or_else(|| {
+                let resolved = resolve_tool(ToolKind::Tinymist, &ToolPreference::default());
+                resolved.is_available().then_some(resolved.program)
+            });
+        let Some(program) = program else {
+            eprintln!("skipping real Tinymist formatting test: no executable is available");
+            return;
+        };
+
+        let project = tempfile::tempdir().unwrap();
+        let source = "#let answer=40+2\n#answer\n";
+        let unsaved =
+            UnsavedTextDocument::create(project.path(), project.path(), "Untitled.typ", source)
+                .unwrap();
+        let backing_path = unsaved.path().to_owned();
+        assert!(backing_path.is_file());
+
+        let sidecar = TinymistSidecar::new(egui::Context::default());
+        let mut config = TinymistConfig::new(project.path()).with_executable(program.clone());
+        config.start_preview = false;
+        let generation = sidecar.start_workspace(config).unwrap();
+        let version = 1;
+        let document = unsaved.text_document(version, source);
+        let uri = document.uri.clone();
+        sidecar.did_open(generation, document).unwrap();
+
+        let initialize_deadline = Instant::now() + Duration::from_secs(15);
+        let mut initialized = false;
+        while Instant::now() < initialize_deadline && !initialized {
+            while let Some(event) = sidecar.try_recv() {
+                match event {
+                    TinymistEvent::Initialized {
+                        generation: event_generation,
+                    } if event_generation == generation => initialized = true,
+                    TinymistEvent::Error {
+                        message,
+                        fatal: true,
+                        ..
+                    } => panic!(
+                        "real Tinymist {} failed before formatting: {message}",
+                        program.display()
+                    ),
+                    TinymistEvent::Stopped { reason, .. } => panic!(
+                        "real Tinymist {} stopped before formatting: {reason}",
+                        program.display()
+                    ),
+                    _ => {}
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            initialized,
+            "real Tinymist {} did not initialize",
+            program.display()
+        );
+
+        unsaved.update_backing_source(source).unwrap();
+        sidecar
+            .format_document(generation, uri.clone(), version)
+            .unwrap();
+        let format_deadline = Instant::now() + Duration::from_secs(15);
+        let edits = 'wait_for_format: loop {
+            while let Some(event) = sidecar.try_recv() {
+                match event {
+                    TinymistEvent::Formatted {
+                        generation: event_generation,
+                        uri: event_uri,
+                        version: event_version,
+                        edits,
+                    } if event_generation == generation
+                        && event_uri == uri
+                        && event_version == version =>
+                    {
+                        break 'wait_for_format edits;
+                    }
+                    TinymistEvent::Error {
+                        stage: "formatting",
+                        message,
+                        ..
+                    } => panic!("real Tinymist formatting failed: {message}"),
+                    TinymistEvent::Error {
+                        message,
+                        fatal: true,
+                        ..
+                    } => panic!("real Tinymist failed while formatting: {message}"),
+                    TinymistEvent::Stopped { reason, .. } => {
+                        panic!("real Tinymist stopped while formatting: {reason}")
+                    }
+                    _ => {}
+                }
+            }
+            assert!(
+                Instant::now() < format_deadline,
+                "real Tinymist did not return a formatting result for the private unsaved file"
+            );
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert!(
+            edits.is_some_and(|edits| !edits.is_empty()),
+            "real Tinymist returned no edits for deliberately unformatted source"
+        );
+
+        sidecar.did_close(generation, uri).unwrap();
+        sidecar.stop_workspace(generation).unwrap();
+        let stop_deadline = Instant::now() + Duration::from_secs(10);
+        let mut stopped = false;
+        while Instant::now() < stop_deadline && !stopped {
+            while let Some(event) = sidecar.try_recv() {
+                if matches!(
+                    event,
+                    TinymistEvent::Stopped {
+                        generation: event_generation,
+                        ..
+                    } if event_generation == generation
+                ) {
+                    stopped = true;
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(stopped, "real Tinymist did not stop cleanly");
+        assert!(backing_path.exists(), "backing vanished before its guard");
+        drop(unsaved);
+        assert!(!backing_path.exists(), "private backing was not cleaned up");
     }
 
     #[test]
@@ -2408,6 +2704,80 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn preinitialize_changes_flush_once_as_the_latest_did_open() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("delayed-initialize-tinymist.sh");
+        let captured_input = directory.path().join("client-input.bin");
+        let initialize = json!({"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}});
+        let payload = serde_json::to_string(&initialize).unwrap();
+        let script_source = format!(
+            "#!/bin/sh\nsleep 0.2\nprintf '%s\\r\\n\\r\\n%s' 'Content-Length: {}' '{}'\nwhile IFS= read -r line || [ -n \"$line\" ]; do printf '%s\\n' \"$line\" >> '{}'; done\n",
+            payload.len(),
+            payload,
+            captured_input.display()
+        );
+        fs::write(&script, script_source).unwrap();
+        let mut permissions = fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script, permissions).unwrap();
+
+        let sidecar = TinymistSidecar::new(egui::Context::default());
+        let mut config = TinymistConfig::new(directory.path())
+            .with_command(&script, std::iter::empty::<OsString>());
+        config.start_preview = false;
+        let generation = sidecar.start_workspace(config).unwrap();
+        let uri = "file:///tmp/main.typ";
+        let other_uri = "file:///tmp/other.typ";
+        sidecar
+            .did_open(generation, TextDocument::typst(uri, 7, "old"))
+            .unwrap();
+        sidecar.did_change(generation, uri, 8, "latest").unwrap();
+        sidecar
+            .did_open(generation, TextDocument::typst(other_uri, 3, "other"))
+            .unwrap();
+
+        let initialize_deadline = Instant::now() + Duration::from_secs(3);
+        let mut initialized = false;
+        while Instant::now() < initialize_deadline && !initialized {
+            while let Some(event) = sidecar.try_recv() {
+                if matches!(event, TinymistEvent::Initialized { .. }) {
+                    initialized = true;
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(initialized, "delayed fake server never initialized");
+        sidecar.stop_workspace(generation).unwrap();
+
+        let stop_deadline = Instant::now() + Duration::from_secs(3);
+        let mut stopped = false;
+        while Instant::now() < stop_deadline {
+            if matches!(sidecar.try_recv(), Some(TinymistEvent::Stopped { .. })) {
+                stopped = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(stopped, "delayed fake server never stopped");
+        let captured = fs::read_to_string(captured_input).unwrap();
+        assert_eq!(
+            captured
+                .matches("\"method\":\"textDocument/didOpen\"")
+                .count(),
+            2,
+            "{captured:?}"
+        );
+        assert!(!captured.contains("\"method\":\"textDocument/didChange\""));
+        assert!(captured.contains("\"version\":8"), "{captured:?}");
+        assert!(captured.contains("\"text\":\"latest\""), "{captured:?}");
+        assert!(captured.contains(other_uri), "{captured:?}");
+        assert!(captured.contains("\"text\":\"other\""), "{captured:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn fake_server_completes_preview_and_source_mapping_handshake() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -2499,11 +2869,23 @@ mod tests {
         sidecar
             .did_change(generation, "file:///tmp/main.typ", 8, "Hello again")
             .unwrap();
+        sidecar
+            .did_change(generation, "file:///tmp/main.typ", 9, "capture flush")
+            .unwrap();
 
         let reply_deadline = Instant::now() + Duration::from_secs(3);
         loop {
             let captured = fs::read_to_string(&captured_input).unwrap_or_default();
-            if captured.contains("\"id\":99") && captured.contains("\"success\":true") {
+            if captured.contains("\"id\":99")
+                && captured.contains("\"success\":true")
+                && captured.contains("Hello again")
+            {
+                assert!(
+                    captured.contains("\"method\":\"textDocument/didChange\""),
+                    "{captured:?}"
+                );
+                assert!(captured.contains("\"version\":8"), "{captured:?}");
+                assert!(captured.contains("Hello again"), "{captured:?}");
                 break;
             }
             assert!(

@@ -79,20 +79,15 @@ pub fn find_all(text: &str, query: &str) -> Vec<SearchMatch> {
 /// Find the match after `selected`, wrapping to the first match at the end.
 /// A stale or unrelated selection is ignored.
 pub fn find_next(text: &str, query: &str, selected: Option<&SearchMatch>) -> Option<SearchMatch> {
-    let matches = find_all(text, query);
-    if matches.is_empty() {
+    if query.is_empty() {
         return None;
     }
 
     let Some(selected) = selected.filter(|selected| selected.is_match_for(text, query)) else {
-        return matches.into_iter().next();
+        return find(text, query);
     };
 
-    matches
-        .iter()
-        .find(|candidate| candidate.byte_range.start >= selected.byte_range.end)
-        .cloned()
-        .or_else(|| matches.into_iter().next())
+    find_at_or_after(text, query, selected.byte_range.end).or_else(|| find(text, query))
 }
 
 /// Find the match before `selected`, wrapping to the final match at the start.
@@ -102,21 +97,16 @@ pub fn find_previous(
     query: &str,
     selected: Option<&SearchMatch>,
 ) -> Option<SearchMatch> {
-    let matches = find_all(text, query);
-    if matches.is_empty() {
+    if query.is_empty() {
         return None;
     }
 
     let Some(selected) = selected.filter(|selected| selected.is_match_for(text, query)) else {
-        return matches.into_iter().next_back();
+        return find_last_before(text, query, text.len());
     };
 
-    matches
-        .iter()
-        .rev()
-        .find(|candidate| candidate.byte_range.end <= selected.byte_range.start)
-        .cloned()
-        .or_else(|| matches.into_iter().next_back())
+    find_last_before(text, query, selected.byte_range.start)
+        .or_else(|| find_last_before(text, query, text.len()))
 }
 
 /// Replace every non-overlapping literal match and return the number replaced.
@@ -129,27 +119,23 @@ pub fn replace_all(text: &mut String, query: &str, replacement: &str) -> usize {
         return 0;
     }
 
-    let starts = text
-        .match_indices(query)
-        .map(|(start, _)| start)
-        .collect::<Vec<_>>();
-    if starts.is_empty() {
+    let mut matches = text.match_indices(query);
+    let Some(first) = matches.next() else {
         return 0;
-    }
+    };
 
-    let removed = starts.len().saturating_mul(query.len());
-    let inserted = starts.len().saturating_mul(replacement.len());
-    let capacity = text.len().saturating_sub(removed).saturating_add(inserted);
-    let mut result = String::with_capacity(capacity);
+    let mut result = String::with_capacity(text.len());
     let mut copied_until = 0;
-    for start in starts.iter().copied() {
+    let mut count = 0;
+    for (start, matched) in std::iter::once(first).chain(matches) {
         result.push_str(&text[copied_until..start]);
         result.push_str(replacement);
-        copied_until = start + query.len();
+        copied_until = start + matched.len();
+        count += 1;
     }
     result.push_str(&text[copied_until..]);
     *text = result;
-    starts.len()
+    count
 }
 
 /// Stateful selection for a find/replace panel. The query and replacement text
@@ -225,17 +211,21 @@ fn find_next_after_anchor(
     }
 
     let start = anchor.map_or(0, |anchor| anchor.byte_range.end);
-    text[start..]
-        .find(query)
-        .and_then(|offset| {
-            let byte_start = start + offset;
-            SearchMatch::from_byte_range(text, byte_start..byte_start + query.len())
-        })
-        .or_else(|| {
-            text[..start].find(query).and_then(|byte_start| {
-                SearchMatch::from_byte_range(text, byte_start..byte_start + query.len())
-            })
-        })
+    find_at_or_after(text, query, start)
+        .or_else(|| text.get(..start).and_then(|prefix| find(prefix, query)))
+}
+
+fn find_at_or_after(text: &str, query: &str, start: usize) -> Option<SearchMatch> {
+    let suffix = text.get(start..)?;
+    let offset = suffix.find(query)?;
+    let byte_start = start + offset;
+    SearchMatch::from_byte_range(text, byte_start..byte_start + query.len())
+}
+
+fn find_last_before(text: &str, query: &str, end: usize) -> Option<SearchMatch> {
+    let prefix = text.get(..end)?;
+    let (byte_start, matched) = prefix.match_indices(query).last()?;
+    SearchMatch::from_byte_range(text, byte_start..byte_start + matched.len())
 }
 
 #[cfg(test)]
@@ -405,5 +395,30 @@ mod tests {
         state.next(&text, "y");
         assert!(!state.replace_one(&mut text, "", "z"));
         assert!(state.selected().is_none());
+    }
+
+    #[test]
+    fn navigation_handles_adjacent_unicode_matches_without_losing_char_offsets() {
+        let text = "éé x éé";
+        let first = find_next(text, "é", None).unwrap();
+        let second = find_next(text, "é", Some(&first)).unwrap();
+        let third = find_next(text, "é", Some(&second)).unwrap();
+        let fourth = find_next(text, "é", Some(&third)).unwrap();
+
+        assert_eq!(first.char_range, 0..1);
+        assert_eq!(second.char_range, 1..2);
+        assert_eq!(third.char_range, 5..6);
+        assert_eq!(fourth.char_range, 6..7);
+        assert_eq!(find_next(text, "é", Some(&fourth)).unwrap(), first);
+        assert_eq!(find_previous(text, "é", Some(&first)).unwrap(), fourth);
+    }
+
+    #[test]
+    fn replacing_many_matches_preserves_original_non_overlapping_semantics() {
+        let mut text = "ab".repeat(10_000);
+        assert_eq!(replace_all(&mut text, "ab", "xyz"), 10_000);
+        assert_eq!(text.len(), 30_000);
+        assert!(text.starts_with("xyzxyz"));
+        assert!(text.ends_with("xyzxyz"));
     }
 }

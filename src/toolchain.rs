@@ -6,6 +6,7 @@
 
 use std::{
     env,
+    ffi::OsString,
     path::{Path, PathBuf},
 };
 
@@ -42,12 +43,18 @@ impl ToolKind {
         }
     }
 
-    fn environment_variable(self) -> &'static str {
+    fn environment_variables(self) -> (&'static str, &'static str) {
         match self {
-            Self::Typst => "MYTYPST_TYPST",
-            Self::Tinymist => "MYTYPST_TINYMIST",
+            Self::Typst => ("TIPTOPTYP_TYPST", "MYTYPST_TYPST"),
+            Self::Tinymist => ("TIPTOPTYP_TINYMIST", "MYTYPST_TINYMIST"),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EnvironmentOverride {
+    variable: &'static str,
+    program: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +87,20 @@ pub(crate) struct ToolResolution {
 }
 
 impl ToolResolution {
+    fn new(
+        kind: ToolKind,
+        program: PathBuf,
+        origin: ToolOrigin,
+        fallback_reason: Option<String>,
+    ) -> Self {
+        Self {
+            kind,
+            program,
+            origin,
+            fallback_reason,
+        }
+    }
+
     pub(crate) fn is_available(&self) -> bool {
         self.origin != ToolOrigin::Missing
     }
@@ -104,9 +125,46 @@ pub(crate) fn resolve_tool(kind: ToolKind, preference: &ToolPreference) -> ToolR
         kind,
         preference,
         &bundled,
-        || env::var_os(kind.environment_variable()).map(PathBuf::from),
+        || tool_environment_override(kind, |name| env::var_os(name)),
         || find_on_path(kind.binary_name()),
     )
+}
+
+/// Reads a renamed environment option without breaking existing automation.
+///
+/// New configuration should use the `TIPTOPTYP_*` name. The `MYTYPST_*` name
+/// remains a lower-priority fallback for releases created before the rename.
+pub(crate) fn renamed_environment_value(
+    primary: &'static str,
+    legacy: &'static str,
+) -> Option<OsString> {
+    renamed_environment_entry(primary, legacy, |name| env::var_os(name)).map(|(_, value)| value)
+}
+
+fn renamed_environment_entry<Lookup>(
+    primary: &'static str,
+    legacy: &'static str,
+    mut lookup: Lookup,
+) -> Option<(&'static str, OsString)>
+where
+    Lookup: FnMut(&str) -> Option<OsString>,
+{
+    lookup(primary)
+        .map(|value| (primary, value))
+        .or_else(|| lookup(legacy).map(|value| (legacy, value)))
+}
+
+fn tool_environment_override<Lookup>(kind: ToolKind, lookup: Lookup) -> Option<EnvironmentOverride>
+where
+    Lookup: FnMut(&str) -> Option<OsString>,
+{
+    let (primary, legacy) = kind.environment_variables();
+    renamed_environment_entry(primary, legacy, lookup).map(|(variable, program)| {
+        EnvironmentOverride {
+            variable,
+            program: PathBuf::from(program),
+        }
+    })
 }
 
 fn resolve_from<Environment, SearchPath>(
@@ -117,7 +175,7 @@ fn resolve_from<Environment, SearchPath>(
     search_path: SearchPath,
 ) -> ToolResolution
 where
-    Environment: FnOnce() -> Option<PathBuf>,
+    Environment: FnOnce() -> Option<EnvironmentOverride>,
     SearchPath: FnOnce() -> Option<PathBuf>,
 {
     let mut problems = Vec::new();
@@ -129,12 +187,7 @@ where
         } else {
             let custom = PathBuf::from(custom);
             if let Some(program) = absolute_executable(&custom) {
-                return ToolResolution {
-                    kind,
-                    program,
-                    origin: ToolOrigin::Custom,
-                    fallback_reason: None,
-                };
+                return ToolResolution::new(kind, program, ToolOrigin::Custom, None);
             }
             problems.push(format!(
                 "Custom {} path is not an executable file: {}",
@@ -148,11 +201,11 @@ where
         .iter()
         .find_map(|candidate| absolute_executable(candidate))
     {
-        return ToolResolution {
+        return ToolResolution::new(
             kind,
             program,
-            origin: ToolOrigin::Bundled,
-            fallback_reason: (!problems.is_empty()).then(|| {
+            ToolOrigin::Bundled,
+            (!problems.is_empty()).then(|| {
                 format!(
                     "{}; using bundled {} {}",
                     problems.join("; "),
@@ -160,7 +213,7 @@ where
                     kind.bundled_version()
                 )
             }),
-        };
+        );
     }
 
     if preference.mode == ToolMode::Bundled {
@@ -177,47 +230,47 @@ where
         ));
     }
 
-    if let Some(program) = environment() {
-        if let Some(program) = absolute_executable(&program) {
-            let variable = kind.environment_variable();
-            return ToolResolution {
+    if let Some(environment) = environment() {
+        if let Some(program) = absolute_executable(&environment.program) {
+            return ToolResolution::new(
                 kind,
                 program,
-                origin: ToolOrigin::Environment,
-                fallback_reason: Some(format!(
-                    "{}; using the {variable} development override",
-                    problems.join("; ")
+                ToolOrigin::Environment,
+                Some(format!(
+                    "{}; using the {} development override",
+                    problems.join("; "),
+                    environment.variable,
                 )),
-            };
+            );
         }
         problems.push(format!(
             "{} does not point to an executable file",
-            kind.environment_variable()
+            environment.variable
         ));
     }
 
     if let Some(program) = search_path() {
-        return ToolResolution {
+        return ToolResolution::new(
             kind,
             program,
-            origin: ToolOrigin::Path,
-            fallback_reason: Some(format!(
+            ToolOrigin::Path,
+            Some(format!(
                 "{}; using the executable found on PATH",
                 problems.join("; ")
             )),
-        };
+        );
     }
 
-    ToolResolution {
+    ToolResolution::new(
         kind,
-        program: PathBuf::from(executable_file_name(kind.binary_name())),
-        origin: ToolOrigin::Missing,
-        fallback_reason: Some(format!(
+        PathBuf::from(executable_file_name(kind.binary_name())),
+        ToolOrigin::Missing,
+        Some(format!(
             "{}; no {} executable was found on PATH",
             problems.join("; "),
             kind.label()
         )),
-    }
+    )
 }
 
 fn bundled_candidates(kind: ToolKind) -> Vec<PathBuf> {
@@ -340,9 +393,11 @@ fn is_executable(path: &Path) -> bool {
 }
 
 fn absolute_executable(path: &Path) -> Option<PathBuf> {
-    is_executable(path)
-        .then(|| path.canonicalize().ok())
-        .flatten()
+    if is_executable(path) {
+        path.canonicalize().ok()
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -435,6 +490,58 @@ mod tests {
     }
 
     #[test]
+    fn renamed_environment_prefers_tiptoptyp_and_accepts_legacy_name() {
+        let selected = renamed_environment_entry(
+            "TIPTOPTYP_TEST_TOOL",
+            "MYTYPST_TEST_TOOL",
+            |name| match name {
+                "TIPTOPTYP_TEST_TOOL" => Some(OsString::from("new")),
+                "MYTYPST_TEST_TOOL" => Some(OsString::from("legacy")),
+                _ => None,
+            },
+        );
+        assert_eq!(
+            selected,
+            Some(("TIPTOPTYP_TEST_TOOL", OsString::from("new")))
+        );
+
+        let selected =
+            renamed_environment_entry("TIPTOPTYP_TEST_TOOL", "MYTYPST_TEST_TOOL", |name| {
+                (name == "MYTYPST_TEST_TOOL").then(|| OsString::from("legacy"))
+            });
+        assert_eq!(
+            selected,
+            Some(("MYTYPST_TEST_TOOL", OsString::from("legacy")))
+        );
+    }
+
+    #[test]
+    fn environment_fallback_reports_the_name_that_selected_the_tool() {
+        let directory = tempfile::tempdir().unwrap();
+        let environment = executable(directory.path(), "typst-environment");
+        let resolved = resolve_from(
+            ToolKind::Typst,
+            &ToolPreference::default(),
+            &[],
+            || {
+                Some(EnvironmentOverride {
+                    variable: "TIPTOPTYP_TYPST",
+                    program: environment.clone(),
+                })
+            },
+            || None,
+        );
+
+        assert_eq!(resolved.origin, ToolOrigin::Environment);
+        assert!(
+            resolved
+                .fallback_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("TIPTOPTYP_TYPST"))
+        );
+    }
+
+    #[test]
     fn complete_absence_is_reported() {
         let resolved = resolve_from(
             ToolKind::Tinymist,
@@ -476,6 +583,38 @@ mod tests {
         );
 
         assert_eq!(resolved.origin, ToolOrigin::Bundled);
+        assert!(!environment_called.get());
+        assert!(!path_called.get());
+    }
+
+    #[test]
+    fn recovery_discovery_is_lazy_when_a_custom_tool_is_valid() {
+        use std::cell::Cell;
+
+        let directory = tempfile::tempdir().unwrap();
+        let custom = executable(directory.path(), "tinymist-custom");
+        let preference = ToolPreference {
+            mode: ToolMode::Custom,
+            custom_path: custom.display().to_string(),
+        };
+        let environment_called = Cell::new(false);
+        let path_called = Cell::new(false);
+
+        let resolved = resolve_from(
+            ToolKind::Tinymist,
+            &preference,
+            &[],
+            || {
+                environment_called.set(true);
+                None
+            },
+            || {
+                path_called.set(true);
+                None
+            },
+        );
+
+        assert_eq!(resolved.origin, ToolOrigin::Custom);
         assert!(!environment_called.get());
         assert!(!path_called.get());
     }

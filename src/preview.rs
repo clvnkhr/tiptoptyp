@@ -1,10 +1,10 @@
 use eframe::egui::Vec2;
 
-use crate::compiler::PREVIEW_DPI;
+use crate::{compiler::PREVIEW_DPI, theme::METRICS};
 
 pub const PDF_POINTS_PER_PREVIEW_PIXEL: f32 = 72.0 / PREVIEW_DPI;
-pub const PAGE_MARGIN: f32 = 28.0;
-pub const PAGE_GAP: f32 = 24.0;
+pub const PAGE_MARGIN: f32 = METRICS.preview.page_margin;
+pub const PAGE_GAP: f32 = METRICS.preview.page_gap;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PageGeometry {
@@ -80,13 +80,14 @@ pub fn zoom_anchored_offset(
 /// A preview-only dark transform. The original pixels and exported PDF remain
 /// untouched, so switching mode is lossless.
 pub fn dark_preview_rgba(rgba: &[u8]) -> Vec<u8> {
+    let [red_percent, green_percent, blue_percent] = METRICS.preview.dark_transform_rgb_percent;
     rgba.chunks_exact(4)
         .flat_map(|pixel| {
             // A slightly blue-black inversion is more comfortable than a raw
             // photographic negative for predominantly black-on-white pages.
-            let red = (255_u16.saturating_sub(pixel[0] as u16) * 92 / 100) as u8;
-            let green = (255_u16.saturating_sub(pixel[1] as u16) * 94 / 100) as u8;
-            let blue = (255_u16.saturating_sub(pixel[2] as u16) * 100 / 100) as u8;
+            let red = (255_u16.saturating_sub(pixel[0] as u16) * red_percent / 100) as u8;
+            let green = (255_u16.saturating_sub(pixel[1] as u16) * green_percent / 100) as u8;
+            let blue = (255_u16.saturating_sub(pixel[2] as u16) * blue_percent / 100) as u8;
             [red, green, blue, pixel[3]]
         })
         .collect()
