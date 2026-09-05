@@ -119,8 +119,13 @@ pub struct CompileResult {
     pub output: Option<Result<CompiledDocument, String>>,
 }
 
+enum CompilerCommand {
+    Request(CompileRequest),
+    Stop,
+}
+
 pub struct Compiler {
-    requests: Option<Sender<CompileRequest>>,
+    requests: Option<Sender<CompilerCommand>>,
     results: Receiver<CompileResult>,
     worker: Option<thread::JoinHandle<()>>,
     shutdown: Arc<AtomicBool>,
@@ -129,7 +134,7 @@ pub struct Compiler {
 
 impl Compiler {
     pub fn new(context: egui::Context) -> Self {
-        let (request_tx, request_rx) = mpsc::channel::<CompileRequest>();
+        let (request_tx, request_rx) = mpsc::channel::<CompilerCommand>();
         let (result_tx, result_rx) = mpsc::channel::<CompileResult>();
         let shutdown = Arc::new(AtomicBool::new(false));
         let latest_revision = Arc::new(AtomicU64::new(0));
@@ -164,8 +169,19 @@ impl Compiler {
         self.requests
             .as_ref()
             .ok_or_else(|| "The preview worker has stopped".to_owned())?
-            .send(request)
+            .send(CompilerCommand::Request(request))
             .map_err(|_| "The preview worker stopped unexpectedly".to_owned())
+    }
+
+    /// Stop any active watcher and discard in-flight rasterisation work.
+    ///
+    /// This is intentionally a queued command: changing view mode must not
+    /// wait for Typst or Poppler on the UI thread.
+    pub fn stop(&self) {
+        self.latest_revision.fetch_add(1, Ordering::AcqRel);
+        if let Some(requests) = &self.requests {
+            let _ = requests.send(CompilerCommand::Stop);
+        }
     }
 
     pub fn try_recv(&self) -> Option<CompileResult> {
@@ -374,7 +390,7 @@ impl Drop for WatchSession {
 }
 
 fn worker_loop(
-    requests: Receiver<CompileRequest>,
+    requests: Receiver<CompilerCommand>,
     results: Sender<CompileResult>,
     context: egui::Context,
     shutdown: Arc<AtomicBool>,
@@ -384,7 +400,7 @@ fn worker_loop(
     let mut next_session_id = 1_u64;
     let mut session: Option<WatchSession> = None;
 
-    loop {
+    'worker: loop {
         drain_watch_logs(&watch_log_rx, &mut session, &results, &context);
         finish_settled_completion(
             &mut session,
@@ -395,13 +411,23 @@ fn worker_loop(
         );
 
         match requests.recv_timeout(WORKER_POLL_INTERVAL) {
-            Ok(mut request) => {
+            Ok(CompilerCommand::Stop) => {
+                session = None;
+                continue;
+            }
+            Ok(CompilerCommand::Request(mut request)) => {
                 if *TRACE_WATCH {
                     eprintln!("tiptoptyp watcher request revision {}", request.revision);
                 }
                 // Never make the watcher step through obsolete editor snapshots.
                 while let Ok(newer) = requests.try_recv() {
-                    request = newer;
+                    match newer {
+                        CompilerCommand::Request(newer) => request = newer,
+                        CompilerCommand::Stop => {
+                            session = None;
+                            continue 'worker;
+                        }
+                    }
                 }
 
                 // Finish processing any event already emitted by the old source

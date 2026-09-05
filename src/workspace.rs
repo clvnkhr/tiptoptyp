@@ -102,11 +102,16 @@ pub struct WorkspaceTree {
 }
 
 impl WorkspaceTree {
-    pub fn new(root: impl AsRef<Path>) -> io::Result<Self> {
-        Ok(Self {
-            snapshot: WorkspaceSnapshot::scan(root)?,
+    pub fn from_snapshot(snapshot: WorkspaceSnapshot) -> Self {
+        Self {
+            snapshot,
             generation: 0,
-        })
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn new(root: impl AsRef<Path>) -> io::Result<Self> {
+        Ok(Self::from_snapshot(WorkspaceSnapshot::scan(root)?))
     }
 
     pub fn root(&self) -> &Path {
@@ -122,19 +127,26 @@ impl WorkspaceTree {
         self.generation
     }
 
-    /// Rescan the root, retaining the old cache if scanning fails. Returns
-    /// whether the visible tree changed.
-    pub fn refresh(&mut self) -> io::Result<bool> {
-        // `snapshot.root` is already canonical, so periodic refreshes do not
-        // need another filesystem canonicalization pass.
-        let next = WorkspaceSnapshot::scan_canonical(self.snapshot.root.clone())?;
-        if next.nodes == self.snapshot.nodes {
-            return Ok(false);
+    /// Apply a completed background scan, incrementing the visible generation
+    /// only when the tree structure changed.
+    pub fn apply_snapshot(&mut self, next: WorkspaceSnapshot) -> bool {
+        if next.root != self.snapshot.root || next.nodes == self.snapshot.nodes {
+            return false;
         }
 
         self.snapshot = next;
         self.generation = self.generation.wrapping_add(1);
-        Ok(true)
+        true
+    }
+
+    /// Rescan the root, retaining the old cache if scanning fails. Returns
+    /// whether the visible tree changed.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn refresh(&mut self) -> io::Result<bool> {
+        // `snapshot.root` is already canonical, so periodic refreshes do not
+        // need another filesystem canonicalization pass.
+        let next = WorkspaceSnapshot::scan_canonical(self.snapshot.root.clone())?;
+        Ok(self.apply_snapshot(next))
     }
 }
 

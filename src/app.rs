@@ -6,8 +6,9 @@ use std::{
     ops::Range,
     path::{Path, PathBuf},
     pin::Pin,
-    sync::{Arc, mpsc},
+    sync::{Arc, mpsc, mpsc::Receiver},
     task::{Context as TaskContext, Poll, Wake, Waker},
+    thread,
     time::{Duration, Instant},
 };
 
@@ -39,12 +40,12 @@ use crate::{
     },
     open_requests::OpenRequestReceiver,
     preview::{
-        PAGE_MARGIN, dark_preview_rgba, page_stack_geometry, stack_height, visible_page,
-        zoom_anchored_offset,
+        PAGE_MARGIN, PDF_POINTS_PER_PREVIEW_PIXEL, dark_preview_rgba, page_stack_geometry,
+        stack_height, visible_page, zoom_anchored_offset,
     },
     project_index::{ProjectIndex, analyze_project},
     screenshot::{CaptureController, CaptureThemeProfile, UiSnapshotScene},
-    search::{SearchState, find, find_all},
+    search::{SearchState, find_all},
     settings::{
         AppSettings, ColorThemeChoice, DEFAULT_HOVER_DELAY_MS, DEFAULT_HOVER_FADE_MS,
         DocumentTheme, InterfaceTheme, PreviewPreference, SYSTEM_THEME_ID, SourcePreviewTrigger,
@@ -63,7 +64,7 @@ use crate::{
         TinymistSidecar, UnsavedTextDocument,
     },
     toolchain::{ToolKind, ToolOrigin, ToolResolution, resolve_tool},
-    workspace::{WorkspaceNode, WorkspaceTree},
+    workspace::{WorkspaceNode, WorkspaceSnapshot, WorkspaceTree},
 };
 
 const COMPILE_DEBOUNCE: Duration = Duration::from_millis(60);
@@ -687,6 +688,7 @@ pub struct EditorApp {
     requested_zoom: Option<f32>,
     requested_page: Option<usize>,
     preview_dark: bool,
+    preview_was_visible: bool,
 
     view_mode: ViewMode,
     filesystem_visible: bool,
@@ -711,9 +713,13 @@ pub struct EditorApp {
     workspace_chooser_visible: bool,
     workspace: Option<WorkspaceTree>,
     workspace_error: Option<String>,
+    workspace_scan: Option<Receiver<(u64, Result<WorkspaceSnapshot, String>)>>,
+    workspace_scan_id: u64,
     next_workspace_refresh: Instant,
     project_index: ProjectIndex,
     project_index_deadline: Option<Instant>,
+    project_index_result: Option<Receiver<(u64, ProjectIndex)>>,
+    project_index_request_id: u64,
     captures: CaptureController,
     snapshot_scene: Option<UiSnapshotScene>,
     window_host: EditorWindowHost,
@@ -767,6 +773,7 @@ pub struct EditorApp {
     tinymist_current_open: bool,
     tinymist_unsaved_document: Option<UnsavedTextDocument>,
     tinymist_url: Option<String>,
+    tinymist_preview_enabled: bool,
     tinymist_lsp_ready: bool,
     tinymist_state: ServiceState,
     webview_state: ServiceState,
@@ -895,6 +902,7 @@ impl EditorApp {
             requested_zoom: None,
             requested_page: None,
             preview_dark,
+            preview_was_visible: false,
             view_mode: ViewMode::Split,
             filesystem_visible: true,
             problems_visible: false,
@@ -918,9 +926,13 @@ impl EditorApp {
             workspace_chooser_visible: false,
             workspace: None,
             workspace_error: None,
+            workspace_scan: None,
+            workspace_scan_id: 0,
             next_workspace_refresh: Instant::now(),
             project_index: ProjectIndex::default(),
             project_index_deadline: Some(Instant::now()),
+            project_index_result: None,
+            project_index_request_id: 0,
             captures,
             snapshot_scene,
             window_host,
@@ -971,6 +983,7 @@ impl EditorApp {
             tinymist_current_open: false,
             tinymist_unsaved_document: None,
             tinymist_url: None,
+            tinymist_preview_enabled: false,
             tinymist_lsp_ready: false,
             tinymist_state: ServiceState::Starting("Launching Tinymist LSP".to_owned()),
             webview_state: ServiceState::Starting(
@@ -1183,30 +1196,55 @@ impl EditorApp {
         self.project_index_deadline = Some(Instant::now() + PROJECT_INDEX_DEBOUNCE);
     }
 
-    fn rebuild_project_index(&mut self) {
+    fn rebuild_project_index(&mut self, context: &egui::Context) {
         self.project_index_deadline = None;
         let main = self.preview_document_path();
+        let root = self.project_root();
         let mut overrides = BTreeMap::new();
         if self.document_kind.is_typst() {
             let path = self.path.clone().unwrap_or_else(|| main.clone());
             overrides.insert(canonical_or_absolute(&path), self.source.clone());
         }
-        self.project_index = analyze_project(&self.project_root(), &main, &overrides);
+        self.project_index_request_id = self.project_index_request_id.wrapping_add(1);
+        let request_id = self.project_index_request_id;
+        let (sender, receiver) = mpsc::channel();
+        self.project_index_result = Some(receiver);
+        let repaint = context.clone();
+        let _ = thread::Builder::new()
+            .name("tiptoptyp-project-index".to_owned())
+            .spawn(move || {
+                let index = analyze_project(&root, &main, &overrides);
+                let _ = sender.send((request_id, index));
+                repaint.request_repaint();
+            });
     }
 
     fn tick_project_index(&mut self, context: &egui::Context) {
+        if let Some(result) = self
+            .project_index_result
+            .as_ref()
+            .and_then(|receiver| receiver.try_recv().ok())
+        {
+            self.project_index_result = None;
+            if result.0 == self.project_index_request_id && self.project_index_deadline.is_none() {
+                self.project_index = result.1;
+            }
+        }
+        if self.project_index_result.is_some() {
+            context.request_repaint_after(Duration::from_millis(50));
+        }
         let Some(deadline) = self.project_index_deadline else {
             return;
         };
         let now = Instant::now();
         if deadline <= now {
-            self.rebuild_project_index();
+            self.rebuild_project_index(context);
         } else {
             context.request_repaint_after(deadline - now);
         }
     }
 
-    fn use_file_for_preview(&mut self, path: PathBuf) {
+    fn use_file_for_preview(&mut self, path: PathBuf, context: &egui::Context) {
         let root = canonical_or_absolute(&self.workspace_root);
         let path = canonical_or_absolute(&path);
         if !path.starts_with(&root)
@@ -1231,7 +1269,7 @@ impl EditorApp {
                 .preview_files
                 .insert(key.to_owned(), value.to_owned());
         }
-        self.rebuild_project_index();
+        self.rebuild_project_index(context);
         self.restart_tinymist();
         self.schedule_compile_now();
         self.notice = Some(Notice {
@@ -1275,8 +1313,7 @@ impl EditorApp {
             // Tinymist sees unsaved edits in every open source file. The CLI
             // fallback can only see an imported subfile after it is saved, so
             // avoid rebuilding the designated main entry with stale disk data.
-            self.compile_deadline = self
-                .current_is_preview_document()
+            self.compile_deadline = (self.preview_visible() && self.current_is_preview_document())
                 .then(|| Instant::now() + COMPILE_DEBOUNCE);
             if self.compile_deadline.is_some() {
                 self.status = PreviewStatus::Waiting;
@@ -1329,7 +1366,7 @@ impl EditorApp {
 
     fn request_compile(&mut self) {
         self.compile_deadline = None;
-        if !self.document_kind.is_typst() {
+        if !self.document_kind.is_typst() || !self.preview_visible() {
             return;
         }
         let preview_path = self.preview_document_path();
@@ -1364,6 +1401,10 @@ impl EditorApp {
     }
 
     fn tick_compile(&mut self, context: &egui::Context) {
+        if !self.preview_visible() {
+            self.compile_deadline = None;
+            return;
+        }
         let Some(deadline) = self.compile_deadline else {
             return;
         };
@@ -1377,7 +1418,10 @@ impl EditorApp {
 
     fn receive_compile_results(&mut self, context: &egui::Context) {
         while let Some(result) = self.compiler.try_recv() {
-            if !self.document_kind.is_typst() || result.revision != self.revision {
+            if !self.document_kind.is_typst()
+                || !self.preview_visible()
+                || result.revision != self.revision
+            {
                 continue;
             }
 
@@ -1490,7 +1534,7 @@ impl EditorApp {
     }
 
     fn schedule_compile_now(&mut self) {
-        if !self.document_kind.is_typst() {
+        if !self.document_kind.is_typst() || !self.preview_visible() {
             self.compile_deadline = None;
             return;
         }
@@ -3050,31 +3094,75 @@ impl EditorApp {
 
     fn reset_document_services(&mut self) {
         let root = self.project_root();
-        match WorkspaceTree::new(&root) {
-            Ok(workspace) => {
-                self.workspace = Some(workspace);
-                self.workspace_error = None;
-            }
-            Err(error) => {
-                self.workspace = None;
-                self.workspace_error = Some(format!("Could not scan {}: {error}", root.display()));
-            }
-        }
+        self.workspace = None;
+        self.workspace_error = None;
+        self.request_workspace_scan(root);
         self.next_workspace_refresh = Instant::now() + WORKSPACE_REFRESH_INTERVAL;
         self.restart_tinymist();
     }
 
-    fn refresh_workspace(&mut self) {
-        if let Some(workspace) = &mut self.workspace {
-            match workspace.refresh() {
-                Ok(_) => self.workspace_error = None,
-                Err(error) => self.workspace_error = Some(error.to_string()),
+    fn request_workspace_scan(&mut self, root: PathBuf) {
+        self.workspace_scan_id = self.workspace_scan_id.wrapping_add(1);
+        let scan_id = self.workspace_scan_id;
+        let (sender, receiver) = mpsc::channel();
+        self.workspace_scan = Some(receiver);
+        let _ = thread::Builder::new()
+            .name("tiptoptyp-workspace-scan".to_owned())
+            .spawn(move || {
+                let result = WorkspaceSnapshot::scan(&root).map_err(|error| error.to_string());
+                let _ = sender.send((scan_id, result));
+            });
+    }
+
+    fn poll_workspace_scan(&mut self) {
+        let Some(receiver) = self.workspace_scan.as_ref() else {
+            return;
+        };
+        let result = match receiver.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.workspace_scan = None;
+                return;
             }
+        };
+        self.workspace_scan = None;
+        let (scan_id, result) = result;
+        if scan_id != self.workspace_scan_id {
+            return;
+        }
+        match result {
+            Ok(snapshot) => {
+                if let Some(workspace) = &mut self.workspace {
+                    workspace.apply_snapshot(snapshot);
+                } else {
+                    self.workspace = Some(WorkspaceTree::from_snapshot(snapshot));
+                }
+                self.workspace_error = None;
+            }
+            Err(error) => {
+                self.workspace_error = Some(format!("Could not scan workspace: {error}"));
+            }
+        }
+    }
+
+    fn refresh_workspace(&mut self) {
+        if self.workspace_scan.is_none() {
+            let root = self
+                .workspace
+                .as_ref()
+                .map(|workspace| workspace.root().to_owned())
+                .unwrap_or_else(|| self.project_root());
+            self.request_workspace_scan(root);
         }
         self.next_workspace_refresh = Instant::now() + WORKSPACE_REFRESH_INTERVAL;
     }
 
     fn tick_workspace(&mut self, context: &egui::Context) {
+        self.poll_workspace_scan();
+        if self.workspace_scan.is_some() {
+            context.request_repaint_after(Duration::from_millis(50));
+        }
         if !self.filesystem_visible {
             return;
         }
@@ -3094,6 +3182,8 @@ impl EditorApp {
     }
 
     fn restart_tinymist(&mut self) {
+        let start_preview = self.interactive_preview_requested();
+        self.tinymist_preview_enabled = start_preview;
         if let Some(generation) = self.tinymist_generation.take() {
             let current_uri = self.tinymist_uri.take();
             let preview_uri = self.tinymist_preview_uri.take();
@@ -3140,17 +3230,20 @@ impl EditorApp {
         self.tinymist_state = ServiceState::Starting("Launching Tinymist LSP".to_owned());
         self.webview_state = if self.settings.preview_preference == PreviewPreference::Native {
             ServiceState::Disabled("Interactive preview is not requested".to_owned())
-        } else if cfg!(any(target_os = "macos", target_os = "windows")) {
-            ServiceState::Starting("Waiting for Tinymist's preview server".to_owned())
-        } else {
+        } else if !cfg!(any(target_os = "macos", target_os = "windows")) {
             ServiceState::Unsupported(
                 "Embedded Tinymist preview is currently available on macOS and Windows".to_owned(),
             )
+        } else if !start_preview {
+            ServiceState::Disabled(
+                "Interactive preview is paused while Code view is active".to_owned(),
+            )
+        } else {
+            ServiceState::Starting("Waiting for Tinymist's preview server".to_owned())
         };
         let mut config = TinymistConfig::new(self.project_root())
             .with_executable(self.tinymist_tool.program.clone());
-        config.start_preview = self.settings.preview_preference == PreviewPreference::Interactive
-            && cfg!(any(target_os = "macos", target_os = "windows"));
+        config.start_preview = start_preview;
         config.preview.invert_colors = tinymist_invert_colors(self.settings.document_theme);
         match self.tinymist.start_workspace(config) {
             Ok(generation) => {
@@ -3259,10 +3352,7 @@ impl EditorApp {
                 }
                 TinymistEvent::Initialized { generation } => {
                     self.tinymist_lsp_ready = true;
-                    self.tinymist_state = if self.settings.preview_preference
-                        == PreviewPreference::Interactive
-                        && cfg!(any(target_os = "macos", target_os = "windows"))
-                    {
+                    self.tinymist_state = if self.interactive_preview_requested() {
                         ServiceState::Starting("Starting Tinymist preview server".to_owned())
                     } else {
                         ServiceState::Ready("Tinymist LSP is ready".to_owned())
@@ -3287,9 +3377,7 @@ impl EditorApp {
                 TinymistEvent::PreviewReady { url, .. } => {
                     self.tinymist_state =
                         ServiceState::Ready("LSP and preview server are ready".to_owned());
-                    if self.settings.preview_preference == PreviewPreference::Interactive
-                        && cfg!(any(target_os = "macos", target_os = "windows"))
-                    {
+                    if self.interactive_preview_requested() {
                         self.tinymist_url = Some(url);
                         self.webview_state =
                             ServiceState::Starting("Embedding the vector preview".to_owned());
@@ -3565,6 +3653,40 @@ impl EditorApp {
         }
     }
 
+    fn preview_visible(&self) -> bool {
+        self.document_kind.preview_only()
+            || (self.document_kind.is_typst() && self.view_mode.shows_preview())
+    }
+
+    fn interactive_preview_requested(&self) -> bool {
+        self.document_kind.is_typst()
+            && self.preview_visible()
+            && self.settings.preview_preference == PreviewPreference::Interactive
+            && cfg!(any(target_os = "macos", target_os = "windows"))
+    }
+
+    fn sync_preview_visibility(&mut self) {
+        let visible = self.preview_visible();
+        let became_hidden = self.preview_was_visible && !visible;
+        let became_visible = !self.preview_was_visible && visible;
+        self.preview_was_visible = visible;
+
+        if !visible {
+            self.compile_deadline = None;
+            self.hide_webview();
+            if became_hidden {
+                self.compiler.stop();
+            }
+        }
+
+        if self.tinymist_preview_enabled != self.interactive_preview_requested() {
+            self.restart_tinymist();
+        }
+        if became_visible {
+            self.schedule_compile_now();
+        }
+    }
+
     fn receive_tinymist_diagnostics(
         &mut self,
         uri: &str,
@@ -3593,16 +3715,13 @@ impl EditorApp {
     }
 
     fn interactive_preview_active(&self) -> bool {
-        self.document_kind.is_typst()
-            && self.settings.preview_preference == PreviewPreference::Interactive
+        self.interactive_preview_requested()
             && self.tinymist_url.is_some()
             && self.webview_state.is_ready()
-            && cfg!(any(target_os = "macos", target_os = "windows"))
     }
 
     fn should_attempt_interactive_preview(&self) -> bool {
-        self.document_kind.is_typst()
-            && self.settings.preview_preference == PreviewPreference::Interactive
+        self.interactive_preview_requested()
             && self.tinymist_url.is_some()
             && !matches!(
                 self.webview_state,
@@ -3612,9 +3731,7 @@ impl EditorApp {
     }
 
     fn interactive_preview_transitioning(&self) -> bool {
-        self.document_kind.is_typst()
-            && self.settings.preview_preference == PreviewPreference::Interactive
-            && cfg!(any(target_os = "macos", target_os = "windows"))
+        self.interactive_preview_requested()
             && matches!(
                 self.tinymist_state,
                 ServiceState::Starting(_) | ServiceState::Ready(_)
@@ -3626,7 +3743,7 @@ impl EditorApp {
     }
 
     fn preview_fallback_reason(&self) -> Option<String> {
-        if !self.document_kind.is_typst() {
+        if !self.document_kind.is_typst() || !self.preview_visible() {
             return None;
         }
         preview_fallback_reason_for(
@@ -4234,7 +4351,7 @@ impl EditorApp {
             self.rename_overlay_had_focus = false;
             self.rename_overlay_suspended = false;
             context.send_viewport_cmd(egui::ViewportCommand::Focus);
-            self.commit_rename(dialog.path, dialog.name);
+            self.commit_rename(dialog.path, dialog.name, context);
         }
     }
 
@@ -4529,7 +4646,7 @@ impl EditorApp {
         context.request_repaint();
     }
 
-    fn commit_rename(&mut self, old_path: PathBuf, name: String) {
+    fn commit_rename(&mut self, old_path: PathBuf, name: String, context: &egui::Context) {
         let name = name.trim();
         let mut components = Path::new(name).components();
         let valid_name = matches!(components.next(), Some(std::path::Component::Normal(_)))
@@ -4612,7 +4729,7 @@ impl EditorApp {
         if renames_preview_document && !renames_current_document {
             self.restart_tinymist();
             self.schedule_compile_now();
-            self.rebuild_project_index();
+            self.rebuild_project_index(context);
         }
         self.notice = Some(Notice {
             message: format!("Renamed to {}", new_path.display()),
@@ -5120,7 +5237,9 @@ impl EditorApp {
                         );
                     }
                 }
-                WorkspaceMenuAction::UseForPreview(path) => self.use_file_for_preview(path),
+                WorkspaceMenuAction::UseForPreview(path) => {
+                    self.use_file_for_preview(path, context)
+                }
                 WorkspaceMenuAction::Rename(path) => self.begin_rename(path),
                 WorkspaceMenuAction::CopyPath(path) => {
                     context.copy_text(path.display().to_string());
@@ -5661,13 +5780,12 @@ impl EditorApp {
         let ui = &mut content_ui;
         ui.spacing_mut().item_spacing.y = METRICS.explorer.section_gap;
 
-        let snapshot = self.workspace.as_ref().map(|tree| tree.snapshot().clone());
-        let project_root = snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.root.clone())
-            .unwrap_or_else(|| self.project_root());
+        let snapshot = self.workspace.as_ref().map(WorkspaceTree::snapshot);
+        let project_root = snapshot.map_or(self.workspace_root.as_path(), |snapshot| {
+            snapshot.root.as_path()
+        });
         let preview_path = self.designated_preview_path();
-        let project_index = self.project_index.clone();
+        let project_index = &self.project_index;
         let active = snapshot.as_ref().and_then(|snapshot| {
             self.path.as_ref().and_then(|path| {
                 path.strip_prefix(&snapshot.root)
@@ -5754,8 +5872,8 @@ impl EditorApp {
 
         show_project_index_sections(
             ui,
-            &project_root,
-            &project_index,
+            project_root,
+            project_index,
             section_body_height,
             &mut index_target,
         );
@@ -5800,11 +5918,7 @@ impl EditorApp {
         let mut find_previous = false;
         let mut replace_one = false;
         let mut replace_all = false;
-        let matches = if find(&self.source, &self.find_query).is_some() {
-            find_all(&self.source, &self.find_query).len()
-        } else {
-            0
-        };
+        let match_count = find_all(&self.source, &self.find_query).len();
 
         ui.horizontal(|ui| {
             let response = ui.add(
@@ -5823,7 +5937,11 @@ impl EditorApp {
             if response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
                 find_next = true;
             }
-            ui.label(RichText::new(format!("{matches} matches")).small().weak());
+            ui.label(
+                RichText::new(format!("{match_count} matches"))
+                    .small()
+                    .weak(),
+            );
             find_previous |= icon_button(ui, UiIcon::Up, "Previous match · Shift+Enter").clicked();
             find_next |= icon_button(ui, UiIcon::Down, "Next match · Enter").clicked();
             if icon_button(ui, UiIcon::Close, "Close · Esc").clicked() {
@@ -6011,6 +6129,7 @@ impl EditorApp {
                     .cursor
                     .char_range()
                     .map(|range| range.primary.index.0);
+                let line_rows = logical_line_row_ranges(&output.galley.rows);
 
                 if let Some(range) = pending_selection {
                     let len = self.source.chars().count();
@@ -6034,12 +6153,18 @@ impl EditorApp {
                     &self.source,
                     current_char,
                     attention,
+                    &line_rows,
                     current_line_slot,
                 );
-                self.diagnostic_tooltip =
-                    paint_line_diagnostics(ui, &output, &line_diagnostics, background_slots);
+                self.diagnostic_tooltip = paint_line_diagnostics(
+                    ui,
+                    &output,
+                    &line_diagnostics,
+                    &line_rows,
+                    background_slots,
+                );
                 if line_numbers {
-                    paint_line_numbers(ui, &output);
+                    paint_line_numbers(ui, &output, &line_rows);
                 }
 
                 if document_kind.is_typst()
@@ -6476,7 +6601,7 @@ impl EditorApp {
         let widest_page = self
             .pages
             .iter()
-            .map(|page| page_stack_geometry([page.size], 1.0)[0].size.x)
+            .map(|page| page.size[0] as f32 * PDF_POINTS_PER_PREVIEW_PIXEL)
             .fold(1.0_f32, f32::max);
         if self.fit_width {
             self.zoom = ((viewport_rect.width() - PAGE_MARGIN * 2.0) / widest_page)
@@ -6616,21 +6741,21 @@ impl EditorApp {
             );
         });
         ui.separator();
-        let diagnostics = self
-            .diagnostics
-            .iter()
-            .chain(&self.tinymist_diagnostics)
-            .cloned()
-            .collect::<Vec<_>>();
+        let diagnostic_count = self.diagnostics.len() + self.tinymist_diagnostics.len();
         let mut jump_target = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                if diagnostics.is_empty() {
+                if diagnostic_count == 0 {
                     ui.label(RichText::new("No compiler diagnostics").weak());
                 }
-                for (index, diagnostic) in diagnostics.iter().enumerate() {
+                for (index, diagnostic) in self
+                    .diagnostics
+                    .iter()
+                    .chain(&self.tinymist_diagnostics)
+                    .enumerate()
+                {
                     let color = diagnostic_color(diagnostic.severity, ui.visuals().dark_mode);
                     let background_slot = ui.painter().add(egui::Shape::Noop);
                     let row = ui
@@ -6832,6 +6957,7 @@ impl EditorApp {
                 ui.separator();
                 let count = fallbacks.len();
                 let color = warning_color(ui.visuals().dark_mode);
+                let fallback_detail = fallbacks.join("\n");
                 native_hover_text(
                     ui.label(
                         RichText::new(count.to_string())
@@ -6839,12 +6965,9 @@ impl EditorApp {
                             .strong()
                             .color(color),
                     ),
-                    fallbacks.join("\n"),
+                    &fallback_detail,
                 );
-                native_hover_text(
-                    static_icon(ui, UiIcon::Warning, color),
-                    fallbacks.join("\n"),
-                );
+                native_hover_text(static_icon(ui, UiIcon::Warning, color), &fallback_detail);
             }
             if let Some(notice) = &self.notice {
                 ui.separator();
@@ -7308,6 +7431,7 @@ impl eframe::App for EditorApp {
         self.show_settings_window(&context, frame);
         self.show_typst_overrides_window(&context);
         self.show_workspace_chooser(&context);
+        self.sync_preview_visibility();
         self.tick_autosave(&context);
         self.tick_compile(&context);
     }
@@ -7360,15 +7484,15 @@ fn paint_editor_line_backgrounds(
     source: &str,
     current_char: Option<usize>,
     attention: Option<(usize, f32)>,
+    line_rows: &[Range<usize>],
     slot: egui::layers::ShapeIdx,
 ) {
-    let line_rows = logical_line_row_ranges(&output.galley.rows);
     let mut shapes = Vec::new();
 
     if let Some(char_index) = current_char {
         let line = line_index_at_char(source, char_index);
         let fill = theme::palette(ui.visuals().dark_mode).active_row;
-        push_editor_line_fill(&mut shapes, output, &line_rows, line, fill, None);
+        push_editor_line_fill(&mut shapes, output, line_rows, line, fill, None);
     }
 
     if let Some((char_index, progress)) = attention {
@@ -7479,30 +7603,46 @@ fn line_column_at_char(source: &str, char_index: usize) -> (usize, usize) {
 }
 
 fn typst_hover_token_range(source: &str, char_index: usize) -> Option<Range<usize>> {
-    let characters = source.chars().collect::<Vec<_>>();
-    if characters.is_empty() {
-        return None;
-    }
     let is_identifier =
         |character: char| character == '_' || character == '-' || character.is_alphanumeric();
-    let mut index = char_index.min(characters.len().saturating_sub(1));
-    if !is_identifier(characters[index]) {
-        if matches!(characters[index], '(' | ')' | '.')
-            && index > 0
-            && is_identifier(characters[index - 1])
+    let (mut index, (mut cursor_byte, mut character)) = source
+        .char_indices()
+        .nth(char_index)
+        .map(|selected| (char_index, selected))
+        .or_else(|| {
+            source
+                .char_indices()
+                .next_back()
+                .map(|selected| (source.chars().count().saturating_sub(1), selected))
+        })?;
+    if !is_identifier(character) {
+        let previous = source[..cursor_byte].char_indices().next_back();
+        if matches!(character, '(' | ')' | '.')
+            && let Some((previous_byte, previous_character)) = previous
+            && is_identifier(previous_character)
         {
-            index -= 1;
+            index = index.saturating_sub(1);
+            cursor_byte = previous_byte;
+            character = previous_character;
         } else {
             return None;
         }
     }
     let mut start = index;
-    while start > 0 && is_identifier(characters[start - 1]) {
-        start -= 1;
+    for (_, previous_character) in source[..cursor_byte].char_indices().rev() {
+        if !is_identifier(previous_character) {
+            break;
+        }
+        start = start.saturating_sub(1);
     }
     let mut end = index + 1;
-    while end < characters.len() && is_identifier(characters[end]) {
+    let mut suffix = &source[cursor_byte + character.len_utf8()..];
+    while let Some((offset, next_character)) = suffix.char_indices().next() {
+        if !is_identifier(next_character) {
+            break;
+        }
         end += 1;
+        suffix = &suffix[offset + next_character.len_utf8()..];
     }
     (start < end).then_some(start..end)
 }
@@ -7519,10 +7659,10 @@ fn paint_line_diagnostics(
     ui: &mut egui::Ui,
     output: &egui::text_edit::TextEditOutput,
     diagnostics: &[LineDiagnostic],
+    line_rows: &[Range<usize>],
     slots: Vec<egui::layers::ShapeIdx>,
 ) -> Option<DiagnosticTooltipOverlay> {
     let painter = ui.painter();
-    let line_rows = logical_line_row_ranges(&output.galley.rows);
     let mut hovered_diagnostic = None;
     for (diagnostic, slot) in diagnostics.iter().zip(slots) {
         let Some(rows) = line_rows.get(diagnostic.line.saturating_sub(1)) else {
@@ -7581,7 +7721,11 @@ fn paint_line_diagnostics(
     hovered_diagnostic
 }
 
-fn paint_line_numbers(ui: &mut egui::Ui, output: &egui::text_edit::TextEditOutput) {
+fn paint_line_numbers(
+    ui: &mut egui::Ui,
+    output: &egui::text_edit::TextEditOutput,
+    line_rows: &[Range<usize>],
+) {
     let painter = ui.painter();
     let right = output.galley_pos.x - METRICS.editor.line_number_right_gap;
     let separator_x = output.galley_pos.x - METRICS.editor.line_number_separator_gap;
@@ -7597,10 +7741,7 @@ fn paint_line_numbers(ui: &mut egui::Ui, output: &egui::text_edit::TextEditOutpu
         separator,
     );
     let color = ui.visuals().weak_text_color();
-    for (line, rows) in logical_line_row_ranges(&output.galley.rows)
-        .into_iter()
-        .enumerate()
-    {
+    for (line, rows) in line_rows.iter().enumerate() {
         let Some(row) = output.galley.rows.get(rows.start) else {
             continue;
         };
