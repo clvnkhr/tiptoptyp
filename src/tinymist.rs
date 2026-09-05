@@ -449,6 +449,15 @@ pub enum TinymistEvent {
         version: i32,
         edits: Option<Vec<LspTextEdit>>,
     },
+    /// Hover information for one exact document version and UI request.
+    Hovered {
+        generation: Generation,
+        uri: String,
+        version: i32,
+        request_token: u64,
+        contents: Option<String>,
+        range: Option<LspRange>,
+    },
     Log {
         generation: Generation,
         level: Option<u32>,
@@ -482,6 +491,7 @@ impl TinymistEvent {
             | Self::ShowDocument { generation, .. }
             | Self::PublishDiagnostics { generation, .. }
             | Self::Formatted { generation, .. }
+            | Self::Hovered { generation, .. }
             | Self::Log { generation, .. }
             | Self::Notification { generation, .. }
             | Self::Error { generation, .. }
@@ -594,6 +604,29 @@ impl TinymistSidecar {
         )
     }
 
+    /// Requests semantic hover information for one exact open-document
+    /// version. `request_token` is opaque and lets the UI discard a response
+    /// after the pointer moves to another token.
+    pub fn hover_document(
+        &self,
+        generation: Generation,
+        uri: impl Into<String>,
+        version: i32,
+        position: LspPosition,
+        request_token: u64,
+    ) -> Result<()> {
+        self.send_for_generation(
+            generation,
+            WorkerCommand::HoverDocument {
+                generation,
+                uri: uri.into(),
+                version,
+                position,
+                request_token,
+            },
+        )
+    }
+
     /// Reveals one source position in the bundled interactive preview.
     ///
     /// Tinymist's current preview resolver consumes a zero-based Unicode
@@ -702,6 +735,13 @@ enum WorkerCommand {
         uri: String,
         version: i32,
     },
+    HoverDocument {
+        generation: Generation,
+        uri: String,
+        version: i32,
+        position: LspPosition,
+        request_token: u64,
+    },
     ScrollPreview {
         generation: Generation,
         path: PathBuf,
@@ -733,7 +773,15 @@ enum PendingRequest {
     Initialize,
     StartPreview,
     ScrollPreview,
-    FormatDocument { uri: String, version: i32 },
+    FormatDocument {
+        uri: String,
+        version: i32,
+    },
+    HoverDocument {
+        uri: String,
+        version: i32,
+        request_token: u64,
+    },
 }
 
 enum Incoming {
@@ -1394,6 +1442,52 @@ fn worker_loop(
                     );
                 }
             }
+            WorkerCommand::HoverDocument {
+                generation,
+                uri,
+                version,
+                position,
+                request_token,
+            } => {
+                let Some(active) = matching_session(session.as_mut(), generation) else {
+                    continue;
+                };
+                let current_version = active.documents.get(&uri).map(|document| document.version);
+                if current_version != Some(version) || !active.phase.can_sync_documents() {
+                    emit(
+                        &events,
+                        &context,
+                        &current_generation,
+                        TinymistEvent::Hovered {
+                            generation,
+                            uri,
+                            version,
+                            request_token,
+                            contents: None,
+                            range: None,
+                        },
+                    );
+                    continue;
+                }
+                if let Err(error) = active.send_request(
+                    "textDocument/hover",
+                    hover_document_params(&uri, position),
+                    PendingRequest::HoverDocument {
+                        uri,
+                        version,
+                        request_token,
+                    },
+                ) {
+                    fail_active_session(
+                        &mut session,
+                        "write",
+                        error,
+                        &events,
+                        &context,
+                        &current_generation,
+                    );
+                }
+            }
             WorkerCommand::ScrollPreview {
                 generation,
                 path,
@@ -1612,6 +1706,26 @@ fn handle_rpc_message(
                 );
                 return Ok(());
             }
+            PendingRequest::HoverDocument {
+                uri,
+                version,
+                request_token,
+            } => {
+                emit(
+                    events,
+                    context,
+                    current_generation,
+                    TinymistEvent::Hovered {
+                        generation: session.generation,
+                        uri,
+                        version,
+                        request_token,
+                        contents: None,
+                        range: None,
+                    },
+                );
+                return Ok(());
+            }
         }
     }
 
@@ -1714,6 +1828,26 @@ fn handle_rpc_message(
                 ),
             }
         }
+        PendingRequest::HoverDocument {
+            uri,
+            version,
+            request_token,
+        } => {
+            let (contents, range) = parse_hover_result(&result);
+            emit(
+                events,
+                context,
+                current_generation,
+                TinymistEvent::Hovered {
+                    generation: session.generation,
+                    uri,
+                    version,
+                    request_token,
+                    contents,
+                    range,
+                },
+            );
+        }
     }
     Ok(())
 }
@@ -1726,6 +1860,51 @@ fn format_document_params(uri: &str) -> Value {
             "insertSpaces": true,
         },
     })
+}
+
+fn hover_document_params(uri: &str, position: LspPosition) -> Value {
+    json!({
+        "textDocument": { "uri": uri },
+        "position": position,
+    })
+}
+
+fn parse_hover_result(result: &Value) -> (Option<String>, Option<LspRange>) {
+    let Some(object) = result.as_object() else {
+        return (None, None);
+    };
+    let range = object
+        .get("range")
+        .and_then(|range| serde_json::from_value(range.clone()).ok());
+    let contents = object
+        .get("contents")
+        .and_then(flatten_hover_contents)
+        .map(|contents| contents.trim().to_owned())
+        .filter(|contents| !contents.is_empty());
+    (contents, range)
+}
+
+fn flatten_hover_contents(contents: &Value) -> Option<String> {
+    match contents {
+        Value::String(text) => Some(text.clone()),
+        Value::Array(parts) => {
+            let parts = parts
+                .iter()
+                .filter_map(flatten_hover_contents)
+                .filter(|part| !part.trim().is_empty())
+                .collect::<Vec<_>>();
+            (!parts.is_empty()).then(|| parts.join("\n\n"))
+        }
+        Value::Object(object) => {
+            let value = object.get("value")?.as_str()?;
+            let language = object.get("language").and_then(Value::as_str);
+            Some(language.map_or_else(
+                || value.to_owned(),
+                |language| format!("{language}\n{value}"),
+            ))
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => None,
+    }
 }
 
 fn parse_format_document_result(
@@ -2285,6 +2464,50 @@ mod tests {
         assert!(args.contains(&"--partial-rendering=false"));
         assert!(args.contains(&"--no-open"));
         assert_eq!(settings["customizedShowDocument"], false);
+    }
+
+    #[test]
+    fn hover_request_uses_standard_utf16_lsp_position() {
+        assert_eq!(
+            hover_document_params(
+                "file:///project/main.typ",
+                LspPosition {
+                    line: 3,
+                    character: 7,
+                },
+            ),
+            json!({
+                "textDocument": { "uri": "file:///project/main.typ" },
+                "position": { "line": 3, "character": 7 },
+            })
+        );
+    }
+
+    #[test]
+    fn hover_results_accept_markup_marked_strings_arrays_and_null() {
+        let markdown = json!({
+            "contents": { "kind": "markdown", "value": "`text(body)`\n\nAdds content." },
+            "range": {
+                "start": { "line": 1, "character": 2 },
+                "end": { "line": 1, "character": 6 }
+            }
+        });
+        let (contents, range) = parse_hover_result(&markdown);
+        assert_eq!(contents.as_deref(), Some("`text(body)`\n\nAdds content."));
+        assert_eq!(range.unwrap().start.line, 1);
+
+        let marked = json!({
+            "contents": [
+                { "language": "typst", "value": "#let value = 1" },
+                "A definition"
+            ]
+        });
+        assert_eq!(
+            parse_hover_result(&marked).0.as_deref(),
+            Some("typst\n#let value = 1\n\nA definition")
+        );
+        assert_eq!(parse_hover_result(&Value::Null), (None, None));
+        assert_eq!(parse_hover_result(&json!({ "contents": [] })), (None, None));
     }
 
     #[test]

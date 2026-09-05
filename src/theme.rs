@@ -4,7 +4,7 @@
 //! describe rendered geometry, typography, color, or UI motion and are shared
 //! by the main and child viewports.
 
-use std::{cell::Cell, time::Duration};
+use std::{cell::Cell, sync::Arc, time::Duration};
 
 use eframe::egui::{self, Align, Color32, FontFamily, FontId, Layout, Rect, RichText, Vec2};
 
@@ -84,7 +84,68 @@ pub const TYPE: TypeScale = TypeScale {
 
 /// Primary editor text, shared by Typst and generic-file highlighters.
 pub fn editor_font() -> FontId {
-    FontId::new(TYPE.content, FontFamily::Monospace)
+    FontId::new(
+        TYPE.content,
+        FontFamily::Name(Arc::from(EDITOR_REGULAR_FAMILY)),
+    )
+}
+
+const EDITOR_REGULAR_FAMILY: &str = "tiptoptyp-editor-regular";
+const EDITOR_STRONG_FAMILY: &str = "tiptoptyp-editor-strong";
+
+/// Select the editor's regular or strong font role.
+///
+/// On macOS the named roles resolve to the regular and bold faces of the
+/// system-provided Menlo collection. Other platforms retain egui's bundled
+/// metric-compatible monospace fallback when no paired face is available.
+pub fn editor_font_with_weight(bold: bool) -> FontId {
+    let family = if bold {
+        FontFamily::Name(Arc::from(EDITOR_STRONG_FAMILY))
+    } else {
+        FontFamily::Name(Arc::from(EDITOR_REGULAR_FAMILY))
+    };
+    FontId::new(TYPE.content, family)
+}
+
+/// Register the named strong editor role while retaining every bundled glyph
+/// fallback. This is called once during application construction.
+pub fn configure_editor_fonts(context: &egui::Context) {
+    let mut definitions = egui::FontDefinitions::default();
+    let fallback = definitions
+        .families
+        .get(&FontFamily::Monospace)
+        .cloned()
+        .unwrap_or_default();
+    let mut regular = fallback.clone();
+    let mut strong = fallback;
+
+    // Use the installed system font at runtime; no third-party font bytes are
+    // copied into the repository or application bundle.
+    #[cfg(target_os = "macos")]
+    if let Ok(bytes) = std::fs::read("/System/Library/Fonts/Menlo.ttc") {
+        const REGULAR_FACE: &str = "tiptoptyp-menlo-regular";
+        const BOLD_FACE: &str = "tiptoptyp-menlo-bold";
+        let mut regular_data = egui::FontData::from_owned(bytes.clone());
+        regular_data.index = 0;
+        let mut bold_data = egui::FontData::from_owned(bytes);
+        bold_data.index = 1;
+        definitions
+            .font_data
+            .insert(REGULAR_FACE.to_owned(), Arc::new(regular_data));
+        definitions
+            .font_data
+            .insert(BOLD_FACE.to_owned(), Arc::new(bold_data));
+        regular.insert(0, REGULAR_FACE.to_owned());
+        strong.insert(0, BOLD_FACE.to_owned());
+    }
+
+    definitions
+        .families
+        .insert(FontFamily::Name(Arc::from(EDITOR_REGULAR_FAMILY)), regular);
+    definitions
+        .families
+        .insert(FontFamily::Name(Arc::from(EDITOR_STRONG_FAMILY)), strong);
+    context.set_fonts(definitions);
 }
 
 /// Compact monospace metadata drawn alongside editor content.
@@ -119,6 +180,9 @@ pub struct ChromeMetrics {
     pub settings_width: f32,
     pub settings_height: f32,
     pub settings_min_size: Vec2,
+    pub typst_overrides_width: f32,
+    pub typst_overrides_height: f32,
+    pub typst_overrides_min_size: Vec2,
     pub problems_default_height: f32,
     pub problems_min_height: f32,
     pub problems_max_height: f32,
@@ -231,12 +295,15 @@ pub struct PreviewMetrics {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SyntaxMetrics {
     pub link_underline_width: f32,
+    pub override_sample_background_alpha: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ExplorerMetrics {
     pub header_refresh_width: f32,
     pub header_row_height: f32,
+    pub section_header_height: f32,
+    pub section_gap: f32,
     pub row_height: f32,
     pub detail_breakpoint: f32,
     pub detail_width: f32,
@@ -267,6 +334,7 @@ pub struct MenuMetrics {
     pub edit_size: Vec2,
     pub workspace_size: Vec2,
     pub editor_size: Vec2,
+    pub status_log_size: Vec2,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -281,6 +349,11 @@ pub struct SettingsMetrics {
     pub tool_custom_max_width: f32,
     pub tool_path_min_width: f32,
     pub tool_path_estimated_font_size: f32,
+    pub override_role_width: f32,
+    pub override_color_width: f32,
+    pub override_decoration_width: f32,
+    pub override_sample_width: f32,
+    pub override_reset_width: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -326,6 +399,9 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
         settings_width: 620.0,
         settings_height: 560.0,
         settings_min_size: Vec2::new(360.0, 260.0),
+        typst_overrides_width: 920.0,
+        typst_overrides_height: 680.0,
+        typst_overrides_min_size: Vec2::new(420.0, 300.0),
         problems_default_height: 140.0,
         problems_min_height: 70.0,
         problems_max_height: 320.0,
@@ -424,10 +500,13 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
     },
     syntax: SyntaxMetrics {
         link_underline_width: 1.0,
+        override_sample_background_alpha: 32,
     },
     explorer: ExplorerMetrics {
         header_refresh_width: 24.0,
         header_row_height: 20.0,
+        section_header_height: 20.0,
+        section_gap: 4.0,
         row_height: 20.0,
         detail_breakpoint: 150.0,
         detail_width: 72.0,
@@ -450,6 +529,7 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
         edit_size: Vec2::new(280.0, 320.0),
         workspace_size: Vec2::new(220.0, 182.0),
         editor_size: Vec2::new(220.0, 240.0),
+        status_log_size: Vec2::new(360.0, 250.0),
     },
     settings: SettingsMetrics {
         appearance_label_width: 70.0,
@@ -462,6 +542,11 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
         tool_custom_max_width: 270.0,
         tool_path_min_width: 32.0,
         tool_path_estimated_font_size: 11.0,
+        override_role_width: 126.0,
+        override_color_width: 94.0,
+        override_decoration_width: 50.0,
+        override_sample_width: 156.0,
+        override_reset_width: 52.0,
     },
     problems: ProblemsMetrics {
         detail_indent: 42.0,
@@ -553,23 +638,7 @@ pub struct SyntaxPalette {
 
 pub fn syntax_palette(dark_mode: bool) -> SyntaxPalette {
     if let Some(imported) = imported_palette() {
-        let colors = imported.colors;
-        return SyntaxPalette {
-            plain: color(colors.plain),
-            comment: color(colors.comment),
-            operator: color(colors.operator),
-            number: color(colors.number),
-            emphasis: color(colors.emphasis),
-            link: color(colors.link),
-            string: color(colors.string),
-            label: color(colors.label),
-            heading: color(colors.heading),
-            keyword: color(colors.keyword),
-            interpolated: color(colors.interpolated),
-            error: color(colors.error),
-            error_background: color(colors.error_background),
-            editor_background: color(colors.editor_background),
-        };
+        return syntax_palette_from_semantic(imported.colors);
     }
     if dark_mode {
         let semantic = palette(true);
@@ -607,6 +676,28 @@ pub fn syntax_palette(dark_mode: bool) -> SyntaxPalette {
             error_background: with_alpha(error, 24),
             editor_background: Color32::from_rgb(250, 250, 252),
         }
+    }
+}
+
+/// Resolve editor syntax roles from one concrete theme without consulting the
+/// process-local active palette. Child theme editors use this to preview the
+/// inactive light/dark slot accurately.
+pub fn syntax_palette_from_semantic(colors: SemanticPalette) -> SyntaxPalette {
+    SyntaxPalette {
+        plain: color(colors.plain),
+        comment: color(colors.comment),
+        operator: color(colors.operator),
+        number: color(colors.number),
+        emphasis: color(colors.emphasis),
+        link: color(colors.link),
+        string: color(colors.string),
+        label: color(colors.label),
+        heading: color(colors.heading),
+        keyword: color(colors.keyword),
+        interpolated: color(colors.interpolated),
+        error: color(colors.error),
+        error_background: color(colors.error_background),
+        editor_background: color(colors.editor_background),
     }
 }
 
@@ -656,6 +747,27 @@ pub fn configure_styles(context: &egui::Context) {
             .text_styles
             .insert(egui::TextStyle::Monospace, editor_font());
     });
+}
+
+/// Build a child-viewport style for a concrete light or dark theme slot.
+///
+/// The main window installs only its active palette globally. Editors that
+/// compare the two independently persisted slots use this helper so their
+/// controls and samples reflect the slot being edited without mutating the
+/// rest of the application.
+pub fn style_for_semantic_palette(
+    base: &egui::Style,
+    dark_mode: bool,
+    colors: SemanticPalette,
+) -> Arc<egui::Style> {
+    let mut style = base.clone();
+    style.visuals = if dark_mode {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
+    apply_imported_visuals(&mut style.visuals, ImportedPalette { dark_mode, colors });
+    Arc::new(style)
 }
 
 fn apply_imported_visuals(visuals: &mut egui::Visuals, imported: ImportedPalette) {
@@ -708,6 +820,16 @@ fn apply_imported_visuals(visuals: &mut egui::Visuals, imported: ImportedPalette
 
 pub fn content_panel_frame(style: &egui::Style) -> egui::Frame {
     egui::Frame::side_top_panel(style).inner_margin(egui::Margin::symmetric(SPACE.content as i8, 0))
+}
+
+/// A compact, theme-aware container for one independently scrolling Explorer
+/// section. Keeping this alongside the other shared frames prevents each
+/// section from inventing its own surface, border, or corner treatment.
+pub fn explorer_section_frame(style: &egui::Style) -> egui::Frame {
+    egui::Frame::new()
+        .fill(style.visuals.widgets.noninteractive.bg_fill)
+        .stroke(style.visuals.widgets.noninteractive.bg_stroke)
+        .corner_radius(RADIUS.row)
 }
 
 pub fn popup_card_frame(style: &egui::Style) -> egui::Frame {
@@ -854,6 +976,8 @@ mod tests {
         assert_eq!(RADIUS.card, 8);
         assert_eq!(METRICS.popup.card_inner_margin, 9);
         assert_eq!(METRICS.icon.button_size, Vec2::new(22.0, 20.0));
+        assert_eq!(METRICS.explorer.section_header_height, 20.0);
+        assert_eq!(METRICS.explorer.section_gap, 4.0);
         assert_eq!(METRICS.explorer.row_height, 20.0);
         assert_eq!(METRICS.preview.page_margin, 28.0);
         assert_eq!(METRICS.preview.page_gap, 24.0);
@@ -881,7 +1005,10 @@ mod tests {
     fn font_roles_derive_from_the_shared_type_scale() {
         assert_eq!(
             editor_font(),
-            FontId::new(TYPE.content, FontFamily::Monospace)
+            FontId::new(
+                TYPE.content,
+                FontFamily::Name(Arc::from(EDITOR_REGULAR_FAMILY))
+            )
         );
         assert_eq!(
             annotation_font(),
@@ -950,6 +1077,14 @@ mod tests {
         let content = content_panel_frame(&style);
         assert_eq!(content.inner_margin, egui::Margin::symmetric(8, 0));
 
+        let explorer = explorer_section_frame(&style);
+        assert_eq!(explorer.corner_radius, egui::CornerRadius::same(RADIUS.row));
+        assert_eq!(explorer.fill, style.visuals.widgets.noninteractive.bg_fill);
+        assert_eq!(
+            explorer.stroke,
+            style.visuals.widgets.noninteractive.bg_stroke
+        );
+
         let chip = status_chip_frame(&style);
         assert_eq!(chip.corner_radius, egui::CornerRadius::same(4));
         assert_eq!(chip.inner_margin, egui::Margin::symmetric(6, 3));
@@ -965,10 +1100,16 @@ mod tests {
         assert_eq!(dark.text_styles, light.text_styles);
         assert_eq!(
             dark.text_styles.get(&egui::TextStyle::Monospace),
-            Some(&FontId::new(TYPE.content, FontFamily::Monospace))
+            Some(&editor_font())
         );
         assert_eq!(dark.visuals.popup_shadow, egui::epaint::Shadow::NONE);
         assert_eq!(dark.visuals.menu_corner_radius, egui::CornerRadius::same(8));
+    }
+
+    #[test]
+    fn regular_and_strong_editor_fonts_have_distinct_family_roles() {
+        assert_ne!(editor_font(), editor_font_with_weight(true));
+        assert_eq!(editor_font(), editor_font_with_weight(false));
     }
 
     #[test]

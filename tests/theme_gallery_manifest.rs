@@ -82,12 +82,15 @@ fn default_gallery_manifest_is_the_exact_maintained_matrix() {
         ("settings", "settings-theme-picker"),
         ("settings", "settings-dark-theme-picker"),
         ("settings", "settings-tooltip"),
+        ("typst-overrides", "typst-overrides-window"),
         ("diagnostic", "diagnostic-tooltip"),
+        ("diagnostic", "function-tooltip"),
         ("modal", "save-dialog"),
         ("modal", "alert-dialog"),
         ("modal", "overwrite-dialog"),
         ("popup", "editor-context-menu"),
         ("popup", "explorer-context-menu"),
+        ("popup", "status-log"),
         ("rename", "rename-dialog"),
         ("workspace", "workspace-chooser"),
         ("main", "problems-panel"),
@@ -109,8 +112,8 @@ fn default_gallery_manifest_is_the_exact_maintained_matrix() {
     ]);
 
     assert_eq!(actual, expected);
-    assert_eq!(actual.len(), 68);
-    assert_eq!(actual.iter().collect::<BTreeSet<_>>().len(), 68);
+    assert_eq!(actual.len(), 74);
+    assert_eq!(actual.iter().collect::<BTreeSet<_>>().len(), 74);
 }
 
 #[test]

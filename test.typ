@@ -4,7 +4,7 @@
 
 = Welcome to tiptoptyp
 
-Edit this document on the left. The PDF preview updates as you type.
+Edit this document on the left. The PDF preview updates as you type. 
 
 #let accent = rgb("#4f8cff") 
 #text(fill: accent, weight: "bold")[A small, fast Typst workspace.] 
@@ -16,3 +16,36 @@ Inline math is highlighted too: $ integral_0^infinity e^(-x) dif x = 1 $.sssssss
 #for item in ("Native UI", "Live PDF", "Fast rebuilds") [
   - #item
 ]
+
+```tex
+\alpha + \beta^{1+2\alpha} \frac{1}{a} 
+\begin{equation}
+sss
+\end{equation}
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

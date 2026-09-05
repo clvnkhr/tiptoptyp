@@ -51,6 +51,22 @@ pub(crate) fn scalar_position_at_char(source: &str, char_index: usize) -> (u32, 
     (line, character)
 }
 
+/// Converts an editor Unicode-scalar offset to a standard zero-based LSP
+/// position. Unlike preview navigation, the column counts UTF-16 code units.
+pub(crate) fn lsp_position_at_char(source: &str, char_index: usize) -> LspPosition {
+    let mut line = 0_u32;
+    let mut character = 0_u32;
+    for value in source.chars().take(char_index) {
+        if value == '\n' {
+            line = line.saturating_add(1);
+            character = 0;
+        } else {
+            character = character.saturating_add(value.len_utf16() as u32);
+        }
+    }
+    LspPosition { line, character }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct LineStart {
     byte: usize,
@@ -312,6 +328,32 @@ mod tests {
                 },
             ),
             7
+        );
+    }
+
+    #[test]
+    fn editor_offsets_map_to_utf16_hover_positions() {
+        let source = "a🦀b\nsecond";
+        assert_eq!(
+            lsp_position_at_char(source, 2),
+            LspPosition {
+                line: 0,
+                character: 3,
+            }
+        );
+        assert_eq!(
+            lsp_position_at_char(source, 7),
+            LspPosition {
+                line: 1,
+                character: 3,
+            }
+        );
+        assert_eq!(
+            lsp_position_at_char(source, usize::MAX),
+            LspPosition {
+                line: 1,
+                character: 6,
+            }
         );
     }
 

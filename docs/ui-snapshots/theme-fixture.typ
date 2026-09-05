@@ -13,6 +13,10 @@ This stable document exercises editor syntax, semantic colors, and the preview.
 
 Inline math is highlighted too: $ integral_0^infinity e^(-x) dif x = 1 $
 
+```rust
+fn main() { println!("theme"); }
+```
+
 #for item in ("Native UI", "Live PDF", "Fast rebuilds") [
   - #item
 ]

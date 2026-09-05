@@ -106,12 +106,13 @@ Open a workspace directly:
 cargo run --release -- path/to/project
 ```
 
-Launching the packaged `tiptoptyp.app` without a path opens a compact workspace
-chooser with recent folders. The bundle registers the text, Typst, PDF, and
-image formats supported by the editor, so Finder's **Open With** and dropping a
-file on the app icon open that file and infer its workspace. The Explorer's
-folder button, **File → Open Folder**, and Cmd/Ctrl-Shift-O change workspace at
-any time.
+Launching the packaged `tiptoptyp.app` without a path restores the newest recent
+workspace that still exists, falling back to the current folder on first run.
+The bundle registers the text, Typst, PDF, and image formats supported by the
+editor, so Finder's **Open With** and dropping a file on the app icon open that
+file and infer its workspace. **File → Change Workspace Root**,
+Cmd/Ctrl-Shift-O, or double-clicking the Explorer path opens the workspace
+chooser with recent folders and an option to select another folder.
 
 Choose **System**, **Light**, or **Dark** under **Settings → Appearance**, then
 pick independent Light theme and Dark theme palettes. System appearance swaps

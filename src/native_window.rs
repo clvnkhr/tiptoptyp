@@ -1,0 +1,139 @@
+//! Access to the native window which currently owns keyboard focus.
+//!
+//! eframe exposes the root window through `Frame`, but its immediate child
+//! viewport callback does not carry a `Frame`. Both Wry and rfd only need a
+//! standards-based raw-window handle, so resolve the focused platform window
+//! while running inside that child callback. WebView creation is separately
+//! gated on the viewport reporting focused, which makes this association
+//! deterministic and avoids activating a background window.
+
+#[cfg(target_os = "macos")]
+mod platform {
+    use std::{ffi::c_void, ptr::NonNull};
+
+    use objc2::{MainThreadMarker, rc::Retained};
+    use objc2_app_kit::{NSApplication, NSView};
+    use raw_window_handle::{
+        AppKitWindowHandle, DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle,
+        RawWindowHandle, WindowHandle,
+    };
+
+    /// A retained AppKit content view keeps the borrowed raw handle valid for
+    /// the complete Wry/rfd construction call.
+    #[derive(Clone)]
+    pub(crate) struct ActiveWindowHandle {
+        view: Retained<NSView>,
+    }
+
+    impl ActiveWindowHandle {
+        pub(crate) fn is_same_window(&self, other: &Self) -> bool {
+            std::ptr::eq(&*self.view, &*other.view)
+        }
+    }
+
+    impl HasWindowHandle for ActiveWindowHandle {
+        fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
+            let view = NonNull::from(&*self.view).cast::<c_void>();
+            let raw = RawWindowHandle::AppKit(AppKitWindowHandle::new(view));
+            // SAFETY: `self.view` retains the NSView for at least the lifetime
+            // of the returned handle, and this type is constructed only on the
+            // AppKit main thread.
+            unsafe { Ok(WindowHandle::borrow_raw(raw)) }
+        }
+    }
+
+    impl HasDisplayHandle for ActiveWindowHandle {
+        fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+            Ok(DisplayHandle::appkit())
+        }
+    }
+
+    pub(crate) fn active_window_handle() -> Option<ActiveWindowHandle> {
+        let marker = MainThreadMarker::new()?;
+        let application = NSApplication::sharedApplication(marker);
+        if !application.isActive() {
+            return None;
+        }
+        let window = application.keyWindow()?;
+        let view = window.contentView()?;
+        Some(ActiveWindowHandle { view })
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod platform {
+    use std::{ffi::c_void, num::NonZeroIsize};
+
+    use raw_window_handle::{
+        DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawWindowHandle,
+        Win32WindowHandle, WindowHandle,
+    };
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetActiveWindow() -> *mut c_void;
+    }
+
+    #[derive(Clone, Copy)]
+    pub(crate) struct ActiveWindowHandle {
+        hwnd: NonZeroIsize,
+    }
+
+    impl ActiveWindowHandle {
+        pub(crate) fn is_same_window(&self, other: &Self) -> bool {
+            self.hwnd == other.hwnd
+        }
+    }
+
+    impl HasWindowHandle for ActiveWindowHandle {
+        fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
+            let raw = RawWindowHandle::Win32(Win32WindowHandle::new(self.hwnd));
+            // SAFETY: the foreground HWND remains owned by the running winit
+            // event loop for the duration of this borrowed handle.
+            unsafe { Ok(WindowHandle::borrow_raw(raw)) }
+        }
+    }
+
+    impl HasDisplayHandle for ActiveWindowHandle {
+        fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+            Ok(DisplayHandle::windows())
+        }
+    }
+
+    pub(crate) fn active_window_handle() -> Option<ActiveWindowHandle> {
+        // SAFETY: this is a read-only Win32 query. A null pointer means the
+        // current event-loop thread has no active window and is handled
+        // without constructing a raw handle.
+        let hwnd = unsafe { GetActiveWindow() } as isize;
+        NonZeroIsize::new(hwnd).map(|hwnd| ActiveWindowHandle { hwnd })
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub(crate) use platform::{ActiveWindowHandle, active_window_handle};
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[derive(Clone, Copy)]
+pub(crate) struct ActiveWindowHandle;
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+impl ActiveWindowHandle {
+    pub(crate) fn is_same_window(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub(crate) fn active_window_handle() -> Option<ActiveWindowHandle> {
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn platform_handle_api_is_non_panicking_without_a_window() {
+        // Merely exercising the symbol in unit-test mode catches target-gated
+        // import and raw-window-handle drift. No application window is created.
+        let _ = super::active_window_handle();
+    }
+}

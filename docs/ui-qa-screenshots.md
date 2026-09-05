@@ -59,14 +59,17 @@ The accepted scenes and their framebuffer targets are:
 | `settings-theme-picker` | `settings` | Open light-theme picker |
 | `settings-dark-theme-picker` | `settings` | Open dark-theme picker |
 | `settings-tooltip` | `settings` | Settings-local hover card |
+| `typst-overrides-window` | `typst-overrides` | Independent light/dark Typst syntax overrides and live samples |
 | `diagnostic-tooltip` | `diagnostic` | Diagnostic hover card |
+| `function-tooltip` | `diagnostic` | Tinymist function-hover card |
 | `save-dialog` | `modal` | Unsaved-changes card with save/discard choices |
 | `alert-dialog` | `modal` | Informational or error alert card |
 | `overwrite-dialog` | `modal` | Existing-file overwrite confirmation card |
 | `editor-context-menu` | `popup` | Editor right-click menu |
 | `explorer-context-menu` | `popup` | Explorer right-click menu |
+| `status-log` | `popup` | Recent compiler and document-status history |
 | `rename-dialog` | `rename` | Rename card |
-| `workspace-chooser` | `workspace` | Initial workspace chooser |
+| `workspace-chooser` | `workspace` | Explicit workspace-root chooser |
 | `problems-panel` | `main` | Expanded Problems panel with diagnostics |
 | `find-replace` | `main` | Find and replace controls |
 | `preview-compiling` | `main` | Compiling status and empty preview state |
@@ -131,7 +134,7 @@ It captures every bundled theme in the ready main split view. It also captures
 every themed scene above in representative Catppuccin Latte and Catppuccin
 Mocha matrices, including the error workbench and compiling preview states,
 plus transformed main and elevated-menu examples to verify that the ordered
-color operations reach every viewport. The complete maintained matrix is 68
+color operations reach every viewport. The complete maintained matrix is 74
 decoded PNGs. It uses `docs/ui-snapshots/theme-fixture.typ` by default; pass a
 fixture path as the first argument to override it. For a quicker review, use
 space-separated `TIPTOPTYP_UI_GALLERY_THEMES`,

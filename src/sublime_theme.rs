@@ -13,7 +13,7 @@ use std::{
     str::FromStr,
 };
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use syntect::{
     highlighting::{
@@ -51,7 +51,7 @@ impl ThemeFormat {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Rgba {
     pub r: u8,
     pub g: u8,

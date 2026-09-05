@@ -113,12 +113,15 @@ scenes=(
   settings-theme-picker
   settings-dark-theme-picker
   settings-tooltip
+  typst-overrides-window
   diagnostic-tooltip
+  function-tooltip
   save-dialog
   alert-dialog
   overwrite-dialog
   editor-context-menu
   explorer-context-menu
+  status-log
   rename-dialog
   workspace-chooser
   problems-panel
@@ -165,13 +168,16 @@ scene_target() {
     main|problems-panel|find-replace|preview-compiling)
       printf 'main\n'
       ;;
-    file-menu|edit-menu|editor-context-menu|explorer-context-menu)
+    file-menu|edit-menu|editor-context-menu|explorer-context-menu|status-log)
       printf 'popup\n'
       ;;
     settings-window|settings-theme-picker|settings-dark-theme-picker|settings-tooltip)
       printf 'settings\n'
       ;;
-    diagnostic-tooltip)
+    typst-overrides-window)
+      printf 'typst-overrides\n'
+      ;;
+    diagnostic-tooltip|function-tooltip)
       printf 'diagnostic\n'
       ;;
     save-dialog|alert-dialog|overwrite-dialog)

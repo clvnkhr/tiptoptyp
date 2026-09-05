@@ -6,7 +6,7 @@ use std::{
 use eframe::{Storage, egui};
 use serde::{Deserialize, Serialize};
 
-use crate::{builtin_themes, sublime_theme};
+use crate::{builtin_themes, sublime_theme, syntax_theme::TypstOverrideThemes};
 
 // Preserve the pre-rename key so existing installations keep their settings.
 const STORAGE_KEY: &str = "mytypst.settings.v1";
@@ -221,6 +221,8 @@ pub(crate) struct AppSettings {
     pub(crate) auto_save_delay_ms: u64,
     pub(crate) hover_delay_ms: u64,
     pub(crate) hover_fade_ms: u64,
+    /// Optional Typst-only style layers for each interface appearance.
+    pub(crate) typst_overrides: TypstOverrideThemes,
     /// Most recently used canonical workspace roots, newest first.
     #[serde(default)]
     pub(crate) recent_workspaces: Vec<String>,
@@ -249,6 +251,7 @@ impl Default for AppSettings {
             auto_save_delay_ms: 750,
             hover_delay_ms: DEFAULT_HOVER_DELAY_MS,
             hover_fade_ms: DEFAULT_HOVER_FADE_MS,
+            typst_overrides: TypstOverrideThemes::default(),
             recent_workspaces: Vec::new(),
             last_opened_files: BTreeMap::new(),
             preview_files: BTreeMap::new(),
@@ -390,6 +393,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
+    use crate::{sublime_theme::Rgba, syntax_theme::TypstSyntaxRole};
 
     #[derive(Default)]
     struct MemoryStorage(HashMap<String, String>);
@@ -436,6 +440,7 @@ mod tests {
         assert_eq!(settings.auto_save_delay_ms, 750);
         assert_eq!(settings.hover_delay_ms, DEFAULT_HOVER_DELAY_MS);
         assert_eq!(settings.hover_fade_ms, DEFAULT_HOVER_FADE_MS);
+        assert_eq!(settings.typst_overrides, TypstOverrideThemes::default());
         assert!(settings.last_opened_files.is_empty());
         assert!(settings.preview_files.is_empty());
         assert!(settings.recent_workspaces.is_empty());
@@ -496,6 +501,17 @@ mod tests {
 
     #[test]
     fn persisted_settings_round_trip_and_missing_fields_use_defaults() {
+        let mut typst_overrides = TypstOverrideThemes::default();
+        let light_function = typst_overrides
+            .for_dark_mut(false)
+            .get_mut_or_default(TypstSyntaxRole::Function);
+        light_function.foreground = Some(Rgba::rgb(24, 80, 196));
+        light_function.bold = Some(true);
+        let dark_comment = typst_overrides
+            .for_dark_mut(true)
+            .get_mut_or_default(TypstSyntaxRole::Comment);
+        dark_comment.background = Some(Rgba::from_rgba(12, 18, 28, 180));
+        dark_comment.italic = Some(false);
         let expected = AppSettings {
             interface_theme: InterfaceTheme::Light,
             light_theme: ColorThemeChoice::builtin("catppuccin-latte"),
@@ -511,6 +527,7 @@ mod tests {
             auto_save_delay_ms: 1_500,
             hover_delay_ms: 450,
             hover_fade_ms: 120,
+            typst_overrides,
             last_opened_files: BTreeMap::from([(
                 "/workspace".to_owned(),
                 "/workspace/main.typ".to_owned(),
@@ -555,6 +572,7 @@ mod tests {
         assert_eq!(partial.auto_save_delay_ms, 750);
         assert_eq!(partial.hover_delay_ms, DEFAULT_HOVER_DELAY_MS);
         assert_eq!(partial.hover_fade_ms, DEFAULT_HOVER_FADE_MS);
+        assert_eq!(partial.typst_overrides, TypstOverrideThemes::default());
         assert!(partial.last_opened_files.is_empty());
         assert!(partial.preview_files.is_empty());
         assert!(partial.recent_workspaces.is_empty());

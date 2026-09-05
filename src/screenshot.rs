@@ -47,12 +47,15 @@ pub enum UiSnapshotScene {
     SettingsThemePicker,
     SettingsDarkThemePicker,
     SettingsTooltip,
+    TypstOverridesWindow,
     DiagnosticTooltip,
+    FunctionTooltip,
     SaveDialog,
     AlertDialog,
     OverwriteDialog,
     EditorContextMenu,
     ExplorerContextMenu,
+    StatusLog,
     RenameDialog,
     WorkspaceChooser,
     ProblemsPanel,
@@ -61,7 +64,7 @@ pub enum UiSnapshotScene {
 }
 
 impl UiSnapshotScene {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 21] = [
         Self::Main,
         Self::FileMenu,
         Self::EditMenu,
@@ -69,12 +72,15 @@ impl UiSnapshotScene {
         Self::SettingsThemePicker,
         Self::SettingsDarkThemePicker,
         Self::SettingsTooltip,
+        Self::TypstOverridesWindow,
         Self::DiagnosticTooltip,
+        Self::FunctionTooltip,
         Self::SaveDialog,
         Self::AlertDialog,
         Self::OverwriteDialog,
         Self::EditorContextMenu,
         Self::ExplorerContextMenu,
+        Self::StatusLog,
         Self::RenameDialog,
         Self::WorkspaceChooser,
         Self::ProblemsPanel,
@@ -91,12 +97,15 @@ impl UiSnapshotScene {
             Self::SettingsThemePicker => "settings-theme-picker",
             Self::SettingsDarkThemePicker => "settings-dark-theme-picker",
             Self::SettingsTooltip => "settings-tooltip",
+            Self::TypstOverridesWindow => "typst-overrides-window",
             Self::DiagnosticTooltip => "diagnostic-tooltip",
+            Self::FunctionTooltip => "function-tooltip",
             Self::SaveDialog => "save-dialog",
             Self::AlertDialog => "alert-dialog",
             Self::OverwriteDialog => "overwrite-dialog",
             Self::EditorContextMenu => "editor-context-menu",
             Self::ExplorerContextMenu => "explorer-context-menu",
+            Self::StatusLog => "status-log",
             Self::RenameDialog => "rename-dialog",
             Self::WorkspaceChooser => "workspace-chooser",
             Self::ProblemsPanel => "problems-panel",
@@ -114,12 +123,14 @@ impl UiSnapshotScene {
             Self::FileMenu
             | Self::EditMenu
             | Self::EditorContextMenu
-            | Self::ExplorerContextMenu => "popup",
+            | Self::ExplorerContextMenu
+            | Self::StatusLog => "popup",
             Self::SettingsWindow
             | Self::SettingsThemePicker
             | Self::SettingsDarkThemePicker
             | Self::SettingsTooltip => "settings",
-            Self::DiagnosticTooltip => "diagnostic",
+            Self::TypstOverridesWindow => "typst-overrides",
+            Self::DiagnosticTooltip | Self::FunctionTooltip => "diagnostic",
             Self::SaveDialog | Self::AlertDialog | Self::OverwriteDialog => "modal",
             Self::RenameDialog => "rename",
             Self::WorkspaceChooser => "workspace",
@@ -144,12 +155,15 @@ impl UiSnapshotScene {
             "settings-theme-picker" => Self::SettingsThemePicker,
             "settings-dark-theme-picker" => Self::SettingsDarkThemePicker,
             "settings-tooltip" => Self::SettingsTooltip,
+            "typst-overrides-window" => Self::TypstOverridesWindow,
             "diagnostic-tooltip" => Self::DiagnosticTooltip,
+            "function-tooltip" => Self::FunctionTooltip,
             "save-dialog" => Self::SaveDialog,
             "alert-dialog" => Self::AlertDialog,
             "overwrite-dialog" => Self::OverwriteDialog,
             "editor-context-menu" => Self::EditorContextMenu,
             "explorer-context-menu" => Self::ExplorerContextMenu,
+            "status-log" => Self::StatusLog,
             "rename-dialog" => Self::RenameDialog,
             "workspace-chooser" => Self::WorkspaceChooser,
             "problems-panel" => Self::ProblemsPanel,
@@ -746,7 +760,7 @@ where
                 .hue_shift_degrees = parse_hue_shift(value)?;
         } else if parse_options && text.starts_with("-psn_") {
             // Legacy Finder launches may inject a process serial number. It is
-            // not a file path and must not suppress the workspace chooser.
+            // not a file path and must not replace the remembered workspace.
         } else if initial_path.is_none() {
             initial_path = Some(PathBuf::from(argument));
         }
@@ -1212,8 +1226,18 @@ mod tests {
                 "settings",
             ),
             (
+                UiSnapshotScene::TypstOverridesWindow,
+                "typst-overrides-window",
+                "typst-overrides",
+            ),
+            (
                 UiSnapshotScene::DiagnosticTooltip,
                 "diagnostic-tooltip",
+                "diagnostic",
+            ),
+            (
+                UiSnapshotScene::FunctionTooltip,
+                "function-tooltip",
                 "diagnostic",
             ),
             (UiSnapshotScene::SaveDialog, "save-dialog", "modal"),
@@ -1233,6 +1257,7 @@ mod tests {
                 "explorer-context-menu",
                 "popup",
             ),
+            (UiSnapshotScene::StatusLog, "status-log", "popup"),
             (UiSnapshotScene::RenameDialog, "rename-dialog", "rename"),
             (
                 UiSnapshotScene::WorkspaceChooser,
@@ -1436,7 +1461,7 @@ mod tests {
     }
 
     #[test]
-    fn finder_process_serial_number_does_not_hide_the_workspace_chooser() {
+    fn finder_process_serial_number_is_not_treated_as_a_launch_target() {
         let launch =
             parse_launch_options(["-psn_0_12345"], Path::new("/project"), no_environment).unwrap();
         assert_eq!(launch.initial_path, None);

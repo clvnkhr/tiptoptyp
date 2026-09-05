@@ -1,7 +1,11 @@
-use eframe::egui::{Color32, Stroke, TextFormat, text::LayoutJob};
-use typst_syntax::{LinkedNode, Source, Tag};
+use eframe::egui::{Color32, text::LayoutJob};
+#[cfg(test)]
+use eframe::egui::{Stroke, TextFormat};
+use typst_syntax::{LinkedNode, Source, SyntaxKind, Tag};
 
-use crate::theme::{self, METRICS};
+use crate::{
+    generic_highlight::GenericSyntaxHighlighter, syntax_theme::ResolvedTypstStyles, theme,
+};
 
 /// Syntax highlighting backed by Typst's own error-tolerant parser.
 ///
@@ -14,6 +18,8 @@ pub struct SyntaxHighlighter {
     cached_dark_mode: bool,
     cached_job: LayoutJob,
     has_cache: bool,
+    cached_syntect_revision: u64,
+    styles: ResolvedTypstStyles,
 }
 
 impl Default for SyntaxHighlighter {
@@ -23,18 +29,33 @@ impl Default for SyntaxHighlighter {
             cached_dark_mode: true,
             cached_job: LayoutJob::default(),
             has_cache: false,
+            cached_syntect_revision: 0,
+            styles: ResolvedTypstStyles::default(),
         }
     }
 }
 
 impl SyntaxHighlighter {
-    pub fn invalidate_theme(&mut self) {
-        self.has_cache = false;
+    pub(crate) fn set_styles(&mut self, styles: ResolvedTypstStyles) {
+        if self.styles != styles {
+            self.styles = styles;
+            self.has_cache = false;
+        }
     }
 
-    pub fn highlight(&mut self, source: &str, dark_mode: bool) -> LayoutJob {
+    pub fn highlight(
+        &mut self,
+        source: &str,
+        dark_mode: bool,
+        syntect: &GenericSyntaxHighlighter,
+    ) -> LayoutJob {
         let source_changed = self.parsed_source.text() != source;
-        if self.has_cache && !source_changed && self.cached_dark_mode == dark_mode {
+        let syntect_revision = syntect.theme_revision();
+        if self.has_cache
+            && !source_changed
+            && self.cached_dark_mode == dark_mode
+            && self.cached_syntect_revision == syntect_revision
+        {
             return self.cached_job.clone();
         }
 
@@ -47,7 +68,15 @@ impl SyntaxHighlighter {
 
         let mut job = LayoutJob::default();
         let root = LinkedNode::new(self.parsed_source.root());
-        append_node(&mut job, &root, None, dark_mode);
+        append_node(
+            &mut job,
+            &root,
+            None,
+            dark_mode,
+            source,
+            &self.styles,
+            syntect,
+        );
         job.wrap.break_anywhere = false;
 
         // TextEdit requires the galley's byte positions to map exactly back to
@@ -56,6 +85,7 @@ impl SyntaxHighlighter {
         debug_assert_eq!(job.text, source);
 
         self.cached_dark_mode = dark_mode;
+        self.cached_syntect_revision = syntect_revision;
         self.cached_job = job.clone();
         self.has_cache = true;
         job
@@ -65,16 +95,29 @@ impl SyntaxHighlighter {
 /// Walk leaves in source order. A tag on the closest node wins; this preserves
 /// structural tags such as headings while allowing nested constructs (strong,
 /// raw, interpolation, errors, and so on) to override them.
-fn append_node(job: &mut LayoutJob, node: &LinkedNode<'_>, inherited: Option<Tag>, dark: bool) {
+fn append_node(
+    job: &mut LayoutJob,
+    node: &LinkedNode<'_>,
+    inherited: Option<Tag>,
+    dark: bool,
+    source: &str,
+    styles: &ResolvedTypstStyles,
+    syntect: &GenericSyntaxHighlighter,
+) {
     let tag = typst_syntax::highlight(node).or(inherited);
     let text = node.leaf_text();
 
     if text.is_empty() {
+        if node.kind() == SyntaxKind::Raw
+            && append_tagged_raw(job, node, dark, source, styles, syntect)
+        {
+            return;
+        }
         for child in node.children() {
-            append_node(job, &child, tag, dark);
+            append_node(job, &child, tag, dark, source, styles, syntect);
         }
     } else {
-        let mut format = format_for(tag, dark);
+        let mut format = styles.format(tag);
         if matches!(tag, Some(Tag::String))
             && let Some(color) = parse_hex_color_string(text)
         {
@@ -86,39 +129,63 @@ fn append_node(job: &mut LayoutJob, node: &LinkedNode<'_>, inherited: Option<Tag
     }
 }
 
-fn format_for(tag: Option<Tag>, dark: bool) -> TextFormat {
-    let colors = theme::syntax_palette(dark);
-    let color = match tag {
-        None => colors.plain,
-        Some(Tag::Comment) => colors.comment,
-        Some(Tag::Punctuation | Tag::MathGroupingParens | Tag::Operator) => colors.operator,
-        Some(Tag::Escape | Tag::Number) => colors.number,
-        Some(Tag::Strong | Tag::Emph | Tag::MathDelimiter | Tag::MathOperator) => colors.emphasis,
-        Some(Tag::Link | Tag::Function) => colors.link,
-        Some(Tag::Raw | Tag::String) => colors.string,
-        Some(Tag::Label | Tag::Ref) => colors.label,
-        Some(Tag::Heading | Tag::ListMarker | Tag::ListTerm) => colors.heading,
-        Some(Tag::Keyword) => colors.keyword,
-        Some(Tag::Interpolated) => colors.interpolated,
-        Some(Tag::Error) => colors.error,
+fn append_tagged_raw(
+    job: &mut LayoutJob,
+    node: &LinkedNode<'_>,
+    dark: bool,
+    source: &str,
+    styles: &ResolvedTypstStyles,
+    syntect: &GenericSyntaxHighlighter,
+) -> bool {
+    let children = node.children().collect::<Vec<_>>();
+    let Some(language) = children
+        .iter()
+        .find(|child| child.kind() == SyntaxKind::RawLang)
+    else {
+        return false;
+    };
+    let Some(closing) = children
+        .last()
+        .filter(|child| child.kind() == SyntaxKind::RawDelim)
+    else {
+        return false;
+    };
+    let prefix_range = node.offset()..language.range().end;
+    let content_range = language.range().end..closing.offset();
+    let suffix_range = closing.offset()..node.range().end;
+    let (Some(prefix), Some(content), Some(suffix)) = (
+        source.get(prefix_range),
+        source.get(content_range),
+        source.get(suffix_range),
+    ) else {
+        return false;
+    };
+    let Some(highlighted) = syntect.highlight_token(content, language.leaf_text(), dark) else {
+        return false;
     };
 
-    let mut format = TextFormat {
-        font_id: theme::editor_font(),
-        color,
-        ..Default::default()
-    };
+    let raw = styles.format(Some(Tag::Raw));
+    job.append(prefix, 0.0, raw.clone());
+    append_layout_job(job, &highlighted);
+    job.append(suffix, 0.0, raw);
+    true
+}
 
-    match tag {
-        Some(Tag::Emph) => format.italics = true,
-        Some(Tag::Link) => {
-            format.underline = Stroke::new(METRICS.syntax.link_underline_width, color);
-        }
-        Some(Tag::Error) => format.background = colors.error_background,
-        _ => {}
+fn append_layout_job(target: &mut LayoutJob, source: &LayoutJob) {
+    for section in &source.sections {
+        let Some(text) = source
+            .text
+            .get(section.byte_range.start.0..section.byte_range.end.0)
+        else {
+            continue;
+        };
+        target.append(text, section.leading_space, section.format.clone());
     }
+}
 
-    format
+#[cfg(test)]
+fn format_for(tag: Option<Tag>, dark: bool) -> TextFormat {
+    ResolvedTypstStyles::resolve(theme::syntax_palette(dark), None, &Default::default()).format(tag)
 }
 
 fn parse_hex_color_string(text: &str) -> Option<Color32> {
@@ -206,6 +273,16 @@ fn contrast_text(background: Color32) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        sublime_theme::Rgba,
+        syntax_theme::{TypstStyleOverrides, TypstSyntaxRole},
+    };
+
+    fn highlight(source: &str, dark: bool) -> LayoutJob {
+        let mut highlighter = SyntaxHighlighter::default();
+        let syntect = GenericSyntaxHighlighter::default();
+        highlighter.highlight(source, dark, &syntect)
+    }
 
     fn format_at(job: &LayoutJob, byte: usize) -> &TextFormat {
         &job.sections
@@ -232,8 +309,7 @@ mod tests {
     #[test]
     fn markup_words_that_resemble_keywords_stay_plain() {
         let source = "The PDF preview updates as you type.";
-        let mut highlighter = SyntaxHighlighter::default();
-        let job = highlighter.highlight(source, true);
+        let job = highlight(source, true);
         let as_byte = source.find(" as ").unwrap() + 1;
 
         assert_exact_mapping(&job, source);
@@ -247,8 +323,7 @@ mod tests {
     #[test]
     fn code_keywords_use_typsts_keyword_tag() {
         let source = "#import \"library.typ\" as library";
-        let mut highlighter = SyntaxHighlighter::default();
-        let job = highlighter.highlight(source, true);
+        let job = highlight(source, true);
         let as_byte = source.find(" as ").unwrap() + 1;
 
         assert_exact_mapping(&job, source);
@@ -274,6 +349,7 @@ mod tests {
     #[test]
     fn malformed_documents_are_highlighted_without_losing_text() {
         let mut highlighter = SyntaxHighlighter::default();
+        let syntect = GenericSyntaxHighlighter::default();
         for source in [
             "#let unfinished =",
             "= *unterminated emphasis",
@@ -281,7 +357,7 @@ mod tests {
             "#(missing: [bracket",
             "Unicode — λ and emoji 🙂\n#let x = ",
         ] {
-            let job = highlighter.highlight(source, true);
+            let job = highlighter.highlight(source, true, &syntect);
             assert_exact_mapping(&job, source);
         }
     }
@@ -289,33 +365,107 @@ mod tests {
     #[test]
     fn incremental_replacement_updates_tags_and_theme() {
         let mut highlighter = SyntaxHighlighter::default();
+        let syntect = GenericSyntaxHighlighter::default();
 
-        let markup = highlighter.highlight("as", true);
+        let markup = highlighter.highlight("as", true, &syntect);
         assert_eq!(format_at(&markup, 0).color, format_for(None, true).color);
 
         let source = "#let value = 42";
-        let dark = highlighter.highlight(source, true);
-        let light = highlighter.highlight(source, false);
+        highlighter.set_styles(ResolvedTypstStyles::resolve(
+            theme::syntax_palette(true),
+            None,
+            &Default::default(),
+        ));
+        let dark = highlighter.highlight(source, true, &syntect);
+        highlighter.set_styles(ResolvedTypstStyles::resolve(
+            theme::syntax_palette(false),
+            None,
+            &Default::default(),
+        ));
+        let light = highlighter.highlight(source, false, &syntect);
         assert_exact_mapping(&dark, source);
         assert_exact_mapping(&light, source);
         assert_ne!(format_at(&dark, 1).color, format_at(&light, 1).color);
 
         // A repeat call exercises the completed LayoutJob cache.
-        assert_eq!(highlighter.highlight(source, false).text, source);
+        assert_eq!(highlighter.highlight(source, false, &syntect).text, source);
+    }
+
+    #[test]
+    fn typst_overrides_flow_into_layout_formats() {
+        let mut overrides = TypstStyleOverrides::default();
+        let keyword = overrides.get_mut_or_default(TypstSyntaxRole::Keyword);
+        keyword.foreground = Some(Rgba::rgb(1, 2, 3));
+        keyword.background = Some(Rgba::from_rgba(4, 5, 6, 90));
+        keyword.bold = Some(true);
+        keyword.italic = Some(true);
+        keyword.underline = Some(true);
+        keyword.strikethrough = Some(true);
+
+        let mut highlighter = SyntaxHighlighter::default();
+        highlighter.set_styles(ResolvedTypstStyles::resolve(
+            theme::syntax_palette(true),
+            None,
+            &overrides,
+        ));
+        let syntect = GenericSyntaxHighlighter::default();
+        let source = "#let value = 1";
+        let job = highlighter.highlight(source, true, &syntect);
+        let format = format_at(&job, source.find("let").unwrap());
+
+        assert_eq!(format.color, Color32::from_rgb(1, 2, 3));
+        assert_eq!(
+            format.background,
+            Color32::from_rgba_unmultiplied(4, 5, 6, 90)
+        );
+        assert_eq!(format.font_id, theme::editor_font_with_weight(true));
+        assert!(format.italics);
+        assert_ne!(format.underline, Stroke::NONE);
+        assert_ne!(format.strikethrough, Stroke::NONE);
+        assert_exact_mapping(&job, source);
+    }
+
+    #[test]
+    fn tagged_raw_blocks_delegate_the_payload_to_syntect() {
+        let source = "```rust\nfn main() {}\n```";
+        let mut syntect_theme = syntect::highlighting::Theme::default();
+        syntect_theme.settings.foreground = Some(syntect::highlighting::Color {
+            r: 3,
+            g: 97,
+            b: 211,
+            a: 255,
+        });
+        let mut syntect = GenericSyntaxHighlighter::default();
+        syntect.set_custom_theme(Some(syntect_theme));
+        let mut highlighter = SyntaxHighlighter::default();
+        let job = highlighter.highlight(source, true, &syntect);
+        let keyword = format_at(&job, source.find("fn").unwrap());
+        let raw_delimiter = format_at(&job, 0);
+
+        assert_eq!(keyword.color, Color32::from_rgb(3, 97, 211));
+        assert_ne!(keyword.color, raw_delimiter.color);
+        assert_exact_mapping(&job, source);
+    }
+
+    #[test]
+    fn unknown_raw_language_falls_back_to_typst_raw_style() {
+        let source = "```not-a-language\nplain payload\n```";
+        let job = highlight(source, true);
+        let payload = format_at(&job, source.find("plain").unwrap());
+        assert_eq!(payload.color, format_for(Some(Tag::Raw), true).color);
+        assert_exact_mapping(&job, source);
     }
 
     #[test]
     fn empty_source_has_an_exact_empty_mapping() {
-        let mut highlighter = SyntaxHighlighter::default();
-        let job = highlighter.highlight("", true);
+        let job = highlight("", true);
         assert_exact_mapping(&job, "");
     }
 
     #[test]
     fn hex_color_strings_become_readable_color_swatches() {
         let source = r##"#let accent = rgb("#4f8cff")"##;
-        let mut highlighter = SyntaxHighlighter::default();
-        let job = highlighter.highlight(source, true);
+        let job = highlight(source, true);
         let format = format_at(&job, source.find("#4f8cff").unwrap());
 
         assert_eq!(format.background, Color32::from_rgb(0x4f, 0x8c, 0xff));
