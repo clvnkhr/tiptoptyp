@@ -121,7 +121,6 @@ pub struct CompileResult {
 
 enum CompilerCommand {
     Request(CompileRequest),
-    Stop,
 }
 
 pub struct Compiler {
@@ -171,17 +170,6 @@ impl Compiler {
             .ok_or_else(|| "The preview worker has stopped".to_owned())?
             .send(CompilerCommand::Request(request))
             .map_err(|_| "The preview worker stopped unexpectedly".to_owned())
-    }
-
-    /// Stop any active watcher and discard in-flight rasterisation work.
-    ///
-    /// This is intentionally a queued command: changing view mode must not
-    /// wait for Typst or Poppler on the UI thread.
-    pub fn stop(&self) {
-        self.latest_revision.fetch_add(1, Ordering::AcqRel);
-        if let Some(requests) = &self.requests {
-            let _ = requests.send(CompilerCommand::Stop);
-        }
     }
 
     pub fn try_recv(&self) -> Option<CompileResult> {
@@ -400,7 +388,7 @@ fn worker_loop(
     let mut next_session_id = 1_u64;
     let mut session: Option<WatchSession> = None;
 
-    'worker: loop {
+    loop {
         drain_watch_logs(&watch_log_rx, &mut session, &results, &context);
         finish_settled_completion(
             &mut session,
@@ -411,10 +399,6 @@ fn worker_loop(
         );
 
         match requests.recv_timeout(WORKER_POLL_INTERVAL) {
-            Ok(CompilerCommand::Stop) => {
-                session = None;
-                continue;
-            }
             Ok(CompilerCommand::Request(mut request)) => {
                 if *TRACE_WATCH {
                     eprintln!("tiptoptyp watcher request revision {}", request.revision);
@@ -423,10 +407,6 @@ fn worker_loop(
                 while let Ok(newer) = requests.try_recv() {
                     match newer {
                         CompilerCommand::Request(newer) => request = newer,
-                        CompilerCommand::Stop => {
-                            session = None;
-                            continue 'worker;
-                        }
                     }
                 }
 

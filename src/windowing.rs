@@ -14,7 +14,7 @@ use crate::{
     native_menu::NativeMenuReceiver,
     open_requests::OpenRequestReceiver,
     screenshot::{CaptureController, CaptureThemeProfile, UiSnapshotScene},
-    settings::AppSettings,
+    settings::{AppSettings, normalize_workspace_root},
     theme,
 };
 
@@ -386,8 +386,11 @@ fn merge_session_histories<'a>(
         )
     {
         for workspace in recent {
-            if !merged_recent.contains(workspace) {
-                merged_recent.push(workspace.clone());
+            let workspace = normalize_workspace_root(std::path::Path::new(workspace))
+                .to_string_lossy()
+                .into_owned();
+            if !merged_recent.contains(&workspace) {
+                merged_recent.push(workspace);
             }
         }
     }

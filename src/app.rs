@@ -148,9 +148,15 @@ fn theme_request_for_appearance(settings: &AppSettings, dark: bool) -> ActiveThe
     }
 }
 
-fn tinymist_invert_colors(document_theme: DocumentTheme) -> InvertColors {
+fn tinymist_invert_colors(document_theme: DocumentTheme, preview_dark: bool) -> InvertColors {
     match document_theme {
-        DocumentTheme::FollowInterface => InvertColors::Auto,
+        DocumentTheme::FollowInterface => {
+            if preview_dark {
+                InvertColors::Always
+            } else {
+                InvertColors::Never
+            }
+        }
         DocumentTheme::Light => InvertColors::Never,
         DocumentTheme::Dark => InvertColors::Always,
     }
@@ -158,11 +164,13 @@ fn tinymist_invert_colors(document_theme: DocumentTheme) -> InvertColors {
 
 fn tinymist_restart_required(
     document_theme_mode_changed: bool,
+    preview_appearance_changed: bool,
     preview_preference_changed: bool,
     tinymist_program_changed: bool,
     refresh_tools: bool,
 ) -> bool {
     document_theme_mode_changed
+        || preview_appearance_changed
         || preview_preference_changed
         || tinymist_program_changed
         || refresh_tools
@@ -421,17 +429,26 @@ struct EditorHoverState {
 
 #[derive(Debug, Clone)]
 struct DiagnosticTooltipOverlay {
+    origin: Rect,
     anchor: Pos2,
     severity: DiagnosticSeverity,
     detail: String,
     opacity: f32,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct HoverTooltipOverlay {
+    origin: Rect,
     anchor: Pos2,
     detail: String,
     opacity: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TooltipGeometry {
+    origin: Rect,
+    card: Rect,
+    pointer_inside_card: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1313,7 +1330,8 @@ impl EditorApp {
             // Tinymist sees unsaved edits in every open source file. The CLI
             // fallback can only see an imported subfile after it is saved, so
             // avoid rebuilding the designated main entry with stale disk data.
-            self.compile_deadline = (self.preview_visible() && self.current_is_preview_document())
+            self.compile_deadline = self
+                .current_is_preview_document()
                 .then(|| Instant::now() + COMPILE_DEBOUNCE);
             if self.compile_deadline.is_some() {
                 self.status = PreviewStatus::Waiting;
@@ -1366,7 +1384,7 @@ impl EditorApp {
 
     fn request_compile(&mut self) {
         self.compile_deadline = None;
-        if !self.document_kind.is_typst() || !self.preview_visible() {
+        if !self.document_kind.is_typst() || !self.preview_processing_enabled() {
             return;
         }
         let preview_path = self.preview_document_path();
@@ -1401,7 +1419,7 @@ impl EditorApp {
     }
 
     fn tick_compile(&mut self, context: &egui::Context) {
-        if !self.preview_visible() {
+        if !self.preview_processing_enabled() {
             self.compile_deadline = None;
             return;
         }
@@ -1419,7 +1437,7 @@ impl EditorApp {
     fn receive_compile_results(&mut self, context: &egui::Context) {
         while let Some(result) = self.compiler.try_recv() {
             if !self.document_kind.is_typst()
-                || !self.preview_visible()
+                || !self.preview_processing_enabled()
                 || result.revision != self.revision
             {
                 continue;
@@ -1534,7 +1552,7 @@ impl EditorApp {
     }
 
     fn schedule_compile_now(&mut self) {
-        if !self.document_kind.is_typst() || !self.preview_visible() {
+        if !self.document_kind.is_typst() || !self.preview_processing_enabled() {
             self.compile_deadline = None;
             return;
         }
@@ -1583,6 +1601,39 @@ impl EditorApp {
         let replace_macos =
             KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::ALT, egui::Key::F);
         let replace_windows = KeyboardShortcut::new(Modifiers::CTRL, egui::Key::H);
+
+        let view_action = context.input_mut(|input| {
+            if input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Num1)) {
+                Some(ViewCommand::Explorer)
+            } else if input
+                .consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Num2))
+            {
+                Some(ViewCommand::Code)
+            } else if input
+                .consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Num3))
+            {
+                Some(ViewCommand::Split)
+            } else if input
+                .consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Num4))
+            {
+                Some(ViewCommand::Preview)
+            } else if input
+                .consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Num5))
+            {
+                Some(ViewCommand::Problems)
+            } else {
+                None
+            }
+        });
+        if let Some(action) = view_action {
+            match action {
+                ViewCommand::Explorer => self.filesystem_visible = !self.filesystem_visible,
+                ViewCommand::Problems => self.problems_visible = !self.problems_visible,
+                ViewCommand::Code => self.view_mode = ViewMode::Code,
+                ViewCommand::Split => self.view_mode = ViewMode::Split,
+                ViewCommand::Preview => self.view_mode = ViewMode::Preview,
+            }
+        }
 
         let file_action = context.input_mut(|input| {
             if input.consume_shortcut(&save_as) {
@@ -2077,11 +2128,12 @@ impl EditorApp {
             self.tinymist_tool = next_tinymist;
         }
 
-        // A system appearance event can change the resolved raster-page tint,
-        // but FollowInterface is already represented by Tinymist's `auto`
-        // inversion. Restart only when the persisted mode itself changes.
+        // A system appearance event changes the effective preview palette when
+        // the document follows the interface, so refresh Tinymist as well as
+        // the raster-page textures.
         if tinymist_restart_required(
             document_theme_mode_changed,
+            preview_appearance_changed,
             preview_preference_changed,
             tinymist_program_changed,
             refresh_tools,
@@ -3244,7 +3296,8 @@ impl EditorApp {
         let mut config = TinymistConfig::new(self.project_root())
             .with_executable(self.tinymist_tool.program.clone());
         config.start_preview = start_preview;
-        config.preview.invert_colors = tinymist_invert_colors(self.settings.document_theme);
+        config.preview.invert_colors =
+            tinymist_invert_colors(self.settings.document_theme, self.preview_dark);
         match self.tinymist.start_workspace(config) {
             Ok(generation) => {
                 let version = revision_as_i32(self.revision);
@@ -3660,23 +3713,21 @@ impl EditorApp {
 
     fn interactive_preview_requested(&self) -> bool {
         self.document_kind.is_typst()
-            && self.preview_visible()
             && self.settings.preview_preference == PreviewPreference::Interactive
             && cfg!(any(target_os = "macos", target_os = "windows"))
     }
 
+    fn preview_processing_enabled(&self) -> bool {
+        self.document_kind.is_typst()
+    }
+
     fn sync_preview_visibility(&mut self) {
         let visible = self.preview_visible();
-        let became_hidden = self.preview_was_visible && !visible;
         let became_visible = !self.preview_was_visible && visible;
         self.preview_was_visible = visible;
 
         if !visible {
-            self.compile_deadline = None;
             self.hide_webview();
-            if became_hidden {
-                self.compiler.stop();
-            }
         }
 
         if self.tinymist_preview_enabled != self.interactive_preview_requested() {
@@ -5031,10 +5082,14 @@ impl EditorApp {
 
     fn show_diagnostic_tooltip_window(&self, context: &egui::Context) {
         let native_tooltip_id = native_hover_tooltip_id(context);
-        let (anchor, detail, severity, opacity) = if self.snapshot_scene
+        let (origin, anchor, detail, severity, opacity) = if self.snapshot_scene
             == Some(UiSnapshotScene::DiagnosticTooltip)
         {
             (
+                Rect::from_min_size(
+                    Pos2::new(420.0, METRICS.chrome.toolbar_height + 86.0),
+                    Vec2::splat(1.0),
+                ),
                 Pos2::new(420.0, METRICS.chrome.toolbar_height + 86.0),
                 "The character `#` is not valid in code\nHint: you are already in code mode\nHint: try removing the `#`".to_owned(),
                 Some(DiagnosticSeverity::Error),
@@ -5042,6 +5097,10 @@ impl EditorApp {
             )
         } else if self.snapshot_scene == Some(UiSnapshotScene::FunctionTooltip) {
             (
+                Rect::from_min_size(
+                    Pos2::new(420.0, METRICS.chrome.toolbar_height + 86.0),
+                    Vec2::splat(1.0),
+                ),
                 Pos2::new(420.0, METRICS.chrome.toolbar_height + 86.0),
                 "text(body, size: length = 1em, fill: color = black)\nDisplays content as text with the selected size and fill."
                     .to_owned(),
@@ -5050,6 +5109,7 @@ impl EditorApp {
             )
         } else if let Some(tooltip) = self.diagnostic_tooltip.clone() {
             (
+                tooltip.origin,
                 tooltip.anchor,
                 tooltip.detail,
                 Some(tooltip.severity),
@@ -5058,7 +5118,13 @@ impl EditorApp {
         } else if let Some(tooltip) =
             context.data(|data| data.get_temp::<HoverTooltipOverlay>(native_tooltip_id))
         {
-            (tooltip.anchor, tooltip.detail, None, tooltip.opacity)
+            (
+                tooltip.origin,
+                tooltip.anchor,
+                tooltip.detail,
+                None,
+                tooltip.opacity,
+            )
         } else {
             return;
         };
@@ -5080,6 +5146,7 @@ impl EditorApp {
             context,
             "diagnostic-tooltip-overlay",
             anchor,
+            origin,
             &detail,
             severity,
             opacity,
@@ -5806,7 +5873,11 @@ impl EditorApp {
             section_body_height,
             |ui| {
                 if let Some(snapshot) = &snapshot {
-                    let tree_id = ui.id().with("workspace-tree");
+                    let tree_id = ui.id().with((
+                        "workspace-tree",
+                        snapshot.root.clone(),
+                        self.workspace.as_ref().map_or(0, WorkspaceTree::generation),
+                    ));
                     let mut tree_state = TreeViewState::load(ui, tree_id).unwrap_or_default();
                     if let Some(active) = &active {
                         // Keep the document shown in the editor selected so the
@@ -6366,6 +6437,7 @@ impl EditorApp {
                 data.insert_temp(
                     tooltip_id,
                     HoverTooltipOverlay {
+                        origin: rect.expand(theme::SPACE.tight),
                         anchor: rect.left_bottom() + egui::vec2(0.0, METRICS.editor.tooltip_gap),
                         detail: detail.clone(),
                         opacity,
@@ -7324,9 +7396,29 @@ impl eframe::App for EditorApp {
         // main window itself fully opaque by painting its complete root first.
         ui.painter()
             .rect_filled(ui.max_rect(), 0.0, ui.visuals().panel_fill);
-        self.diagnostic_tooltip = None;
         let native_tooltip_id = native_hover_tooltip_id(&context);
-        context.data_mut(|data| data.remove::<HoverTooltipOverlay>(native_tooltip_id));
+        let geometry_id = tooltip_geometry_id(&context);
+        let pointer = context
+            .pointer_hover_pos()
+            .or_else(|| context.pointer_latest_pos());
+        let tooltip_retained = context.data(|data| {
+            data.get_temp::<TooltipGeometry>(geometry_id)
+                .is_some_and(|geometry| {
+                    if geometry.pointer_inside_card {
+                        return true;
+                    }
+                    pointer.is_some_and(|pointer| {
+                        tooltip_region_contains(pointer, geometry.origin, geometry.card)
+                    })
+                })
+        });
+        if !tooltip_retained {
+            self.diagnostic_tooltip = None;
+            context.data_mut(|data| {
+                data.remove::<HoverTooltipOverlay>(native_tooltip_id);
+                data.remove::<TooltipGeometry>(geometry_id);
+            });
+        }
         self.receive_open_requests(&context);
         self.receive_native_menu_commands(&context, frame);
         self.execute_pending_app_popup_action(&context, frame);
@@ -7708,6 +7800,7 @@ fn paint_line_diagnostics(
             && hovered_diagnostic.is_none()
         {
             hovered_diagnostic = Some(DiagnosticTooltipOverlay {
+                origin: hover_rect,
                 anchor: Pos2::new(
                     output.response.rect.right() + METRICS.editor.tooltip_gap,
                     hover_rect.top(),
@@ -7805,6 +7898,7 @@ fn add_workspace_nodes(
         if node.is_directory() {
             let open = builder.node(
                 NodeBuilder::dir(node.path.clone())
+                    .default_open(active.is_some_and(|path| path.starts_with(&node.path)))
                     .icon(|ui| paint_tree_icon(ui, true))
                     .label_ui(move |ui| {
                         let text = RichText::new(&label);
@@ -9089,6 +9183,10 @@ fn native_hover_tooltip_id(context: &egui::Context) -> egui::Id {
     viewport_scoped_id(context, "tiptoptyp-native-hover-tooltip")
 }
 
+fn tooltip_geometry_id(context: &egui::Context) -> egui::Id {
+    native_hover_tooltip_id(context).with("geometry")
+}
+
 fn settings_hover_tooltip_id(context: &egui::Context) -> egui::Id {
     viewport_scoped_id(context, "tiptoptyp-settings-hover-tooltip")
 }
@@ -9139,6 +9237,7 @@ fn hover_text_with_id(
 ) -> egui::Response {
     if let Some(opacity) = hover_opacity(&response, id.with("timing")) {
         let tooltip = HoverTooltipOverlay {
+            origin: response.rect,
             anchor: response.rect.left_bottom() + egui::vec2(0.0, theme::SPACE.small),
             detail: detail.into(),
             opacity,
@@ -9208,10 +9307,12 @@ fn hover_opacity(response: &egui::Response, timing_id: egui::Id) -> Option<f32> 
     Some(opacity)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn show_native_tooltip_card(
     context: &egui::Context,
     viewport_salt: &'static str,
     anchor: Pos2,
+    origin: Rect,
     detail: &str,
     severity: Option<DiagnosticSeverity>,
     opacity: f32,
@@ -9275,6 +9376,17 @@ fn show_native_tooltip_card(
             window_rect.bottom() - height - METRICS.popup.viewport_edge,
         ),
     );
+    let geometry_id = tooltip_geometry_id(context);
+    context.data_mut(|data| {
+        data.insert_temp(
+            geometry_id,
+            TooltipGeometry {
+                origin,
+                card: Rect::from_min_size(position, Vec2::new(width, height)),
+                pointer_inside_card: false,
+            },
+        );
+    });
     let native_theme = theme::native_theme(theme);
     let capture_viewport = captures.has_pending_for("diagnostic");
 
@@ -9285,20 +9397,30 @@ fn show_native_tooltip_card(
             .with_inner_size([width, height])
             .with_min_inner_size([width, height])
             .with_max_inner_size([width, height])
-            // Production hovers remain non-activating and click-through. A
+            // Keep the popup non-activating in production, while still letting
+            // it receive pointer movement and wheel events for scrolling. A
             // queued QA capture temporarily activates its isolated viewport so
             // macOS supplies the repeated paint passes needed by the settling
             // countdown and framebuffer callback.
             .with_active(capture_viewport)
-            .with_mouse_passthrough(!capture_viewport),
+            .with_mouse_passthrough(false),
         |ui, _class| {
+            let pointer_inside_card = ui.rect_contains_pointer(ui.max_rect());
+            context.data_mut(|data| {
+                if let Some(mut geometry) = data.get_temp::<TooltipGeometry>(geometry_id) {
+                    geometry.pointer_inside_card = pointer_inside_card;
+                    data.insert_temp(geometry_id, geometry);
+                }
+            });
             captures.begin_viewport(ui.ctx());
             ui.set_style(style.clone());
             ui.set_opacity(opacity);
             ui.ctx()
                 .send_viewport_cmd(egui::ViewportCommand::SetTheme(native_theme));
             theme::tooltip_card_frame(&style).show(ui, |ui| {
-                ui.label(detail);
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| show_markdown(ui, detail));
             });
             captures.end_glow_viewport(ui, "diagnostic");
         },
@@ -9315,9 +9437,161 @@ fn show_local_tooltip_card(context: &egui::Context, anchor: Pos2, detail: &str, 
             ui.set_opacity(opacity);
             theme::tooltip_card_frame(&style).show(ui, |ui| {
                 ui.set_max_width(METRICS.popup.tooltip_max_width);
-                ui.label(detail);
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .max_height(METRICS.popup.tooltip_max_height)
+                    .show(ui, |ui| show_markdown(ui, detail));
             });
         });
+}
+
+fn show_markdown(ui: &mut egui::Ui, markdown: &str) {
+    let mut fenced = false;
+    for line in markdown.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced {
+            ui.monospace(line);
+            continue;
+        }
+        if trimmed.is_empty() {
+            ui.add_space(theme::SPACE.small);
+            continue;
+        }
+
+        let (prefix, content, heading) = if let Some(content) = trimmed.strip_prefix("### ") {
+            ("", content, 1.05)
+        } else if let Some(content) = trimmed.strip_prefix("## ") {
+            ("", content, 1.1)
+        } else if let Some(content) = trimmed.strip_prefix("# ") {
+            ("", content, 1.15)
+        } else if let Some(content) = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "))
+        {
+            ("• ", content, 1.0)
+        } else {
+            ("", trimmed, 1.0)
+        };
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            if !prefix.is_empty() {
+                ui.label(prefix);
+            }
+            show_markdown_inline(ui, content, heading);
+        });
+    }
+}
+
+fn show_markdown_inline(ui: &mut egui::Ui, text: &str, scale: f32) {
+    let mut spans = Vec::new();
+    let mut current = String::new();
+    let mut code = false;
+    let mut bold = false;
+    let mut italics = false;
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut index = 0;
+    while index < chars.len() {
+        let (kind, marker, marker_len) = if chars[index] == '`' {
+            (Some(0), '`', 1)
+        } else if chars[index] == '*' && chars.get(index + 1) == Some(&'*') {
+            (Some(1), '*', 2)
+        } else if chars[index] == '_' && chars.get(index + 1) == Some(&'_') {
+            (Some(1), '_', 2)
+        } else if chars[index] == '*' {
+            (Some(2), '*', 1)
+        } else if chars[index] == '_' {
+            (Some(2), '_', 1)
+        } else {
+            (None, '\0', 0)
+        };
+        if let Some(kind) = kind
+            && marker_is_closed(&chars, index + marker_len, marker, marker_len)
+        {
+            if !current.is_empty() {
+                spans.push((std::mem::take(&mut current), code, bold, italics));
+            }
+            match kind {
+                0 => code = !code,
+                1 => bold = !bold,
+                _ => italics = !italics,
+            }
+            index += marker_len;
+        } else {
+            current.push(chars[index]);
+            index += 1;
+        }
+    }
+    if !current.is_empty() {
+        spans.push((current, code, bold, italics));
+    }
+    for (text, code, bold, italics) in spans {
+        let mut rich = RichText::new(text);
+        if code {
+            rich = rich.monospace();
+        }
+        if bold {
+            rich = rich.strong();
+        }
+        if italics {
+            rich = rich.italics();
+        }
+        if scale != 1.0 {
+            rich = rich.size(theme::TYPE.content * scale);
+        }
+        ui.label(rich);
+    }
+}
+
+fn marker_is_closed(chars: &[char], start: usize, marker: char, length: usize) -> bool {
+    chars.get(start..).is_some_and(|rest| {
+        rest.windows(length)
+            .any(|window| window.iter().all(|character| *character == marker))
+    })
+}
+
+fn tooltip_region_contains(pointer: Pos2, origin: Rect, card: Rect) -> bool {
+    if origin.contains(pointer) || card.contains(pointer) {
+        return true;
+    }
+    let (a, b, c) = if card.left() >= origin.right() {
+        (
+            Pos2::new(origin.right(), origin.top()),
+            Pos2::new(origin.right(), origin.bottom()),
+            Pos2::new(card.left(), card.center().y),
+        )
+    } else if card.right() <= origin.left() {
+        (
+            Pos2::new(origin.left(), origin.top()),
+            Pos2::new(origin.left(), origin.bottom()),
+            Pos2::new(card.right(), card.center().y),
+        )
+    } else if card.top() >= origin.bottom() {
+        (
+            Pos2::new(origin.left(), origin.bottom()),
+            Pos2::new(origin.right(), origin.bottom()),
+            Pos2::new(card.center().x, card.top()),
+        )
+    } else {
+        (
+            Pos2::new(origin.left(), origin.top()),
+            Pos2::new(origin.right(), origin.top()),
+            Pos2::new(card.center().x, card.bottom()),
+        )
+    };
+    let ab = b - a;
+    let ac = c - a;
+    let ap = pointer - a;
+    let denominator = ab.x * ac.y - ab.y * ac.x;
+    if denominator.abs() < f32::EPSILON {
+        return false;
+    }
+    let u = (ap.x * ac.y - ap.y * ac.x) / denominator;
+    let v = (ab.x * ap.y - ab.y * ap.x) / denominator;
+    u >= 0.0 && v >= 0.0 && u + v <= 1.0
 }
 
 fn clamp_cursor_range(range: CCursorRange, len: usize) -> CCursorRange {
@@ -10216,6 +10490,20 @@ mod tests {
     }
 
     #[test]
+    fn tooltip_bridge_keeps_pointer_transitively_connected_to_the_card() {
+        let origin = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(10.0, 10.0));
+        let card = Rect::from_min_max(Pos2::new(30.0, 0.0), Pos2::new(80.0, 30.0));
+        assert!(tooltip_region_contains(origin.center(), origin, card));
+        assert!(tooltip_region_contains(Pos2::new(20.0, 10.0), origin, card));
+        assert!(tooltip_region_contains(Pos2::new(45.0, 15.0), origin, card));
+        assert!(!tooltip_region_contains(
+            Pos2::new(20.0, 25.0),
+            origin,
+            card
+        ));
+    }
+
+    #[test]
     fn remembered_documents_must_stay_inside_the_canonical_project() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("project");
@@ -10642,25 +10930,32 @@ mod tests {
     }
 
     #[test]
-    fn document_theme_maps_to_tinymist_without_resolving_system_appearance() {
+    fn document_theme_maps_to_tinymist_with_effective_preview_appearance() {
         assert_eq!(
-            tinymist_invert_colors(DocumentTheme::FollowInterface),
-            InvertColors::Auto
-        );
-        assert_eq!(
-            tinymist_invert_colors(DocumentTheme::Light),
+            tinymist_invert_colors(DocumentTheme::FollowInterface, false),
             InvertColors::Never
         );
         assert_eq!(
-            tinymist_invert_colors(DocumentTheme::Dark),
+            tinymist_invert_colors(DocumentTheme::Light, true),
+            InvertColors::Never
+        );
+        assert_eq!(
+            tinymist_invert_colors(DocumentTheme::Dark, false),
+            InvertColors::Always
+        );
+        assert_eq!(
+            tinymist_invert_colors(DocumentTheme::FollowInterface, true),
             InvertColors::Always
         );
     }
 
     #[test]
-    fn resolved_system_appearance_change_does_not_restart_tinymist() {
-        assert!(!tinymist_restart_required(false, false, false, false));
-        assert!(tinymist_restart_required(true, false, false, false));
+    fn resolved_system_appearance_change_restarts_tinymist_preview() {
+        assert!(!tinymist_restart_required(
+            false, false, false, false, false
+        ));
+        assert!(tinymist_restart_required(true, false, false, false, false));
+        assert!(tinymist_restart_required(false, true, false, false, false));
     }
 
     #[test]

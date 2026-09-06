@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeMap,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use eframe::{Storage, egui};
@@ -278,10 +278,12 @@ impl AppSettings {
 
     /// Move a successfully opened workspace to the front of the recent list.
     ///
-    /// Callers pass a canonical or otherwise absolute path; keeping the helper
-    /// lexical avoids filesystem access on the UI thread.
+    /// Canonicalize the root once at the point it enters MRU history so path
+    /// aliases cannot create duplicate workspace entries.
     pub(crate) fn remember_workspace(&mut self, workspace: &Path) {
-        let workspace = workspace.to_string_lossy().into_owned();
+        let workspace = normalize_workspace_root(workspace)
+            .to_string_lossy()
+            .into_owned();
         if workspace.is_empty() {
             return;
         }
@@ -295,11 +297,14 @@ impl AppSettings {
     /// Return displayable workspace roots without mutating persisted history.
     /// Missing entries can become valid again when a removable volume returns.
     pub(crate) fn existing_recent_workspaces(&self) -> Vec<PathBuf> {
-        self.recent_workspaces
-            .iter()
-            .map(PathBuf::from)
-            .filter(|workspace| workspace.is_dir())
-            .collect()
+        let mut roots = Vec::new();
+        for workspace in &self.recent_workspaces {
+            let workspace = PathBuf::from(workspace);
+            if workspace.is_dir() && !roots.contains(&workspace) {
+                roots.push(workspace);
+            }
+        }
+        roots
     }
 
     pub(crate) fn load(storage: Option<&dyn Storage>) -> Self {
@@ -310,7 +315,25 @@ impl AppSettings {
         let legacy = serde_json::from_str::<LegacyThemeSettings>(&serialized).unwrap_or_default();
         settings.migrate_legacy_theme(legacy);
         settings.normalize_builtin_theme_slots();
+        settings.normalize_workspace_history();
         settings
+    }
+
+    fn normalize_workspace_history(&mut self) {
+        let mut recent = Vec::new();
+        for workspace in std::mem::take(&mut self.recent_workspaces) {
+            let normalized = normalize_workspace_root(Path::new(&workspace))
+                .to_string_lossy()
+                .into_owned();
+            if !normalized.is_empty() && !recent.contains(&normalized) {
+                recent.push(normalized);
+            }
+        }
+        self.recent_workspaces = recent;
+
+        self.last_opened_files =
+            normalize_workspace_map(std::mem::take(&mut self.last_opened_files));
+        self.preview_files = normalize_workspace_map(std::mem::take(&mut self.preview_files));
     }
 
     fn normalize_builtin_theme_slots(&mut self) {
@@ -377,6 +400,48 @@ impl AppSettings {
             storage.set_string(STORAGE_KEY, serialized);
         }
     }
+}
+
+/// Canonicalize workspace roots when possible and otherwise normalize their
+/// lexical form without touching the filesystem. The fallback keeps startup
+/// and settings migration useful for roots that have temporarily disappeared.
+pub(crate) fn normalize_workspace_root(path: &Path) -> PathBuf {
+    let absolute = path.canonicalize().unwrap_or_else(|_| {
+        if path.is_absolute() {
+            path.to_owned()
+        } else {
+            std::env::current_dir()
+                .map(|directory| directory.join(path))
+                .unwrap_or_else(|_| path.to_owned())
+        }
+    });
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !matches!(
+                    normalized.components().next_back(),
+                    Some(Component::RootDir | Component::Prefix(_))
+                ) {
+                    normalized.pop();
+                }
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
+}
+
+fn normalize_workspace_map(map: BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut normalized = BTreeMap::new();
+    for (workspace, file) in map {
+        let workspace = normalize_workspace_root(Path::new(&workspace))
+            .to_string_lossy()
+            .into_owned();
+        normalized.entry(workspace).or_insert(file);
+    }
+    normalized
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -696,6 +761,24 @@ mod tests {
                 .filter(|path| path.as_str() == "/workspace/7")
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn workspace_aliases_are_normalized_before_entering_history() {
+        let temp = tempfile::tempdir().expect("create temporary workspace root");
+        let root = temp.path().join("project");
+        let nested = root.join("chapters");
+        std::fs::create_dir_all(&nested).expect("create project folders");
+
+        let mut settings = AppSettings::default();
+        settings.remember_workspace(&root);
+        settings.remember_workspace(&nested.join(".."));
+
+        assert_eq!(settings.recent_workspaces.len(), 1);
+        assert_eq!(
+            PathBuf::from(&settings.recent_workspaces[0]),
+            root.canonicalize().unwrap()
         );
     }
 
