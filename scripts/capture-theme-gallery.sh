@@ -104,8 +104,10 @@ all_builtin_themes=(
 )
 themes=("${all_builtin_themes[@]}")
 
-# Every non-main custom themed component family. These run against one
+# These component families have stable checked-in PNG slots and run against one
 # representative light theme and one representative dark theme by default.
+# Other deterministic scenes remain available for targeted captures; adding a
+# new scene to this list is intentionally paired with committing its PNGs.
 scenes=(
   file-menu
   edit-menu
@@ -113,15 +115,12 @@ scenes=(
   settings-theme-picker
   settings-dark-theme-picker
   settings-tooltip
-  typst-overrides-window
   diagnostic-tooltip
-  function-tooltip
   save-dialog
   alert-dialog
   overwrite-dialog
   editor-context-menu
   explorer-context-menu
-  status-log
   rename-dialog
   workspace-chooser
   problems-panel

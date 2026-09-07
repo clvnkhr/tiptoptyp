@@ -6,7 +6,7 @@ use std::{
     ops::Range,
     path::{Path, PathBuf},
     pin::Pin,
-    sync::{Arc, mpsc, mpsc::Receiver},
+    sync::{Arc, OnceLock, mpsc, mpsc::Receiver},
     task::{Context as TaskContext, Poll, Wake, Waker},
     thread,
     time::{Duration, Instant},
@@ -6572,8 +6572,19 @@ impl EditorApp {
             // The interactive viewer is a native child view, so it does not
             // inherit egui's clip rectangle. Keep its bounds inside the
             // preview pane or it can draw over the editor after a resize.
-            let rect = clipped_preview_rect(ui.available_rect_before_wrap(), ui.clip_rect());
-            if self.update_webview(ui.ctx(), frame, rect, ui.visuals().panel_fill, true) {
+            let available = ui.available_rect_before_wrap();
+            let clip = ui.clip_rect();
+            let rect = clipped_preview_rect(available, clip);
+            let native_rect = egui_rect_to_native(ui.ctx(), rect);
+            trace_native_preview_bounds(ui.ctx(), available, clip, rect, native_rect);
+            if self.update_webview(
+                ui.ctx(),
+                frame,
+                rect,
+                native_rect,
+                ui.visuals().panel_fill,
+                true,
+            ) {
                 ui.allocate_rect(rect, Sense::hover());
                 ui.painter().rect_filled(rect, 0.0, preview_background(ui));
             } else if self.interactive_preview_transitioning() {
@@ -7099,7 +7110,8 @@ impl EditorApp {
         &mut self,
         context: &egui::Context,
         frame: &mut eframe::Frame,
-        rect: Rect,
+        _rect: Rect,
+        native_rect: Rect,
         background: Color32,
         visible: bool,
     ) -> bool {
@@ -7109,7 +7121,6 @@ impl EditorApp {
             self.hide_webview();
             return false;
         };
-        let native_rect = egui_rect_to_native(context, rect);
         let bounds = wry::Rect {
             position: LogicalPosition::new(native_rect.left() as f64, native_rect.top() as f64)
                 .into(),
@@ -7279,6 +7290,7 @@ impl EditorApp {
         _context: &egui::Context,
         _frame: &mut eframe::Frame,
         _rect: Rect,
+        _native_rect: Rect,
         _background: Color32,
         _visible: bool,
     ) -> bool {
@@ -7496,22 +7508,13 @@ impl eframe::App for EditorApp {
                         .show(ui, |ui| self.show_editor(ui));
                 }
                 ViewMode::Split => {
-                    let available = ui.available_width();
-                    let preview_reserve = METRICS.chrome.split_preview_reserve.min(
-                        (available * METRICS.chrome.split_preview_fraction)
-                            .max(METRICS.chrome.split_pane_hard_minimum),
-                    );
-                    let max_editor =
-                        (available - preview_reserve).max(METRICS.chrome.split_pane_hard_minimum);
-                    let min_editor = METRICS.chrome.split_editor_minimum.min(max_editor);
-                    let editor_width = (available * METRICS.chrome.split_editor_fraction)
-                        .clamp(min_editor, max_editor);
+                    let layout = theme::split_pane_layout(ui.available_width());
                     egui::Panel::left("editor")
                         .frame(theme::content_panel_frame(ui.style()))
                         .resizable(true)
-                        .default_size(editor_width)
-                        .min_size(min_editor)
-                        .max_size(max_editor)
+                        .default_size(layout.editor_width)
+                        .min_size(layout.editor_minimum)
+                        .max_size(layout.editor_maximum)
                         .show(ui, |ui| self.show_editor(ui));
                     egui::CentralPanel::default()
                         .frame(theme::content_panel_frame(ui.style()))
@@ -8470,6 +8473,47 @@ fn preview_background(ui: &egui::Ui) -> Color32 {
 
 fn clipped_preview_rect(available: Rect, clip: Rect) -> Rect {
     available.intersect(clip)
+}
+
+fn trace_native_preview_bounds(
+    context: &egui::Context,
+    available: Rect,
+    clip: Rect,
+    egui_rect: Rect,
+    native_rect: Rect,
+) {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    if !*ENABLED.get_or_init(|| std::env::var_os("TIPTOPTYP_UI_TRACE").is_some()) {
+        return;
+    }
+
+    let (viewport, egui_pixels_per_point, native_pixels_per_point) = context.input(|input| {
+        (
+            input.viewport_rect(),
+            input.pixels_per_point,
+            input.viewport().native_pixels_per_point,
+        )
+    });
+    let native_pixels_per_point = native_pixels_per_point.unwrap_or(egui_pixels_per_point);
+    let zoom = egui_pixels_per_point / native_pixels_per_point;
+    eprintln!(
+        "ui.preview.bounds available={} clip={} egui={} native={} viewport={} zoom={zoom:.3} egui_ppp={egui_pixels_per_point:.3} native_ppp={native_pixels_per_point:.3}",
+        format_rect(available),
+        format_rect(clip),
+        format_rect(egui_rect),
+        format_rect(native_rect),
+        format_rect(viewport),
+    );
+}
+
+fn format_rect(rect: Rect) -> String {
+    format!(
+        "({:.1},{:.1})-({:.1},{:.1})",
+        rect.left(),
+        rect.top(),
+        rect.right(),
+        rect.bottom()
+    )
 }
 
 fn egui_rect_to_native(context: &egui::Context, rect: Rect) -> Rect {

@@ -131,11 +131,13 @@ scripts/capture-theme-gallery.sh
 ```
 
 It captures every bundled theme in the ready main split view. It also captures
-every themed scene above in representative Catppuccin Latte and Catppuccin
-Mocha matrices, including the error workbench and compiling preview states,
-plus transformed main and elevated-menu examples to verify that the ordered
-color operations reach every viewport. The complete maintained matrix is 74
-decoded PNGs. It uses `docs/ui-snapshots/theme-fixture.typ` by default; pass a
+the maintained themed scene set in representative Catppuccin Latte and
+Catppuccin Mocha matrices, including the error workbench and compiling preview
+states, plus transformed main and elevated-menu examples to verify that the
+ordered color operations reach every viewport. The complete checked-in matrix
+is 68 decoded PNGs. The remaining deterministic scenes are still available for
+targeted local captures and become gallery slots when their images are
+committed. It uses `docs/ui-snapshots/theme-fixture.typ` by default; pass a
 fixture path as the first argument to override it. For a quicker review, use
 space-separated `TIPTOPTYP_UI_GALLERY_THEMES`,
 `TIPTOPTYP_UI_GALLERY_SCENE_THEMES`, or `TIPTOPTYP_UI_GALLERY_SCENES`

@@ -15,13 +15,17 @@ Only deliberate `--ui-screenshot-latest` captures belong here.
 The maintained matrix contains exactly 68 decoded PNGs:
 
 - the ready main editor/preview scene for every bundled light and dark theme;
-- all custom themed popup, tooltip, modal, context-menu, window, panel, and
-  find/replace families in representative Catppuccin Latte and Mocha themes,
-  including both independent Settings theme pickers, the Settings-local
-  tooltip, and all three app-owned modal layouts;
+- all maintained custom themed popup, tooltip, modal, context-menu, window,
+  panel, and find/replace families in representative Catppuccin Latte and
+  Mocha themes, including both independent Settings theme pickers, the
+  Settings-local tooltip, and all three app-owned modal layouts;
 - deterministic diagnostics and compiling-preview lifecycle states;
 - inversion-then-hue-shift examples for both the main window and an elevated
   menu viewport.
+
+The app also exposes deterministic local scenes for Typst overrides, function
+hover, and status history; those are intentionally targeted captures until
+their stable gallery slots are committed.
 
 Each capture is removed from its stable slot before the app launches, so a
 stale image cannot conceal a missing write. The script restores that slot if

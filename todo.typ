@@ -4,11 +4,13 @@
 
 = todo but deferred (big)
 - there should be a proper pdf preview option that is just a proper pdf viewer.
+- perf
 
 = todo
 
 - typst overrides should be in appearances subsection
-- when we move off from theme to set in typst overrides it should start from the theme color
+- the color indicator in typst overrides should always be the current color, not faded out if its 'theme/override'. In fact there should not be a 'theme/override' button, since if we want to return to the theme we can just hit the reset button
+- somethings not right with alignment, see pic
 - lots of tooltips in typst overrides popup kinda suck. Too big, not useful. If useless just delete it, otherwise tighten the space
 - next to the theme name in the selectors, we should be able to see at a glance a colour pallette of the theme.
 - allow customising UI fonts

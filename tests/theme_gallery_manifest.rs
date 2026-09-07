@@ -16,6 +16,10 @@ fn gallery_script() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/capture-theme-gallery.sh")
 }
 
+fn gallery_directory() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/ui-snapshots/latest")
+}
+
 fn manifest_command() -> Command {
     let mut command = Command::new("bash");
     command.arg(gallery_script()).arg("--print-manifest");
@@ -82,15 +86,12 @@ fn default_gallery_manifest_is_the_exact_maintained_matrix() {
         ("settings", "settings-theme-picker"),
         ("settings", "settings-dark-theme-picker"),
         ("settings", "settings-tooltip"),
-        ("typst-overrides", "typst-overrides-window"),
         ("diagnostic", "diagnostic-tooltip"),
-        ("diagnostic", "function-tooltip"),
         ("modal", "save-dialog"),
         ("modal", "alert-dialog"),
         ("modal", "overwrite-dialog"),
         ("popup", "editor-context-menu"),
         ("popup", "explorer-context-menu"),
-        ("popup", "status-log"),
         ("rename", "rename-dialog"),
         ("workspace", "workspace-chooser"),
         ("main", "problems-panel"),
@@ -112,8 +113,43 @@ fn default_gallery_manifest_is_the_exact_maintained_matrix() {
     ]);
 
     assert_eq!(actual, expected);
-    assert_eq!(actual.len(), 74);
-    assert_eq!(actual.iter().collect::<BTreeSet<_>>().len(), 74);
+    assert_eq!(actual.len(), 68);
+    assert_eq!(actual.iter().collect::<BTreeSet<_>>().len(), 68);
+}
+
+#[test]
+fn checked_in_gallery_matches_the_manifest_and_every_png_decodes() {
+    let expected = lines(manifest_command().output().expect("run gallery manifest"));
+    let mut actual = std::fs::read_dir(gallery_directory())
+        .expect("read checked-in gallery")
+        .map(|entry| entry.expect("read gallery entry").path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "png"))
+        .map(|path| {
+            path.file_name()
+                .expect("gallery PNG has a filename")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect::<Vec<_>>();
+    actual.sort();
+
+    let mut expected_sorted = expected.clone();
+    expected_sorted.sort();
+    assert_eq!(actual, expected_sorted);
+
+    for name in expected {
+        let path = gallery_directory().join(&name);
+        let image = image::ImageReader::open(&path)
+            .unwrap_or_else(|error| panic!("open gallery PNG {name}: {error}"))
+            .with_guessed_format()
+            .unwrap_or_else(|error| panic!("identify gallery PNG {name}: {error}"))
+            .decode()
+            .unwrap_or_else(|error| panic!("decode gallery PNG {name}: {error}"));
+        assert!(
+            image.width() > 0 && image.height() > 0,
+            "empty gallery PNG {name}"
+        );
+    }
 }
 
 #[test]
@@ -143,6 +179,25 @@ fn subset_manifest_respects_every_override() {
 fn gallery_script_never_invokes_a_desktop_capture_api() {
     let script = std::fs::read_to_string(gallery_script()).expect("read gallery script");
     assert!(!script.contains("screencapture"));
+}
+
+#[test]
+fn agent_workflow_makes_fresh_ui_evidence_mandatory() {
+    let instructions =
+        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("AGENTS.md"))
+            .expect("read agent workflow");
+    for required in [
+        "Mandatory UI workflow",
+        "--ui-snapshot-scene",
+        "TIPTOPTYP_UI_TRACE=1",
+        "scripts/capture-theme-gallery.sh --validate-latest",
+        "Do not report a UI fix as visually verified",
+    ] {
+        assert!(
+            instructions.contains(required),
+            "missing workflow rule: {required}"
+        );
+    }
 }
 
 #[test]

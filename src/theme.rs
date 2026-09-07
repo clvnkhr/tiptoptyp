@@ -195,6 +195,47 @@ pub struct ChromeMetrics {
     pub split_pane_hard_minimum: f32,
 }
 
+/// The width contract for the two panes in Split mode.
+///
+/// Keeping this calculation outside the egui callback makes the most fragile
+/// part of the main layout deterministic and directly testable. In
+/// particular, very narrow windows must not let the editor's minimum consume
+/// the preview pane or produce an invalid panel range.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SplitPaneLayout {
+    pub editor_width: f32,
+    pub editor_minimum: f32,
+    pub editor_maximum: f32,
+    pub preview_width: f32,
+}
+
+/// Calculate a valid split layout for the current content width.
+pub fn split_pane_layout(available_width: f32) -> SplitPaneLayout {
+    let available_width = available_width.max(0.0);
+    let hard_minimum = METRICS.chrome.split_pane_hard_minimum;
+    let pane_minimum = (available_width / 2.0).min(hard_minimum);
+    let preview_reserve = METRICS
+        .chrome
+        .split_preview_reserve
+        .min((available_width * METRICS.chrome.split_preview_fraction).max(hard_minimum));
+    let preview_reserve = preview_reserve.min((available_width - pane_minimum).max(0.0));
+    let editor_maximum = (available_width - preview_reserve).max(pane_minimum);
+    let editor_minimum = METRICS
+        .chrome
+        .split_editor_minimum
+        .min(editor_maximum)
+        .min(available_width);
+    let editor_width = (available_width * METRICS.chrome.split_editor_fraction)
+        .clamp(editor_minimum, editor_maximum);
+
+    SplitPaneLayout {
+        editor_width,
+        editor_minimum,
+        editor_maximum,
+        preview_width: (available_width - editor_width).max(0.0),
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SpacingMetrics {
     pub global_item: Vec2,
@@ -985,6 +1026,31 @@ mod tests {
         assert_eq!(METRICS.preview.header_pages_min_width, 185.0);
         assert_eq!(SPACE.tight, 2.0);
         assert_eq!(METRICS.editor.gutter_max_width, 120);
+    }
+
+    #[test]
+    fn split_pane_layout_preserves_both_panes_at_normal_widths() {
+        for available in [220.0, 320.0, 640.0, 1_400.0, 2_400.0] {
+            let layout = split_pane_layout(available);
+            assert!(layout.editor_minimum <= layout.editor_width);
+            assert!(layout.editor_width <= layout.editor_maximum);
+            assert!(layout.preview_width >= 0.0);
+            assert!((layout.editor_width + layout.preview_width - available).abs() < 0.01);
+            assert!(layout.editor_maximum + layout.preview_width >= available - 0.01);
+        }
+    }
+
+    #[test]
+    fn split_pane_layout_degrades_without_invalid_panel_ranges() {
+        for available in [0.0, 1.0, 20.0, 79.0] {
+            let layout = split_pane_layout(available);
+            assert!(layout.editor_minimum >= 0.0);
+            assert!(layout.editor_minimum <= layout.editor_maximum);
+            assert!(layout.editor_width >= layout.editor_minimum);
+            assert!(layout.editor_width <= layout.editor_maximum);
+            assert!(layout.preview_width >= 0.0);
+            assert!(layout.editor_width + layout.preview_width <= available + 0.01);
+        }
     }
 
     #[test]

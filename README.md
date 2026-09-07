@@ -211,6 +211,11 @@ auto-save.
 
 ## Development
 
+UI changes require fresh app-window screenshot evidence and, for native
+preview geometry, `TIPTOPTYP_UI_TRACE=1` bounds output. See
+[`AGENTS.md`](AGENTS.md) for the mandatory workflow and
+[`docs/ui-qa-screenshots.md`](docs/ui-qa-screenshots.md) for the scene contract.
+
 ```sh
 cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
