@@ -6569,9 +6569,12 @@ impl EditorApp {
         }
 
         if self.should_attempt_interactive_preview() {
-            let rect = ui.available_rect_before_wrap();
+            // The interactive viewer is a native child view, so it does not
+            // inherit egui's clip rectangle. Keep its bounds inside the
+            // preview pane or it can draw over the editor after a resize.
+            let rect = clipped_preview_rect(ui.available_rect_before_wrap(), ui.clip_rect());
             if self.update_webview(ui.ctx(), frame, rect, ui.visuals().panel_fill, true) {
-                let (rect, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
+                ui.allocate_rect(rect, Sense::hover());
                 ui.painter().rect_filled(rect, 0.0, preview_background(ui));
             } else if self.interactive_preview_transitioning() {
                 self.hide_webview();
@@ -7106,10 +7109,15 @@ impl EditorApp {
             self.hide_webview();
             return false;
         };
+        let native_rect = egui_rect_to_native(context, rect);
         let bounds = wry::Rect {
-            position: LogicalPosition::new(rect.left() as f64, rect.top() as f64).into(),
-            size: LogicalSize::new(rect.width().max(1.0) as f64, rect.height().max(1.0) as f64)
+            position: LogicalPosition::new(native_rect.left() as f64, native_rect.top() as f64)
                 .into(),
+            size: LogicalSize::new(
+                native_rect.width().max(1.0) as f64,
+                native_rect.height().max(1.0) as f64,
+            )
+            .into(),
         };
         if self.webview.is_none() {
             let focused = context.input(|input| input.viewport().focused);
@@ -8458,6 +8466,30 @@ fn clipped_panel_content_ui(ui: &mut egui::Ui, id_salt: &'static str) -> egui::U
 
 fn preview_background(ui: &egui::Ui) -> Color32 {
     ui.visuals().panel_fill
+}
+
+fn clipped_preview_rect(available: Rect, clip: Rect) -> Rect {
+    available.intersect(clip)
+}
+
+fn egui_rect_to_native(context: &egui::Context, rect: Rect) -> Rect {
+    let (viewport, egui_pixels_per_point, native_pixels_per_point) = context.input(|input| {
+        (
+            input.viewport_rect(),
+            input.pixels_per_point,
+            input.viewport().native_pixels_per_point,
+        )
+    });
+    let scale = (egui_pixels_per_point / native_pixels_per_point.unwrap_or(egui_pixels_per_point))
+        .max(0.01);
+    scale_rect_from_egui_to_native(rect, viewport, scale)
+}
+
+fn scale_rect_from_egui_to_native(rect: Rect, viewport: Rect, scale: f32) -> Rect {
+    Rect::from_min_max(
+        viewport.min + (rect.min - viewport.min) * scale,
+        viewport.min + (rect.max - viewport.min) * scale,
+    )
 }
 
 fn show_preview_transition(ui: &mut egui::Ui) {
@@ -10338,6 +10370,29 @@ mod tests {
                     && (pair[0].3 - pair[1].3).abs() < 0.01
             }),
             "{measurements:?}"
+        );
+    }
+
+    #[test]
+    fn native_preview_bounds_stay_inside_the_panel_clip() {
+        let available = Rect::from_min_max(Pos2::new(96.0, 30.0), Pos2::new(420.0, 260.0));
+        let clip = Rect::from_min_max(Pos2::new(120.0, 48.0), Pos2::new(400.0, 220.0));
+
+        assert_eq!(
+            clipped_preview_rect(available, clip),
+            Rect::from_min_max(Pos2::new(120.0, 48.0), Pos2::new(400.0, 220.0))
+        );
+    }
+
+    #[test]
+    fn native_preview_bounds_follow_egui_zoom_without_moving_the_viewport_origin() {
+        assert_eq!(
+            scale_rect_from_egui_to_native(
+                Rect::from_min_max(Pos2::new(100.0, 50.0), Pos2::new(300.0, 250.0)),
+                Rect::from_min_size(Pos2::ZERO, Vec2::new(500.0, 400.0)),
+                1.15,
+            ),
+            Rect::from_min_max(Pos2::new(115.0, 57.5), Pos2::new(345.0, 287.5))
         );
     }
 

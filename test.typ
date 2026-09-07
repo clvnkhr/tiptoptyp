@@ -11,7 +11,7 @@ Edit this document on the left. The PDF preview updates as you type.
 
 == Math and code
 
-Inline math is highlighted too: $ integral_0^infinity e^(-x) dif x = 1 $.sssssssss 
+Inline math is highlighted too: $ integral_0^infinity e^(-x) dif x = 1 $
 
 #for item in ("Native UI", "Live PDF", "Fast rebuilds") [
   - #item
