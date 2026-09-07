@@ -2,7 +2,10 @@
 
 tiptoptyp's UI QA captures use egui's viewport framebuffer. They capture one
 tiptoptyp window only; they never invoke a desktop or operating-system screen
-capture.
+capture. A capture of `main` does not include a sibling native child viewport,
+so these PNGs are viewport evidence rather than a composed desktop screenshot.
+Use the native geometry trace, and an approved whole-window observation when
+available, to verify relationships between those surfaces.
 
 Press `Cmd+Shift+F12` on macOS or `Ctrl+Shift+F12` elsewhere to capture the
 focused supported window. PNG files are written to:
@@ -80,6 +83,11 @@ file and folder pickers are outside the app framebuffer and therefore cannot be
 included; `save-dialog` covers the custom themed modal shown around a save.
 Together, `save-dialog`, `alert-dialog`, and `overwrite-dialog` cover every
 app-owned modal layout.
+
+Native tooltip cards remain connected to their source while the pointer crosses
+the bridge. Click the card, or press Cmd+Shift+Space while its hover content is
+available, to focus it for scrolling and text selection; Escape or defocusing
+the card dismisses it.
 
 ## Theme gallery
 

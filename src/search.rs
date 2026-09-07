@@ -9,6 +9,7 @@ pub struct SearchMatch {
     pub char_range: Range<usize>,
 }
 
+#[allow(dead_code)]
 impl SearchMatch {
     /// Build a match from a byte range, rejecting ranges which are out of
     /// bounds, reversed, or not on UTF-8 character boundaries.
@@ -33,10 +34,6 @@ impl SearchMatch {
     pub fn as_str<'a>(&self, text: &'a str) -> Option<&'a str> {
         text.get(self.byte_range.clone())
     }
-
-    fn is_match_for(&self, text: &str, query: &str) -> bool {
-        !query.is_empty() && self.as_str(text) == Some(query)
-    }
 }
 
 /// Find the first case-sensitive literal match.
@@ -47,6 +44,14 @@ pub fn find(text: &str, query: &str) -> Option<SearchMatch> {
 
     let start = text.find(query)?;
     SearchMatch::from_byte_range(text, start..start + query.len())
+}
+
+/// Find the first literal match with an optional case-insensitive comparison.
+#[allow(dead_code)]
+pub fn find_with_case(text: &str, query: &str, case_sensitive: bool) -> Option<SearchMatch> {
+    find_all_with_case(text, query, case_sensitive)
+        .into_iter()
+        .next()
 }
 
 /// Find all non-overlapping, case-sensitive literal matches.
@@ -76,37 +81,186 @@ pub fn find_all(text: &str, query: &str) -> Vec<SearchMatch> {
         .collect()
 }
 
-/// Find the match after `selected`, wrapping to the first match at the end.
-/// A stale or unrelated selection is ignored.
-pub fn find_next(text: &str, query: &str, selected: Option<&SearchMatch>) -> Option<SearchMatch> {
-    if query.is_empty() {
-        return None;
+/// Find all non-overlapping literal matches while preserving UTF-8-safe
+/// ranges. Folding is performed per Unicode scalar, and a match always spans
+/// whole source characters.
+pub fn find_all_with_case(text: &str, query: &str, case_sensitive: bool) -> Vec<SearchMatch> {
+    if case_sensitive {
+        return find_all(text, query);
     }
-
-    let Some(selected) = selected.filter(|selected| selected.is_match_for(text, query)) else {
-        return find(text, query);
-    };
-
-    find_at_or_after(text, query, selected.byte_range.end).or_else(|| find(text, query))
+    let folded_query = folded(query);
+    if folded_query.is_empty() {
+        return Vec::new();
+    }
+    let chars = text.char_indices().collect::<Vec<_>>();
+    let mut matches = Vec::new();
+    let mut index = 0;
+    while index < chars.len() {
+        let mut candidate = String::new();
+        let mut found = None;
+        for (end, (_, character)) in chars.iter().enumerate().skip(index) {
+            candidate.extend(character.to_lowercase());
+            if candidate == folded_query {
+                found = Some(end);
+                break;
+            }
+            if candidate.len() >= folded_query.len() {
+                break;
+            }
+        }
+        if let Some(end) = found {
+            let byte_start = chars[index].0;
+            let byte_end = chars.get(end + 1).map_or(text.len(), |(byte, _)| *byte);
+            matches.push(SearchMatch {
+                byte_range: byte_start..byte_end,
+                char_range: index..end + 1,
+            });
+            index = end + 1;
+        } else {
+            index += 1;
+        }
+    }
+    matches
 }
 
-/// Find the match before `selected`, wrapping to the final match at the start.
-/// A stale or unrelated selection starts at the final match.
-pub fn find_previous(
+/// Find UTF-8-safe matches using the bounded, non-backtracking engine already
+/// used by Syntect. Replacement text is literal (no capture expansion).
+pub fn find_all_with_options(
+    text: &str,
+    query: &str,
+    case_sensitive: bool,
+    regex: bool,
+) -> Vec<SearchMatch> {
+    if !regex {
+        return find_all_with_case(text, query, case_sensitive);
+    }
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let Ok(pattern) = regex_automata::meta::Regex::builder()
+        .syntax(regex_automata::util::syntax::Config::new().case_insensitive(!case_sensitive))
+        .build(query)
+    else {
+        return Vec::new();
+    };
+    // Convert sorted byte ranges in one pass, including zero-width matches.
+    let mut byte_cursor = 0;
+    let mut char_cursor = 0;
+    pattern
+        .find_iter(text)
+        .map(|matched| {
+            char_cursor += text[byte_cursor..matched.start()].chars().count();
+            let char_start = char_cursor;
+            char_cursor += text[matched.range()].chars().count();
+            byte_cursor = matched.end();
+            SearchMatch {
+                byte_range: matched.range(),
+                char_range: char_start..char_cursor,
+            }
+        })
+        .collect()
+}
+
+fn folded(text: &str) -> String {
+    text.chars().flat_map(char::to_lowercase).collect()
+}
+
+/// Find the match after `selected`, wrapping to the first match at the end.
+/// A stale or unrelated selection is ignored.
+#[allow(dead_code)]
+pub fn find_next(text: &str, query: &str, selected: Option<&SearchMatch>) -> Option<SearchMatch> {
+    find_next_with_case(text, query, selected, true)
+}
+
+#[allow(dead_code)]
+pub fn find_next_with_case(
     text: &str,
     query: &str,
     selected: Option<&SearchMatch>,
+    case_sensitive: bool,
+) -> Option<SearchMatch> {
+    find_next_with_options(text, query, selected, case_sensitive, false)
+}
+
+pub fn find_next_with_options(
+    text: &str,
+    query: &str,
+    selected: Option<&SearchMatch>,
+    case_sensitive: bool,
+    regex: bool,
 ) -> Option<SearchMatch> {
     if query.is_empty() {
         return None;
     }
 
-    let Some(selected) = selected.filter(|selected| selected.is_match_for(text, query)) else {
-        return find_last_before(text, query, text.len());
-    };
+    let matches = find_all_with_options(text, query, case_sensitive, regex);
+    let selected = selected.filter(|selected| {
+        matches
+            .iter()
+            .any(|matched| matched.byte_range == selected.byte_range)
+    });
+    selected
+        .and_then(|selected| {
+            matches
+                .iter()
+                .find(|matched| {
+                    matched.byte_range != selected.byte_range
+                        && matched.byte_range.start >= selected.byte_range.end
+                })
+                .cloned()
+        })
+        .or_else(|| matches.into_iter().next())
+}
 
-    find_last_before(text, query, selected.byte_range.start)
-        .or_else(|| find_last_before(text, query, text.len()))
+/// Find the match before `selected`, wrapping to the final match at the start.
+/// A stale or unrelated selection starts at the final match.
+#[allow(dead_code)]
+pub fn find_previous(
+    text: &str,
+    query: &str,
+    selected: Option<&SearchMatch>,
+) -> Option<SearchMatch> {
+    find_previous_with_case(text, query, selected, true)
+}
+
+#[allow(dead_code)]
+pub fn find_previous_with_case(
+    text: &str,
+    query: &str,
+    selected: Option<&SearchMatch>,
+    case_sensitive: bool,
+) -> Option<SearchMatch> {
+    find_previous_with_options(text, query, selected, case_sensitive, false)
+}
+
+pub fn find_previous_with_options(
+    text: &str,
+    query: &str,
+    selected: Option<&SearchMatch>,
+    case_sensitive: bool,
+    regex: bool,
+) -> Option<SearchMatch> {
+    if query.is_empty() {
+        return None;
+    }
+
+    let matches = find_all_with_options(text, query, case_sensitive, regex);
+    let selected = selected.filter(|selected| {
+        matches
+            .iter()
+            .any(|matched| matched.byte_range == selected.byte_range)
+    });
+    selected
+        .and_then(|selected| {
+            matches
+                .iter()
+                .rfind(|matched| {
+                    matched.byte_range != selected.byte_range
+                        && matched.byte_range.end <= selected.byte_range.start
+                })
+                .cloned()
+        })
+        .or_else(|| matches.into_iter().last())
 }
 
 /// Replace every non-overlapping literal match and return the number replaced.
@@ -146,6 +300,7 @@ pub struct SearchState {
     selected: Option<SearchMatch>,
 }
 
+#[allow(dead_code)]
 impl SearchState {
     pub fn selected(&self) -> Option<&SearchMatch> {
         self.selected.as_ref()
@@ -156,29 +311,90 @@ impl SearchState {
     }
 
     pub fn next(&mut self, text: &str, query: &str) -> Option<&SearchMatch> {
-        self.selected = find_next(text, query, self.selected.as_ref());
+        self.next_with_case(text, query, true)
+    }
+
+    pub fn next_with_case(
+        &mut self,
+        text: &str,
+        query: &str,
+        case_sensitive: bool,
+    ) -> Option<&SearchMatch> {
+        self.next_with_options(text, query, case_sensitive, false)
+    }
+
+    pub fn next_with_options(
+        &mut self,
+        text: &str,
+        query: &str,
+        case_sensitive: bool,
+        regex: bool,
+    ) -> Option<&SearchMatch> {
+        self.selected =
+            find_next_with_options(text, query, self.selected.as_ref(), case_sensitive, regex);
         self.selected.as_ref()
     }
 
     pub fn previous(&mut self, text: &str, query: &str) -> Option<&SearchMatch> {
-        self.selected = find_previous(text, query, self.selected.as_ref());
+        self.previous_with_case(text, query, true)
+    }
+
+    pub fn previous_with_case(
+        &mut self,
+        text: &str,
+        query: &str,
+        case_sensitive: bool,
+    ) -> Option<&SearchMatch> {
+        self.previous_with_options(text, query, case_sensitive, false)
+    }
+
+    pub fn previous_with_options(
+        &mut self,
+        text: &str,
+        query: &str,
+        case_sensitive: bool,
+        regex: bool,
+    ) -> Option<&SearchMatch> {
+        self.selected =
+            find_previous_with_options(text, query, self.selected.as_ref(), case_sensitive, regex);
         self.selected.as_ref()
     }
 
     /// Replace the selected match. When there is no valid selection, the first
     /// match is selected and replaced. The following match is then selected.
     pub fn replace_one(&mut self, text: &mut String, query: &str, replacement: &str) -> bool {
+        self.replace_one_with_case(text, query, replacement, true)
+    }
+
+    pub fn replace_one_with_case(
+        &mut self,
+        text: &mut String,
+        query: &str,
+        replacement: &str,
+        case_sensitive: bool,
+    ) -> bool {
+        self.replace_one_with_options(text, query, replacement, case_sensitive, false)
+    }
+
+    pub fn replace_one_with_options(
+        &mut self,
+        text: &mut String,
+        query: &str,
+        replacement: &str,
+        case_sensitive: bool,
+        regex: bool,
+    ) -> bool {
         if query.is_empty() {
             self.clear();
             return false;
         }
 
-        if !self
-            .selected
-            .as_ref()
-            .is_some_and(|selected| selected.is_match_for(text, query))
-        {
-            self.selected = find_next(text, query, None);
+        if !self.selected.as_ref().is_some_and(|selected| {
+            find_all_with_options(text, query, case_sensitive, regex)
+                .iter()
+                .any(|matched| matched.byte_range == selected.byte_range)
+        }) {
+            self.selected = find_next_with_options(text, query, None, case_sensitive, regex);
         }
 
         let Some(selected) = self.selected.take() else {
@@ -190,7 +406,13 @@ impl SearchState {
         // Search after the inserted text so a replacement containing the query
         // does not immediately reselect itself. `find_next` supplies wrapping.
         let anchor = SearchMatch::from_byte_range(text, next_search_byte..next_search_byte);
-        self.selected = find_next_after_anchor(text, query, anchor.as_ref());
+        self.selected = find_next_after_anchor_with_options(
+            text,
+            query,
+            anchor.as_ref(),
+            case_sensitive,
+            regex,
+        );
         true
     }
 
@@ -198,6 +420,61 @@ impl SearchState {
         let count = replace_all(text, query, replacement);
         self.clear();
         count
+    }
+
+    pub fn replace_all_with_case(
+        &mut self,
+        text: &mut String,
+        query: &str,
+        replacement: &str,
+        case_sensitive: bool,
+    ) -> usize {
+        self.replace_all_with_options(text, query, replacement, case_sensitive, false)
+    }
+
+    pub fn replace_all_with_options(
+        &mut self,
+        text: &mut String,
+        query: &str,
+        replacement: &str,
+        case_sensitive: bool,
+        regex: bool,
+    ) -> usize {
+        if regex {
+            let matches = find_all_with_options(text, query, case_sensitive, true);
+            if matches.is_empty() {
+                return 0;
+            }
+            let mut result = String::with_capacity(text.len());
+            let mut copied_until = 0;
+            for matched in &matches {
+                result.push_str(&text[copied_until..matched.byte_range.start]);
+                result.push_str(replacement);
+                copied_until = matched.byte_range.end;
+            }
+            result.push_str(&text[copied_until..]);
+            *text = result;
+            self.clear();
+            return matches.len();
+        }
+        if case_sensitive {
+            return self.replace_all(text, query, replacement);
+        }
+        let matches = find_all_with_case(text, query, false);
+        if matches.is_empty() {
+            return 0;
+        }
+        let mut result = String::with_capacity(text.len());
+        let mut copied_until = 0;
+        for matched in &matches {
+            result.push_str(&text[copied_until..matched.byte_range.start]);
+            result.push_str(replacement);
+            copied_until = matched.byte_range.end;
+        }
+        result.push_str(&text[copied_until..]);
+        *text = result;
+        self.clear();
+        matches.len()
     }
 }
 
@@ -215,17 +492,50 @@ fn find_next_after_anchor(
         .or_else(|| text.get(..start).and_then(|prefix| find(prefix, query)))
 }
 
+fn find_next_after_anchor_with_case(
+    text: &str,
+    query: &str,
+    anchor: Option<&SearchMatch>,
+    case_sensitive: bool,
+) -> Option<SearchMatch> {
+    if case_sensitive {
+        return find_next_after_anchor(text, query, anchor);
+    }
+    let start = anchor.map_or(0, |anchor| anchor.byte_range.end);
+    find_all_with_case(text, query, false)
+        .into_iter()
+        .find(|matched| matched.byte_range.start >= start)
+        .or_else(|| {
+            find_all_with_case(text, query, false)
+                .into_iter()
+                .find(|matched| matched.byte_range.start < start)
+        })
+}
+
+fn find_next_after_anchor_with_options(
+    text: &str,
+    query: &str,
+    anchor: Option<&SearchMatch>,
+    case_sensitive: bool,
+    regex: bool,
+) -> Option<SearchMatch> {
+    if !regex {
+        return find_next_after_anchor_with_case(text, query, anchor, case_sensitive);
+    }
+    let matches = find_all_with_options(text, query, case_sensitive, true);
+    let start = anchor.map_or(0, |anchor| anchor.byte_range.end);
+    matches
+        .iter()
+        .find(|matched| matched.byte_range.start >= start)
+        .cloned()
+        .or_else(|| matches.into_iter().next())
+}
+
 fn find_at_or_after(text: &str, query: &str, start: usize) -> Option<SearchMatch> {
     let suffix = text.get(start..)?;
     let offset = suffix.find(query)?;
     let byte_start = start + offset;
     SearchMatch::from_byte_range(text, byte_start..byte_start + query.len())
-}
-
-fn find_last_before(text: &str, query: &str, end: usize) -> Option<SearchMatch> {
-    let prefix = text.get(..end)?;
-    let (byte_start, matched) = prefix.match_indices(query).last()?;
-    SearchMatch::from_byte_range(text, byte_start..byte_start + matched.len())
 }
 
 #[cfg(test)]
@@ -253,6 +563,87 @@ mod tests {
 
         let overlapping = find_all("aaaa", "aa");
         assert_eq!(byte_ranges(&overlapping), vec![0..2, 2..4]);
+    }
+
+    #[test]
+    fn case_insensitive_find_preserves_unicode_ranges() {
+        let matches = find_all_with_case("Alpha ALPHA 🦀", "alpha", false);
+        assert_eq!(byte_ranges(&matches), vec![0..5, 6..11]);
+        assert_eq!(char_ranges(&matches), vec![0..5, 6..11]);
+    }
+
+    #[test]
+    fn editor_regex_supports_classes_quantifiers_and_anchors() {
+        let matches = find_all_with_options("item-12", r"^item-\d+$", true, true);
+        assert_eq!(byte_ranges(&matches), vec![0..7]);
+        let matches = find_all_with_options("cat cot cut", r"c.t", true, true);
+        assert_eq!(matches.len(), 3);
+        let matches = find_all_with_options("a12 b7", r"\w+\d+", true, true);
+        assert_eq!(matches.len(), 2);
+    }
+
+    #[test]
+    fn invalid_editor_regex_fails_closed() {
+        assert!(find_all_with_options("abc", "[", true, true).is_empty());
+        assert!(find_all_with_options("abc", "", true, true).is_empty());
+    }
+
+    #[test]
+    fn regex_handles_unicode_case_ranges_and_standard_escapes() {
+        assert_eq!(
+            byte_ranges(&find_all_with_options("M", "[a-z]", false, true)),
+            vec![0..1]
+        );
+        assert_eq!(
+            byte_ranges(&find_all_with_options("É", "é", false, true)),
+            vec![0..2]
+        );
+        assert_eq!(
+            byte_ranges(&find_all_with_options("a\nb", r"\n", true, true)),
+            vec![1..2]
+        );
+        assert!(find_all_with_options("*", "*", true, true).is_empty());
+        assert!(find_all_with_options("b", "[z-a]", true, true).is_empty());
+    }
+
+    #[test]
+    fn zero_width_regex_navigation_advances_and_wraps() {
+        let mut state = SearchState::default();
+        let text = "é x";
+        assert_eq!(
+            state
+                .next_with_options(text, r"\b", true, true)
+                .unwrap()
+                .byte_range,
+            0..0
+        );
+        assert_eq!(
+            state
+                .next_with_options(text, r"\b", true, true)
+                .unwrap()
+                .byte_range,
+            2..2
+        );
+        assert_eq!(
+            state
+                .previous_with_options(text, r"\b", true, true)
+                .unwrap()
+                .byte_range,
+            0..0
+        );
+        assert_eq!(
+            state
+                .previous_with_options(text, r"\b", true, true)
+                .unwrap()
+                .byte_range,
+            4..4
+        );
+    }
+
+    #[test]
+    fn regex_rejects_pathological_nonmatches_without_recursive_backtracking() {
+        let text = "a".repeat(2000);
+        assert!(find_all_with_options(&text, "a*a*a*a*a*a*a*a*b", true, true).is_empty());
     }
 
     #[test]

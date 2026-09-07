@@ -38,12 +38,20 @@ pub struct SymbolEntry {
     pub kind: SymbolKind,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReferenceEntry {
+    pub path: PathBuf,
+    pub line: usize,
+    pub label: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProjectIndex {
     pub outline: Vec<OutlineEntry>,
     pub subfiles: Vec<PathBuf>,
     pub symbols: Vec<SymbolEntry>,
     pub packages: Vec<String>,
+    pub references: Vec<ReferenceEntry>,
 }
 
 /// Build a compact, deterministic index from one Typst entry point.
@@ -60,7 +68,11 @@ pub fn analyze_project(
 ) -> ProjectIndex {
     let root = canonical_or_owned(root);
     let main = canonical_or_owned(main);
-    if !main.starts_with(&root) || main.extension().is_none_or(|extension| extension != "typ") {
+    if !main.starts_with(&root)
+        || main
+            .extension()
+            .is_none_or(|extension| !extension.eq_ignore_ascii_case("typ"))
+    {
         return ProjectIndex::default();
     }
 
@@ -116,6 +128,7 @@ fn scan_source(
     packages: &mut BTreeSet<String>,
     mut local_file: impl FnMut(&str),
 ) {
+    index_references(path, source, index);
     for (line_index, raw_line) in source.lines().enumerate() {
         let line_number = line_index + 1;
         let line = strip_line_comment(raw_line).trim();
@@ -147,7 +160,10 @@ fn scan_source(
             if let Some(target) = quoted_argument_after(line, keyword) {
                 if target.starts_with('@') {
                     packages.insert(target.to_owned());
-                } else if target.ends_with(".typ") {
+                } else if target
+                    .rsplit_once('.')
+                    .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("typ"))
+                {
                     local_file(target);
                 }
             }
@@ -213,6 +229,29 @@ fn package_specs(line: &str) -> impl Iterator<Item = &str> {
     })
 }
 
+fn index_references(path: &Path, source: &str, index: &mut ProjectIndex) {
+    use typst_syntax::{LinkedNode, Source, SyntaxKind};
+    fn walk(node: LinkedNode<'_>, path: &Path, source: &str, index: &mut ProjectIndex) {
+        if matches!(node.kind(), SyntaxKind::Label | SyntaxKind::RefMarker) {
+            index.references.push(ReferenceEntry {
+                path: path.to_owned(),
+                line: source[..node.offset()]
+                    .bytes()
+                    .filter(|byte| *byte == b'\n')
+                    .count()
+                    + 1,
+                label: source[node.range()].to_owned(),
+            });
+        } else {
+            for child in node.children() {
+                walk(child, path, source, index);
+            }
+        }
+    }
+    let parsed = Source::detached(source);
+    walk(LinkedNode::new(parsed.root()), path, source, index);
+}
+
 fn strip_line_comment(line: &str) -> &str {
     let mut quote = None;
     let mut escaped = false;
@@ -253,7 +292,7 @@ fn resolve_local_typst_path(root: &Path, source: &Path, target: &str) -> Option<
     (candidate.starts_with(root)
         && candidate
             .extension()
-            .is_some_and(|extension| extension == "typ"))
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("typ")))
     .then_some(candidate)
 }
 
@@ -330,6 +369,70 @@ mod tests {
         assert_eq!(
             strip_line_comment("#let url = \"https://typst.app\" // comment"),
             "#let url = \"https://typst.app\" "
+        );
+    }
+
+    #[test]
+    fn indexes_document_tags_and_references_but_not_package_names() {
+        let project = tempfile::tempdir().unwrap();
+        let main = project.path().join("main.typ");
+        fs::write(
+            &main,
+            "= Main <chapter>
+See @chapter and @figure. #link(<appendix>)[Appendix]
+#import \"@preview/cetz:0.3.2\"
+",
+        )
+        .unwrap();
+
+        let index = analyze_project(project.path(), &main, &BTreeMap::new());
+
+        assert_eq!(
+            index
+                .references
+                .iter()
+                .map(|reference| reference.label.as_str())
+                .collect::<Vec<_>>(),
+            ["<chapter>", "@chapter", "@figure", "<appendix>"]
+        );
+        assert!(
+            index
+                .references
+                .iter()
+                .all(|reference| reference.line == 1 || reference.line == 2)
+        );
+    }
+
+    #[test]
+    fn project_index_accepts_case_insensitive_typst_extensions() {
+        let project = tempfile::tempdir().unwrap();
+        let main = project.path().join("main.TYP");
+        fs::write(&main, "#include \"chapter.TyP\"").unwrap();
+        fs::write(project.path().join("chapter.TyP"), "= Chapter").unwrap();
+
+        let index = analyze_project(project.path(), &main, &BTreeMap::new());
+
+        assert_eq!(
+            index.subfiles,
+            vec![project.path().join("chapter.TyP").canonicalize().unwrap()]
+        );
+    }
+
+    #[test]
+    fn reference_index_ignores_strings_comments_and_raw_blocks() {
+        let mut index = ProjectIndex::default();
+        index_references(
+            Path::new("main.typ"),
+            "// @comment <comment>\n/* @block <block> */\n#let s = \"@string <string>\"\n`@raw <raw>`\n= Chapter <real>\nSee @real.",
+            &mut index,
+        );
+        assert_eq!(
+            index
+                .references
+                .iter()
+                .map(|r| (r.label.as_str(), r.line))
+                .collect::<Vec<_>>(),
+            vec![("<real>", 5), ("@real", 6)]
         );
     }
 

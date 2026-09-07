@@ -11,9 +11,11 @@ eframe = { version = "0.36.1", default-features = false, features = ["default_fo
 egui_ltreeview = "0.9.0"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff"] }
 quick-xml = "0.41"
+regex-automata = "0.4.18"
 rfd = "0.17.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+skrifa = { version = "0.44.0", default-features = false, features = ["std"] }
 syntect = { version = "5.3.0", default-features = false, features = ["default-syntaxes", "default-themes", "plist-load", "regex-fancy"] }
 tempfile = "3.21.0"
 typst-syntax = "0.15.1"

@@ -1,4 +1,7 @@
-use std::path::Path;
+use std::{
+    path::Path,
+    sync::{Arc, LazyLock},
+};
 
 use eframe::egui::{Color32, Stroke, TextFormat, text::LayoutJob};
 use syntect::{
@@ -13,8 +16,8 @@ use crate::theme::{self, METRICS};
 /// Syntax highlighting for non-Typst text files, backed by Syntect's bundled
 /// Sublime grammars. Typst keeps using its own incremental parser.
 pub struct GenericSyntaxHighlighter {
-    syntaxes: SyntaxSet,
-    themes: ThemeSet,
+    syntaxes: Arc<SyntaxSet>,
+    themes: Arc<ThemeSet>,
     custom_theme: Option<Theme>,
     cached_source: String,
     cached_extension: Option<String>,
@@ -26,9 +29,15 @@ pub struct GenericSyntaxHighlighter {
 
 impl Default for GenericSyntaxHighlighter {
     fn default() -> Self {
+        // Hover rendering can construct a highlighter every frame. Decode the
+        // bundled grammar/theme databases only once, shared across windows.
+        static SYNTAXES: LazyLock<Arc<SyntaxSet>> =
+            LazyLock::new(|| Arc::new(SyntaxSet::load_defaults_newlines()));
+        static THEMES: LazyLock<Arc<ThemeSet>> =
+            LazyLock::new(|| Arc::new(ThemeSet::load_defaults()));
         Self {
-            syntaxes: SyntaxSet::load_defaults_newlines(),
-            themes: ThemeSet::load_defaults(),
+            syntaxes: SYNTAXES.clone(),
+            themes: THEMES.clone(),
             custom_theme: None,
             cached_source: String::new(),
             cached_extension: None,

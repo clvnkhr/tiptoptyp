@@ -9,7 +9,7 @@ For any change that can affect layout, preview rendering, native child views,
 themes, controls, menus, dialogs, or screenshots:
 
 1. Run the focused Rust tests while iterating.
-2. Capture a fresh deterministic app-window screenshot for the changed scene:
+2. Capture a fresh deterministic viewport framebuffer for the changed scene:
 
    ```sh
    cargo run --release -- \
@@ -22,6 +22,8 @@ themes, controls, menus, dialogs, or screenshots:
 
    Replace `main` with the affected scene. The accepted scene and framebuffer
    target contract is documented in `docs/ui-qa-screenshots.md`.
+   These PNGs are not a true desktop screenshot: a native child viewport is
+   captured separately and is not composited with the root app window.
 3. Inspect the resulting PNG, not just the command output. Check alignment,
    clipping, edges, transparency, focus state, and the changed interaction.
    The PNG must be a new capture under `.tiptoptyp/screenshots`; a stale file
@@ -36,7 +38,10 @@ themes, controls, menus, dialogs, or screenshots:
 
    The trace reports the available, clipped egui, native, viewport, and scale
    rectangles. This is required because native child views are outside egui's
-   framebuffer clip and cannot be verified by an app-window screenshot alone.
+   framebuffer clip and cannot be verified by a viewport framebuffer alone.
+   Do not describe a viewport PNG as proof of the composed desktop geometry;
+   use an approved whole-window observation when available, or report that
+   composition could not be visually verified.
 5. If the change updates a maintained visual contract, regenerate the stable
    gallery and validate it:
 

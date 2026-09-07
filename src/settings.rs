@@ -14,6 +14,7 @@ pub(crate) const DEFAULT_HOVER_DELAY_MS: u64 = 300;
 pub(crate) const DEFAULT_HOVER_FADE_MS: u64 = 90;
 pub(crate) const MAX_RECENT_WORKSPACES: usize = 10;
 pub(crate) const SYSTEM_THEME_ID: &str = "system";
+pub(crate) const DEFAULT_UI_SCALE_PERCENT: u16 = 100;
 
 /// The interface appearance selected by the user.
 ///
@@ -133,7 +134,10 @@ impl SourcePreviewTrigger {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::DoubleClick => "Double-click",
-            Self::ModifierClick => "Command/Ctrl-click",
+            #[cfg(target_os = "macos")]
+            Self::ModifierClick => "Command-click",
+            #[cfg(not(target_os = "macos"))]
+            Self::ModifierClick => "Control-click",
             Self::Disabled => "Disabled",
         }
     }
@@ -143,9 +147,10 @@ impl SourcePreviewTrigger {
             Self::DoubleClick => {
                 "Double-click source text to reveal it in the interactive preview."
             }
-            Self::ModifierClick => {
-                "Command-click on macOS or Ctrl-click elsewhere to reveal source in the preview."
-            }
+            #[cfg(target_os = "macos")]
+            Self::ModifierClick => "Command-click source text to reveal it in the preview.",
+            #[cfg(not(target_os = "macos"))]
+            Self::ModifierClick => "Control-click source text to reveal it in the preview.",
             Self::Disabled => "Source-to-preview mouse navigation is disabled.",
         }
     }
@@ -221,6 +226,16 @@ pub(crate) struct AppSettings {
     pub(crate) auto_save_delay_ms: u64,
     pub(crate) hover_delay_ms: u64,
     pub(crate) hover_fade_ms: u64,
+    /// Scale applied to the application chrome and editor UI.
+    pub(crate) ui_scale_percent: u16,
+    /// Use the editor's monospace family for interface text as well.
+    pub(crate) ui_font_monospace: bool,
+    /// Optional user-provided TTF/OTF/TTC used for interface text.
+    #[serde(default)]
+    pub(crate) ui_font_path: Option<String>,
+    /// Keep the in-window File/Edit/View controls visible beside the document
+    /// title. Native macOS menus remain available when this is disabled.
+    pub(crate) titlebar_menus: bool,
     /// Optional Typst-only style layers for each interface appearance.
     pub(crate) typst_overrides: TypstOverrideThemes,
     /// Most recently used canonical workspace roots, newest first.
@@ -251,6 +266,10 @@ impl Default for AppSettings {
             auto_save_delay_ms: 750,
             hover_delay_ms: DEFAULT_HOVER_DELAY_MS,
             hover_fade_ms: DEFAULT_HOVER_FADE_MS,
+            ui_scale_percent: DEFAULT_UI_SCALE_PERCENT,
+            ui_font_monospace: false,
+            ui_font_path: None,
+            titlebar_menus: true,
             typst_overrides: TypstOverrideThemes::default(),
             recent_workspaces: Vec::new(),
             last_opened_files: BTreeMap::new(),
@@ -592,6 +611,10 @@ mod tests {
             auto_save_delay_ms: 1_500,
             hover_delay_ms: 450,
             hover_fade_ms: 120,
+            ui_scale_percent: 115,
+            ui_font_monospace: true,
+            ui_font_path: Some("/fonts/Example.ttf".to_owned()),
+            titlebar_menus: false,
             typst_overrides,
             last_opened_files: BTreeMap::from([(
                 "/workspace".to_owned(),
@@ -637,6 +660,10 @@ mod tests {
         assert_eq!(partial.auto_save_delay_ms, 750);
         assert_eq!(partial.hover_delay_ms, DEFAULT_HOVER_DELAY_MS);
         assert_eq!(partial.hover_fade_ms, DEFAULT_HOVER_FADE_MS);
+        assert_eq!(partial.ui_scale_percent, DEFAULT_UI_SCALE_PERCENT);
+        assert!(!partial.ui_font_monospace);
+        assert_eq!(partial.ui_font_path, None);
+        assert!(partial.titlebar_menus);
         assert_eq!(partial.typst_overrides, TypstOverrideThemes::default());
         assert!(partial.last_opened_files.is_empty());
         assert!(partial.preview_files.is_empty());

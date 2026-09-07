@@ -1,4 +1,7 @@
-use eframe::egui::{Color32, text::LayoutJob};
+use eframe::egui::{
+    Color32,
+    text::{ByteIndex, LayoutJob, LayoutSection},
+};
 #[cfg(test)]
 use eframe::egui::{Stroke, TextFormat};
 use typst_syntax::{LinkedNode, Source, SyntaxKind, Tag};
@@ -19,6 +22,7 @@ pub struct SyntaxHighlighter {
     cached_job: LayoutJob,
     has_cache: bool,
     cached_syntect_revision: u64,
+    cached_code_mode: bool,
     styles: ResolvedTypstStyles,
 }
 
@@ -30,6 +34,7 @@ impl Default for SyntaxHighlighter {
             cached_job: LayoutJob::default(),
             has_cache: false,
             cached_syntect_revision: 0,
+            cached_code_mode: false,
             styles: ResolvedTypstStyles::default(),
         }
     }
@@ -49,12 +54,43 @@ impl SyntaxHighlighter {
         dark_mode: bool,
         syntect: &GenericSyntaxHighlighter,
     ) -> LayoutJob {
-        let source_changed = self.parsed_source.text() != source;
+        self.highlight_mode(source, dark_mode, syntect, false)
+    }
+
+    /// Highlight a Typst snippet as code, matching the editor's `#{...}` mode.
+    ///
+    /// Typst parses bare fenced payloads as markup, which makes words such as
+    /// `let` look like ordinary prose. Wrapping the payload in a synthetic
+    /// code-mode expression gives the parser the same context as the editor;
+    /// the synthetic delimiters are removed again before returning the job.
+    pub(crate) fn highlight_code(
+        &mut self,
+        source: &str,
+        dark_mode: bool,
+        syntect: &GenericSyntaxHighlighter,
+    ) -> LayoutJob {
+        self.highlight_mode(source, dark_mode, syntect, true)
+    }
+
+    fn highlight_mode(
+        &mut self,
+        source: &str,
+        dark_mode: bool,
+        syntect: &GenericSyntaxHighlighter,
+        code_mode: bool,
+    ) -> LayoutJob {
+        let parse_source = if code_mode {
+            format!("#{{{source}}}")
+        } else {
+            source.to_owned()
+        };
+        let source_changed = self.parsed_source.text() != parse_source;
         let syntect_revision = syntect.theme_revision();
         if self.has_cache
             && !source_changed
             && self.cached_dark_mode == dark_mode
             && self.cached_syntect_revision == syntect_revision
+            && self.cached_code_mode == code_mode
         {
             return self.cached_job.clone();
         }
@@ -63,7 +99,7 @@ impl SyntaxHighlighter {
             // `replace` computes the common prefix/suffix and reparses only the
             // changed syntax-tree region. It is the incremental API supplied by
             // Typst itself.
-            self.parsed_source.replace(source);
+            self.parsed_source.replace(&parse_source);
         }
 
         let mut job = LayoutJob::default();
@@ -73,10 +109,13 @@ impl SyntaxHighlighter {
             &root,
             None,
             dark_mode,
-            source,
+            &parse_source,
             &self.styles,
             syntect,
         );
+        if code_mode {
+            trim_layout_job(&mut job, 2, 1);
+        }
         job.wrap.break_anywhere = false;
 
         // TextEdit requires the galley's byte positions to map exactly back to
@@ -86,10 +125,36 @@ impl SyntaxHighlighter {
 
         self.cached_dark_mode = dark_mode;
         self.cached_syntect_revision = syntect_revision;
+        self.cached_code_mode = code_mode;
         self.cached_job = job.clone();
         self.has_cache = true;
         job
     }
+}
+
+fn trim_layout_job(job: &mut LayoutJob, prefix_bytes: usize, suffix_bytes: usize) {
+    let end = job.text.len().saturating_sub(suffix_bytes);
+    let start = prefix_bytes.min(end);
+    let text = job.text[start..end].to_owned();
+    let sections = job
+        .sections
+        .iter()
+        .filter_map(|section| {
+            let section_start = section.byte_range.start.0.max(start);
+            let section_end = section.byte_range.end.0.min(end);
+            (section_start < section_end).then(|| LayoutSection {
+                leading_space: if section_start == section.byte_range.start.0 {
+                    section.leading_space
+                } else {
+                    0.0
+                },
+                byte_range: ByteIndex(section_start - start)..ByteIndex(section_end - start),
+                format: section.format.clone(),
+            })
+        })
+        .collect();
+    job.text = text;
+    job.sections = sections;
 }
 
 /// Walk leaves in source order. A tag on the closest node wins; this preserves
@@ -330,6 +395,28 @@ mod tests {
         assert_eq!(
             format_at(&job, as_byte).color,
             format_for(Some(Tag::Keyword), true).color
+        );
+    }
+
+    #[test]
+    fn code_fenced_typst_payload_uses_code_mode_without_delimiters() {
+        let source = "let value = 42\ntext(value)";
+        let mut highlighter = SyntaxHighlighter::default();
+        let syntect = GenericSyntaxHighlighter::default();
+        let job = highlighter.highlight_code(source, true, &syntect);
+
+        assert_exact_mapping(&job, source);
+        assert_eq!(
+            format_at(&job, source.find("let").unwrap()).color,
+            format_for(Some(Tag::Keyword), true).color
+        );
+        assert_eq!(
+            format_at(&job, source.find("42").unwrap()).color,
+            format_for(Some(Tag::Number), true).color
+        );
+        assert_eq!(
+            format_at(&job, source.find("text").unwrap()).color,
+            format_for(Some(Tag::Function), true).color
         );
     }
 

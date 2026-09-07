@@ -175,7 +175,8 @@ and provide notarization credentials.
 | Format Typst | Option/Alt-Shift-F |
 | Settings | Cmd/Ctrl-Comma |
 | Refresh build and project | Cmd/Ctrl-R |
-| Rasterised preview zoom | Cmd/Ctrl-Plus, Minus, or 0 |
+| Interface scale | Cmd/Ctrl-Plus or Minus |
+| Rasterised preview zoom | Cmd/Ctrl-Option/Alt-Plus, Minus, or 0 |
 | App-only UI screenshot | Cmd/Ctrl-Shift-F12 |
 
 ## Preview architecture

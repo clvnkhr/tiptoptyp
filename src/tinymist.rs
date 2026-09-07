@@ -1900,7 +1900,7 @@ fn flatten_hover_contents(contents: &Value) -> Option<String> {
             let language = object.get("language").and_then(Value::as_str);
             Some(language.map_or_else(
                 || value.to_owned(),
-                |language| format!("{language}\n{value}"),
+                |language| format!("```{}\n{value}\n```", language.trim()),
             ))
         }
         Value::Null | Value::Bool(_) | Value::Number(_) => None,
@@ -2504,7 +2504,7 @@ mod tests {
         });
         assert_eq!(
             parse_hover_result(&marked).0.as_deref(),
-            Some("typst\n#let value = 1\n\nA definition")
+            Some("```typst\n#let value = 1\n```\n\nA definition")
         );
         assert_eq!(parse_hover_result(&Value::Null), (None, None));
         assert_eq!(parse_hover_result(&json!({ "contents": [] })), (None, None));

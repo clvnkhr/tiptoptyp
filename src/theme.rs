@@ -4,7 +4,7 @@
 //! describe rendered geometry, typography, color, or UI motion and are shared
 //! by the main and child viewports.
 
-use std::{cell::Cell, sync::Arc, time::Duration};
+use std::{cell::Cell, path::Path, sync::Arc, time::Duration};
 
 use eframe::egui::{self, Align, Color32, FontFamily, FontId, Layout, Rect, RichText, Vec2};
 
@@ -92,6 +92,21 @@ pub fn editor_font() -> FontId {
 
 const EDITOR_REGULAR_FAMILY: &str = "tiptoptyp-editor-regular";
 const EDITOR_STRONG_FAMILY: &str = "tiptoptyp-editor-strong";
+const CUSTOM_UI_FAMILY: &str = "tiptoptyp-custom-ui";
+const CUSTOM_UI_DATA: &str = "tiptoptyp-custom-ui-data";
+
+/// Read and validate a user-provided font before giving it to egui.
+///
+/// `FontDefinitions` panics when it receives malformed font bytes, so this
+/// validation is deliberately performed at the file-picker boundary and again
+/// during runtime reload. Collections are accepted through face index zero.
+pub fn load_ui_font_bytes(path: &Path) -> Result<Vec<u8>, String> {
+    let bytes = std::fs::read(path)
+        .map_err(|error| format!("Could not read UI font {}: {error}", path.display()))?;
+    skrifa::FontRef::from_index(&bytes, 0)
+        .map_err(|_| format!("{} is not a readable TTF, OTF, or TTC font", path.display()))?;
+    Ok(bytes)
+}
 
 /// Select the editor's regular or strong font role.
 ///
@@ -109,8 +124,13 @@ pub fn editor_font_with_weight(bold: bool) -> FontId {
 
 /// Register the named strong editor role while retaining every bundled glyph
 /// fallback. This is called once during application construction.
-pub fn configure_editor_fonts(context: &egui::Context) {
+pub fn configure_editor_fonts(context: &egui::Context, custom_ui_font: Option<&Path>) -> bool {
     let mut definitions = egui::FontDefinitions::default();
+    let proportional_fallback = definitions
+        .families
+        .get(&FontFamily::Proportional)
+        .cloned()
+        .unwrap_or_default();
     let fallback = definitions
         .families
         .get(&FontFamily::Monospace)
@@ -118,6 +138,17 @@ pub fn configure_editor_fonts(context: &egui::Context) {
         .unwrap_or_default();
     let mut regular = fallback.clone();
     let mut strong = fallback;
+    let mut custom_ui_family = custom_ui_font
+        .and_then(|path| load_ui_font_bytes(path).ok())
+        .map(|bytes| {
+            definitions.font_data.insert(
+                CUSTOM_UI_DATA.to_owned(),
+                Arc::new(egui::FontData::from_owned(bytes)),
+            );
+            let mut family = vec![CUSTOM_UI_DATA.to_owned()];
+            family.extend(proportional_fallback.iter().cloned());
+            family
+        });
 
     // Use the installed system font at runtime; no third-party font bytes are
     // copied into the repository or application bundle.
@@ -139,13 +170,75 @@ pub fn configure_editor_fonts(context: &egui::Context) {
         strong.insert(0, BOLD_FACE.to_owned());
     }
 
+    // Keep Latin editor/UI metrics stable while adding a platform-provided
+    // CJK fallback. These paths are optional: missing fonts simply leave
+    // egui's bundled fallback chain in place, and no font bytes are shipped.
+    let cjk_candidates: &[(&str, &str)] = if cfg!(target_os = "macos") {
+        &[
+            (
+                "tiptoptyp-cjk-pingfang",
+                "/System/Library/Fonts/PingFang.ttc",
+            ),
+            (
+                "tiptoptyp-cjk-hiragino",
+                "/System/Library/Fonts/Hiragino Sans GB.ttc",
+            ),
+        ]
+    } else if cfg!(target_os = "windows") {
+        &[(
+            "tiptoptyp-cjk-microsoft-yahei",
+            "C:\\Windows\\Fonts\\msyh.ttc",
+        )]
+    } else {
+        &[
+            (
+                "tiptoptyp-cjk-noto",
+                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            ),
+            (
+                "tiptoptyp-cjk-noto-truetype",
+                "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            ),
+        ]
+    };
+    for (name, path) in cjk_candidates {
+        let path = Path::new(path);
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
+        let data = egui::FontData::from_owned(bytes);
+        definitions
+            .font_data
+            .insert((*name).to_owned(), Arc::new(data));
+        for family in [FontFamily::Proportional, FontFamily::Monospace] {
+            definitions
+                .families
+                .entry(family)
+                .or_default()
+                .push((*name).to_owned());
+        }
+        regular.push((*name).to_owned());
+        strong.push((*name).to_owned());
+        if let Some(family) = &mut custom_ui_family {
+            family.push((*name).to_owned());
+        }
+        break;
+    }
+
     definitions
         .families
         .insert(FontFamily::Name(Arc::from(EDITOR_REGULAR_FAMILY)), regular);
     definitions
         .families
         .insert(FontFamily::Name(Arc::from(EDITOR_STRONG_FAMILY)), strong);
+    let custom_ui_loaded = custom_ui_family.is_some();
+    if let Some(family) = custom_ui_family {
+        definitions
+            .families
+            .insert(FontFamily::Name(Arc::from(CUSTOM_UI_FAMILY)), family);
+    }
     context.set_fonts(definitions);
+    custom_ui_loaded
 }
 
 /// Compact monospace metadata drawn alongside editor content.
@@ -261,8 +354,6 @@ pub struct ToolbarMetrics {
 pub struct PopupMetrics {
     pub card_inner_margin: i8,
     pub menu_outer_margin: i8,
-    pub menu_horizontal_chrome: f32,
-    pub menu_vertical_chrome: f32,
     pub viewport_edge: f32,
     pub rename_window_inset: f32,
     pub rename_max_width: f32,
@@ -289,6 +380,7 @@ pub struct TextMetrics {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EditorMetrics {
     pub find_field_width: f32,
+    pub find_overlay_max_width: f32,
     pub wrapped_minimum_width: f32,
     pub source_character_width: f32,
     pub diagnostic_character_width: f32,
@@ -375,6 +467,7 @@ pub struct MenuMetrics {
     pub edit_size: Vec2,
     pub workspace_size: Vec2,
     pub editor_size: Vec2,
+    pub view_size: Vec2,
     pub status_log_size: Vec2,
 }
 
@@ -474,8 +567,6 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
     popup: PopupMetrics {
         card_inner_margin: 9,
         menu_outer_margin: 7,
-        menu_horizontal_chrome: 20.0,
-        menu_vertical_chrome: 14.0,
         viewport_edge: 4.0,
         rename_window_inset: 52.0,
         rename_max_width: 340.0,
@@ -488,7 +579,7 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
         tooltip_width: 360.0,
         tooltip_text_padding: 18.0,
         tooltip_min_width: 96.0,
-        tooltip_max_width: 320.0,
+        tooltip_max_width: 620.0,
         tooltip_title_height: 26.0,
         tooltip_min_height: 68.0,
         tooltip_max_height: 256.0,
@@ -498,6 +589,7 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
     },
     editor: EditorMetrics {
         find_field_width: 180.0,
+        find_overlay_max_width: 620.0,
         wrapped_minimum_width: 24.0,
         source_character_width: 8.5,
         diagnostic_character_width: 7.2,
@@ -566,10 +658,11 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
     status_chip: StatusChipMetrics { vertical_margin: 3 },
     menu: MenuMetrics {
         row_height: 24.0,
-        file_size: Vec2::new(260.0, 220.0),
+        file_size: Vec2::new(280.0, 240.0),
         edit_size: Vec2::new(280.0, 320.0),
         workspace_size: Vec2::new(220.0, 182.0),
         editor_size: Vec2::new(220.0, 240.0),
+        view_size: Vec2::new(220.0, 190.0),
         status_log_size: Vec2::new(360.0, 250.0),
     },
     settings: SettingsMetrics {
@@ -787,6 +880,36 @@ pub fn configure_styles(context: &egui::Context) {
         style
             .text_styles
             .insert(egui::TextStyle::Monospace, editor_font());
+    });
+}
+
+/// Apply the user-selected interface typeface while keeping the editor's
+/// syntax roles independent. This is intentionally a small, explicit set of
+/// text roles: changing the UI font must not make code samples lose their
+/// monospace face.
+pub fn configure_ui_font(context: &egui::Context, monospace: bool, custom_loaded: bool) {
+    let family = if custom_loaded {
+        FontFamily::Name(Arc::from(CUSTOM_UI_FAMILY))
+    } else if monospace {
+        FontFamily::Monospace
+    } else {
+        FontFamily::Proportional
+    };
+    context.all_styles_mut(|style| {
+        for text_style in [
+            egui::TextStyle::Body,
+            egui::TextStyle::Button,
+            egui::TextStyle::Heading,
+            egui::TextStyle::Small,
+        ] {
+            let size = style
+                .text_styles
+                .get(&text_style)
+                .map_or(TYPE.content, |font| font.size);
+            style
+                .text_styles
+                .insert(text_style, FontId::new(size, family.clone()));
+        }
     });
 }
 
@@ -1176,6 +1299,41 @@ mod tests {
     fn regular_and_strong_editor_fonts_have_distinct_family_roles() {
         assert_ne!(editor_font(), editor_font_with_weight(true));
         assert_eq!(editor_font(), editor_font_with_weight(false));
+    }
+
+    #[test]
+    fn custom_ui_font_is_validated_loaded_and_keeps_editor_font_independent() {
+        let definitions = egui::FontDefinitions::default();
+        let source_font = definitions
+            .font_data
+            .values()
+            .next()
+            .expect("egui ships a fallback font");
+        let directory = tempfile::tempdir().expect("create temporary font directory");
+        let path = directory.path().join("custom-ui.ttf");
+        std::fs::write(&path, source_font.font.as_ref()).expect("write test font");
+
+        let context = egui::Context::default();
+        assert!(load_ui_font_bytes(&path).is_ok());
+        assert!(configure_editor_fonts(&context, Some(&path)));
+        configure_styles(&context);
+        configure_ui_font(&context, false, true);
+
+        let body = context.style_of(egui::Theme::Light);
+        assert_eq!(
+            body.text_styles[&egui::TextStyle::Body].family,
+            FontFamily::Name(Arc::from(CUSTOM_UI_FAMILY))
+        );
+        assert_eq!(body.text_styles[&egui::TextStyle::Monospace], editor_font());
+    }
+
+    #[test]
+    fn malformed_custom_ui_font_is_rejected_before_egui_loads_it() {
+        let directory = tempfile::tempdir().expect("create temporary font directory");
+        let path = directory.path().join("not-a-font.ttf");
+        std::fs::write(&path, b"not a font").expect("write malformed font");
+
+        assert!(load_ui_font_bytes(&path).is_err());
     }
 
     #[test]
