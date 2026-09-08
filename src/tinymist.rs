@@ -94,26 +94,6 @@ impl fmt::Display for TinymistError {
 impl std::error::Error for TinymistError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PreviewMode {
-    #[default]
-    Document,
-    #[expect(
-        dead_code,
-        reason = "supported by Tinymist; the MVP UI exposes document mode"
-    )]
-    Slide,
-}
-
-impl PreviewMode {
-    fn as_arg(self) -> &'static str {
-        match self {
-            Self::Document => "document",
-            Self::Slide => "slide",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum InvertColors {
     Never,
     #[default]
@@ -131,26 +111,9 @@ impl InvertColors {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PreviewOptions {
-    pub mode: PreviewMode,
     pub invert_colors: InvertColors,
-    pub partial_rendering: bool,
-}
-
-impl Default for PreviewOptions {
-    fn default() -> Self {
-        Self {
-            mode: PreviewMode::Document,
-            invert_colors: InvertColors::Auto,
-            // Tinymist labels this optimisation experimental. In long
-            // documents its visible-page cache can fail to refill after large
-            // scroll/zoom jumps, leaving a blank viewer. A desktop editor can
-            // afford the complete document representation and prioritises
-            // deterministic navigation.
-            partial_rendering: false,
-        }
-    }
 }
 
 impl PreviewOptions {
@@ -165,10 +128,13 @@ impl PreviewOptions {
         arguments.extend([
             "--data-plane-host=127.0.0.1:0".to_owned(),
             "--control-plane-host=127.0.0.1:0".to_owned(),
-            format!("--preview-mode={}", self.mode.as_arg()),
+            "--preview-mode=document".to_owned(),
             format!("--invert-colors={}", self.invert_colors.as_arg()),
         ]);
-        arguments.push(format!("--partial-rendering={}", self.partial_rendering));
+        // Tinymist labels partial rendering experimental. Its visible-page
+        // cache can fail to refill after large scroll or zoom jumps, so the
+        // desktop editor deliberately requests the complete document.
+        arguments.push("--partial-rendering=false".to_owned());
         // This is a native application: opening the system browser would be a
         // surprising side effect and could expose a stale preview tab.
         arguments.push("--no-open".to_owned());

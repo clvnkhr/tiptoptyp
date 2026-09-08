@@ -1,6 +1,5 @@
 mod app;
 mod asset;
-mod builtin_themes;
 mod child_view;
 mod compiler;
 mod diagnostics;
@@ -20,10 +19,8 @@ mod project_index;
 mod screenshot;
 mod search;
 mod settings;
-mod sublime_theme;
 mod syntax_theme;
 mod theme;
-mod theme_transform;
 mod tinymist;
 mod toolchain;
 mod windowing;
@@ -33,6 +30,9 @@ mod workspace;
 
 use eframe::egui;
 use screenshot::{CaptureController, LaunchOptions, ScreenshotApp};
+use tiptoptyp::themes::{
+    builtin as builtin_themes, sublime as sublime_theme, transform as theme_transform,
+};
 use windowing::AppShell;
 
 fn main() -> eframe::Result {

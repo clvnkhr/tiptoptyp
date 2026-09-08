@@ -29,8 +29,6 @@ const DARK_BACKGROUND_LUMINANCE_THRESHOLD: f32 = 0.35;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ThemeFormat {
-    // Standalone importer tests compile this module without the app resolver.
-    #[allow(dead_code)]
     Builtin,
     TextMate,
     SublimeColorScheme,

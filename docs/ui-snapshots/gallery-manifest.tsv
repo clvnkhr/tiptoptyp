@@ -1,0 +1,69 @@
+# The stable UI gallery contract. Fields are tab-separated.
+#
+# theme <id> <filename-slug>
+# scene <id> <viewport-target> <filename-stem> <role> <corner-policy> <comparison-group>
+# scene-theme <theme-id>
+# variant <phase> <theme-id> <scene-id> <invert> <hue-shift> <profile-slug>
+#
+# Scene roles are theme-matrix, component, or targeted. Only theme-matrix and
+# component scenes enter the default checked-in gallery. Targeted scenes remain
+# available through TIPTOPTYP_UI_GALLERY_SCENES. A dash disables an optional
+# policy field.
+theme	tiptop-light	tiptop-light
+theme	tiptop-dark	tiptop-dark
+theme	paper-light	paper-light
+theme	paper-dark	paper-dark
+theme	ocean-light	ocean-light
+theme	ocean-dark	ocean-dark
+theme	forest-light	forest-light
+theme	forest-dark	forest-dark
+theme	catppuccin-latte	catppuccin-latte
+theme	catppuccin-frappe	catppuccin-frappe
+theme	catppuccin-macchiato	catppuccin-macchiato
+theme	catppuccin-mocha	catppuccin-mocha
+theme	solarized-light	solarized-light
+theme	solarized-dark	solarized-dark
+theme	gruvbox-light	gruvbox-light
+theme	gruvbox-dark	gruvbox-dark
+theme	github-light-default	github-light-default
+theme	github-dark-default	github-dark-default
+theme	rose-pine-dawn	rose-pine-dawn
+theme	rose-pine	rose-pine
+theme	tokyo-night-light	tokyo-night-light
+theme	tokyo-night	tokyo-night
+theme	kanagawa-lotus	kanagawa-lotus
+theme	kanagawa-wave	kanagawa-wave
+theme	everforest-light	everforest-light
+theme	everforest-dark	everforest-dark
+theme	ayu-light	ayu-light
+theme	ayu-dark	ayu-dark
+theme	flexoki-light	flexoki-light
+theme	flexoki-dark	flexoki-dark
+theme	dracula-alucard	dracula-alucard
+theme	dracula	dracula
+scene	main	main	main	theme-matrix	-	-
+scene	problems-panel	main	main-problems-panel	component	-	-
+scene	find-replace	main	main-find-replace	component	-	-
+scene	preview-compiling	main	main-preview-compiling	component	-	-
+scene	file-menu	popup	popup-file-menu	component	transparent	-
+scene	edit-menu	popup	popup-edit-menu	component	transparent	-
+scene	editor-context-menu	popup	popup-editor-context-menu	component	transparent	-
+scene	explorer-context-menu	popup	popup-explorer-context-menu	component	transparent	-
+scene	settings-window	settings	settings-settings-window	component	-	settings-state
+scene	settings-theme-picker	settings	settings-settings-theme-picker	component	-	settings-state
+scene	settings-dark-theme-picker	settings	settings-settings-dark-theme-picker	component	-	settings-state
+scene	settings-tooltip	settings	settings-settings-tooltip	component	-	settings-state
+scene	diagnostic-tooltip	diagnostic	diagnostic-diagnostic-tooltip	component	transparent	-
+scene	save-dialog	modal	modal-save-dialog	component	transparent	-
+scene	alert-dialog	modal	modal-alert-dialog	component	transparent	-
+scene	overwrite-dialog	modal	modal-overwrite-dialog	component	transparent	-
+scene	rename-dialog	rename	rename-rename-dialog	component	transparent	-
+scene	workspace-chooser	workspace	workspace-workspace-chooser	component	transparent	-
+scene	typst-overrides-window	typst-overrides	typst-overrides-typst-overrides-window	targeted	-	-
+scene	function-tooltip	diagnostic	diagnostic-function-tooltip	targeted	transparent	-
+scene	document-font-selector	popup	popup-document-font-selector	targeted	transparent	-
+scene	status-log	popup	popup-status-log	targeted	transparent	-
+scene-theme	catppuccin-latte
+scene-theme	catppuccin-mocha
+variant	before-components	catppuccin-latte	main	1	30	catppuccin-latte-inverted-hue-p30
+variant	after-components	catppuccin-latte	file-menu	1	30	catppuccin-latte-inverted-hue-p30

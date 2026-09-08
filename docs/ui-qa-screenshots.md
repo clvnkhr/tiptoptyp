@@ -146,8 +146,12 @@ states, plus transformed main and elevated-menu examples to verify that the
 ordered color operations reach every viewport. The complete checked-in matrix
 is 68 decoded PNGs. The remaining deterministic scenes are still available for
 targeted local captures and become gallery slots when their images are
-committed. It uses `docs/ui-snapshots/theme-fixture.typ` by default; pass a
-fixture path as the first argument to override it. For a quicker review, use
+committed and their manifest role is promoted from `targeted` to `component`.
+`docs/ui-snapshots/gallery-manifest.tsv` is the shared source of truth for
+theme order, scene targets, stable filename stems, pixel policies, and
+transformed variants. It uses `docs/ui-snapshots/theme-fixture.typ` by default;
+pass a fixture path as the first argument to override it. For a quicker review,
+use
 space-separated `TIPTOPTYP_UI_GALLERY_THEMES`,
 `TIPTOPTYP_UI_GALLERY_SCENE_THEMES`, or `TIPTOPTYP_UI_GALLERY_SCENES`
 overrides. The script launches only tiptoptyp's framebuffer capture path; it

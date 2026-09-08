@@ -787,7 +787,7 @@ fn rasterize_pdf_with_program(
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|error| command_error("pdftoppm", error))?;
+        .map_err(rasterizer_command_error)?;
 
     let stderr = render_child
         .stderr
@@ -1102,17 +1102,12 @@ fn preview_page_number(path: &Path) -> u32 {
         .unwrap_or(u32::MAX)
 }
 
-fn command_error(command: &str, error: std::io::Error) -> String {
+fn rasterizer_command_error(error: std::io::Error) -> String {
     if error.kind() == std::io::ErrorKind::NotFound {
-        match command {
-            "typst" => "Typst was not found. Install the `typst` CLI and make sure it is on PATH."
-                .to_owned(),
-            "pdftoppm" => "Poppler was not found. Install `pdftoppm` (usually provided by the `poppler` package) and make sure it is on PATH."
-                .to_owned(),
-            _ => format!("Could not start `{command}`: {error}"),
-        }
+        "Poppler was not found. Install `pdftoppm` (usually provided by the `poppler` package) and make sure it is on PATH."
+            .to_owned()
     } else {
-        format!("Could not start `{command}`: {error}")
+        format!("Could not start `pdftoppm`: {error}")
     }
 }
 

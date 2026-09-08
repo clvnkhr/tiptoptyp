@@ -1268,6 +1268,93 @@ fn save_color_image(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::builtin_themes;
+    use std::collections::BTreeSet;
+
+    const GALLERY_MANIFEST: &str = include_str!("../docs/ui-snapshots/gallery-manifest.tsv");
+
+    #[derive(Debug)]
+    struct GalleryScene<'a> {
+        id: &'a str,
+        target: &'a str,
+        filename_stem: &'a str,
+        role: &'a str,
+        corner_policy: &'a str,
+        comparison_group: &'a str,
+    }
+
+    #[derive(Debug)]
+    struct GalleryVariant<'a> {
+        phase: &'a str,
+        theme: &'a str,
+        scene: &'a str,
+        invert: &'a str,
+        hue_shift: &'a str,
+        profile_slug: &'a str,
+    }
+
+    #[derive(Debug, Default)]
+    struct GalleryContract<'a> {
+        themes: Vec<(&'a str, &'a str)>,
+        scenes: Vec<GalleryScene<'a>>,
+        scene_themes: Vec<&'a str>,
+        variants: Vec<GalleryVariant<'a>>,
+    }
+
+    fn gallery_contract() -> GalleryContract<'static> {
+        let mut contract = GalleryContract::default();
+        for (line_index, line) in GALLERY_MANIFEST.lines().enumerate() {
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let fields = line.split('\t').collect::<Vec<_>>();
+            match fields.as_slice() {
+                ["theme", id, slug] => contract.themes.push((id, slug)),
+                [
+                    "scene",
+                    id,
+                    target,
+                    stem,
+                    role,
+                    corner_policy,
+                    comparison_group,
+                ] => {
+                    contract.scenes.push(GalleryScene {
+                        id,
+                        target,
+                        filename_stem: stem,
+                        role,
+                        corner_policy,
+                        comparison_group,
+                    });
+                }
+                ["scene-theme", id] => contract.scene_themes.push(id),
+                [
+                    "variant",
+                    phase,
+                    theme,
+                    scene,
+                    invert,
+                    hue_shift,
+                    profile_slug,
+                ] => {
+                    contract.variants.push(GalleryVariant {
+                        phase,
+                        theme,
+                        scene,
+                        invert,
+                        hue_shift,
+                        profile_slug,
+                    });
+                }
+                _ => panic!(
+                    "invalid gallery manifest record on line {}: {line:?}",
+                    line_index + 1
+                ),
+            }
+        }
+        contract
+    }
 
     fn no_environment(_: &str) -> Option<OsString> {
         None
@@ -1452,96 +1539,118 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_scenes_have_stable_names_and_real_framebuffer_targets() {
-        let expected = [
-            (UiSnapshotScene::Main, "main", "main"),
-            (UiSnapshotScene::FileMenu, "file-menu", "popup"),
-            (UiSnapshotScene::EditMenu, "edit-menu", "popup"),
-            (
-                UiSnapshotScene::SettingsWindow,
-                "settings-window",
-                "settings",
-            ),
-            (
-                UiSnapshotScene::SettingsThemePicker,
-                "settings-theme-picker",
-                "settings",
-            ),
-            (
-                UiSnapshotScene::SettingsDarkThemePicker,
-                "settings-dark-theme-picker",
-                "settings",
-            ),
-            (
-                UiSnapshotScene::SettingsTooltip,
-                "settings-tooltip",
-                "settings",
-            ),
-            (
-                UiSnapshotScene::TypstOverridesWindow,
-                "typst-overrides-window",
-                "typst-overrides",
-            ),
-            (
-                UiSnapshotScene::DiagnosticTooltip,
-                "diagnostic-tooltip",
-                "diagnostic",
-            ),
-            (
-                UiSnapshotScene::FunctionTooltip,
-                "function-tooltip",
-                "diagnostic",
-            ),
-            (UiSnapshotScene::SaveDialog, "save-dialog", "modal"),
-            (UiSnapshotScene::AlertDialog, "alert-dialog", "modal"),
-            (
-                UiSnapshotScene::OverwriteDialog,
-                "overwrite-dialog",
-                "modal",
-            ),
-            (
-                UiSnapshotScene::EditorContextMenu,
-                "editor-context-menu",
-                "popup",
-            ),
-            (
-                UiSnapshotScene::ExplorerContextMenu,
-                "explorer-context-menu",
-                "popup",
-            ),
-            (
-                UiSnapshotScene::DocumentFontSelector,
-                "document-font-selector",
-                "popup",
-            ),
-            (UiSnapshotScene::StatusLog, "status-log", "popup"),
-            (UiSnapshotScene::RenameDialog, "rename-dialog", "rename"),
-            (
-                UiSnapshotScene::WorkspaceChooser,
-                "workspace-chooser",
-                "workspace",
-            ),
-            (UiSnapshotScene::ProblemsPanel, "problems-panel", "main"),
-            (UiSnapshotScene::FindReplace, "find-replace", "main"),
-            (
-                UiSnapshotScene::PreviewCompiling,
-                "preview-compiling",
-                "main",
-            ),
-        ];
-        assert_eq!(expected.len(), UiSnapshotScene::ALL.len());
-        for (scene, name, target) in expected {
-            assert_eq!(scene.as_str(), name);
-            assert_eq!(UiSnapshotScene::parse(name).unwrap(), scene);
-            assert_eq!(scene.viewport_target(), target);
-            assert_eq!(
-                scene.capture_spec(),
-                CaptureSpec {
-                    target: target.to_owned(),
-                    name: name.to_owned(),
-                }
-            );
+    fn gallery_contract_matches_runtime_theme_scene_and_filename_metadata() {
+        let contract = gallery_contract();
+        let declared_theme_ids = contract
+            .themes
+            .iter()
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>();
+        let runtime_theme_ids = builtin_themes::all()
+            .iter()
+            .map(|theme| theme.id)
+            .collect::<Vec<_>>();
+        assert_eq!(declared_theme_ids, runtime_theme_ids);
+        assert_eq!(
+            contract
+                .themes
+                .iter()
+                .map(|(_, slug)| *slug)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            contract.themes.len(),
+            "gallery theme filename slugs must be unique"
+        );
+        for (id, filename_slug) in &contract.themes {
+            assert_eq!(*filename_slug, safe_slug(id));
         }
+
+        let declared_scene_ids = contract
+            .scenes
+            .iter()
+            .map(|scene| scene.id)
+            .collect::<BTreeSet<_>>();
+        let runtime_scene_ids = UiSnapshotScene::ALL
+            .iter()
+            .map(|scene| scene.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(contract.scenes.len(), UiSnapshotScene::ALL.len());
+        assert_eq!(declared_scene_ids, runtime_scene_ids);
+        assert_eq!(
+            contract
+                .scenes
+                .iter()
+                .map(|scene| scene.filename_stem)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            contract.scenes.len(),
+            "gallery scene filename stems must be unique"
+        );
+
+        let filename_theme = CaptureThemeProfile {
+            name: "gallery-contract".to_owned(),
+            invert: false,
+            hue_shift_degrees: 0,
+        };
+        for declared in &contract.scenes {
+            let scene = UiSnapshotScene::parse(declared.id).unwrap();
+            assert_eq!(declared.target, scene.viewport_target());
+            let capture = scene.capture_spec();
+            assert_eq!(capture.name, declared.id);
+            assert_eq!(capture.target, declared.target);
+            assert_eq!(
+                latest_capture_filename(
+                    &capture.target,
+                    &capture.name,
+                    &filename_theme,
+                    Some(scene),
+                ),
+                format!("{}--gallery-contract.png", declared.filename_stem)
+            );
+            assert!(matches!(
+                declared.role,
+                "theme-matrix" | "component" | "targeted"
+            ));
+            assert!(matches!(declared.corner_policy, "-" | "transparent"));
+            assert!(!declared.comparison_group.is_empty());
+        }
+        assert_eq!(
+            contract
+                .scenes
+                .iter()
+                .filter(|scene| scene.role == "theme-matrix")
+                .map(|scene| scene.id)
+                .collect::<Vec<_>>(),
+            [UiSnapshotScene::Main.as_str()]
+        );
+
+        for theme in &contract.scene_themes {
+            assert!(declared_theme_ids.contains(theme));
+        }
+        for variant in &contract.variants {
+            assert!(matches!(
+                variant.phase,
+                "before-components" | "after-components"
+            ));
+            assert!(declared_theme_ids.contains(&variant.theme));
+            assert!(declared_scene_ids.contains(variant.scene));
+            let profile = CaptureThemeProfile {
+                name: variant.theme.to_owned(),
+                invert: parse_bool(variant.invert).unwrap(),
+                hue_shift_degrees: parse_hue_shift(variant.hue_shift).unwrap(),
+            };
+            assert_eq!(profile.filename_slug(), variant.profile_slug);
+        }
+
+        let component_count = contract
+            .scenes
+            .iter()
+            .filter(|scene| scene.role == "component")
+            .count();
+        let default_output_count = contract.themes.len()
+            + component_count * contract.scene_themes.len()
+            + contract.variants.len();
+        assert_eq!(default_output_count, 68);
     }
 
     #[test]

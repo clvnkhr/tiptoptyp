@@ -424,10 +424,8 @@ impl SearchSession {
     }
 }
 
-/// One-off search used by low-level callers and the audit probe. UI code
-/// should retain a [`SearchSession`] instead.
-#[cfg_attr(not(test), allow(dead_code))]
-pub fn find_all_with_options(
+#[cfg(test)]
+fn find_all_with_options(
     text: &str,
     query: &str,
     case_sensitive: bool,

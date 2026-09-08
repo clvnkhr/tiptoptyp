@@ -67,71 +67,378 @@ if (( capture_timeout_seconds < 1 || capture_timeout_seconds > 3600 )); then
   exit 2
 fi
 
-# Keep this list in the same canonical order as the built-in theme catalog.
-all_builtin_themes=(
-  tiptop-light
-  tiptop-dark
-  paper-light
-  paper-dark
-  ocean-light
-  ocean-dark
-  forest-light
-  forest-dark
-  catppuccin-latte
-  catppuccin-frappe
-  catppuccin-macchiato
-  catppuccin-mocha
-  solarized-light
-  solarized-dark
-  gruvbox-light
-  gruvbox-dark
-  github-light-default
-  github-dark-default
-  rose-pine-dawn
-  rose-pine
-  tokyo-night-light
-  tokyo-night
-  kanagawa-lotus
-  kanagawa-wave
-  everforest-light
-  everforest-dark
-  ayu-light
-  ayu-dark
-  flexoki-light
-  flexoki-dark
-  dracula-alucard
-  dracula
-)
-themes=("${all_builtin_themes[@]}")
+manifest_path="${repository_root}/docs/ui-snapshots/gallery-manifest.tsv"
+if [[ ! -f "${manifest_path}" ]]; then
+  printf 'Gallery manifest does not exist: %s\n' "${manifest_path}" >&2
+  exit 2
+fi
 
-# These component families have stable checked-in PNG slots and run against one
-# representative light theme and one representative dark theme by default.
-# Other deterministic scenes remain available for targeted captures; adding a
-# new scene to this list is intentionally paired with committing its PNGs.
-scenes=(
-  problems-panel
-  find-replace
-  preview-compiling
-  file-menu
-  edit-menu
-  editor-context-menu
-  explorer-context-menu
-  settings-window
-  settings-theme-picker
-  settings-dark-theme-picker
-  settings-tooltip
-  diagnostic-tooltip
-  save-dialog
-  alert-dialog
-  overwrite-dialog
-  rename-dialog
-  workspace-chooser
-)
+catalog_theme_ids=()
+catalog_theme_slugs=()
+catalog_scene_ids=()
+catalog_scene_targets=()
+catalog_scene_stems=()
+catalog_scene_roles=()
+catalog_scene_corner_policies=()
+catalog_scene_comparison_groups=()
+scene_themes=()
+variant_phases=()
+variant_themes=()
+variant_scenes=()
+variant_inverts=()
+variant_hues=()
+variant_profile_slugs=()
 
-scene_themes=(
-  catppuccin-latte
-  catppuccin-mocha
-)
+manifest_token_is_safe() {
+  case "$1" in
+    ''|*[!a-zA-Z0-9._-]*)
+      return 1
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+contains_value() {
+  local needle="$1"
+  local existing
+  shift
+  for existing in "$@"; do
+    if [[ "${existing}" == "${needle}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+manifest_line=0
+while IFS=$'\t' read -r record first second third fourth fifth sixth extra \
+  || [[ -n "${record:-}" ]]; do
+  manifest_line=$((manifest_line + 1))
+  [[ -z "${record}" || "${record}" == \#* ]] && continue
+  case "${record}" in
+    theme)
+      if [[ -z "${first}" || -z "${second}" || -n "${third}" ]]; then
+        printf 'Invalid theme record on gallery manifest line %d.\n' \
+          "${manifest_line}" >&2
+        exit 2
+      fi
+      if ! manifest_token_is_safe "${first}" \
+        || ! manifest_token_is_safe "${second}"; then
+        printf 'Unsafe theme token on gallery manifest line %d.\n' \
+          "${manifest_line}" >&2
+        exit 2
+      fi
+      if contains_value "${first}" \
+        ${catalog_theme_ids[@]+"${catalog_theme_ids[@]}"}; then
+        printf 'Duplicate theme id on gallery manifest line %d: %s\n' \
+          "${manifest_line}" "${first}" >&2
+        exit 2
+      fi
+      if contains_value "${second}" \
+        ${catalog_theme_slugs[@]+"${catalog_theme_slugs[@]}"}; then
+        printf 'Duplicate theme filename slug on gallery manifest line %d: %s\n' \
+          "${manifest_line}" "${second}" >&2
+        exit 2
+      fi
+      catalog_theme_ids[${#catalog_theme_ids[@]}]="${first}"
+      catalog_theme_slugs[${#catalog_theme_slugs[@]}]="${second}"
+      ;;
+    scene)
+      if [[ -z "${first}" || -z "${second}" || -z "${third}" \
+        || -z "${fourth}" || -z "${fifth}" || -z "${sixth}" \
+        || -n "${extra}" ]]; then
+        printf 'Invalid scene record on gallery manifest line %d.\n' \
+          "${manifest_line}" >&2
+        exit 2
+      fi
+      if ! manifest_token_is_safe "${first}" \
+        || ! manifest_token_is_safe "${second}" \
+        || ! manifest_token_is_safe "${third}" \
+        || ! manifest_token_is_safe "${fourth}" \
+        || ! manifest_token_is_safe "${fifth}" \
+        || ! manifest_token_is_safe "${sixth}"; then
+        printf 'Unsafe scene token on gallery manifest line %d.\n' \
+          "${manifest_line}" >&2
+        exit 2
+      fi
+      if contains_value "${first}" \
+        ${catalog_scene_ids[@]+"${catalog_scene_ids[@]}"}; then
+        printf 'Duplicate scene id on gallery manifest line %d: %s\n' \
+          "${manifest_line}" "${first}" >&2
+        exit 2
+      fi
+      if contains_value "${third}" \
+        ${catalog_scene_stems[@]+"${catalog_scene_stems[@]}"}; then
+        printf 'Duplicate scene filename stem on gallery manifest line %d: %s\n' \
+          "${manifest_line}" "${third}" >&2
+        exit 2
+      fi
+      catalog_scene_ids[${#catalog_scene_ids[@]}]="${first}"
+      catalog_scene_targets[${#catalog_scene_targets[@]}]="${second}"
+      catalog_scene_stems[${#catalog_scene_stems[@]}]="${third}"
+      catalog_scene_roles[${#catalog_scene_roles[@]}]="${fourth}"
+      catalog_scene_corner_policies[${#catalog_scene_corner_policies[@]}]="${fifth}"
+      catalog_scene_comparison_groups[${#catalog_scene_comparison_groups[@]}]="${sixth}"
+      ;;
+    scene-theme)
+      if [[ -z "${first}" || -n "${second}" ]]; then
+        printf 'Invalid scene-theme record on gallery manifest line %d.\n' \
+          "${manifest_line}" >&2
+        exit 2
+      fi
+      if ! manifest_token_is_safe "${first}"; then
+        printf 'Unsafe scene-theme token on gallery manifest line %d.\n' \
+          "${manifest_line}" >&2
+        exit 2
+      fi
+      if contains_value "${first}" ${scene_themes[@]+"${scene_themes[@]}"}; then
+        printf 'Duplicate scene theme on gallery manifest line %d: %s\n' \
+          "${manifest_line}" "${first}" >&2
+        exit 2
+      fi
+      scene_themes[${#scene_themes[@]}]="${first}"
+      ;;
+    variant)
+      if [[ -z "${first}" || -z "${second}" || -z "${third}" \
+        || -z "${fourth}" || -z "${fifth}" || -z "${sixth}" \
+        || -n "${extra}" ]]; then
+        printf 'Invalid variant record on gallery manifest line %d.\n' \
+          "${manifest_line}" >&2
+        exit 2
+      fi
+      if ! manifest_token_is_safe "${first}" \
+        || ! manifest_token_is_safe "${second}" \
+        || ! manifest_token_is_safe "${third}" \
+        || ! manifest_token_is_safe "${sixth}"; then
+        printf 'Unsafe variant token on gallery manifest line %d.\n' \
+          "${manifest_line}" >&2
+        exit 2
+      fi
+      case "${fourth}" in
+        0|1)
+          ;;
+        *)
+          printf 'Invalid variant inversion on gallery manifest line %d: %s\n' \
+            "${manifest_line}" "${fourth}" >&2
+          exit 2
+          ;;
+      esac
+      numeric_hue="${fifth#-}"
+      case "${numeric_hue}" in
+        ''|*[!0-9]*)
+          printf 'Invalid variant hue on gallery manifest line %d: %s\n' \
+            "${manifest_line}" "${fifth}" >&2
+          exit 2
+          ;;
+      esac
+      if (( ${#numeric_hue} > 3 )) \
+        || [[ "${numeric_hue}" != "0" && "${numeric_hue}" == 0* ]] \
+        || [[ "${fifth}" == "-0" ]]; then
+        printf 'Variant hue must use canonical decimal form on gallery manifest line %d: %s\n' \
+          "${manifest_line}" "${fifth}" >&2
+        exit 2
+      fi
+      # The canonical form above avoids Bash's legacy octal arithmetic rules.
+      numeric_hue=$((10#${numeric_hue}))
+      if [[ "${fifth}" == -* ]]; then
+        normalized_hue=$((-numeric_hue))
+      else
+        normalized_hue=${numeric_hue}
+      fi
+      if (( normalized_hue < -180 || normalized_hue > 180 )); then
+        printf 'Variant hue is outside -180..180 on gallery manifest line %d: %s\n' \
+          "${manifest_line}" "${fifth}" >&2
+        exit 2
+      fi
+      variant_phases[${#variant_phases[@]}]="${first}"
+      variant_themes[${#variant_themes[@]}]="${second}"
+      variant_scenes[${#variant_scenes[@]}]="${third}"
+      variant_inverts[${#variant_inverts[@]}]="${fourth}"
+      variant_hues[${#variant_hues[@]}]="${fifth}"
+      variant_profile_slugs[${#variant_profile_slugs[@]}]="${sixth}"
+      ;;
+    *)
+      printf 'Unknown gallery manifest record %s on line %d.\n' \
+        "${record}" "${manifest_line}" >&2
+      exit 2
+      ;;
+  esac
+done < "${manifest_path}"
+
+theme_slug=""
+load_theme() {
+  local candidate="$1"
+  local index=0
+  while (( index < ${#catalog_theme_ids[@]} )); do
+    if [[ "${catalog_theme_ids[index]}" == "${candidate}" ]]; then
+      theme_slug="${catalog_theme_slugs[index]}"
+      return 0
+    fi
+    index=$((index + 1))
+  done
+  return 1
+}
+
+scene_target=""
+scene_stem=""
+scene_role=""
+scene_corner_policy=""
+scene_comparison_group=""
+load_scene() {
+  local candidate="$1"
+  local index=0
+  while (( index < ${#catalog_scene_ids[@]} )); do
+    if [[ "${catalog_scene_ids[index]}" == "${candidate}" ]]; then
+      scene_target="${catalog_scene_targets[index]}"
+      scene_stem="${catalog_scene_stems[index]}"
+      scene_role="${catalog_scene_roles[index]}"
+      scene_corner_policy="${catalog_scene_corner_policies[index]}"
+      scene_comparison_group="${catalog_scene_comparison_groups[index]}"
+      return 0
+    fi
+    index=$((index + 1))
+  done
+  return 1
+}
+
+if (( ${#catalog_theme_ids[@]} == 0 || ${#catalog_scene_ids[@]} == 0 \
+  || ${#scene_themes[@]} == 0 )); then
+  printf 'Gallery manifest must declare themes, scenes, and scene themes.\n' >&2
+  exit 2
+fi
+
+themes=("${catalog_theme_ids[@]}")
+scenes=()
+theme_matrix_scene=""
+catalog_index=0
+while (( catalog_index < ${#catalog_scene_ids[@]} )); do
+  case "${catalog_scene_roles[catalog_index]}" in
+    theme-matrix)
+      if [[ -n "${theme_matrix_scene}" ]]; then
+        printf 'Gallery manifest declares more than one theme-matrix scene.\n' >&2
+        exit 2
+      fi
+      theme_matrix_scene="${catalog_scene_ids[catalog_index]}"
+      ;;
+    component)
+      scenes[${#scenes[@]}]="${catalog_scene_ids[catalog_index]}"
+      ;;
+    targeted)
+      ;;
+    *)
+      printf 'Unknown gallery role for scene %s: %s\n' \
+        "${catalog_scene_ids[catalog_index]}" \
+        "${catalog_scene_roles[catalog_index]}" >&2
+      exit 2
+      ;;
+  esac
+  case "${catalog_scene_corner_policies[catalog_index]}" in
+    -|transparent)
+      ;;
+    *)
+      printf 'Unknown corner policy for scene %s: %s\n' \
+        "${catalog_scene_ids[catalog_index]}" \
+        "${catalog_scene_corner_policies[catalog_index]}" >&2
+      exit 2
+      ;;
+  esac
+  catalog_index=$((catalog_index + 1))
+done
+if [[ -z "${theme_matrix_scene}" ]]; then
+  printf 'Gallery manifest does not declare a theme-matrix scene.\n' >&2
+  exit 2
+fi
+
+contract_outputs=()
+append_contract_output() {
+  local output="$1"
+  if contains_value "${output}" ${contract_outputs[@]+"${contract_outputs[@]}"}; then
+    printf 'Gallery manifest declares duplicate stable output: %s\n' \
+      "${output}" >&2
+    return 1
+  fi
+  contract_outputs[${#contract_outputs[@]}]="${output}"
+}
+
+validate_catalog_contract() {
+  local index
+  local theme
+  local scene
+  local magnitude
+  local signed_hue
+  local expected_profile
+
+  load_scene "${theme_matrix_scene}"
+  for theme in "${catalog_theme_ids[@]}"; do
+    load_theme "${theme}"
+    append_contract_output "${scene_stem}--${theme_slug}.png"
+  done
+
+  for theme in "${scene_themes[@]}"; do
+    if ! load_theme "${theme}"; then
+      printf 'Unknown built-in gallery scene theme: %s\n' "${theme}" >&2
+      return 1
+    fi
+  done
+
+  for scene in "${scenes[@]}"; do
+    load_scene "${scene}"
+    for theme in "${scene_themes[@]}"; do
+      load_theme "${theme}"
+      append_contract_output "${scene_stem}--${theme_slug}.png"
+    done
+  done
+
+  index=0
+  while (( index < ${#variant_phases[@]} )); do
+    case "${variant_phases[index]}" in
+      before-components|after-components)
+        ;;
+      *)
+        printf 'Unknown gallery variant phase: %s\n' \
+          "${variant_phases[index]}" >&2
+        return 1
+        ;;
+    esac
+    if ! load_theme "${variant_themes[index]}"; then
+      printf 'Unknown built-in gallery theme in variant: %s\n' \
+        "${variant_themes[index]}" >&2
+      return 1
+    fi
+    expected_profile="${theme_slug}"
+    if [[ "${variant_inverts[index]}" == "1" ]]; then
+      expected_profile="${expected_profile}-inverted"
+    fi
+    magnitude="${variant_hues[index]#-}"
+    magnitude=$((10#${magnitude}))
+    if [[ "${variant_hues[index]}" == -* ]]; then
+      signed_hue=$((-magnitude))
+    else
+      signed_hue=${magnitude}
+    fi
+    if (( signed_hue < 0 )); then
+      expected_profile="${expected_profile}-hue-m$((-signed_hue))"
+    elif (( signed_hue > 0 )); then
+      expected_profile="${expected_profile}-hue-p${signed_hue}"
+    fi
+    if [[ "${variant_profile_slugs[index]}" != "${expected_profile}" ]]; then
+      printf 'Gallery variant profile slug mismatch: expected %s, found %s\n' \
+        "${expected_profile}" "${variant_profile_slugs[index]}" >&2
+      return 1
+    fi
+    if ! load_scene "${variant_scenes[index]}"; then
+      printf 'Unknown gallery scene in variant: %s\n' \
+        "${variant_scenes[index]}" >&2
+      return 1
+    fi
+    append_contract_output "${scene_stem}--${expected_profile}.png"
+    index=$((index + 1))
+  done
+}
+
+validate_catalog_contract
 
 # Subset overrides are useful for quick local review. They deliberately disable
 # pruning: a partial run must never decide that the rest of the gallery is stale.
@@ -152,48 +459,6 @@ if [[ "${TIPTOPTYP_UI_GALLERY_SKIP_VARIANTS:-0}" == "1" ]]; then
   full_default_matrix=0
 fi
 
-is_builtin_theme() {
-  local candidate
-  for candidate in "${all_builtin_themes[@]}"; do
-    if [[ "$1" == "${candidate}" ]]; then
-      return 0
-    fi
-  done
-  return 1
-}
-
-scene_target() {
-  case "$1" in
-    main|problems-panel|find-replace|preview-compiling)
-      printf 'main\n'
-      ;;
-    file-menu|edit-menu|editor-context-menu|explorer-context-menu|document-font-selector|status-log)
-      printf 'popup\n'
-      ;;
-    settings-window|settings-theme-picker|settings-dark-theme-picker|settings-tooltip)
-      printf 'settings\n'
-      ;;
-    typst-overrides-window)
-      printf 'typst-overrides\n'
-      ;;
-    diagnostic-tooltip|function-tooltip)
-      printf 'diagnostic\n'
-      ;;
-    save-dialog|alert-dialog|overwrite-dialog)
-      printf 'modal\n'
-      ;;
-    rename-dialog)
-      printf 'rename\n'
-      ;;
-    workspace-chooser)
-      printf 'workspace\n'
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
 validate_requested_values() {
   local value
   if (( ${#themes[@]} == 0 || ${#scene_themes[@]} == 0 || ${#scenes[@]} == 0 )); then
@@ -201,17 +466,17 @@ validate_requested_values() {
     return 1
   fi
   for value in "${themes[@]}" "${scene_themes[@]}"; do
-    if ! is_builtin_theme "${value}"; then
+    if ! load_theme "${value}"; then
       printf 'Unknown built-in gallery theme: %s\n' "${value}" >&2
       return 1
     fi
   done
   for value in "${scenes[@]}"; do
-    if ! scene_target "${value}" >/dev/null; then
+    if ! load_scene "${value}"; then
       printf 'Unknown gallery scene: %s\n' "${value}" >&2
       return 1
     fi
-    if [[ "${value}" == "main" ]]; then
+    if [[ "${scene_role}" == "theme-matrix" ]]; then
       printf 'The main scene belongs in the theme matrix, not the component scene list.\n' >&2
       return 1
     fi
@@ -222,43 +487,25 @@ job_themes=()
 job_scenes=()
 job_inverts=()
 job_hues=()
+job_profile_slugs=()
+job_corner_policies=()
+job_comparison_groups=()
 expected_outputs=()
-
-expected_filename() {
-  local theme="$1"
-  local scene="$2"
-  local invert="$3"
-  local hue="$4"
-  local target
-  local view
-  local theme_profile="${theme}"
-
-  target="$(scene_target "${scene}")"
-  if [[ "${target}" == "${scene}" ]]; then
-    view="${target}"
-  else
-    view="${target}-${scene}"
-  fi
-  if [[ "${invert}" == "1" ]]; then
-    theme_profile="${theme_profile}-inverted"
-  fi
-  if (( hue < 0 )); then
-    theme_profile="${theme_profile}-hue-m$((-hue))"
-  elif (( hue > 0 )); then
-    theme_profile="${theme_profile}-hue-p${hue}"
-  fi
-  printf '%s--%s.png\n' "${view}" "${theme_profile}"
-}
 
 append_job() {
   local theme="$1"
   local scene="$2"
   local invert="$3"
   local hue="$4"
+  local profile_slug="$5"
   local expected
   local existing
 
-  expected="$(expected_filename "${theme}" "${scene}" "${invert}" "${hue}")"
+  if ! load_scene "${scene}"; then
+    printf 'Unknown gallery scene in job: %s\n' "${scene}" >&2
+    return 1
+  fi
+  expected="${scene_stem}--${profile_slug}.png"
   # The `+` form also works with `set -u` in macOS's Bash 3.2 while this
   # array is still empty for the first job.
   for existing in ${expected_outputs[@]+"${expected_outputs[@]}"}; do
@@ -271,7 +518,45 @@ append_job() {
   job_scenes[${#job_scenes[@]}]="${scene}"
   job_inverts[${#job_inverts[@]}]="${invert}"
   job_hues[${#job_hues[@]}]="${hue}"
+  job_profile_slugs[${#job_profile_slugs[@]}]="${profile_slug}"
+  job_corner_policies[${#job_corner_policies[@]}]="${scene_corner_policy}"
+  job_comparison_groups[${#job_comparison_groups[@]}]="${scene_comparison_group}"
   expected_outputs[${#expected_outputs[@]}]="${expected}"
+}
+
+append_variants() {
+  local requested_phase="$1"
+  local index=0
+  while (( index < ${#variant_phases[@]} )); do
+    case "${variant_phases[index]}" in
+      before-components|after-components)
+        ;;
+      *)
+        printf 'Unknown gallery variant phase: %s\n' \
+          "${variant_phases[index]}" >&2
+        return 1
+        ;;
+    esac
+    if ! load_theme "${variant_themes[index]}"; then
+      printf 'Unknown built-in gallery theme in variant: %s\n' \
+        "${variant_themes[index]}" >&2
+      return 1
+    fi
+    if ! load_scene "${variant_scenes[index]}"; then
+      printf 'Unknown gallery scene in variant: %s\n' \
+        "${variant_scenes[index]}" >&2
+      return 1
+    fi
+    if [[ "${variant_phases[index]}" == "${requested_phase}" ]]; then
+      append_job \
+        "${variant_themes[index]}" \
+        "${variant_scenes[index]}" \
+        "${variant_inverts[index]}" \
+        "${variant_hues[index]}" \
+        "${variant_profile_slugs[index]}"
+    fi
+    index=$((index + 1))
+  done
 }
 
 build_manifest() {
@@ -280,25 +565,27 @@ build_manifest() {
 
   validate_requested_values
   for theme in "${themes[@]}"; do
-    append_job "${theme}" main 0 0
+    load_theme "${theme}"
+    append_job "${theme}" "${theme_matrix_scene}" 0 0 "${theme_slug}"
   done
   if [[ "${TIPTOPTYP_UI_GALLERY_SKIP_VARIANTS:-0}" != "1" ]]; then
-    append_job catppuccin-latte main 1 30
+    append_variants before-components
   fi
   # Keep equal framebuffer targets adjacent. Immediate child viewports have
   # independent renderer state, so grouping avoids unnecessary root/child
   # churn while every image still comes from this one app session.
   for scene in "${scenes[@]}"; do
     for theme in "${scene_themes[@]}"; do
-      append_job "${theme}" "${scene}" 0 0
+      load_theme "${theme}"
+      append_job "${theme}" "${scene}" 0 0 "${theme_slug}"
     done
   done
   if [[ "${TIPTOPTYP_UI_GALLERY_SKIP_VARIANTS:-0}" != "1" ]]; then
-    append_job catppuccin-latte file-menu 1 30
+    append_variants after-components
   fi
 
   local expected_default_count
-  expected_default_count=$((${#all_builtin_themes[@]} + ${#scene_themes[@]} * ${#scenes[@]} + 2))
+  expected_default_count=$((${#catalog_theme_ids[@]} + ${#scene_themes[@]} * ${#scenes[@]} + ${#variant_phases[@]}))
   if (( full_default_matrix == 1 && ${#expected_outputs[@]} != expected_default_count )); then
     printf 'Internal gallery error: default manifest has %d outputs, expected %d.\n' \
       "${#expected_outputs[@]}" "${expected_default_count}" >&2
@@ -430,15 +717,10 @@ validate_visual_smoke() {
   local expected
   local path
   local corner_status
-  local theme
-  local settings_window
-  local theme_picker
-  local dark_theme_picker
-  local settings_tooltip
-  local settings_signature
-  local picker_signature
-  local dark_picker_signature
-  local tooltip_signature
+  local index
+  local other
+  local group
+  local comparison_signatures=()
 
   if [[ "${png_decoder}" != "magick" && "${png_decoder}" != "convert" ]]; then
     printf 'Visual smoke checks skipped: %s validates PNG data but not pixels or alpha.\n' \
@@ -448,58 +730,57 @@ validate_visual_smoke() {
 
   # Elevated child viewports must retain transparency around their themed
   # cards; opaque black corners are a regression even when the PNG decodes.
-  for expected in "${expected_outputs[@]}"; do
-    case "${expected}" in
-      popup-*|diagnostic-*|modal-*|rename-*|workspace-*)
-        path="${latest_directory}/${expected}"
-        if image_has_transparent_corners "${path}"; then
-          :
-        else
-          corner_status=$?
-          case ${corner_status} in
-            1)
-              printf 'Elevated gallery capture has an opaque outer corner: %s\n' \
-                "${path}" >&2
-              ;;
-            *)
-              printf 'Could not inspect gallery capture corner transparency: %s\n' \
-                "${path}" >&2
-              ;;
-          esac
-          return 1
-        fi
-        ;;
-    esac
+  index=0
+  while (( index < ${#expected_outputs[@]} )); do
+    expected="${expected_outputs[index]}"
+    path="${latest_directory}/${expected}"
+    if [[ "${job_corner_policies[index]}" == "transparent" ]]; then
+      if image_has_transparent_corners "${path}"; then
+        :
+      else
+        corner_status=$?
+        case ${corner_status} in
+          1)
+            printf 'Elevated gallery capture has an opaque outer corner: %s\n' \
+              "${path}" >&2
+            ;;
+          *)
+            printf 'Could not inspect gallery capture corner transparency: %s\n' \
+              "${path}" >&2
+            ;;
+        esac
+        return 1
+      fi
+    fi
+    group="${job_comparison_groups[index]}"
+    if [[ "${group}" == "-" ]]; then
+      comparison_signatures[index]=""
+    else
+      comparison_signatures[index]="$(image_signature "${path}")"
+    fi
+    index=$((index + 1))
   done
 
-  # These Settings captures deliberately expose different themed state.
-  # Comparing decoded pixel signatures catches a closed picker or missing card
-  # without tying the snapshots to brittle, pre-recorded hashes.
-  for theme in catppuccin-latte catppuccin-mocha; do
-    settings_window="settings-settings-window--${theme}.png"
-    theme_picker="settings-settings-theme-picker--${theme}.png"
-    dark_theme_picker="settings-settings-dark-theme-picker--${theme}.png"
-    settings_tooltip="settings-settings-tooltip--${theme}.png"
-    if ! is_expected_output "${settings_window}" \
-      || ! is_expected_output "${theme_picker}" \
-      || ! is_expected_output "${dark_theme_picker}" \
-      || ! is_expected_output "${settings_tooltip}"; then
-      continue
+  # Captures in the same comparison group deliberately expose different
+  # themed state. Pairwise decoded-pixel signatures catch a missing popup or
+  # card without tying the gallery to fixed image hashes.
+  index=0
+  while (( index < ${#expected_outputs[@]} )); do
+    group="${job_comparison_groups[index]}"
+    if [[ "${group}" != "-" ]]; then
+      other=0
+      while (( other < index )); do
+        if [[ "${job_comparison_groups[other]}" == "${group}" \
+          && "${job_profile_slugs[other]}" == "${job_profile_slugs[index]}" \
+          && "${comparison_signatures[other]}" == "${comparison_signatures[index]}" ]]; then
+          printf 'Gallery captures in comparison group %s are pixel-identical for theme %s.\n' \
+            "${group}" "${job_profile_slugs[index]}" >&2
+          return 1
+        fi
+        other=$((other + 1))
+      done
     fi
-    settings_signature="$(image_signature "${latest_directory}/${settings_window}")"
-    picker_signature="$(image_signature "${latest_directory}/${theme_picker}")"
-    dark_picker_signature="$(image_signature "${latest_directory}/${dark_theme_picker}")"
-    tooltip_signature="$(image_signature "${latest_directory}/${settings_tooltip}")"
-    if [[ "${settings_signature}" == "${picker_signature}" \
-      || "${settings_signature}" == "${dark_picker_signature}" \
-      || "${settings_signature}" == "${tooltip_signature}" \
-      || "${picker_signature}" == "${dark_picker_signature}" \
-      || "${picker_signature}" == "${tooltip_signature}" \
-      || "${dark_picker_signature}" == "${tooltip_signature}" ]]; then
-      printf 'Settings gallery states are pixel-identical for theme %s.\n' \
-        "${theme}" >&2
-      return 1
-    fi
+    index=$((index + 1))
   done
 }
 

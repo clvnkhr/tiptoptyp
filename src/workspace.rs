@@ -109,11 +109,6 @@ impl WorkspaceTree {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub fn new(root: impl AsRef<Path>) -> io::Result<Self> {
-        Ok(Self::from_snapshot(WorkspaceSnapshot::scan(root)?))
-    }
-
     pub fn root(&self) -> &Path {
         &self.snapshot.root
     }
@@ -137,16 +132,6 @@ impl WorkspaceTree {
         self.snapshot = next;
         self.generation = self.generation.wrapping_add(1);
         true
-    }
-
-    /// Rescan the root, retaining the old cache if scanning fails. Returns
-    /// whether the visible tree changed.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub fn refresh(&mut self) -> io::Result<bool> {
-        // `snapshot.root` is already canonical, so periodic refreshes do not
-        // need another filesystem canonicalization pass.
-        let next = WorkspaceSnapshot::scan_canonical(self.snapshot.root.clone())?;
-        Ok(self.apply_snapshot(next))
     }
 }
 
@@ -227,38 +212,31 @@ mod tests {
     use std::{
         fs,
         path::{Path, PathBuf},
-        sync::atomic::{AtomicU64, Ordering},
     };
 
     use super::*;
 
-    static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
-
     struct TempProject {
-        path: PathBuf,
+        directory: tempfile::TempDir,
     }
 
     impl TempProject {
         fn new(label: &str) -> Self {
-            let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "tiptoptyp-workspace-{label}-{}-{id}",
-                std::process::id()
-            ));
-            fs::create_dir(&path).unwrap();
-            Self { path }
+            let prefix = format!("tiptoptyp-workspace-{label}-");
+            let directory = tempfile::Builder::new().prefix(&prefix).tempdir().unwrap();
+            Self { directory }
         }
 
         fn path(&self) -> &Path {
-            &self.path
+            self.directory.path()
         }
 
         fn directory(&self, relative: impl AsRef<Path>) {
-            fs::create_dir_all(self.path.join(relative)).unwrap();
+            fs::create_dir_all(self.path().join(relative)).unwrap();
         }
 
         fn file(&self, relative: impl AsRef<Path>, contents: &str) {
-            let path = self.path.join(relative);
+            let path = self.path().join(relative);
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent).unwrap();
             }
@@ -266,10 +244,15 @@ mod tests {
         }
     }
 
-    impl Drop for TempProject {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
-        }
+    fn workspace_tree(root: &Path) -> WorkspaceTree {
+        WorkspaceTree::from_snapshot(WorkspaceSnapshot::scan(root).unwrap())
+    }
+
+    fn refresh_workspace_tree(tree: &mut WorkspaceTree) -> io::Result<bool> {
+        // The cached root is already canonical, matching the background scan
+        // that production applies through `apply_snapshot`.
+        let next = WorkspaceSnapshot::scan_canonical(tree.snapshot.root.clone())?;
+        Ok(tree.apply_snapshot(next))
     }
 
     fn names(nodes: &[WorkspaceNode]) -> Vec<String> {
@@ -365,21 +348,21 @@ mod tests {
     fn caches_until_refresh_and_tracks_structural_generations() {
         let project = TempProject::new("cache");
         project.file("main.typ", "first");
-        let mut tree = WorkspaceTree::new(project.path()).unwrap();
+        let mut tree = workspace_tree(project.path());
         assert_eq!(tree.generation(), 0);
 
         project.file("chapter.typ", "chapter");
         assert!(tree.snapshot().find("chapter.typ").is_none());
-        assert!(tree.refresh().unwrap());
+        assert!(refresh_workspace_tree(&mut tree).unwrap());
         assert!(tree.snapshot().find("chapter.typ").is_some());
         assert_eq!(tree.generation(), 1);
 
-        assert!(!tree.refresh().unwrap());
+        assert!(!refresh_workspace_tree(&mut tree).unwrap());
         assert_eq!(tree.generation(), 1);
 
         // Contents do not affect the filesystem panel's structural snapshot.
         project.file("main.typ", "second");
-        assert!(!tree.refresh().unwrap());
+        assert!(!refresh_workspace_tree(&mut tree).unwrap());
         assert_eq!(tree.generation(), 1);
     }
 
@@ -388,7 +371,7 @@ mod tests {
         let project = TempProject::new("paths");
         project.file("chapters/one.typ", "one");
 
-        let tree = WorkspaceTree::new(project.path()).unwrap();
+        let tree = workspace_tree(project.path());
         let node = tree.snapshot().find("chapters/one.typ").unwrap();
         assert_eq!(tree.root(), project.path().canonicalize().unwrap());
         assert_eq!(node.relative_path, PathBuf::from("chapters/one.typ"));
@@ -431,11 +414,14 @@ mod tests {
     fn a_failed_refresh_preserves_the_cached_snapshot_and_generation() {
         let project = TempProject::new("failed-refresh");
         project.file("main.typ", "main");
-        let mut tree = WorkspaceTree::new(project.path()).unwrap();
+        let mut tree = workspace_tree(project.path());
         let cached = tree.snapshot().clone();
 
         fs::remove_dir_all(project.path()).unwrap();
-        assert_eq!(tree.refresh().unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert_eq!(
+            refresh_workspace_tree(&mut tree).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
         assert_eq!(tree.snapshot(), &cached);
         assert_eq!(tree.generation(), 0);
     }

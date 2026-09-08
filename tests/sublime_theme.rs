@@ -1,9 +1,6 @@
-#[path = "../src/sublime_theme.rs"]
-mod sublime_theme;
-
 use std::path::Path;
 
-use sublime_theme::{ImportError, ThemeFormat, import_bytes, import_path};
+use tiptoptyp::themes::sublime::{ImportError, ThemeFormat, import_bytes, import_path};
 
 const MODERN_DARK: &str = r##"
 {

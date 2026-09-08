@@ -2,10 +2,10 @@
 #set text(size: 11pt)
 #set heading(numbering: "1.")
 #show "[ ]": box(stroke: 1pt, height: 0.8em, width: 0.8em)
-#show "[x]": box(stroke: 1pt, height: 0.8em, width: 0.8em, fill: green, align(center)[x])
+#show "[x]": box(stroke: 1pt, height: 0.8em, width: 0.8em, fill: green, [#set align(center);x])
 = running todo list
 
-Keep this sssslist as the source of truth. Every task has a permanent number and
+Keep this list as the source of truth. Every task has a permanent number and
 `[ ]` (open, partial, unverified, or deferred) or `[x]` (completed). Never remove
 completed tasks or renumber existing tasks; append new tasks with the next
 unused number. Resolved and audit notes must cite the relevant item numbers.
