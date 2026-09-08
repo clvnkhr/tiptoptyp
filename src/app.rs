@@ -409,6 +409,18 @@ struct HoverTooltipOverlay {
     opacity: f32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TooltipPlacement {
+    Below,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TooltipFadeState {
+    opacity: f32,
+    updated_at: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MarkdownInlineSpan {
     text: String,
@@ -423,6 +435,7 @@ struct TooltipGeometry {
     identity: u64,
     origin: Rect,
     card: Rect,
+    fade: TooltipFadeState,
     pointer_inside_viewport: bool,
     handoff_until: f64,
 }
@@ -5610,7 +5623,7 @@ impl EditorApp {
 
     fn show_diagnostic_tooltip_window(&mut self, context: &egui::Context) {
         let native_tooltip_id = native_hover_tooltip_id(context);
-        let (origin, anchor, detail, severity, opacity) = if self.snapshot_scene
+        let (origin, anchor, detail, severity, placement, opacity) = if self.snapshot_scene
             == Some(UiSnapshotScene::DiagnosticTooltip)
         {
             (
@@ -5621,6 +5634,7 @@ impl EditorApp {
                 Pos2::new(420.0, METRICS.chrome.toolbar_height + 86.0),
                 "The character `#` is not valid in code\nHint: you are already in code mode\nHint: try removing the `#`".to_owned(),
                 Some(DiagnosticSeverity::Error),
+                TooltipPlacement::Right,
                 1.0,
             )
         } else if self.snapshot_scene == Some(UiSnapshotScene::FunctionTooltip) {
@@ -5633,6 +5647,7 @@ impl EditorApp {
                 "```typc\ntext(body, size: length = 1em, fill: color = black)\n```\nDisplays content as text with the selected size and fill."
                     .to_owned(),
                 None,
+                TooltipPlacement::Below,
                 1.0,
             )
         } else if let Some(tooltip) = self.diagnostic_tooltip.clone() {
@@ -5641,6 +5656,7 @@ impl EditorApp {
                 tooltip.anchor,
                 tooltip.detail,
                 Some(tooltip.severity),
+                TooltipPlacement::Right,
                 tooltip.opacity,
             )
         } else if let Some(tooltip) =
@@ -5651,6 +5667,7 @@ impl EditorApp {
                 tooltip.anchor,
                 tooltip.detail,
                 None,
+                TooltipPlacement::Below,
                 tooltip.opacity,
             )
         } else {
@@ -5702,6 +5719,7 @@ impl EditorApp {
             origin,
             &detail,
             severity,
+            placement,
             opacity,
             &self.captures,
             &self.web_link_sender,
@@ -10932,6 +10950,17 @@ fn install_hover_runtime_config(context: &egui::Context, delay: Duration, fade: 
     context.data_mut(|data| data.insert_temp(id, config));
 }
 
+fn hover_runtime_config(context: &egui::Context) -> HoverRuntimeConfig {
+    let id = hover_runtime_config_id(context);
+    context.data(|data| {
+        data.get_temp::<HoverRuntimeConfig>(id)
+            .unwrap_or(HoverRuntimeConfig {
+                delay: Duration::from_millis(DEFAULT_HOVER_DELAY_MS),
+                fade: Duration::from_millis(DEFAULT_HOVER_FADE_MS),
+            })
+    })
+}
+
 fn diagnostic_hover_timing_id(context: &egui::Context) -> egui::Id {
     viewport_scoped_id(context, "tiptoptyp-diagnostic-hover-timing")
 }
@@ -10983,14 +11012,7 @@ fn hover_opacity(response: &egui::Response, timing_id: egui::Id) -> Option<f32> 
         return None;
     }
     let now = response.ctx.input(|input| input.time);
-    let runtime_config_id = hover_runtime_config_id(&response.ctx);
-    let config = response.ctx.data(|data| {
-        data.get_temp::<HoverRuntimeConfig>(runtime_config_id)
-            .unwrap_or(HoverRuntimeConfig {
-                delay: Duration::from_millis(DEFAULT_HOVER_DELAY_MS),
-                fade: Duration::from_millis(DEFAULT_HOVER_FADE_MS),
-            })
-    });
+    let config = hover_runtime_config(&response.ctx);
     let mut state = response.ctx.data(|data| {
         data.get_temp::<HoverTimingState>(timing_id)
             .unwrap_or(HoverTimingState {
@@ -11046,6 +11068,7 @@ fn show_native_tooltip_card(
     origin: Rect,
     detail: &str,
     severity: Option<DiagnosticSeverity>,
+    placement: TooltipPlacement,
     opacity: f32,
     captures: &CaptureController,
     link_sender: &mpsc::Sender<String>,
@@ -11098,17 +11121,15 @@ fn show_native_tooltip_card(
             METRICS.popup.tooltip_max_height,
         )
         .min(available_height);
-    let desired = window_rect.min + anchor.to_vec2();
-    let position = Pos2::new(
-        desired.x.clamp(
-            window_rect.left() + METRICS.popup.viewport_edge,
-            window_rect.right() - width - METRICS.popup.viewport_edge,
-        ),
-        desired.y.clamp(
-            window_rect.top() + METRICS.popup.viewport_edge,
-            window_rect.bottom() - height - METRICS.popup.viewport_edge,
-        ),
+    let root_local_card = place_native_tooltip_card(
+        Rect::from_min_size(Pos2::ZERO, window_rect.size()),
+        origin,
+        anchor,
+        Vec2::new(width, height),
+        placement,
+        METRICS.popup.viewport_edge,
     );
+    let position = window_rect.min + root_local_card.min.to_vec2();
     let interaction_id = tooltip_interaction_id(context);
     let identity = tooltip_identity(origin, detail);
     let interaction = context.data(|data| {
@@ -11120,23 +11141,28 @@ fn show_native_tooltip_card(
         return;
     }
     let geometry_id = tooltip_geometry_id(context);
-    // The native child viewport is positioned in monitor coordinates, while
-    // the root viewport reports pointer positions in its own local space. Keep
-    // the card used by the pointer bridge in root-local coordinates; mixing
-    // these spaces makes the bridge appear to work only at the top-left of the
-    // screen.
-    let root_local_card = root_local_tooltip_card(position, window_rect, Vec2::new(width, height));
     let now = context.input(|input| input.time);
+    let previous = context.data(|data| {
+        data.get_temp::<TooltipGeometry>(geometry_id)
+            .filter(|geometry| geometry.identity == identity)
+    });
+    let fade = continue_tooltip_fade(
+        opacity,
+        previous.map(|geometry| geometry.fade),
+        now,
+        hover_runtime_config(context).fade,
+    );
+    if fade.opacity < 1.0 {
+        context.request_repaint_after(METRICS.motion.animation_frame);
+    }
     context.data_mut(|data| {
-        let previous = data
-            .get_temp::<TooltipGeometry>(geometry_id)
-            .filter(|geometry| geometry.identity == identity);
         data.insert_temp(
             geometry_id,
             TooltipGeometry {
                 identity,
                 origin,
                 card: root_local_card,
+                fade,
                 // The child viewport exclusively owns this bit. The root has
                 // no pointer while the cursor is over a native child and must
                 // preserve the child's last observation across paint passes.
@@ -11171,7 +11197,7 @@ fn show_native_tooltip_card(
             input.focused
         };
         let dismiss_requested = input.escape_pressed;
-        ui.set_opacity(opacity);
+        ui.set_opacity(fade.opacity);
         let frame = if interaction.focused {
             tooltip_frame.stroke(Stroke::new(
                 1.0,
@@ -11602,7 +11628,7 @@ fn tooltip_region_contains(pointer: Pos2, origin: Rect, card: Rect) -> bool {
     // the handoff.
     if card.left() >= origin.right() {
         let gap = card.left() - origin.right();
-        if gap <= f32::EPSILON {
+        if gap <= f32::EPSILON || pointer.x < origin.right() || pointer.x > card.left() {
             return false;
         }
         let t = ((pointer.x - origin.right()) / gap).clamp(0.0, 1.0);
@@ -11611,7 +11637,7 @@ fn tooltip_region_contains(pointer: Pos2, origin: Rect, card: Rect) -> bool {
         pointer.y >= top && pointer.y <= bottom
     } else if card.right() <= origin.left() {
         let gap = origin.left() - card.right();
-        if gap <= f32::EPSILON {
+        if gap <= f32::EPSILON || pointer.x < card.right() || pointer.x > origin.left() {
             return false;
         }
         let t = ((origin.left() - pointer.x) / gap).clamp(0.0, 1.0);
@@ -11620,7 +11646,7 @@ fn tooltip_region_contains(pointer: Pos2, origin: Rect, card: Rect) -> bool {
         pointer.y >= top && pointer.y <= bottom
     } else if card.top() >= origin.bottom() {
         let gap = card.top() - origin.bottom();
-        if gap <= f32::EPSILON {
+        if gap <= f32::EPSILON || pointer.y < origin.bottom() || pointer.y > card.top() {
             return false;
         }
         let t = ((pointer.y - origin.bottom()) / gap).clamp(0.0, 1.0);
@@ -11629,7 +11655,7 @@ fn tooltip_region_contains(pointer: Pos2, origin: Rect, card: Rect) -> bool {
         pointer.x >= left && pointer.x <= right
     } else if card.bottom() <= origin.top() {
         let gap = origin.top() - card.bottom();
-        if gap <= f32::EPSILON {
+        if gap <= f32::EPSILON || pointer.y < card.bottom() || pointer.y > origin.top() {
             return false;
         }
         let t = ((origin.top() - pointer.y) / gap).clamp(0.0, 1.0);
@@ -11650,8 +11676,84 @@ fn tooltip_identity(origin: Rect, detail: &str) -> u64 {
     hasher.finish()
 }
 
-fn root_local_tooltip_card(position: Pos2, root_rect: Rect, size: Vec2) -> Rect {
-    Rect::from_min_size(position - root_rect.min.to_vec2(), size)
+fn place_native_tooltip_card(
+    viewport: Rect,
+    origin: Rect,
+    anchor: Pos2,
+    size: Vec2,
+    placement: TooltipPlacement,
+    edge: f32,
+) -> Rect {
+    let edge = edge.max(0.0);
+    let min_x = (viewport.left() + edge).min(viewport.center().x);
+    let min_y = (viewport.top() + edge).min(viewport.center().y);
+    let max_x = (viewport.right() - edge - size.x).max(min_x);
+    let max_y = (viewport.bottom() - edge - size.y).max(min_y);
+
+    let (x, y) = match placement {
+        TooltipPlacement::Below => {
+            let gap = (anchor.y - origin.bottom()).max(0.0);
+            let below = anchor.y;
+            let above = origin.top() - gap - size.y;
+            let y = if (min_y..=max_y).contains(&below) {
+                below
+            } else if (min_y..=max_y).contains(&above) {
+                above
+            } else {
+                let room_below = (viewport.bottom() - edge - origin.bottom() - gap).max(0.0);
+                let room_above = (origin.top() - gap - viewport.top() - edge).max(0.0);
+                if room_above > room_below {
+                    above.clamp(min_y, max_y)
+                } else {
+                    below.clamp(min_y, max_y)
+                }
+            };
+            (anchor.x.clamp(min_x, max_x), y)
+        }
+        TooltipPlacement::Right => {
+            let gap = (anchor.x - origin.right()).max(0.0);
+            let right = anchor.x;
+            let left = origin.left() - gap - size.x;
+            let x = if (min_x..=max_x).contains(&right) {
+                right
+            } else if (min_x..=max_x).contains(&left) {
+                left
+            } else {
+                let room_right = (viewport.right() - edge - origin.right() - gap).max(0.0);
+                let room_left = (origin.left() - gap - viewport.left() - edge).max(0.0);
+                if room_left > room_right {
+                    left.clamp(min_x, max_x)
+                } else {
+                    right.clamp(min_x, max_x)
+                }
+            };
+            (x, anchor.y.clamp(min_y, max_y))
+        }
+    };
+    Rect::from_min_size(Pos2::new(x, y), size)
+}
+
+fn continue_tooltip_fade(
+    sampled_opacity: f32,
+    previous: Option<TooltipFadeState>,
+    now: f64,
+    duration: Duration,
+) -> TooltipFadeState {
+    let sampled_opacity = sampled_opacity.clamp(0.0, 1.0);
+    let updated_at = previous.map_or(now, |previous| previous.updated_at.max(now));
+    let opacity = if duration.is_zero() {
+        1.0
+    } else if let Some(previous) = previous {
+        let elapsed = (now - previous.updated_at).max(0.0) as f32;
+        let continued = previous.opacity + elapsed / duration.as_secs_f32();
+        sampled_opacity.max(continued).clamp(0.0, 1.0)
+    } else {
+        sampled_opacity
+    };
+    TooltipFadeState {
+        opacity,
+        updated_at,
+    }
 }
 
 fn update_tooltip_interaction_state(
@@ -13776,7 +13878,26 @@ mod tests {
         assert!(tooltip_region_contains(Pos2::new(20.0, 10.0), origin, card));
         assert!(tooltip_region_contains(Pos2::new(45.0, 15.0), origin, card));
         assert!(!tooltip_region_contains(
+            Pos2::new(90.0, 15.0),
+            origin,
+            card
+        ));
+        assert!(!tooltip_region_contains(
             Pos2::new(20.0, 25.0),
+            origin,
+            card
+        ));
+    }
+
+    #[test]
+    fn tooltip_bridge_ends_at_the_bottom_edge_of_a_lower_card() {
+        let origin = Rect::from_min_max(Pos2::new(30.0, 0.0), Pos2::new(50.0, 10.0));
+        let card = Rect::from_min_max(Pos2::new(0.0, 30.0), Pos2::new(80.0, 60.0));
+
+        assert!(tooltip_region_contains(Pos2::new(40.0, 20.0), origin, card));
+        assert!(tooltip_region_contains(Pos2::new(40.0, 45.0), origin, card));
+        assert!(!tooltip_region_contains(
+            Pos2::new(40.0, 60.1),
             origin,
             card
         ));
@@ -13785,9 +13906,76 @@ mod tests {
     #[test]
     fn tooltip_bridge_converts_child_position_to_root_coordinates() {
         let root = Rect::from_min_size(Pos2::new(100.0, 50.0), Vec2::new(800.0, 600.0));
-        let card = root_local_tooltip_card(Pos2::new(420.0, 200.0), root, Vec2::new(240.0, 120.0));
+        let origin = Rect::from_min_size(Pos2::new(320.0, 130.0), Vec2::new(40.0, 14.0));
+        let card = place_native_tooltip_card(
+            Rect::from_min_size(Pos2::ZERO, root.size()),
+            origin,
+            Pos2::new(320.0, 150.0),
+            Vec2::new(240.0, 120.0),
+            TooltipPlacement::Below,
+            8.0,
+        );
+        let child_position = root.min + card.min.to_vec2();
+        assert_eq!(child_position, Pos2::new(420.0, 200.0));
         assert_eq!(card.min, Pos2::new(320.0, 150.0));
         assert!(card.contains(Pos2::new(400.0, 240.0)));
+    }
+
+    #[test]
+    fn tooltip_below_flips_above_instead_of_covering_a_bottom_edge_source() {
+        let viewport = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let origin = Rect::from_min_max(Pos2::new(300.0, 540.0), Pos2::new(340.0, 560.0));
+        let card = place_native_tooltip_card(
+            viewport,
+            origin,
+            Pos2::new(300.0, 566.0),
+            Vec2::new(240.0, 120.0),
+            TooltipPlacement::Below,
+            8.0,
+        );
+
+        assert_eq!(card.min, Pos2::new(300.0, 414.0));
+        assert_eq!(card.bottom(), origin.top() - 6.0);
+        assert!(!card.intersects(origin));
+    }
+
+    #[test]
+    fn tooltip_right_flips_left_at_the_viewport_edge() {
+        let viewport = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let origin = Rect::from_min_max(Pos2::new(750.0, 200.0), Pos2::new(770.0, 220.0));
+        let card = place_native_tooltip_card(
+            viewport,
+            origin,
+            Pos2::new(776.0, 200.0),
+            Vec2::new(240.0, 120.0),
+            TooltipPlacement::Right,
+            8.0,
+        );
+
+        assert_eq!(card.min, Pos2::new(504.0, 200.0));
+        assert_eq!(card.right(), origin.left() - 6.0);
+        assert!(!card.intersects(origin));
+    }
+
+    #[test]
+    fn retained_native_tooltip_finishes_its_fade_without_new_hover_samples() {
+        let duration = Duration::from_millis(90);
+        let initial = TooltipFadeState {
+            opacity: 0.05,
+            updated_at: 1.0,
+        };
+        let halfway = continue_tooltip_fade(0.05, Some(initial), 1.045, duration);
+        assert!((halfway.opacity - 0.55).abs() < 0.001);
+
+        let finished = continue_tooltip_fade(0.05, Some(halfway), 1.100, duration);
+        assert_eq!(finished.opacity, 1.0);
+        let time_reversed = continue_tooltip_fade(0.0, Some(finished), 0.5, duration);
+        assert_eq!(time_reversed.opacity, 1.0);
+        assert_eq!(time_reversed.updated_at, finished.updated_at);
+        assert_eq!(
+            continue_tooltip_fade(0.0, None, 1.0, Duration::ZERO).opacity,
+            1.0
+        );
     }
 
     #[test]
@@ -13809,6 +13997,10 @@ mod tests {
             identity: 1,
             origin: Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(10.0, 10.0)),
             card: Rect::from_min_max(Pos2::new(30.0, 0.0), Pos2::new(80.0, 30.0)),
+            fade: TooltipFadeState {
+                opacity: 1.0,
+                updated_at: 0.0,
+            },
             pointer_inside_viewport: false,
             handoff_until: 0.0,
         };
@@ -13862,6 +14054,10 @@ mod tests {
             // The handoff envelope includes the transparent native viewport;
             // its painted card can be smaller after content-aware shrinking.
             card: Rect::from_min_max(Pos2::new(10.0, 50.0), Pos2::new(220.0, 140.0)),
+            fade: TooltipFadeState {
+                opacity: 1.0,
+                updated_at: 0.0,
+            },
             pointer_inside_viewport: false,
             handoff_until: 0.0,
         };
@@ -13881,6 +14077,10 @@ mod tests {
             identity: 3,
             origin: Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(10.0, 10.0)),
             card: Rect::from_min_max(Pos2::new(30.0, 0.0), Pos2::new(80.0, 30.0)),
+            fade: TooltipFadeState {
+                opacity: 1.0,
+                updated_at: 0.0,
+            },
             pointer_inside_viewport: false,
             handoff_until: 1.3,
         };
@@ -13905,6 +14105,10 @@ mod tests {
             identity: 4,
             origin: Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(10.0, 10.0)),
             card: Rect::from_min_max(Pos2::new(30.0, 0.0), Pos2::new(80.0, 30.0)),
+            fade: TooltipFadeState {
+                opacity: 1.0,
+                updated_at: 0.0,
+            },
             pointer_inside_viewport: true,
             handoff_until: 0.5,
         };
