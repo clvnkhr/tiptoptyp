@@ -316,6 +316,39 @@ const fn raster_preview_required_for(
     screenshot_pending || export_pending || !interactive_requested || interactive_unavailable
 }
 
+const fn compilation_run_allowed(
+    paused: bool,
+    export_pending: bool,
+    screenshot_pending: bool,
+) -> bool {
+    !paused || export_pending || screenshot_pending
+}
+
+fn default_compile_pdf_path(
+    designated_preview: Option<&Path>,
+    document_kind: DocumentKind,
+    document_path: Option<&Path>,
+) -> Option<PathBuf> {
+    let source = designated_preview.or_else(|| {
+        if document_kind.is_typst() {
+            document_path
+        } else {
+            None
+        }
+    })?;
+    let mut output = source.to_path_buf();
+    output.set_extension("pdf");
+    Some(output)
+}
+
+const fn compilation_toggle_copy(paused: bool) -> (&'static str, &'static str) {
+    if paused {
+        ("Resume", "Resume automatic compilation")
+    } else {
+        ("Pause", "Pause automatic compilation")
+    }
+}
+
 const fn snapshot_scene_hides_preview_pages(scene: Option<UiSnapshotScene>) -> bool {
     matches!(scene, Some(UiSnapshotScene::PreviewCompiling))
 }
@@ -610,13 +643,45 @@ struct EditorSnapshot {
     cursor: CCursorRange,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PdfWriteIntent {
+    Compile,
+    Export,
+}
+
+impl PdfWriteIntent {
+    const fn dialog_title(self) -> &'static str {
+        match self {
+            Self::Compile => "Compile PDF",
+            Self::Export => "Export PDF",
+        }
+    }
+
+    const fn completed_verb(self) -> &'static str {
+        match self {
+            Self::Compile => "Compiled",
+            Self::Export => "Exported",
+        }
+    }
+
+    const fn queued_message(self) -> &'static str {
+        match self {
+            Self::Compile => "Compile queued for the next successful build",
+            Self::Export => "Export queued for the next successful build",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingExport {
     path: PathBuf,
     document_epoch: u64,
+    intent: PdfWriteIntent,
 }
 
 struct PendingExportDialog {
     document_epoch: u64,
+    intent: PdfWriteIntent,
     future: Pin<Box<dyn Future<Output = Option<FileHandle>>>>,
 }
 
@@ -662,8 +727,18 @@ enum WorkspaceMenuAction {
     OpenInNewWindow(PathBuf),
     TogglePreview(PathBuf),
     Rename(PathBuf),
-    CopyPath(PathBuf),
+    Copy {
+        path: PathBuf,
+        kind: WorkspaceCopyKind,
+    },
     Reveal(PathBuf),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkspaceCopyKind {
+    FileName,
+    FilePath,
+    RelativePath,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -851,6 +926,7 @@ pub struct EditorApp {
     asset_token: u64,
     pending_asset_page: Option<usize>,
     compile_deadline: Option<Instant>,
+    compilation_paused: bool,
     status: PreviewStatus,
     raw_diagnostics: String,
     diagnostics: Vec<Diagnostic>,
@@ -1106,6 +1182,7 @@ impl EditorApp {
             asset_token: 0,
             pending_asset_page: None,
             compile_deadline: Some(Instant::now()),
+            compilation_paused: false,
             status: PreviewStatus::Waiting,
             raw_diagnostics: String::new(),
             diagnostics: Vec::new(),
@@ -1660,7 +1737,8 @@ impl EditorApp {
             // fallback can only see an imported subfile after it is saved, so
             // avoid rebuilding the designated main entry with stale disk data.
             self.compile_deadline = (self.current_is_preview_document()
-                && self.preview_processing_enabled())
+                && self.preview_processing_enabled()
+                && self.may_run_compilation())
             .then(|| Instant::now() + COMPILE_DEBOUNCE);
             if self.compile_deadline.is_some() {
                 self.status = PreviewStatus::Waiting;
@@ -1713,7 +1791,7 @@ impl EditorApp {
 
     fn request_compile(&mut self) {
         self.compile_deadline = None;
-        if !self.preview_processing_enabled() {
+        if !self.preview_processing_enabled() || !self.may_run_compilation() {
             return;
         }
         let preview_path = self.preview_document_path();
@@ -1749,7 +1827,7 @@ impl EditorApp {
     }
 
     fn tick_compile(&mut self, context: &egui::Context) {
-        if !self.preview_processing_enabled() {
+        if !self.preview_processing_enabled() || !self.may_run_compilation() {
             self.compile_deadline = None;
             return;
         }
@@ -1766,7 +1844,10 @@ impl EditorApp {
 
     fn receive_compile_results(&mut self, context: &egui::Context) {
         while let Some(result) = self.compiler.try_recv() {
-            if !self.preview_processing_enabled() || result.revision != self.revision {
+            if !self.preview_processing_enabled()
+                || !self.may_run_compilation()
+                || result.revision != self.revision
+            {
                 continue;
             }
 
@@ -1879,12 +1960,70 @@ impl EditorApp {
     }
 
     fn schedule_compile_now(&mut self) {
-        if !self.preview_processing_enabled() {
+        if !self.preview_processing_enabled() || !self.may_run_compilation() {
             self.compile_deadline = None;
             return;
         }
         self.compile_deadline = Some(Instant::now());
         self.status = PreviewStatus::Waiting;
+    }
+
+    fn may_run_compilation(&self) -> bool {
+        compilation_run_allowed(
+            self.compilation_paused,
+            self.pending_export.is_some(),
+            self.captures.has_pending_for("main"),
+        )
+    }
+
+    fn toggle_compilation_paused(&mut self) {
+        self.compilation_paused = !self.compilation_paused;
+        if self.compilation_paused {
+            if !self.may_run_compilation() {
+                self.compile_deadline = None;
+                if let Err(error) = self.compiler.pause(self.revision) {
+                    self.compilation_paused = false;
+                    self.notice = Some(Notice {
+                        message: format!("Could not pause the Typst watcher: {error}"),
+                        kind: NoticeKind::Error,
+                    });
+                    return;
+                }
+            }
+            self.notice = Some(Notice {
+                message: "Automatic compilation paused".to_owned(),
+                kind: NoticeKind::Info,
+            });
+        } else {
+            self.sync_tinymist_change();
+            self.schedule_compile_now();
+            self.notice = Some(Notice {
+                message: "Automatic compilation resumed".to_owned(),
+                kind: NoticeKind::Success,
+            });
+        }
+    }
+
+    fn compile_pdf(&mut self, frame: &eframe::Frame) {
+        if !self.typst_preview_available() {
+            self.notice = Some(Notice {
+                message: "Compile needs a Typst preview entry".to_owned(),
+                kind: NoticeKind::Info,
+            });
+            return;
+        }
+        let designated = self.designated_preview_path();
+        let Some(path) = default_compile_pdf_path(
+            designated.as_deref(),
+            self.document_kind,
+            self.path.as_deref(),
+        ) else {
+            // An unsaved Typst document has no meaningful adjacent output
+            // path, so ask once where its first PDF should be written.
+            self.choose_pdf_output(frame, PdfWriteIntent::Compile);
+            return;
+        };
+        self.finish_pdf_output(path, PdfWriteIntent::Compile);
     }
 
     fn clear_preview_for_document(&mut self, preserve_designated_preview: bool) {
@@ -1910,10 +2049,12 @@ impl EditorApp {
         }
         self.pending_asset_page = None;
         self.editor_hover = None;
-        if self.pending_export.take().is_some() {
+        if let Some(pending) = self.pending_export.take() {
             self.notice = Some(Notice {
-                message: "Queued PDF export canceled because another document is now active"
-                    .to_owned(),
+                message: format!(
+                    "Queued {} canceled because another document is now active",
+                    pending.intent.dialog_title()
+                ),
                 kind: NoticeKind::Info,
             });
         }
@@ -1964,8 +2105,7 @@ impl EditorApp {
             self.execute_file_menu_action(action, frame);
         }
         if context.input_mut(|input| input.consume_shortcut(&refresh)) {
-            self.request_compile();
-            self.refresh_workspace();
+            self.compile_pdf(frame);
         }
         match context.input_mut(consume_find_shortcut) {
             Some(FindShortcutAction::Toggle) => self.toggle_find(),
@@ -2994,9 +3134,13 @@ impl EditorApp {
         };
         let path = path.canonicalize().unwrap_or(path);
         let keep_designated_preview = self.should_keep_designated_preview(&path);
-        if !path.starts_with(&self.workspace_root)
-            && let Some(parent) = path.parent()
-        {
+        let workspace_root_changed = !path.starts_with(&self.workspace_root);
+        let preserve_workspace_snapshot = preserve_workspace_snapshot_for_open(
+            self.workspace.is_some(),
+            &self.workspace_root,
+            &path,
+        );
+        if workspace_root_changed && let Some(parent) = path.parent() {
             self.workspace_root = canonical_or_absolute(&discover_project_root(parent));
         }
         let workspace_root = self.workspace_root.clone();
@@ -3018,15 +3162,16 @@ impl EditorApp {
         self.remember_open_document(&path);
         self.clear_preview_for_document(keep_designated_preview);
         self.search.clear();
-        if keep_designated_preview {
+        if !preserve_workspace_snapshot {
+            self.reset_document_services();
+        } else if keep_designated_preview {
             if self.tinymist_generation.is_some() {
                 self.reopen_tinymist_current_document(&path, kind);
             } else {
                 self.restart_tinymist();
             }
-            self.refresh_workspace();
         } else {
-            self.reset_document_services();
+            self.restart_tinymist();
         }
 
         if self.preview_processing_enabled() {
@@ -3221,9 +3366,23 @@ impl EditorApp {
     }
 
     fn export_pdf(&mut self, frame: &eframe::Frame) {
+        self.choose_pdf_output(frame, PdfWriteIntent::Export);
+    }
+
+    fn choose_pdf_output(&mut self, frame: &eframe::Frame, intent: PdfWriteIntent) {
         if !self.typst_preview_available() && self.document_kind != DocumentKind::Pdf {
             self.notice = Some(Notice {
-                message: "PDF export needs a Typst preview entry or PDF document".to_owned(),
+                message: format!(
+                    "{} needs a Typst preview entry or PDF document",
+                    intent.dialog_title()
+                ),
+                kind: NoticeKind::Info,
+            });
+            return;
+        }
+        if let Some(pending) = self.pending_export.as_ref() {
+            self.notice = Some(Notice {
+                message: format!("{} is already queued", pending.intent.dialog_title()),
                 kind: NoticeKind::Info,
             });
             return;
@@ -3246,7 +3405,7 @@ impl EditorApp {
         };
         let mut dialog = dialog
             .add_filter("PDF documents", &["pdf"])
-            .set_title("Export PDF")
+            .set_title(intent.dialog_title())
             .set_file_name(default_name);
         if let Some(directory) = export_source
             .as_deref()
@@ -3262,6 +3421,7 @@ impl EditorApp {
         // uses a completion handler and is polled by normal egui frames instead.
         self.pending_export_dialog = Some(PendingExportDialog {
             document_epoch: self.document_epoch,
+            intent,
             future: Box::pin(dialog.save_file()),
         });
     }
@@ -3277,14 +3437,17 @@ impl EditorApp {
             return;
         };
         let document_epoch = pending.document_epoch;
+        let intent = pending.intent;
         self.pending_export_dialog = None;
         if let Some(file) = selection {
             if self.document_epoch == document_epoch {
-                self.finish_export_selection(file.path().to_path_buf());
+                self.finish_pdf_output(file.path().to_path_buf(), intent);
             } else {
                 self.notice = Some(Notice {
-                    message: "PDF export canceled because another document is now active"
-                        .to_owned(),
+                    message: format!(
+                        "{} canceled because another document is now active",
+                        intent.dialog_title()
+                    ),
                     kind: NoticeKind::Info,
                 });
             }
@@ -3513,7 +3676,14 @@ impl EditorApp {
         }
     }
 
-    fn finish_export_selection(&mut self, mut path: PathBuf) {
+    fn finish_pdf_output(&mut self, mut path: PathBuf, intent: PdfWriteIntent) {
+        if let Some(pending) = self.pending_export.as_ref() {
+            self.notice = Some(Notice {
+                message: format!("{} is already queued", pending.intent.dialog_title()),
+                kind: NoticeKind::Info,
+            });
+            return;
+        }
         if path.extension().is_none() {
             path.set_extension("pdf");
         }
@@ -3525,7 +3695,7 @@ impl EditorApp {
                 self.show_file_error(error);
             } else {
                 self.notice = Some(Notice {
-                    message: format!("Exported {}", path.display()),
+                    message: format!("{} {}", intent.completed_verb(), path.display()),
                     kind: NoticeKind::Success,
                 });
             }
@@ -3535,9 +3705,10 @@ impl EditorApp {
         self.pending_export = Some(PendingExport {
             path,
             document_epoch: self.document_epoch,
+            intent,
         });
         self.notice = Some(Notice {
-            message: "Export queued for the next successful build".to_owned(),
+            message: intent.queued_message().to_owned(),
             kind: NoticeKind::Info,
         });
         if self.preview_processing_enabled() {
@@ -3546,19 +3717,27 @@ impl EditorApp {
     }
 
     fn complete_pending_export(&mut self) {
-        let (Some(path), Some(pdf)) = (
+        let (Some(pending), Some(pdf)) = (
             take_matching_export(&mut self.pending_export, self.document_epoch),
             self.pdf.as_deref(),
         ) else {
             return;
         };
-        if let Err(error) = atomic_write(&self.project_root(), &path, pdf) {
+        if let Err(error) = atomic_write(&self.project_root(), &pending.path, pdf) {
             self.show_file_error(error);
         } else {
             self.notice = Some(Notice {
-                message: format!("Exported {}", path.display()),
+                message: format!(
+                    "{} {}",
+                    pending.intent.completed_verb(),
+                    pending.path.display()
+                ),
                 kind: NoticeKind::Success,
             });
+        }
+        if self.compilation_paused && !self.may_run_compilation() {
+            self.compile_deadline = None;
+            let _ = self.compiler.pause(self.revision);
         }
     }
 
@@ -4129,7 +4308,7 @@ impl EditorApp {
     }
 
     fn sync_tinymist_change(&mut self) {
-        if !self.document_kind.is_typst() {
+        if self.compilation_paused || !self.document_kind.is_typst() {
             return;
         }
         if let Some(document) = &self.tinymist_unsaved_document
@@ -4730,7 +4909,7 @@ impl EditorApp {
             };
             let title_response = ui.add_sized(
                 [title_width, METRICS.toolbar.title_height],
-                egui::Label::new(RichText::new(&title).strong())
+                theme::nonselectable_label(RichText::new(&title).strong())
                     .truncate()
                     .sense(Sense::click()),
             );
@@ -4761,13 +4940,25 @@ impl EditorApp {
             if native_hover_text(ui.button("Find"), "Find · Cmd+F").clicked() {
                 self.toggle_find();
             }
+            let (pause_label, pause_hint) = compilation_toggle_copy(self.compilation_paused);
             if native_hover_text(
-                ui.add_enabled(self.typst_preview_available(), egui::Button::new("Compile")),
-                "Compile now · Cmd+R",
+                ui.add_enabled(
+                    self.typst_preview_available(),
+                    egui::Button::new(pause_label).selected(self.compilation_paused),
+                ),
+                pause_hint,
             )
             .clicked()
             {
-                self.request_compile();
+                self.toggle_compilation_paused();
+            }
+            if native_hover_text(
+                ui.add_enabled(self.typst_preview_available(), egui::Button::new("Compile")),
+                "Compile PDF beside the Typst source · Cmd+R",
+            )
+            .clicked()
+            {
+                self.compile_pdf(frame);
             }
 
             // Consuming the remaining width with a right-to-left layout keeps
@@ -6169,7 +6360,9 @@ impl EditorApp {
             AppPopup::File { anchor } => (*anchor, METRICS.menu.file_size),
             AppPopup::Edit { anchor } => (*anchor, METRICS.menu.edit_size),
             AppPopup::View { anchor } => (*anchor, METRICS.menu.view_size),
-            AppPopup::Workspace { anchor, .. } => (*anchor, METRICS.menu.workspace_size),
+            AppPopup::Workspace {
+                anchor, is_file, ..
+            } => (*anchor, workspace_context_menu_size(*is_file)),
             AppPopup::Editor { anchor, link } => {
                 (*anchor, editor_context_menu_size(link.is_some()))
             }
@@ -6371,8 +6564,19 @@ impl EditorApp {
                     self.toggle_file_for_preview(path, context)
                 }
                 WorkspaceMenuAction::Rename(path) => self.begin_rename(path),
-                WorkspaceMenuAction::CopyPath(path) => {
-                    context.copy_text(path.display().to_string());
+                WorkspaceMenuAction::Copy { path, kind } => {
+                    if let Some(text) = workspace_copy_text(&path, &self.project_root(), kind) {
+                        context.copy_text(text);
+                    } else {
+                        self.notice = Some(Notice {
+                            message: format!(
+                                "Could not copy the {} for {}",
+                                workspace_copy_kind_description(kind),
+                                path.display()
+                            ),
+                            kind: NoticeKind::Error,
+                        });
+                    }
                 }
                 WorkspaceMenuAction::Reveal(path) => {
                     if let Err(error) = reveal_in_file_manager(&path) {
@@ -6985,6 +7189,9 @@ impl EditorApp {
     fn compiler_service_state(&self) -> ServiceState {
         if !self.typst_preview_available() {
             return ServiceState::Disabled("The selected file is not compiled as Typst".to_owned());
+        }
+        if !self.may_run_compilation() {
+            return ServiceState::Disabled("Automatic compilation is paused".to_owned());
         }
         match self.status {
             PreviewStatus::Waiting => {
@@ -8440,18 +8647,23 @@ impl EditorApp {
             }
 
             let dark_mode = ui.visuals().dark_mode;
-            let (icon, color, timing) = match self.status {
-                PreviewStatus::Waiting => (UiIcon::Waiting, neutral_color(dark_mode), None),
-                PreviewStatus::Compiling => (UiIcon::Refresh, info_color(dark_mode), None),
-                PreviewStatus::Ready(elapsed) => (
-                    UiIcon::Check,
-                    success_color(dark_mode),
-                    self.document_kind
-                        .is_typst()
-                        .then(|| format!("{:.0} ms", elapsed.as_secs_f64() * 1000.0)),
-                ),
-                PreviewStatus::Error => (UiIcon::Warning, error_color(dark_mode), None),
-            };
+            let (icon, color, timing) =
+                if !self.may_run_compilation() && self.typst_preview_available() {
+                    (UiIcon::Waiting, neutral_color(dark_mode), None)
+                } else {
+                    match self.status {
+                        PreviewStatus::Waiting => (UiIcon::Waiting, neutral_color(dark_mode), None),
+                        PreviewStatus::Compiling => (UiIcon::Refresh, info_color(dark_mode), None),
+                        PreviewStatus::Ready(elapsed) => (
+                            UiIcon::Check,
+                            success_color(dark_mode),
+                            self.document_kind
+                                .is_typst()
+                                .then(|| format!("{:.0} ms", elapsed.as_secs_f64() * 1000.0)),
+                        ),
+                        PreviewStatus::Error => (UiIcon::Warning, error_color(dark_mode), None),
+                    }
+                };
             let status_detail = self.status_detail();
             let status_response = ui
                 .horizontal(|ui| {
@@ -8527,6 +8739,9 @@ impl EditorApp {
     }
 
     fn status_detail(&self) -> String {
+        if !self.may_run_compilation() && self.typst_preview_available() {
+            return "Automatic compilation paused".to_owned();
+        }
         if !self.typst_preview_available() {
             return match (self.document_kind, self.status) {
                 (DocumentKind::Text, _) => "Text file ready".to_owned(),
@@ -9038,11 +9253,10 @@ fn preview_color_image(size: [usize; 2], rgba: &[u8]) -> ColorImage {
 fn take_matching_export(
     pending: &mut Option<PendingExport>,
     document_epoch: u64,
-) -> Option<PathBuf> {
+) -> Option<PendingExport> {
     pending
         .take()
         .filter(|export| export.document_epoch == document_epoch)
-        .map(|export| export.path)
 }
 
 fn paint_editor_line_backgrounds(
@@ -9379,7 +9593,7 @@ fn add_workspace_nodes(
                     .icon(|ui| paint_tree_icon(ui, true))
                     .label_ui(move |ui| {
                         let text = RichText::new(&label).color(color);
-                        ui.label(if is_active { text.strong() } else { text });
+                        ui.add(workspace_entry_label(text, is_active));
                     }),
             );
             if open {
@@ -9394,7 +9608,7 @@ fn add_workspace_nodes(
                     .label_ui(move |ui| {
                         ui.horizontal(|ui| {
                             let text = RichText::new(&label).color(color);
-                            ui.label(if is_active { text.strong() } else { text });
+                            ui.add(workspace_entry_label(text, is_active));
                             if is_preview {
                                 let blue = theme::palette(ui.visuals().dark_mode).accent;
                                 native_hover_text(
@@ -9412,11 +9626,20 @@ fn add_workspace_nodes(
                     .icon(|ui| paint_tree_icon(ui, false))
                     .label_ui(move |ui| {
                         let text = RichText::new(format!("{label} (link)")).color(color);
-                        ui.label(if is_active { text.strong() } else { text });
+                        ui.add(workspace_entry_label(text, is_active));
                     }),
             );
         }
     }
+}
+
+fn workspace_entry_label(text: RichText, is_active: bool) -> egui::Label {
+    let text = if is_active {
+        text.font(theme::strong_ui_font()).strong()
+    } else {
+        text
+    };
+    theme::nonselectable_label(text)
 }
 
 fn workspace_entry_color(path: &Path, directory: bool, symlink: bool, dark_mode: bool) -> Color32 {
@@ -12499,10 +12722,24 @@ fn show_workspace_popup_ui(
         )));
     }
     ui.separator();
-    if menu_item(ui, "Copy Path", None).clicked() {
-        *action = Some(AppPopupAction::Workspace(WorkspaceMenuAction::CopyPath(
-            path.to_path_buf(),
-        )));
+    if is_file {
+        for kind in [
+            WorkspaceCopyKind::FileName,
+            WorkspaceCopyKind::FilePath,
+            WorkspaceCopyKind::RelativePath,
+        ] {
+            if menu_item(ui, workspace_copy_kind_label(kind), None).clicked() {
+                *action = Some(AppPopupAction::Workspace(WorkspaceMenuAction::Copy {
+                    path: path.to_path_buf(),
+                    kind,
+                }));
+            }
+        }
+    } else if menu_item(ui, "Copy Path", None).clicked() {
+        *action = Some(AppPopupAction::Workspace(WorkspaceMenuAction::Copy {
+            path: path.to_path_buf(),
+            kind: WorkspaceCopyKind::FilePath,
+        }));
     }
     if menu_item(ui, reveal_label(), None).clicked() {
         *action = Some(AppPopupAction::Workspace(WorkspaceMenuAction::Reveal(
@@ -12583,6 +12820,44 @@ fn editor_context_menu_size(has_link: bool) -> Vec2 {
         size.y += METRICS.menu.row_height + theme::SPACE.control;
     }
     size
+}
+
+fn workspace_context_menu_size(is_file: bool) -> Vec2 {
+    let mut size = METRICS.menu.workspace_size;
+    if is_file {
+        // A file has three copy actions where a directory has one.
+        size.y += METRICS.menu.row_height * 2.0;
+    }
+    size
+}
+
+const fn workspace_copy_kind_label(kind: WorkspaceCopyKind) -> &'static str {
+    match kind {
+        WorkspaceCopyKind::FileName => "Copy File Name",
+        WorkspaceCopyKind::FilePath => "Copy File Path",
+        WorkspaceCopyKind::RelativePath => "Copy Relative Path",
+    }
+}
+
+const fn workspace_copy_kind_description(kind: WorkspaceCopyKind) -> &'static str {
+    match kind {
+        WorkspaceCopyKind::FileName => "file name",
+        WorkspaceCopyKind::FilePath => "file path",
+        WorkspaceCopyKind::RelativePath => "relative path",
+    }
+}
+
+fn workspace_copy_text(path: &Path, root: &Path, kind: WorkspaceCopyKind) -> Option<String> {
+    match kind {
+        WorkspaceCopyKind::FileName => path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned()),
+        WorkspaceCopyKind::FilePath => Some(path.display().to_string()),
+        WorkspaceCopyKind::RelativePath => path
+            .strip_prefix(root)
+            .ok()
+            .map(|relative| relative.display().to_string()),
+    }
 }
 
 fn child_viewport_builder(viewport: egui::ViewportBuilder) -> egui::ViewportBuilder {
@@ -13090,6 +13365,14 @@ fn discover_project_root(source_dir: &Path) -> PathBuf {
         .unwrap_or_else(|| source_dir.to_path_buf())
 }
 
+fn preserve_workspace_snapshot_for_open(
+    has_snapshot: bool,
+    workspace_root: &Path,
+    path: &Path,
+) -> bool {
+    has_snapshot && path.starts_with(workspace_root)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -13183,6 +13466,55 @@ mod tests {
         assert!(raster_preview_required_for(true, false, true, false));
         assert!(raster_preview_required_for(true, false, false, true));
         assert!(raster_preview_required_for(false, false, false, false));
+    }
+
+    #[test]
+    fn pausing_blocks_automatic_builds_but_not_explicit_pdf_or_capture_work() {
+        assert!(compilation_run_allowed(false, false, false));
+        assert!(!compilation_run_allowed(true, false, false));
+        assert!(compilation_run_allowed(true, true, false));
+        assert!(compilation_run_allowed(true, false, true));
+        assert_eq!(
+            compilation_toggle_copy(false),
+            ("Pause", "Pause automatic compilation")
+        );
+        assert_eq!(
+            compilation_toggle_copy(true),
+            ("Resume", "Resume automatic compilation")
+        );
+    }
+
+    #[test]
+    fn compile_writes_beside_the_effective_saved_typst_entry() {
+        assert_eq!(
+            default_compile_pdf_path(
+                None,
+                DocumentKind::Typst,
+                Some(Path::new("/project/chapters/main.typ")),
+            ),
+            Some(PathBuf::from("/project/chapters/main.pdf"))
+        );
+        assert_eq!(
+            default_compile_pdf_path(
+                Some(Path::new("/project/book.typ")),
+                DocumentKind::Text,
+                Some(Path::new("/project/metadata.toml")),
+            ),
+            Some(PathBuf::from("/project/book.pdf"))
+        );
+        assert_eq!(
+            default_compile_pdf_path(None, DocumentKind::Typst, None),
+            None,
+            "an unsaved document must ask the user for an output path"
+        );
+        assert_eq!(
+            default_compile_pdf_path(
+                None,
+                DocumentKind::Text,
+                Some(Path::new("/project/notes.txt")),
+            ),
+            None
+        );
     }
 
     #[test]
@@ -13333,18 +13665,18 @@ mod tests {
         let mut pending = Some(PendingExport {
             path: PathBuf::from("old-document.pdf"),
             document_epoch: 7,
+            intent: PdfWriteIntent::Export,
         });
         assert_eq!(take_matching_export(&mut pending, 8), None);
         assert!(pending.is_none());
 
-        let mut pending = Some(PendingExport {
+        let expected = PendingExport {
             path: PathBuf::from("current-document.pdf"),
             document_epoch: 8,
-        });
-        assert_eq!(
-            take_matching_export(&mut pending, 8),
-            Some(PathBuf::from("current-document.pdf"))
-        );
+            intent: PdfWriteIntent::Compile,
+        };
+        let mut pending = Some(expected.clone());
+        assert_eq!(take_matching_export(&mut pending, 8), Some(expected));
     }
 
     #[test]
@@ -13422,6 +13754,26 @@ mod tests {
     }
 
     #[test]
+    fn opening_a_file_only_invalidates_the_tree_when_the_workspace_changes() {
+        let root = Path::new("/project");
+        assert!(preserve_workspace_snapshot_for_open(
+            true,
+            root,
+            Path::new("/project/chapters/intro.typ")
+        ));
+        assert!(!preserve_workspace_snapshot_for_open(
+            true,
+            root,
+            Path::new("/another-project/main.typ")
+        ));
+        assert!(!preserve_workspace_snapshot_for_open(
+            false,
+            root,
+            Path::new("/project/main.typ")
+        ));
+    }
+
+    #[test]
     fn workspace_font_refresh_matches_catalog_directory_exclusions() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(directory.path().join("assets/fonts")).unwrap();
@@ -13447,6 +13799,71 @@ mod tests {
         assert!(compact.starts_with('…'));
         assert!(compact.ends_with("introduction.typ"));
         assert_eq!(compact.chars().count(), 18);
+    }
+
+    #[test]
+    fn workspace_copy_actions_produce_name_absolute_and_root_relative_text() {
+        let root = Path::new("/project");
+        let path = root.join("docs/guide.typ");
+
+        assert_eq!(
+            workspace_copy_text(&path, root, WorkspaceCopyKind::FileName).as_deref(),
+            Some("guide.typ")
+        );
+        assert_eq!(
+            workspace_copy_text(&path, root, WorkspaceCopyKind::FilePath).as_deref(),
+            Some("/project/docs/guide.typ")
+        );
+        assert_eq!(
+            workspace_copy_text(&path, root, WorkspaceCopyKind::RelativePath).as_deref(),
+            Some("docs/guide.typ")
+        );
+        assert_eq!(
+            workspace_copy_text(
+                Path::new("/elsewhere/guide.typ"),
+                root,
+                WorkspaceCopyKind::RelativePath,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn file_context_menu_exposes_each_copy_contract() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+
+        let path = PathBuf::from("/project/docs/guide.typ");
+        let expected_path = path.clone();
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(320.0, 360.0))
+            .build_ui_state(
+                move |ui, action| {
+                    show_workspace_popup_ui(ui, &path, true, false, action);
+                },
+                None::<AppPopupAction>,
+            );
+        harness.run();
+
+        for label in ["Copy File Name", "Copy File Path", "Copy Relative Path"] {
+            assert!(
+                harness.query_by_label_contains(label).is_some(),
+                "missing {label}"
+            );
+        }
+        harness.get_by_label_contains("Copy Relative Path").click();
+        harness.run();
+
+        match harness.state() {
+            Some(AppPopupAction::Workspace(WorkspaceMenuAction::Copy {
+                path,
+                kind: WorkspaceCopyKind::RelativePath,
+            })) => assert_eq!(path, &expected_path),
+            other => panic!("unexpected context-menu action: {other:?}"),
+        }
+        assert_eq!(
+            workspace_context_menu_size(true).y,
+            workspace_context_menu_size(false).y + METRICS.menu.row_height * 2.0
+        );
     }
 
     #[test]

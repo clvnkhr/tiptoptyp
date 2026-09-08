@@ -140,6 +140,8 @@ pub fn editor_font() -> FontId {
 const EDITOR_WEIGHT_FAMILY_PREFIX: &str = "tiptoptyp-editor-weight";
 const WEIGHTED_UI_FAMILY: &str = "tiptoptyp-weighted-ui";
 const WEIGHTED_UI_DATA: &str = "tiptoptyp-weighted-ui-data";
+const WEIGHTED_UI_STRONG_FAMILY: &str = "tiptoptyp-weighted-ui-strong";
+const WEIGHTED_UI_STRONG_DATA: &str = "tiptoptyp-weighted-ui-strong-data";
 
 fn editor_weight_family(weight: u16) -> String {
     format!(
@@ -182,6 +184,16 @@ pub fn editor_font_with_weight(weight: u16) -> FontId {
     FontId::new(
         TYPE.content,
         FontFamily::Name(Arc::from(editor_weight_family(weight))),
+    )
+}
+
+/// A heavier version of the selected interface font for active navigation
+/// entries. Unlike `RichText::strong`, this changes glyph weight rather than
+/// only increasing foreground contrast.
+pub fn strong_ui_font() -> FontId {
+    FontId::new(
+        TYPE.content,
+        FontFamily::Name(Arc::from(WEIGHTED_UI_STRONG_FAMILY)),
     )
 }
 
@@ -385,6 +397,24 @@ fn weighted_requested_font_data(
     Some((data, support))
 }
 
+fn weighted_ui_font_data(
+    ui_font: FontRequest<'_>,
+    editor_font: FontRequest<'_>,
+    ui_font_monospace: bool,
+    custom_editor_requested: bool,
+    weight: u16,
+) -> Option<(egui::FontData, Option<FontWeightSupport>)> {
+    if ui_font_monospace && custom_editor_requested {
+        weighted_requested_font_data(editor_font, weight)
+    } else if ui_font_monospace {
+        variable_editor_font().and_then(|bytes| weighted_font_data(bytes, weight))
+    } else if ui_font.family.is_some() || ui_font.fallback_path.is_some() {
+        weighted_requested_font_data(ui_font, weight)
+    } else {
+        default_proportional_font().and_then(|bytes| weighted_font_data(bytes, weight))
+    }
+}
+
 fn variable_editor_font() -> Option<Vec<u8>> {
     let candidates: &[&str] = if cfg!(target_os = "macos") {
         &["/System/Library/Fonts/SFNSMono.ttf"]
@@ -417,7 +447,7 @@ fn default_proportional_font() -> Option<Vec<u8>> {
     candidates.iter().find_map(|path| std::fs::read(path).ok())
 }
 
-/// Register editor weight roles and the active weighted UI family while
+/// Register editor weight roles and normal/strong weighted UI families while
 /// retaining every bundled glyph fallback.
 pub fn configure_editor_fonts(
     context: &egui::Context,
@@ -583,27 +613,39 @@ pub fn configure_editor_fonts(
     }
 
     let custom_ui_requested = ui_font.family.is_some() || ui_font.fallback_path.is_some();
-    let selected_ui_font = if ui_font_monospace && custom_editor_requested {
-        weighted_requested_font_data(editor_font, ui_font_weight)
-    } else if ui_font_monospace {
-        variable_editor_font().and_then(|bytes| weighted_font_data(bytes, ui_font_weight))
-    } else if custom_ui_requested {
-        weighted_requested_font_data(ui_font, ui_font_weight)
-    } else {
-        default_proportional_font().and_then(|bytes| weighted_font_data(bytes, ui_font_weight))
-    };
+    let selected_ui_font = weighted_ui_font_data(
+        ui_font,
+        editor_font,
+        ui_font_monospace,
+        custom_editor_requested,
+        ui_font_weight,
+    );
+    let selected_strong_ui_font = weighted_ui_font_data(
+        ui_font,
+        editor_font,
+        ui_font_monospace,
+        custom_editor_requested,
+        editor_weight_from_base(FONT_WEIGHT_BOLD, ui_font_weight),
+    );
     let custom_ui_loaded = custom_ui_requested && selected_ui_font.is_some();
     let mut ui_weight_support = None;
+    let ui_fallback = if ui_font_monospace {
+        monospace_fallback.clone()
+    } else {
+        proportional_fallback.clone()
+    };
+    let strong_ui_primary = selected_strong_ui_font.map(|(data, _)| {
+        definitions
+            .font_data
+            .insert(WEIGHTED_UI_STRONG_DATA.to_owned(), Arc::new(data));
+        WEIGHTED_UI_STRONG_DATA.to_owned()
+    });
     let weighted_ui_loaded = if let Some((data, support)) = selected_ui_font {
         definitions
             .font_data
             .insert(WEIGHTED_UI_DATA.to_owned(), Arc::new(data));
         let mut family = vec![WEIGHTED_UI_DATA.to_owned()];
-        family.extend(if ui_font_monospace {
-            monospace_fallback.clone()
-        } else {
-            proportional_fallback
-        });
+        family.extend(ui_fallback.clone());
         definitions
             .families
             .insert(FontFamily::Name(Arc::from(WEIGHTED_UI_FAMILY)), family);
@@ -625,6 +667,23 @@ pub fn configure_editor_fonts(
     } else {
         false
     };
+    let mut strong_family = strong_ui_primary.into_iter().collect::<Vec<_>>();
+    if strong_family.is_empty() && ui_font_monospace {
+        strong_family.extend(
+            definitions
+                .families
+                .get(&FontFamily::Name(Arc::from(editor_weight_family(
+                    FONT_WEIGHT_BOLD,
+                ))))
+                .cloned()
+                .unwrap_or_default(),
+        );
+    }
+    strong_family.extend(ui_fallback);
+    definitions.families.insert(
+        FontFamily::Name(Arc::from(WEIGHTED_UI_STRONG_FAMILY)),
+        strong_family,
+    );
     context.set_fonts(definitions);
     FontConfiguration {
         custom_ui_loaded,
@@ -1476,19 +1535,29 @@ pub fn apply_active_row_selection(ui: &mut egui::Ui) {
     ui.visuals_mut().selection.stroke = egui::Stroke::NONE;
 }
 
+/// Keep chrome and navigation labels inert while selectable labels remain
+/// enabled for document-like content such as diagnostics and tooltip bodies.
+pub fn nonselectable_label(text: impl Into<egui::WidgetText>) -> egui::Label {
+    egui::Label::new(text).selectable(false)
+}
+
 pub fn show_logo(ui: &mut egui::Ui) {
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         ui.horizontal(|ui| {
             let font = FontId::proportional(TYPE.content);
-            ui.label(RichText::new("t").font(font.clone()).strong());
-            ui.label(RichText::new("t").font(font.clone()).strong());
-            ui.label(
+            ui.add(nonselectable_label(
+                RichText::new("t").font(font.clone()).strong(),
+            ));
+            ui.add(nonselectable_label(
+                RichText::new("t").font(font.clone()).strong(),
+            ));
+            ui.add(nonselectable_label(
                 RichText::new("t")
                     .font(font)
                     .strong()
                     .color(palette(ui.visuals().dark_mode).accent),
-            );
+            ));
         });
     });
 }
@@ -1557,6 +1626,49 @@ mod tests {
     }
 
     #[test]
+    fn nonselectable_chrome_labels_override_global_text_selection() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+
+        fn drag_select(selectable: bool) -> bool {
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(260.0, 100.0))
+                .build_ui(move |ui| {
+                    ui.style_mut().interaction.selectable_labels = true;
+                    if selectable {
+                        ui.add(egui::Label::new("drag across this label").selectable(true));
+                    } else {
+                        ui.add(nonselectable_label("drag across this label"));
+                    }
+                });
+            harness.run();
+
+            let rect = harness.get_by_label("drag across this label").rect();
+            let start = egui::Pos2::new(rect.left() + 1.0, rect.center().y);
+            let end = egui::Pos2::new(rect.right() - 1.0, rect.center().y);
+            harness.hover_at(start);
+            harness.run();
+            harness.drag_at(start);
+            harness.run();
+            harness.hover_at(end);
+            harness.run();
+            harness.drop_at(end);
+            harness.run();
+
+            harness
+                .ctx
+                .plugin::<egui::text_selection::LabelSelectionState>()
+                .lock()
+                .has_selection()
+        }
+
+        assert!(
+            drag_select(true),
+            "positive selection control should select"
+        );
+        assert!(!drag_select(false), "chrome label must remain inert");
+    }
+
+    #[test]
     fn split_pane_layout_preserves_both_panes_at_normal_widths() {
         for available in [220.0, 320.0, 640.0, 1_400.0, 2_400.0] {
             let layout = split_pane_layout(available);
@@ -1611,6 +1723,20 @@ mod tests {
         assert_eq!(
             supporting_font(),
             FontId::new(TYPE.supporting, FontFamily::Proportional)
+        );
+        assert_eq!(strong_ui_font().size, TYPE.content);
+        assert_ne!(strong_ui_font().family, FontFamily::Proportional);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn strong_system_ui_role_uses_a_heavier_variable_font_coordinate() {
+        let bytes = default_proportional_font().expect("macOS system UI font should be available");
+        let normal = font_selection(&bytes, FONT_WEIGHT_NORMAL).expect("select normal UI font");
+        let strong = font_selection(&bytes, FONT_WEIGHT_BOLD).expect("select strong UI font");
+        assert!(
+            strong.coordinate > normal.coordinate,
+            "strong UI role should select a heavier OpenType coordinate"
         );
     }
 

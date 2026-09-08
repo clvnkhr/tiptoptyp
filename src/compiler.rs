@@ -124,6 +124,7 @@ pub struct CompileResult {
 
 enum CompilerCommand {
     Request(CompileRequest),
+    Pause,
 }
 
 pub struct Compiler {
@@ -172,6 +173,18 @@ impl Compiler {
             .as_ref()
             .ok_or_else(|| "The preview worker has stopped".to_owned())?
             .send(CompilerCommand::Request(request))
+            .map_err(|_| "The preview worker stopped unexpectedly".to_owned())
+    }
+
+    pub fn pause(&self, revision: u64) -> Result<(), String> {
+        // Interrupt rasterization for the current revision before asking the
+        // worker to reap its persistent `typst watch` child.
+        self.latest_revision
+            .store(revision.wrapping_add(1), Ordering::Release);
+        self.requests
+            .as_ref()
+            .ok_or_else(|| "The preview worker has stopped".to_owned())?
+            .send(CompilerCommand::Pause)
             .map_err(|_| "The preview worker stopped unexpectedly".to_owned())
     }
 
@@ -405,15 +418,27 @@ fn worker_loop(
         );
 
         match requests.recv_timeout(WORKER_POLL_INTERVAL) {
+            Ok(CompilerCommand::Pause) => {
+                session = None;
+            }
             Ok(CompilerCommand::Request(mut request)) => {
                 if *TRACE_WATCH {
                     eprintln!("tiptoptyp watcher request revision {}", request.revision);
                 }
                 // Never make the watcher step through obsolete editor snapshots.
+                let mut pause_after_request = false;
                 while let Ok(newer) = requests.try_recv() {
                     match newer {
-                        CompilerCommand::Request(newer) => request = newer,
+                        CompilerCommand::Request(newer) => {
+                            request = newer;
+                            pause_after_request = false;
+                        }
+                        CompilerCommand::Pause => pause_after_request = true,
                     }
+                }
+                if pause_after_request {
+                    session = None;
+                    continue;
                 }
 
                 // Finish processing any event already emitted by the old source
@@ -1078,6 +1103,13 @@ mod tests {
             classify_watch_line("document.typ:2:4: error: bad expression"),
             WatchLine::Diagnostic
         );
+    }
+
+    #[test]
+    fn an_idle_compiler_can_be_paused_and_reaped_cleanly() {
+        let compiler = Compiler::new(eframe::egui::Context::default());
+        compiler.pause(7).expect("pause compiler worker");
+        drop(compiler);
     }
 
     #[test]

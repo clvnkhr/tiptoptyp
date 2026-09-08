@@ -25,8 +25,9 @@ a rasterised recovery viewer.
 - UTF-8-safe literal find/replace with wraparound navigation
 - New, Open, Save, Save As, undo/redo, formatting, auto-save, drag-and-drop,
   dirty-file guards, and atomic writes
-- PDF export for saved or unsaved documents; a stale document queues export for
-  the next successful watched build
+- Pause/resume control for automatic live compilation. Compile writes the
+  current canonical PDF beside its saved Typst entry; unsaved documents ask
+  for a destination. Export PDF remains available for choosing another path.
 - Thirty-two bundled interface themes, with independent light and dark choices:
   Tiptop, Paper, Ocean, Forest, Catppuccin, Solarized, Gruvbox, GitHub,
   Rosé Pine, Tokyo Night, Kanagawa, Everforest, Ayu, Flexoki, and Dracula
@@ -172,7 +173,7 @@ and provide notarization credentials.
 | Find and replace | Cmd-Option-F on macOS, Ctrl-H elsewhere |
 | Format Typst | Option/Alt-Shift-F |
 | Settings | Cmd/Ctrl-Comma |
-| Refresh build and project | Cmd/Ctrl-R |
+| Compile PDF beside source | Cmd/Ctrl-R |
 | Interface scale | Cmd/Ctrl-Plus or Minus |
 | Rasterised preview zoom | Cmd/Ctrl-Option/Alt-Plus, Minus, or 0 |
 | App-only UI screenshot | Cmd/Ctrl-Shift-F12 |

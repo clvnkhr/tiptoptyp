@@ -61,8 +61,8 @@ Update the checkbox only when the entire task is complete and verified.
 46. [x] color code various filetypes (various categories should be: .typ, other text-based files, pdfs and images, folders, and others) make sure you use colours from the theme
 47. [x] the ttt in settings window is no longer left of file name in main window(s)
 48. [x] the top right X in settings should not be there - use the Mac OS traffic lights
-49. [ ] selecting a file in file explorer resets the file explorer scroll amount. Why? Opening a file cannot trigger more files to appear. It should not redraw. If it does, at least restore the scroll
-50. [ ] the current line background should be also used for the current file.
+49. [ ] selecting a file in file explorer resets the file explorer scroll amount. Why? Opening a file cannot trigger more files to appear. It should not redraw. If it does, at least restore the scroll (Implementation now preserves the cached filesystem snapshot and tree identity when opening a file within the current workspace; user interaction verification remains open.)
+50. [ ] the current line background should be also used for the current file. The currently opened file should also use an actual heavier UI-font face, not only stronger text color. (Implementation and deterministic font-role coverage are complete; user interaction verification remains open.)
 51. [x] find and replace shortcut just gives find.
 52. [ ] we should (by default) have the current scopes and the current sections/subsections etc be "sticky rows" at the top so that we have context for what we are looking at. each level should give a further row that is persisted to the top. For instance if we are in ```typ
   = first section
@@ -110,6 +110,8 @@ Update the checkbox only when the entire task is complete and verified.
 81. [ ] capture the complete maintained screenshot gallery from one app session instead of reopening the app for every image (The one-session runner and manifest tests are complete; a fresh full gallery exercise remains open.)
 82. [ ] redraw the refresh and used-for-preview eye vector icons so the refresh arrowhead does not overlap its body and the eye is rounded rather than angular (Implementation and deterministic geometry tests are complete; user visual verification remains open.)
 83. [ ] make tooltip Markdown links display only their linked text and open in the system browser; support opening external Typst `#link(...)` targets with Cmd+click or the editor context menu; and open preview links in the browser (Implementation and deterministic interaction/routing tests are complete; user interaction verification remains open.)
+84. [ ] prevent selecting file-tree names, the `ttt` logo, and the title-bar filename; add file-name, absolute-path, and workspace-relative-path copy actions to file context menus; and show Cmd+1 through Cmd+5 shortcuts in the native View menu (Implementation and deterministic tests are complete; user interaction verification remains open.)
+85. [ ] add a Pause/Resume control for automatic compilation and make Compile write the effective Typst entry's PDF beside its source, using an output picker only for an unsaved document (Implementation and deterministic tests are complete; user interaction verification remains open.)
 = resolved in the 2026-09-07 pass
 
 Items 1, 2, and 26 remain deferred. This history records completed work and partial
@@ -263,3 +265,22 @@ Open work is represented by the unchecked entries in the running list above.
 - Item 83: Tooltip Markdown links now omit their destination syntax, retain selectable text, and dispatch normalized HTTP(S) targets through the shared system-browser route. The editor recognizes literal external targets in real `#link(...)` calls: normal clicks remain editing actions, Cmd+click opens the link, and right-click exposes an Open Link in Browser action. Raster and native preview links use the same route.
 - Item 83: Native preview navigation callbacks now read the current preview URL, project root, and designated-source directory from shared session state. Reusing a pinned WebView after Tinymist restarts therefore cannot mistake the replacement localhost origin for an external page or resolve project links relative to a stale editor file.
 - Verification for item 83: Parser, Unicode cursor mapping, unsafe-scheme rejection, command-click priority, semantic tooltip activation, semantic context-menu activation, popup sizing, project-file routing, external preview dispatch, and replacement-origin routing have deterministic regressions. No app launch or screenshot was used; item 83 remains unchecked for user interaction verification.
+
+= correctness audit (2026-09-08 inert chrome and explorer copy actions)
+
+- Item 84: File-tree names, every `ttt` logo instance, and the main title-bar filename now explicitly opt out of egui label selection while document-like labels remain selectable. File context menus expose separate commands for the file name, absolute file path, and path relative to the workspace root; directory menus retain their existing Copy Path command.
+- Item 84: The native View menu now advertises the same Cmd+1 through Cmd+5 mapping already handled by the editor and shown in the title-bar View popup: Explorer, Code, Split, Preview, and Problems.
+- Verification for item 84: Selection behavior, clipboard text derivation, context-menu routing and sizing, and native shortcut metadata have deterministic regressions. No app launch or screenshot was used; item 84 remains unchecked for user interaction verification.
+
+= correctness audit (2026-09-08 stable explorer activation)
+
+- Item 49: Opening another document inside the current workspace now preserves the cached filesystem snapshot instead of clearing it or scheduling an unnecessary scan. The stable snapshot generation keeps the tree identity, expansion state, and scroll memory intact; a real workspace-root change still installs a new snapshot.
+- Item 50: The active Explorer entry retains the shared active-row background and now uses a separately registered heavier face of the selected UI font. This makes the current file genuinely bold instead of relying on egui's stronger-color-only `strong` flag.
+- Verification for items 49 and 50: Workspace invalidation and the distinct strong UI font role are covered programmatically. No app launch or screenshot was used; both items remain unchecked for user interaction verification.
+
+= correctness audit (2026-09-08 compilation controls)
+
+- Item 85: The toolbar now has an explicit Pause/Resume control. Pausing cancels queued automatic work, stops the persistent CLI watcher, suppresses editor-driven Tinymist updates, and leaves one-shot PDF exports and deterministic captures available. Resuming sends the newest editor buffer and restarts whichever preview pipeline is required.
+- Item 85: Compile and Cmd+R now materialize the canonical PDF beside the effective saved Typst entry, including a designated preview entry while another file is being edited. Unsaved Typst documents ask for their first output location; Export PDF remains the choose-another-destination command. Compile and Export retain distinct chooser, queued, completion, and cancellation messages, and a second output request can no longer overwrite an already queued destination.
+- Item 85: Completing a one-shot Compile or Export while automatic compilation is paused now reaps the temporary watcher again instead of leaving it active after producing the PDF.
+- Verification for item 85: Deterministic tests cover pause gating, explicit-build exceptions, watcher shutdown, toggle copy, current/designated output paths, output intent, and unsaved/non-Typst rejection. Formatting, strict Clippy, all 372 non-ignored repository tests, all 7 packaging tests, and the ignored real-`typst` watcher compile/error/recovery integration test pass. No app launch or screenshot was used; item 85 remains unchecked for user interaction verification.

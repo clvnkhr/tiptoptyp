@@ -281,33 +281,33 @@ mod macos {
     const VIEW_ITEMS: &[ItemSpec] = &[
         command(
             "Problems",
-            "",
-            Modifiers(0),
+            "5",
+            Modifiers::COMMAND,
             NativeMenuCommand::View(ViewCommand::Problems),
         ),
         command(
             "Explorer",
-            "",
-            Modifiers(0),
+            "1",
+            Modifiers::COMMAND,
             NativeMenuCommand::View(ViewCommand::Explorer),
         ),
         ItemSpec::Separator,
         command(
             "Code",
-            "",
-            Modifiers(0),
+            "2",
+            Modifiers::COMMAND,
             NativeMenuCommand::View(ViewCommand::Code),
         ),
         command(
             "Split",
-            "",
-            Modifiers(0),
+            "3",
+            Modifiers::COMMAND,
             NativeMenuCommand::View(ViewCommand::Split),
         ),
         command(
             "Preview",
-            "",
-            Modifiers(0),
+            "4",
+            Modifiers::COMMAND,
             NativeMenuCommand::View(ViewCommand::Preview),
         ),
     ];
@@ -558,6 +558,33 @@ mod macos {
             let settings = NativeMenuCommand::Application(ApplicationCommand::Settings);
             assert_eq!(command_from_tag(command_tag(settings)), Some(settings));
             assert_eq!(command_from_tag(-1), None);
+        }
+
+        #[test]
+        fn view_items_advertise_the_editor_command_number_shortcuts() {
+            let shortcuts = VIEW_ITEMS
+                .iter()
+                .filter_map(|spec| match spec {
+                    ItemSpec::Command {
+                        key,
+                        modifiers,
+                        command: NativeMenuCommand::View(command),
+                        ..
+                    } => Some((*command, *key, modifiers.0)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                shortcuts,
+                [
+                    (ViewCommand::Problems, "5", Modifiers::COMMAND.0),
+                    (ViewCommand::Explorer, "1", Modifiers::COMMAND.0),
+                    (ViewCommand::Code, "2", Modifiers::COMMAND.0),
+                    (ViewCommand::Split, "3", Modifiers::COMMAND.0),
+                    (ViewCommand::Preview, "4", Modifiers::COMMAND.0),
+                ]
+            );
         }
     }
 }
