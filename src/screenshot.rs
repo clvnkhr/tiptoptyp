@@ -32,13 +32,40 @@ pub struct CaptureThemeProfile {
     pub hue_shift_degrees: i16,
 }
 
+/// One serial step in a single-process visual-QA capture session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UiCaptureStep {
+    pub theme: CaptureThemeProfile,
+    pub scene: UiSnapshotScene,
+}
+
+impl UiCaptureStep {
+    /// Parse `theme,scene,invert,hue-shift`.
+    fn parse(value: &str) -> Result<Self, String> {
+        let fields = value.split(',').map(str::trim).collect::<Vec<_>>();
+        let [theme, scene, invert, hue_shift] = fields.as_slice() else {
+            return Err(format!(
+                "invalid UI screenshot step {value:?}; use theme,scene,invert,hue-shift"
+            ));
+        };
+        Ok(Self {
+            theme: CaptureThemeProfile {
+                name: parse_theme_name(theme)?,
+                invert: parse_bool(invert)?,
+                hue_shift_degrees: parse_hue_shift(hue_shift)?,
+            },
+            scene: UiSnapshotScene::parse(scene)?,
+        })
+    }
+}
+
 /// Deterministic app state used by launch-time visual QA.
 ///
 /// Each variant names one themed component family. The target identifies the
 /// framebuffer that actually contains it: menus and cards rendered above the
 /// native preview live in transparent child viewports, while panels and the
 /// find bar remain in the root app viewport.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum UiSnapshotScene {
     Main,
     FileMenu,
@@ -55,6 +82,7 @@ pub enum UiSnapshotScene {
     OverwriteDialog,
     EditorContextMenu,
     ExplorerContextMenu,
+    DocumentFontSelector,
     StatusLog,
     RenameDialog,
     WorkspaceChooser,
@@ -64,7 +92,7 @@ pub enum UiSnapshotScene {
 }
 
 impl UiSnapshotScene {
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 22] = [
         Self::Main,
         Self::FileMenu,
         Self::EditMenu,
@@ -80,6 +108,7 @@ impl UiSnapshotScene {
         Self::OverwriteDialog,
         Self::EditorContextMenu,
         Self::ExplorerContextMenu,
+        Self::DocumentFontSelector,
         Self::StatusLog,
         Self::RenameDialog,
         Self::WorkspaceChooser,
@@ -105,6 +134,7 @@ impl UiSnapshotScene {
             Self::OverwriteDialog => "overwrite-dialog",
             Self::EditorContextMenu => "editor-context-menu",
             Self::ExplorerContextMenu => "explorer-context-menu",
+            Self::DocumentFontSelector => "document-font-selector",
             Self::StatusLog => "status-log",
             Self::RenameDialog => "rename-dialog",
             Self::WorkspaceChooser => "workspace-chooser",
@@ -124,6 +154,7 @@ impl UiSnapshotScene {
             | Self::EditMenu
             | Self::EditorContextMenu
             | Self::ExplorerContextMenu
+            | Self::DocumentFontSelector
             | Self::StatusLog => "popup",
             Self::SettingsWindow
             | Self::SettingsThemePicker
@@ -163,6 +194,7 @@ impl UiSnapshotScene {
             "overwrite-dialog" => Self::OverwriteDialog,
             "editor-context-menu" => Self::EditorContextMenu,
             "explorer-context-menu" => Self::ExplorerContextMenu,
+            "document-font-selector" => Self::DocumentFontSelector,
             "status-log" => Self::StatusLog,
             "rename-dialog" => Self::RenameDialog,
             "workspace-chooser" => Self::WorkspaceChooser,
@@ -300,6 +332,8 @@ pub struct LaunchOptions {
     pub theme_profile: Option<CaptureThemeProfile>,
     /// QA-only state for exposing one themed component before capture.
     pub ui_snapshot_scene: Option<UiSnapshotScene>,
+    /// Ordered captures performed by one live application instance.
+    pub ui_capture_steps: Vec<UiCaptureStep>,
 }
 
 impl LaunchOptions {
@@ -317,6 +351,7 @@ impl LaunchOptions {
 /// One completed (or failed) screenshot write.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CaptureResult {
+    pub request_id: u64,
     pub path: PathBuf,
     pub error: Option<String>,
 }
@@ -327,6 +362,9 @@ struct CaptureRequest {
     target: String,
     name: String,
     remaining_frames: u8,
+    theme: CaptureThemeProfile,
+    scene: Option<UiSnapshotScene>,
+    persist: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -335,6 +373,9 @@ struct CaptureToken {
     request_id: u64,
     target: String,
     name: String,
+    theme: CaptureThemeProfile,
+    scene: Option<UiSnapshotScene>,
+    persist: bool,
 }
 
 #[derive(Debug, Default)]
@@ -371,6 +412,59 @@ impl CaptureController {
     /// Queue a capture for a logical viewport. Names are sanitized before they
     /// can become filesystem components.
     pub fn queue(&self, target: &str, name: &str) -> Option<u64> {
+        self.queue_with_naming(
+            target,
+            name,
+            self.config.filename_theme_profile.clone(),
+            self.config.filename_scene,
+        )
+    }
+
+    /// Queue one scene with its own filename theme. Batch runners use this to
+    /// switch UI state without rebuilding the screenshot service or app.
+    pub fn queue_step(&self, step: &UiCaptureStep) -> Option<u64> {
+        let spec = step.scene.capture_spec();
+        self.queue_with_naming(
+            &spec.target,
+            &spec.name,
+            step.theme.clone(),
+            Some(step.scene),
+        )
+    }
+
+    fn queue_with_naming(
+        &self,
+        target: &str,
+        name: &str,
+        theme: CaptureThemeProfile,
+        scene: Option<UiSnapshotScene>,
+    ) -> Option<u64> {
+        self.queue_request(target, name, self.config.settle_frames, theme, scene, true)
+    }
+
+    /// Read and discard one framebuffer after returning from an immediate
+    /// child viewport. This resynchronizes the root renderer before the next
+    /// persisted capture without creating an extra gallery file.
+    pub(crate) fn queue_viewport_warmup(&self, target: &str) -> Option<u64> {
+        self.queue_request(
+            target,
+            "renderer-warmup",
+            0,
+            CaptureThemeProfile::default(),
+            None,
+            false,
+        )
+    }
+
+    fn queue_request(
+        &self,
+        target: &str,
+        name: &str,
+        remaining_frames: u8,
+        theme: CaptureThemeProfile,
+        scene: Option<UiSnapshotScene>,
+        persist: bool,
+    ) -> Option<u64> {
         if !self.config.enabled {
             return None;
         }
@@ -381,7 +475,10 @@ impl CaptureController {
             id,
             target: safe_slug(target),
             name: safe_slug(name),
-            remaining_frames: self.config.settle_frames,
+            remaining_frames,
+            theme,
+            scene,
+            persist,
         });
         Some(id)
     }
@@ -506,8 +603,21 @@ impl CaptureController {
         self.state().results.drain(..).collect()
     }
 
+    pub fn take_result(&self, request_id: u64) -> Option<CaptureResult> {
+        let mut state = self.state();
+        let index = state
+            .results
+            .iter()
+            .position(|result| result.request_id == request_id)?;
+        state.results.remove(index)
+    }
+
     pub fn output_directory(&self) -> &Path {
         &self.config.output_directory
+    }
+
+    pub fn closes_after_captures(&self) -> bool {
+        self.config.close_after_captures
     }
 
     fn take_ready_request(&self, context: &egui::Context, target: &str) -> Option<CaptureRequest> {
@@ -548,12 +658,18 @@ impl CaptureController {
             request_id: request.id,
             target: request.target,
             name: request.name,
+            theme: request.theme,
+            scene: request.scene,
+            persist: request.persist,
         }
     }
 
     fn complete_capture(&self, token: &CaptureToken, image: &egui::ColorImage) {
         let claimed = self.state().in_flight.remove(&token.request_id);
         if claimed.as_deref() != Some(token.target.as_str()) {
+            return;
+        }
+        if !token.persist {
             return;
         }
         let result = save_color_image(
@@ -565,8 +681,8 @@ impl CaptureController {
             SystemTime::now(),
             CaptureNaming {
                 latest: self.config.latest_filenames,
-                theme: &self.config.filename_theme_profile,
-                scene: self.config.filename_scene,
+                theme: &token.theme,
+                scene: token.scene,
             },
         );
         match &result.error {
@@ -659,6 +775,7 @@ where
     let mut captures = CaptureConfig::for_working_directory(working_directory);
     let mut theme_profile = None;
     let mut ui_snapshot_scene = None;
+    let mut ui_capture_steps = Vec::new();
     let mut explicit_theme_name = false;
     apply_environment(
         &mut captures,
@@ -700,6 +817,15 @@ where
             captures.close_after_captures = true;
         } else if parse_options && text == "--no-ui-screenshot-exit" {
             captures.close_after_captures = false;
+        } else if parse_options && text.starts_with("--ui-screenshot-step=") {
+            captures.enabled = true;
+            ui_capture_steps.push(UiCaptureStep::parse(
+                text.trim_start_matches("--ui-screenshot-step="),
+            )?);
+        } else if parse_options && text == "--ui-screenshot-step" {
+            captures.enabled = true;
+            let value = next_utf8_argument(&arguments, &mut index, "--ui-screenshot-step")?;
+            ui_capture_steps.push(UiCaptureStep::parse(value)?);
         } else if parse_options && text.starts_with("--ui-snapshot-scene=") {
             ui_snapshot_scene = Some(UiSnapshotScene::parse(
                 text.trim_start_matches("--ui-snapshot-scene="),
@@ -758,18 +884,30 @@ where
             theme_profile
                 .get_or_insert_with(CaptureThemeProfile::default)
                 .hue_shift_degrees = parse_hue_shift(value)?;
-        } else if parse_options && text.starts_with("-psn_") {
-            // Legacy Finder launches may inject a process serial number. It is
-            // not a file path and must not replace the remembered workspace.
         } else if initial_path.is_none() {
             initial_path = Some(PathBuf::from(argument));
         }
         index += 1;
     }
 
-    if captures.latest_filenames && !explicit_theme_name {
+    if !ui_capture_steps.is_empty() {
+        if theme_profile.is_some()
+            || ui_snapshot_scene.is_some()
+            || !captures.startup_captures.is_empty()
+        {
+            return Err(
+                "--ui-screenshot-step cannot be combined with --ui-theme, --ui-snapshot-scene, or --ui-screenshot"
+                    .to_owned(),
+            );
+        }
+        let first = &ui_capture_steps[0];
+        theme_profile = Some(first.theme.clone());
+        ui_snapshot_scene = Some(first.scene);
+    }
+
+    if captures.latest_filenames && !explicit_theme_name && ui_capture_steps.is_empty() {
         return Err(
-            "--ui-screenshot-latest needs an explicit --ui-theme so its files cannot be mislabeled"
+            "--ui-screenshot-latest needs an explicit theme or screenshot step so its files cannot be mislabeled"
                 .to_owned(),
         );
     }
@@ -781,6 +919,7 @@ where
         captures,
         theme_profile,
         ui_snapshot_scene,
+        ui_capture_steps,
     })
 }
 
@@ -1078,6 +1217,7 @@ fn save_color_image(
         .map_err(|error| format!("could not save {}: {error}", path.display()))
     })();
     CaptureResult {
+        request_id,
         path,
         error: result.err(),
     }
@@ -1200,6 +1340,73 @@ mod tests {
     }
 
     #[test]
+    fn command_line_parses_serial_screenshot_steps_without_startup_duplicates() {
+        let launch = parse_launch_options(
+            [
+                "--ui-screenshot-latest",
+                "--ui-screenshot-step",
+                "paper-light,main,false,0",
+                "--ui-screenshot-step=catppuccin-mocha,file-menu,true,-30",
+                "fixture.typ",
+            ],
+            Path::new("/project"),
+            no_environment,
+        )
+        .unwrap();
+
+        assert_eq!(launch.ui_capture_steps.len(), 2);
+        assert_eq!(launch.ui_snapshot_scene, Some(UiSnapshotScene::Main));
+        assert_eq!(
+            launch.theme_profile,
+            Some(CaptureThemeProfile {
+                name: "paper-light".to_owned(),
+                invert: false,
+                hue_shift_degrees: 0,
+            })
+        );
+        assert_eq!(
+            launch.ui_capture_steps[1],
+            UiCaptureStep {
+                theme: CaptureThemeProfile {
+                    name: "catppuccin-mocha".to_owned(),
+                    invert: true,
+                    hue_shift_degrees: -30,
+                },
+                scene: UiSnapshotScene::FileMenu,
+            }
+        );
+        assert!(launch.captures.startup_captures.is_empty());
+    }
+
+    #[test]
+    fn serial_screenshot_steps_reject_ambiguous_single_capture_options() {
+        for arguments in [
+            vec![
+                "--ui-theme",
+                "paper-light",
+                "--ui-screenshot-step",
+                "paper-light,main,false,0",
+            ],
+            vec![
+                "--ui-snapshot-scene",
+                "main",
+                "--ui-screenshot-step",
+                "paper-light,main,false,0",
+            ],
+            vec![
+                "--ui-screenshot",
+                "main",
+                "--ui-screenshot-step",
+                "paper-light,main,false,0",
+            ],
+        ] {
+            let error =
+                parse_launch_options(arguments, Path::new("/project"), no_environment).unwrap_err();
+            assert!(error.contains("cannot be combined"));
+        }
+    }
+
+    #[test]
     fn snapshot_scenes_have_stable_names_and_real_framebuffer_targets() {
         let expected = [
             (UiSnapshotScene::Main, "main", "main"),
@@ -1255,6 +1462,11 @@ mod tests {
             (
                 UiSnapshotScene::ExplorerContextMenu,
                 "explorer-context-menu",
+                "popup",
+            ),
+            (
+                UiSnapshotScene::DocumentFontSelector,
+                "document-font-selector",
                 "popup",
             ),
             (UiSnapshotScene::StatusLog, "status-log", "popup"),
@@ -1461,13 +1673,6 @@ mod tests {
     }
 
     #[test]
-    fn finder_process_serial_number_is_not_treated_as_a_launch_target() {
-        let launch =
-            parse_launch_options(["-psn_0_12345"], Path::new("/project"), no_environment).unwrap();
-        assert_eq!(launch.initial_path, None);
-    }
-
-    #[test]
     fn shortcut_keys_keep_the_original_letter_and_function_key_contract() {
         for letter in 'a'..='z' {
             assert!(parse_key(&letter.to_string()).is_ok());
@@ -1592,6 +1797,47 @@ mod tests {
         assert_eq!(state.pending[0].remaining_frames, 2);
         drop(state);
         assert!(controller.has_pending());
+    }
+
+    #[test]
+    fn serial_step_keeps_its_own_scene_and_theme_naming() {
+        let controller =
+            CaptureController::new(CaptureConfig::for_working_directory(Path::new("/project")));
+        let step = UiCaptureStep {
+            theme: CaptureThemeProfile {
+                name: "paper-dark".to_owned(),
+                invert: true,
+                hue_shift_degrees: 25,
+            },
+            scene: UiSnapshotScene::FileMenu,
+        };
+        assert_eq!(controller.queue_step(&step), Some(1));
+        let state = controller.state();
+        let request = &state.pending[0];
+        assert_eq!(request.target, "popup");
+        assert_eq!(request.name, "file-menu");
+        assert_eq!(request.theme, step.theme);
+        assert_eq!(request.scene, Some(step.scene));
+        assert!(request.persist);
+    }
+
+    #[test]
+    fn viewport_warmup_precedes_the_persisted_capture_without_an_output_slot() {
+        let controller =
+            CaptureController::new(CaptureConfig::for_working_directory(Path::new("/project")));
+        controller.queue_viewport_warmup("main").unwrap();
+        controller
+            .queue_step(&UiCaptureStep {
+                theme: CaptureThemeProfile::default(),
+                scene: UiSnapshotScene::ProblemsPanel,
+            })
+            .unwrap();
+
+        let state = controller.state();
+        assert!(state.pending[0].remaining_frames == 0 && !state.pending[0].persist);
+        assert_eq!(state.pending[0].name, "renderer-warmup");
+        assert!(state.pending[1].persist);
+        assert_eq!(state.pending[1].scene, Some(UiSnapshotScene::ProblemsPanel));
     }
 
     #[test]

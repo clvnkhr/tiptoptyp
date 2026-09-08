@@ -43,10 +43,10 @@ impl ToolKind {
         }
     }
 
-    fn environment_variables(self) -> (&'static str, &'static str) {
+    fn environment_variable(self) -> &'static str {
         match self {
-            Self::Typst => ("TIPTOPTYP_TYPST", "MYTYPST_TYPST"),
-            Self::Tinymist => ("TIPTOPTYP_TINYMIST", "MYTYPST_TINYMIST"),
+            Self::Typst => "TIPTOPTYP_TYPST",
+            Self::Tinymist => "TIPTOPTYP_TINYMIST",
         }
     }
 }
@@ -130,40 +130,17 @@ pub(crate) fn resolve_tool(kind: ToolKind, preference: &ToolPreference) -> ToolR
     )
 }
 
-/// Reads a renamed environment option without breaking existing automation.
-///
-/// New configuration should use the `TIPTOPTYP_*` name. The `MYTYPST_*` name
-/// remains a lower-priority fallback for releases created before the rename.
-pub(crate) fn renamed_environment_value(
-    primary: &'static str,
-    legacy: &'static str,
-) -> Option<OsString> {
-    renamed_environment_entry(primary, legacy, |name| env::var_os(name)).map(|(_, value)| value)
-}
-
-fn renamed_environment_entry<Lookup>(
-    primary: &'static str,
-    legacy: &'static str,
+fn tool_environment_override<Lookup>(
+    kind: ToolKind,
     mut lookup: Lookup,
-) -> Option<(&'static str, OsString)>
+) -> Option<EnvironmentOverride>
 where
     Lookup: FnMut(&str) -> Option<OsString>,
 {
-    lookup(primary)
-        .map(|value| (primary, value))
-        .or_else(|| lookup(legacy).map(|value| (legacy, value)))
-}
-
-fn tool_environment_override<Lookup>(kind: ToolKind, lookup: Lookup) -> Option<EnvironmentOverride>
-where
-    Lookup: FnMut(&str) -> Option<OsString>,
-{
-    let (primary, legacy) = kind.environment_variables();
-    renamed_environment_entry(primary, legacy, lookup).map(|(variable, program)| {
-        EnvironmentOverride {
-            variable,
-            program: PathBuf::from(program),
-        }
+    let variable = kind.environment_variable();
+    lookup(variable).map(|program| EnvironmentOverride {
+        variable,
+        program: PathBuf::from(program),
     })
 }
 
@@ -487,32 +464,6 @@ mod tests {
         assert_eq!(resolved.program, path_tool);
         assert_eq!(resolved.origin, ToolOrigin::Path);
         assert!(resolved.fallback_reason.is_some());
-    }
-
-    #[test]
-    fn renamed_environment_prefers_tiptoptyp_and_accepts_legacy_name() {
-        let selected = renamed_environment_entry(
-            "TIPTOPTYP_TEST_TOOL",
-            "MYTYPST_TEST_TOOL",
-            |name| match name {
-                "TIPTOPTYP_TEST_TOOL" => Some(OsString::from("new")),
-                "MYTYPST_TEST_TOOL" => Some(OsString::from("legacy")),
-                _ => None,
-            },
-        );
-        assert_eq!(
-            selected,
-            Some(("TIPTOPTYP_TEST_TOOL", OsString::from("new")))
-        );
-
-        let selected =
-            renamed_environment_entry("TIPTOPTYP_TEST_TOOL", "MYTYPST_TEST_TOOL", |name| {
-                (name == "MYTYPST_TEST_TOOL").then(|| OsString::from("legacy"))
-            });
-        assert_eq!(
-            selected,
-            Some(("MYTYPST_TEST_TOOL", OsString::from("legacy")))
-        );
     }
 
     #[test]

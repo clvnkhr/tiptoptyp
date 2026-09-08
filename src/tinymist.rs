@@ -26,8 +26,6 @@ use serde_json::{Value, json};
 use url::Url;
 
 use crate::private_workspace::{PrivateTypstDocument, PrivateWorkspace};
-#[cfg(test)]
-use crate::toolchain::renamed_environment_value;
 
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(300);
@@ -150,13 +148,20 @@ impl Default for PreviewOptions {
 }
 
 impl PreviewOptions {
-    fn command_line(&self) -> Vec<String> {
-        let mut arguments = vec![
+    fn command_line(&self, entry_path: Option<&Path>) -> Vec<String> {
+        let mut arguments = Vec::new();
+        // `startDefaultPreview` otherwise follows Tinymist's inferred focused
+        // file. Supplying the designated entry to the preview command itself
+        // keeps the one embedded viewer pinned when another source is opened.
+        if let Some(entry_path) = entry_path {
+            arguments.push(entry_path.to_string_lossy().into_owned());
+        }
+        arguments.extend([
             "--data-plane-host=127.0.0.1:0".to_owned(),
             "--control-plane-host=127.0.0.1:0".to_owned(),
             format!("--preview-mode={}", self.mode.as_arg()),
             format!("--invert-colors={}", self.invert_colors.as_arg()),
-        ];
+        ]);
         arguments.push(format!("--partial-rendering={}", self.partial_rendering));
         // This is a native application: opening the system browser would be a
         // surprising side effect and could expose a stale preview tab.
@@ -164,11 +169,11 @@ impl PreviewOptions {
         arguments
     }
 
-    fn settings(&self) -> Value {
+    fn settings(&self, entry_path: Option<&Path>) -> Value {
         json!({
             "preview": {
                 "browsing": {
-                    "args": self.command_line(),
+                    "args": self.command_line(entry_path),
                 }
             },
             // False tells Tinymist to use standard window/showDocument, which
@@ -187,6 +192,10 @@ pub struct TinymistConfig {
     /// preview server. Document synchronization and formatting remain
     /// available when this is false.
     pub start_preview: bool,
+    /// Explicit Typst entry used for diagnostics and the default preview.
+    /// Without this, Tinymist follows whichever open document it most
+    /// recently inferred as focused.
+    entry_path: Option<PathBuf>,
     program: PathBuf,
     arguments: Vec<OsString>,
 }
@@ -197,6 +206,7 @@ impl TinymistConfig {
             workspace_root: workspace_root.into(),
             preview: PreviewOptions::default(),
             start_preview: true,
+            entry_path: None,
             program: PathBuf::from("tinymist"),
             arguments: vec![OsString::from("lsp")],
         }
@@ -205,6 +215,27 @@ impl TinymistConfig {
     /// Overrides the executable while retaining the default `lsp` argument.
     pub fn with_executable(mut self, executable: impl Into<PathBuf>) -> Self {
         self.program = executable.into();
+        self
+    }
+
+    /// Pin the project entry for this process. Tinymist consumes the final
+    /// `typstExtraArgs` value as the entry document before any open-document
+    /// focus changes can influence `startDefaultPreview`.
+    pub fn with_entry_path(mut self, entry_path: impl Into<PathBuf>) -> Self {
+        self.entry_path = Some(entry_path.into());
+        self
+    }
+
+    /// Add workspace-local font directories using Tinymist's recursive font
+    /// search. Joining them into one platform-native argument matches the LSP
+    /// sidecar's documented command-line contract.
+    pub fn with_font_paths(mut self, paths: &[PathBuf]) -> Self {
+        if !paths.is_empty()
+            && let Ok(paths) = std::env::join_paths(paths)
+        {
+            self.arguments.push(OsString::from("--font-path"));
+            self.arguments.push(paths);
+        }
         self
     }
 
@@ -217,6 +248,14 @@ impl TinymistConfig {
         self.program = program.into();
         self.arguments = arguments.into_iter().collect();
         self
+    }
+
+    fn server_settings(&self) -> Value {
+        let mut settings = self.preview.settings(self.entry_path.as_deref());
+        if let Some(entry_path) = &self.entry_path {
+            settings["typstExtraArgs"] = json!([entry_path.to_string_lossy()]);
+        }
+        settings
     }
 }
 
@@ -882,7 +921,7 @@ impl Session {
             next_request_id: 1,
             pending: HashMap::new(),
             documents: HashMap::new(),
-            settings: config.preview.settings(),
+            settings: config.server_settings(),
             start_preview: config.start_preview,
             root_uri,
             workspace_name,
@@ -898,7 +937,6 @@ impl Session {
                 "name": "tiptoptyp",
                 "version": env!("CARGO_PKG_VERSION"),
             },
-            "rootPath": self.root_path_for_legacy_servers(),
             "rootUri": self.root_uri,
             "capabilities": {
                 "workspace": {
@@ -930,9 +968,6 @@ impl Session {
                     "positionEncodings": ["utf-16"],
                 },
             },
-            "initializationOptions": {
-                "rootPath": self.root_path_for_legacy_servers(),
-            },
             "trace": "off",
             "workspaceFolders": [{
                 "uri": self.root_uri,
@@ -941,15 +976,6 @@ impl Session {
         });
         self.send_request("initialize", params, PendingRequest::Initialize)?;
         Ok(())
-    }
-
-    fn root_path_for_legacy_servers(&self) -> String {
-        Url::parse(&self.root_uri)
-            .ok()
-            .and_then(|uri| uri.to_file_path().ok())
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned()
     }
 
     fn send_request(
@@ -2401,6 +2427,8 @@ mod tests {
 
     use super::*;
 
+    const FAKE_SERVER_TIMEOUT: Duration = Duration::from_secs(10);
+
     fn frame(value: &Value) -> Vec<u8> {
         let mut bytes = Vec::new();
         write_lsp_message(&mut bytes, value).unwrap();
@@ -2418,6 +2446,31 @@ mod tests {
         assert_eq!(read_lsp_message(&mut reader).unwrap(), Some(first));
         assert_eq!(read_lsp_message(&mut reader).unwrap(), Some(second));
         assert_eq!(read_lsp_message(&mut reader).unwrap(), None);
+    }
+
+    #[test]
+    fn workspace_font_paths_are_forwarded_as_one_platform_native_argument() {
+        let paths = vec![
+            PathBuf::from("/workspace/fonts"),
+            PathBuf::from("/workspace/assets/type"),
+        ];
+        let config = TinymistConfig::new("/workspace").with_font_paths(&paths);
+        assert_eq!(config.arguments[0], OsString::from("lsp"));
+        assert_eq!(config.arguments[1], OsString::from("--font-path"));
+        assert_eq!(config.arguments[2], std::env::join_paths(paths).unwrap());
+    }
+
+    #[test]
+    fn explicit_entry_path_pins_both_lsp_compilation_and_web_preview() {
+        let entry = PathBuf::from("/workspace/main.typ");
+        let settings = TinymistConfig::new("/workspace")
+            .with_entry_path(&entry)
+            .server_settings();
+        assert_eq!(settings["typstExtraArgs"], json!([entry]));
+        assert_eq!(
+            settings["preview"]["browsing"]["args"][0],
+            json!("/workspace/main.typ")
+        );
     }
 
     #[test]
@@ -2449,7 +2502,7 @@ mod tests {
 
     #[test]
     fn preview_settings_are_safe_and_interactive() {
-        let settings = PreviewOptions::default().settings();
+        let settings = PreviewOptions::default().settings(None);
         let args = settings["preview"]["browsing"]["args"]
             .as_array()
             .unwrap()
@@ -2554,7 +2607,7 @@ mod tests {
             toolchain::{ToolKind, resolve_tool},
         };
 
-        let program = renamed_environment_value("TIPTOPTYP_TEST_TINYMIST", "MYTYPST_TEST_TINYMIST")
+        let program = std::env::var_os("TIPTOPTYP_TEST_TINYMIST")
             .map(PathBuf::from)
             .or_else(|| {
                 let resolved = resolve_tool(ToolKind::Tinymist, &ToolPreference::default());
@@ -2776,7 +2829,7 @@ mod tests {
 
     #[test]
     fn configuration_requests_resolve_tinymist_sections() {
-        let settings = PreviewOptions::default().settings();
+        let settings = PreviewOptions::default().settings(None);
         let params = json!({
             "items": [
                 {"section":"tinymist"},
@@ -2884,7 +2937,7 @@ mod tests {
             .did_open(generation, TextDocument::typst(uri, 7, "Hello"))
             .unwrap();
 
-        let initialize_deadline = Instant::now() + Duration::from_secs(3);
+        let initialize_deadline = Instant::now() + FAKE_SERVER_TIMEOUT;
         let mut initialized = false;
         while Instant::now() < initialize_deadline && !initialized {
             while let Some(event) = sidecar.try_recv() {
@@ -2903,7 +2956,7 @@ mod tests {
         sidecar.format_document(generation, uri, 7).unwrap();
         sidecar.stop_workspace(generation).unwrap();
 
-        let stop_deadline = Instant::now() + Duration::from_secs(3);
+        let stop_deadline = Instant::now() + FAKE_SERVER_TIMEOUT;
         let mut stopped = false;
         while Instant::now() < stop_deadline && !stopped {
             while let Some(event) = sidecar.try_recv() {
@@ -2961,7 +3014,7 @@ mod tests {
             .did_open(generation, TextDocument::typst(other_uri, 3, "other"))
             .unwrap();
 
-        let initialize_deadline = Instant::now() + Duration::from_secs(3);
+        let initialize_deadline = Instant::now() + FAKE_SERVER_TIMEOUT;
         let mut initialized = false;
         while Instant::now() < initialize_deadline && !initialized {
             while let Some(event) = sidecar.try_recv() {
@@ -2974,7 +3027,7 @@ mod tests {
         assert!(initialized, "delayed fake server never initialized");
         sidecar.stop_workspace(generation).unwrap();
 
-        let stop_deadline = Instant::now() + Duration::from_secs(3);
+        let stop_deadline = Instant::now() + FAKE_SERVER_TIMEOUT;
         let mut stopped = false;
         while Instant::now() < stop_deadline {
             if matches!(sidecar.try_recv(), Some(TinymistEvent::Stopped { .. })) {
@@ -3053,7 +3106,9 @@ mod tests {
         fs::set_permissions(&script, permissions).unwrap();
 
         let sidecar = TinymistSidecar::new(egui::Context::default());
+        let pinned_entry = directory.path().join("pinned-main.typ");
         let config = TinymistConfig::new(directory.path())
+            .with_entry_path(&pinned_entry)
             .with_command(&script, std::iter::empty::<OsString>());
         let generation = sidecar.start_workspace(config).unwrap();
         sidecar
@@ -3063,7 +3118,7 @@ mod tests {
             )
             .unwrap();
 
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline = Instant::now() + FAKE_SERVER_TIMEOUT;
         let mut preview_url = None;
         let mut diagnostic = None;
         let mut jump = None;
@@ -3096,7 +3151,7 @@ mod tests {
             .did_change(generation, "file:///tmp/main.typ", 9, "capture flush")
             .unwrap();
 
-        let reply_deadline = Instant::now() + Duration::from_secs(3);
+        let reply_deadline = Instant::now() + FAKE_SERVER_TIMEOUT;
         loop {
             let captured = fs::read_to_string(&captured_input).unwrap_or_default();
             if captured.contains("\"id\":99")
@@ -3109,6 +3164,13 @@ mod tests {
                 );
                 assert!(captured.contains("\"version\":8"), "{captured:?}");
                 assert!(captured.contains("Hello again"), "{captured:?}");
+                assert!(
+                    captured.contains(&format!(
+                        "\"typstExtraArgs\":[\"{}\"]",
+                        pinned_entry.display()
+                    )),
+                    "{captured:?}"
+                );
                 break;
             }
             assert!(

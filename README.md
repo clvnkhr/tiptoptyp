@@ -66,10 +66,8 @@ cargo run --manifest-path xtask/Cargo.toml -- fetch-sidecars
 The downloaded archives, staged executables, licenses, and provenance records
 are generated under `toolchain/` and ignored by Git. If they are absent during
 development, tiptoptyp checks `PATH`. `TIPTOPTYP_TYPST` and
-`TIPTOPTYP_TINYMIST` can override that development fallback. The pre-rename
-`MYTYPST_*` names remain lower-priority aliases so existing automation and
-local configurations continue to work. Every fallback is labelled in the
-fixed bottom status bar and Settings.
+`TIPTOPTYP_TINYMIST` can override that development fallback. Every fallback is
+labelled in the fixed bottom status bar and Settings.
 
 Each binary can instead be set to **Custom path** in Settings. This persisted
 choice has priority over the bundled sidecar. An invalid custom path falls back

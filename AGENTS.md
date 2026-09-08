@@ -1,15 +1,28 @@
 # Agent working agreement
 
-This repository treats UI evidence as part of the implementation, not as an
-optional follow-up. The rules below apply to every agent working in the tree.
+This repository uses proportionate UI evidence. Prefer fast deterministic
+tests for behavior and capture screenshots only when pixels are material to
+the change. The rules below apply to every agent working in the tree.
 
-## Mandatory UI workflow
+## Compatibility policy
 
-For any change that can affect layout, preview rendering, native child views,
-themes, controls, menus, dialogs, or screenshots:
+tiptoptyp is greenfield software. Do not retain deprecated names, settings
+keys, environment variables, temporary-file conventions, or compatibility
+aliases unless the user explicitly asks for a migration path. Prefer a clean
+break and remove the obsolete behavior completely.
+
+## Risk-based UI workflow
+
+For changes that affect UI behavior, layout, preview rendering, native child
+views, themes, controls, menus, dialogs, or screenshot infrastructure:
 
 1. Run the focused Rust tests while iterating.
-2. Capture a fresh deterministic viewport framebuffer for the changed scene:
+2. Prefer pure geometry/state tests and semantic `egui_kittest` coverage.
+   Routine behavior changes, refactors, and fixes with adequate deterministic
+   coverage do not require a screenshot.
+3. Capture a fresh deterministic viewport framebuffer only when correctness is
+   genuinely visual—for example alignment, clipping, rounded edges,
+   transparency, color/theme appearance, or native-view composition:
 
    ```sh
    cargo run --release -- \
@@ -24,26 +37,27 @@ themes, controls, menus, dialogs, or screenshots:
    target contract is documented in `docs/ui-qa-screenshots.md`.
    These PNGs are not a true desktop screenshot: a native child viewport is
    captured separately and is not composited with the root app window.
-3. Inspect the resulting PNG, not just the command output. Check alignment,
-   clipping, edges, transparency, focus state, and the changed interaction.
+4. When a PNG is captured, inspect it rather than relying on command output.
+   Check alignment, clipping, edges, transparency, focus state, and the changed
+   interaction.
    The PNG must be a new capture under `.tiptoptyp/screenshots`; a stale file
    or an unrelated desktop screenshot is not evidence. When available, use
    the local image inspection tool to view it.
-4. For native preview or child-window changes, also run with geometry tracing
-   enabled and retain the relevant `ui.preview.bounds` lines:
+5. For changes to native preview bounds, clipping, or child-window placement,
+   use geometry tracing and retain the relevant `ui.preview.bounds` lines:
 
    ```sh
    TIPTOPTYP_UI_TRACE=1 cargo run --release -- test.typ
    ```
 
    The trace reports the available, clipped egui, native, viewport, and scale
-   rectangles. This is required because native child views are outside egui's
+   rectangles. Native child views are outside egui's
    framebuffer clip and cannot be verified by a viewport framebuffer alone.
    Do not describe a viewport PNG as proof of the composed desktop geometry;
    use an approved whole-window observation when available, or report that
    composition could not be visually verified.
-5. If the change updates a maintained visual contract, regenerate the stable
-   gallery and validate it:
+6. If the change updates a maintained visual contract or screenshot machinery,
+   regenerate the stable gallery and validate it:
 
    ```sh
    scripts/capture-theme-gallery.sh
@@ -51,9 +65,11 @@ themes, controls, menus, dialogs, or screenshots:
    ```
 
    Every expected PNG must be freshly written, non-empty, and decodable. Do
-   not use a desktop capture API such as `screencapture`.
+   not use a desktop capture API such as `screencapture`. The gallery command
+   intentionally captures its complete matrix from one app session; do not
+   replace it with a per-image launch loop.
 
-Do not report a UI fix as visually verified unless a fresh PNG was inspected.
+Do not claim visual verification unless a fresh PNG was inspected.
 If the environment cannot launch the native app, report the exact command and
 the missing GUI capability instead of implying that visual QA passed.
 
@@ -81,5 +97,5 @@ cargo test --no-fail-fast
 cargo test --manifest-path xtask/Cargo.toml
 ```
 
-For UI work, the screenshot steps above are required in addition to these
-checks, even when the code-only tests pass.
+Screenshots and geometry traces are additional checks only when the risk-based
+workflow above calls for them.

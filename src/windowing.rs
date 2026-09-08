@@ -13,7 +13,7 @@ use crate::{
     app::{EditorApp, EditorWindowRequest},
     native_menu::NativeMenuReceiver,
     open_requests::OpenRequestReceiver,
-    screenshot::{CaptureController, CaptureThemeProfile, UiSnapshotScene},
+    screenshot::{CaptureController, CaptureThemeProfile, UiCaptureStep, UiSnapshotScene},
     settings::{AppSettings, normalize_workspace_root},
     theme,
 };
@@ -43,6 +43,17 @@ struct PendingWindow {
     settings: AppSettings,
 }
 
+struct CaptureBatch {
+    remaining: VecDeque<UiCaptureStep>,
+    active_request: u64,
+    active_scene: UiSnapshotScene,
+    close_when_finished: bool,
+}
+
+fn root_capture_needs_warmup(previous: UiSnapshotScene, next: UiSnapshotScene) -> bool {
+    previous.viewport_target() != "main" && next.viewport_target() == "main"
+}
+
 /// Application shell which keeps the eframe root editor and all additional
 /// document viewports in the same process and on the same event loop.
 pub(crate) struct AppShell {
@@ -54,6 +65,7 @@ pub(crate) struct AppShell {
     open_requests: OpenRequestReceiver,
     native_menu_commands: NativeMenuReceiver,
     captures: CaptureController,
+    capture_batch: Option<CaptureBatch>,
     shared_settings: AppSettings,
 }
 
@@ -65,25 +77,27 @@ impl AppShell {
         captures: CaptureController,
         theme_override: Option<CaptureThemeProfile>,
         snapshot_scene: Option<UiSnapshotScene>,
+        capture_steps: Vec<UiCaptureStep>,
         open_requests: OpenRequestReceiver,
         native_menu_commands: NativeMenuReceiver,
     ) -> Self {
-        // Process-level requests belong to the shell. EditorApp retains its
-        // receiver fields for a small, backwards-compatible construction API,
-        // but these disconnected receivers ensure only the shell can consume a
-        // Finder/native-menu event and route it to the focused session.
-        let (_, editor_open_requests) = crate::open_requests::channel();
-        let (_, editor_native_commands) = crate::native_menu::channel();
         let primary = EditorApp::new(
             context,
             initial_path,
             captures.clone(),
             theme_override,
             snapshot_scene,
-            editor_open_requests,
-            editor_native_commands,
         );
         let shared_settings = primary.settings_snapshot();
+        let mut remaining = VecDeque::from(capture_steps);
+        let capture_batch = remaining.pop_front().map(|first| CaptureBatch {
+            active_request: captures
+                .queue_step(&first)
+                .expect("a screenshot batch enables its capture controller"),
+            active_scene: first.scene,
+            remaining,
+            close_when_finished: captures.closes_after_captures(),
+        });
         Self {
             primary,
             secondary: Vec::new(),
@@ -93,8 +107,52 @@ impl AppShell {
             open_requests,
             native_menu_commands,
             captures,
+            capture_batch,
             shared_settings,
         }
+    }
+
+    fn advance_capture_batch(&mut self, context: &egui::Context) {
+        let Some(mut batch) = self.capture_batch.take() else {
+            return;
+        };
+        let Some(result) = self.captures.take_result(batch.active_request) else {
+            self.capture_batch = Some(batch);
+            return;
+        };
+
+        if let Some(error) = result.error {
+            self.primary
+                .show_window_notice(format!("UI screenshot batch failed: {error}"));
+            if batch.close_when_finished {
+                context.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            return;
+        }
+
+        let Some(next) = batch.remaining.pop_front() else {
+            if batch.close_when_finished {
+                context.send_viewport_cmd(egui::ViewportCommand::Close);
+            } else {
+                self.primary
+                    .show_window_notice("UI screenshot batch completed".to_owned());
+            }
+            return;
+        };
+        if root_capture_needs_warmup(batch.active_scene, next.scene) {
+            self.captures
+                .queue_viewport_warmup(next.scene.viewport_target())
+                .expect("an active screenshot batch keeps captures enabled");
+        }
+        let request = self
+            .captures
+            .queue_step(&next)
+            .expect("an active screenshot batch keeps captures enabled");
+        self.primary.set_capture_step(&next, context);
+        batch.active_request = request;
+        batch.active_scene = next.scene;
+        self.capture_batch = Some(batch);
+        context.request_repaint();
     }
 
     fn active_editor_mut(&mut self) -> &mut EditorApp {
@@ -300,6 +358,7 @@ impl eframe::App for AppShell {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let context = ui.ctx().clone();
+        self.advance_capture_batch(&context);
         if context.input(|input| input.viewport().focused == Some(true)) {
             self.active = ActiveSession::Primary;
         }
@@ -439,6 +498,22 @@ mod tests {
         assert!(!should_cancel_process_close(0));
         assert!(should_cancel_process_close(1));
         assert!(should_cancel_process_close(4));
+    }
+
+    #[test]
+    fn returning_from_a_child_viewport_warms_the_root_framebuffer() {
+        assert!(root_capture_needs_warmup(
+            UiSnapshotScene::SettingsWindow,
+            UiSnapshotScene::ProblemsPanel,
+        ));
+        assert!(!root_capture_needs_warmup(
+            UiSnapshotScene::ProblemsPanel,
+            UiSnapshotScene::FindReplace,
+        ));
+        assert!(!root_capture_needs_warmup(
+            UiSnapshotScene::SettingsWindow,
+            UiSnapshotScene::FileMenu,
+        ));
     }
 
     #[test]

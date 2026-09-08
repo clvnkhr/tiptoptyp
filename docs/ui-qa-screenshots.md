@@ -70,6 +70,7 @@ The accepted scenes and their framebuffer targets are:
 | `overwrite-dialog` | `modal` | Existing-file overwrite confirmation card |
 | `editor-context-menu` | `popup` | Editor right-click menu |
 | `explorer-context-menu` | `popup` | Explorer right-click menu |
+| `document-font-selector` | `popup` | Scrollable font selector for a `text(font: …)` argument |
 | `status-log` | `popup` | Recent compiler and document-status history |
 | `rename-dialog` | `rename` | Rename card |
 | `workspace-chooser` | `workspace` | Explicit workspace-root chooser |
@@ -163,10 +164,14 @@ window, theme-picker, and tooltip states without depending on fixed image
 hashes.
 
 The script builds the release app once, then runs that exact binary for the
-matrix. Every launch has a 45-second watchdog so a missing child viewport
-cannot hang the gallery indefinitely. Override it with an integer from 1 to
-3600 in `TIPTOPTYP_UI_GALLERY_CAPTURE_TIMEOUT_SECONDS`; timeout failure restores
-the previous stable image before the script exits.
+entire matrix in one app session. It sends repeated
+`--ui-screenshot-step theme,scene,invert,hue-shift` options to a serial runner;
+each scene is reset, themed, settled, and written before the next step starts.
+The whole session has a 45-second base watchdog plus one second per requested
+image, so a missing child viewport cannot hang the gallery indefinitely.
+Override the base with an integer from 1 to 3600 in
+`TIPTOPTYP_UI_GALLERY_CAPTURE_TIMEOUT_SECONDS`; any capture or validation
+failure restores every previous stable image before the script exits.
 
 The corresponding environment variables are
 `TIPTOPTYP_UI_SCREENSHOTS`, `TIPTOPTYP_UI_SCREENSHOTS_ENABLED`,

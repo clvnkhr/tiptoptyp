@@ -7,8 +7,12 @@
 use std::{cell::Cell, path::Path, sync::Arc, time::Duration};
 
 use eframe::egui::{self, Align, Color32, FontFamily, FontId, Layout, Rect, RichText, Vec2};
+use skrifa::{MetadataProvider as _, Tag, attribute::Style as FontStyle};
 
-use crate::sublime_theme::{Rgba, SemanticPalette};
+use crate::{
+    font_catalog::{FontFace, FontFamily as CatalogFontFamily},
+    sublime_theme::{Rgba, SemanticPalette},
+};
 
 #[derive(Clone, Copy)]
 struct ImportedPalette {
@@ -82,18 +86,79 @@ pub const TYPE: TypeScale = TypeScale {
     content: 15.0,
 };
 
+pub const FONT_WEIGHT_NORMAL: u16 = 400;
+pub const FONT_WEIGHT_BOLD: u16 = 700;
+pub const EDITOR_FONT_WEIGHTS: [u16; 9] = [100, 200, 300, 400, 500, 600, 700, 800, 900];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FontWeightSupport {
+    Continuous { min: u16, max: u16, default: u16 },
+    Discrete { values: Vec<u16>, default: u16 },
+}
+
+impl FontWeightSupport {
+    pub fn default_weight(&self) -> u16 {
+        match self {
+            Self::Continuous { default, .. } | Self::Discrete { default, .. } => *default,
+        }
+    }
+
+    pub fn clamp(&self, weight: u16) -> u16 {
+        match self {
+            Self::Continuous { min, max, .. } => weight.clamp(*min, *max),
+            Self::Discrete { values, default } => values
+                .iter()
+                .copied()
+                .min_by_key(|candidate| candidate.abs_diff(weight))
+                .unwrap_or(*default),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FontConfiguration {
+    pub custom_ui_loaded: bool,
+    pub custom_editor_loaded: bool,
+    pub weighted_ui_loaded: bool,
+    pub ui_weight_support: Option<FontWeightSupport>,
+    pub code_weight_support: Option<FontWeightSupport>,
+    pub editor_weight_support: FontWeightSupport,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FontRequest<'a> {
+    pub family: Option<&'a CatalogFontFamily>,
+    pub fallback_path: Option<&'a Path>,
+    pub fallback_face_index: u32,
+}
+
 /// Primary editor text, shared by Typst and generic-file highlighters.
 pub fn editor_font() -> FontId {
-    FontId::new(
-        TYPE.content,
-        FontFamily::Name(Arc::from(EDITOR_REGULAR_FAMILY)),
+    editor_font_with_weight(FONT_WEIGHT_NORMAL)
+}
+
+const EDITOR_WEIGHT_FAMILY_PREFIX: &str = "tiptoptyp-editor-weight";
+const WEIGHTED_UI_FAMILY: &str = "tiptoptyp-weighted-ui";
+const WEIGHTED_UI_DATA: &str = "tiptoptyp-weighted-ui-data";
+
+fn editor_weight_family(weight: u16) -> String {
+    format!(
+        "{EDITOR_WEIGHT_FAMILY_PREFIX}-{}",
+        nearest_editor_weight(weight)
     )
 }
 
-const EDITOR_REGULAR_FAMILY: &str = "tiptoptyp-editor-regular";
-const EDITOR_STRONG_FAMILY: &str = "tiptoptyp-editor-strong";
-const CUSTOM_UI_FAMILY: &str = "tiptoptyp-custom-ui";
-const CUSTOM_UI_DATA: &str = "tiptoptyp-custom-ui-data";
+pub fn nearest_editor_weight(weight: u16) -> u16 {
+    EDITOR_FONT_WEIGHTS
+        .into_iter()
+        .min_by_key(|candidate| candidate.abs_diff(weight))
+        .unwrap_or(FONT_WEIGHT_NORMAL)
+}
+
+fn editor_weight_from_base(role_weight: u16, base_weight: u16) -> u16 {
+    (i32::from(base_weight) + i32::from(role_weight) - i32::from(FONT_WEIGHT_NORMAL))
+        .clamp(1, 1_000) as u16
+}
 
 /// Read and validate a user-provided font before giving it to egui.
 ///
@@ -101,59 +166,328 @@ const CUSTOM_UI_DATA: &str = "tiptoptyp-custom-ui-data";
 /// validation is deliberately performed at the file-picker boundary and again
 /// during runtime reload. Collections are accepted through face index zero.
 pub fn load_ui_font_bytes(path: &Path) -> Result<Vec<u8>, String> {
+    load_ui_font_bytes_at(path, 0)
+}
+
+fn load_ui_font_bytes_at(path: &Path, face_index: u32) -> Result<Vec<u8>, String> {
     let bytes = std::fs::read(path)
         .map_err(|error| format!("Could not read UI font {}: {error}", path.display()))?;
-    skrifa::FontRef::from_index(&bytes, 0)
+    skrifa::FontRef::from_index(&bytes, face_index)
         .map_err(|_| format!("{} is not a readable TTF, OTF, or TTC font", path.display()))?;
     Ok(bytes)
 }
 
-/// Select the editor's regular or strong font role.
-///
-/// On macOS the named roles resolve to the regular and bold faces of the
-/// system-provided Menlo collection. Other platforms retain egui's bundled
-/// metric-compatible monospace fallback when no paired face is available.
-pub fn editor_font_with_weight(bold: bool) -> FontId {
-    let family = if bold {
-        FontFamily::Name(Arc::from(EDITOR_STRONG_FAMILY))
-    } else {
-        FontFamily::Name(Arc::from(EDITOR_REGULAR_FAMILY))
-    };
-    FontId::new(TYPE.content, family)
+/// Select one of the editor's registered OpenType weight roles.
+pub fn editor_font_with_weight(weight: u16) -> FontId {
+    FontId::new(
+        TYPE.content,
+        FontFamily::Name(Arc::from(editor_weight_family(weight))),
+    )
 }
 
-/// Register the named strong editor role while retaining every bundled glyph
-/// fallback. This is called once during application construction.
-pub fn configure_editor_fonts(context: &egui::Context, custom_ui_font: Option<&Path>) -> bool {
+#[derive(Clone, Debug)]
+struct FontSelection {
+    index: u32,
+    coordinate: Option<f32>,
+    support: Option<FontWeightSupport>,
+}
+
+fn font_selection(bytes: &[u8], requested_weight: u16) -> Option<FontSelection> {
+    let mut variable_faces = Vec::new();
+    let mut static_faces = Vec::new();
+    let mut any_static_faces = Vec::new();
+    let weight_tag = Tag::new(b"wght");
+
+    for (index, font) in skrifa::FontRef::fonts(bytes).enumerate() {
+        let Ok(font) = font else {
+            continue;
+        };
+        let attributes = font.attributes();
+        if attributes.style == FontStyle::Normal
+            && let Some(axis) = font.axes().get_by_tag(weight_tag)
+        {
+            let min = axis.min_value().round().clamp(1.0, 1_000.0) as u16;
+            let max = axis.max_value().round().clamp(f32::from(min), 1_000.0) as u16;
+            let default = axis
+                .default_value()
+                .round()
+                .clamp(f32::from(min), f32::from(max)) as u16;
+            variable_faces.push((
+                (attributes.stretch.ratio() - 1.0).abs(),
+                FontSelection {
+                    index: index as u32,
+                    coordinate: Some(f32::from(requested_weight.clamp(min, max))),
+                    support: Some(FontWeightSupport::Continuous { min, max, default }),
+                },
+            ));
+        }
+
+        let weight = attributes.weight.value().round().clamp(1.0, 1_000.0) as u16;
+        let stretch_distance = (attributes.stretch.ratio() - 1.0).abs();
+        any_static_faces.push((index as u32, weight, stretch_distance));
+        if attributes.style == FontStyle::Normal {
+            static_faces.push((index as u32, weight, stretch_distance));
+        }
+    }
+
+    if let Some((_, selection)) = variable_faces
+        .into_iter()
+        .min_by(|(left, _), (right, _)| left.total_cmp(right))
+    {
+        return Some(selection);
+    }
+
+    let faces = if static_faces.is_empty() {
+        any_static_faces
+    } else {
+        static_faces
+    };
+    let closest_stretch = faces
+        .iter()
+        .map(|(_, _, stretch)| *stretch)
+        .min_by(f32::total_cmp)?;
+    let normal_width_faces = faces
+        .iter()
+        .filter(|(_, _, stretch)| (*stretch - closest_stretch).abs() < f32::EPSILON)
+        .collect::<Vec<_>>();
+    let (index, _, _) = normal_width_faces
+        .iter()
+        .copied()
+        .min_by_key(|(_, weight, _)| weight.abs_diff(requested_weight))?;
+    let mut values = normal_width_faces
+        .iter()
+        .map(|(_, weight, _)| *weight)
+        .collect::<Vec<_>>();
+    values.sort_unstable();
+    values.dedup();
+    let default = values
+        .iter()
+        .copied()
+        .min_by_key(|weight| weight.abs_diff(FONT_WEIGHT_NORMAL))
+        .unwrap_or(FONT_WEIGHT_NORMAL);
+    let support = (values.len() > 1).then_some(FontWeightSupport::Discrete { values, default });
+    Some(FontSelection {
+        index: *index,
+        coordinate: None,
+        support,
+    })
+}
+
+fn weighted_font_data(
+    bytes: Vec<u8>,
+    requested_weight: u16,
+) -> Option<(egui::FontData, Option<FontWeightSupport>)> {
+    let selection = font_selection(&bytes, requested_weight)?;
+    let mut data = egui::FontData::from_owned(bytes);
+    data.index = selection.index;
+    if let Some(coordinate) = selection.coordinate {
+        data.tweak.coords = egui::epaint::text::VariationCoords::new([(b"wght", coordinate)]);
+    }
+    Some((data, selection.support))
+}
+
+fn preferred_catalog_faces(family: &CatalogFontFamily) -> Vec<&FontFace> {
+    let has_normal = family.faces.iter().any(|face| face.normal_style);
+    let eligible = family
+        .faces
+        .iter()
+        .filter(|face| !has_normal || face.normal_style)
+        .collect::<Vec<_>>();
+    let closest_stretch = eligible
+        .iter()
+        .map(|face| face.stretch_milli)
+        .min_by_key(|stretch| stretch.abs_diff(1_000));
+    eligible
+        .into_iter()
+        .filter(|face| closest_stretch.is_none_or(|stretch| face.stretch_milli == stretch))
+        .collect()
+}
+
+fn catalog_family_support(family: &CatalogFontFamily) -> FontWeightSupport {
+    let faces = preferred_catalog_faces(family);
+    if let Some((min, max, default)) = faces.iter().find_map(|face| face.variable_weight) {
+        return FontWeightSupport::Continuous { min, max, default };
+    }
+    let mut values = faces.iter().map(|face| face.weight).collect::<Vec<_>>();
+    values.sort_unstable();
+    values.dedup();
+    let default = values
+        .iter()
+        .copied()
+        .min_by_key(|weight| weight.abs_diff(FONT_WEIGHT_NORMAL))
+        .unwrap_or(FONT_WEIGHT_NORMAL);
+    FontWeightSupport::Discrete { values, default }
+}
+
+fn weighted_catalog_font_data(
+    family: &CatalogFontFamily,
+    requested_weight: u16,
+) -> Option<(egui::FontData, FontWeightSupport)> {
+    let faces = preferred_catalog_faces(family);
+    let support = catalog_family_support(family);
+    let face = faces
+        .iter()
+        .copied()
+        .find(|face| face.variable_weight.is_some())
+        .or_else(|| {
+            faces
+                .iter()
+                .copied()
+                .min_by_key(|face| face.weight.abs_diff(requested_weight))
+        })?;
+    let bytes = std::fs::read(&face.path).ok()?;
+    skrifa::FontRef::from_index(&bytes, face.index).ok()?;
+    let mut data = egui::FontData::from_owned(bytes);
+    data.index = face.index;
+    if let Some((min, max, _)) = face.variable_weight {
+        let coordinate = f32::from(requested_weight.clamp(min, max));
+        data.tweak.coords = egui::epaint::text::VariationCoords::new([(b"wght", coordinate)]);
+    }
+    Some((data, support))
+}
+
+fn weighted_requested_font_data(
+    request: FontRequest<'_>,
+    requested_weight: u16,
+) -> Option<(egui::FontData, Option<FontWeightSupport>)> {
+    if let Some(family) = request.family {
+        return weighted_catalog_font_data(family, requested_weight)
+            .map(|(data, support)| (data, Some(support)));
+    }
+    let path = request.fallback_path?;
+    let bytes = load_ui_font_bytes_at(path, request.fallback_face_index).ok()?;
+    if request.fallback_face_index == 0 {
+        return weighted_font_data(bytes, requested_weight);
+    }
+
+    // While the asynchronous catalog is loading, honor the exact persisted
+    // collection face instead of deriving weight support from another face
+    // and only swapping its index afterward.
+    let font = skrifa::FontRef::from_index(&bytes, request.fallback_face_index).ok()?;
+    let axis = font.axes().get_by_tag(Tag::new(b"wght"));
+    let support = axis.map(|axis| {
+        let min = axis.min_value().round().clamp(1.0, 1_000.0) as u16;
+        let max = axis.max_value().round().clamp(f32::from(min), 1_000.0) as u16;
+        let default = axis
+            .default_value()
+            .round()
+            .clamp(f32::from(min), f32::from(max)) as u16;
+        FontWeightSupport::Continuous { min, max, default }
+    });
+    let mut data = egui::FontData::from_owned(bytes);
+    data.index = request.fallback_face_index;
+    if let Some(FontWeightSupport::Continuous { min, max, .. }) = support {
+        data.tweak.coords = egui::epaint::text::VariationCoords::new([(
+            b"wght",
+            f32::from(requested_weight.clamp(min, max)),
+        )]);
+    }
+    Some((data, support))
+}
+
+fn variable_editor_font() -> Option<Vec<u8>> {
+    let candidates: &[&str] = if cfg!(target_os = "macos") {
+        &["/System/Library/Fonts/SFNSMono.ttf"]
+    } else if cfg!(target_os = "windows") {
+        &["C:\\Windows\\Fonts\\CascadiaMono.ttf"]
+    } else {
+        &[
+            "/usr/share/fonts/truetype/noto/NotoSansMono-VariableFont_wdth,wght.ttf",
+            "/usr/share/fonts/truetype/cascadia-code/CascadiaMono.ttf",
+        ]
+    };
+    candidates.iter().find_map(|path| {
+        let bytes = std::fs::read(path).ok()?;
+        matches!(
+            font_selection(&bytes, FONT_WEIGHT_NORMAL)?.support,
+            Some(FontWeightSupport::Continuous { .. })
+        )
+        .then_some(bytes)
+    })
+}
+
+fn default_proportional_font() -> Option<Vec<u8>> {
+    let candidates: &[&str] = if cfg!(target_os = "macos") {
+        &["/System/Library/Fonts/SFNS.ttf"]
+    } else if cfg!(target_os = "windows") {
+        &["C:\\Windows\\Fonts\\SegoeUIVariable.ttf"]
+    } else {
+        &[]
+    };
+    candidates.iter().find_map(|path| std::fs::read(path).ok())
+}
+
+/// Register editor weight roles and the active weighted UI family while
+/// retaining every bundled glyph fallback.
+pub fn configure_editor_fonts(
+    context: &egui::Context,
+    ui_font: FontRequest<'_>,
+    editor_font: FontRequest<'_>,
+    ui_font_monospace: bool,
+    ui_font_weight: u16,
+    code_font_weight: u16,
+) -> FontConfiguration {
     let mut definitions = egui::FontDefinitions::default();
-    let proportional_fallback = definitions
+    let mut proportional_fallback = definitions
         .families
         .get(&FontFamily::Proportional)
         .cloned()
         .unwrap_or_default();
-    let fallback = definitions
+    let mut monospace_fallback = definitions
         .families
         .get(&FontFamily::Monospace)
         .cloned()
         .unwrap_or_default();
-    let mut regular = fallback.clone();
-    let mut strong = fallback;
-    let mut custom_ui_family = custom_ui_font
-        .and_then(|path| load_ui_font_bytes(path).ok())
-        .map(|bytes| {
-            definitions.font_data.insert(
-                CUSTOM_UI_DATA.to_owned(),
-                Arc::new(egui::FontData::from_owned(bytes)),
-            );
-            let mut family = vec![CUSTOM_UI_DATA.to_owned()];
-            family.extend(proportional_fallback.iter().cloned());
-            family
-        });
+    let mut editor_primary = std::collections::BTreeMap::new();
+    let mut editor_weight_support = FontWeightSupport::Discrete {
+        values: vec![FONT_WEIGHT_NORMAL, FONT_WEIGHT_BOLD],
+        default: FONT_WEIGHT_NORMAL,
+    };
+    let mut code_weight_support = None;
 
-    // Use the installed system font at runtime; no third-party font bytes are
-    // copied into the repository or application bundle.
+    let custom_editor_requested =
+        editor_font.family.is_some() || editor_font.fallback_path.is_some();
+    if custom_editor_requested {
+        for weight in EDITOR_FONT_WEIGHTS {
+            let requested_weight = editor_weight_from_base(weight, code_font_weight);
+            let Some((data, support)) = weighted_requested_font_data(editor_font, requested_weight)
+            else {
+                continue;
+            };
+            if let Some(support) = support {
+                code_weight_support = Some(support.clone());
+                editor_weight_support = support;
+            }
+            let name = format!("tiptoptyp-editor-data-{weight}");
+            definitions.font_data.insert(name.clone(), Arc::new(data));
+            editor_primary.insert(weight, name);
+        }
+    } else if let Some(bytes) = variable_editor_font() {
+        for weight in EDITOR_FONT_WEIGHTS {
+            let requested_weight = editor_weight_from_base(weight, code_font_weight);
+            let Some((data, support)) = weighted_font_data(bytes.clone(), requested_weight) else {
+                continue;
+            };
+            if let Some(FontWeightSupport::Continuous { .. }) = &support {
+                code_weight_support = support.clone();
+                editor_weight_support = FontWeightSupport::Discrete {
+                    values: EDITOR_FONT_WEIGHTS.to_vec(),
+                    default: FONT_WEIGHT_NORMAL,
+                };
+            }
+            let name = format!("tiptoptyp-editor-data-{weight}");
+            definitions.font_data.insert(name.clone(), Arc::new(data));
+            editor_primary.insert(weight, name);
+        }
+    }
+    let custom_editor_loaded = custom_editor_requested && !editor_primary.is_empty();
+
+    // Fall back to Menlo's regular/bold faces on macOS. Other platforms keep
+    // egui's bundled monospace font when no variable system font is available.
     #[cfg(target_os = "macos")]
-    if let Ok(bytes) = std::fs::read("/System/Library/Fonts/Menlo.ttc") {
+    if editor_primary.is_empty()
+        && let Ok(bytes) = std::fs::read("/System/Library/Fonts/Menlo.ttc")
+    {
         const REGULAR_FACE: &str = "tiptoptyp-menlo-regular";
         const BOLD_FACE: &str = "tiptoptyp-menlo-bold";
         let mut regular_data = egui::FontData::from_owned(bytes.clone());
@@ -166,8 +500,21 @@ pub fn configure_editor_fonts(context: &egui::Context, custom_ui_font: Option<&P
         definitions
             .font_data
             .insert(BOLD_FACE.to_owned(), Arc::new(bold_data));
-        regular.insert(0, REGULAR_FACE.to_owned());
-        strong.insert(0, BOLD_FACE.to_owned());
+        code_weight_support = Some(FontWeightSupport::Discrete {
+            values: vec![FONT_WEIGHT_NORMAL, FONT_WEIGHT_BOLD],
+            default: FONT_WEIGHT_NORMAL,
+        });
+        for weight in EDITOR_FONT_WEIGHTS {
+            editor_primary.insert(
+                weight,
+                if weight < 600 {
+                    REGULAR_FACE
+                } else {
+                    BOLD_FACE
+                }
+                .to_owned(),
+            );
+        }
     }
 
     // Keep Latin editor/UI metrics stable while adding a platform-provided
@@ -217,28 +564,76 @@ pub fn configure_editor_fonts(context: &egui::Context, custom_ui_font: Option<&P
                 .or_default()
                 .push((*name).to_owned());
         }
-        regular.push((*name).to_owned());
-        strong.push((*name).to_owned());
-        if let Some(family) = &mut custom_ui_family {
-            family.push((*name).to_owned());
-        }
+        proportional_fallback.push((*name).to_owned());
+        monospace_fallback.push((*name).to_owned());
         break;
     }
 
-    definitions
-        .families
-        .insert(FontFamily::Name(Arc::from(EDITOR_REGULAR_FAMILY)), regular);
-    definitions
-        .families
-        .insert(FontFamily::Name(Arc::from(EDITOR_STRONG_FAMILY)), strong);
-    let custom_ui_loaded = custom_ui_family.is_some();
-    if let Some(family) = custom_ui_family {
+    for weight in EDITOR_FONT_WEIGHTS {
+        let mut family = editor_primary
+            .get(&weight)
+            .cloned()
+            .into_iter()
+            .collect::<Vec<_>>();
+        family.extend(monospace_fallback.iter().cloned());
+        definitions.families.insert(
+            FontFamily::Name(Arc::from(editor_weight_family(weight))),
+            family,
+        );
+    }
+
+    let custom_ui_requested = ui_font.family.is_some() || ui_font.fallback_path.is_some();
+    let selected_ui_font = if ui_font_monospace && custom_editor_requested {
+        weighted_requested_font_data(editor_font, ui_font_weight)
+    } else if ui_font_monospace {
+        variable_editor_font().and_then(|bytes| weighted_font_data(bytes, ui_font_weight))
+    } else if custom_ui_requested {
+        weighted_requested_font_data(ui_font, ui_font_weight)
+    } else {
+        default_proportional_font().and_then(|bytes| weighted_font_data(bytes, ui_font_weight))
+    };
+    let custom_ui_loaded = custom_ui_requested && selected_ui_font.is_some();
+    let mut ui_weight_support = None;
+    let weighted_ui_loaded = if let Some((data, support)) = selected_ui_font {
+        definitions
+            .font_data
+            .insert(WEIGHTED_UI_DATA.to_owned(), Arc::new(data));
+        let mut family = vec![WEIGHTED_UI_DATA.to_owned()];
+        family.extend(if ui_font_monospace {
+            monospace_fallback.clone()
+        } else {
+            proportional_fallback
+        });
         definitions
             .families
-            .insert(FontFamily::Name(Arc::from(CUSTOM_UI_FAMILY)), family);
-    }
+            .insert(FontFamily::Name(Arc::from(WEIGHTED_UI_FAMILY)), family);
+        ui_weight_support = support;
+        true
+    } else if ui_font_monospace {
+        let family = definitions
+            .families
+            .get(&FontFamily::Name(Arc::from(editor_weight_family(
+                ui_font_weight,
+            ))))
+            .cloned()
+            .unwrap_or_else(|| monospace_fallback.clone());
+        definitions
+            .families
+            .insert(FontFamily::Name(Arc::from(WEIGHTED_UI_FAMILY)), family);
+        ui_weight_support = code_weight_support.clone();
+        true
+    } else {
+        false
+    };
     context.set_fonts(definitions);
-    custom_ui_loaded
+    FontConfiguration {
+        custom_ui_loaded,
+        custom_editor_loaded,
+        weighted_ui_loaded,
+        ui_weight_support,
+        code_weight_support,
+        editor_weight_support,
+    }
 }
 
 /// Compact monospace metadata drawn alongside editor content.
@@ -469,6 +864,7 @@ pub struct MenuMetrics {
     pub editor_size: Vec2,
     pub view_size: Vec2,
     pub status_log_size: Vec2,
+    pub font_selector_size: Vec2,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -483,8 +879,11 @@ pub struct SettingsMetrics {
     pub tool_custom_max_width: f32,
     pub tool_path_min_width: f32,
     pub tool_path_estimated_font_size: f32,
+    pub override_row_height: f32,
     pub override_role_width: f32,
     pub override_color_width: f32,
+    pub override_weight_width: f32,
+    pub ui_font_weight_width: f32,
     pub override_decoration_width: f32,
     pub override_sample_width: f32,
     pub override_reset_width: f32,
@@ -664,6 +1063,7 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
         editor_size: Vec2::new(220.0, 240.0),
         view_size: Vec2::new(220.0, 190.0),
         status_log_size: Vec2::new(360.0, 250.0),
+        font_selector_size: Vec2::new(360.0, 390.0),
     },
     settings: SettingsMetrics {
         appearance_label_width: 70.0,
@@ -676,8 +1076,11 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
         tool_custom_max_width: 270.0,
         tool_path_min_width: 32.0,
         tool_path_estimated_font_size: 11.0,
+        override_row_height: 24.0,
         override_role_width: 126.0,
         override_color_width: 94.0,
+        override_weight_width: 86.0,
+        ui_font_weight_width: 180.0,
         override_decoration_width: 50.0,
         override_sample_width: 156.0,
         override_reset_width: 52.0,
@@ -873,6 +1276,10 @@ pub fn configure_styles(context: &egui::Context) {
         context.all_styles_mut(|style| apply_imported_visuals(&mut style.visuals, imported));
     }
     context.all_styles_mut(|style| {
+        // Popups must be immediately usable and fully opaque. Area fade-in is
+        // time-based, which can strand menus in a translucent state when a
+        // secondary viewport is not receiving regular repaint ticks.
+        style.animation_time = 0.0;
         style.spacing.item_spacing = METRICS.spacing.global_item;
         style.spacing.button_padding = METRICS.spacing.global_button_padding;
         style.visuals.menu_corner_radius = egui::CornerRadius::same(RADIUS.card);
@@ -887,11 +1294,9 @@ pub fn configure_styles(context: &egui::Context) {
 /// syntax roles independent. This is intentionally a small, explicit set of
 /// text roles: changing the UI font must not make code samples lose their
 /// monospace face.
-pub fn configure_ui_font(context: &egui::Context, monospace: bool, custom_loaded: bool) {
-    let family = if custom_loaded {
-        FontFamily::Name(Arc::from(CUSTOM_UI_FAMILY))
-    } else if monospace {
-        FontFamily::Monospace
+pub fn configure_ui_font(context: &egui::Context, weighted_ui_loaded: bool) {
+    let family = if weighted_ui_loaded {
+        FontFamily::Name(Arc::from(WEIGHTED_UI_FAMILY))
     } else {
         FontFamily::Proportional
     };
@@ -1196,7 +1601,7 @@ mod tests {
             editor_font(),
             FontId::new(
                 TYPE.content,
-                FontFamily::Name(Arc::from(EDITOR_REGULAR_FAMILY))
+                FontFamily::Name(Arc::from(editor_weight_family(FONT_WEIGHT_NORMAL)))
             )
         );
         assert_eq!(
@@ -1291,14 +1696,62 @@ mod tests {
             dark.text_styles.get(&egui::TextStyle::Monospace),
             Some(&editor_font())
         );
+        assert_eq!(dark.animation_time, 0.0);
+        assert_eq!(light.animation_time, 0.0);
         assert_eq!(dark.visuals.popup_shadow, egui::epaint::Shadow::NONE);
         assert_eq!(dark.visuals.menu_corner_radius, egui::CornerRadius::same(8));
     }
 
     #[test]
     fn regular_and_strong_editor_fonts_have_distinct_family_roles() {
-        assert_ne!(editor_font(), editor_font_with_weight(true));
-        assert_eq!(editor_font(), editor_font_with_weight(false));
+        assert_ne!(editor_font(), editor_font_with_weight(FONT_WEIGHT_BOLD));
+        assert_eq!(editor_font(), editor_font_with_weight(FONT_WEIGHT_NORMAL));
+        assert_eq!(nearest_editor_weight(549), 500);
+        assert_eq!(nearest_editor_weight(550), 500);
+        assert_eq!(nearest_editor_weight(551), 600);
+    }
+
+    #[test]
+    fn code_font_base_weight_preserves_relative_syntax_emphasis() {
+        assert_eq!(editor_weight_from_base(FONT_WEIGHT_NORMAL, 525), 525);
+        assert_eq!(editor_weight_from_base(FONT_WEIGHT_BOLD, 525), 825);
+        assert_eq!(editor_weight_from_base(100, 100), 1);
+        assert_eq!(editor_weight_from_base(900, 900), 1_000);
+    }
+
+    #[test]
+    fn font_weight_support_clamps_continuous_and_discrete_choices() {
+        let continuous = FontWeightSupport::Continuous {
+            min: 250,
+            max: 750,
+            default: 400,
+        };
+        assert_eq!(continuous.clamp(100), 250);
+        assert_eq!(continuous.clamp(900), 750);
+
+        let discrete = FontWeightSupport::Discrete {
+            values: vec![300, 500, 700],
+            default: 500,
+        };
+        assert_eq!(discrete.clamp(620), 700);
+        assert_eq!(discrete.clamp(580), 500);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_variable_monospace_font_exposes_and_applies_weight_axis() {
+        let bytes = std::fs::read("/System/Library/Fonts/SFNSMono.ttf")
+            .expect("macOS ships its system monospace font");
+        let selection = font_selection(&bytes, 650).expect("select variable font face");
+        assert!(matches!(
+            selection.support,
+            Some(FontWeightSupport::Continuous { min, max, .. })
+                if min <= 400 && max >= 700
+        ));
+        assert_eq!(selection.coordinate, Some(650.0));
+
+        let (data, _) = weighted_font_data(bytes, 650).expect("configure variable font");
+        assert_eq!(data.tweak.coords.as_ref(), &[(Tag::new(b"wght"), 650.0)]);
     }
 
     #[test]
@@ -1315,16 +1768,82 @@ mod tests {
 
         let context = egui::Context::default();
         assert!(load_ui_font_bytes(&path).is_ok());
-        assert!(configure_editor_fonts(&context, Some(&path)));
+        let configuration = configure_editor_fonts(
+            &context,
+            FontRequest {
+                fallback_path: Some(&path),
+                ..Default::default()
+            },
+            FontRequest::default(),
+            false,
+            FONT_WEIGHT_NORMAL,
+            FONT_WEIGHT_NORMAL,
+        );
+        assert!(configuration.custom_ui_loaded);
         configure_styles(&context);
-        configure_ui_font(&context, false, true);
+        configure_ui_font(&context, configuration.weighted_ui_loaded);
 
         let body = context.style_of(egui::Theme::Light);
         assert_eq!(
             body.text_styles[&egui::TextStyle::Body].family,
-            FontFamily::Name(Arc::from(CUSTOM_UI_FAMILY))
+            FontFamily::Name(Arc::from(WEIGHTED_UI_FAMILY))
         );
         assert_eq!(body.text_styles[&egui::TextStyle::Monospace], editor_font());
+    }
+
+    #[test]
+    fn selected_code_fonts_keep_open_type_ligature_shaping_enabled() {
+        let definitions = egui::FontDefinitions::default();
+        let proportional_name = definitions.families[&FontFamily::Proportional][0].clone();
+        let source_font = &definitions.font_data[&proportional_name];
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ligature-code.ttf");
+        std::fs::write(&path, source_font.font.as_ref()).unwrap();
+        let family = CatalogFontFamily {
+            name: "Ligature fixture".to_owned(),
+            origin: crate::font_catalog::FontOrigin::Workspace,
+            faces: vec![FontFace {
+                path,
+                index: source_font.index,
+                weight: FONT_WEIGHT_NORMAL,
+                normal_style: true,
+                stretch_milli: 1_000,
+                variable_weight: None,
+            }],
+        };
+        let context = egui::Context::default();
+        let configuration = configure_editor_fonts(
+            &context,
+            FontRequest::default(),
+            FontRequest {
+                family: Some(&family),
+                ..Default::default()
+            },
+            false,
+            FONT_WEIGHT_NORMAL,
+            FONT_WEIGHT_NORMAL,
+        );
+        assert!(configuration.custom_editor_loaded);
+
+        let mut advances = Vec::new();
+        context
+            .run_ui(egui::RawInput::default(), |ui| {
+                let galley = ui.fonts_mut(|fonts| {
+                    fonts.layout_no_wrap("ffi".to_owned(), editor_font(), Color32::WHITE)
+                });
+                advances.extend(
+                    galley.rows[0]
+                        .glyphs
+                        .iter()
+                        .map(|glyph| glyph.advance_width),
+                );
+            })
+            .drop_without_applying_deltas();
+        assert_eq!(advances.len(), 3);
+        assert!(
+            advances.iter().skip(1).any(|advance| *advance == 0.0),
+            "the selected font's ffi ligature should retain continuation glyphs: {advances:?}"
+        );
     }
 
     #[test]

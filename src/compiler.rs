@@ -19,10 +19,7 @@ use quick_xml::{
     events::{BytesStart, Event},
 };
 
-use crate::{
-    private_workspace::{PrivateTypstDocument, PrivateWorkspace},
-    toolchain::renamed_environment_value,
-};
+use crate::private_workspace::{PrivateTypstDocument, PrivateWorkspace};
 
 /// Resolution used only by the native recovery viewer. The primary Tinymist
 /// viewer is vector-based. 144 DPI keeps the fallback crisp at 100% on a 2×
@@ -30,16 +27,11 @@ use crate::{
 pub const PREVIEW_DPI: f32 = 144.0;
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(15);
 const WATCH_LOG_QUIET_PERIOD: Duration = Duration::from_millis(40);
-const IGNORE_SYSTEM_FONTS_ENV: (&str, &str) = (
-    "TIPTOPTYP_IGNORE_SYSTEM_FONTS",
-    "MYTYPST_IGNORE_SYSTEM_FONTS",
-);
-const TRACE_WATCH_ENV: (&str, &str) = ("TIPTOPTYP_TRACE_WATCH", "MYTYPST_TRACE_WATCH");
-static IGNORE_SYSTEM_FONTS: LazyLock<bool> = LazyLock::new(|| {
-    renamed_environment_value(IGNORE_SYSTEM_FONTS_ENV.0, IGNORE_SYSTEM_FONTS_ENV.1).is_some()
-});
-static TRACE_WATCH: LazyLock<bool> =
-    LazyLock::new(|| renamed_environment_value(TRACE_WATCH_ENV.0, TRACE_WATCH_ENV.1).is_some());
+const IGNORE_SYSTEM_FONTS_ENV: &str = "TIPTOPTYP_IGNORE_SYSTEM_FONTS";
+const TRACE_WATCH_ENV: &str = "TIPTOPTYP_TRACE_WATCH";
+static IGNORE_SYSTEM_FONTS: LazyLock<bool> =
+    LazyLock::new(|| std::env::var_os(IGNORE_SYSTEM_FONTS_ENV).is_some());
+static TRACE_WATCH: LazyLock<bool> = LazyLock::new(|| std::env::var_os(TRACE_WATCH_ENV).is_some());
 
 #[derive(Debug, Clone)]
 pub struct CompileRequest {
@@ -49,6 +41,7 @@ pub struct CompileRequest {
     pub project_root: PathBuf,
     pub display_name: String,
     pub typst_executable: PathBuf,
+    pub font_paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +49,7 @@ struct WatchContext {
     source_dir: PathBuf,
     project_root: PathBuf,
     typst_executable: PathBuf,
+    font_paths: Vec<PathBuf>,
     display_name: String,
 }
 
@@ -80,10 +74,19 @@ impl WatchContext {
                 project_root.display()
             ));
         }
+        let mut font_paths = request
+            .font_paths
+            .iter()
+            .filter_map(|path| path.canonicalize().ok())
+            .filter(|path| path.starts_with(&project_root))
+            .collect::<Vec<_>>();
+        font_paths.sort();
+        font_paths.dedup();
         Ok(Self {
             source_dir,
             project_root,
             typst_executable: request.typst_executable.clone(),
+            font_paths,
             display_name: request.display_name.clone(),
         })
     }
@@ -251,6 +254,9 @@ impl WatchSession {
 
         let mut command = Command::new(&context.typst_executable);
         command.arg("watch").arg("--diagnostic-format").arg("short");
+        for font_path in &context.font_paths {
+            command.arg("--font-path").arg(font_path);
+        }
         if *IGNORE_SYSTEM_FONTS {
             // This only affects watcher startup; subsequent incremental builds
             // reuse the same font book and stay fast.
@@ -1019,8 +1025,8 @@ fn send_result(results: &Sender<CompileResult>, context: &egui::Context, result:
 #[cfg(test)]
 mod tests {
     use super::{
-        CompileRequest, CompileResult, Compiler, WatchLine, classify_watch_line, parse_pdf_links,
-        preview_page_number, watch_context_matches,
+        CompileRequest, CompileResult, Compiler, WatchContext, WatchLine, classify_watch_line,
+        parse_pdf_links, preview_page_number, watch_context_matches,
     };
     use std::{
         fs,
@@ -1092,6 +1098,30 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn watch_context_keeps_only_canonical_project_font_directories() {
+        let project = tempfile::tempdir().unwrap();
+        let fonts = project.path().join("assets/fonts");
+        fs::create_dir_all(&fonts).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let request = CompileRequest {
+            revision: 1,
+            source: String::new(),
+            source_dir: project.path().to_path_buf(),
+            project_root: project.path().to_path_buf(),
+            display_name: "main.typ".to_owned(),
+            typst_executable: PathBuf::from("typst"),
+            font_paths: vec![
+                fonts.clone(),
+                fonts.clone(),
+                outside.path().to_path_buf(),
+                project.path().join("missing"),
+            ],
+        };
+        let context = WatchContext::resolve(&request).unwrap();
+        assert_eq!(context.font_paths, vec![fonts.canonicalize().unwrap()]);
+    }
+
     #[cfg(unix)]
     #[test]
     fn watch_context_accepts_canonical_and_symlink_aliases_but_not_missing_paths() {
@@ -1132,12 +1162,9 @@ mod tests {
     fn persistent_watcher_compiles_errors_and_recovers() {
         let root = tempfile::tempdir().unwrap();
         let compiler = Compiler::new(eframe::egui::Context::default());
-        let typst_executable = crate::toolchain::renamed_environment_value(
-            "TIPTOPTYP_TEST_TYPST",
-            "MYTYPST_TEST_TYPST",
-        )
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("typst"));
+        let typst_executable = std::env::var_os("TIPTOPTYP_TEST_TYPST")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("typst"));
         let request = |revision, source: &str| CompileRequest {
             revision,
             source: source.to_owned(),
@@ -1145,6 +1172,7 @@ mod tests {
             project_root: root.path().to_path_buf(),
             display_name: "integration.typ".to_owned(),
             typst_executable: typst_executable.clone(),
+            font_paths: Vec::new(),
         };
 
         compiler.request(request(1, "= First build")).unwrap();

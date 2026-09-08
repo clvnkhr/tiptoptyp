@@ -6,15 +6,15 @@ use std::{
 use eframe::{Storage, egui};
 use serde::{Deserialize, Serialize};
 
-use crate::{builtin_themes, sublime_theme, syntax_theme::TypstOverrideThemes};
+use crate::{builtin_themes, syntax_theme::TypstOverrideThemes};
 
-// Preserve the pre-rename key so existing installations keep their settings.
-const STORAGE_KEY: &str = "mytypst.settings.v1";
+const STORAGE_KEY: &str = "tiptoptyp.settings.v1";
 pub(crate) const DEFAULT_HOVER_DELAY_MS: u64 = 300;
 pub(crate) const DEFAULT_HOVER_FADE_MS: u64 = 90;
 pub(crate) const MAX_RECENT_WORKSPACES: usize = 10;
 pub(crate) const SYSTEM_THEME_ID: &str = "system";
 pub(crate) const DEFAULT_UI_SCALE_PERCENT: u16 = 100;
+pub(crate) const DEFAULT_UI_FONT_WEIGHT: u16 = 400;
 
 /// The interface appearance selected by the user.
 ///
@@ -177,7 +177,6 @@ impl ToolMode {
 /// One executable choice. Keeping the last custom path while Bundled is
 /// selected makes it possible to switch between the two without re-browsing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
 pub(crate) struct ToolPreference {
     pub(crate) mode: ToolMode,
     pub(crate) custom_path: String,
@@ -203,10 +202,8 @@ impl PreviewPreference {
     }
 }
 
-/// Persisted user choices. New fields must have defaults so older settings
-/// files remain forwards-compatible as this panel grows.
+/// Persisted user choices for the current settings schema.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
 pub(crate) struct AppSettings {
     pub(crate) interface_theme: InterfaceTheme,
     /// Color scheme used whenever the effective interface appearance is light.
@@ -230,16 +227,28 @@ pub(crate) struct AppSettings {
     pub(crate) ui_scale_percent: u16,
     /// Use the editor's monospace family for interface text as well.
     pub(crate) ui_font_monospace: bool,
-    /// Optional user-provided TTF/OTF/TTC used for interface text.
-    #[serde(default)]
+    /// A face path used to identify the selected system or workspace UI family.
     pub(crate) ui_font_path: Option<String>,
+    /// OpenType family selected from `ui_font_path`. Keeping the family name
+    /// lets collections and separately installed weight faces act as one font.
+    pub(crate) ui_font_family: Option<String>,
+    /// Face used as the persisted fallback until the font catalog is ready.
+    pub(crate) ui_font_face_index: u32,
+    /// OpenType weight used by proportional, monospace, and custom UI fonts.
+    pub(crate) ui_font_weight: u16,
+    /// Optional system or workspace family used by the source editor.
+    pub(crate) code_font_path: Option<String>,
+    pub(crate) code_font_family: Option<String>,
+    pub(crate) code_font_face_index: u32,
+    /// Base OpenType weight used by ordinary editor text. Syntax roles retain
+    /// their relative emphasis around this value.
+    pub(crate) code_font_weight: u16,
     /// Keep the in-window File/Edit/View controls visible beside the document
     /// title. Native macOS menus remain available when this is disabled.
     pub(crate) titlebar_menus: bool,
     /// Optional Typst-only style layers for each interface appearance.
     pub(crate) typst_overrides: TypstOverrideThemes,
     /// Most recently used canonical workspace roots, newest first.
-    #[serde(default)]
     pub(crate) recent_workspaces: Vec<String>,
     /// Last successfully opened source document, keyed by canonical project root.
     pub(crate) last_opened_files: BTreeMap<String, String>,
@@ -269,6 +278,13 @@ impl Default for AppSettings {
             ui_scale_percent: DEFAULT_UI_SCALE_PERCENT,
             ui_font_monospace: false,
             ui_font_path: None,
+            ui_font_family: None,
+            ui_font_face_index: 0,
+            ui_font_weight: DEFAULT_UI_FONT_WEIGHT,
+            code_font_path: None,
+            code_font_family: None,
+            code_font_face_index: 0,
+            code_font_weight: DEFAULT_UI_FONT_WEIGHT,
             titlebar_menus: true,
             typst_overrides: TypstOverrideThemes::default(),
             recent_workspaces: Vec::new(),
@@ -331,8 +347,8 @@ impl AppSettings {
             return Self::default();
         };
         let mut settings: Self = serde_json::from_str(&serialized).unwrap_or_default();
-        let legacy = serde_json::from_str::<LegacyThemeSettings>(&serialized).unwrap_or_default();
-        settings.migrate_legacy_theme(legacy);
+        settings.ui_font_weight = settings.ui_font_weight.clamp(1, 1_000);
+        settings.code_font_weight = settings.code_font_weight.clamp(1, 1_000);
         settings.normalize_builtin_theme_slots();
         settings.normalize_workspace_history();
         settings
@@ -369,51 +385,6 @@ impl AppSettings {
         }
     }
 
-    fn migrate_legacy_theme(&mut self, legacy: LegacyThemeSettings) {
-        // A new-format file can omit either slot and receive its default. It
-        // must never be mistaken for the old single-selection schema.
-        if legacy.light_theme.is_some() || legacy.dark_theme.is_some() {
-            return;
-        }
-
-        let fallback_dark =
-            self.interface_theme.resolve(None, egui::Theme::Dark) == egui::Theme::Dark;
-        let legacy_choice = legacy
-            .sublime_theme_path
-            .filter(|path| !path.is_empty())
-            .map(|path| {
-                let dark_mode = sublime_theme::import_path(Path::new(&path))
-                    .map_or(fallback_dark, |theme| theme.dark_mode);
-                (ColorThemeChoice::sublime(path), dark_mode)
-            })
-            .or_else(|| {
-                let id = legacy.builtin_theme_id.filter(|id| !id.is_empty())?;
-                if id == SYSTEM_THEME_ID {
-                    return None;
-                }
-                let dark_mode =
-                    builtin_themes::find(&id).map_or(fallback_dark, |theme| theme.dark_mode);
-                Some((ColorThemeChoice::builtin(id), dark_mode))
-            });
-
-        let Some((choice, dark_mode)) = legacy_choice else {
-            return;
-        };
-        *self.color_theme_mut(if dark_mode {
-            egui::Theme::Dark
-        } else {
-            egui::Theme::Light
-        }) = choice;
-        // The old source was fixed rather than paired. Preserve what the user
-        // saw at migration time instead of letting the other slot become active
-        // immediately because the OS currently has the opposite appearance.
-        self.interface_theme = if dark_mode {
-            InterfaceTheme::Dark
-        } else {
-            InterfaceTheme::Light
-        };
-    }
-
     pub(crate) fn save(&self, storage: &mut dyn Storage) {
         if let Ok(serialized) = serde_json::to_string(self) {
             storage.set_string(STORAGE_KEY, serialized);
@@ -423,7 +394,7 @@ impl AppSettings {
 
 /// Canonicalize workspace roots when possible and otherwise normalize their
 /// lexical form without touching the filesystem. The fallback keeps startup
-/// and settings migration useful for roots that have temporarily disappeared.
+/// useful for roots that have temporarily disappeared.
 pub(crate) fn normalize_workspace_root(path: &Path) -> PathBuf {
     let absolute = path.canonicalize().unwrap_or_else(|_| {
         if path.is_absolute() {
@@ -463,21 +434,12 @@ fn normalize_workspace_map(map: BTreeMap<String, String>) -> BTreeMap<String, St
     normalized
 }
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct LegacyThemeSettings {
-    builtin_theme_id: Option<String>,
-    sublime_theme_path: Option<String>,
-    light_theme: Option<ColorThemeChoice>,
-    dark_theme: Option<ColorThemeChoice>,
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::{sublime_theme::Rgba, syntax_theme::TypstSyntaxRole};
+    use crate::{sublime_theme::Rgba, syntax_theme::TypstSyntaxRole, theme};
 
     #[derive(Default)]
     struct MemoryStorage(HashMap<String, String>);
@@ -584,13 +546,13 @@ mod tests {
     }
 
     #[test]
-    fn persisted_settings_round_trip_and_missing_fields_use_defaults() {
+    fn persisted_settings_round_trip_and_partial_schemas_are_rejected() {
         let mut typst_overrides = TypstOverrideThemes::default();
         let light_function = typst_overrides
             .for_dark_mut(false)
             .get_mut_or_default(TypstSyntaxRole::Function);
         light_function.foreground = Some(Rgba::rgb(24, 80, 196));
-        light_function.bold = Some(true);
+        light_function.weight = Some(theme::FONT_WEIGHT_BOLD);
         let dark_comment = typst_overrides
             .for_dark_mut(true)
             .get_mut_or_default(TypstSyntaxRole::Comment);
@@ -614,6 +576,13 @@ mod tests {
             ui_scale_percent: 115,
             ui_font_monospace: true,
             ui_font_path: Some("/fonts/Example.ttf".to_owned()),
+            ui_font_family: Some("Example Sans".to_owned()),
+            ui_font_face_index: 2,
+            ui_font_weight: 550,
+            code_font_path: Some("/fonts/ExampleCode.ttf".to_owned()),
+            code_font_family: Some("Example Code".to_owned()),
+            code_font_face_index: 1,
+            code_font_weight: 450,
             titlebar_menus: false,
             typst_overrides,
             last_opened_files: BTreeMap::from([(
@@ -639,97 +608,29 @@ mod tests {
         assert_eq!(AppSettings::load(Some(&storage)), expected);
 
         storage.set_string(STORAGE_KEY, r#"{"interface_theme":"Dark"}"#.to_owned());
-        let partial = AppSettings::load(Some(&storage));
-        assert_eq!(partial.interface_theme, InterfaceTheme::Dark);
-        assert_eq!(
-            partial.light_theme,
-            ColorThemeChoice::builtin("tiptop-light")
-        );
-        assert_eq!(partial.dark_theme, ColorThemeChoice::builtin("tiptop-dark"));
-        assert!(!partial.theme_invert);
-        assert_eq!(partial.theme_hue_shift_degrees, 0);
-        assert_eq!(partial.document_theme, DocumentTheme::FollowInterface);
-        assert_eq!(partial.preview_preference, PreviewPreference::Interactive);
-        assert!(partial.line_wrap);
-        assert!(partial.line_numbers);
-        assert_eq!(
-            partial.source_preview_trigger,
-            SourcePreviewTrigger::DoubleClick
-        );
-        assert!(partial.auto_save);
-        assert_eq!(partial.auto_save_delay_ms, 750);
-        assert_eq!(partial.hover_delay_ms, DEFAULT_HOVER_DELAY_MS);
-        assert_eq!(partial.hover_fade_ms, DEFAULT_HOVER_FADE_MS);
-        assert_eq!(partial.ui_scale_percent, DEFAULT_UI_SCALE_PERCENT);
-        assert!(!partial.ui_font_monospace);
-        assert_eq!(partial.ui_font_path, None);
-        assert!(partial.titlebar_menus);
-        assert_eq!(partial.typst_overrides, TypstOverrideThemes::default());
-        assert!(partial.last_opened_files.is_empty());
-        assert!(partial.preview_files.is_empty());
-        assert!(partial.recent_workspaces.is_empty());
-        assert_eq!(partial.typst, ToolPreference::default());
-        assert_eq!(partial.tinymist, ToolPreference::default());
+        assert_eq!(AppSettings::load(Some(&storage)), AppSettings::default());
     }
 
     #[test]
-    fn old_single_builtin_theme_migrates_to_its_matching_slot() {
+    fn persisted_font_weights_are_normalized() {
         let mut storage = MemoryStorage::default();
+        let settings = AppSettings {
+            ui_font_weight: 0,
+            code_font_weight: 5_000,
+            ..AppSettings::default()
+        };
         storage.set_string(
             STORAGE_KEY,
-            r#"{"interface_theme":"System","builtin_theme_id":"catppuccin-latte"}"#.to_owned(),
+            serde_json::to_string(&settings).expect("settings serialize"),
         );
 
         let settings = AppSettings::load(Some(&storage));
-        assert_eq!(settings.interface_theme, InterfaceTheme::Light);
-        assert_eq!(
-            settings.light_theme,
-            ColorThemeChoice::builtin("catppuccin-latte")
-        );
-        assert_eq!(
-            settings.dark_theme,
-            ColorThemeChoice::builtin("tiptop-dark")
-        );
+        assert_eq!(settings.ui_font_weight, 1);
+        assert_eq!(settings.code_font_weight, 1_000);
     }
 
     #[test]
-    fn old_imported_theme_migrates_using_its_inferred_appearance() {
-        let temp = tempfile::tempdir().expect("create temporary theme directory");
-        let path = temp.path().join("Legacy.sublime-color-scheme");
-        std::fs::write(
-            &path,
-            r##"{
-                "name": "Legacy Dark",
-                "globals": {
-                    "background": "#20242c",
-                    "foreground": "#e8ecf2"
-                }
-            }"##,
-        )
-        .expect("write legacy imported theme");
-        let serialized = serde_json::json!({
-            "interface_theme": "System",
-            "builtin_theme_id": "paper-light",
-            "sublime_theme_path": path.to_string_lossy(),
-        })
-        .to_string();
-        let mut storage = MemoryStorage::default();
-        storage.set_string(STORAGE_KEY, serialized);
-
-        let settings = AppSettings::load(Some(&storage));
-        assert_eq!(settings.interface_theme, InterfaceTheme::Dark);
-        assert_eq!(
-            settings.light_theme,
-            ColorThemeChoice::builtin("tiptop-light")
-        );
-        assert_eq!(
-            settings.dark_theme,
-            ColorThemeChoice::sublime(path.to_string_lossy())
-        );
-    }
-
-    #[test]
-    fn new_theme_slots_are_not_reinterpreted_as_legacy_settings() {
+    fn theme_slots_round_trip_without_reinterpretation() {
         let mut settings = AppSettings {
             interface_theme: InterfaceTheme::System,
             light_theme: ColorThemeChoice::builtin("paper-light"),
@@ -746,14 +647,14 @@ mod tests {
     #[test]
     fn corrupt_or_cross_mode_builtin_slots_use_their_matching_defaults() {
         let mut storage = MemoryStorage::default();
+        let settings = AppSettings {
+            light_theme: ColorThemeChoice::builtin("catppuccin-mocha"),
+            dark_theme: ColorThemeChoice::builtin("missing-theme"),
+            ..AppSettings::default()
+        };
         storage.set_string(
             STORAGE_KEY,
-            serde_json::json!({
-                "interface_theme": "System",
-                "light_theme": { "source": "builtin", "value": "catppuccin-mocha" },
-                "dark_theme": { "source": "builtin", "value": "missing-theme" }
-            })
-            .to_string(),
+            serde_json::to_string(&settings).expect("settings serialize"),
         );
 
         let settings = AppSettings::load(Some(&storage));

@@ -219,12 +219,7 @@ fn is_excluded(name: &OsStr) -> bool {
         return true;
     }
 
-    // Hide scratch files left by versions released before `.tiptoptyp`
-    // project-local storage. These names stay recognized during migration.
-    let name = name.to_string_lossy();
-    name.starts_with(".mytypst-preview-")
-        || name.starts_with("mytypst-preview-")
-        || name.starts_with(".mytypst-write-")
+    false
 }
 
 #[cfg(test)]
@@ -322,29 +317,17 @@ mod tests {
         project.file(".git/config", "git");
         project.file("target/debug/output", "build");
         project.file("nested/target/output", "build");
-        project.file(".mytypst-preview-123.typ", "preview");
-        project.file("mytypst-preview-124.typ", "preview");
-        project.file("nested/.mytypst-preview-456.typ", "preview");
-        project.file(".mytypst-write-document.typ", "write");
-        project.file("nested/.mytypst-write-789", "write");
         project.file(".tiptoptyp/private/preview.typ", "private");
         project.file("nested/.tiptoptyp/private/preview.typ", "private");
         project.file("target.typ", "useful");
-        project.file(".mytypst-preview", "useful");
 
         let snapshot = WorkspaceSnapshot::scan(project.path()).unwrap();
         assert!(snapshot.find(".git").is_none());
         assert!(snapshot.find("target").is_none());
         assert!(snapshot.find("nested/target").is_none());
-        assert!(snapshot.find(".mytypst-preview-123.typ").is_none());
-        assert!(snapshot.find("mytypst-preview-124.typ").is_none());
-        assert!(snapshot.find("nested/.mytypst-preview-456.typ").is_none());
-        assert!(snapshot.find(".mytypst-write-document.typ").is_none());
-        assert!(snapshot.find("nested/.mytypst-write-789").is_none());
         assert!(snapshot.find(".tiptoptyp").is_none());
         assert!(snapshot.find("nested/.tiptoptyp").is_none());
         assert!(snapshot.find("target.typ").is_some());
-        assert!(snapshot.find(".mytypst-preview").is_some());
     }
 
     #[test]

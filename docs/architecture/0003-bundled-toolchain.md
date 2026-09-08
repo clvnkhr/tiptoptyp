@@ -52,8 +52,6 @@ would require combining all three executables before signing.
 Cross-target packaging sets `TIPTOPTYP_PACKAGE_TARGET` to the same triple passed
 to cargo-packager. This explicitly propagates the target to the package hook;
 cargo-packager itself exposes formats, but not its CLI target, to hook commands.
-The pre-rename `MYTYPST_PACKAGE_TARGET` name remains a lower-priority alias for
-existing release automation.
 
 ### 2. Bundled is a preference, not an invisible assumption
 

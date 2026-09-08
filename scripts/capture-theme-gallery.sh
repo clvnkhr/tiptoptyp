@@ -17,8 +17,8 @@ defaults to docs/ui-snapshots/theme-fixture.typ.
 --print-manifest   Print the requested stable PNG filenames without launching.
 --validate-latest  Decode and validate every requested PNG without launching.
 
-TIPTOPTYP_UI_GALLERY_CAPTURE_TIMEOUT_SECONDS controls the per-capture watchdog
-and defaults to 45 seconds.
+TIPTOPTYP_UI_GALLERY_CAPTURE_TIMEOUT_SECONDS controls the base whole-session
+watchdog and defaults to 45 seconds. The runner adds one second per image.
 EOF
 }
 
@@ -109,8 +109,13 @@ themes=("${all_builtin_themes[@]}")
 # Other deterministic scenes remain available for targeted captures; adding a
 # new scene to this list is intentionally paired with committing its PNGs.
 scenes=(
+  problems-panel
+  find-replace
+  preview-compiling
   file-menu
   edit-menu
+  editor-context-menu
+  explorer-context-menu
   settings-window
   settings-theme-picker
   settings-dark-theme-picker
@@ -119,13 +124,8 @@ scenes=(
   save-dialog
   alert-dialog
   overwrite-dialog
-  editor-context-menu
-  explorer-context-menu
   rename-dialog
   workspace-chooser
-  problems-panel
-  find-replace
-  preview-compiling
 )
 
 scene_themes=(
@@ -167,7 +167,7 @@ scene_target() {
     main|problems-panel|find-replace|preview-compiling)
       printf 'main\n'
       ;;
-    file-menu|edit-menu|editor-context-menu|explorer-context-menu|status-log)
+    file-menu|edit-menu|editor-context-menu|explorer-context-menu|document-font-selector|status-log)
       printf 'popup\n'
       ;;
     settings-window|settings-theme-picker|settings-dark-theme-picker|settings-tooltip)
@@ -282,13 +282,18 @@ build_manifest() {
   for theme in "${themes[@]}"; do
     append_job "${theme}" main 0 0
   done
-  for theme in "${scene_themes[@]}"; do
-    for scene in "${scenes[@]}"; do
+  if [[ "${TIPTOPTYP_UI_GALLERY_SKIP_VARIANTS:-0}" != "1" ]]; then
+    append_job catppuccin-latte main 1 30
+  fi
+  # Keep equal framebuffer targets adjacent. Immediate child viewports have
+  # independent renderer state, so grouping avoids unnecessary root/child
+  # churn while every image still comes from this one app session.
+  for scene in "${scenes[@]}"; do
+    for theme in "${scene_themes[@]}"; do
       append_job "${theme}" "${scene}" 0 0
     done
   done
   if [[ "${TIPTOPTYP_UI_GALLERY_SKIP_VARIANTS:-0}" != "1" ]]; then
-    append_job catppuccin-latte main 1 30
     append_job catppuccin-latte file-menu 1 30
   fi
 
@@ -516,29 +521,35 @@ prune_obsolete_pngs() {
 }
 
 backup_directory=""
-active_output=""
-active_backup=""
-active_had_previous=0
+restore_outputs_on_exit=0
 
-restore_active_output() {
-  if [[ -z "${active_output}" ]]; then
-    return 0
-  fi
-  rm -f -- "${active_output}"
-  if (( active_had_previous == 1 )) \
-    && [[ -e "${active_backup}" || -L "${active_backup}" ]]; then
-    mv -- "${active_backup}" "${active_output}"
-  fi
-  active_output=""
-  active_backup=""
-  active_had_previous=0
+restore_requested_outputs() {
+  local expected
+  for expected in "${expected_outputs[@]}"; do
+    rm -f -- "${latest_directory}/${expected}"
+    if [[ -e "${backup_directory}/${expected}" \
+      || -L "${backup_directory}/${expected}" ]]; then
+      mv -- "${backup_directory}/${expected}" "${latest_directory}/${expected}"
+    fi
+  done
+}
+
+backup_requested_outputs() {
+  local expected
+  for expected in "${expected_outputs[@]}"; do
+    if [[ -e "${latest_directory}/${expected}" \
+      || -L "${latest_directory}/${expected}" ]]; then
+      mv -- "${latest_directory}/${expected}" "${backup_directory}/${expected}"
+    fi
+  done
+  restore_outputs_on_exit=1
 }
 
 cleanup() {
   local status=$?
   trap - EXIT
-  if (( status != 0 )); then
-    restore_active_output || true
+  if (( restore_outputs_on_exit == 1 )); then
+    restore_requested_outputs || true
   fi
   if [[ -n "${backup_directory}" && -d "${backup_directory}" ]]; then
     rm -rf -- "${backup_directory}"
@@ -570,117 +581,66 @@ build_app() {
 }
 
 run_with_watchdog() {
-  # macOS does not ship GNU `timeout`. This wrapper watches the exact app PID,
-  # requests termination at the deadline, escalates after a short grace period,
-  # and exits 124 so the caller can distinguish a timeout from an app failure.
+  # macOS does not ship GNU `timeout`. `alarm` survives `exec`, so this keeps
+  # the GUI app in the original process instead of forking it from Perl (which
+  # makes AppKit window servicing intermittent). SIGALRM terminates a hung app.
+  local timeout_seconds="$1"
+  shift
   LC_ALL=C perl -e '
     use strict;
     use warnings;
-    use POSIX qw(WNOHANG);
-    use Time::HiRes qw(time sleep);
-
     my $limit = shift @ARGV;
-    my $pid = fork();
-    die "could not fork gallery app: $!\n" unless defined $pid;
-    if ($pid == 0) {
-      exec @ARGV;
-      die "could not launch gallery app: $!\n";
-    }
-
-    my $deadline = time + $limit;
-    while (1) {
-      my $result = waitpid($pid, WNOHANG);
-      if ($result == $pid) {
-        my $status = $?;
-        exit(128 + ($status & 127)) if $status & 127;
-        exit($status >> 8);
-      }
-      die "could not wait for gallery app: $!\n" if $result < 0;
-      last if time >= $deadline;
-      sleep 0.05;
-    }
-
-    kill "TERM", $pid;
-    my $grace_deadline = time + 2;
-    while (time < $grace_deadline) {
-      my $result = waitpid($pid, WNOHANG);
-      exit 124 if $result == $pid;
-      last if $result < 0;
-      sleep 0.05;
-    }
-    kill "KILL", $pid;
-    waitpid($pid, 0);
-    exit 124;
-  ' "${capture_timeout_seconds}" "$@"
+    alarm $limit;
+    exec @ARGV;
+    die "could not launch gallery app: $!\n";
+  ' "${timeout_seconds}" "$@"
 }
 
-capture_job() {
-  local index="$1"
-  local theme="${job_themes[index]}"
-  local scene="${job_scenes[index]}"
-  local invert="${job_inverts[index]}"
-  local hue="${job_hues[index]}"
-  local expected="${expected_outputs[index]}"
+capture_gallery() {
+  local index
+  local invert
+  local batch_timeout_seconds
   local command=(
     "${app_binary}"
-    --ui-theme "${theme}"
-  )
-
-  if [[ "${invert}" == "1" ]]; then
-    command+=(--ui-theme-invert)
-  fi
-  if (( hue != 0 )); then
-    command+=(--ui-theme-hue-shift "${hue}")
-  fi
-  command+=(
-    --ui-snapshot-scene "${scene}"
     --ui-screenshot-latest
     --ui-screenshot-exit
     --ui-screenshot-settle 30
-    "${fixture}"
   )
 
-  active_output=""
-  active_backup="${backup_directory}/previous.png"
-  active_had_previous=0
-  rm -f -- "${active_backup}"
-  if [[ -e "${latest_directory}/${expected}" || -L "${latest_directory}/${expected}" ]]; then
-    if ! mv -- "${latest_directory}/${expected}" "${active_backup}"; then
-      printf 'Could not back up existing gallery slot: %s\n' "${expected}" >&2
-      return 1
+  index=0
+  while (( index < ${#expected_outputs[@]} )); do
+    if [[ "${job_inverts[index]}" == "1" ]]; then
+      invert=true
+    else
+      invert=false
     fi
-    active_had_previous=1
-  fi
-  active_output="${latest_directory}/${expected}"
+    command+=(
+      --ui-screenshot-step
+      "${job_themes[index]},${job_scenes[index]},${invert},${job_hues[index]}"
+    )
+    index=$((index + 1))
+  done
+  command+=("${fixture}")
 
-  printf 'Capturing %d/%d: theme %s, scene %s\n' \
-    "$((index + 1))" "${#expected_outputs[@]}" "${theme}" "${scene}"
+  batch_timeout_seconds=$((capture_timeout_seconds + ${#expected_outputs[@]}))
+  printf 'Capturing %d gallery images in one app session (watchdog %d seconds).\n' \
+    "${#expected_outputs[@]}" "${batch_timeout_seconds}"
   local capture_status=0
-  if run_with_watchdog "${command[@]}"; then
+  if run_with_watchdog "${batch_timeout_seconds}" "${command[@]}"; then
     capture_status=0
   else
     capture_status=$?
   fi
   if (( capture_status != 0 )); then
-    if (( capture_status == 124 )); then
-      printf 'Capture timed out after %s seconds; expected output was %s\n' \
-        "${capture_timeout_seconds}" "${expected}" >&2
+    if (( capture_status == 142 )); then
+      printf 'Gallery session timed out after %s seconds.\n' \
+        "${batch_timeout_seconds}" >&2
     else
-      printf 'Capture command failed with status %d; expected output was %s\n' \
-        "${capture_status}" "${expected}" >&2
+      printf 'Gallery session failed with status %d.\n' \
+        "${capture_status}" >&2
     fi
-    restore_active_output
     return 1
   fi
-  if ! validate_png "${active_output}"; then
-    restore_active_output
-    return 1
-  fi
-
-  rm -f -- "${active_backup}"
-  active_output=""
-  active_backup=""
-  active_had_previous=0
 }
 
 build_manifest
@@ -719,11 +679,8 @@ trap 'exit 143' TERM
 
 cd "${repository_root}"
 build_app
-job_index=0
-while (( job_index < ${#expected_outputs[@]} )); do
-  capture_job "${job_index}"
-  job_index=$((job_index + 1))
-done
+backup_requested_outputs
+capture_gallery
 
 # Revalidate the complete requested set after all app processes have exited.
 validate_manifest
@@ -734,6 +691,7 @@ validate_visual_smoke
 if (( full_default_matrix == 1 )); then
   prune_obsolete_pngs
 fi
+restore_outputs_on_exit=0
 
 printf 'Theme gallery complete: %d validated PNGs in %s\n' \
   "${#expected_outputs[@]}" "${latest_directory}"

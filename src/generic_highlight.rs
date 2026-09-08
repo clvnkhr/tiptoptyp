@@ -151,7 +151,11 @@ fn syntect_format(style: Style, theme: &Theme) -> TextFormat {
         syntect_color(style.background)
     };
     TextFormat {
-        font_id: theme::editor_font_with_weight(style.font_style.contains(FontStyle::BOLD)),
+        font_id: theme::editor_font_with_weight(if style.font_style.contains(FontStyle::BOLD) {
+            theme::FONT_WEIGHT_BOLD
+        } else {
+            theme::FONT_WEIGHT_NORMAL
+        }),
         color,
         background,
         italics: style.font_style.contains(FontStyle::ITALIC),
@@ -226,7 +230,8 @@ mod tests {
                 job.sections
                     .iter()
                     .all(|section| section.format.font_id == theme::editor_font()
-                        || section.format.font_id == theme::editor_font_with_weight(true))
+                        || section.format.font_id
+                            == theme::editor_font_with_weight(theme::FONT_WEIGHT_BOLD))
             );
             assert_eq!(plain_format(dark_mode).font_id, theme::editor_font());
         }
@@ -265,7 +270,10 @@ mod tests {
 
         assert_eq!(format.color, syntect_color(foreground));
         assert_eq!(format.background, syntect_color(scope_background));
-        assert_eq!(format.font_id, theme::editor_font_with_weight(true));
+        assert_eq!(
+            format.font_id,
+            theme::editor_font_with_weight(theme::FONT_WEIGHT_BOLD)
+        );
         assert!(format.italics);
         assert_ne!(format.underline, Stroke::NONE);
 

@@ -217,14 +217,12 @@ impl TypstSyntaxRole {
 }
 
 /// One optional layer over a selected theme. `None` means inherit; an explicit
-/// `Some(false)` is therefore distinct from inheriting a bold/italic theme
-/// rule.
+/// `Some(false)` is therefore distinct from inheriting an italic theme rule.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
 pub(crate) struct TypstStyleOverride {
     pub(crate) foreground: Option<Rgba>,
     pub(crate) background: Option<Rgba>,
-    pub(crate) bold: Option<bool>,
+    pub(crate) weight: Option<u16>,
     pub(crate) italic: Option<bool>,
     pub(crate) underline: Option<bool>,
     pub(crate) strikethrough: Option<bool>,
@@ -237,7 +235,6 @@ impl TypstStyleOverride {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
 pub(crate) struct TypstStyleOverrides {
     styles: BTreeMap<TypstSyntaxRole, TypstStyleOverride>,
 }
@@ -251,7 +248,8 @@ impl TypstStyleOverrides {
         self.styles.entry(role).or_default()
     }
 
-    pub(crate) fn set(&mut self, role: TypstSyntaxRole, style: TypstStyleOverride) {
+    pub(crate) fn set(&mut self, role: TypstSyntaxRole, mut style: TypstStyleOverride) {
+        style.weight = style.weight.map(|weight| weight.clamp(1, 1_000));
         if style.is_empty() {
             self.styles.remove(&role);
         } else {
@@ -294,7 +292,7 @@ impl TypstOverrideThemes {
 pub(crate) struct ResolvedTypstStyle {
     pub(crate) foreground: Color32,
     pub(crate) background: Color32,
-    pub(crate) bold: bool,
+    pub(crate) weight: u16,
     pub(crate) italic: bool,
     pub(crate) underline: bool,
     pub(crate) strikethrough: bool,
@@ -303,7 +301,7 @@ pub(crate) struct ResolvedTypstStyle {
 impl ResolvedTypstStyle {
     pub(crate) fn text_format(self) -> TextFormat {
         TextFormat {
-            font_id: theme::editor_font_with_weight(self.bold),
+            font_id: theme::editor_font_with_weight(self.weight),
             color: self.foreground,
             background: self.background,
             italics: self.italic,
@@ -378,7 +376,11 @@ fn resolve_role(
         } else {
             Color32::TRANSPARENT
         },
-        bold: role == TypstSyntaxRole::Strong,
+        weight: if role == TypstSyntaxRole::Strong {
+            theme::FONT_WEIGHT_BOLD
+        } else {
+            theme::FONT_WEIGHT_NORMAL
+        },
         italic: role == TypstSyntaxRole::Emphasis,
         underline: role == TypstSyntaxRole::Link,
         strikethrough: false,
@@ -408,7 +410,11 @@ fn resolve_role(
             style.background = syntect_color(themed.background);
         }
         if matched_font {
-            style.bold = themed.font_style.contains(FontStyle::BOLD);
+            style.weight = if themed.font_style.contains(FontStyle::BOLD) {
+                theme::FONT_WEIGHT_BOLD
+            } else {
+                theme::FONT_WEIGHT_NORMAL
+            };
             style.italic = themed.font_style.contains(FontStyle::ITALIC);
             style.underline = themed.font_style.contains(FontStyle::UNDERLINE);
         }
@@ -421,8 +427,8 @@ fn resolve_role(
         if let Some(color) = overrides.background {
             style.background = rgba(color);
         }
-        if let Some(value) = overrides.bold {
-            style.bold = value;
+        if let Some(value) = overrides.weight {
+            style.weight = theme::nearest_editor_weight(value);
         }
         if let Some(value) = overrides.italic {
             style.italic = value;
@@ -485,7 +491,10 @@ mod tests {
     #[test]
     fn empty_overrides_keep_sensible_markup_defaults() {
         let styles = ResolvedTypstStyles::default();
-        assert!(styles.style(TypstSyntaxRole::Strong).bold);
+        assert_eq!(
+            styles.style(TypstSyntaxRole::Strong).weight,
+            theme::FONT_WEIGHT_BOLD
+        );
         assert!(styles.style(TypstSyntaxRole::Emphasis).italic);
         assert!(styles.style(TypstSyntaxRole::Link).underline);
         assert_ne!(
@@ -502,7 +511,7 @@ mod tests {
             TypstStyleOverride {
                 foreground: Some(Rgba::rgb(1, 2, 3)),
                 background: Some(Rgba::from_rgba(4, 5, 6, 70)),
-                bold: Some(false),
+                weight: Some(theme::FONT_WEIGHT_NORMAL),
                 italic: Some(true),
                 underline: None,
                 strikethrough: Some(true),
@@ -515,7 +524,7 @@ mod tests {
             style.background,
             Color32::from_rgba_unmultiplied(4, 5, 6, 70)
         );
-        assert!(!style.bold);
+        assert_eq!(style.weight, theme::FONT_WEIGHT_NORMAL);
         assert!(style.italic);
         assert!(!style.underline);
         assert!(style.strikethrough);
@@ -527,7 +536,7 @@ mod tests {
         themes
             .for_dark_mut(true)
             .get_mut_or_default(TypstSyntaxRole::Keyword)
-            .bold = Some(true);
+            .weight = Some(theme::FONT_WEIGHT_BOLD);
         assert!(themes.for_dark(false).is_empty());
         assert!(!themes.for_dark(true).is_empty());
     }
@@ -548,7 +557,7 @@ mod tests {
             &Default::default(),
         );
         let strong = styles.style(TypstSyntaxRole::Strong);
-        assert!(!strong.bold);
+        assert_eq!(strong.weight, theme::FONT_WEIGHT_NORMAL);
         assert!(strong.italic);
     }
 }

@@ -1,9 +1,5 @@
 /target/
 /.tiptoptyp/
-# Legacy scratch files created before project-local `.tiptoptyp` storage.
-.mytypst-preview-*.typ
-mytypst-preview-*.typ
-.mytypst-write-*.typ
 .DS_Store
 /toolchain/bin/
 /toolchain/cache/

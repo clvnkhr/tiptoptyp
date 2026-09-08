@@ -4,6 +4,7 @@ mod builtin_themes;
 mod compiler;
 mod diagnostics;
 mod document;
+mod font_catalog;
 mod generic_highlight;
 mod highlight;
 mod lsp_text;
@@ -44,12 +45,21 @@ fn main() -> eframe::Result {
         eprintln!("Unknown built-in UI theme {:?}", profile.name);
         return Ok(());
     }
+    if let Some(step) = launch.ui_capture_steps.iter().find(|step| {
+        step.theme.name != settings::SYSTEM_THEME_ID
+            && builtin_themes::find(&step.theme.name).is_none()
+    }) {
+        eprintln!("Unknown built-in UI theme {:?}", step.theme.name);
+        return Ok(());
+    }
     let initial_path = launch.initial_path;
     let theme_profile = launch.theme_profile;
     let ui_snapshot_scene = launch.ui_snapshot_scene;
+    let ui_capture_steps = launch.ui_capture_steps;
     let deterministic_snapshot = ui_snapshot_scene.is_some();
     let mut capture_config = launch.captures;
     if let Some(scene) = ui_snapshot_scene
+        && ui_capture_steps.is_empty()
         && capture_config.startup_captures.is_empty()
     {
         capture_config.startup_captures.push(scene.capture_spec());
@@ -83,6 +93,7 @@ fn main() -> eframe::Result {
                     captures.clone(),
                     theme_profile,
                     ui_snapshot_scene,
+                    ui_capture_steps,
                     open_requests,
                     native_menu_commands,
                 );
@@ -108,6 +119,7 @@ fn main() -> eframe::Result {
                     captures.clone(),
                     theme_profile,
                     ui_snapshot_scene,
+                    ui_capture_steps,
                     open_requests,
                     native_menu_commands,
                 );

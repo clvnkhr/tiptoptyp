@@ -66,10 +66,6 @@ impl NativeMenuCommandQueue {
         self.pending.push_back(command);
     }
 
-    pub(crate) fn extend(&mut self, commands: impl IntoIterator<Item = NativeMenuCommand>) {
-        self.pending.extend(commands);
-    }
-
     pub(crate) fn pop(&mut self) -> Option<NativeMenuCommand> {
         self.pending.pop_front()
     }
@@ -593,10 +589,8 @@ mod tests {
     fn assigned_window_queue_preserves_command_order() {
         let mut queue = NativeMenuCommandQueue::default();
         queue.push(NativeMenuCommand::Edit(EditCommand::Undo));
-        queue.extend([
-            NativeMenuCommand::Edit(EditCommand::Copy),
-            NativeMenuCommand::View(ViewCommand::Preview),
-        ]);
+        queue.push(NativeMenuCommand::Edit(EditCommand::Copy));
+        queue.push(NativeMenuCommand::View(ViewCommand::Preview));
 
         assert_eq!(
             [queue.pop(), queue.pop(), queue.pop()],

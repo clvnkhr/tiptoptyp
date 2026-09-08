@@ -14,7 +14,6 @@ const TYPST_LICENSE_SHA256: &str =
 const TYPST_NOTICE_SHA256: &str =
     "1778244777547c281b6f5fa9fc0c18ab21f8d4491c803f64e09046800f5fcb26";
 const PACKAGE_TARGET_ENV: &str = "TIPTOPTYP_PACKAGE_TARGET";
-const LEGACY_PACKAGE_TARGET_ENV: &str = "MYTYPST_PACKAGE_TARGET";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Artifact {
@@ -102,7 +101,7 @@ fn run() -> Result<(), String> {
         }
         "help" | "--help" | "-h" => {
             println!(
-                "tiptoptyp packaging tasks\n\n  fetch-sidecars [--target TRIPLE]\n  package-build [--target TRIPLE]\n  verify-package [--target TRIPLE]\n\n{PACKAGE_TARGET_ENV} supplies the target to cargo-packager's hook ({LEGACY_PACKAGE_TARGET_ENV} is also accepted for compatibility)."
+                "tiptoptyp packaging tasks\n\n  fetch-sidecars [--target TRIPLE]\n  package-build [--target TRIPLE]\n  verify-package [--target TRIPLE]\n\n{PACKAGE_TARGET_ENV} supplies the target to cargo-packager's hook."
             );
             Ok(())
         }
@@ -220,25 +219,16 @@ fn host_target() -> Result<String, String> {
 }
 
 fn target_or_host(explicit: Option<String>) -> Result<String, String> {
-    selected_package_target(
-        explicit,
-        env::var_os(PACKAGE_TARGET_ENV),
-        env::var_os(LEGACY_PACKAGE_TARGET_ENV),
-    )
+    selected_package_target(explicit, env::var_os(PACKAGE_TARGET_ENV))
     .map(Ok)
     .unwrap_or_else(host_target)
 }
 
 fn selected_package_target(
     explicit: Option<String>,
-    primary: Option<OsString>,
-    legacy: Option<OsString>,
+    environment: Option<OsString>,
 ) -> Option<String> {
-    explicit.or_else(|| {
-        primary
-            .or(legacy)
-            .map(|target| target.to_string_lossy().into_owned())
-    })
+    explicit.or_else(|| environment.map(|target| target.to_string_lossy().into_owned()))
 }
 
 fn fetch_sidecars(target: &str) -> Result<(), String> {
@@ -691,25 +681,19 @@ mod tests {
     }
 
     #[test]
-    fn package_target_prefers_explicit_then_tiptoptyp_then_legacy() {
-        let primary = Some(OsString::from("primary-target"));
-        let legacy = Some(OsString::from("legacy-target"));
+    fn package_target_prefers_explicit_then_tiptoptyp_environment() {
+        let environment = Some(OsString::from("environment-target"));
         assert_eq!(
             selected_package_target(
                 Some("explicit-target".to_owned()),
-                primary.clone(),
-                legacy.clone(),
+                environment.clone(),
             )
             .as_deref(),
             Some("explicit-target")
         );
         assert_eq!(
-            selected_package_target(None, primary, legacy.clone()).as_deref(),
-            Some("primary-target")
-        );
-        assert_eq!(
-            selected_package_target(None, None, legacy).as_deref(),
-            Some("legacy-target")
+            selected_package_target(None, environment).as_deref(),
+            Some("environment-target")
         );
     }
 

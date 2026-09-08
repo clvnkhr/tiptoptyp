@@ -80,8 +80,13 @@ fn default_gallery_manifest_is_the_exact_maintained_matrix() {
         "dracula",
     ];
     let scenes = [
+        ("main", "problems-panel"),
+        ("main", "find-replace"),
+        ("main", "preview-compiling"),
         ("popup", "file-menu"),
         ("popup", "edit-menu"),
+        ("popup", "editor-context-menu"),
+        ("popup", "explorer-context-menu"),
         ("settings", "settings-window"),
         ("settings", "settings-theme-picker"),
         ("settings", "settings-dark-theme-picker"),
@@ -90,27 +95,20 @@ fn default_gallery_manifest_is_the_exact_maintained_matrix() {
         ("modal", "save-dialog"),
         ("modal", "alert-dialog"),
         ("modal", "overwrite-dialog"),
-        ("popup", "editor-context-menu"),
-        ("popup", "explorer-context-menu"),
         ("rename", "rename-dialog"),
         ("workspace", "workspace-chooser"),
-        ("main", "problems-panel"),
-        ("main", "find-replace"),
-        ("main", "preview-compiling"),
     ];
     let mut expected = Vec::new();
     for theme in themes {
         expected.push(format!("main--{theme}.png"));
     }
-    for theme in ["catppuccin-latte", "catppuccin-mocha"] {
-        for (target, scene) in scenes {
+    expected.push("main--catppuccin-latte-inverted-hue-p30.png".to_owned());
+    for (target, scene) in scenes {
+        for theme in ["catppuccin-latte", "catppuccin-mocha"] {
             expected.push(format!("{target}-{scene}--{theme}.png"));
         }
     }
-    expected.extend([
-        "main--catppuccin-latte-inverted-hue-p30.png".to_owned(),
-        "popup-file-menu--catppuccin-latte-inverted-hue-p30.png".to_owned(),
-    ]);
+    expected.push("popup-file-menu--catppuccin-latte-inverted-hue-p30.png".to_owned());
 
     assert_eq!(actual, expected);
     assert_eq!(actual.len(), 68);
@@ -182,22 +180,34 @@ fn gallery_script_never_invokes_a_desktop_capture_api() {
 }
 
 #[test]
-fn agent_workflow_makes_fresh_ui_evidence_mandatory() {
+fn gallery_runs_all_capture_steps_in_one_app_session() {
+    let script = std::fs::read_to_string(gallery_script()).expect("read gallery script");
+    assert!(script.contains("--ui-screenshot-step"));
+    assert!(script.contains("capture_gallery"));
+    assert!(!script.contains("capture_job"));
+    assert!(!script.contains("while (( job_index"));
+}
+
+#[test]
+fn agent_workflow_uses_risk_based_ui_evidence() {
     let instructions =
         std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("AGENTS.md"))
             .expect("read agent workflow");
     for required in [
-        "Mandatory UI workflow",
+        "Risk-based UI workflow",
+        "Routine behavior changes, refactors, and fixes with adequate deterministic",
+        "only when correctness is",
         "--ui-snapshot-scene",
         "TIPTOPTYP_UI_TRACE=1",
         "scripts/capture-theme-gallery.sh --validate-latest",
-        "Do not report a UI fix as visually verified",
+        "Do not claim visual verification unless a fresh PNG was inspected",
     ] {
         assert!(
             instructions.contains(required),
             "missing workflow rule: {required}"
         );
     }
+    assert!(!instructions.contains("Mandatory UI workflow"));
 }
 
 #[test]
