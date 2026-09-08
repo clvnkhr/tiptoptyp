@@ -366,24 +366,6 @@ impl WatchSession {
     }
 }
 
-#[cfg(test)]
-fn watch_context_matches(
-    current_source_dir: &Path,
-    current_project_root: &Path,
-    current_typst_executable: &Path,
-    requested_source_dir: &Path,
-    requested_project_root: &Path,
-    requested_typst_executable: &Path,
-) -> bool {
-    requested_source_dir
-        .canonicalize()
-        .is_ok_and(|source_dir| source_dir == current_source_dir)
-        && requested_project_root
-            .canonicalize()
-            .is_ok_and(|project_root| project_root == current_project_root)
-        && requested_typst_executable == current_typst_executable
-}
-
 impl Drop for WatchSession {
     fn drop(&mut self) {
         // Killing the child first releases its handles, then the private
@@ -417,30 +399,19 @@ fn worker_loop(
             &latest_revision,
         );
 
-        match requests.recv_timeout(WORKER_POLL_INTERVAL) {
+        // Only the latest queued command matters, whether it requests a new
+        // editor snapshot or pauses the watcher.
+        let command = requests
+            .recv_timeout(WORKER_POLL_INTERVAL)
+            .map(|first| requests.try_iter().last().unwrap_or(first));
+        match command {
             Ok(CompilerCommand::Pause) => {
                 session = None;
             }
-            Ok(CompilerCommand::Request(mut request)) => {
+            Ok(CompilerCommand::Request(request)) => {
                 if *TRACE_WATCH {
                     eprintln!("tiptoptyp watcher request revision {}", request.revision);
                 }
-                // Never make the watcher step through obsolete editor snapshots.
-                let mut pause_after_request = false;
-                while let Ok(newer) = requests.try_recv() {
-                    match newer {
-                        CompilerCommand::Request(newer) => {
-                            request = newer;
-                            pause_after_request = false;
-                        }
-                        CompilerCommand::Pause => pause_after_request = true,
-                    }
-                }
-                if pause_after_request {
-                    session = None;
-                    continue;
-                }
-
                 // Finish processing any event already emitted by the old source
                 // before changing the shadow file to the new revision.
                 drain_watch_logs(&watch_log_rx, &mut session, &results, &context);
@@ -1050,12 +1021,17 @@ fn send_result(results: &Sender<CompileResult>, context: &egui::Context, result:
 #[cfg(test)]
 mod tests {
     use super::{
-        CompileRequest, CompileResult, Compiler, WatchContext, WatchLine, classify_watch_line,
-        parse_pdf_links, preview_page_number, watch_context_matches,
+        CompileRequest, CompileResult, Compiler, CompilerCommand, WatchContext, WatchLine,
+        classify_watch_line, parse_pdf_links, preview_page_number, worker_loop,
     };
     use std::{
         fs,
         path::{Path, PathBuf},
+        sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicU64},
+            mpsc,
+        },
         time::{Duration, Instant},
     };
 
@@ -1113,21 +1089,68 @@ mod tests {
     }
 
     #[test]
+    fn queued_compiler_commands_apply_only_the_last_request_or_pause() {
+        let project = tempfile::tempdir().unwrap();
+        for commands in [
+            vec![Some(1), Some(2)],
+            vec![Some(1), None],
+            vec![None, Some(2)],
+            vec![Some(1), None, Some(2)],
+            vec![None, Some(1), None],
+        ] {
+            let expected_revision = *commands.last().unwrap();
+            let (request_tx, request_rx) = mpsc::channel();
+            let (result_tx, result_rx) = mpsc::channel();
+            for revision in commands {
+                let command = revision.map_or(CompilerCommand::Pause, |revision| {
+                    CompilerCommand::Request(CompileRequest {
+                        revision,
+                        source: String::new(),
+                        // Resolve fails deterministically before starting a process.
+                        source_dir: project.path().join("missing"),
+                        project_root: project.path().to_path_buf(),
+                        display_name: "main.typ".to_owned(),
+                        typst_executable: PathBuf::from("unused-typst"),
+                        font_paths: Vec::new(),
+                    })
+                });
+                request_tx.send(command).unwrap();
+            }
+            drop(request_tx);
+            worker_loop(
+                request_rx,
+                result_tx,
+                eframe::egui::Context::default(),
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(AtomicU64::new(0)),
+            );
+            let results = result_rx.try_iter().collect::<Vec<_>>();
+            assert_eq!(results.len(), usize::from(expected_revision.is_some()));
+            if let Some(revision) = expected_revision {
+                assert_eq!(results[0].revision, revision);
+                assert!(matches!(results[0].output, Some(Err(_))));
+            }
+        }
+    }
+
+    #[test]
     fn changing_typst_executable_invalidates_the_watch_session() {
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("source");
         std::fs::create_dir(&source).unwrap();
-        let source = source.canonicalize().unwrap();
-        let root = root.path().canonicalize().unwrap();
-        let bundled = PathBuf::from("/tools/typst-bundled");
-        let custom = PathBuf::from("/tools/typst-custom");
-
-        assert!(watch_context_matches(
-            &source, &root, &bundled, &source, &root, &bundled
-        ));
-        assert!(!watch_context_matches(
-            &source, &root, &bundled, &source, &root, &custom
-        ));
+        let mut request = CompileRequest {
+            revision: 1,
+            source: String::new(),
+            source_dir: source,
+            project_root: root.path().to_path_buf(),
+            display_name: "main.typ".to_owned(),
+            typst_executable: PathBuf::from("/tools/typst-bundled"),
+            font_paths: Vec::new(),
+        };
+        let context = WatchContext::resolve(&request).unwrap();
+        assert_eq!(WatchContext::resolve(&request).unwrap(), context);
+        request.typst_executable = PathBuf::from("/tools/typst-custom");
+        assert_ne!(WatchContext::resolve(&request).unwrap(), context);
     }
 
     #[test]
@@ -1164,29 +1187,21 @@ mod tests {
         fs::create_dir(&source).unwrap();
         let alias = project.path().join("alias");
         symlink(&source, &alias).unwrap();
-        let root = project.path().canonicalize().unwrap();
-        let source = source.canonicalize().unwrap();
-        let typst = PathBuf::from("/tools/typst");
-
-        assert!(watch_context_matches(
-            &source, &root, &typst, &source, &root, &typst
-        ));
-        assert!(watch_context_matches(
-            &source,
-            &root,
-            &typst,
-            &alias,
-            project.path(),
-            &typst
-        ));
-        assert!(!watch_context_matches(
-            &source,
-            &root,
-            &typst,
-            &project.path().join("missing"),
-            project.path(),
-            &typst
-        ));
+        let mut request = CompileRequest {
+            revision: 1,
+            source: String::new(),
+            source_dir: source.canonicalize().unwrap(),
+            project_root: project.path().canonicalize().unwrap(),
+            display_name: "main.typ".to_owned(),
+            typst_executable: PathBuf::from("/tools/typst"),
+            font_paths: Vec::new(),
+        };
+        let context = WatchContext::resolve(&request).unwrap();
+        request.source_dir = alias;
+        request.project_root = project.path().to_path_buf();
+        assert_eq!(WatchContext::resolve(&request).unwrap(), context);
+        request.source_dir = project.path().join("missing");
+        assert!(WatchContext::resolve(&request).is_err());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-/// A literal match expressed in both of the coordinate systems used by the
+/// A match expressed in both of the coordinate systems used by the
 /// editor: UTF-8 byte offsets for editing `String`s and Unicode scalar offsets
 /// for positioning an egui text cursor.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -9,11 +9,10 @@ pub struct SearchMatch {
     pub char_range: Range<usize>,
 }
 
-#[allow(dead_code)]
 impl SearchMatch {
     /// Build a match from a byte range, rejecting ranges which are out of
     /// bounds, reversed, or not on UTF-8 character boundaries.
-    pub fn from_byte_range(text: &str, byte_range: Range<usize>) -> Option<Self> {
+    fn from_byte_range(text: &str, byte_range: Range<usize>) -> Option<Self> {
         if byte_range.start > byte_range.end
             || byte_range.end > text.len()
             || !text.is_char_boundary(byte_range.start)
@@ -29,36 +28,13 @@ impl SearchMatch {
             char_range: char_start..char_start + char_len,
         })
     }
-
-    /// Return the matched text when this range still describes `text`.
-    pub fn as_str<'a>(&self, text: &'a str) -> Option<&'a str> {
-        text.get(self.byte_range.clone())
-    }
-}
-
-/// Find the first case-sensitive literal match.
-pub fn find(text: &str, query: &str) -> Option<SearchMatch> {
-    if query.is_empty() {
-        return None;
-    }
-
-    let start = text.find(query)?;
-    SearchMatch::from_byte_range(text, start..start + query.len())
-}
-
-/// Find the first literal match with an optional case-insensitive comparison.
-#[allow(dead_code)]
-pub fn find_with_case(text: &str, query: &str, case_sensitive: bool) -> Option<SearchMatch> {
-    find_all_with_case(text, query, case_sensitive)
-        .into_iter()
-        .next()
 }
 
 /// Find all non-overlapping, case-sensitive literal matches.
 ///
 /// Empty queries deliberately have no matches. This matches editor find
 /// behavior and avoids treating every character boundary as a result.
-pub fn find_all(text: &str, query: &str) -> Vec<SearchMatch> {
+fn find_all(text: &str, query: &str) -> Vec<SearchMatch> {
     if query.is_empty() {
         return Vec::new();
     }
@@ -84,7 +60,7 @@ pub fn find_all(text: &str, query: &str) -> Vec<SearchMatch> {
 /// Find all non-overlapping literal matches while preserving UTF-8-safe
 /// ranges. Folding is performed per Unicode scalar, and a match always spans
 /// whole source characters.
-pub fn find_all_with_case(text: &str, query: &str, case_sensitive: bool) -> Vec<SearchMatch> {
+fn find_all_with_case(text: &str, query: &str, case_sensitive: bool) -> Vec<SearchMatch> {
     if case_sensitive {
         return find_all(text, query);
     }
@@ -167,32 +143,13 @@ fn folded(text: &str) -> String {
 
 /// Find the match after `selected`, wrapping to the first match at the end.
 /// A stale or unrelated selection is ignored.
-#[allow(dead_code)]
-pub fn find_next(text: &str, query: &str, selected: Option<&SearchMatch>) -> Option<SearchMatch> {
-    find_next_with_case(text, query, selected, true)
-}
-
-#[allow(dead_code)]
-pub fn find_next_with_case(
-    text: &str,
-    query: &str,
-    selected: Option<&SearchMatch>,
-    case_sensitive: bool,
-) -> Option<SearchMatch> {
-    find_next_with_options(text, query, selected, case_sensitive, false)
-}
-
-pub fn find_next_with_options(
+fn find_next_with_options(
     text: &str,
     query: &str,
     selected: Option<&SearchMatch>,
     case_sensitive: bool,
     regex: bool,
 ) -> Option<SearchMatch> {
-    if query.is_empty() {
-        return None;
-    }
-
     let matches = find_all_with_options(text, query, case_sensitive, regex);
     let selected = selected.filter(|selected| {
         matches
@@ -214,36 +171,13 @@ pub fn find_next_with_options(
 
 /// Find the match before `selected`, wrapping to the final match at the start.
 /// A stale or unrelated selection starts at the final match.
-#[allow(dead_code)]
-pub fn find_previous(
-    text: &str,
-    query: &str,
-    selected: Option<&SearchMatch>,
-) -> Option<SearchMatch> {
-    find_previous_with_case(text, query, selected, true)
-}
-
-#[allow(dead_code)]
-pub fn find_previous_with_case(
-    text: &str,
-    query: &str,
-    selected: Option<&SearchMatch>,
-    case_sensitive: bool,
-) -> Option<SearchMatch> {
-    find_previous_with_options(text, query, selected, case_sensitive, false)
-}
-
-pub fn find_previous_with_options(
+fn find_previous_with_options(
     text: &str,
     query: &str,
     selected: Option<&SearchMatch>,
     case_sensitive: bool,
     regex: bool,
 ) -> Option<SearchMatch> {
-    if query.is_empty() {
-        return None;
-    }
-
     let matches = find_all_with_options(text, query, case_sensitive, regex);
     let selected = selected.filter(|selected| {
         matches
@@ -263,35 +197,6 @@ pub fn find_previous_with_options(
         .or_else(|| matches.into_iter().last())
 }
 
-/// Replace every non-overlapping literal match and return the number replaced.
-///
-/// Matches are collected from the original text and the result is assembled in
-/// one pass. Consequently this always terminates even when `replacement`
-/// contains `query` (for example, replacing `a` with `aa`).
-pub fn replace_all(text: &mut String, query: &str, replacement: &str) -> usize {
-    if query.is_empty() {
-        return 0;
-    }
-
-    let mut matches = text.match_indices(query);
-    let Some(first) = matches.next() else {
-        return 0;
-    };
-
-    let mut result = String::with_capacity(text.len());
-    let mut copied_until = 0;
-    let mut count = 0;
-    for (start, matched) in std::iter::once(first).chain(matches) {
-        result.push_str(&text[copied_until..start]);
-        result.push_str(replacement);
-        copied_until = start + matched.len();
-        count += 1;
-    }
-    result.push_str(&text[copied_until..]);
-    *text = result;
-    count
-}
-
 /// Stateful selection for a find/replace panel. The query and replacement text
 /// can remain UI-owned; passing a changed query automatically invalidates a
 /// selection which no longer matches it.
@@ -300,7 +205,6 @@ pub struct SearchState {
     selected: Option<SearchMatch>,
 }
 
-#[allow(dead_code)]
 impl SearchState {
     pub fn selected(&self) -> Option<&SearchMatch> {
         self.selected.as_ref()
@@ -308,19 +212,6 @@ impl SearchState {
 
     pub fn clear(&mut self) {
         self.selected = None;
-    }
-
-    pub fn next(&mut self, text: &str, query: &str) -> Option<&SearchMatch> {
-        self.next_with_case(text, query, true)
-    }
-
-    pub fn next_with_case(
-        &mut self,
-        text: &str,
-        query: &str,
-        case_sensitive: bool,
-    ) -> Option<&SearchMatch> {
-        self.next_with_options(text, query, case_sensitive, false)
     }
 
     pub fn next_with_options(
@@ -333,19 +224,6 @@ impl SearchState {
         self.selected =
             find_next_with_options(text, query, self.selected.as_ref(), case_sensitive, regex);
         self.selected.as_ref()
-    }
-
-    pub fn previous(&mut self, text: &str, query: &str) -> Option<&SearchMatch> {
-        self.previous_with_case(text, query, true)
-    }
-
-    pub fn previous_with_case(
-        &mut self,
-        text: &str,
-        query: &str,
-        case_sensitive: bool,
-    ) -> Option<&SearchMatch> {
-        self.previous_with_options(text, query, case_sensitive, false)
     }
 
     pub fn previous_with_options(
@@ -362,20 +240,6 @@ impl SearchState {
 
     /// Replace the selected match. When there is no valid selection, the first
     /// match is selected and replaced. The following match is then selected.
-    pub fn replace_one(&mut self, text: &mut String, query: &str, replacement: &str) -> bool {
-        self.replace_one_with_case(text, query, replacement, true)
-    }
-
-    pub fn replace_one_with_case(
-        &mut self,
-        text: &mut String,
-        query: &str,
-        replacement: &str,
-        case_sensitive: bool,
-    ) -> bool {
-        self.replace_one_with_options(text, query, replacement, case_sensitive, false)
-    }
-
     pub fn replace_one_with_options(
         &mut self,
         text: &mut String,
@@ -384,54 +248,32 @@ impl SearchState {
         case_sensitive: bool,
         regex: bool,
     ) -> bool {
-        if query.is_empty() {
-            self.clear();
-            return false;
-        }
-
-        if !self.selected.as_ref().is_some_and(|selected| {
-            find_all_with_options(text, query, case_sensitive, regex)
+        let matches = find_all_with_options(text, query, case_sensitive, regex);
+        let selected = self.selected.take().filter(|selected| {
+            matches
                 .iter()
                 .any(|matched| matched.byte_range == selected.byte_range)
-        }) {
-            self.selected = find_next_with_options(text, query, None, case_sensitive, regex);
-        }
-
-        let Some(selected) = self.selected.take() else {
+        });
+        let Some(selected) = selected.or_else(|| matches.into_iter().next()) else {
             return false;
         };
         let next_search_byte = selected.byte_range.start + replacement.len();
         text.replace_range(selected.byte_range, replacement);
 
         // Search after the inserted text so a replacement containing the query
-        // does not immediately reselect itself. `find_next` supplies wrapping.
-        let anchor = SearchMatch::from_byte_range(text, next_search_byte..next_search_byte);
+        // does not immediately reselect itself, wrapping at the end.
         self.selected = find_next_after_anchor_with_options(
             text,
             query,
-            anchor.as_ref(),
+            next_search_byte,
             case_sensitive,
             regex,
         );
         true
     }
 
-    pub fn replace_all(&mut self, text: &mut String, query: &str, replacement: &str) -> usize {
-        let count = replace_all(text, query, replacement);
-        self.clear();
-        count
-    }
-
-    pub fn replace_all_with_case(
-        &mut self,
-        text: &mut String,
-        query: &str,
-        replacement: &str,
-        case_sensitive: bool,
-    ) -> usize {
-        self.replace_all_with_options(text, query, replacement, case_sensitive, false)
-    }
-
+    /// Replace the original non-overlapping matches, then clear the selection.
+    /// Replacement text is literal, even in regex mode.
     pub fn replace_all_with_options(
         &mut self,
         text: &mut String,
@@ -440,27 +282,8 @@ impl SearchState {
         case_sensitive: bool,
         regex: bool,
     ) -> usize {
-        if regex {
-            let matches = find_all_with_options(text, query, case_sensitive, true);
-            if matches.is_empty() {
-                return 0;
-            }
-            let mut result = String::with_capacity(text.len());
-            let mut copied_until = 0;
-            for matched in &matches {
-                result.push_str(&text[copied_until..matched.byte_range.start]);
-                result.push_str(replacement);
-                copied_until = matched.byte_range.end;
-            }
-            result.push_str(&text[copied_until..]);
-            *text = result;
-            self.clear();
-            return matches.len();
-        }
-        if case_sensitive {
-            return self.replace_all(text, query, replacement);
-        }
-        let matches = find_all_with_case(text, query, false);
+        self.clear();
+        let matches = find_all_with_options(text, query, case_sensitive, regex);
         if matches.is_empty() {
             return 0;
         }
@@ -473,57 +296,26 @@ impl SearchState {
         }
         result.push_str(&text[copied_until..]);
         *text = result;
-        self.clear();
         matches.len()
     }
-}
-
-fn find_next_after_anchor(
-    text: &str,
-    query: &str,
-    anchor: Option<&SearchMatch>,
-) -> Option<SearchMatch> {
-    if query.is_empty() {
-        return None;
-    }
-
-    let start = anchor.map_or(0, |anchor| anchor.byte_range.end);
-    find_at_or_after(text, query, start)
-        .or_else(|| text.get(..start).and_then(|prefix| find(prefix, query)))
-}
-
-fn find_next_after_anchor_with_case(
-    text: &str,
-    query: &str,
-    anchor: Option<&SearchMatch>,
-    case_sensitive: bool,
-) -> Option<SearchMatch> {
-    if case_sensitive {
-        return find_next_after_anchor(text, query, anchor);
-    }
-    let start = anchor.map_or(0, |anchor| anchor.byte_range.end);
-    find_all_with_case(text, query, false)
-        .into_iter()
-        .find(|matched| matched.byte_range.start >= start)
-        .or_else(|| {
-            find_all_with_case(text, query, false)
-                .into_iter()
-                .find(|matched| matched.byte_range.start < start)
-        })
 }
 
 fn find_next_after_anchor_with_options(
     text: &str,
     query: &str,
-    anchor: Option<&SearchMatch>,
+    start: usize,
     case_sensitive: bool,
     regex: bool,
 ) -> Option<SearchMatch> {
-    if !regex {
-        return find_next_after_anchor_with_case(text, query, anchor, case_sensitive);
+    if case_sensitive && !regex {
+        // Search each side of the anchor independently: a literal match may
+        // overlap the original non-overlapping sequence after replacement.
+        return find_at_or_after(text, query, start).or_else(|| {
+            text.get(..start)
+                .and_then(|prefix| find_at_or_after(prefix, query, 0))
+        });
     }
-    let matches = find_all_with_options(text, query, case_sensitive, true);
-    let start = anchor.map_or(0, |anchor| anchor.byte_range.end);
+    let matches = find_all_with_options(text, query, case_sensitive, regex);
     matches
         .iter()
         .find(|matched| matched.byte_range.start >= start)
@@ -558,16 +350,16 @@ mod tests {
 
     #[test]
     fn literal_find_is_case_sensitive_and_non_overlapping() {
-        let matches = find_all("Aa.a aa", "a");
+        let matches = find_all_with_options("Aa.a aa", "a", true, false);
         assert_eq!(byte_ranges(&matches), vec![1..2, 3..4, 5..6, 6..7]);
 
-        let overlapping = find_all("aaaa", "aa");
+        let overlapping = find_all_with_options("aaaa", "aa", true, false);
         assert_eq!(byte_ranges(&overlapping), vec![0..2, 2..4]);
     }
 
     #[test]
     fn case_insensitive_find_preserves_unicode_ranges() {
-        let matches = find_all_with_case("Alpha ALPHA 🦀", "alpha", false);
+        let matches = find_all_with_options("Alpha ALPHA 🦀", "alpha", false, false);
         assert_eq!(byte_ranges(&matches), vec![0..5, 6..11]);
         assert_eq!(char_ranges(&matches), vec![0..5, 6..11]);
     }
@@ -648,19 +440,24 @@ mod tests {
 
     #[test]
     fn literal_find_does_not_interpret_regex_characters() {
-        assert_eq!(find("a.*b aZZb", "a.*b").unwrap().byte_range, 0..4);
-        let matches = find_all("a.*b aZZb a.*b", "a.*b");
+        assert_eq!(
+            find_next_with_options("a.*b aZZb", "a.*b", None, true, false)
+                .unwrap()
+                .byte_range,
+            0..4
+        );
+        let matches = find_all_with_options("a.*b aZZb a.*b", "a.*b", true, false);
         assert_eq!(byte_ranges(&matches), vec![0..4, 10..14]);
     }
 
     #[test]
     fn matches_report_utf8_byte_and_char_ranges() {
         let text = "á 🦀café 🦀";
-        let crabs = find_all(text, "🦀");
+        let crabs = find_all_with_options(text, "🦀", true, false);
         assert_eq!(byte_ranges(&crabs), vec![4..8, 14..18]);
         assert_eq!(char_ranges(&crabs), vec![3..4, 9..10]);
 
-        let cafe = find_all(text, "café");
+        let cafe = find_all_with_options(text, "café", true, false);
         assert_eq!(byte_ranges(&cafe), vec![8..13]);
         assert_eq!(char_ranges(&cafe), vec![4..8]);
     }
@@ -679,16 +476,25 @@ mod tests {
     #[test]
     fn next_and_previous_wrap() {
         let text = "one two one";
-        let first = find_next(text, "one", None).unwrap();
+        let first = find_next_with_options(text, "one", None, true, false).unwrap();
         assert_eq!(first.byte_range, 0..3);
-        let second = find_next(text, "one", Some(&first)).unwrap();
+        let second = find_next_with_options(text, "one", Some(&first), true, false).unwrap();
         assert_eq!(second.byte_range, 8..11);
-        assert_eq!(find_next(text, "one", Some(&second)).unwrap(), first);
+        assert_eq!(
+            find_next_with_options(text, "one", Some(&second), true, false).unwrap(),
+            first
+        );
 
-        let last = find_previous(text, "one", None).unwrap();
+        let last = find_previous_with_options(text, "one", None, true, false).unwrap();
         assert_eq!(last.byte_range, 8..11);
-        assert_eq!(find_previous(text, "one", Some(&last)).unwrap(), first);
-        assert_eq!(find_previous(text, "one", Some(&first)).unwrap(), last);
+        assert_eq!(
+            find_previous_with_options(text, "one", Some(&last), true, false).unwrap(),
+            first
+        );
+        assert_eq!(
+            find_previous_with_options(text, "one", Some(&first), true, false).unwrap(),
+            last
+        );
     }
 
     #[test]
@@ -698,13 +504,13 @@ mod tests {
             char_range: 0..3,
         };
         assert_eq!(
-            find_next("zero one", "one", Some(&stale))
+            find_next_with_options("zero one", "one", Some(&stale), true, false)
                 .unwrap()
                 .byte_range,
             5..8
         );
         assert_eq!(
-            find_previous("zero one", "one", Some(&stale))
+            find_previous_with_options("zero one", "one", Some(&stale), true, false)
                 .unwrap()
                 .byte_range,
             5..8
@@ -713,13 +519,15 @@ mod tests {
 
     #[test]
     fn empty_query_never_matches_or_replaces() {
-        assert!(find("abc", "").is_none());
-        assert!(find_all("abc", "").is_empty());
-        assert!(find_next("abc", "", None).is_none());
-        assert!(find_previous("abc", "", None).is_none());
+        assert!(find_all_with_options("abc", "", true, false).is_empty());
+        assert!(find_next_with_options("abc", "", None, true, false).is_none());
+        assert!(find_previous_with_options("abc", "", None, true, false).is_none());
 
         let mut text = "abc".to_owned();
-        assert_eq!(replace_all(&mut text, "", "x"), 0);
+        assert_eq!(
+            SearchState::default().replace_all_with_options(&mut text, "", "x", true, false),
+            0
+        );
         assert_eq!(text, "abc");
     }
 
@@ -727,13 +535,19 @@ mod tests {
     fn replace_one_uses_utf8_safe_offsets_and_selects_the_next_match() {
         let mut text = "🦀 and 🦀 and 🦀".to_owned();
         let mut search = SearchState::default();
-        assert_eq!(search.next(&text, "🦀").unwrap().char_range, 0..1);
+        assert_eq!(
+            search
+                .next_with_options(&text, "🦀", true, false)
+                .unwrap()
+                .char_range,
+            0..1
+        );
 
-        assert!(search.replace_one(&mut text, "🦀", "café"));
+        assert!(search.replace_one_with_options(&mut text, "🦀", "café", true, false));
         assert_eq!(text, "café and 🦀 and 🦀");
         assert_eq!(search.selected().unwrap().char_range, 9..10);
 
-        assert!(search.replace_one(&mut text, "🦀", "x"));
+        assert!(search.replace_one_with_options(&mut text, "🦀", "x", true, false));
         assert_eq!(text, "café and x and 🦀");
         assert_eq!(search.selected().unwrap().char_range, 15..16);
     }
@@ -742,7 +556,7 @@ mod tests {
     fn replace_one_selects_and_replaces_when_no_match_was_selected() {
         let mut text = "one two one".to_owned();
         let mut search = SearchState::default();
-        assert!(search.replace_one(&mut text, "one", "1"));
+        assert!(search.replace_one_with_options(&mut text, "one", "1", true, false));
         assert_eq!(text, "1 two one");
         assert_eq!(search.selected().unwrap().byte_range, 6..9);
     }
@@ -751,8 +565,8 @@ mod tests {
     fn replace_one_does_not_immediately_select_query_inside_replacement() {
         let mut text = "a then a".to_owned();
         let mut search = SearchState::default();
-        search.next(&text, "a");
-        assert!(search.replace_one(&mut text, "a", "aa"));
+        search.next_with_options(&text, "a", true, false);
+        assert!(search.replace_one_with_options(&mut text, "a", "aa", true, false));
         assert_eq!(text, "aa then a");
         assert_eq!(search.selected().unwrap().byte_range, 8..9);
     }
@@ -760,18 +574,33 @@ mod tests {
     #[test]
     fn replace_all_terminates_when_replacement_contains_query() {
         let mut text = "a banana".to_owned();
-        assert_eq!(replace_all(&mut text, "a", "aa"), 4);
+        assert_eq!(
+            SearchState::default().replace_all_with_options(&mut text, "a", "aa", true, false),
+            4
+        );
         assert_eq!(text, "aa baanaanaa");
     }
 
     #[test]
     fn replace_all_uses_original_non_overlapping_matches() {
         let mut text = "aaaa".to_owned();
-        assert_eq!(replace_all(&mut text, "aa", "aaa"), 2);
+        assert_eq!(
+            SearchState::default().replace_all_with_options(&mut text, "aa", "aaa", true, false),
+            2
+        );
         assert_eq!(text, "aaaaaa");
 
         let mut unicode = "🙂🙂 x 🙂🙂".to_owned();
-        assert_eq!(replace_all(&mut unicode, "🙂🙂", "🙂"), 2);
+        assert_eq!(
+            SearchState::default().replace_all_with_options(
+                &mut unicode,
+                "🙂🙂",
+                "🙂",
+                true,
+                false
+            ),
+            2
+        );
         assert_eq!(unicode, "🙂 x 🙂");
     }
 
@@ -779,35 +608,117 @@ mod tests {
     fn state_clears_after_replace_all_and_on_empty_replace_one() {
         let mut text = "x x".to_owned();
         let mut state = SearchState::default();
-        state.next(&text, "x");
-        assert_eq!(state.replace_all(&mut text, "x", "y"), 2);
+        state.next_with_options(&text, "x", true, false);
+        assert_eq!(
+            state.replace_all_with_options(&mut text, "x", "y", true, false),
+            2
+        );
         assert!(state.selected().is_none());
 
-        state.next(&text, "y");
-        assert!(!state.replace_one(&mut text, "", "z"));
+        state.next_with_options(&text, "y", true, false);
+        assert!(!state.replace_one_with_options(&mut text, "", "z", true, false));
+        assert!(state.selected().is_none());
+    }
+
+    #[test]
+    fn replace_all_preserves_unicode_and_uses_literal_replacements_in_every_mode() {
+        for (original, query, replacement, case_sensitive, regex, count, expected) in [
+            ("é é", "é", "🙂", true, false, 2, "🙂 🙂"),
+            ("É é", "é", "🙂", false, false, 2, "🙂 🙂"),
+            ("İ i\u{307}", "i\u{307}", "x", false, false, 2, "x x"),
+            ("a1 a2", r"a(\d)", "$1", true, true, 2, "$1 $1"),
+            ("É é", "é", "🙂", false, true, 2, "🙂 🙂"),
+            ("é x", r"\b", "_", true, true, 4, "_é_ _x_"),
+        ] {
+            let mut text = original.to_owned();
+            let mut state = SearchState::default();
+            state.next_with_options(&text, query, case_sensitive, regex);
+            assert_eq!(
+                state.replace_all_with_options(
+                    &mut text,
+                    query,
+                    replacement,
+                    case_sensitive,
+                    regex,
+                ),
+                count
+            );
+            assert_eq!(text, expected);
+            assert!(state.selected().is_none());
+        }
+    }
+
+    #[test]
+    fn replace_all_without_matches_clears_stale_selection_in_every_mode() {
+        for case_sensitive in [false, true] {
+            for regex in [false, true] {
+                for query in ["", "missing"] {
+                    let mut text = "x".to_owned();
+                    let mut state = SearchState::default();
+                    state.next_with_options(&text, "x", case_sensitive, regex);
+                    assert_eq!(
+                        state.replace_all_with_options(
+                            &mut text,
+                            query,
+                            "y",
+                            case_sensitive,
+                            regex,
+                        ),
+                        0
+                    );
+                    assert_eq!(text, "x");
+                    assert!(state.selected().is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn replace_one_literal_search_starts_at_the_end_of_the_replacement() {
+        let mut state = SearchState::default();
+        let mut text = "aaaa".to_owned();
+        assert!(state.replace_one_with_options(&mut text, "aa", "a", true, false));
+        assert_eq!(text, "aaa");
+        assert_eq!(state.selected().unwrap().byte_range, 1..3);
+
+        // Wrapping searches the prefix without including a match which
+        // straddles the end of the replacement.
+        state.clear();
+        text = "aaa".to_owned();
+        assert!(state.replace_one_with_options(&mut text, "aa", "a", true, false));
+        assert_eq!(text, "aa");
         assert!(state.selected().is_none());
     }
 
     #[test]
     fn navigation_handles_adjacent_unicode_matches_without_losing_char_offsets() {
         let text = "éé x éé";
-        let first = find_next(text, "é", None).unwrap();
-        let second = find_next(text, "é", Some(&first)).unwrap();
-        let third = find_next(text, "é", Some(&second)).unwrap();
-        let fourth = find_next(text, "é", Some(&third)).unwrap();
+        let first = find_next_with_options(text, "é", None, true, false).unwrap();
+        let second = find_next_with_options(text, "é", Some(&first), true, false).unwrap();
+        let third = find_next_with_options(text, "é", Some(&second), true, false).unwrap();
+        let fourth = find_next_with_options(text, "é", Some(&third), true, false).unwrap();
 
         assert_eq!(first.char_range, 0..1);
         assert_eq!(second.char_range, 1..2);
         assert_eq!(third.char_range, 5..6);
         assert_eq!(fourth.char_range, 6..7);
-        assert_eq!(find_next(text, "é", Some(&fourth)).unwrap(), first);
-        assert_eq!(find_previous(text, "é", Some(&first)).unwrap(), fourth);
+        assert_eq!(
+            find_next_with_options(text, "é", Some(&fourth), true, false).unwrap(),
+            first
+        );
+        assert_eq!(
+            find_previous_with_options(text, "é", Some(&first), true, false).unwrap(),
+            fourth
+        );
     }
 
     #[test]
     fn replacing_many_matches_preserves_original_non_overlapping_semantics() {
         let mut text = "ab".repeat(10_000);
-        assert_eq!(replace_all(&mut text, "ab", "xyz"), 10_000);
+        assert_eq!(
+            SearchState::default().replace_all_with_options(&mut text, "ab", "xyz", true, false),
+            10_000
+        );
         assert_eq!(text.len(), 30_000);
         assert!(text.starts_with("xyzxyz"));
         assert!(text.ends_with("xyzxyz"));

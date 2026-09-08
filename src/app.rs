@@ -1743,7 +1743,11 @@ impl EditorApp {
             if self.compile_deadline.is_some() {
                 self.status = PreviewStatus::Waiting;
             }
-            self.sync_tinymist_change();
+            if !self.compilation_paused
+                && let Err(error) = self.sync_tinymist_change()
+            {
+                self.tinymist_state = ServiceState::Degraded(error);
+            }
             self.schedule_project_index();
         } else {
             self.compile_deadline = None;
@@ -1995,7 +1999,9 @@ impl EditorApp {
                 kind: NoticeKind::Info,
             });
         } else {
-            self.sync_tinymist_change();
+            if let Err(error) = self.sync_tinymist_change() {
+                self.tinymist_state = ServiceState::Degraded(error);
+            }
             self.schedule_compile_now();
             self.notice = Some(Notice {
                 message: "Automatic compilation resumed".to_owned(),
@@ -3688,25 +3694,15 @@ impl EditorApp {
             path.set_extension("pdf");
         }
 
-        if self.compiled_revision == Some(self.revision)
-            && let Some(pdf) = self.pdf.as_deref()
-        {
-            if let Err(error) = atomic_write(&self.project_root(), &path, pdf) {
-                self.show_file_error(error);
-            } else {
-                self.notice = Some(Notice {
-                    message: format!("{} {}", intent.completed_verb(), path.display()),
-                    kind: NoticeKind::Success,
-                });
-            }
-            return;
-        }
-
         self.pending_export = Some(PendingExport {
             path,
             document_epoch: self.document_epoch,
             intent,
         });
+        if self.compiled_revision == Some(self.revision) && self.pdf.is_some() {
+            self.complete_pending_export();
+            return;
+        }
         self.notice = Some(Notice {
             message: intent.queued_message().to_owned(),
             kind: NoticeKind::Info,
@@ -4307,32 +4303,31 @@ impl EditorApp {
         }
     }
 
-    fn sync_tinymist_change(&mut self) {
-        if self.compilation_paused || !self.document_kind.is_typst() {
-            return;
+    fn sync_tinymist_change(&self) -> Result<(), String> {
+        if !self.document_kind.is_typst() {
+            return Ok(());
         }
-        if let Some(document) = &self.tinymist_unsaved_document
-            && let Err(error) = document.update_backing_source(&self.source)
-        {
-            self.tinymist_state = ServiceState::Degraded(error.to_string());
-            return;
+        if let Some(document) = &self.tinymist_unsaved_document {
+            document
+                .update_backing_source(&self.source)
+                .map_err(|error| error.to_string())?;
         }
         let (Some(generation), Some(uri)) = (self.tinymist_generation, self.tinymist_uri.clone())
         else {
-            return;
+            return Ok(());
         };
         if !self.tinymist_current_open {
             // Initialized opens this document using the newest buffer.
-            return;
+            return Ok(());
         }
-        if let Err(error) = self.tinymist.did_change(
-            generation,
-            uri,
-            revision_as_i32(self.revision),
-            self.source.clone(),
-        ) {
-            self.tinymist_state = ServiceState::Degraded(error.to_string());
-        }
+        self.tinymist
+            .did_change(
+                generation,
+                uri,
+                revision_as_i32(self.revision),
+                self.source.clone(),
+            )
+            .map_err(|error| error.to_string())
     }
 
     fn receive_tinymist_events(&mut self, context: &egui::Context) {
@@ -5274,12 +5269,12 @@ impl EditorApp {
             });
             return;
         };
-        if let Some(document) = &self.tinymist_unsaved_document
-            && let Err(error) = document.update_backing_source(&self.source)
-        {
+        // Formatting is explicit work: send edits accumulated while automatic
+        // compilation was paused before requesting this exact buffer version.
+        if let Err(error) = self.sync_tinymist_change() {
             self.manual_format_revision = None;
             self.notice = Some(Notice {
-                message: format!("Could not prepare the unsaved document for formatting: {error}"),
+                message: format!("Could not prepare the document for formatting: {error}"),
                 kind: NoticeKind::Error,
             });
             return;

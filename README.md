@@ -211,9 +211,9 @@ auto-save.
 
 ## Development
 
-UI changes require fresh app-window screenshot evidence and, for native
-preview geometry, `TIPTOPTYP_UI_TRACE=1` bounds output. See
-[`AGENTS.md`](AGENTS.md) for the mandatory workflow and
+Use focused deterministic tests for UI behavior and fresh screenshots when
+correctness depends on pixels. Native preview geometry also requires
+`TIPTOPTYP_UI_TRACE=1` bounds output. See [`AGENTS.md`](AGENTS.md) for the workflow and
 [`docs/ui-qa-screenshots.md`](docs/ui-qa-screenshots.md) for the scene contract.
 
 ```sh

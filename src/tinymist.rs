@@ -593,7 +593,8 @@ impl TinymistSidecar {
         )
     }
 
-    /// Sends a full-buffer LSP change. The version must increase monotonically.
+    /// Sends a full-buffer LSP change. An identical version and buffer are a
+    /// no-op; actual changes must increase the version monotonically.
     pub fn did_change(
         &self,
         generation: Generation,
@@ -1343,6 +1344,9 @@ fn worker_loop(
                     );
                     continue;
                 };
+                if version == document.version && text == document.text {
+                    continue;
+                }
                 if version <= document.version {
                     emit(
                         &events,
@@ -2908,7 +2912,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn lsp_only_session_formats_without_starting_preview() {
+    fn lsp_only_session_syncs_current_buffer_for_formatting_without_preview() {
         use std::os::unix::fs::PermissionsExt;
 
         let directory = tempfile::tempdir().unwrap();
@@ -2953,11 +2957,28 @@ mod tests {
         }
         assert!(initialized, "LSP-only session never initialized");
 
-        sidecar.format_document(generation, uri, 7).unwrap();
+        // Resuming without edits must not send a duplicate LSP version or
+        // degrade the session. Explicit formatting after paused edits must
+        // synchronize its requested version first.
+        sidecar.did_change(generation, uri, 7, "Hello").unwrap();
+        sidecar
+            .did_change(generation, uri, 8, "Edited while paused")
+            .unwrap();
+        sidecar
+            .did_change(generation, uri, 8, "Edited while paused")
+            .unwrap();
+        sidecar
+            .did_change(generation, uri, 8, "Conflicting version")
+            .unwrap();
+        sidecar
+            .did_change(generation, uri, 7, "Edited while paused")
+            .unwrap();
+        sidecar.format_document(generation, uri, 8).unwrap();
         sidecar.stop_workspace(generation).unwrap();
 
         let stop_deadline = Instant::now() + FAKE_SERVER_TIMEOUT;
         let mut stopped = false;
+        let mut rejected_changes = Vec::new();
         while Instant::now() < stop_deadline && !stopped {
             while let Some(event) = sidecar.try_recv() {
                 match event {
@@ -2965,16 +2986,39 @@ mod tests {
                     TinymistEvent::PreviewReady { .. } => {
                         panic!("LSP-only session unexpectedly started a preview")
                     }
+                    TinymistEvent::Error {
+                        stage: "document",
+                        message,
+                        fatal: false,
+                        ..
+                    } => rejected_changes.push(message),
+                    TinymistEvent::Error { stage, message, .. } => {
+                        panic!("LSP-only session {stage} failed: {message}")
+                    }
                     _ => {}
                 }
             }
             thread::sleep(Duration::from_millis(10));
         }
         assert!(stopped, "LSP-only session never stopped");
+        assert_eq!(
+            rejected_changes,
+            [
+                format!("ignored non-monotonic version 8 for {uri}; current version is 8"),
+                format!("ignored non-monotonic version 7 for {uri}; current version is 8"),
+            ]
+        );
 
         let captured = fs::read_to_string(captured_input).unwrap();
         assert!(captured.contains("textDocument/didOpen"), "{captured:?}");
+        assert_eq!(captured.matches("textDocument/didChange").count(), 1);
+        assert!(captured.contains("Edited while paused"), "{captured:?}");
+        assert!(!captured.contains("Conflicting version"), "{captured:?}");
         assert!(captured.contains("textDocument/formatting"), "{captured:?}");
+        assert!(
+            captured.find("textDocument/didChange") < captured.find("textDocument/formatting"),
+            "{captured:?}"
+        );
         assert!(!captured.contains("tinymist.startDefaultPreview"));
     }
 
