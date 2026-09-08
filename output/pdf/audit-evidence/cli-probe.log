@@ -1,0 +1,7 @@
+Command: target/debug/tiptoptyp --ui-snapshot-scene=__invalid__
+Probe: existing debug binary; configuration rejection occurs before GUI startup
+Exit status: 0
+stdout:
+
+stderr:
+Invalid UI screenshot configuration: unknown UI snapshot scene "__invalid__"; expected one of: main, file-menu, edit-menu, settings-window, settings-theme-picker, settings-dark-theme-picker, settings-tooltip, typst-overrides-window, diagnostic-tooltip, function-tooltip, save-dialog, alert-dialog, overwrite-dialog, editor-context-menu, explorer-context-menu, document-font-selector, status-log, rename-dialog, workspace-chooser, problems-panel, find-replace, preview-compiling

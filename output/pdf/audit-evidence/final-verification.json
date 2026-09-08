@@ -1,0 +1,14 @@
+{
+  "commit": "10bd0295c066e7866a066c115f9e76e3a7f9be63",
+  "pdf_pages": 19,
+  "typst_source_sha256": "c49cb66f71fc2e6f1ad4706e79350291530e5ac208412c564464b818c7f09d3c",
+  "pdf_sha256": "94974dc26c0074b559ec76a23295c366ebfdce05b24eefc7b7ee6fe70df43d32",
+  "source_files_match_audit_snapshot": true,
+  "visual_review": "All 19 final PDF page renders inspected in contact sheets; no overlap or clipping observed. This is report QA, not app visual QA.",
+  "required_checks": {
+    "fmt": "pass",
+    "clippy": "pass",
+    "application_and_integration_tests": "376 pass, 2 ignored",
+    "xtask_tests": "7 pass"
+  }
+}

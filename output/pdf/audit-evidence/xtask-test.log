@@ -1,0 +1,14 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.03s
+     Running unittests src/main.rs (xtask/target/debug/deps/tiptoptyp_xtask-95490dfc3b92da36)
+
+running 7 tests
+test tests::archive_members_are_exactly_allowlisted_and_must_be_unique ... ok
+test tests::archive_listing_rejects_traversal_and_absolute_paths ... ok
+test tests::archive_metadata_rejects_links_and_special_entries ... ok
+test tests::package_target_prefers_explicit_then_tiptoptyp_environment ... ok
+test tests::parser_rejects_bad_hashes_and_unknown_tools ... ok
+test tests::manifest_has_two_valid_artifacts_for_every_target ... ok
+test tests::sha256_matches_a_known_vector ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+

@@ -1,0 +1,11 @@
+Input: scripts/capture-theme-gallery.sh
+Input SHA-256: f5770b0f7e567cabdab54f0a631b30e7a44b860b6a1ac9408e9da5ec1f2eb402
+Exact extracted transaction region: lines 523-558
+Fault injection: fail the second mv before executing it
+Script exit: 1
+stderr: injected second-move failure
+first original exists: False
+second original exists: True
+backup exists: False
+Audited original-file-loss failure reproduced: True
+Maintained gallery untouched; temporary fixtures removed

@@ -1,0 +1,267 @@
+{
+  "files": [
+    {
+      "path": "src/app.rs",
+      "physical": 15643,
+      "pre_test_module": 13370,
+      "test_module": 2273,
+      "test_attributes": 100,
+      "hash": "d19fb9283dadc7f64aee32a448ca4aac45d277fd1c9e703c8bdec7bbac6031d1"
+    },
+    {
+      "path": "src/asset.rs",
+      "physical": 213,
+      "pre_test_module": 189,
+      "test_module": 24,
+      "test_attributes": 1,
+      "hash": "6ba55e5c25ba7ffd6d55d157823011bfe11f55543c7f61eb3ada61ad2bd9dca6"
+    },
+    {
+      "path": "src/builtin_themes.rs",
+      "physical": 1469,
+      "pre_test_module": 1127,
+      "test_module": 342,
+      "test_attributes": 7,
+      "hash": "c753b72911827fe1c14d6ab000dccfe3a7aec851bf3676288a72d5af50cebfb5"
+    },
+    {
+      "path": "src/compiler.rs",
+      "physical": 1255,
+      "pre_test_module": 1020,
+      "test_module": 235,
+      "test_attributes": 9,
+      "hash": "24fe91cf10e3c992ecd5dcdfa671ee206d0a4b1f7bac20ffe9a67baf34d65f10"
+    },
+    {
+      "path": "src/diagnostics.rs",
+      "physical": 831,
+      "pre_test_module": 529,
+      "test_module": 302,
+      "test_attributes": 15,
+      "hash": "06dbdcb031ceb90de9a9183e1b867705b310bcb92f7b1992a0c564d03d2d9c80"
+    },
+    {
+      "path": "src/document.rs",
+      "physical": 175,
+      "pre_test_module": 100,
+      "test_module": 75,
+      "test_attributes": 6,
+      "hash": "ddaa8e840cec1c9dfff9e2705c33290ab2c7e40bee1f5f798b9e21ca0d4241db"
+    },
+    {
+      "path": "src/font_catalog.rs",
+      "physical": 539,
+      "pre_test_module": 407,
+      "test_module": 132,
+      "test_attributes": 6,
+      "hash": "b557d3be33219e2ba0086e110b55b5d2a1c53871afae8aa08fe24364d45593d5"
+    },
+    {
+      "path": "src/generic_highlight.rs",
+      "physical": 319,
+      "pre_test_module": 182,
+      "test_module": 137,
+      "test_attributes": 6,
+      "hash": "1f07ce794b4bc69388d49c09d0ef489066e834f0c31da7f39d5da03b159bce9f"
+    },
+    {
+      "path": "src/highlight.rs",
+      "physical": 1194,
+      "pre_test_module": 841,
+      "test_module": 353,
+      "test_attributes": 17,
+      "hash": "576f14d2f2a07cbc4ecd7f755a842907f3d14d8dd5e5f0a4ce8e7d609487ae64"
+    },
+    {
+      "path": "src/lsp_text.rs",
+      "physical": 442,
+      "pre_test_module": 284,
+      "test_module": 158,
+      "test_attributes": 10,
+      "hash": "9d846584f9f3da850b378b4ff287c0b4c44b66e8853851af63dad8d103952b01"
+    },
+    {
+      "path": "src/main.rs",
+      "physical": 170,
+      "pre_test_module": 155,
+      "test_module": 15,
+      "test_attributes": 1,
+      "hash": "34f67b1d0cbb3bcea53a6e97a9a335d33e008e050d449a7a086d49f4f0bac402"
+    },
+    {
+      "path": "src/native_menu.rs",
+      "physical": 632,
+      "pre_test_module": 591,
+      "test_module": 41,
+      "test_attributes": 4,
+      "hash": "b4ba1ba19487aff9903868dcce5b443b71b4b5d13461ab91fcbde2bc7b602827"
+    },
+    {
+      "path": "src/native_window.rs",
+      "physical": 139,
+      "pre_test_module": 130,
+      "test_module": 9,
+      "test_attributes": 1,
+      "hash": "22a14ccd4e49c0bd3b2d9397bc8683aeff589bfea2543db5935846cc77c09d3a"
+    },
+    {
+      "path": "src/open_requests.rs",
+      "physical": 139,
+      "pre_test_module": 120,
+      "test_module": 19,
+      "test_attributes": 1,
+      "hash": "e5e05980b36c2607bb1dcc93af97f3029df47b4f453d920028916f30bfd1ba37"
+    },
+    {
+      "path": "src/preview.rs",
+      "physical": 139,
+      "pre_test_module": 95,
+      "test_module": 44,
+      "test_attributes": 4,
+      "hash": "e20fa360ebfd614cfc86a44613bb4f5fbc6b6f96700bcd66b2bd9b36a530f73d"
+    },
+    {
+      "path": "src/private_workspace.rs",
+      "physical": 710,
+      "pre_test_module": 508,
+      "test_module": 202,
+      "test_attributes": 7,
+      "hash": "0d4791d0f1da89ed96c7d8516d560e914149261ded48c68bc97e89de504ac7d9"
+    },
+    {
+      "path": "src/project_index.rs",
+      "physical": 531,
+      "pre_test_module": 302,
+      "test_module": 229,
+      "test_attributes": 9,
+      "hash": "5ce422bb995285d088ff552cf1b9778ac2bd751ebf6980d6b6ad183b49e95ec7"
+    },
+    {
+      "path": "src/screenshot.rs",
+      "physical": 1959,
+      "pre_test_module": 1225,
+      "test_module": 734,
+      "test_attributes": 24,
+      "hash": "380579862e5b72507ae83d9b271833df8447ffe3ddfc528636c55d5ad87ee545"
+    },
+    {
+      "path": "src/search.rs",
+      "physical": 726,
+      "pre_test_module": 332,
+      "test_module": 394,
+      "test_attributes": 24,
+      "hash": "b086b815ccbc0b7126be93a6837d258b95480d75e08b2b5250a9485d05b278ab"
+    },
+    {
+      "path": "src/settings.rs",
+      "physical": 742,
+      "pre_test_module": 436,
+      "test_module": 306,
+      "test_attributes": 12,
+      "hash": "aa840482a15f05e3e7aa3fbd13031ca31efd2bfc4b91361281e0bc4b13d5bd29"
+    },
+    {
+      "path": "src/sublime_theme.rs",
+      "physical": 1012,
+      "pre_test_module": 963,
+      "test_module": 49,
+      "test_attributes": 3,
+      "hash": "12a20e8056334888d59d28a78ddd0bf3a843f8cfcf0604c234f7864300053571"
+    },
+    {
+      "path": "src/syntax_theme.rs",
+      "physical": 563,
+      "pre_test_module": 477,
+      "test_module": 86,
+      "test_attributes": 5,
+      "hash": "40edebf4d90e3900381238fcc2a88b9e0a1030ac94b8d51d599ff34ce1e364fb"
+    },
+    {
+      "path": "src/theme.rs",
+      "physical": 2030,
+      "pre_test_module": 1588,
+      "test_module": 442,
+      "test_attributes": 21,
+      "hash": "c84dddd9d8a7aaec4d0026a2ab8095db5364d996f34ebef051c9be445427c0b8"
+    },
+    {
+      "path": "src/theme_transform.rs",
+      "physical": 462,
+      "pre_test_module": 244,
+      "test_module": 218,
+      "test_attributes": 10,
+      "hash": "65b4879c7d940db4587a2f2ed41c9095c40c817d8223d79b88359389c943a479"
+    },
+    {
+      "path": "src/tinymist.rs",
+      "physical": 3227,
+      "pre_test_module": 2423,
+      "test_module": 804,
+      "test_attributes": 21,
+      "hash": "6c38eb0554c3137c907bdba9b92758c56d75ad716a767e061f15b05ebffe76ab"
+    },
+    {
+      "path": "src/toolchain.rs",
+      "physical": 595,
+      "pre_test_module": 379,
+      "test_module": 216,
+      "test_attributes": 9,
+      "hash": "1df4b17acefb0d1b8312ac4f201be7d2e93e5fb74a5ef4ffc0e2009c9b936994"
+    },
+    {
+      "path": "src/windowing.rs",
+      "physical": 613,
+      "pre_test_module": 484,
+      "test_module": 129,
+      "test_attributes": 7,
+      "hash": "2bce7e1f67466f0c3459b397d6daf67f7c99e341eac5696e18c7eb9cbd3e8f2c"
+    },
+    {
+      "path": "src/workspace.rs",
+      "physical": 480,
+      "pre_test_module": 224,
+      "test_module": 256,
+      "test_attributes": 11,
+      "hash": "70f308e0f3af36683e3dfc10ab80704ca9a9c8e7343b956239bfb7847221dd9e"
+    },
+    {
+      "path": "tests/builtin_themes.rs",
+      "physical": 22,
+      "pre_test_module": 0,
+      "test_module": 22,
+      "test_attributes": 1,
+      "hash": "5a3bcb781c79ac8f83463f83b5e9a794b7a6140d69ca0ad460dbc0bc14b35b59"
+    },
+    {
+      "path": "tests/sublime_theme.rs",
+      "physical": 163,
+      "pre_test_module": 0,
+      "test_module": 163,
+      "test_attributes": 5,
+      "hash": "865a581af15e3865527d1c2fef52fae86c776dc39681f64a5269e76fad4ea8da"
+    },
+    {
+      "path": "tests/theme_gallery_manifest.rs",
+      "physical": 242,
+      "pre_test_module": 0,
+      "test_module": 242,
+      "test_attributes": 8,
+      "hash": "6ca462a2f0d2301d88006c153bd3bbd06e6e2d9586fa4d27c76cdb30f93e7549"
+    },
+    {
+      "path": "xtask/src/main.rs",
+      "physical": 714,
+      "pre_test_module": 603,
+      "test_module": 111,
+      "test_attributes": 7,
+      "hash": "cdb56fb49c9fc7f74ac1c583963300c85de3d22b5367ff25b99a43a87c0b72e3"
+    }
+  ],
+  "totals": {
+    "physical": 38090,
+    "pre_test_module": 29328,
+    "test_module": 8762,
+    "test_attributes": 372
+  },
+  "editor_app_fields": 145
+}
