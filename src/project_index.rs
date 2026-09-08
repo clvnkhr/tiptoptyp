@@ -4,6 +4,7 @@ use std::{
     fs,
     path::{Component, Path, PathBuf},
 };
+use typst_syntax::{LinkedNode, Source, SyntaxKind, ast};
 
 const MAX_PROJECT_FILES: usize = 256;
 
@@ -45,6 +46,20 @@ pub struct ReferenceEntry {
     pub label: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DependencyKind {
+    Import,
+    Include,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnresolvedDependency {
+    pub path: PathBuf,
+    pub line: usize,
+    pub kind: DependencyKind,
+    pub expression: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProjectIndex {
     pub outline: Vec<OutlineEntry>,
@@ -52,13 +67,15 @@ pub struct ProjectIndex {
     pub symbols: Vec<SymbolEntry>,
     pub packages: Vec<String>,
     pub references: Vec<ReferenceEntry>,
+    /// Import/include expressions which require Typst evaluation. The indexer
+    /// deliberately reports rather than follows them.
+    pub unresolved_dependencies: Vec<UnresolvedDependency>,
 }
 
 /// Build a compact, deterministic index from one Typst entry point.
 ///
-/// This intentionally performs syntax-aware line scanning rather than Typst
-/// evaluation: it is fast enough for the UI thread, never downloads packages,
-/// and still covers the project-navigation constructs users need at a glance.
+/// This walks Typst's error-tolerant syntax tree without evaluating code or
+/// downloading packages. Only literal local import/include paths are followed.
 /// `overrides` lets the currently edited document participate before it is
 /// saved to disk.
 pub fn analyze_project(
@@ -99,7 +116,7 @@ pub fn analyze_project(
         if path != main {
             index.subfiles.push(path.clone());
         }
-        scan_source(&path, &source, &mut index, &mut packages, |target| {
+        visit_source(&path, &source, &mut index, &mut packages, |target| {
             let Some(resolved) = resolve_local_typst_path(&root, &path, target) else {
                 return;
             };
@@ -121,164 +138,150 @@ fn source_for<'a>(path: &Path, overrides: &'a HashMap<PathBuf, &'a str>) -> Opti
         .or_else(|| fs::read_to_string(path).ok().map(Cow::Owned))
 }
 
-fn scan_source(
+fn visit_source(
     path: &Path,
     source: &str,
     index: &mut ProjectIndex,
     packages: &mut BTreeSet<String>,
     mut local_file: impl FnMut(&str),
 ) {
-    index_references(path, source, index);
-    for (line_index, raw_line) in source.lines().enumerate() {
-        let line_number = line_index + 1;
-        let line = strip_line_comment(raw_line).trim();
-        if line.is_empty() {
-            continue;
-        }
+    let parsed = Source::detached(source);
+    let lines = LineIndex::new(source);
+    let mut visitor = ProjectVisitor {
+        path,
+        source,
+        lines: &lines,
+        index,
+        packages,
+        local_file: &mut local_file,
+    };
+    visitor.visit(LinkedNode::new(parsed.root()));
+}
 
-        if let Some((level, title)) = heading(line) {
-            index.outline.push(OutlineEntry {
-                path: path.to_path_buf(),
-                line: line_number,
-                level,
-                title: title.to_owned(),
+struct ProjectVisitor<'a, F> {
+    path: &'a Path,
+    source: &'a str,
+    lines: &'a LineIndex,
+    index: &'a mut ProjectIndex,
+    packages: &'a mut BTreeSet<String>,
+    local_file: &'a mut F,
+}
+
+impl<F: FnMut(&str)> ProjectVisitor<'_, F> {
+    fn visit(&mut self, node: LinkedNode<'_>) {
+        match node.kind() {
+            SyntaxKind::Heading => self.heading(&node),
+            SyntaxKind::LetBinding => self.binding(&node),
+            SyntaxKind::ModuleImport => self.dependency(&node, DependencyKind::Import),
+            SyntaxKind::ModuleInclude => self.dependency(&node, DependencyKind::Include),
+            SyntaxKind::Label | SyntaxKind::RefMarker => self.reference(&node),
+            _ => {}
+        }
+        for child in node.children() {
+            self.visit(child);
+        }
+    }
+
+    fn heading(&mut self, node: &LinkedNode<'_>) {
+        let Some(heading) = node.get().cast::<ast::Heading>() else {
+            return;
+        };
+        let body = node
+            .children()
+            .find(|child| child.kind() == SyntaxKind::Markup)
+            .map(|child| self.source[child.range()].trim())
+            .unwrap_or_default();
+        if !body.is_empty() {
+            self.index.outline.push(OutlineEntry {
+                path: self.path.to_owned(),
+                line: self.lines.line_at(node.offset()),
+                level: heading.depth().get(),
+                title: body.to_owned(),
             });
         }
-        if let Some((name, kind)) = definition(line) {
-            index.symbols.push(SymbolEntry {
-                path: path.to_path_buf(),
-                line: line_number,
-                name: name.to_owned(),
+    }
+
+    fn binding(&mut self, node: &LinkedNode<'_>) {
+        let Some(binding) = node.get().cast::<ast::LetBinding>() else {
+            return;
+        };
+        let (bindings, kind) = match binding.kind() {
+            ast::LetBindingKind::Closure(name) => (vec![name], SymbolKind::Function),
+            ast::LetBindingKind::Normal(pattern) => (pattern.bindings(), SymbolKind::Definition),
+        };
+        for binding in bindings {
+            self.index.symbols.push(SymbolEntry {
+                path: self.path.to_owned(),
+                line: self.lines.line_at(node.offset()),
+                name: binding.as_str().to_owned(),
                 kind,
             });
         }
+    }
 
-        for package in package_specs(line) {
-            packages.insert(package.to_owned());
-        }
-        for keyword in ["#include", "#import"] {
-            if let Some(target) = quoted_argument_after(line, keyword) {
-                if target.starts_with('@') {
-                    packages.insert(target.to_owned());
-                } else if target
-                    .rsplit_once('.')
-                    .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("typ"))
-                {
-                    local_file(target);
-                }
+    fn dependency(&mut self, node: &LinkedNode<'_>, kind: DependencyKind) {
+        let expression = match kind {
+            DependencyKind::Import => node
+                .get()
+                .cast::<ast::ModuleImport>()
+                .map(ast::ModuleImport::source),
+            DependencyKind::Include => node
+                .get()
+                .cast::<ast::ModuleInclude>()
+                .map(ast::ModuleInclude::source),
+        };
+        let Some(expression) = expression else {
+            return;
+        };
+        if let ast::Expr::Str(target) = expression {
+            let target = target.get();
+            if target.starts_with('@') {
+                self.packages.insert(target.into());
+            } else if target
+                .rsplit_once('.')
+                .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("typ"))
+            {
+                (self.local_file)(&target);
             }
-        }
-    }
-}
-
-fn heading(line: &str) -> Option<(usize, &str)> {
-    let level = line.bytes().take_while(|byte| *byte == b'=').count();
-    if level == 0 {
-        return None;
-    }
-    let title = line.get(level..)?.strip_prefix(char::is_whitespace)?.trim();
-    (!title.is_empty()).then_some((level, title))
-}
-
-fn definition(line: &str) -> Option<(&str, SymbolKind)> {
-    let rest = line.strip_prefix("#let ")?.trim_start();
-    let end = rest
-        .char_indices()
-        .find_map(|(index, character)| (!is_identifier_character(character)).then_some(index))
-        .unwrap_or(rest.len());
-    let name = &rest[..end];
-    if name.is_empty() {
-        return None;
-    }
-    let kind = if rest[end..].trim_start().starts_with('(') {
-        SymbolKind::Function
-    } else {
-        SymbolKind::Definition
-    };
-    Some((name, kind))
-}
-
-fn is_identifier_character(character: char) -> bool {
-    character == '_' || character == '-' || character.is_alphanumeric()
-}
-
-fn quoted_argument_after<'a>(line: &'a str, keyword: &str) -> Option<&'a str> {
-    let rest = line.split_once(keyword)?.1.trim_start();
-    let quote = rest.chars().next()?;
-    if !matches!(quote, '"' | '\'') {
-        return None;
-    }
-    let contents = &rest[quote.len_utf8()..];
-    let end = contents.find(quote)?;
-    Some(&contents[..end])
-}
-
-fn package_specs(line: &str) -> impl Iterator<Item = &str> {
-    line.match_indices('@').filter_map(|(start, _)| {
-        let tail = &line[start..];
-        let end = tail
-            .char_indices()
-            .skip(1)
-            .find_map(|(index, character)| {
-                (!matches!(character, 'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '-' | '/' | ':' | '.'))
-                    .then_some(index)
-            })
-            .unwrap_or(tail.len());
-        let package = &tail[..end];
-        (package.contains('/') && package.contains(':')).then_some(package)
-    })
-}
-
-fn index_references(path: &Path, source: &str, index: &mut ProjectIndex) {
-    use typst_syntax::{LinkedNode, Source, SyntaxKind};
-    fn walk(node: LinkedNode<'_>, path: &Path, source: &str, index: &mut ProjectIndex) {
-        if matches!(node.kind(), SyntaxKind::Label | SyntaxKind::RefMarker) {
-            index.references.push(ReferenceEntry {
-                path: path.to_owned(),
-                line: source[..node.offset()]
-                    .bytes()
-                    .filter(|byte| *byte == b'\n')
-                    .count()
-                    + 1,
-                label: source[node.range()].to_owned(),
-            });
         } else {
-            for child in node.children() {
-                walk(child, path, source, index);
-            }
+            self.index
+                .unresolved_dependencies
+                .push(UnresolvedDependency {
+                    path: self.path.to_owned(),
+                    line: self.lines.line_at(node.offset()),
+                    kind,
+                    expression: self.source[node.range()].trim().to_owned(),
+                });
         }
     }
-    let parsed = Source::detached(source);
-    walk(LinkedNode::new(parsed.root()), path, source, index);
+
+    fn reference(&mut self, node: &LinkedNode<'_>) {
+        self.index.references.push(ReferenceEntry {
+            path: self.path.to_owned(),
+            line: self.lines.line_at(node.offset()),
+            label: self.source[node.range()].to_owned(),
+        });
+    }
 }
 
-fn strip_line_comment(line: &str) -> &str {
-    let mut quote = None;
-    let mut escaped = false;
-    let bytes = line.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        if escaped {
-            escaped = false;
-        } else if bytes[index] == b'\\' && quote.is_some() {
-            escaped = true;
-        } else if matches!(bytes[index], b'"' | b'\'') {
-            quote = if quote == Some(bytes[index]) {
-                None
-            } else if quote.is_none() {
-                Some(bytes[index])
-            } else {
-                quote
-            };
-        } else if bytes[index] == b'/'
-            && quote.is_none()
-            && bytes.get(index + 1).is_some_and(|next| *next == b'/')
-        {
-            return &line[..index];
-        }
-        index += 1;
+struct LineIndex {
+    starts: Vec<usize>,
+}
+
+impl LineIndex {
+    fn new(source: &str) -> Self {
+        let mut starts = vec![0];
+        starts.extend(
+            source
+                .match_indices('\n')
+                .map(|(byte, newline)| byte + newline.len()),
+        );
+        Self { starts }
     }
-    line
+
+    fn line_at(&self, byte: usize) -> usize {
+        self.starts.partition_point(|start| *start <= byte)
+    }
 }
 
 fn resolve_local_typst_path(root: &Path, source: &Path, target: &str) -> Option<PathBuf> {
@@ -365,14 +368,6 @@ mod tests {
     }
 
     #[test]
-    fn comment_scanning_keeps_urls_inside_strings() {
-        assert_eq!(
-            strip_line_comment("#let url = \"https://typst.app\" // comment"),
-            "#let url = \"https://typst.app\" "
-        );
-    }
-
-    #[test]
     fn indexes_document_tags_and_references_but_not_package_names() {
         let project = tempfile::tempdir().unwrap();
         let main = project.path().join("main.typ");
@@ -421,10 +416,13 @@ See @chapter and @figure. #link(<appendix>)[Appendix]
     #[test]
     fn reference_index_ignores_strings_comments_and_raw_blocks() {
         let mut index = ProjectIndex::default();
-        index_references(
+        let mut packages = BTreeSet::new();
+        visit_source(
             Path::new("main.typ"),
             "// @comment <comment>\n/* @block <block> */\n#let s = \"@string <string>\"\n`@raw <raw>`\n= Chapter <real>\nSee @real.",
             &mut index,
+            &mut packages,
+            |_| {},
         );
         assert_eq!(
             index
@@ -433,6 +431,113 @@ See @chapter and @figure. #link(<appendix>)[Appendix]
                 .map(|r| (r.label.as_str(), r.line))
                 .collect::<Vec<_>>(),
             vec![("<real>", 5), ("@real", 6)]
+        );
+    }
+
+    #[test]
+    fn comments_and_raw_examples_contribute_no_live_index_entries() {
+        let project = tempfile::tempdir().unwrap();
+        let main = project.path().join("main.typ");
+        let child = project.path().join("child.typ");
+        fs::write(&child, "= Child\n").unwrap();
+        fs::write(
+            &main,
+            r###"/*
+= Comment heading
+#let comment_definition = 1
+#include "child.typ"
+*/
+```typ
+= Sample heading
+#let sample_definition = 1
+#include "child.typ"
+```
+= Real heading
+#let real = 2
+"###,
+        )
+        .unwrap();
+
+        let index = analyze_project(project.path(), &main, &BTreeMap::new());
+        assert_eq!(
+            index
+                .outline
+                .iter()
+                .map(|entry| entry.title.as_str())
+                .collect::<Vec<_>>(),
+            ["Real heading"]
+        );
+        assert_eq!(
+            index
+                .symbols
+                .iter()
+                .map(|symbol| symbol.name.as_str())
+                .collect::<Vec<_>>(),
+            ["real"]
+        );
+        assert!(index.subfiles.is_empty());
+    }
+
+    #[test]
+    fn multiline_syntax_and_code_block_bindings_are_visited() {
+        let project = tempfile::tempdir().unwrap();
+        let main = project.path().join("main.typ");
+        let child = project.path().join("child.typ");
+        fs::write(
+            &main,
+            "#import \"child.typ\": (\n  chapter,\n)\n#let render(\n  body,\n) = body\n#let values = {\n  let nested = 1\n  nested\n}\n",
+        )
+        .unwrap();
+        fs::write(&child, "= Child\n").unwrap();
+
+        let index = analyze_project(project.path(), &main, &BTreeMap::new());
+        assert_eq!(index.subfiles, vec![child.canonicalize().unwrap()]);
+        assert!(index.symbols.iter().any(|symbol| {
+            symbol.name == "render" && symbol.kind == SymbolKind::Function && symbol.line == 4
+        }));
+        assert!(index.symbols.iter().any(|symbol| {
+            symbol.name == "nested" && symbol.kind == SymbolKind::Definition && symbol.line == 8
+        }));
+    }
+
+    #[test]
+    fn dynamic_dependencies_are_reported_but_not_followed() {
+        let project = tempfile::tempdir().unwrap();
+        let main = project.path().join("main.typ");
+        let child = project.path().join("child.typ");
+        fs::write(
+            &main,
+            "#let target = \"child.typ\"\n#include target\n#import target\n",
+        )
+        .unwrap();
+        fs::write(&child, "= Child\n").unwrap();
+
+        let index = analyze_project(project.path(), &main, &BTreeMap::new());
+        assert!(index.subfiles.is_empty());
+        assert_eq!(
+            index
+                .unresolved_dependencies
+                .iter()
+                .map(|dependency| (dependency.kind, dependency.line))
+                .collect::<Vec<_>>(),
+            [(DependencyKind::Include, 2), (DependencyKind::Import, 3)]
+        );
+    }
+
+    #[test]
+    fn line_index_maps_many_offsets_without_rescanning_prefixes() {
+        let source = (1..=10_000)
+            .map(|line| format!("line {line}\n"))
+            .collect::<String>();
+        let lines = LineIndex::new(&source);
+        let offsets = source.match_indices("line ").map(|(byte, _)| byte);
+        assert_eq!(
+            offsets
+                .enumerate()
+                .map(|(index, byte)| lines.line_at(byte) == index + 1)
+                .filter(|correct| *correct)
+                .count(),
+            10_000
         );
     }
 

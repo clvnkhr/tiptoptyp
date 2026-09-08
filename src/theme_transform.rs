@@ -14,7 +14,7 @@
 use eframe::egui::Color32;
 use syntect::highlighting::{Color as SyntectColor, Theme as SyntectTheme};
 
-use crate::sublime_theme::{ImportedTheme, Rgba, SemanticPalette};
+use crate::sublime_theme::{ImportedTheme, Rgba, SemanticPalette, is_dark_background};
 
 /// User-configurable operations applied uniformly to every theme color.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -167,7 +167,7 @@ impl ThemeTransform {
     pub fn apply_imported_theme(self, theme: &mut ImportedTheme) {
         theme.palette = self.apply_semantic_palette(theme.palette);
         self.apply_syntect_theme(&mut theme.syntect_theme);
-        theme.dark_mode = is_dark(theme.palette.background);
+        theme.dark_mode = is_dark_background(theme.palette.background);
     }
 
     fn apply_syntect_color(self, color: SyntectColor) -> SyntectColor {
@@ -226,20 +226,6 @@ fn rotate_hue(color: Rgba, degrees: f32) -> Rgba {
 
 fn unit_to_channel(value: f32) -> u8 {
     (value.clamp(0.0, 1.0) * 255.0).round() as u8
-}
-
-fn is_dark(color: Rgba) -> bool {
-    fn linear(channel: u8) -> f32 {
-        let channel = f32::from(channel) / 255.0;
-        if channel <= 0.04045 {
-            channel / 12.92
-        } else {
-            ((channel + 0.055) / 1.055).powf(2.4)
-        }
-    }
-
-    let luminance = 0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b);
-    luminance < 0.5
 }
 
 #[cfg(test)]
@@ -458,5 +444,41 @@ mod tests {
                 a: 255,
             })
         );
+    }
+
+    #[test]
+    fn identity_preserves_the_complete_resolved_theme_and_appearance() {
+        // #aaaaaa falls between the two thresholds that previously disagreed,
+        // so this catches an identity transform reclassifying a light import.
+        let background = Rgba::rgb(0xaa, 0xaa, 0xaa);
+        let syntect_background: SyntectColor = background.into();
+        let original = ImportedTheme {
+            name: Some("Midtone".to_owned()),
+            author: Some("Theme Author".to_owned()),
+            format: ThemeFormat::SublimeColorScheme,
+            dark_mode: false,
+            palette: repeated_palette(background),
+            syntect_theme: SyntectTheme {
+                name: Some("Midtone".to_owned()),
+                author: Some("Theme Author".to_owned()),
+                settings: ThemeSettings {
+                    background: Some(syntect_background),
+                    foreground: Some(SyntectColor {
+                        r: 1,
+                        g: 2,
+                        b: 3,
+                        a: 4,
+                    }),
+                    ..ThemeSettings::default()
+                },
+                ..SyntectTheme::default()
+            },
+        };
+        let mut transformed = original.clone();
+
+        ThemeTransform::IDENTITY.apply_imported_theme(&mut transformed);
+
+        assert_eq!(transformed, original);
+        assert!(!transformed.dark_mode);
     }
 }

@@ -4,7 +4,14 @@
 //! describe rendered geometry, typography, color, or UI motion and are shared
 //! by the main and child viewports.
 
-use std::{cell::Cell, path::Path, sync::Arc, time::Duration};
+use std::{
+    cell::Cell,
+    collections::HashMap,
+    io,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use eframe::egui::{self, Align, Color32, FontFamily, FontId, Layout, Rect, RichText, Vec2};
 use skrifa::{MetadataProvider as _, Tag, attribute::Style as FontStyle};
@@ -125,7 +132,7 @@ pub struct FontConfiguration {
     pub editor_weight_support: FontWeightSupport,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FontRequest<'a> {
     pub family: Option<&'a CatalogFontFamily>,
     pub fallback_path: Option<&'a Path>,
@@ -204,98 +211,173 @@ struct FontSelection {
     support: Option<FontWeightSupport>,
 }
 
-fn font_selection(bytes: &[u8], requested_weight: u16) -> Option<FontSelection> {
-    let mut variable_faces = Vec::new();
-    let mut static_faces = Vec::new();
-    let mut any_static_faces = Vec::new();
-    let weight_tag = Tag::new(b"wght");
-
-    for (index, font) in skrifa::FontRef::fonts(bytes).enumerate() {
-        let Ok(font) = font else {
-            continue;
-        };
-        let attributes = font.attributes();
-        if attributes.style == FontStyle::Normal
-            && let Some(axis) = font.axes().get_by_tag(weight_tag)
-        {
-            let min = axis.min_value().round().clamp(1.0, 1_000.0) as u16;
-            let max = axis.max_value().round().clamp(f32::from(min), 1_000.0) as u16;
-            let default = axis
-                .default_value()
-                .round()
-                .clamp(f32::from(min), f32::from(max)) as u16;
-            variable_faces.push((
-                (attributes.stretch.ratio() - 1.0).abs(),
-                FontSelection {
-                    index: index as u32,
-                    coordinate: Some(f32::from(requested_weight.clamp(min, max))),
-                    support: Some(FontWeightSupport::Continuous { min, max, default }),
-                },
-            ));
-        }
-
-        let weight = attributes.weight.value().round().clamp(1.0, 1_000.0) as u16;
-        let stretch_distance = (attributes.stretch.ratio() - 1.0).abs();
-        any_static_faces.push((index as u32, weight, stretch_distance));
-        if attributes.style == FontStyle::Normal {
-            static_faces.push((index as u32, weight, stretch_distance));
-        }
-    }
-
-    if let Some((_, selection)) = variable_faces
-        .into_iter()
-        .min_by(|(left, _), (right, _)| left.total_cmp(right))
-    {
-        return Some(selection);
-    }
-
-    let faces = if static_faces.is_empty() {
-        any_static_faces
-    } else {
-        static_faces
-    };
-    let closest_stretch = faces
-        .iter()
-        .map(|(_, _, stretch)| *stretch)
-        .min_by(f32::total_cmp)?;
-    let normal_width_faces = faces
-        .iter()
-        .filter(|(_, _, stretch)| (*stretch - closest_stretch).abs() < f32::EPSILON)
-        .collect::<Vec<_>>();
-    let (index, _, _) = normal_width_faces
-        .iter()
-        .copied()
-        .min_by_key(|(_, weight, _)| weight.abs_diff(requested_weight))?;
-    let mut values = normal_width_faces
-        .iter()
-        .map(|(_, weight, _)| *weight)
-        .collect::<Vec<_>>();
-    values.sort_unstable();
-    values.dedup();
-    let default = values
-        .iter()
-        .copied()
-        .min_by_key(|weight| weight.abs_diff(FONT_WEIGHT_NORMAL))
-        .unwrap_or(FONT_WEIGHT_NORMAL);
-    let support = (values.len() > 1).then_some(FontWeightSupport::Discrete { values, default });
-    Some(FontSelection {
-        index: *index,
-        coordinate: None,
-        support,
-    })
+#[derive(Clone, Debug)]
+struct PreparedFontFace {
+    index: u32,
+    weight: u16,
+    normal_style: bool,
+    stretch_distance: f32,
+    variable_weight: Option<(u16, u16, u16)>,
 }
 
+/// Immutable bytes plus normalized face metadata for one font file.
+///
+/// A configure pass may derive eleven egui entries from one selected family
+/// (nine editor roles and two UI roles). Parsing the collection once keeps all
+/// of those derivations on the same face/axis snapshot.
+#[derive(Clone, Debug)]
+struct PreparedFontFile {
+    bytes: Arc<[u8]>,
+    faces: Vec<PreparedFontFace>,
+}
+
+impl PreparedFontFile {
+    fn from_bytes(bytes: Vec<u8>) -> Self {
+        let faces = skrifa::FontRef::fonts(&bytes)
+            .enumerate()
+            .filter_map(|(index, font)| {
+                let font = font.ok()?;
+                let attributes = font.attributes();
+                let variable_weight = font.axes().get_by_tag(Tag::new(b"wght")).map(|axis| {
+                    let min = axis.min_value().round().clamp(1.0, 1_000.0) as u16;
+                    let max = axis.max_value().round().clamp(f32::from(min), 1_000.0) as u16;
+                    let default =
+                        axis.default_value()
+                            .round()
+                            .clamp(f32::from(min), f32::from(max)) as u16;
+                    (min, max, default)
+                });
+                Some(PreparedFontFace {
+                    index: index as u32,
+                    weight: attributes.weight.value().round().clamp(1.0, 1_000.0) as u16,
+                    normal_style: attributes.style == FontStyle::Normal,
+                    stretch_distance: (attributes.stretch.ratio() - 1.0).abs(),
+                    variable_weight,
+                })
+            })
+            .collect();
+        Self {
+            bytes: bytes.into(),
+            faces,
+        }
+    }
+
+    fn face(&self, index: u32) -> Option<&PreparedFontFace> {
+        self.faces.iter().find(|face| face.index == index)
+    }
+
+    fn selection(&self, requested_weight: u16) -> Option<FontSelection> {
+        if let Some(face) = self
+            .faces
+            .iter()
+            .filter(|face| face.normal_style && face.variable_weight.is_some())
+            .min_by(|left, right| left.stretch_distance.total_cmp(&right.stretch_distance))
+        {
+            let (min, max, default) = face.variable_weight?;
+            return Some(FontSelection {
+                index: face.index,
+                coordinate: Some(f32::from(requested_weight.clamp(min, max))),
+                support: Some(FontWeightSupport::Continuous { min, max, default }),
+            });
+        }
+
+        let has_normal = self.faces.iter().any(|face| face.normal_style);
+        let eligible = self
+            .faces
+            .iter()
+            .filter(|face| !has_normal || face.normal_style)
+            .collect::<Vec<_>>();
+        let closest_stretch = eligible
+            .iter()
+            .map(|face| face.stretch_distance)
+            .min_by(f32::total_cmp)?;
+        let normal_width_faces = eligible
+            .into_iter()
+            .filter(|face| (face.stretch_distance - closest_stretch).abs() < f32::EPSILON)
+            .collect::<Vec<_>>();
+        let face = normal_width_faces
+            .iter()
+            .copied()
+            .min_by_key(|face| face.weight.abs_diff(requested_weight))?;
+        let mut values = normal_width_faces
+            .iter()
+            .map(|face| face.weight)
+            .collect::<Vec<_>>();
+        values.sort_unstable();
+        values.dedup();
+        let default = values
+            .iter()
+            .copied()
+            .min_by_key(|weight| weight.abs_diff(FONT_WEIGHT_NORMAL))
+            .unwrap_or(FONT_WEIGHT_NORMAL);
+        let support = (values.len() > 1).then_some(FontWeightSupport::Discrete { values, default });
+        Some(FontSelection {
+            index: face.index,
+            coordinate: None,
+            support,
+        })
+    }
+
+    fn font_data(&self, index: u32, coordinate: Option<f32>) -> Option<egui::FontData> {
+        self.face(index)?;
+        let mut data = egui::FontData::from_owned(self.bytes.as_ref().to_vec());
+        data.index = index;
+        if let Some(coordinate) = coordinate {
+            data.tweak.coords = egui::epaint::text::VariationCoords::new([(b"wght", coordinate)]);
+        }
+        Some(data)
+    }
+
+    fn weighted_data(
+        &self,
+        requested_weight: u16,
+    ) -> Option<(egui::FontData, Option<FontWeightSupport>)> {
+        let selection = self.selection(requested_weight)?;
+        let data = self.font_data(selection.index, selection.coordinate)?;
+        Some((data, selection.support))
+    }
+}
+
+#[cfg(test)]
+fn font_selection(bytes: &[u8], requested_weight: u16) -> Option<FontSelection> {
+    PreparedFontFile::from_bytes(bytes.to_vec()).selection(requested_weight)
+}
+
+#[cfg(test)]
 fn weighted_font_data(
     bytes: Vec<u8>,
     requested_weight: u16,
 ) -> Option<(egui::FontData, Option<FontWeightSupport>)> {
-    let selection = font_selection(&bytes, requested_weight)?;
-    let mut data = egui::FontData::from_owned(bytes);
-    data.index = selection.index;
-    if let Some(coordinate) = selection.coordinate {
-        data.tweak.coords = egui::epaint::text::VariationCoords::new([(b"wght", coordinate)]);
+    PreparedFontFile::from_bytes(bytes).weighted_data(requested_weight)
+}
+
+struct FontFileCache<'a, F> {
+    read: &'a mut F,
+    files: HashMap<PathBuf, Option<Arc<PreparedFontFile>>>,
+}
+
+impl<'a, F> FontFileCache<'a, F>
+where
+    F: FnMut(&Path) -> io::Result<Vec<u8>>,
+{
+    fn new(read: &'a mut F) -> Self {
+        Self {
+            read,
+            files: HashMap::new(),
+        }
     }
-    Some((data, selection.support))
+
+    fn load(&mut self, path: &Path) -> Option<Arc<PreparedFontFile>> {
+        if let Some(prepared) = self.files.get(path) {
+            return prepared.clone();
+        }
+        let prepared = (self.read)(path)
+            .ok()
+            .map(PreparedFontFile::from_bytes)
+            .map(Arc::new);
+        self.files.insert(path.to_owned(), prepared.clone());
+        prepared
+    }
 }
 
 fn preferred_catalog_faces(family: &CatalogFontFamily) -> Vec<&FontFace> {
@@ -315,8 +397,7 @@ fn preferred_catalog_faces(family: &CatalogFontFamily) -> Vec<&FontFace> {
         .collect()
 }
 
-fn catalog_family_support(family: &CatalogFontFamily) -> FontWeightSupport {
-    let faces = preferred_catalog_faces(family);
+fn catalog_family_support(faces: &[&FontFace]) -> FontWeightSupport {
     if let Some((min, max, default)) = faces.iter().find_map(|face| face.variable_weight) {
         return FontWeightSupport::Continuous { min, max, default };
     }
@@ -331,91 +412,111 @@ fn catalog_family_support(family: &CatalogFontFamily) -> FontWeightSupport {
     FontWeightSupport::Discrete { values, default }
 }
 
-fn weighted_catalog_font_data(
-    family: &CatalogFontFamily,
-    requested_weight: u16,
-) -> Option<(egui::FontData, FontWeightSupport)> {
-    let faces = preferred_catalog_faces(family);
-    let support = catalog_family_support(family);
-    let face = faces
-        .iter()
-        .copied()
-        .find(|face| face.variable_weight.is_some())
-        .or_else(|| {
-            faces
-                .iter()
-                .copied()
-                .min_by_key(|face| face.weight.abs_diff(requested_weight))
-        })?;
-    let bytes = std::fs::read(&face.path).ok()?;
-    skrifa::FontRef::from_index(&bytes, face.index).ok()?;
-    let mut data = egui::FontData::from_owned(bytes);
-    data.index = face.index;
-    if let Some((min, max, _)) = face.variable_weight {
-        let coordinate = f32::from(requested_weight.clamp(min, max));
-        data.tweak.coords = egui::epaint::text::VariationCoords::new([(b"wght", coordinate)]);
-    }
-    Some((data, support))
+#[derive(Clone)]
+struct PreparedCatalogFace {
+    file: Option<Arc<PreparedFontFile>>,
+    index: u32,
+    weight: u16,
+    variable_weight: Option<(u16, u16, u16)>,
 }
 
-fn weighted_requested_font_data(
-    request: FontRequest<'_>,
-    requested_weight: u16,
-) -> Option<(egui::FontData, Option<FontWeightSupport>)> {
-    if let Some(family) = request.family {
-        return weighted_catalog_font_data(family, requested_weight)
-            .map(|(data, support)| (data, Some(support)));
+#[derive(Clone)]
+enum PreparedFontSource {
+    Collection(Arc<PreparedFontFile>),
+    ExactFace {
+        file: Arc<PreparedFontFile>,
+        index: u32,
+        support: Option<FontWeightSupport>,
+    },
+    Catalog {
+        faces: Vec<PreparedCatalogFace>,
+        support: FontWeightSupport,
+    },
+}
+
+impl PreparedFontSource {
+    fn weighted_data(
+        &self,
+        requested_weight: u16,
+    ) -> Option<(egui::FontData, Option<FontWeightSupport>)> {
+        match self {
+            Self::Collection(file) => file.weighted_data(requested_weight),
+            Self::ExactFace {
+                file,
+                index,
+                support,
+            } => {
+                let coordinate = match support {
+                    Some(FontWeightSupport::Continuous { min, max, .. }) => {
+                        Some(f32::from(requested_weight.clamp(*min, *max)))
+                    }
+                    Some(FontWeightSupport::Discrete { .. }) | None => None,
+                };
+                Some((file.font_data(*index, coordinate)?, support.clone()))
+            }
+            Self::Catalog { faces, support } => {
+                let face = faces
+                    .iter()
+                    .find(|face| face.variable_weight.is_some())
+                    .or_else(|| {
+                        faces
+                            .iter()
+                            .min_by_key(|face| face.weight.abs_diff(requested_weight))
+                    })?;
+                let coordinate = face
+                    .variable_weight
+                    .map(|(min, max, _)| f32::from(requested_weight.clamp(min, max)));
+                let data = face.file.as_ref()?.font_data(face.index, coordinate)?;
+                Some((data, Some(support.clone())))
+            }
+        }
     }
-    let path = request.fallback_path?;
-    let bytes = load_ui_font_bytes_at(path, request.fallback_face_index).ok()?;
+}
+
+fn prepare_requested_font<F>(
+    request: FontRequest<'_>,
+    files: &mut FontFileCache<'_, F>,
+) -> Option<PreparedFontSource>
+where
+    F: FnMut(&Path) -> io::Result<Vec<u8>>,
+{
+    if let Some(family) = request.family {
+        let preferred = preferred_catalog_faces(family);
+        let support = catalog_family_support(&preferred);
+        let faces = preferred
+            .into_iter()
+            .map(|face| PreparedCatalogFace {
+                file: files.load(&face.path),
+                index: face.index,
+                weight: face.weight,
+                variable_weight: face.variable_weight,
+            })
+            .collect();
+        return Some(PreparedFontSource::Catalog { faces, support });
+    }
+
+    let file = files.load(request.fallback_path?)?;
+    let face = file.face(request.fallback_face_index)?;
     if request.fallback_face_index == 0 {
-        return weighted_font_data(bytes, requested_weight);
+        return Some(PreparedFontSource::Collection(file));
     }
 
     // While the asynchronous catalog is loading, honor the exact persisted
-    // collection face instead of deriving weight support from another face
-    // and only swapping its index afterward.
-    let font = skrifa::FontRef::from_index(&bytes, request.fallback_face_index).ok()?;
-    let axis = font.axes().get_by_tag(Tag::new(b"wght"));
-    let support = axis.map(|axis| {
-        let min = axis.min_value().round().clamp(1.0, 1_000.0) as u16;
-        let max = axis.max_value().round().clamp(f32::from(min), 1_000.0) as u16;
-        let default = axis
-            .default_value()
-            .round()
-            .clamp(f32::from(min), f32::from(max)) as u16;
-        FontWeightSupport::Continuous { min, max, default }
-    });
-    let mut data = egui::FontData::from_owned(bytes);
-    data.index = request.fallback_face_index;
-    if let Some(FontWeightSupport::Continuous { min, max, .. }) = support {
-        data.tweak.coords = egui::epaint::text::VariationCoords::new([(
-            b"wght",
-            f32::from(requested_weight.clamp(min, max)),
-        )]);
-    }
-    Some((data, support))
+    // collection face instead of deriving weight support from another face.
+    let support = face
+        .variable_weight
+        .map(|(min, max, default)| FontWeightSupport::Continuous { min, max, default });
+    Some(PreparedFontSource::ExactFace {
+        file,
+        index: request.fallback_face_index,
+        support,
+    })
 }
 
-fn weighted_ui_font_data(
-    ui_font: FontRequest<'_>,
-    editor_font: FontRequest<'_>,
-    ui_font_monospace: bool,
-    custom_editor_requested: bool,
-    weight: u16,
-) -> Option<(egui::FontData, Option<FontWeightSupport>)> {
-    if ui_font_monospace && custom_editor_requested {
-        weighted_requested_font_data(editor_font, weight)
-    } else if ui_font_monospace {
-        variable_editor_font().and_then(|bytes| weighted_font_data(bytes, weight))
-    } else if ui_font.family.is_some() || ui_font.fallback_path.is_some() {
-        weighted_requested_font_data(ui_font, weight)
-    } else {
-        default_proportional_font().and_then(|bytes| weighted_font_data(bytes, weight))
-    }
-}
-
-fn variable_editor_font() -> Option<Vec<u8>> {
+fn variable_editor_font<F>(files: &mut FontFileCache<'_, F>) -> Option<PreparedFontSource>
+where
+    F: FnMut(&Path) -> io::Result<Vec<u8>>,
+{
     let candidates: &[&str] = if cfg!(target_os = "macos") {
         &["/System/Library/Fonts/SFNSMono.ttf"]
     } else if cfg!(target_os = "windows") {
@@ -427,16 +528,19 @@ fn variable_editor_font() -> Option<Vec<u8>> {
         ]
     };
     candidates.iter().find_map(|path| {
-        let bytes = std::fs::read(path).ok()?;
+        let file = files.load(Path::new(path))?;
         matches!(
-            font_selection(&bytes, FONT_WEIGHT_NORMAL)?.support,
+            file.selection(FONT_WEIGHT_NORMAL)?.support,
             Some(FontWeightSupport::Continuous { .. })
         )
-        .then_some(bytes)
+        .then_some(PreparedFontSource::Collection(file))
     })
 }
 
-fn default_proportional_font() -> Option<Vec<u8>> {
+fn default_proportional_font<F>(files: &mut FontFileCache<'_, F>) -> Option<PreparedFontSource>
+where
+    F: FnMut(&Path) -> io::Result<Vec<u8>>,
+{
     let candidates: &[&str] = if cfg!(target_os = "macos") {
         &["/System/Library/Fonts/SFNS.ttf"]
     } else if cfg!(target_os = "windows") {
@@ -444,7 +548,11 @@ fn default_proportional_font() -> Option<Vec<u8>> {
     } else {
         &[]
     };
-    candidates.iter().find_map(|path| std::fs::read(path).ok())
+    candidates.iter().find_map(|path| {
+        files
+            .load(Path::new(path))
+            .map(PreparedFontSource::Collection)
+    })
 }
 
 /// Register editor weight roles and normal/strong weighted UI families while
@@ -457,6 +565,29 @@ pub fn configure_editor_fonts(
     ui_font_weight: u16,
     code_font_weight: u16,
 ) -> FontConfiguration {
+    configure_editor_fonts_with_reader(
+        context,
+        ui_font,
+        editor_font,
+        ui_font_monospace,
+        ui_font_weight,
+        code_font_weight,
+        |path| std::fs::read(path),
+    )
+}
+
+fn configure_editor_fonts_with_reader<F>(
+    context: &egui::Context,
+    ui_font: FontRequest<'_>,
+    editor_font: FontRequest<'_>,
+    ui_font_monospace: bool,
+    ui_font_weight: u16,
+    code_font_weight: u16,
+    mut read_font: F,
+) -> FontConfiguration
+where
+    F: FnMut(&Path) -> io::Result<Vec<u8>>,
+{
     let mut definitions = egui::FontDefinitions::default();
     let mut proportional_fallback = definitions
         .families
@@ -474,32 +605,28 @@ pub fn configure_editor_fonts(
         default: FONT_WEIGHT_NORMAL,
     };
     let mut code_weight_support = None;
+    let mut prepared_files = FontFileCache::new(&mut read_font);
 
     let custom_editor_requested =
         editor_font.family.is_some() || editor_font.fallback_path.is_some();
-    if custom_editor_requested {
+    let prepared_editor = if custom_editor_requested {
+        prepare_requested_font(editor_font, &mut prepared_files)
+    } else {
+        variable_editor_font(&mut prepared_files)
+    };
+    if let Some(prepared_editor) = &prepared_editor {
         for weight in EDITOR_FONT_WEIGHTS {
             let requested_weight = editor_weight_from_base(weight, code_font_weight);
-            let Some((data, support)) = weighted_requested_font_data(editor_font, requested_weight)
-            else {
+            let Some((data, support)) = prepared_editor.weighted_data(requested_weight) else {
                 continue;
             };
-            if let Some(support) = support {
-                code_weight_support = Some(support.clone());
-                editor_weight_support = support;
-            }
-            let name = format!("tiptoptyp-editor-data-{weight}");
-            definitions.font_data.insert(name.clone(), Arc::new(data));
-            editor_primary.insert(weight, name);
-        }
-    } else if let Some(bytes) = variable_editor_font() {
-        for weight in EDITOR_FONT_WEIGHTS {
-            let requested_weight = editor_weight_from_base(weight, code_font_weight);
-            let Some((data, support)) = weighted_font_data(bytes.clone(), requested_weight) else {
-                continue;
-            };
-            if let Some(FontWeightSupport::Continuous { .. }) = &support {
-                code_weight_support = support.clone();
+            if custom_editor_requested {
+                if let Some(support) = support {
+                    code_weight_support = Some(support.clone());
+                    editor_weight_support = support;
+                }
+            } else if let Some(FontWeightSupport::Continuous { .. }) = &support {
+                code_weight_support.clone_from(&support);
                 editor_weight_support = FontWeightSupport::Discrete {
                     values: EDITOR_FONT_WEIGHTS.to_vec(),
                     default: FONT_WEIGHT_NORMAL,
@@ -613,20 +740,23 @@ pub fn configure_editor_fonts(
     }
 
     let custom_ui_requested = ui_font.family.is_some() || ui_font.fallback_path.is_some();
-    let selected_ui_font = weighted_ui_font_data(
-        ui_font,
-        editor_font,
-        ui_font_monospace,
-        custom_editor_requested,
-        ui_font_weight,
-    );
-    let selected_strong_ui_font = weighted_ui_font_data(
-        ui_font,
-        editor_font,
-        ui_font_monospace,
-        custom_editor_requested,
-        editor_weight_from_base(FONT_WEIGHT_BOLD, ui_font_weight),
-    );
+    let prepared_ui = if ui_font_monospace {
+        prepared_editor.clone()
+    } else if custom_ui_requested {
+        if ui_font == editor_font {
+            prepared_editor.clone()
+        } else {
+            prepare_requested_font(ui_font, &mut prepared_files)
+        }
+    } else {
+        default_proportional_font(&mut prepared_files)
+    };
+    let selected_ui_font = prepared_ui
+        .as_ref()
+        .and_then(|font| font.weighted_data(ui_font_weight));
+    let selected_strong_ui_font = prepared_ui.as_ref().and_then(|font| {
+        font.weighted_data(editor_weight_from_base(FONT_WEIGHT_BOLD, ui_font_weight))
+    });
     let custom_ui_loaded = custom_ui_requested && selected_ui_font.is_some();
     let mut ui_weight_support = None;
     let ui_fallback = if ui_font_monospace {
@@ -1731,11 +1861,18 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn strong_system_ui_role_uses_a_heavier_variable_font_coordinate() {
-        let bytes = default_proportional_font().expect("macOS system UI font should be available");
-        let normal = font_selection(&bytes, FONT_WEIGHT_NORMAL).expect("select normal UI font");
-        let strong = font_selection(&bytes, FONT_WEIGHT_BOLD).expect("select strong UI font");
+        let mut read = |path: &Path| std::fs::read(path);
+        let mut files = FontFileCache::new(&mut read);
+        let font = default_proportional_font(&mut files)
+            .expect("macOS system UI font should be available");
+        let (normal, _) = font
+            .weighted_data(FONT_WEIGHT_NORMAL)
+            .expect("select normal UI font");
+        let (strong, _) = font
+            .weighted_data(FONT_WEIGHT_BOLD)
+            .expect("select strong UI font");
         assert!(
-            strong.coordinate > normal.coordinate,
+            strong.tweak.coords.as_ref()[0].1 > normal.tweak.coords.as_ref()[0].1,
             "strong UI role should select a heavier OpenType coordinate"
         );
     }
@@ -1915,6 +2052,49 @@ mod tests {
             FontFamily::Name(Arc::from(WEIGHTED_UI_FAMILY))
         );
         assert_eq!(body.text_styles[&egui::TextStyle::Monospace], editor_font());
+    }
+
+    #[test]
+    fn configure_reuses_one_prepared_font_file_for_every_weight_role() {
+        let definitions = egui::FontDefinitions::default();
+        let source_font = definitions
+            .font_data
+            .values()
+            .next()
+            .expect("egui ships a fallback font");
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("shared-ui-and-editor.ttf");
+        std::fs::write(&path, source_font.font.as_ref()).unwrap();
+        let request = FontRequest {
+            fallback_path: Some(&path),
+            fallback_face_index: source_font.index,
+            ..Default::default()
+        };
+        let reads = Cell::new(0_u32);
+        let context = egui::Context::default();
+
+        let configuration = configure_editor_fonts_with_reader(
+            &context,
+            request,
+            request,
+            false,
+            FONT_WEIGHT_NORMAL,
+            FONT_WEIGHT_NORMAL,
+            |candidate| {
+                if candidate == path {
+                    reads.set(reads.get() + 1);
+                }
+                std::fs::read(candidate)
+            },
+        );
+
+        assert!(configuration.custom_ui_loaded);
+        assert!(configuration.custom_editor_loaded);
+        assert_eq!(
+            reads.get(),
+            1,
+            "one byte/metadata snapshot must serve nine editor and two UI weights"
+        );
     }
 
     #[test]

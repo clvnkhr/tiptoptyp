@@ -1,34 +1,32 @@
 use std::{
     collections::{BTreeMap, VecDeque, hash_map::DefaultHasher},
     fs,
-    future::Future,
     hash::{Hash, Hasher},
     ops::Range,
     path::{Path, PathBuf},
-    pin::Pin,
-    sync::{Arc, Mutex, OnceLock, mpsc, mpsc::Receiver},
-    task::{Context as TaskContext, Poll, Wake, Waker},
-    thread,
+    sync::{Arc, Mutex, OnceLock, mpsc},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use eframe::egui::{
     self, Align, Color32, ColorImage, KeyboardShortcut, Layout, Modifiers, Pos2, Rect, RichText,
-    Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Vec2,
+    Sense, Stroke, StrokeKind, TextureOptions, Vec2,
     text::{CCursor, CCursorRange},
 };
 use egui_ltreeview::{Action as TreeAction, NodeBuilder, TreeView, TreeViewBuilder, TreeViewState};
-use rfd::{AsyncFileDialog, FileHandle};
+use rfd::AsyncFileDialog;
 
 use crate::{
     asset::{AssetLoader, LoadedAsset},
     builtin_themes,
-    compiler::{CompileRequest, Compiler, PreviewLink, PreviewPage},
+    child_view::{ChildViewHost, ChildViewSpec, scoped_child_viewport_id, viewport_scoped_id},
+    compiler::{ArtifactKey, CompileEvent, CompileRequest, Compiler, PreviewPage},
     diagnostics::{
         Diagnostic, DiagnosticLocation, DiagnosticSeverity, DiagnosticSource,
         normalize_diagnostics, parse_typst_short_output,
     },
-    document::DocumentKind,
+    document::{DocumentKind, DocumentSession, EditorSnapshot},
+    editor_data::{EditorDerivedData, EditorRevision, FontArgumentTarget, LineDiagnostic},
     font_catalog::{FontCatalog, FontFamily, ignored_workspace_directory, is_font_path},
     generic_highlight::GenericSyntaxHighlighter,
     highlight::SyntaxHighlighter,
@@ -36,35 +34,51 @@ use crate::{
         apply_text_edits, lsp_position_at_char, range_to_char_range, scalar_position_at_char,
     },
     native_menu::{
-        ApplicationCommand, EditCommand, FileCommand, NativeMenuCommand, NativeMenuCommandQueue,
-        ViewCommand,
+        AppCommand, CommandMenu, CommandRequirement, NativeMenuCommandQueue, command_spec,
+        command_specs, consume_shortcut,
+    },
+    presentation::{
+        ActiveThemeRequest, AppliedPresentation, ResolvedPresentationRequest,
+        active_theme_preference, active_theme_request, load_active_theme_or_fallback,
+        theme_request_for_appearance,
     },
     preview::{
-        PAGE_MARGIN, PDF_POINTS_PER_PREVIEW_PIXEL, dark_preview_rgba, page_stack_geometry,
-        stack_height, visible_page, zoom_anchored_offset,
+        PAGE_MARGIN, PDF_POINTS_PER_PREVIEW_PIXEL, PreviewController, PreviewStatus,
+        PreviewTexture, RasterContentFreshness, ServiceState, dark_preview_rgba,
+        page_stack_geometry, stack_height, visible_page, zoom_anchored_offset,
     },
     project_index::{ProjectIndex, analyze_project},
     screenshot::{CaptureController, CaptureThemeProfile, UiCaptureStep, UiSnapshotScene},
-    search::{SearchState, find_all_with_options},
+    search::{SearchRevision, SearchSession},
     settings::{
         AppSettings, ColorThemeChoice, DEFAULT_HOVER_DELAY_MS, DEFAULT_HOVER_FADE_MS,
         DEFAULT_UI_FONT_WEIGHT, DEFAULT_UI_SCALE_PERCENT, DocumentTheme, InterfaceTheme,
-        PreviewPreference, SYSTEM_THEME_ID, SourcePreviewTrigger, ToolMode, ToolPreference,
+        PreviewPreference, SourcePreviewTrigger, ToolMode, ToolPreference,
     },
-    sublime_theme::{self, ImportedTheme, Rgba, ThemeFormat},
-    syntax_theme::{
-        ResolvedTypstStyles, TypstOverrideThemes, TypstStyleOverride, TypstStyleOverrides,
-        TypstSyntaxRole,
-    },
+    sublime_theme::{self, ImportedTheme, Rgba},
+    syntax_theme::{ResolvedTypstStyles, TypstStyleOverride, TypstStyleOverrides, TypstSyntaxRole},
     theme::{self, METRICS},
-    theme_transform::ThemeTransform,
     tinymist::{
         DiagnosticSeverity as TinymistDiagnosticSeverity, Generation, InvertColors, LspRange,
         LspTextEdit, TextDocument, TinymistConfig, TinymistDiagnostic, TinymistEvent,
         TinymistSidecar, UnsavedTextDocument,
     },
     toolchain::{ToolKind, ToolOrigin, ToolResolution, resolve_tool},
+    worker::{LatestJob, LatestJobPoll},
+    workflow::{
+        AppModal, AppModalChoice, DeferredDocumentAction, DialogPoll, DocumentDialogRequest,
+        DocumentDialogTarget, DocumentWorkflow, ExportDialogRequest, NoticeKind, PdfWriteIntent,
+        PendingDialog, PendingDocumentAction, PendingExport, poll_dialog,
+    },
     workspace::{WorkspaceNode, WorkspaceSnapshot, WorkspaceTree},
+};
+
+#[cfg(test)]
+use crate::presentation::{ThemeSourceRequest, load_active_theme};
+#[cfg(test)]
+use crate::preview::{
+    preview_backend_label_for, preview_fallback_reason_for, raster_content_freshness,
+    raster_result_matches_artifact,
 };
 
 const COMPILE_DEBOUNCE: Duration = Duration::from_millis(60);
@@ -79,80 +93,6 @@ const POPUP_BLUR_GRACE: Duration = Duration::from_millis(120);
 const STATUS_LOG_LIMIT: usize = 100;
 const STATUS_LOG_TIMESTAMP_WIDTH: f32 = 74.0;
 const STATUS_LOG_ROW_HEIGHT: f32 = 24.0;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum ThemeSourceRequest {
-    Builtin(String),
-    Sublime(PathBuf),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ActiveThemeRequest {
-    source: ThemeSourceRequest,
-    invert: bool,
-    hue_shift_degrees: i16,
-    fallback_dark: bool,
-}
-
-impl ActiveThemeRequest {
-    fn transform(&self) -> ThemeTransform {
-        ThemeTransform::new(self.invert, f32::from(self.hue_shift_degrees))
-    }
-}
-
-fn active_theme_request(
-    settings: &AppSettings,
-    system_theme: Option<egui::Theme>,
-    launch_override: Option<&CaptureThemeProfile>,
-) -> ActiveThemeRequest {
-    let system_dark = system_theme.unwrap_or(egui::Theme::Dark) == egui::Theme::Dark;
-    if let Some(profile) = launch_override {
-        let id = if profile.name == SYSTEM_THEME_ID {
-            paired_tiptop_theme_id(system_dark)
-        } else {
-            profile.name.as_str()
-        };
-        return ActiveThemeRequest {
-            source: ThemeSourceRequest::Builtin(id.to_owned()),
-            invert: profile.invert,
-            hue_shift_degrees: profile.hue_shift_degrees,
-            fallback_dark: system_dark,
-        };
-    }
-
-    let preferred_theme = settings
-        .interface_theme
-        .resolve(system_theme, egui::Theme::Dark);
-    let fallback_dark = preferred_theme == egui::Theme::Dark;
-    let source = match settings.color_theme(preferred_theme) {
-        ColorThemeChoice::Builtin(id) => ThemeSourceRequest::Builtin(id.clone()),
-        ColorThemeChoice::Sublime(path) => ThemeSourceRequest::Sublime(PathBuf::from(path)),
-    };
-    ActiveThemeRequest {
-        source,
-        invert: settings.theme_invert,
-        hue_shift_degrees: settings.theme_hue_shift_degrees,
-        fallback_dark,
-    }
-}
-
-fn theme_request_for_appearance(settings: &AppSettings, dark: bool) -> ActiveThemeRequest {
-    let appearance = if dark {
-        egui::Theme::Dark
-    } else {
-        egui::Theme::Light
-    };
-    let source = match settings.color_theme(appearance) {
-        ColorThemeChoice::Builtin(id) => ThemeSourceRequest::Builtin(id.clone()),
-        ColorThemeChoice::Sublime(path) => ThemeSourceRequest::Sublime(PathBuf::from(path)),
-    };
-    ActiveThemeRequest {
-        source,
-        invert: settings.theme_invert,
-        hue_shift_degrees: settings.theme_hue_shift_degrees,
-        fallback_dark: dark,
-    }
-}
 
 fn tinymist_invert_colors(document_theme: DocumentTheme, preview_dark: bool) -> InvertColors {
     match document_theme {
@@ -184,81 +124,6 @@ fn tinymist_restart_required(
 
 fn may_create_embedded_webview(prevent_background_activation: bool, focused: Option<bool>) -> bool {
     !prevent_background_activation || focused != Some(false)
-}
-
-fn paired_tiptop_theme_id(dark_mode: bool) -> &'static str {
-    builtin_themes::default_for_mode(dark_mode).id
-}
-
-fn active_theme_preference(
-    interface_theme: InterfaceTheme,
-    has_launch_override: bool,
-    active_dark: bool,
-) -> egui::ThemePreference {
-    if !has_launch_override && interface_theme == InterfaceTheme::System {
-        // Leaving egui in system mode is important on macOS: a fixed preference
-        // becomes a per-window AppKit appearance override, which prevents winit
-        // from receiving later system appearance changes.
-        egui::ThemePreference::System
-    } else if active_dark {
-        egui::ThemePreference::Dark
-    } else {
-        egui::ThemePreference::Light
-    }
-}
-
-fn load_active_theme(request: &ActiveThemeRequest) -> Result<ImportedTheme, String> {
-    let mut imported = match &request.source {
-        ThemeSourceRequest::Builtin(id) => {
-            let builtin =
-                builtin_themes::find(id).ok_or_else(|| format!("Unknown built-in theme {id:?}"))?;
-            ImportedTheme {
-                name: Some(builtin.name.to_owned()),
-                author: Some("tiptoptyp".to_owned()),
-                format: ThemeFormat::Builtin,
-                dark_mode: builtin.dark_mode,
-                palette: builtin.palette,
-                syntect_theme: builtin.syntect_theme(),
-            }
-        }
-        ThemeSourceRequest::Sublime(path) => {
-            let imported = sublime_theme::import_path(path).map_err(|error| error.to_string())?;
-            if imported.dark_mode != request.fallback_dark {
-                let inferred = if imported.dark_mode { "dark" } else { "light" };
-                let assigned = if request.fallback_dark {
-                    "dark"
-                } else {
-                    "light"
-                };
-                return Err(format!(
-                    "{} is a {inferred} Sublime theme but is assigned to the {assigned} slot",
-                    path.display()
-                ));
-            }
-            imported
-        }
-    };
-    request.transform().apply_imported_theme(&mut imported);
-    Ok(imported)
-}
-
-fn load_active_theme_or_fallback(request: &ActiveThemeRequest) -> (ImportedTheme, Option<String>) {
-    match load_active_theme(request) {
-        Ok(theme) => (theme, None),
-        Err(error) => {
-            let fallback = ActiveThemeRequest {
-                source: ThemeSourceRequest::Builtin(
-                    paired_tiptop_theme_id(request.fallback_dark).to_owned(),
-                ),
-                invert: request.invert,
-                hue_shift_degrees: request.hue_shift_degrees,
-                fallback_dark: request.fallback_dark,
-            };
-            let theme = load_active_theme(&fallback)
-                .expect("the paired built-in Tiptop fallback is always present");
-            (theme, Some(error))
-        }
-    }
 }
 
 const DEFAULT_SOURCE: &str = r##"#set page(paper: "a4", margin: 2.2cm)
@@ -307,13 +172,23 @@ fn preview_visible_for(document_kind: DocumentKind, view_mode: ViewMode, designa
         || (typst_preview_available_for(document_kind, designated) && view_mode.shows_preview())
 }
 
+#[cfg(test)]
 const fn raster_preview_required_for(
     interactive_requested: bool,
     interactive_unavailable: bool,
     screenshot_pending: bool,
-    export_pending: bool,
 ) -> bool {
-    screenshot_pending || export_pending || !interactive_requested || interactive_unavailable
+    screenshot_pending || !interactive_requested || interactive_unavailable
+}
+
+#[cfg(any(test, target_os = "macos", target_os = "windows"))]
+const fn raster_fallback_compile_needed(
+    typst_preview_available: bool,
+    compilation_allowed: bool,
+    raster_was_required: bool,
+    raster_is_required: bool,
+) -> bool {
+    typst_preview_available && compilation_allowed && !raster_was_required && raster_is_required
 }
 
 const fn compilation_run_allowed(
@@ -343,14 +218,57 @@ fn default_compile_pdf_path(
 
 const fn compilation_toggle_copy(paused: bool) -> (&'static str, &'static str) {
     if paused {
-        ("Resume", "Resume automatic compilation")
+        ("Resume", "Resume automatic preview updates")
     } else {
-        ("Pause", "Pause automatic compilation")
+        (
+            "Pause",
+            "Pause automatic preview updates; Compile PDF stays available",
+        )
+    }
+}
+
+const fn compilation_notice(paused: bool) -> (&'static str, NoticeKind) {
+    if paused {
+        ("Automatic preview updates paused", NoticeKind::Info)
+    } else {
+        ("Automatic preview updates resumed", NoticeKind::Success)
     }
 }
 
 const fn snapshot_scene_hides_preview_pages(scene: Option<UiSnapshotScene>) -> bool {
     matches!(scene, Some(UiSnapshotScene::PreviewCompiling))
+}
+
+const fn settled_snapshot_preview_status(
+    scene: UiSnapshotScene,
+    has_pages: bool,
+) -> Option<PreviewStatus> {
+    if !has_pages {
+        // Do not replace Waiting/Compiling while the deterministic fixture is
+        // still producing the raster that gates its main-viewport capture.
+        return None;
+    }
+    match scene {
+        UiSnapshotScene::Main | UiSnapshotScene::FindReplace => {
+            Some(PreviewStatus::Ready(Duration::ZERO))
+        }
+        UiSnapshotScene::ProblemsPanel => Some(PreviewStatus::Error),
+        _ => None,
+    }
+}
+
+const fn capture_preview_build_needed(
+    main_capture_pending: bool,
+    has_pages: bool,
+    compile_scheduled: bool,
+    status: PreviewStatus,
+    has_artifact: bool,
+) -> bool {
+    main_capture_pending
+        && !has_pages
+        && !compile_scheduled
+        && !has_artifact
+        && !matches!(status, PreviewStatus::Compiling | PreviewStatus::Error)
 }
 
 const fn retain_preview_surface_for_restart(
@@ -403,14 +321,6 @@ enum PreviewNavigationAction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PreviewStatus {
-    Waiting,
-    Compiling,
-    Ready(Duration),
-    Error,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UiIcon {
     Check,
     Close,
@@ -428,13 +338,6 @@ enum UiIcon {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NoticeKind {
-    Info,
-    Success,
-    Error,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SaveIntent {
     Explicit,
     ExplicitConfirmed,
@@ -445,11 +348,6 @@ enum SaveIntent {
 struct Notice {
     message: String,
     kind: NoticeKind,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct FontArgumentTarget {
-    value_range: Range<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -465,74 +363,6 @@ enum ExternalFileObservation {
     Missing,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ServiceState {
-    Disabled(String),
-    Starting(String),
-    Ready(String),
-    Degraded(String),
-    Failed(String),
-    Unsupported(String),
-}
-
-impl ServiceState {
-    fn label(&self) -> &'static str {
-        match self {
-            Self::Disabled(_) => "Disabled",
-            Self::Starting(_) => "Starting",
-            Self::Ready(_) => "Ready",
-            Self::Degraded(_) => "Degraded",
-            Self::Failed(_) => "Failed",
-            Self::Unsupported(_) => "Unsupported",
-        }
-    }
-
-    fn detail(&self) -> &str {
-        match self {
-            Self::Disabled(detail)
-            | Self::Starting(detail)
-            | Self::Ready(detail)
-            | Self::Degraded(detail)
-            | Self::Failed(detail)
-            | Self::Unsupported(detail) => detail,
-        }
-    }
-
-    fn is_ready(&self) -> bool {
-        matches!(self, Self::Ready(_))
-    }
-}
-
-struct PreviewTexture {
-    /// Logical layout size. Images may deliberately differ from PDF raster
-    /// pixels so one image pixel maps to one UI point at 100%.
-    size: [usize; 2],
-    raster_size: [usize; 2],
-    rgba: Vec<u8>,
-    links: Vec<PreviewLink>,
-    texture: TextureHandle,
-}
-
-struct EguiFutureWake(egui::Context);
-
-impl Wake for EguiFutureWake {
-    fn wake(self: Arc<Self>) {
-        self.0.request_repaint();
-    }
-
-    fn wake_by_ref(self: &Arc<Self>) {
-        self.0.request_repaint();
-    }
-}
-
-#[derive(Clone)]
-struct LineDiagnostic {
-    line: usize,
-    severity: DiagnosticSeverity,
-    summary: String,
-    detail: String,
-}
-
 #[derive(Debug, Clone, Copy)]
 struct EditorAttention {
     char_index: usize,
@@ -543,12 +373,6 @@ struct EditorAttention {
 enum FindStep {
     Next,
     Previous,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FindShortcutAction {
-    Toggle,
-    Replace,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -637,54 +461,6 @@ struct HoverTimingState {
     last_seen: f64,
 }
 
-#[derive(Debug, Clone)]
-struct EditorSnapshot {
-    source: String,
-    cursor: CCursorRange,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PdfWriteIntent {
-    Compile,
-    Export,
-}
-
-impl PdfWriteIntent {
-    const fn dialog_title(self) -> &'static str {
-        match self {
-            Self::Compile => "Compile PDF",
-            Self::Export => "Export PDF",
-        }
-    }
-
-    const fn completed_verb(self) -> &'static str {
-        match self {
-            Self::Compile => "Compiled",
-            Self::Export => "Exported",
-        }
-    }
-
-    const fn queued_message(self) -> &'static str {
-        match self {
-            Self::Compile => "Compile queued for the next successful build",
-            Self::Export => "Export queued for the next successful build",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct PendingExport {
-    path: PathBuf,
-    document_epoch: u64,
-    intent: PdfWriteIntent,
-}
-
-struct PendingExportDialog {
-    document_epoch: u64,
-    intent: PdfWriteIntent,
-    future: Pin<Box<dyn Future<Output = Option<FileHandle>>>>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToolPickerTarget {
     Typst,
@@ -692,26 +468,6 @@ enum ToolPickerTarget {
     SublimeTheme { dark_mode: bool },
     UiFont,
     CodeFont,
-}
-
-struct PendingToolPicker {
-    target: ToolPickerTarget,
-    future: Pin<Box<dyn Future<Output = Option<FileHandle>>>>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DocumentDialogTarget {
-    OpenFile,
-    OpenFileInNewWindow,
-    OpenFolder,
-    SaveAs { typst: bool },
-}
-
-struct PendingDocumentDialog {
-    target: DocumentDialogTarget,
-    document_epoch: u64,
-    revision: u64,
-    future: Pin<Box<dyn Future<Output = Option<FileHandle>>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -743,28 +499,8 @@ enum WorkspaceCopyKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum EditorMenuAction {
-    Undo,
-    Redo,
-    Cut,
-    Copy,
-    Paste,
-    SelectAll,
-    ToggleComment,
-    SyncPreview,
+    Command(AppCommand),
     OpenLink(String),
-    Format,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FileMenuAction {
-    New,
-    NewWindow,
-    Open,
-    OpenInNewWindow,
-    ChangeWorkspaceRoot,
-    Save,
-    SaveAs,
-    ExportPdf,
 }
 
 /// A document-window request emitted by one editor session and fulfilled by
@@ -835,10 +571,8 @@ enum AppPopup {
 
 #[derive(Debug, Clone)]
 enum AppPopupAction {
-    File(FileMenuAction),
+    Command(AppCommand),
     Editor(EditorMenuAction),
-    View(ViewCommand),
-    Find(bool),
     Workspace(WorkspaceMenuAction),
     SetDocumentFont {
         target: FontArgumentTarget,
@@ -846,78 +580,8 @@ enum AppPopupAction {
     },
 }
 
-#[derive(Debug, Clone)]
-enum DeferredDocumentAction {
-    New,
-    OpenFileDialog,
-    OpenFolderDialog,
-    CloseWindow,
-    LoadPath(PathBuf),
-    OpenFolder(PathBuf),
-    FollowFileLink {
-        path: PathBuf,
-        page: Option<usize>,
-        source_position: Option<(usize, usize)>,
-    },
-    FollowTinymistLocation {
-        path: PathBuf,
-        selection: Option<LspRange>,
-    },
-    SaveThen(Box<PendingDocumentAction>),
-    ForceSave {
-        path: PathBuf,
-        document_epoch: u64,
-        revision: u64,
-        expected_disk_fingerprint: Option<u64>,
-        observed_disk_fingerprint: Option<u64>,
-    },
-}
-
-#[derive(Debug, Clone)]
-struct PendingDocumentAction {
-    action: DeferredDocumentAction,
-    document_epoch: u64,
-    revision: u64,
-    allow_discard: bool,
-    description: String,
-}
-
-#[derive(Debug, Clone)]
-enum AppModal {
-    Alert {
-        title: String,
-        message: String,
-        kind: NoticeKind,
-    },
-    Unsaved {
-        message: String,
-        pending: PendingDocumentAction,
-    },
-    Overwrite {
-        message: String,
-        path: PathBuf,
-        document_epoch: u64,
-        revision: u64,
-        expected_disk_fingerprint: Option<u64>,
-        observed_disk_fingerprint: Option<u64>,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AppModalChoice {
-    Primary,
-    Secondary,
-    Cancel,
-}
-
 pub struct EditorApp {
-    source: String,
-    saved_source: String,
-    path: Option<PathBuf>,
-    document_epoch: u64,
-    revision: u64,
-    disk_fingerprint: Option<u64>,
-    document_kind: DocumentKind,
+    document: DocumentSession,
     highlighter: SyntaxHighlighter,
     generic_highlighter: GenericSyntaxHighlighter,
 
@@ -927,20 +591,8 @@ pub struct EditorApp {
     pending_asset_page: Option<usize>,
     compile_deadline: Option<Instant>,
     compilation_paused: bool,
-    status: PreviewStatus,
-    raw_diagnostics: String,
-    diagnostics: Vec<Diagnostic>,
-    tinymist_diagnostics: Vec<Diagnostic>,
-    compiled_revision: Option<u64>,
-    pdf: Option<Vec<u8>>,
-    pages: Vec<PreviewTexture>,
-    visible_page: usize,
-    zoom: f32,
-    fit_width: bool,
-    requested_zoom: Option<f32>,
-    requested_page: Option<usize>,
-    preview_dark: bool,
-    preview_was_visible: bool,
+    preview: PreviewController,
+    editor_data: EditorDerivedData,
 
     view_mode: ViewMode,
     filesystem_visible: bool,
@@ -951,29 +603,12 @@ pub struct EditorApp {
     settings: AppSettings,
     pending_settings: Option<AppSettings>,
     imported_theme: Option<ImportedTheme>,
-    applied_theme_request: ActiveThemeRequest,
-    applied_typst_overrides: TypstOverrideThemes,
+    presentation: AppliedPresentation,
     theme_override: Option<CaptureThemeProfile>,
-    applied_document_theme: DocumentTheme,
-    applied_preview_preference: PreviewPreference,
-    applied_typst_preference: ToolPreference,
-    applied_tinymist_preference: ToolPreference,
-    applied_ui_scale_percent: u16,
-    applied_ui_font_monospace: bool,
-    applied_ui_font_path: Option<String>,
-    applied_ui_font_family: Option<String>,
-    applied_ui_font_face_index: u32,
-    applied_ui_font_weight: u16,
-    applied_code_font_path: Option<String>,
-    applied_code_font_family: Option<String>,
-    applied_code_font_face_index: u32,
-    applied_code_font_weight: u16,
-    applied_font_catalog_revision: u64,
     font_configuration: theme::FontConfiguration,
     font_catalog: FontCatalog,
     font_catalog_revision: u64,
-    font_catalog_scan: Option<Receiver<(u64, PathBuf, FontCatalog)>>,
-    font_catalog_scan_id: u64,
+    font_catalog_scan: LatestJob<(PathBuf, FontCatalog)>,
     font_catalog_root: PathBuf,
     staged_ui_font_weight: Option<u16>,
     staged_code_font_weight: Option<u16>,
@@ -984,13 +619,11 @@ pub struct EditorApp {
     workspace_chooser_visible: bool,
     workspace: Option<WorkspaceTree>,
     workspace_error: Option<String>,
-    workspace_scan: Option<Receiver<(u64, Result<WorkspaceSnapshot, String>)>>,
-    workspace_scan_id: u64,
+    workspace_scan: LatestJob<WorkspaceSnapshot>,
     next_workspace_refresh: Instant,
     project_index: ProjectIndex,
     project_index_deadline: Option<Instant>,
-    project_index_result: Option<Receiver<(u64, ProjectIndex)>>,
-    project_index_request_id: u64,
+    project_index_job: LatestJob<ProjectIndex>,
     captures: CaptureController,
     snapshot_scene: Option<UiSnapshotScene>,
     window_host: EditorWindowHost,
@@ -1002,7 +635,7 @@ pub struct EditorApp {
     replace_visible: bool,
     find_query: String,
     replacement: String,
-    search: SearchState,
+    search: SearchSession,
     find_case_sensitive: bool,
     find_regex: bool,
     focus_find: bool,
@@ -1010,9 +643,6 @@ pub struct EditorApp {
     editor_attention: Option<EditorAttention>,
     editor_hover: Option<EditorHoverState>,
     next_editor_hover_token: u64,
-    reset_editor_history: bool,
-    editor_undo: Vec<EditorSnapshot>,
-    editor_redo: Vec<EditorSnapshot>,
     manual_format_revision: Option<u64>,
     autosave_deadline: Option<Instant>,
     diagnostic_tooltip: Option<DiagnosticTooltipOverlay>,
@@ -1021,19 +651,12 @@ pub struct EditorApp {
     app_popup_had_focus: bool,
     app_popup_blur_started: Option<Instant>,
     pending_app_popup_action: Option<AppPopupAction>,
-    app_modal: Option<AppModal>,
-    app_modal_had_focus: bool,
-    app_modal_suspended: bool,
-    pending_document_action: Option<PendingDocumentAction>,
-    post_save_action: Option<PendingDocumentAction>,
+    document_workflow: DocumentWorkflow,
     rename_dialog: Option<RenameDialog>,
     rename_overlay_had_focus: bool,
     rename_overlay_suspended: bool,
 
-    pending_export: Option<PendingExport>,
-    pending_export_dialog: Option<PendingExportDialog>,
-    pending_tool_picker: Option<PendingToolPicker>,
-    pending_document_dialog: Option<PendingDocumentDialog>,
+    pending_tool_picker: Option<PendingDialog<ToolPickerTarget>>,
     notice: Option<Notice>,
     status_log: VecDeque<StatusLogEntry>,
     recorded_status: Option<PreviewStatus>,
@@ -1041,7 +664,6 @@ pub struct EditorApp {
     next_external_file_check: Instant,
     external_file_change_notice: Option<ExternalFileObservation>,
     last_title: String,
-    allow_close: bool,
 
     tinymist: TinymistSidecar,
     tinymist_generation: Option<Generation>,
@@ -1049,11 +671,6 @@ pub struct EditorApp {
     tinymist_preview_uri: Option<String>,
     tinymist_current_open: bool,
     tinymist_unsaved_document: Option<UnsavedTextDocument>,
-    tinymist_url: Option<String>,
-    tinymist_preview_enabled: bool,
-    tinymist_lsp_ready: bool,
-    tinymist_state: ServiceState,
-    webview_state: ServiceState,
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     native_window_parent: Option<crate::native_window::ActiveWindowHandle>,
@@ -1118,6 +735,11 @@ impl EditorApp {
             active_theme_request(&settings, context.system_theme(), theme_override.as_ref());
         let (active_theme, initial_theme_error) =
             load_active_theme_or_fallback(&applied_theme_request);
+        let presentation = AppliedPresentation::new(ResolvedPresentationRequest::resolve(
+            &settings,
+            applied_theme_request,
+            0,
+        ));
         theme::set_imported_palette(Some((active_theme.dark_mode, active_theme.palette)));
         let typst_tool = resolve_tool(ToolKind::Typst, &settings.typst);
         let tinymist_tool = resolve_tool(ToolKind::Tinymist, &settings.tinymist);
@@ -1168,13 +790,7 @@ impl EditorApp {
             settings.typst_overrides.for_dark(active_theme.dark_mode),
         ));
         let mut app = Self {
-            source: DEFAULT_SOURCE.to_owned(),
-            saved_source: DEFAULT_SOURCE.to_owned(),
-            path: None,
-            document_epoch: 0,
-            revision: 0,
-            disk_fingerprint: None,
-            document_kind: DocumentKind::Typst,
+            document: DocumentSession::new(DEFAULT_SOURCE, DocumentKind::Typst),
             highlighter,
             generic_highlighter,
             compiler: Compiler::new(context.clone()),
@@ -1183,20 +799,8 @@ impl EditorApp {
             pending_asset_page: None,
             compile_deadline: Some(Instant::now()),
             compilation_paused: false,
-            status: PreviewStatus::Waiting,
-            raw_diagnostics: String::new(),
-            diagnostics: Vec::new(),
-            tinymist_diagnostics: Vec::new(),
-            compiled_revision: None,
-            pdf: None,
-            pages: Vec::new(),
-            visible_page: 0,
-            zoom: 1.0,
-            fit_width: true,
-            requested_zoom: None,
-            requested_page: None,
-            preview_dark,
-            preview_was_visible: false,
+            preview: PreviewController::new(preview_dark, settings.preview_preference),
+            editor_data: EditorDerivedData::default(),
             view_mode: ViewMode::Split,
             filesystem_visible: true,
             problems_visible: false,
@@ -1206,29 +810,12 @@ impl EditorApp {
             settings: settings.clone(),
             pending_settings: None,
             imported_theme: Some(active_theme),
-            applied_theme_request,
-            applied_typst_overrides: settings.typst_overrides.clone(),
+            presentation,
             theme_override,
-            applied_document_theme: settings.document_theme,
-            applied_preview_preference: settings.preview_preference,
-            applied_typst_preference: settings.typst.clone(),
-            applied_tinymist_preference: settings.tinymist.clone(),
-            applied_ui_scale_percent: settings.ui_scale_percent,
-            applied_ui_font_monospace: settings.ui_font_monospace,
-            applied_ui_font_path: settings.ui_font_path.clone(),
-            applied_ui_font_family: settings.ui_font_family.clone(),
-            applied_ui_font_face_index: settings.ui_font_face_index,
-            applied_ui_font_weight: settings.ui_font_weight,
-            applied_code_font_path: settings.code_font_path.clone(),
-            applied_code_font_family: settings.code_font_family.clone(),
-            applied_code_font_face_index: settings.code_font_face_index,
-            applied_code_font_weight: settings.code_font_weight,
-            applied_font_catalog_revision: 0,
             font_configuration,
             font_catalog: FontCatalog::default(),
             font_catalog_revision: 0,
-            font_catalog_scan: None,
-            font_catalog_scan_id: 0,
+            font_catalog_scan: LatestJob::default(),
             font_catalog_root: workspace_root.clone(),
             staged_ui_font_weight: None,
             staged_code_font_weight: None,
@@ -1239,13 +826,11 @@ impl EditorApp {
             workspace_chooser_visible: false,
             workspace: None,
             workspace_error: None,
-            workspace_scan: None,
-            workspace_scan_id: 0,
+            workspace_scan: LatestJob::default(),
             next_workspace_refresh: Instant::now(),
             project_index: ProjectIndex::default(),
             project_index_deadline: Some(Instant::now()),
-            project_index_result: None,
-            project_index_request_id: 0,
+            project_index_job: LatestJob::default(),
             captures,
             snapshot_scene,
             window_host,
@@ -1256,7 +841,7 @@ impl EditorApp {
             replace_visible: false,
             find_query: String::new(),
             replacement: String::new(),
-            search: SearchState::default(),
+            search: SearchSession::default(),
             find_case_sensitive: true,
             find_regex: false,
             focus_find: false,
@@ -1264,9 +849,6 @@ impl EditorApp {
             editor_attention: None,
             editor_hover: None,
             next_editor_hover_token: 1,
-            reset_editor_history: true,
-            editor_undo: Vec::new(),
-            editor_redo: Vec::new(),
             manual_format_revision: None,
             autosave_deadline: None,
             diagnostic_tooltip: None,
@@ -1275,18 +857,11 @@ impl EditorApp {
             app_popup_had_focus: false,
             app_popup_blur_started: None,
             pending_app_popup_action: None,
-            app_modal: None,
-            app_modal_had_focus: false,
-            app_modal_suspended: false,
-            pending_document_action: None,
-            post_save_action: None,
+            document_workflow: DocumentWorkflow::default(),
             rename_dialog: None,
             rename_overlay_had_focus: false,
             rename_overlay_suspended: false,
-            pending_export: None,
-            pending_export_dialog: None,
             pending_tool_picker: None,
-            pending_document_dialog: None,
             notice: None,
             status_log: VecDeque::new(),
             recorded_status: None,
@@ -1294,20 +869,12 @@ impl EditorApp {
             next_external_file_check: Instant::now(),
             external_file_change_notice: None,
             last_title: String::new(),
-            allow_close: false,
             tinymist: TinymistSidecar::new(context.clone()),
             tinymist_generation: None,
             tinymist_uri: None,
             tinymist_preview_uri: None,
             tinymist_current_open: false,
             tinymist_unsaved_document: None,
-            tinymist_url: None,
-            tinymist_preview_enabled: false,
-            tinymist_lsp_ready: false,
-            tinymist_state: ServiceState::Starting("Launching Tinymist LSP".to_owned()),
-            webview_state: ServiceState::Starting(
-                "Waiting for Tinymist's preview server".to_owned(),
-            ),
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             native_window_parent: None,
             #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -1393,7 +960,7 @@ impl EditorApp {
     /// Assign a process-level native menu command to this document session.
     /// It is deliberately executed later from `ui_in_window`, where `context`
     /// belongs to this session's viewport and therefore owns its TextEditState.
-    pub(crate) fn enqueue_native_menu_command(&mut self, command: NativeMenuCommand) {
+    pub(crate) fn enqueue_native_menu_command(&mut self, command: AppCommand) {
         self.queued_native_menu_commands.push(command);
     }
 
@@ -1409,7 +976,7 @@ impl EditorApp {
     }
 
     pub(crate) fn can_reuse_for_external_open(&self) -> bool {
-        self.path.is_none() && !self.is_dirty() && !self.document_flow_busy()
+        self.document.path.is_none() && !self.is_dirty() && !self.document_flow_busy()
     }
 
     pub(crate) fn open_external_path(&mut self, path: PathBuf) {
@@ -1425,7 +992,7 @@ impl EditorApp {
     }
 
     pub(crate) fn close_accepted(&self) -> bool {
-        self.allow_close
+        self.document_workflow.allow_close
     }
 
     pub(crate) fn show_window_notice(&mut self, message: String) {
@@ -1436,15 +1003,11 @@ impl EditorApp {
     }
 
     fn is_dirty(&self) -> bool {
-        self.document_kind.is_editable() && self.source != self.saved_source
+        self.document.is_dirty()
     }
 
     fn document_name(&self) -> String {
-        self.path
-            .as_ref()
-            .and_then(|path| path.file_name())
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "Untitled.typ".to_owned())
+        self.document.name()
     }
 
     fn title(&self) -> String {
@@ -1461,7 +1024,8 @@ impl EditorApp {
     }
 
     fn current_directory(&self) -> Option<PathBuf> {
-        self.path
+        self.document
+            .path
             .as_ref()
             .and_then(|path| path.parent())
             .map(Path::to_path_buf)
@@ -1479,50 +1043,44 @@ impl EditorApp {
 
     fn request_font_catalog_scan(&mut self, context: &egui::Context) {
         let root = self.project_root();
-        self.font_catalog_scan_id = self.font_catalog_scan_id.wrapping_add(1);
-        let scan_id = self.font_catalog_scan_id;
         self.font_catalog_root = root.clone();
-        let (sender, receiver) = mpsc::channel();
-        let repaint = context.clone();
-        let spawn = thread::Builder::new()
-            .name("tiptoptyp-font-catalog".to_owned())
-            .spawn(move || {
-                let catalog = FontCatalog::discover(&root);
-                if sender.send((scan_id, root, catalog)).is_ok() {
-                    repaint.request_repaint();
-                }
+        if let Err(error) =
+            self.font_catalog_scan
+                .start_and_repaint("tiptoptyp-font-catalog", context, move || {
+                    Ok((root.clone(), FontCatalog::discover(&root)))
+                })
+        {
+            self.notice = Some(Notice {
+                message: format!("Could not start font discovery: {error}"),
+                kind: NoticeKind::Error,
             });
-        self.font_catalog_scan = spawn.ok().map(|_| receiver);
+        }
     }
 
     fn poll_font_catalog(&mut self, context: &egui::Context) {
         if self.snapshot_scene.is_some() {
-            self.font_catalog_scan = None;
+            self.font_catalog_scan.cancel();
             return;
         }
         if self.font_catalog_root != self.project_root() {
             self.request_font_catalog_scan(context);
         }
-        let Some(receiver) = self.font_catalog_scan.as_ref() else {
-            return;
-        };
-        let (scan_id, root, catalog) = match receiver.try_recv() {
-            Ok(result) => result,
-            Err(mpsc::TryRecvError::Empty) => {
+        let (root, catalog) = match self.font_catalog_scan.poll() {
+            LatestJobPoll::Idle => return,
+            LatestJobPoll::Pending => {
                 context.request_repaint_after(Duration::from_millis(100));
                 return;
             }
-            Err(mpsc::TryRecvError::Disconnected) => {
-                self.font_catalog_scan = None;
+            LatestJobPoll::Ready(result) => result,
+            LatestJobPoll::Failed(error) => {
                 self.notice = Some(Notice {
-                    message: "Font discovery stopped unexpectedly".to_owned(),
+                    message: format!("Font discovery stopped unexpectedly: {error}"),
                     kind: NoticeKind::Error,
                 });
                 return;
             }
         };
-        self.font_catalog_scan = None;
-        if scan_id != self.font_catalog_scan_id || root != self.project_root() {
+        if root != self.project_root() {
             return;
         }
         let font_files_changed = !self
@@ -1565,8 +1123,8 @@ impl EditorApp {
     fn preview_document_path(&self) -> PathBuf {
         self.designated_preview_path()
             .or_else(|| {
-                (self.document_kind.is_typst())
-                    .then(|| self.path.clone())
+                (self.document.kind.is_typst())
+                    .then(|| self.document.path.clone())
                     .flatten()
             })
             .unwrap_or_else(|| {
@@ -1578,20 +1136,20 @@ impl EditorApp {
     }
 
     fn typst_preview_available(&self) -> bool {
-        typst_preview_available_for(self.document_kind, self.designated_preview_path().is_some())
+        typst_preview_available_for(self.document.kind, self.designated_preview_path().is_some())
     }
 
     fn current_is_preview_document(&self) -> bool {
-        match &self.path {
+        match &self.document.path {
             Some(path) => same_path(path, &self.preview_document_path()),
-            None => self.designated_preview_path().is_none() && self.document_kind.is_typst(),
+            None => self.designated_preview_path().is_none() && self.document.kind.is_typst(),
         }
     }
 
     fn preview_document_source(&self) -> Result<String, String> {
         let path = self.preview_document_path();
         if self.current_is_preview_document() {
-            return Ok(self.source.clone());
+            return Ok(self.document.source.clone());
         }
         fs::read_to_string(&path)
             .map_err(|error| format!("Could not read preview entry {}: {error}", path.display()))
@@ -1606,36 +1164,36 @@ impl EditorApp {
         let main = self.preview_document_path();
         let root = self.project_root();
         let mut overrides = BTreeMap::new();
-        if self.document_kind.is_typst() {
-            let path = self.path.clone().unwrap_or_else(|| main.clone());
-            overrides.insert(canonical_or_absolute(&path), self.source.clone());
+        if self.document.kind.is_typst() {
+            let path = self.document.path.clone().unwrap_or_else(|| main.clone());
+            overrides.insert(canonical_or_absolute(&path), self.document.source.clone());
         }
-        self.project_index_request_id = self.project_index_request_id.wrapping_add(1);
-        let request_id = self.project_index_request_id;
-        let (sender, receiver) = mpsc::channel();
-        self.project_index_result = Some(receiver);
-        let repaint = context.clone();
-        let _ = thread::Builder::new()
-            .name("tiptoptyp-project-index".to_owned())
-            .spawn(move || {
-                let index = analyze_project(&root, &main, &overrides);
-                let _ = sender.send((request_id, index));
-                repaint.request_repaint();
+        if let Err(error) = self.project_index_job.start_and_repaint(
+            "tiptoptyp-project-index",
+            context,
+            move || Ok(analyze_project(&root, &main, &overrides)),
+        ) {
+            self.notice = Some(Notice {
+                message: format!("Could not start project index: {error}"),
+                kind: NoticeKind::Error,
             });
+        }
     }
 
     fn tick_project_index(&mut self, context: &egui::Context) {
-        if let Some(result) = self
-            .project_index_result
-            .as_ref()
-            .and_then(|receiver| receiver.try_recv().ok())
-        {
-            self.project_index_result = None;
-            if result.0 == self.project_index_request_id && self.project_index_deadline.is_none() {
-                self.project_index = result.1;
+        match self.project_index_job.poll() {
+            LatestJobPoll::Ready(index) if self.project_index_deadline.is_none() => {
+                self.project_index = index;
             }
+            LatestJobPoll::Failed(error) => {
+                self.notice = Some(Notice {
+                    message: format!("Project index stopped: {error}"),
+                    kind: NoticeKind::Error,
+                });
+            }
+            LatestJobPoll::Idle | LatestJobPoll::Pending | LatestJobPoll::Ready(_) => {}
         }
-        if self.project_index_result.is_some() {
+        if self.project_index_job.is_running() {
             context.request_repaint_after(Duration::from_millis(50));
         }
         let Some(deadline) = self.project_index_deadline else {
@@ -1729,10 +1287,10 @@ impl EditorApp {
 
     fn mark_edited(&mut self) {
         self.manual_format_revision = None;
-        self.revision = self.revision.wrapping_add(1);
+        self.document.mark_edited();
         self.notice = None;
         self.editor_hover = None;
-        if self.document_kind.is_typst() {
+        if self.document.kind.is_typst() {
             // Tinymist sees unsaved edits in every open source file. The CLI
             // fallback can only see an imported subfile after it is saved, so
             // avoid rebuilding the designated main entry with stale disk data.
@@ -1741,12 +1299,12 @@ impl EditorApp {
                 && self.may_run_compilation())
             .then(|| Instant::now() + COMPILE_DEBOUNCE);
             if self.compile_deadline.is_some() {
-                self.status = PreviewStatus::Waiting;
+                self.preview.status = PreviewStatus::Waiting;
             }
             if !self.compilation_paused
                 && let Err(error) = self.sync_tinymist_change()
             {
-                self.tinymist_state = ServiceState::Degraded(error);
+                self.preview.tinymist_state = ServiceState::Degraded(error);
             }
             self.schedule_project_index();
         } else {
@@ -1757,15 +1315,16 @@ impl EditorApp {
 
     fn schedule_autosave_if_needed(&mut self) {
         self.autosave_deadline = (self.settings.auto_save
-            && self.path.is_some()
-            && self.source != self.saved_source)
+            && self.document.path.is_some()
+            && self.document.source != self.document.saved_source)
             .then(|| {
                 Instant::now() + Duration::from_millis(self.settings.auto_save_delay_ms.max(100))
             });
     }
 
     fn tick_autosave(&mut self, context: &egui::Context) {
-        if self.pending_document_dialog.is_some() || self.app_modal.is_some() {
+        if self.document_workflow.pending_dialog.is_some() || self.document_workflow.modal.is_some()
+        {
             return;
         }
         let Some(deadline) = self.autosave_deadline else {
@@ -1781,7 +1340,7 @@ impl EditorApp {
             return;
         }
         self.autosave_deadline = None;
-        let Some(path) = self.path.clone() else {
+        let Some(path) = self.document.path.clone() else {
             return;
         };
 
@@ -1791,6 +1350,37 @@ impl EditorApp {
                 kind: NoticeKind::Success,
             });
         }
+    }
+
+    fn editor_revision(&self) -> EditorRevision {
+        EditorRevision::new(self.document.epoch, self.document.revision)
+    }
+
+    fn prepare_editor_source_data(&mut self) {
+        let revision = self.editor_revision();
+        self.editor_data
+            .prepare_source(revision, &self.document.source);
+    }
+
+    fn prepare_editor_data(&mut self) {
+        self.prepare_editor_source_data();
+        let document = self.editor_revision();
+        let current_path = self.document.path.clone();
+        let virtual_path = self.tinymist_document_path();
+        let current_is_preview = self.current_is_preview_document();
+        self.editor_data.prepare_diagnostics(
+            document,
+            self.preview.diagnostics_generation,
+            current_path.as_deref(),
+            &virtual_path,
+            current_is_preview,
+            &self.preview.diagnostics,
+            &self.preview.tinymist_diagnostics,
+        );
+    }
+
+    fn mark_diagnostics_changed(&mut self) {
+        self.preview.mark_diagnostics_changed();
     }
 
     fn request_compile(&mut self) {
@@ -1815,7 +1405,8 @@ impl EditorApp {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Untitled.typ".to_owned());
         let request = CompileRequest {
-            revision: self.revision,
+            revision: self.document.revision,
+            rasterize: self.raster_preview_required(),
             source,
             project_root: self.project_root(),
             source_dir,
@@ -1825,7 +1416,7 @@ impl EditorApp {
         };
 
         match self.compiler.request(request) {
-            Ok(()) => self.status = PreviewStatus::Compiling,
+            Ok(()) => self.preview.status = PreviewStatus::Compiling,
             Err(error) => self.set_compile_error(error),
         }
     }
@@ -1850,56 +1441,62 @@ impl EditorApp {
         while let Some(result) = self.compiler.try_recv() {
             if !self.preview_processing_enabled()
                 || !self.may_run_compilation()
-                || result.revision != self.revision
+                || result.revision != self.document.revision
             {
                 continue;
             }
 
-            let Some(output) = result.output else {
-                // Keep both the last successful pages and previous diagnostics
-                // in place until a terminal result arrives. Neither transient
-                // state changes preview geometry.
-                self.status = PreviewStatus::Compiling;
-                continue;
-            };
-
-            match output {
-                Ok(document) => {
-                    self.pages = document
-                        .pages
+            match result.event {
+                CompileEvent::Started => {
+                    // Keep the previous artifact and pages until their
+                    // independently versioned replacements arrive.
+                    self.preview.status = PreviewStatus::Compiling;
+                }
+                CompileEvent::Failed(error) => self.set_compile_error(error),
+                CompileEvent::Artifact(artifact) => {
+                    self.preview.accept_artifact(artifact.key, artifact.pdf);
+                    self.set_diagnostics(artifact.diagnostics);
+                    self.preview.status = PreviewStatus::Ready(result.elapsed);
+                    self.complete_pending_export();
+                }
+                CompileEvent::Rasterized { key, pages }
+                    if self.preview.accepts_raster(key, self.document.revision) =>
+                {
+                    let pages = pages
                         .into_iter()
                         .enumerate()
                         .map(|(index, page)| {
-                            make_preview_texture(
-                                context,
-                                result.revision,
-                                index,
-                                page,
-                                self.preview_dark,
-                            )
+                            make_preview_texture(context, key, index, page, self.preview.dark)
                         })
                         .collect();
-                    self.visible_page = self.visible_page.min(self.pages.len().saturating_sub(1));
-                    self.pdf = Some(document.pdf);
-                    self.set_diagnostics(document.diagnostics);
-                    self.compiled_revision = Some(result.revision);
-                    self.status = PreviewStatus::Ready(result.elapsed);
-                    self.complete_pending_export();
+                    self.preview.replace_raster(key, pages);
                 }
-                Err(error) => self.set_compile_error(error),
+                CompileEvent::RasterFailed { key, error }
+                    if self.preview.accepts_raster(key, self.document.revision) =>
+                {
+                    self.preview.raster_error = Some(error.clone());
+                    self.notice = Some(Notice {
+                        message: format!(
+                            "PDF is ready, but its raster preview is unavailable: {error}"
+                        ),
+                        kind: NoticeKind::Error,
+                    });
+                }
+                CompileEvent::Rasterized { .. } | CompileEvent::RasterFailed { .. } => {}
             }
         }
     }
 
     fn receive_asset_results(&mut self, context: &egui::Context) {
         while let Some(result) = self.asset_loader.try_recv() {
-            if result.token != self.asset_token || !self.document_kind.preview_only() {
+            if result.token != self.asset_token || !self.document.kind.preview_only() {
                 continue;
             }
             match result.output {
                 Ok(LoadedAsset::Image(page)) => {
+                    let key = ArtifactKey::unversioned(self.document.revision);
                     let image_size = page.size;
-                    let mut texture = make_preview_texture(context, self.revision, 0, page, false);
+                    let mut texture = make_preview_texture(context, key, 0, page, false);
                     // Native PDF pages are 144-DPI rasters interpreted in
                     // 72-point coordinates. Doubling the image's logical
                     // raster size cancels that conversion and makes 100% mean
@@ -1908,36 +1505,27 @@ impl EditorApp {
                         image_size[0].saturating_mul(2),
                         image_size[1].saturating_mul(2),
                     ];
-                    self.pages = vec![texture];
-                    self.pdf = None;
-                    self.compiled_revision = Some(self.revision);
-                    self.status = PreviewStatus::Ready(Duration::ZERO);
+                    self.preview.replace_asset(key, None, vec![texture]);
                 }
                 Ok(LoadedAsset::Pdf { bytes, pages }) => {
-                    self.pages = pages
+                    let key = ArtifactKey::unversioned(self.document.revision);
+                    let pages = pages
                         .into_iter()
                         .enumerate()
                         .map(|(index, page)| {
-                            make_preview_texture(
-                                context,
-                                self.revision,
-                                index,
-                                page,
-                                self.preview_dark,
-                            )
+                            make_preview_texture(context, key, index, page, self.preview.dark)
                         })
                         .collect();
-                    self.pdf = Some(bytes);
-                    self.compiled_revision = Some(self.revision);
-                    self.status = PreviewStatus::Ready(Duration::ZERO);
+                    self.preview.replace_asset(key, Some(bytes.into()), pages);
                     if let Some(page) = self.pending_asset_page.take() {
-                        self.requested_page = Some(page.min(self.pages.len().saturating_sub(1)));
+                        self.preview.requested_page =
+                            Some(page.min(self.preview.pages.len().saturating_sub(1)));
                     }
                     self.complete_pending_export();
                 }
                 Err(error) => {
-                    self.pending_export = None;
-                    self.status = PreviewStatus::Error;
+                    self.document_workflow.pending_export = None;
+                    self.preview.status = PreviewStatus::Error;
                     self.notice = Some(Notice {
                         message: error,
                         kind: NoticeKind::Error,
@@ -1948,8 +1536,8 @@ impl EditorApp {
     }
 
     fn set_compile_error(&mut self, error: String) {
-        self.compiled_revision = None;
-        self.status = PreviewStatus::Error;
+        self.preview.artifact_key = None;
+        self.preview.status = PreviewStatus::Error;
         self.set_diagnostics(error);
     }
 
@@ -1959,8 +1547,8 @@ impl EditorApp {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| self.document_name());
-        self.diagnostics = parse_typst_short_output(&raw, Some(Path::new(&display_name)));
-        self.raw_diagnostics = raw;
+        let diagnostics = parse_typst_short_output(&raw, Some(Path::new(&display_name)));
+        self.preview.set_diagnostics(raw, diagnostics);
     }
 
     fn schedule_compile_now(&mut self) {
@@ -1969,13 +1557,13 @@ impl EditorApp {
             return;
         }
         self.compile_deadline = Some(Instant::now());
-        self.status = PreviewStatus::Waiting;
+        self.preview.status = PreviewStatus::Waiting;
     }
 
     fn may_run_compilation(&self) -> bool {
         compilation_run_allowed(
             self.compilation_paused,
-            self.pending_export.is_some(),
+            self.document_workflow.pending_export.is_some(),
             self.captures.has_pending_for("main"),
         )
     }
@@ -1985,7 +1573,7 @@ impl EditorApp {
         if self.compilation_paused {
             if !self.may_run_compilation() {
                 self.compile_deadline = None;
-                if let Err(error) = self.compiler.pause(self.revision) {
+                if let Err(error) = self.compiler.pause(self.document.revision) {
                     self.compilation_paused = false;
                     self.notice = Some(Notice {
                         message: format!("Could not pause the Typst watcher: {error}"),
@@ -1994,18 +1582,20 @@ impl EditorApp {
                     return;
                 }
             }
+            let (message, kind) = compilation_notice(true);
             self.notice = Some(Notice {
-                message: "Automatic compilation paused".to_owned(),
-                kind: NoticeKind::Info,
+                message: message.to_owned(),
+                kind,
             });
         } else {
             if let Err(error) = self.sync_tinymist_change() {
-                self.tinymist_state = ServiceState::Degraded(error);
+                self.preview.tinymist_state = ServiceState::Degraded(error);
             }
             self.schedule_compile_now();
+            let (message, kind) = compilation_notice(false);
             self.notice = Some(Notice {
-                message: "Automatic compilation resumed".to_owned(),
-                kind: NoticeKind::Success,
+                message: message.to_owned(),
+                kind,
             });
         }
     }
@@ -2021,8 +1611,8 @@ impl EditorApp {
         let designated = self.designated_preview_path();
         let Some(path) = default_compile_pdf_path(
             designated.as_deref(),
-            self.document_kind,
-            self.path.as_deref(),
+            self.document.kind,
+            self.document.path.as_deref(),
         ) else {
             // An unsaved Typst document has no meaningful adjacent output
             // path, so ask once where its first PDF should be written.
@@ -2038,24 +1628,11 @@ impl EditorApp {
         self.next_external_file_check = Instant::now();
         self.asset_token = self.asset_token.wrapping_add(1);
         self.asset_loader.cancel_before(self.asset_token);
-        if preserve_designated_preview {
-            // The editor revision advances when the active child file changes,
-            // but an already rendered designated entry remains current.
-            if self.compiled_revision.is_some() {
-                self.compiled_revision = Some(self.revision);
-            }
-        } else {
-            self.compiled_revision = None;
-            self.pdf = None;
-            self.pages.clear();
-            self.visible_page = 0;
-            self.raw_diagnostics.clear();
-            self.diagnostics.clear();
-            self.tinymist_diagnostics.clear();
-        }
+        self.preview
+            .clear_for_document(self.document.revision, preserve_designated_preview);
         self.pending_asset_page = None;
         self.editor_hover = None;
-        if let Some(pending) = self.pending_export.take() {
+        if let Some(pending) = self.document_workflow.pending_export.take() {
             self.notice = Some(Notice {
                 message: format!(
                     "Queued {} canceled because another document is now active",
@@ -2068,70 +1645,37 @@ impl EditorApp {
 
     fn handle_shortcuts(&mut self, context: &egui::Context, frame: &eframe::Frame) {
         let refresh = KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::R);
-        let settings = KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Comma);
-        let undo = KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Z);
-        let redo = KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, egui::Key::Z);
-        let format = format_shortcut();
-
-        let view_action = context.input_mut(|input| {
-            if input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Num1)) {
-                Some(ViewCommand::Explorer)
-            } else if input
-                .consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Num2))
-            {
-                Some(ViewCommand::Code)
-            } else if input
-                .consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Num3))
-            {
-                Some(ViewCommand::Split)
-            } else if input
-                .consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Num4))
-            {
-                Some(ViewCommand::Preview)
-            } else if input
-                .consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Num5))
-            {
-                Some(ViewCommand::Problems)
-            } else {
-                None
-            }
+        let global_command = context.input_mut(|input| {
+            consume_shortcut(input, |command| {
+                matches!(
+                    command_spec(command).menu,
+                    CommandMenu::Application | CommandMenu::File | CommandMenu::View
+                ) || matches!(
+                    command,
+                    AppCommand::Find
+                        | AppCommand::FindReplace
+                        | AppCommand::Format
+                        | AppCommand::ToggleComment
+                )
+            })
         });
-        if let Some(action) = view_action {
-            match action {
-                ViewCommand::Explorer => self.filesystem_visible = !self.filesystem_visible,
-                ViewCommand::Problems => self.problems_visible = !self.problems_visible,
-                ViewCommand::Code => self.view_mode = ViewMode::Code,
-                ViewCommand::Split => self.view_mode = ViewMode::Split,
-                ViewCommand::Preview => self.view_mode = ViewMode::Preview,
-            }
-        }
-
-        let file_action = context.input_mut(consume_file_shortcut);
-        if let Some(action) = file_action {
-            self.execute_file_menu_action(action, frame);
+        if let Some(command) = global_command {
+            self.execute_app_command(command, context, frame);
         }
         if context.input_mut(|input| input.consume_shortcut(&refresh)) {
             self.compile_pdf(frame);
         }
-        match context.input_mut(consume_find_shortcut) {
-            Some(FindShortcutAction::Toggle) => self.toggle_find(),
-            Some(FindShortcutAction::Replace) => self.open_find(true),
-            None => {}
-        }
-        if context.input_mut(|input| input.consume_shortcut(&settings)) {
-            self.toggle_settings();
-        }
         let editor_id = source_editor_id(context);
         let source_focused = context.memory(|memory| memory.focused()) == Some(editor_id);
         if source_focused || !context.egui_wants_keyboard_input() {
-            if context.input_mut(|input| input.consume_shortcut(&redo)) {
-                self.undo_editor(context, true);
-            } else if context.input_mut(|input| input.consume_shortcut(&undo)) {
-                self.undo_editor(context, false);
+            let history_command = context.input_mut(|input| {
+                consume_shortcut(input, |command| {
+                    matches!(command, AppCommand::Undo | AppCommand::Redo)
+                })
+            });
+            if let Some(command) = history_command {
+                self.execute_app_command(command, context, frame);
             }
-        }
-        if context.input_mut(|input| input.consume_shortcut(&format)) {
-            self.request_format_document();
         }
         let focus_tooltip = focus_tooltip_shortcut();
         if context.input_mut(|input| input.consume_shortcut(&focus_tooltip)) {
@@ -2160,10 +1704,6 @@ impl EditorApp {
                 context.request_repaint();
             }
         }
-        let toggle_comment = KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Slash);
-        if context.input_mut(|input| input.consume_shortcut(&toggle_comment)) {
-            self.toggle_comments(context);
-        }
         if self.find_visible
             && context.input_mut(|input| input.consume_key(Modifiers::NONE, egui::Key::Escape))
         {
@@ -2175,22 +1715,22 @@ impl EditorApp {
         if self.view_mode.shows_preview() && !self.interactive_preview_active() {
             match context.input_mut(consume_preview_zoom_shortcut) {
                 Some(PreviewZoomAction::In) => {
-                    self.requested_zoom = Some(
-                        (self.zoom * METRICS.preview.zoom_step)
+                    self.preview.requested_zoom = Some(
+                        (self.preview.zoom * METRICS.preview.zoom_step)
                             .clamp(MIN_PREVIEW_ZOOM, MAX_PREVIEW_ZOOM),
                     );
-                    self.fit_width = false;
+                    self.preview.fit_width = false;
                 }
                 Some(PreviewZoomAction::Out) => {
-                    self.requested_zoom = Some(
-                        (self.zoom / METRICS.preview.zoom_step)
+                    self.preview.requested_zoom = Some(
+                        (self.preview.zoom / METRICS.preview.zoom_step)
                             .clamp(MIN_PREVIEW_ZOOM, MAX_PREVIEW_ZOOM),
                     );
-                    self.fit_width = false;
+                    self.preview.fit_width = false;
                 }
                 Some(PreviewZoomAction::Reset) => {
-                    self.requested_zoom = Some(1.0);
-                    self.fit_width = false;
+                    self.preview.requested_zoom = Some(1.0);
+                    self.preview.fit_width = false;
                 }
                 None => {}
             }
@@ -2201,127 +1741,73 @@ impl EditorApp {
         }
     }
 
-    fn execute_file_menu_action(&mut self, action: FileMenuAction, frame: &eframe::Frame) {
-        if self.document_flow_busy() {
+    fn execute_app_command(
+        &mut self,
+        command: AppCommand,
+        context: &egui::Context,
+        frame: &eframe::Frame,
+    ) {
+        if command_spec(command).menu == CommandMenu::File && self.document_flow_busy() {
             self.notice = Some(Notice {
                 message: "Finish the current file operation before starting another".to_owned(),
                 kind: NoticeKind::Info,
             });
             return;
         }
-        match action {
-            FileMenuAction::New => self.new_document(),
-            FileMenuAction::NewWindow => {
+        match command {
+            AppCommand::Settings => self.set_settings_visible(true),
+            AppCommand::New => self.new_document(),
+            AppCommand::NewWindow => {
                 self.pending_window_requests
                     .push_back(EditorWindowRequest::New {
                         workspace_root: self.workspace_root.clone(),
                     });
             }
-            FileMenuAction::Open => self.open_dialog(),
-            FileMenuAction::OpenInNewWindow => self.open_in_new_window_dialog(frame),
-            FileMenuAction::ChangeWorkspaceRoot => self.open_workspace_chooser(),
-            FileMenuAction::Save => {
+            AppCommand::Open => self.open_dialog(),
+            AppCommand::OpenInNewWindow => self.open_in_new_window_dialog(frame),
+            AppCommand::ChangeWorkspaceRoot => self.open_workspace_chooser(),
+            AppCommand::Save => {
                 if self.save_document(frame) {
                     self.request_format_after_manual_save();
                 }
             }
-            FileMenuAction::SaveAs => {
+            AppCommand::SaveAs => {
                 self.save_as(frame);
             }
-            FileMenuAction::ExportPdf => {
-                self.export_pdf(frame);
-            }
-        }
-    }
-
-    fn execute_editor_menu_action(&mut self, action: EditorMenuAction, context: &egui::Context) {
-        match action {
-            EditorMenuAction::Undo => self.undo_editor(context, false),
-            EditorMenuAction::Redo => self.undo_editor(context, true),
-            EditorMenuAction::Cut => self.cut_editor_selection(context),
-            EditorMenuAction::Copy => self.copy_editor_selection(context),
-            EditorMenuAction::Paste => self.request_editor_paste(context),
-            EditorMenuAction::SelectAll => self.select_all_editor(context),
-            EditorMenuAction::ToggleComment => self.toggle_comments(context),
-            EditorMenuAction::SyncPreview => {
+            AppCommand::ExportPdf => self.export_pdf(frame),
+            AppCommand::Undo => self.undo_editor(context, false),
+            AppCommand::Redo => self.undo_editor(context, true),
+            AppCommand::Cut => self.cut_editor_selection(context),
+            AppCommand::Copy => self.copy_editor_selection(context),
+            AppCommand::Paste => self.request_editor_paste(context),
+            AppCommand::SelectAll => self.select_all_editor(context),
+            AppCommand::ToggleComment => self.toggle_comments(context),
+            AppCommand::Find => self.toggle_find(),
+            AppCommand::FindReplace => self.open_find(true),
+            AppCommand::Format => self.request_format_document(),
+            AppCommand::SyncPreview => {
                 let cursor = self.editor_snapshot(context).cursor.primary.index.0;
                 self.jump_source_to_preview(cursor);
             }
-            EditorMenuAction::OpenLink(target) => self.follow_preview_link(&target),
-            EditorMenuAction::Format => self.request_format_document(),
+            AppCommand::Problems => self.problems_visible = !self.problems_visible,
+            AppCommand::Explorer => self.filesystem_visible = !self.filesystem_visible,
+            AppCommand::Code => self.view_mode = ViewMode::Code,
+            AppCommand::Split => self.view_mode = ViewMode::Split,
+            AppCommand::Preview => self.view_mode = ViewMode::Preview,
         }
     }
 
     fn process_native_menu_commands(&mut self, context: &egui::Context, frame: &eframe::Frame) {
         while let Some(command) = self.queued_native_menu_commands.pop() {
-            self.dispatch_native_menu_command(command, context, frame);
-        }
-    }
-
-    fn dispatch_native_menu_command(
-        &mut self,
-        command: NativeMenuCommand,
-        context: &egui::Context,
-        frame: &eframe::Frame,
-    ) {
-        match command {
-            NativeMenuCommand::Application(ApplicationCommand::Settings) => {
-                self.set_settings_visible(true);
-            }
-            NativeMenuCommand::File(command) => {
-                let action = match command {
-                    FileCommand::New => FileMenuAction::New,
-                    FileCommand::NewWindow => FileMenuAction::NewWindow,
-                    FileCommand::Open => FileMenuAction::Open,
-                    FileCommand::OpenInNewWindow => FileMenuAction::OpenInNewWindow,
-                    FileCommand::ChangeWorkspaceRoot => FileMenuAction::ChangeWorkspaceRoot,
-                    FileCommand::Save => FileMenuAction::Save,
-                    FileCommand::SaveAs => FileMenuAction::SaveAs,
-                    FileCommand::ExportPdf => FileMenuAction::ExportPdf,
-                };
-                self.execute_file_menu_action(action, frame);
-            }
-            NativeMenuCommand::Edit(command) => match command {
-                EditCommand::Find => self.toggle_find(),
-                EditCommand::FindReplace => self.open_find(true),
-                EditCommand::Undo => {
-                    self.execute_editor_menu_action(EditorMenuAction::Undo, context)
-                }
-                EditCommand::Redo => {
-                    self.execute_editor_menu_action(EditorMenuAction::Redo, context)
-                }
-                EditCommand::Cut => self.execute_editor_menu_action(EditorMenuAction::Cut, context),
-                EditCommand::Copy => {
-                    self.execute_editor_menu_action(EditorMenuAction::Copy, context)
-                }
-                EditCommand::Paste => {
-                    self.execute_editor_menu_action(EditorMenuAction::Paste, context)
-                }
-                EditCommand::SelectAll => {
-                    self.execute_editor_menu_action(EditorMenuAction::SelectAll, context)
-                }
-                EditCommand::Format => {
-                    self.execute_editor_menu_action(EditorMenuAction::Format, context)
-                }
-            },
-            NativeMenuCommand::View(command) => match command {
-                ViewCommand::Problems => self.problems_visible = !self.problems_visible,
-                ViewCommand::Explorer => self.filesystem_visible = !self.filesystem_visible,
-                ViewCommand::Code => self.view_mode = ViewMode::Code,
-                ViewCommand::Split => self.view_mode = ViewMode::Split,
-                ViewCommand::Preview => self.view_mode = ViewMode::Preview,
-            },
+            self.execute_app_command(command, context, frame);
         }
     }
 
     fn document_flow_busy(&self) -> bool {
-        self.app_modal.is_some()
-            || self.rename_dialog.is_some()
-            || self.pending_document_action.is_some()
-            || self.post_save_action.is_some()
-            || self.pending_document_dialog.is_some()
-            || self.pending_export_dialog.is_some()
-            || self.pending_tool_picker.is_some()
+        self.document_workflow.is_busy(
+            self.rename_dialog.is_some(),
+            self.pending_tool_picker.is_some(),
+        )
     }
 
     fn set_settings_visible(&mut self, visible: bool) {
@@ -2380,7 +1866,7 @@ impl EditorApp {
         edited.ui_scale_percent = current.saturating_add(delta).clamp(75, 150) as u16;
         self.queue_settings(edited.clone(), context);
         apply_ui_scale(context, edited.ui_scale_percent);
-        self.applied_ui_scale_percent = edited.ui_scale_percent;
+        self.presentation.record_ui_scale(edited.ui_scale_percent);
     }
 
     fn queue_settings(&mut self, settings: AppSettings, context: &egui::Context) {
@@ -2399,18 +1885,22 @@ impl EditorApp {
         if matches!(
             scene,
             UiSnapshotScene::Main | UiSnapshotScene::ProblemsPanel | UiSnapshotScene::FindReplace
-        ) && self.pages.is_empty()
+        ) && self.preview.pages.is_empty()
         {
             self.captures.defer_target("main");
+        }
+        if let Some(status) = settled_snapshot_preview_status(scene, !self.preview.pages.is_empty())
+        {
+            self.preview.status = status;
         }
         let toolbar_anchor = Pos2::new(theme::SPACE.content, METRICS.chrome.toolbar_height);
         match scene {
             UiSnapshotScene::Main => {
-                self.status = PreviewStatus::Ready(Duration::ZERO);
                 self.notice = None;
-                self.raw_diagnostics.clear();
-                self.diagnostics.clear();
-                self.tinymist_diagnostics.clear();
+                self.preview.raw_diagnostics.clear();
+                self.preview.diagnostics.clear();
+                self.preview.tinymist_diagnostics.clear();
+                self.mark_diagnostics_changed();
                 self.problems_visible = false;
                 self.find_visible = false;
                 self.replace_visible = false;
@@ -2441,16 +1931,15 @@ impl EditorApp {
             // editor intentionally replaces hover overlays every frame.
             UiSnapshotScene::DiagnosticTooltip | UiSnapshotScene::FunctionTooltip => {}
             UiSnapshotScene::SaveDialog => {
-                if self.app_modal.is_none() {
-                    self.app_modal = Some(AppModal::Unsaved {
+                if self.document_workflow.modal.is_none() {
+                    self.document_workflow.modal = Some(AppModal::Unsaved {
                         message: format!(
                             "Save changes to {} before opening another file?",
                             self.document_name()
                         ),
                         pending: PendingDocumentAction {
                             action: DeferredDocumentAction::CloseWindow,
-                            document_epoch: self.document_epoch,
-                            revision: self.revision,
+                            key: self.document.key(),
                             allow_discard: true,
                             description: "closing the document".to_owned(),
                         },
@@ -2458,8 +1947,8 @@ impl EditorApp {
                 }
             }
             UiSnapshotScene::AlertDialog => {
-                if self.app_modal.is_none() {
-                    self.app_modal = Some(AppModal::Alert {
+                if self.document_workflow.modal.is_none() {
+                    self.document_workflow.modal = Some(AppModal::Alert {
                         title: "error".to_owned(),
                         message:
                             "The document could not be saved. Check the destination and try again."
@@ -2469,16 +1958,14 @@ impl EditorApp {
                 }
             }
             UiSnapshotScene::OverwriteDialog => {
-                if self.app_modal.is_none() {
-                    self.app_modal = Some(AppModal::Overwrite {
+                if self.document_workflow.modal.is_none() {
+                    self.document_workflow.modal = Some(AppModal::Overwrite {
                         message: "This file changed on disk after it was opened. Overwrite it with the editor contents?"
                             .to_owned(),
-                        path: self
-                            .path
+                        path: self.document.path
                             .clone()
                             .unwrap_or_else(|| self.workspace_root.join("document.typ")),
-                        document_epoch: self.document_epoch,
-                        revision: self.revision,
+                        key: self.document.key(),
                         expected_disk_fingerprint: Some(1),
                         observed_disk_fingerprint: Some(2),
                     });
@@ -2491,11 +1978,16 @@ impl EditorApp {
                 });
             }
             UiSnapshotScene::DocumentFontSelector => {
-                self.source = "#set text(font: \"Libertinus Serif\")\n= Font selector".to_owned();
-                let font_char = self.source[..self.source.find("font").unwrap()]
+                self.document.source =
+                    "#set text(font: \"Libertinus Serif\")\n= Font selector".to_owned();
+                self.document.revision = self.document.revision.wrapping_add(1);
+                self.prepare_editor_source_data();
+                let font_char = self.document.source[..self.document.source.find("font").unwrap()]
                     .chars()
                     .count();
-                let target = typst_font_argument_at(&self.source, font_char)
+                let target = self
+                    .editor_data
+                    .font_argument_at(font_char)
                     .expect("snapshot font argument is valid");
                 self.font_catalog = FontCatalog::snapshot_fixture();
                 self.app_popup = Some(AppPopup::FontSelector {
@@ -2505,6 +1997,7 @@ impl EditorApp {
             }
             UiSnapshotScene::ExplorerContextMenu => {
                 let path = self
+                    .document
                     .path
                     .clone()
                     .unwrap_or_else(|| self.workspace_root.join("document.typ"));
@@ -2515,8 +2008,8 @@ impl EditorApp {
                 });
             }
             UiSnapshotScene::StatusLog => {
-                self.status = PreviewStatus::Ready(Duration::from_millis(18));
-                self.recorded_status = Some(self.status);
+                self.preview.status = PreviewStatus::Ready(Duration::from_millis(18));
+                self.recorded_status = Some(self.preview.status);
                 self.notice = None;
                 self.recorded_notice = None;
                 self.status_log = VecDeque::from([
@@ -2548,6 +2041,7 @@ impl EditorApp {
             UiSnapshotScene::RenameDialog => {
                 if self.rename_dialog.is_none() {
                     let path = self
+                        .document
                         .path
                         .clone()
                         .unwrap_or_else(|| self.workspace_root.join("document.typ"));
@@ -2565,8 +2059,7 @@ impl EditorApp {
             UiSnapshotScene::WorkspaceChooser => self.workspace_chooser_visible = true,
             UiSnapshotScene::ProblemsPanel => {
                 self.problems_visible = true;
-                self.status = PreviewStatus::Error;
-                self.diagnostics = vec![
+                self.preview.diagnostics = vec![
                     Diagnostic {
                         severity: DiagnosticSeverity::Error,
                         source: DiagnosticSource::Main,
@@ -2591,11 +2084,11 @@ impl EditorApp {
                         details: Vec::new(),
                     },
                 ];
-                self.tinymist_diagnostics.clear();
-                self.raw_diagnostics.clear();
+                self.preview.tinymist_diagnostics.clear();
+                self.preview.raw_diagnostics.clear();
+                self.mark_diagnostics_changed();
             }
             UiSnapshotScene::FindReplace => {
-                self.status = PreviewStatus::Ready(Duration::ZERO);
                 self.notice = None;
                 self.find_visible = true;
                 self.replace_visible = true;
@@ -2603,7 +2096,7 @@ impl EditorApp {
                 self.replacement = "tiptoptyp".to_owned();
             }
             UiSnapshotScene::PreviewCompiling => {
-                self.status = PreviewStatus::Compiling;
+                self.preview.status = PreviewStatus::Compiling;
             }
         }
     }
@@ -2626,23 +2119,22 @@ impl EditorApp {
         self.focus_find = false;
         self.diagnostic_tooltip = None;
         self.close_app_popup();
-        self.app_modal = None;
-        self.app_modal_had_focus = false;
-        self.app_modal_suspended = false;
+        self.document_workflow.clear_modal();
         self.rename_dialog = None;
         self.rename_overlay_had_focus = false;
         self.rename_overlay_suspended = false;
         self.staged_ui_font_weight = None;
         self.staged_code_font_weight = None;
         self.notice = None;
-        self.raw_diagnostics.clear();
-        self.diagnostics.clear();
-        self.tinymist_diagnostics.clear();
+        self.preview.raw_diagnostics.clear();
+        self.preview.diagnostics.clear();
+        self.preview.tinymist_diagnostics.clear();
+        self.mark_diagnostics_changed();
         self.status_log.clear();
         self.recorded_status = None;
         self.recorded_notice = None;
-        self.status = PreviewStatus::Ready(Duration::ZERO);
-        self.source.clone_from(&self.saved_source);
+        self.preview.status = PreviewStatus::Ready(Duration::ZERO);
+        self.document.restore_saved_source();
         self.theme_override = Some(step.theme.clone());
         self.snapshot_scene = Some(step.scene);
 
@@ -2650,13 +2142,13 @@ impl EditorApp {
             // Immediate child viewports have their own renderer texture state.
             // Refresh the shared definitions only when crossing that boundary,
             // rather than rebuilding every configured font for every image.
-            self.applied_font_catalog_revision = self.font_catalog_revision.wrapping_add(1);
+            self.presentation.invalidate_fonts();
         }
 
         if matches!(
             step.scene,
             UiSnapshotScene::Main | UiSnapshotScene::ProblemsPanel | UiSnapshotScene::FindReplace
-        ) && self.pages.is_empty()
+        ) && self.preview.pages.is_empty()
         {
             self.schedule_compile_now();
         }
@@ -2664,68 +2156,59 @@ impl EditorApp {
     }
 
     fn sync_runtime_settings(&mut self, context: &egui::Context) {
-        if self.applied_ui_scale_percent != self.settings.ui_scale_percent {
-            apply_ui_scale(context, self.settings.ui_scale_percent);
-            self.applied_ui_scale_percent = self.settings.ui_scale_percent;
+        let theme_request = active_theme_request(
+            &self.settings,
+            context.system_theme(),
+            self.theme_override.as_ref(),
+        );
+        let request = ResolvedPresentationRequest::resolve(
+            &self.settings,
+            theme_request,
+            self.font_catalog_revision,
+        );
+        let changes = self.presentation.changes(&request);
+        self.preview
+            .set_requested_backend(request.preview_preference);
+
+        if changes.ui_scale {
+            apply_ui_scale(context, request.ui_scale_percent);
         }
-        let ui_font_changed = self.applied_ui_font_path != self.settings.ui_font_path
-            || self.applied_ui_font_family != self.settings.ui_font_family
-            || self.applied_ui_font_face_index != self.settings.ui_font_face_index
-            || self.applied_ui_font_monospace != self.settings.ui_font_monospace
-            || self.applied_ui_font_weight != self.settings.ui_font_weight
-            || self.applied_code_font_path != self.settings.code_font_path
-            || self.applied_code_font_family != self.settings.code_font_family
-            || self.applied_code_font_face_index != self.settings.code_font_face_index
-            || self.applied_code_font_weight != self.settings.code_font_weight
-            || self.applied_font_catalog_revision != self.font_catalog_revision;
-        if ui_font_changed {
+        if changes.fonts {
             let ui_family = self
                 .selected_font_family(
-                    self.settings.ui_font_path.as_deref(),
-                    self.settings.ui_font_family.as_deref(),
+                    request.ui_font.path.as_deref(),
+                    request.ui_font.family.as_deref(),
                 )
                 .cloned();
             let code_family = self
                 .selected_font_family(
-                    self.settings.code_font_path.as_deref(),
-                    self.settings.code_font_family.as_deref(),
+                    request.code_font.path.as_deref(),
+                    request.code_font.family.as_deref(),
                 )
                 .cloned();
             self.font_configuration = theme::configure_editor_fonts(
                 context,
                 theme::FontRequest {
                     family: ui_family.as_ref(),
-                    fallback_path: self.settings.ui_font_path.as_deref().map(Path::new),
-                    fallback_face_index: self.settings.ui_font_face_index,
+                    fallback_path: request.ui_font.path.as_deref().map(Path::new),
+                    fallback_face_index: request.ui_font.face_index,
                 },
                 theme::FontRequest {
                     family: code_family.as_ref(),
-                    fallback_path: self.settings.code_font_path.as_deref().map(Path::new),
-                    fallback_face_index: self.settings.code_font_face_index,
+                    fallback_path: request.code_font.path.as_deref().map(Path::new),
+                    fallback_face_index: request.code_font.face_index,
                 },
-                self.settings.ui_font_monospace,
-                self.settings.ui_font_weight,
-                self.settings.code_font_weight,
+                request.ui_font.monospace,
+                request.ui_font.weight,
+                request.code_font.weight,
             );
-            self.applied_ui_font_path = self.settings.ui_font_path.clone();
-            self.applied_ui_font_family = self.settings.ui_font_family.clone();
-            self.applied_ui_font_face_index = self.settings.ui_font_face_index;
-            self.applied_ui_font_monospace = self.settings.ui_font_monospace;
-            self.applied_ui_font_weight = self.settings.ui_font_weight;
-            self.applied_code_font_path = self.settings.code_font_path.clone();
-            self.applied_code_font_family = self.settings.code_font_family.clone();
-            self.applied_code_font_face_index = self.settings.code_font_face_index;
-            self.applied_code_font_weight = self.settings.code_font_weight;
-            self.applied_font_catalog_revision = self.font_catalog_revision;
-            if self.settings.ui_font_path.is_some() && !self.font_configuration.custom_ui_loaded {
+            if request.ui_font.path.is_some() && !self.font_configuration.custom_ui_loaded {
                 self.notice = Some(Notice {
                     message: "The selected UI font is unavailable; using a fallback".to_owned(),
                     kind: NoticeKind::Error,
                 });
             }
-            if self.settings.code_font_path.is_some()
-                && !self.font_configuration.custom_editor_loaded
-            {
+            if request.code_font.path.is_some() && !self.font_configuration.custom_editor_loaded {
                 self.notice = Some(Notice {
                     message: "The selected code font is unavailable; using a fallback".to_owned(),
                     kind: NoticeKind::Error,
@@ -2733,25 +2216,19 @@ impl EditorApp {
             }
             theme::configure_ui_font(context, self.font_configuration.weighted_ui_loaded);
         }
-        let theme_request = active_theme_request(
-            &self.settings,
-            context.system_theme(),
-            self.theme_override.as_ref(),
-        );
-        if self.applied_theme_request != theme_request {
-            self.applied_theme_request = theme_request;
-            self.reload_active_theme(context);
+        if changes.theme {
+            self.reload_active_theme(context, &request.theme);
         }
-        if self.applied_typst_overrides != self.settings.typst_overrides {
-            self.applied_typst_overrides = self.settings.typst_overrides.clone();
-            if let Some(active) = &self.imported_theme {
-                let styles = ResolvedTypstStyles::resolve(
-                    theme::syntax_palette(active.dark_mode),
-                    Some(&active.syntect_theme),
-                    self.settings.typst_overrides.for_dark(active.dark_mode),
-                );
-                self.highlighter.set_styles(styles);
-            }
+        if changes.typst_overrides
+            && !changes.theme
+            && let Some(active) = &self.imported_theme
+        {
+            let styles = ResolvedTypstStyles::resolve(
+                theme::syntax_palette(active.dark_mode),
+                Some(&active.syntect_theme),
+                request.typst_overrides.for_dark(active.dark_mode),
+            );
+            self.highlighter.set_styles(styles);
         }
         let active_interface_theme =
             self.imported_theme
@@ -2765,28 +2242,14 @@ impl EditorApp {
                 });
         let next_preview_dark =
             self.settings.document_theme.resolve(active_interface_theme) == egui::Theme::Dark;
-        let preview_appearance_changed = next_preview_dark != self.preview_dark;
+        let preview_appearance_changed = next_preview_dark != self.preview.dark;
         if preview_appearance_changed {
-            self.preview_dark = next_preview_dark;
+            self.preview.dark = next_preview_dark;
             self.rebuild_preview_textures(context);
         }
-        let document_theme_mode_changed =
-            self.applied_document_theme != self.settings.document_theme;
-        if document_theme_mode_changed {
-            self.applied_document_theme = self.settings.document_theme;
-        }
-
-        let preview_preference_changed =
-            self.applied_preview_preference != self.settings.preview_preference;
-        if preview_preference_changed {
-            self.applied_preview_preference = self.settings.preview_preference;
-        }
-
         let refresh_tools = std::mem::take(&mut self.tool_refresh_requested);
-        let typst_preference_changed = self.applied_typst_preference != self.settings.typst;
-        if refresh_tools || typst_preference_changed {
-            self.applied_typst_preference = self.settings.typst.clone();
-            let next_typst = resolve_tool(ToolKind::Typst, &self.settings.typst);
+        if refresh_tools || changes.typst {
+            let next_typst = resolve_tool(ToolKind::Typst, &request.typst);
             let typst_program_changed = next_typst.program != self.typst_tool.program;
             self.typst_tool = next_typst;
             if refresh_tools || typst_program_changed {
@@ -2794,12 +2257,9 @@ impl EditorApp {
             }
         }
 
-        let tinymist_preference_changed =
-            self.applied_tinymist_preference != self.settings.tinymist;
         let mut tinymist_program_changed = false;
-        if refresh_tools || tinymist_preference_changed {
-            self.applied_tinymist_preference = self.settings.tinymist.clone();
-            let next_tinymist = resolve_tool(ToolKind::Tinymist, &self.settings.tinymist);
+        if refresh_tools || changes.tinymist {
+            let next_tinymist = resolve_tool(ToolKind::Tinymist, &request.tinymist);
             tinymist_program_changed = next_tinymist.program != self.tinymist_tool.program;
             self.tinymist_tool = next_tinymist;
         }
@@ -2808,19 +2268,20 @@ impl EditorApp {
         // the document follows the interface, so refresh Tinymist as well as
         // the raster-page textures.
         if tinymist_restart_required(
-            document_theme_mode_changed,
+            changes.document_theme,
             preview_appearance_changed,
-            preview_preference_changed,
+            changes.preview_preference,
             tinymist_program_changed,
             refresh_tools,
         ) {
             self.restart_tinymist();
             self.schedule_compile_now();
         }
+        self.presentation.commit(request);
     }
 
-    fn reload_active_theme(&mut self, context: &egui::Context) {
-        let (active, error) = load_active_theme_or_fallback(&self.applied_theme_request);
+    fn reload_active_theme(&mut self, context: &egui::Context, request: &ActiveThemeRequest) {
+        let (active, error) = load_active_theme_or_fallback(request);
         theme::set_imported_palette(Some((active.dark_mode, active.palette)));
         theme::configure_styles(context);
         self.generic_highlighter
@@ -2830,7 +2291,6 @@ impl EditorApp {
             Some(&active.syntect_theme),
             self.settings.typst_overrides.for_dark(active.dark_mode),
         ));
-        self.applied_typst_overrides = self.settings.typst_overrides.clone();
         context.set_theme(active_theme_preference(
             self.settings.interface_theme,
             self.theme_override.is_some(),
@@ -2905,9 +2365,9 @@ impl EditorApp {
 
     fn handle_close_request(&mut self, context: &egui::Context) {
         let close_requested = context.input(|input| input.viewport().close_requested());
-        if close_requested && self.is_dirty() && !self.allow_close {
+        if close_requested && self.is_dirty() && !self.document_workflow.allow_close {
             context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            if self.app_modal.is_none() {
+            if self.document_workflow.modal.is_none() {
                 self.request_document_replacement(
                     DeferredDocumentAction::CloseWindow,
                     "closing tiptoptyp",
@@ -2921,17 +2381,8 @@ impl EditorApp {
     }
 
     fn reset_untitled_document(&mut self) {
-        self.source = DEFAULT_SOURCE.to_owned();
-        self.saved_source = self.source.clone();
-        self.path = None;
-        self.document_epoch = self.document_epoch.wrapping_add(1);
-        self.disk_fingerprint = None;
-        self.document_kind = DocumentKind::Typst;
-        self.revision = self.revision.wrapping_add(1);
+        self.document.replace_untitled(DEFAULT_SOURCE);
         self.autosave_deadline = None;
-        self.reset_editor_history = true;
-        self.editor_undo.clear();
-        self.editor_redo.clear();
         self.pending_editor_selection = None;
         self.editor_attention = None;
         self.clear_preview_for_document(false);
@@ -2990,7 +2441,7 @@ impl EditorApp {
     }
 
     fn start_open_folder_dialog(&mut self, frame: &eframe::Frame) {
-        if self.pending_document_dialog.is_some() {
+        if self.document_workflow.pending_dialog.is_some() {
             return;
         }
         let Some(dialog) = self.native_file_dialog(frame) else {
@@ -3000,12 +2451,13 @@ impl EditorApp {
         if let Some(directory) = self.current_directory() {
             dialog = dialog.set_directory(directory);
         }
-        self.pending_document_dialog = Some(PendingDocumentDialog {
-            target: DocumentDialogTarget::OpenFolder,
-            document_epoch: self.document_epoch,
-            revision: self.revision,
-            future: Box::pin(dialog.pick_folder()),
-        });
+        self.document_workflow.pending_dialog = Some(PendingDialog::new(
+            DocumentDialogRequest {
+                target: DocumentDialogTarget::OpenFolder,
+                key: self.document.key(),
+            },
+            dialog.pick_folder(),
+        ));
     }
 
     fn finish_open_folder_selection(&mut self, folder: PathBuf) {
@@ -3017,11 +2469,12 @@ impl EditorApp {
         self.workspace_root = root.clone();
         self.remember_workspace(&root);
         if self
+            .document
             .path
             .as_ref()
             .is_some_and(|path| path.starts_with(&root))
         {
-            if let Some(path) = self.path.clone() {
+            if let Some(path) = self.document.path.clone() {
                 self.remember_open_document(&path);
             }
             self.reset_document_services();
@@ -3052,7 +2505,7 @@ impl EditorApp {
     }
 
     fn open_in_new_window_dialog(&mut self, frame: &eframe::Frame) {
-        if self.pending_document_dialog.is_some() {
+        if self.document_workflow.pending_dialog.is_some() {
             return;
         }
         let Some(dialog) = self.native_file_dialog(frame) else {
@@ -3073,16 +2526,17 @@ impl EditorApp {
         if let Some(directory) = self.current_directory() {
             dialog = dialog.set_directory(directory);
         }
-        self.pending_document_dialog = Some(PendingDocumentDialog {
-            target: DocumentDialogTarget::OpenFileInNewWindow,
-            document_epoch: self.document_epoch,
-            revision: self.revision,
-            future: Box::pin(dialog.pick_file()),
-        });
+        self.document_workflow.pending_dialog = Some(PendingDialog::new(
+            DocumentDialogRequest {
+                target: DocumentDialogTarget::OpenFileInNewWindow,
+                key: self.document.key(),
+            },
+            dialog.pick_file(),
+        ));
     }
 
     fn start_open_dialog(&mut self, frame: &eframe::Frame) {
-        if self.pending_document_dialog.is_some() {
+        if self.document_workflow.pending_dialog.is_some() {
             return;
         }
         let Some(dialog) = self.native_file_dialog(frame) else {
@@ -3109,12 +2563,13 @@ impl EditorApp {
         if let Some(directory) = self.current_directory() {
             dialog = dialog.set_directory(directory);
         }
-        self.pending_document_dialog = Some(PendingDocumentDialog {
-            target: DocumentDialogTarget::OpenFile,
-            document_epoch: self.document_epoch,
-            revision: self.revision,
-            future: Box::pin(dialog.pick_file()),
-        });
+        self.document_workflow.pending_dialog = Some(PendingDialog::new(
+            DocumentDialogRequest {
+                target: DocumentDialogTarget::OpenFile,
+                key: self.document.key(),
+            },
+            dialog.pick_file(),
+        ));
     }
 
     fn load_path(&mut self, path: PathBuf) -> bool {
@@ -3152,17 +2607,13 @@ impl EditorApp {
         let workspace_root = self.workspace_root.clone();
         self.remember_workspace(&workspace_root);
 
-        self.document_kind = kind;
-        self.disk_fingerprint = kind.is_editable().then(|| fingerprint(&bytes));
-        self.source = source;
-        self.saved_source = self.source.clone();
-        self.path = Some(path.clone());
-        self.document_epoch = self.document_epoch.wrapping_add(1);
-        self.revision = self.revision.wrapping_add(1);
+        self.document.replace_loaded(
+            source,
+            path.clone(),
+            kind,
+            kind.is_editable().then(|| fingerprint(&bytes)),
+        );
         self.autosave_deadline = None;
-        self.reset_editor_history = true;
-        self.editor_undo.clear();
-        self.editor_redo.clear();
         self.pending_editor_selection = None;
         self.editor_attention = None;
         self.remember_open_document(&path);
@@ -3183,25 +2634,25 @@ impl EditorApp {
         if self.preview_processing_enabled() {
             self.schedule_compile_now();
         } else if kind.preview_only() {
-            self.status = PreviewStatus::Compiling;
+            self.preview.status = PreviewStatus::Compiling;
             if let Err(error) = self.asset_loader.request(self.asset_token, path, kind) {
-                self.status = PreviewStatus::Error;
+                self.preview.status = PreviewStatus::Error;
                 self.notice = Some(Notice {
                     message: error,
                     kind: NoticeKind::Error,
                 });
             }
         } else {
-            self.status = PreviewStatus::Ready(Duration::ZERO);
+            self.preview.status = PreviewStatus::Ready(Duration::ZERO);
         }
         true
     }
 
     fn save_document(&mut self, frame: &eframe::Frame) -> bool {
-        if !self.document_kind.is_editable() {
+        if !self.document.kind.is_editable() {
             return true;
         }
-        if let Some(path) = self.path.clone() {
+        if let Some(path) = self.document.path.clone() {
             self.save_to(path)
         } else {
             self.save_as(frame)
@@ -3209,13 +2660,13 @@ impl EditorApp {
     }
 
     fn save_as(&mut self, frame: &eframe::Frame) -> bool {
-        if !self.document_kind.is_editable() {
+        if !self.document.kind.is_editable() {
             return false;
         }
-        if self.pending_document_dialog.is_some() {
+        if self.document_workflow.pending_dialog.is_some() {
             return false;
         }
-        let typst = self.document_kind.is_typst();
+        let typst = self.document.kind.is_typst();
         let Some(dialog) = self.native_file_dialog(frame) else {
             return false;
         };
@@ -3232,12 +2683,13 @@ impl EditorApp {
         if let Some(directory) = self.current_directory() {
             dialog = dialog.set_directory(directory);
         }
-        self.pending_document_dialog = Some(PendingDocumentDialog {
-            target: DocumentDialogTarget::SaveAs { typst },
-            document_epoch: self.document_epoch,
-            revision: self.revision,
-            future: Box::pin(dialog.save_file()),
-        });
+        self.document_workflow.pending_dialog = Some(PendingDialog::new(
+            DocumentDialogRequest {
+                target: DocumentDialogTarget::SaveAs { typst },
+                key: self.document.key(),
+            },
+            dialog.save_file(),
+        ));
         false
     }
 
@@ -3247,6 +2699,7 @@ impl EditorApp {
 
     fn save_to_with_intent(&mut self, path: PathBuf, intent: SaveIntent) -> bool {
         let path_changed = self
+            .document
             .path
             .as_ref()
             .is_none_or(|current| !same_path(current, &path));
@@ -3254,7 +2707,9 @@ impl EditorApp {
             match intent {
                 SaveIntent::Explicit if !self.confirm_disk_unchanged(&path) => return false,
                 SaveIntent::ExplicitConfirmed => {}
-                SaveIntent::Auto if !disk_matches_fingerprint(&path, self.disk_fingerprint) => {
+                SaveIntent::Auto
+                    if !disk_matches_fingerprint(&path, self.document.disk_fingerprint) =>
+                {
                     self.notice = Some(Notice {
                         message: "Auto-save paused because the file changed on disk".to_owned(),
                         kind: NoticeKind::Error,
@@ -3264,27 +2719,31 @@ impl EditorApp {
                 _ => {}
             }
         }
-        match atomic_write(&self.project_root(), &path, self.source.as_bytes()) {
+        match atomic_write(&path, self.document.source.as_bytes()) {
             Ok(()) => {
-                self.path = Some(path.canonicalize().unwrap_or(path));
-                if let Some(current) = self.path.as_deref()
-                    && !current.starts_with(&self.workspace_root)
-                    && let Some(parent) = current.parent()
+                let path = path.canonicalize().unwrap_or(path);
+                if !path.starts_with(&self.workspace_root)
+                    && let Some(parent) = path.parent()
                 {
                     self.workspace_root = canonical_or_absolute(&discover_project_root(parent));
                 }
-                self.disk_fingerprint = Some(fingerprint(self.source.as_bytes()));
+                let saved_kind = if path_changed {
+                    DocumentKind::detect(&path, self.document.source.as_bytes())
+                        .ok()
+                        .filter(|kind| kind.is_editable())
+                        .unwrap_or(DocumentKind::Text)
+                } else {
+                    self.document.kind
+                };
+                self.document.complete_save(
+                    path.clone(),
+                    saved_kind,
+                    fingerprint(self.document.source.as_bytes()),
+                    path_changed,
+                );
                 self.external_file_change_notice = None;
                 if path_changed {
-                    self.document_epoch = self.document_epoch.wrapping_add(1);
-                    self.document_kind = self
-                        .path
-                        .as_deref()
-                        .and_then(|path| DocumentKind::detect(path, self.source.as_bytes()).ok())
-                        .filter(|kind| kind.is_editable())
-                        .unwrap_or(DocumentKind::Text);
-                    self.revision = self.revision.wrapping_add(1);
-                    self.compiled_revision = None;
+                    self.preview.artifact_key = None;
                     self.reset_document_services();
                     self.schedule_compile_now();
                 } else {
@@ -3295,24 +2754,22 @@ impl EditorApp {
                         self.schedule_compile_now();
                     }
                 }
-                self.saved_source = self.source.clone();
                 self.autosave_deadline = None;
-                if let Some(path) = self.path.clone() {
+                if let Some(path) = self.document.path.clone() {
                     self.remember_open_document(&path);
                 }
                 self.schedule_project_index();
-                if let Some(mut action) = self.post_save_action.take() {
-                    action.document_epoch = self.document_epoch;
-                    action.revision = self.revision;
+                if let Some(mut action) = self.document_workflow.post_save_action.take() {
+                    action.key = self.document.key();
                     action.allow_discard = false;
-                    self.pending_document_action = Some(action);
+                    self.document_workflow.pending_action = Some(action);
                 }
                 true
             }
             Err(error) => {
                 match intent {
                     SaveIntent::Explicit | SaveIntent::ExplicitConfirmed => {
-                        self.post_save_action = None;
+                        self.document_workflow.post_save_action = None;
                         self.show_file_error(error);
                     }
                     SaveIntent::Auto => {
@@ -3329,7 +2786,7 @@ impl EditorApp {
     }
 
     fn confirm_disk_unchanged(&mut self, path: &Path) -> bool {
-        let Some(expected) = self.disk_fingerprint else {
+        let Some(expected) = self.document.disk_fingerprint else {
             return true;
         };
         let (description, observed_disk_fingerprint) = match fs::read(path) {
@@ -3349,7 +2806,7 @@ impl EditorApp {
                 None,
             ),
             Err(error) => {
-                self.post_save_action = None;
+                self.document_workflow.post_save_action = None;
                 self.show_file_error(format!(
                     "Could not check {} before saving: {error}",
                     path.display()
@@ -3358,16 +2815,15 @@ impl EditorApp {
             }
         };
 
-        self.app_modal = Some(AppModal::Overwrite {
+        self.document_workflow.modal = Some(AppModal::Overwrite {
             message: description,
             path: path.to_path_buf(),
-            document_epoch: self.document_epoch,
-            revision: self.revision,
-            expected_disk_fingerprint: self.disk_fingerprint,
+            key: self.document.key(),
+            expected_disk_fingerprint: self.document.disk_fingerprint,
             observed_disk_fingerprint,
         });
-        self.app_modal_had_focus = false;
-        self.app_modal_suspended = false;
+        self.document_workflow.modal_had_focus = false;
+        self.document_workflow.modal_suspended = false;
         false
     }
 
@@ -3376,7 +2832,7 @@ impl EditorApp {
     }
 
     fn choose_pdf_output(&mut self, frame: &eframe::Frame, intent: PdfWriteIntent) {
-        if !self.typst_preview_available() && self.document_kind != DocumentKind::Pdf {
+        if !self.typst_preview_available() && self.document.kind != DocumentKind::Pdf {
             self.notice = Some(Notice {
                 message: format!(
                     "{} needs a Typst preview entry or PDF document",
@@ -3386,20 +2842,20 @@ impl EditorApp {
             });
             return;
         }
-        if let Some(pending) = self.pending_export.as_ref() {
+        if let Some(pending) = self.document_workflow.pending_export.as_ref() {
             self.notice = Some(Notice {
                 message: format!("{} is already queued", pending.intent.dialog_title()),
                 kind: NoticeKind::Info,
             });
             return;
         }
-        if self.pending_export_dialog.is_some() {
+        if self.document_workflow.pending_export_dialog.is_some() {
             return;
         }
         let export_source = if self.typst_preview_available() {
             Some(self.preview_document_path())
         } else {
-            self.path.clone()
+            self.document.path.clone()
         };
         let default_name = export_source
             .as_ref()
@@ -3425,34 +2881,29 @@ impl EditorApp {
         // inside winit's event callback. Dragging a folder across the panel can
         // then re-enter winit and trigger a non-unwinding panic. The async panel
         // uses a completion handler and is polled by normal egui frames instead.
-        self.pending_export_dialog = Some(PendingExportDialog {
-            document_epoch: self.document_epoch,
-            intent,
-            future: Box::pin(dialog.save_file()),
-        });
+        self.document_workflow.pending_export_dialog = Some(PendingDialog::new(
+            ExportDialogRequest {
+                document_epoch: self.document.epoch,
+                intent,
+            },
+            dialog.save_file(),
+        ));
     }
 
     fn poll_export_dialog(&mut self, context: &egui::Context) {
-        let Some(pending) = self.pending_export_dialog.as_mut() else {
+        let DialogPoll::Ready { request, selection } =
+            poll_dialog(&mut self.document_workflow.pending_export_dialog, context)
+        else {
             return;
         };
-        let waker = Waker::from(Arc::new(EguiFutureWake(context.clone())));
-        let mut task_context = TaskContext::from_waker(&waker);
-        let Poll::Ready(selection) = pending.future.as_mut().poll(&mut task_context) else {
-            context.request_repaint_after(Duration::from_millis(50));
-            return;
-        };
-        let document_epoch = pending.document_epoch;
-        let intent = pending.intent;
-        self.pending_export_dialog = None;
         if let Some(file) = selection {
-            if self.document_epoch == document_epoch {
-                self.finish_pdf_output(file.path().to_path_buf(), intent);
+            if self.document.epoch == request.document_epoch {
+                self.finish_pdf_output(file.path().to_path_buf(), request.intent);
             } else {
                 self.notice = Some(Notice {
                     message: format!(
                         "{} canceled because another document is now active",
-                        intent.dialog_title()
+                        request.intent.dialog_title()
                     ),
                     kind: NoticeKind::Info,
                 });
@@ -3501,25 +2952,18 @@ impl EditorApp {
         if let Some(directory) = self.current_directory() {
             dialog = dialog.set_directory(directory);
         }
-        self.pending_tool_picker = Some(PendingToolPicker {
-            target,
-            future: Box::pin(dialog.pick_file()),
-        });
+        self.pending_tool_picker = Some(PendingDialog::new(target, dialog.pick_file()));
         settings_context.request_repaint();
     }
 
     fn poll_tool_picker(&mut self, context: &egui::Context) {
-        let Some(pending) = self.pending_tool_picker.as_mut() else {
+        let DialogPoll::Ready {
+            request: target,
+            selection,
+        } = poll_dialog(&mut self.pending_tool_picker, context)
+        else {
             return;
         };
-        let waker = Waker::from(Arc::new(EguiFutureWake(context.clone())));
-        let mut task_context = TaskContext::from_waker(&waker);
-        let Poll::Ready(selection) = pending.future.as_mut().poll(&mut task_context) else {
-            context.request_repaint_after(Duration::from_millis(50));
-            return;
-        };
-        let target = pending.target;
-        self.pending_tool_picker = None;
         let Some(file) = selection else {
             return;
         };
@@ -3606,33 +3050,27 @@ impl EditorApp {
     }
 
     fn poll_document_dialog(&mut self, context: &egui::Context) {
-        let Some(pending) = self.pending_document_dialog.as_mut() else {
+        let DialogPoll::Ready { request, selection } =
+            poll_dialog(&mut self.document_workflow.pending_dialog, context)
+        else {
             return;
         };
-        let waker = Waker::from(Arc::new(EguiFutureWake(context.clone())));
-        let mut task_context = TaskContext::from_waker(&waker);
-        let Poll::Ready(selection) = pending.future.as_mut().poll(&mut task_context) else {
-            context.request_repaint_after(Duration::from_millis(50));
-            return;
-        };
-        let target = pending.target;
-        let document_epoch = pending.document_epoch;
-        let revision = pending.revision;
-        self.pending_document_dialog = None;
+        let target = request.target;
+        let key = request.key;
         let Some(file) = selection else {
-            self.post_save_action = None;
+            self.document_workflow.post_save_action = None;
             self.schedule_autosave_if_needed();
             return;
         };
         let mut path = file.path().to_path_buf();
         match target {
             DocumentDialogTarget::OpenFile => {
-                if self.document_epoch != document_epoch {
+                if self.document.epoch != key.epoch {
                     self.notice = Some(Notice {
                         message: "Open canceled because another document is now active".to_owned(),
                         kind: NoticeKind::Info,
                     });
-                } else if self.revision != revision {
+                } else if self.document.revision != key.revision {
                     self.request_document_replacement(
                         DeferredDocumentAction::LoadPath(path),
                         "opening the selected document",
@@ -3647,13 +3085,13 @@ impl EditorApp {
                     .push_back(EditorWindowRequest::Open(path));
             }
             DocumentDialogTarget::OpenFolder => {
-                if self.document_epoch != document_epoch {
+                if self.document.epoch != key.epoch {
                     self.notice = Some(Notice {
                         message: "Open Folder canceled because another document is now active"
                             .to_owned(),
                         kind: NoticeKind::Info,
                     });
-                } else if self.revision != revision {
+                } else if self.document.revision != key.revision {
                     self.request_document_replacement(
                         DeferredDocumentAction::OpenFolder(path),
                         "opening the selected folder",
@@ -3664,8 +3102,8 @@ impl EditorApp {
                 self.schedule_autosave_if_needed();
             }
             DocumentDialogTarget::SaveAs { typst } => {
-                if self.document_epoch != document_epoch {
-                    self.post_save_action = None;
+                if self.document.epoch != key.epoch {
+                    self.document_workflow.post_save_action = None;
                     self.notice = Some(Notice {
                         message: "Save As was canceled because another document is now open"
                             .to_owned(),
@@ -3683,7 +3121,7 @@ impl EditorApp {
     }
 
     fn finish_pdf_output(&mut self, mut path: PathBuf, intent: PdfWriteIntent) {
-        if let Some(pending) = self.pending_export.as_ref() {
+        if let Some(pending) = self.document_workflow.pending_export.as_ref() {
             self.notice = Some(Notice {
                 message: format!("{} is already queued", pending.intent.dialog_title()),
                 kind: NoticeKind::Info,
@@ -3694,12 +3132,17 @@ impl EditorApp {
             path.set_extension("pdf");
         }
 
-        self.pending_export = Some(PendingExport {
+        self.document_workflow.pending_export = Some(PendingExport {
             path,
-            document_epoch: self.document_epoch,
+            document_epoch: self.document.epoch,
             intent,
         });
-        if self.compiled_revision == Some(self.revision) && self.pdf.is_some() {
+        if self
+            .preview
+            .artifact_key
+            .is_some_and(|key| key.revision == self.document.revision)
+            && self.preview.pdf.is_some()
+        {
             self.complete_pending_export();
             return;
         }
@@ -3714,12 +3157,15 @@ impl EditorApp {
 
     fn complete_pending_export(&mut self) {
         let (Some(pending), Some(pdf)) = (
-            take_matching_export(&mut self.pending_export, self.document_epoch),
-            self.pdf.as_deref(),
+            take_matching_export(
+                &mut self.document_workflow.pending_export,
+                self.document.epoch,
+            ),
+            self.preview.pdf.as_deref(),
         ) else {
             return;
         };
-        if let Err(error) = atomic_write(&self.project_root(), &pending.path, pdf) {
+        if let Err(error) = atomic_write(&pending.path, pdf) {
             self.show_file_error(error);
         } else {
             self.notice = Some(Notice {
@@ -3733,7 +3179,7 @@ impl EditorApp {
         }
         if self.compilation_paused && !self.may_run_compilation() {
             self.compile_deadline = None;
-            let _ = self.compiler.pause(self.revision);
+            let _ = self.compiler.pause(self.document.revision);
         }
     }
 
@@ -3741,42 +3187,25 @@ impl EditorApp {
         if self.document_flow_busy() {
             return;
         }
-        let pending = PendingDocumentAction {
-            action,
-            document_epoch: self.document_epoch,
-            revision: self.revision,
-            allow_discard: false,
-            description: description.to_owned(),
-        };
-        if self.is_dirty() {
-            self.present_unsaved_prompt(pending);
-        } else {
-            self.pending_document_action = Some(pending);
-        }
+        let key = self.document.key();
+        let dirty = self.document.is_dirty();
+        let name = self.document.name();
+        self.document_workflow
+            .queue_replacement(key, dirty, &name, action, description);
     }
 
-    fn present_unsaved_prompt(&mut self, mut pending: PendingDocumentAction) {
-        pending.document_epoch = self.document_epoch;
-        pending.revision = self.revision;
-        pending.allow_discard = false;
-        self.app_modal = Some(AppModal::Unsaved {
-            message: format!(
-                "Save changes to {} before {}?",
-                self.document_name(),
-                pending.description
-            ),
-            pending,
-        });
-        self.app_modal_had_focus = false;
-        self.app_modal_suspended = false;
+    fn present_unsaved_prompt(&mut self, pending: PendingDocumentAction) {
+        let key = self.document.key();
+        let name = self.document.name();
+        self.document_workflow.present_unsaved(key, &name, pending);
     }
 
     fn execute_pending_document_action(&mut self, context: &egui::Context, frame: &eframe::Frame) {
-        let Some(mut pending) = self.pending_document_action.take() else {
+        let Some(mut pending) = self.document_workflow.pending_action.take() else {
             return;
         };
-        if pending.document_epoch != self.document_epoch {
-            self.post_save_action = None;
+        if pending.key.epoch != self.document.epoch {
+            self.document_workflow.post_save_action = None;
             self.notice = Some(Notice {
                 message: "Canceled a stale document action because another document is open"
                     .to_owned(),
@@ -3788,32 +3217,31 @@ impl EditorApp {
 
         match pending.action {
             DeferredDocumentAction::SaveThen(action) => {
-                self.post_save_action = Some(*action);
+                self.document_workflow.post_save_action = Some(*action);
                 if self.save_document(frame)
-                    && let Some(mut action) = self.post_save_action.take()
+                    && let Some(mut action) = self.document_workflow.post_save_action.take()
                 {
-                    action.document_epoch = self.document_epoch;
-                    action.revision = self.revision;
+                    action.key = self.document.key();
                     action.allow_discard = false;
-                    self.pending_document_action = Some(action);
+                    self.document_workflow.pending_action = Some(action);
                 }
                 return;
             }
             DeferredDocumentAction::ForceSave {
                 path,
-                document_epoch,
-                revision,
+                key,
                 expected_disk_fingerprint,
                 observed_disk_fingerprint,
             } => {
-                let same_document = document_epoch == self.document_epoch
+                let same_document = key.epoch == self.document.epoch
                     && self
+                        .document
                         .path
                         .as_ref()
                         .is_some_and(|current| same_path(current, &path))
-                    && self.disk_fingerprint == expected_disk_fingerprint;
+                    && self.document.disk_fingerprint == expected_disk_fingerprint;
                 if !same_document {
-                    self.post_save_action = None;
+                    self.document_workflow.post_save_action = None;
                     self.notice = Some(Notice {
                         message: "Overwrite canceled because the document changed".to_owned(),
                         kind: NoticeKind::Error,
@@ -3825,7 +3253,7 @@ impl EditorApp {
                     Ok(contents) => Some(fingerprint(&contents)),
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
                     Err(error) => {
-                        self.post_save_action = None;
+                        self.document_workflow.post_save_action = None;
                         self.show_file_error(format!(
                             "Could not recheck {} before saving: {error}",
                             path.display()
@@ -3833,8 +3261,8 @@ impl EditorApp {
                         return;
                     }
                 };
-                let continue_after_save = self.post_save_action.is_some();
-                let saved = if revision != self.revision
+                let continue_after_save = self.document_workflow.post_save_action.is_some();
+                let saved = if key.revision != self.document.revision
                     || current_disk_fingerprint != observed_disk_fingerprint
                 {
                     self.save_to_with_intent(path, SaveIntent::Explicit)
@@ -3850,7 +3278,7 @@ impl EditorApp {
         }
 
         if pending.allow_discard {
-            if pending.revision != self.revision {
+            if pending.key.revision != self.document.revision {
                 self.present_unsaved_prompt(pending);
                 return;
             }
@@ -3864,7 +3292,7 @@ impl EditorApp {
             DeferredDocumentAction::OpenFileDialog => self.start_open_dialog(frame),
             DeferredDocumentAction::OpenFolderDialog => self.start_open_folder_dialog(frame),
             DeferredDocumentAction::CloseWindow => {
-                self.allow_close = true;
+                self.document_workflow.allow_close = true;
                 context.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             DeferredDocumentAction::LoadPath(path) => {
@@ -3899,13 +3327,7 @@ impl EditorApp {
             message: message.clone(),
             kind: NoticeKind::Error,
         });
-        self.app_modal = Some(AppModal::Alert {
-            title: "error".to_owned(),
-            message,
-            kind: NoticeKind::Error,
-        });
-        self.app_modal_had_focus = false;
-        self.app_modal_suspended = false;
+        self.document_workflow.present_error(message);
     }
 
     fn reset_document_services(&mut self) {
@@ -3933,10 +3355,14 @@ impl EditorApp {
         let old_uri = self.tinymist_uri.take();
         let preview_uri = self.tinymist_preview_uri.clone();
         let document = if kind.is_typst() {
-            match TextDocument::from_path(path, revision_as_i32(self.revision), &self.source) {
+            match TextDocument::from_path(
+                path,
+                revision_as_i32(self.document.revision),
+                &self.document.source,
+            ) {
                 Ok(document) => Some(document),
                 Err(error) => {
-                    self.tinymist_state = ServiceState::Degraded(error.to_string());
+                    self.preview.tinymist_state = ServiceState::Degraded(error.to_string());
                     return;
                 }
             }
@@ -3960,55 +3386,40 @@ impl EditorApp {
             if let Err(error) = self.tinymist.did_change(
                 generation,
                 document.uri,
-                revision_as_i32(self.revision),
-                self.source.clone(),
+                revision_as_i32(self.document.revision),
+                self.document.source.clone(),
             ) {
-                self.tinymist_state = ServiceState::Degraded(error.to_string());
+                self.preview.tinymist_state = ServiceState::Degraded(error.to_string());
             }
             return;
         }
-        if self.tinymist_lsp_ready {
+        if self.preview.tinymist_lsp_ready {
             match self.tinymist.did_open(generation, document) {
                 Ok(()) => self.tinymist_current_open = true,
-                Err(error) => self.tinymist_state = ServiceState::Degraded(error.to_string()),
+                Err(error) => {
+                    self.preview.tinymist_state = ServiceState::Degraded(error.to_string())
+                }
             }
         }
     }
 
     fn request_workspace_scan(&mut self, root: PathBuf) {
-        self.workspace_scan_id = self.workspace_scan_id.wrapping_add(1);
-        let scan_id = self.workspace_scan_id;
-        let (sender, receiver) = mpsc::channel();
-        self.workspace_scan = Some(receiver);
-        let _ = thread::Builder::new()
-            .name("tiptoptyp-workspace-scan".to_owned())
-            .spawn(move || {
-                let result = WorkspaceSnapshot::scan(&root).map_err(|error| error.to_string());
-                let _ = sender.send((scan_id, result));
-            });
+        if let Err(error) = self
+            .workspace_scan
+            .start("tiptoptyp-workspace-scan", move || {
+                WorkspaceSnapshot::scan(&root).map_err(|error| error.to_string())
+            })
+        {
+            self.workspace_error = Some(format!("Could not start workspace scan: {error}"));
+        }
     }
 
     fn poll_workspace_scan(&mut self, context: &egui::Context) {
-        let Some(receiver) = self.workspace_scan.as_ref() else {
-            return;
-        };
-        let result = match receiver.try_recv() {
-            Ok(result) => result,
-            Err(mpsc::TryRecvError::Empty) => return,
-            Err(mpsc::TryRecvError::Disconnected) => {
-                self.workspace_scan = None;
-                return;
-            }
-        };
-        self.workspace_scan = None;
-        let (scan_id, result) = result;
-        if scan_id != self.workspace_scan_id {
-            return;
-        }
-        match result {
-            Ok(snapshot) => {
+        match self.workspace_scan.poll() {
+            LatestJobPoll::Idle | LatestJobPoll::Pending => {}
+            LatestJobPoll::Ready(snapshot) => {
                 let font_files = workspace_snapshot_font_files(&snapshot);
-                let should_rescan_fonts = self.font_catalog_scan.is_none()
+                let should_rescan_fonts = !self.font_catalog_scan.is_running()
                     && snapshot.root == self.font_catalog_root
                     && !self.font_catalog.workspace_files_match(&font_files);
                 if let Some(workspace) = &mut self.workspace {
@@ -4021,14 +3432,14 @@ impl EditorApp {
                     self.request_font_catalog_scan(context);
                 }
             }
-            Err(error) => {
+            LatestJobPoll::Failed(error) => {
                 self.workspace_error = Some(format!("Could not scan workspace: {error}"));
             }
         }
     }
 
     fn refresh_workspace(&mut self) {
-        if self.workspace_scan.is_none() {
+        if !self.workspace_scan.is_running() {
             let root = self
                 .workspace
                 .as_ref()
@@ -4042,7 +3453,7 @@ impl EditorApp {
     fn tick_workspace(&mut self, context: &egui::Context) {
         self.poll_workspace_scan(context);
         self.poll_external_file_change(context);
-        if self.workspace_scan.is_some() {
+        if self.workspace_scan.is_running() {
             context.request_repaint_after(Duration::from_millis(50));
         }
         if !self.filesystem_visible {
@@ -4063,10 +3474,10 @@ impl EditorApp {
         }
         self.next_external_file_check = now + EXTERNAL_FILE_CHECK_INTERVAL;
         context.request_repaint_after(EXTERNAL_FILE_CHECK_INTERVAL);
-        let Some(path) = self.path.clone() else {
+        let Some(path) = self.document.path.clone() else {
             return;
         };
-        if !self.document_kind.is_editable() {
+        if !self.document.kind.is_editable() {
             return;
         }
         let observed = match fs::read(&path) {
@@ -4076,7 +3487,7 @@ impl EditorApp {
             }
             Err(_) => return,
         };
-        if matches!(observed, ExternalFileObservation::Present(fingerprint) if Some(fingerprint) == self.disk_fingerprint)
+        if matches!(observed, ExternalFileObservation::Present(fingerprint) if Some(fingerprint) == self.document.disk_fingerprint)
         {
             self.external_file_change_notice = None;
             return;
@@ -4120,7 +3531,7 @@ impl EditorApp {
         self.tinymist_unsaved_document
             .as_ref()
             .map(|document| document.path().to_owned())
-            .or_else(|| self.path.clone())
+            .or_else(|| self.document.path.clone())
             .unwrap_or_else(|| self.preview_document_path())
     }
 
@@ -4137,7 +3548,7 @@ impl EditorApp {
         // carry save-after-format intent into the replacement generation.
         self.manual_format_revision = None;
         let start_preview = self.tinymist_session_requested();
-        self.tinymist_preview_enabled = start_preview;
+        self.preview.tinymist_preview_enabled = start_preview;
         if let Some(generation) = self.tinymist_generation.take() {
             let current_uri = self.tinymist_uri.take();
             let preview_uri = self.tinymist_preview_uri.take();
@@ -4163,14 +3574,15 @@ impl EditorApp {
         let retain_preview_surface = retain_preview_surface_for_restart(
             preserve_preview,
             start_preview,
-            self.tinymist_url.is_some(),
+            self.preview.interactive_url.is_some(),
             has_webview,
         );
         if !retain_preview_surface {
-            self.tinymist_url = None;
+            self.preview.interactive_url = None;
         }
-        self.tinymist_lsp_ready = false;
-        self.tinymist_diagnostics.clear();
+        self.preview.tinymist_lsp_ready = false;
+        self.preview.tinymist_diagnostics.clear();
+        self.mark_diagnostics_changed();
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             self.webview_reload_pending = false;
@@ -4180,10 +3592,10 @@ impl EditorApp {
                 self.webview_navigation = None;
             }
         }
-        if !self.document_kind.is_typst() && self.designated_preview_path().is_none() {
-            self.tinymist_state =
+        if !self.document.kind.is_typst() && self.designated_preview_path().is_none() {
+            self.preview.tinymist_state =
                 ServiceState::Disabled("The selected file is not a Typst document".to_owned());
-            self.webview_state =
+            self.preview.webview_state =
                 ServiceState::Disabled("Binary files use the native preview".to_owned());
             return;
         }
@@ -4193,12 +3605,13 @@ impl EditorApp {
                 .fallback_reason
                 .clone()
                 .unwrap_or_else(|| "Tinymist is unavailable".to_owned());
-            self.tinymist_state = ServiceState::Failed(reason.clone());
-            self.webview_state = ServiceState::Failed(reason);
+            self.preview.tinymist_state = ServiceState::Failed(reason.clone());
+            self.preview.webview_state = ServiceState::Failed(reason);
             return;
         }
-        self.tinymist_state = ServiceState::Starting("Launching Tinymist LSP".to_owned());
-        self.webview_state = if self.settings.preview_preference == PreviewPreference::Native {
+        self.preview.tinymist_state = ServiceState::Starting("Launching Tinymist LSP".to_owned());
+        self.preview.webview_state = if self.preview.requested_backend == PreviewPreference::Native
+        {
             ServiceState::Disabled("Interactive preview is not requested".to_owned())
         } else if !cfg!(any(target_os = "macos", target_os = "windows")) {
             ServiceState::Unsupported(
@@ -4223,13 +3636,13 @@ impl EditorApp {
         }
         config.start_preview = start_preview;
         config.preview.invert_colors =
-            tinymist_invert_colors(self.settings.document_theme, self.preview_dark);
+            tinymist_invert_colors(self.settings.document_theme, self.preview.dark);
         match self.tinymist.start_workspace(config) {
             Ok(generation) => {
-                let version = revision_as_i32(self.revision);
-                let current_document = if self.document_kind.is_typst() {
-                    if let Some(path) = self.path.as_deref() {
-                        TextDocument::from_path(path, version, self.source.clone())
+                let version = revision_as_i32(self.document.revision);
+                let current_document = if self.document.kind.is_typst() {
+                    if let Some(path) = self.document.path.as_deref() {
+                        TextDocument::from_path(path, version, self.document.source.clone())
                             .map_err(|error| error.to_string())
                     } else {
                         let source_dir = self
@@ -4239,11 +3652,11 @@ impl EditorApp {
                             self.project_root(),
                             source_dir,
                             self.document_name(),
-                            &self.source,
+                            &self.document.source,
                         ) {
                             Ok(document) => {
                                 let text_document =
-                                    document.text_document(version, self.source.clone());
+                                    document.text_document(version, self.document.source.clone());
                                 self.tinymist_unsaved_document = Some(document);
                                 Ok(text_document)
                             }
@@ -4261,13 +3674,13 @@ impl EditorApp {
                     Ok(document) => document,
                     Err(error) => {
                         let _ = self.tinymist.stop_workspace(generation);
-                        self.tinymist_state = ServiceState::Failed(error.to_string());
+                        self.preview.tinymist_state = ServiceState::Failed(error.to_string());
                         return;
                     }
                 };
 
                 let preview_document =
-                    if !self.document_kind.is_typst() || self.current_is_preview_document() {
+                    if !self.document.kind.is_typst() || self.current_is_preview_document() {
                         current_document.clone()
                     } else {
                         let path = self.preview_document_path();
@@ -4278,7 +3691,7 @@ impl EditorApp {
                             Ok(document) => document,
                             Err(error) => {
                                 let _ = self.tinymist.stop_workspace(generation);
-                                self.tinymist_state = ServiceState::Failed(error);
+                                self.preview.tinymist_state = ServiceState::Failed(error);
                                 return;
                             }
                         }
@@ -4291,25 +3704,25 @@ impl EditorApp {
                 // The first document opened determines startDefaultPreview.
                 // Imported/current subfiles are opened after Initialized.
                 if let Err(error) = self.tinymist.did_open(generation, preview_document) {
-                    self.tinymist_state = ServiceState::Failed(error.to_string());
+                    self.preview.tinymist_state = ServiceState::Failed(error.to_string());
                 }
             }
             Err(error) => {
-                self.tinymist_url = None;
-                self.tinymist_state = ServiceState::Failed(error.to_string());
-                self.webview_state =
+                self.preview.interactive_url = None;
+                self.preview.tinymist_state = ServiceState::Failed(error.to_string());
+                self.preview.webview_state =
                     ServiceState::Failed("Could not restart the pinned preview".to_owned());
             }
         }
     }
 
     fn sync_tinymist_change(&self) -> Result<(), String> {
-        if !self.document_kind.is_typst() {
+        if !self.document.kind.is_typst() {
             return Ok(());
         }
         if let Some(document) = &self.tinymist_unsaved_document {
             document
-                .update_backing_source(&self.source)
+                .update_backing_source(&self.document.source)
                 .map_err(|error| error.to_string())?;
         }
         let (Some(generation), Some(uri)) = (self.tinymist_generation, self.tinymist_uri.clone())
@@ -4324,8 +3737,8 @@ impl EditorApp {
             .did_change(
                 generation,
                 uri,
-                revision_as_i32(self.revision),
-                self.source.clone(),
+                revision_as_i32(self.document.revision),
+                self.document.source.clone(),
             )
             .map_err(|error| error.to_string())
     }
@@ -4334,13 +3747,13 @@ impl EditorApp {
         while let Some(event) = self.tinymist.try_recv() {
             match event {
                 TinymistEvent::Starting { .. } => {
-                    self.tinymist_lsp_ready = false;
-                    self.tinymist_state =
+                    self.preview.tinymist_lsp_ready = false;
+                    self.preview.tinymist_state =
                         ServiceState::Starting("Launching Tinymist LSP".to_owned());
                 }
                 TinymistEvent::Initialized { generation } => {
-                    self.tinymist_lsp_ready = true;
-                    self.tinymist_state = if self.tinymist_preview_enabled {
+                    self.preview.tinymist_lsp_ready = true;
+                    self.preview.tinymist_state = if self.preview.tinymist_preview_enabled {
                         ServiceState::Starting("Starting Tinymist preview server".to_owned())
                     } else {
                         ServiceState::Ready("Tinymist LSP is ready".to_owned())
@@ -4351,23 +3764,24 @@ impl EditorApp {
                     {
                         let document = TextDocument::typst(
                             uri,
-                            revision_as_i32(self.revision),
-                            self.source.clone(),
+                            revision_as_i32(self.document.revision),
+                            self.document.source.clone(),
                         );
                         match self.tinymist.did_open(generation, document) {
                             Ok(()) => self.tinymist_current_open = true,
                             Err(error) => {
-                                self.tinymist_state = ServiceState::Degraded(error.to_string())
+                                self.preview.tinymist_state =
+                                    ServiceState::Degraded(error.to_string())
                             }
                         }
                     }
                 }
                 TinymistEvent::PreviewReady { url, .. } => {
-                    self.tinymist_state =
+                    self.preview.tinymist_state =
                         ServiceState::Ready("LSP and preview server are ready".to_owned());
-                    if self.tinymist_preview_enabled {
-                        self.tinymist_url = Some(url);
-                        self.status = PreviewStatus::Ready(Duration::ZERO);
+                    if self.preview.tinymist_preview_enabled {
+                        self.preview.interactive_url = Some(url);
+                        self.preview.status = PreviewStatus::Ready(Duration::ZERO);
                         #[cfg(any(target_os = "macos", target_os = "windows"))]
                         let reusing_webview = {
                             let reusing = self.webview.is_some();
@@ -4381,7 +3795,7 @@ impl EditorApp {
                         };
                         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
                         let reusing_webview = false;
-                        self.webview_state = if reusing_webview {
+                        self.preview.webview_state = if reusing_webview {
                             ServiceState::Starting(
                                 "Loading the pinned entry in the existing preview".to_owned(),
                             )
@@ -4439,14 +3853,14 @@ impl EditorApp {
                         continue;
                     }
                     if stage == "preview" {
-                        self.tinymist_url = None;
-                        self.webview_state = ServiceState::Failed(message.clone());
+                        self.preview.interactive_url = None;
+                        self.preview.webview_state = ServiceState::Failed(message.clone());
                     }
                     let detail = format!("{stage}: {message}");
-                    self.tinymist_state = if fatal {
-                        self.tinymist_lsp_ready = false;
-                        self.tinymist_url = None;
-                        self.webview_state = ServiceState::Failed(
+                    self.preview.tinymist_state = if fatal {
+                        self.preview.tinymist_lsp_ready = false;
+                        self.preview.interactive_url = None;
+                        self.preview.webview_state = ServiceState::Failed(
                             "Tinymist stopped before the embedded preview was available".to_owned(),
                         );
                         ServiceState::Failed(detail)
@@ -4458,16 +3872,16 @@ impl EditorApp {
                     }
                 }
                 TinymistEvent::Stopped { reason, .. } => {
-                    self.tinymist_lsp_ready = false;
-                    self.tinymist_url = None;
-                    let detail = match &self.tinymist_state {
+                    self.preview.tinymist_lsp_ready = false;
+                    self.preview.interactive_url = None;
+                    let detail = match &self.preview.tinymist_state {
                         ServiceState::Failed(previous) if previous != &reason => {
                             format!("{previous}; {reason}")
                         }
                         _ => reason,
                     };
-                    self.tinymist_state = ServiceState::Failed(detail);
-                    self.webview_state =
+                    self.preview.tinymist_state = ServiceState::Failed(detail);
+                    self.preview.webview_state =
                         ServiceState::Failed("Tinymist preview is no longer running".to_owned());
                     self.schedule_compile_now();
                 }
@@ -4489,7 +3903,8 @@ impl EditorApp {
 
     fn follow_preview_link(&mut self, target: &str) {
         if let Some(page) = internal_pdf_page_target(target) {
-            self.requested_page = Some(page.min(self.pages.len().saturating_sub(1)));
+            self.preview.requested_page =
+                Some(page.min(self.preview.pages.len().saturating_sub(1)));
             return;
         }
 
@@ -4561,6 +3976,7 @@ impl EditorApp {
             return;
         }
         let same_document = self
+            .document
             .path
             .as_ref()
             .is_some_and(|current| same_path(current, &path));
@@ -4583,22 +3999,23 @@ impl EditorApp {
         page: Option<usize>,
         source_position: Option<(usize, usize)>,
     ) {
-        if self.document_kind == DocumentKind::Pdf {
-            if self.pages.is_empty() {
+        if self.document.kind == DocumentKind::Pdf {
+            if self.preview.pages.is_empty() {
                 self.pending_asset_page = page;
             } else if let Some(page) = page {
-                self.requested_page = Some(page.min(self.pages.len().saturating_sub(1)));
+                self.preview.requested_page =
+                    Some(page.min(self.preview.pages.len().saturating_sub(1)));
             }
-        } else if self.document_kind.is_editable()
+        } else if self.document.kind.is_editable()
             && let Some((line, column)) = source_position
         {
-            let char_index = char_index_at_line_column(&self.source, line, column);
+            let char_index = char_index_at_line_column(&self.document.source, line, column);
             self.pending_editor_selection = Some(char_index..char_index);
             self.editor_attention = Some(EditorAttention {
                 char_index,
                 started: Instant::now(),
             });
-            if self.document_kind.is_typst() {
+            if self.document.kind.is_typst() {
                 self.view_mode = ViewMode::Split;
             }
         }
@@ -4611,9 +4028,11 @@ impl EditorApp {
         let Ok(path) = url.to_file_path() else {
             return;
         };
-        let virtual_untitled = self.path.is_none() && path == self.tinymist_document_path();
+        let virtual_untitled =
+            self.document.path.is_none() && path == self.tinymist_document_path();
         let same_document = virtual_untitled
             || self
+                .document
                 .path
                 .as_ref()
                 .is_some_and(|current| same_path(current, &path));
@@ -4638,7 +4057,7 @@ impl EditorApp {
 
     fn apply_tinymist_selection(&mut self, selection: Option<&LspRange>) {
         if let Some(selection) = selection {
-            let range = range_to_char_range(&self.source, selection);
+            let range = range_to_char_range(&self.document.source, selection);
             self.editor_attention = Some(EditorAttention {
                 char_index: range.start,
                 started: Instant::now(),
@@ -4649,13 +4068,13 @@ impl EditorApp {
     }
 
     fn jump_source_to_preview(&mut self, char_index: usize) {
-        if !self.document_kind.is_typst() || !self.interactive_preview_active() {
+        if !self.document.kind.is_typst() || !self.interactive_preview_active() {
             return;
         }
         let Some(generation) = self.tinymist_generation else {
             return;
         };
-        let (line, character) = scalar_position_at_char(&self.source, char_index);
+        let (line, character) = scalar_position_at_char(&self.document.source, char_index);
         let path = self.tinymist_document_path();
         if let Err(error) = self
             .tinymist
@@ -4674,56 +4093,67 @@ impl EditorApp {
 
     fn preview_visible(&self) -> bool {
         preview_visible_for(
-            self.document_kind,
+            self.document.kind,
             self.view_mode,
             self.designated_preview_path().is_some(),
         )
     }
 
     fn interactive_preview_requested(&self) -> bool {
-        self.typst_preview_available()
-            && self.settings.preview_preference == PreviewPreference::Interactive
-            && cfg!(any(target_os = "macos", target_os = "windows"))
+        self.preview.interactive_requested(
+            self.typst_preview_available(),
+            cfg!(any(target_os = "macos", target_os = "windows")),
+        )
     }
 
     fn tinymist_session_requested(&self) -> bool {
-        self.settings.preview_preference == PreviewPreference::Interactive
-            && cfg!(any(target_os = "macos", target_os = "windows"))
-            && self.typst_preview_available()
+        self.preview.session_requested(
+            self.typst_preview_available(),
+            cfg!(any(target_os = "macos", target_os = "windows")),
+        )
     }
 
     fn preview_processing_enabled(&self) -> bool {
-        let interactive_unavailable = (self.tinymist_url.is_none()
-            && matches!(
-                self.tinymist_state,
-                ServiceState::Disabled(_)
-                    | ServiceState::Degraded(_)
-                    | ServiceState::Failed(_)
-                    | ServiceState::Unsupported(_)
-            ))
-            || matches!(
-                self.webview_state,
-                ServiceState::Failed(_) | ServiceState::Unsupported(_)
-            );
         self.typst_preview_available()
-            && raster_preview_required_for(
-                self.interactive_preview_requested(),
-                interactive_unavailable,
-                self.captures.has_pending_for("main"),
-                self.pending_export.is_some(),
-            )
+            && (self.document_workflow.pending_export.is_some() || self.raster_preview_required())
+    }
+
+    fn raster_preview_required(&self) -> bool {
+        self.preview.raster_required(
+            self.interactive_preview_requested(),
+            self.captures.has_pending_for("main"),
+        )
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    fn fail_local_webview(&mut self, message: String) {
+        let raster_was_required = self.raster_preview_required();
+        self.webview = None;
+        self.webview_url = None;
+        self.webview_reload_pending = false;
+        self.webview_navigation = None;
+        self.preview.webview_state = ServiceState::Failed(message);
+        let raster_is_required = self.raster_preview_required();
+        if raster_fallback_compile_needed(
+            self.typst_preview_available(),
+            self.may_run_compilation(),
+            raster_was_required,
+            raster_is_required,
+        ) {
+            self.schedule_compile_now();
+        }
     }
 
     fn sync_preview_visibility(&mut self) {
         let visible = self.preview_visible();
-        let became_visible = !self.preview_was_visible && visible;
-        self.preview_was_visible = visible;
+        let became_visible = !self.preview.was_visible && visible;
+        self.preview.was_visible = visible;
 
         if !visible {
             self.hide_webview();
         }
 
-        if self.tinymist_preview_enabled != self.tinymist_session_requested() {
+        if self.preview.tinymist_preview_enabled != self.tinymist_session_requested() {
             self.restart_tinymist();
         }
         if became_visible {
@@ -4738,7 +4168,7 @@ impl EditorApp {
         diagnostics: Vec<TinymistDiagnostic>,
     ) {
         if self.tinymist_uri.as_deref() == Some(uri)
-            && version.is_some_and(|version| version != revision_as_i32(self.revision))
+            && version.is_some_and(|version| version != revision_as_i32(self.document.revision))
         {
             return;
         }
@@ -4755,62 +4185,51 @@ impl EditorApp {
             .map(|diagnostic| tinymist_diagnostic(diagnostic, source.clone()))
             .collect();
         normalize_diagnostics(&mut converted);
-        self.tinymist_diagnostics = converted;
+        self.preview.tinymist_diagnostics = converted;
+        self.mark_diagnostics_changed();
     }
 
     fn interactive_preview_active(&self) -> bool {
-        self.interactive_preview_requested()
-            && self.tinymist_url.is_some()
-            && self.webview_state.is_ready()
+        self.preview.interactive_active(
+            self.typst_preview_available(),
+            cfg!(any(target_os = "macos", target_os = "windows")),
+        )
     }
 
     fn should_attempt_interactive_preview(&self) -> bool {
-        self.interactive_preview_requested()
-            && self.tinymist_url.is_some()
-            && !matches!(
-                self.webview_state,
-                ServiceState::Failed(_) | ServiceState::Unsupported(_)
-            )
-            && cfg!(any(target_os = "macos", target_os = "windows"))
+        self.preview.should_attempt_interactive(
+            self.typst_preview_available(),
+            cfg!(any(target_os = "macos", target_os = "windows")),
+        )
     }
 
     fn interactive_preview_transitioning(&self) -> bool {
-        self.interactive_preview_requested()
-            && matches!(
-                self.tinymist_state,
-                ServiceState::Starting(_) | ServiceState::Ready(_)
-            )
-            && !matches!(
-                self.webview_state,
-                ServiceState::Failed(_) | ServiceState::Unsupported(_)
-            )
+        self.preview.interactive_transitioning(
+            self.typst_preview_available(),
+            cfg!(any(target_os = "macos", target_os = "windows")),
+        )
     }
 
     fn preview_fallback_reason(&self) -> Option<String> {
-        if !self.typst_preview_available() || !self.preview_visible() {
-            return None;
-        }
-        preview_fallback_reason_for(
-            self.settings.preview_preference,
-            self.interactive_preview_active(),
-            self.tinymist_url.is_some(),
-            &self.tinymist_state,
-            &self.webview_state,
+        self.preview.fallback_reason(
+            self.typst_preview_available(),
+            self.preview_visible(),
+            cfg!(any(target_os = "macos", target_os = "windows")),
         )
     }
 
     fn preview_backend_label(&self) -> &'static str {
         if !self.typst_preview_available() {
-            return match self.document_kind {
+            return match self.document.kind {
                 DocumentKind::Pdf => "Rasterised PDF",
                 DocumentKind::Image => "Image",
                 DocumentKind::Text => "Text editor",
                 DocumentKind::Typst => unreachable!(),
             };
         }
-        preview_backend_label_for(
-            self.settings.preview_preference,
-            self.interactive_preview_active(),
+        self.preview.backend_label(
+            self.typst_preview_available(),
+            cfg!(any(target_os = "macos", target_os = "windows")),
         )
     }
 
@@ -4824,17 +4243,20 @@ impl EditorApp {
     }
 
     fn rebuild_preview_textures(&mut self, context: &egui::Context) {
-        let revision = self.compiled_revision.unwrap_or(self.revision);
-        let dark = self.preview_dark
-            && (self.typst_preview_available() || self.document_kind != DocumentKind::Image);
-        for (index, page) in self.pages.iter_mut().enumerate() {
+        let key = self
+            .preview
+            .raster_key
+            .unwrap_or_else(|| ArtifactKey::unversioned(self.document.revision));
+        let dark = self.preview.dark
+            && (self.typst_preview_available() || self.document.kind != DocumentKind::Image);
+        for (index, page) in self.preview.pages.iter_mut().enumerate() {
             let pixels = if dark {
                 dark_preview_rgba(&page.rgba)
             } else {
                 page.rgba.clone()
             };
             page.texture = context.load_texture(
-                format!("preview-{revision}-{index}-{dark}"),
+                format!("preview-{}-{}-{index}-{dark}", key.revision, key.generation),
                 preview_color_image(page.raster_size, &pixels),
                 TextureOptions::LINEAR,
             );
@@ -4912,14 +4334,14 @@ impl EditorApp {
                 title_response.clone(),
                 format!(
                     "{}\nDouble-click to rename",
-                    self.path.as_ref().map_or_else(
+                    self.document.path.as_ref().map_or_else(
                         || "Unsaved document".to_owned(),
                         |path| path.display().to_string()
                     )
                 ),
             );
             if title_response.double_clicked() && !self.document_flow_busy() {
-                if let Some(path) = self.path.clone() {
+                if let Some(path) = self.document.path.clone() {
                     self.begin_rename(path);
                 } else {
                     self.save_as(frame);
@@ -5062,37 +4484,22 @@ impl EditorApp {
     }
 
     fn editor_history_availability(&self, _context: &egui::Context) -> (bool, bool) {
-        (
-            self.document_kind.is_editable() && !self.editor_undo.is_empty(),
-            self.document_kind.is_editable() && !self.editor_redo.is_empty(),
-        )
+        self.document.history_availability()
     }
 
     fn undo_editor(&mut self, context: &egui::Context, redo: bool) {
-        if !self.document_kind.is_editable() {
+        if !self.document.kind.is_editable() {
             return;
         }
         let current = self.editor_snapshot(context);
-        let next = if redo {
-            let next = self.editor_redo.pop();
-            if next.is_some() {
-                self.editor_undo.push(current);
-            }
-            next
-        } else {
-            let next = self.editor_undo.pop();
-            if next.is_some() {
-                self.editor_redo.push(current);
-            }
-            next
-        };
+        let next = self.document.history_step(redo, current);
         let Some(next) = next else {
             return;
         };
-        let changed = next.source != self.source;
-        self.source = next.source;
+        let changed = next.source.as_ref() != self.document.source;
+        self.document.source = next.source.to_string();
         self.store_editor_cursor(context, next.cursor);
-        self.reset_editor_history = false;
+        self.document.reset_editor_history = false;
         let editor_id = source_editor_id(context);
         context.memory_mut(|memory| memory.request_focus(editor_id));
         if changed {
@@ -5101,13 +4508,15 @@ impl EditorApp {
         }
     }
 
-    fn editor_snapshot(&self, context: &egui::Context) -> EditorSnapshot {
+    fn editor_snapshot(&mut self, context: &egui::Context) -> EditorSnapshot {
+        self.prepare_editor_source_data();
+        let metrics = self.editor_data.source_metrics();
         let cursor = egui::text_edit::TextEditState::load(context, source_editor_id(context))
             .and_then(|state| state.cursor.char_range())
-            .unwrap_or_else(|| CCursorRange::one(CCursor::new(self.source.chars().count())));
+            .unwrap_or_else(|| CCursorRange::one(CCursor::new(metrics.char_count)));
         EditorSnapshot {
-            source: self.source.clone(),
-            cursor: clamp_cursor_range(cursor, self.source.chars().count()),
+            source: self.editor_data.source_snapshot(),
+            cursor: clamp_cursor_range(cursor, metrics.char_count),
         }
     }
 
@@ -5117,7 +4526,7 @@ impl EditorApp {
         state.clear_undoer();
         state.cursor.set_char_range(Some(clamp_cursor_range(
             cursor,
-            self.source.chars().count(),
+            self.document.source.chars().count(),
         )));
         state.store(context, source_editor_id(context));
     }
@@ -5128,47 +4537,37 @@ impl EditorApp {
     }
 
     fn push_editor_undo_snapshot(&mut self, snapshot: EditorSnapshot) {
-        if self
-            .editor_undo
-            .last()
-            .is_none_or(|latest| latest.source != snapshot.source)
-        {
-            self.editor_undo.push(snapshot);
-            const MAX_EDITOR_HISTORY: usize = 100;
-            if self.editor_undo.len() > MAX_EDITOR_HISTORY {
-                self.editor_undo.remove(0);
-            }
-        }
-        self.editor_redo.clear();
+        self.document.push_undo_snapshot(snapshot);
     }
 
     fn selected_editor_chars(&self, context: &egui::Context) -> Option<Range<usize>> {
         let state = egui::text_edit::TextEditState::load(context, source_editor_id(context))?;
         let range = state.cursor.char_range()?.as_sorted_char_range();
-        let len = self.source.chars().count();
+        let len = self.document.source.chars().count();
         let range = range.start.0.min(len)..range.end.0.min(len);
         (range.start != range.end).then_some(range)
     }
 
-    fn copy_editor_selection(&self, context: &egui::Context) {
+    fn copy_editor_selection(&mut self, context: &egui::Context) {
         let Some(range) = self.selected_editor_chars(context) else {
             return;
         };
-        let bytes = char_range_to_byte_range(&self.source, range);
-        context.copy_text(self.source[bytes].to_owned());
+        self.prepare_editor_source_data();
+        let bytes = self.editor_data.char_range_to_byte(range);
+        context.copy_text(self.document.source[bytes].to_owned());
     }
 
     fn cut_editor_selection(&mut self, context: &egui::Context) {
-        if !self.document_kind.is_editable() {
+        if !self.document.kind.is_editable() {
             return;
         }
         let Some(range) = self.selected_editor_chars(context) else {
             return;
         };
         self.record_editor_undo_point(context);
-        let bytes = char_range_to_byte_range(&self.source, range.clone());
-        context.copy_text(self.source[bytes.clone()].to_owned());
-        self.source.replace_range(bytes, "");
+        let bytes = self.editor_data.char_range_to_byte(range.clone());
+        context.copy_text(self.document.source[bytes.clone()].to_owned());
+        self.document.source.replace_range(bytes, "");
         let editor_id = source_editor_id(context);
         if let Some(mut state) = egui::text_edit::TextEditState::load(context, editor_id) {
             state
@@ -5182,8 +4581,8 @@ impl EditorApp {
     }
 
     fn request_editor_paste(&mut self, context: &egui::Context) {
-        if self.document_kind.is_editable() {
-            if self.document_kind.is_typst() && !self.view_mode.shows_code() {
+        if self.document.kind.is_editable() {
+            if self.document.kind.is_typst() && !self.view_mode.shows_code() {
                 self.view_mode = ViewMode::Split;
             }
             let editor_id = source_editor_id(context);
@@ -5197,7 +4596,7 @@ impl EditorApp {
         if let Some(mut state) = egui::text_edit::TextEditState::load(context, editor_id) {
             state.cursor.set_char_range(Some(CCursorRange::two(
                 CCursor::new(0),
-                CCursor::new(self.source.chars().count()),
+                CCursor::new(self.document.source.chars().count()),
             )));
             state.store(context, editor_id);
             context.memory_mut(|memory| memory.request_focus(editor_id));
@@ -5205,7 +4604,7 @@ impl EditorApp {
     }
 
     fn toggle_comments(&mut self, context: &egui::Context) {
-        if !self.document_kind.is_editable() {
+        if !self.document.kind.is_editable() {
             return;
         }
         let editor_id = source_editor_id(context);
@@ -5214,25 +4613,25 @@ impl EditorApp {
             .as_ref()
             .and_then(|state| state.cursor.char_range())
             .map_or(0, |range| range.primary.index.0)
-            .min(self.source.chars().count());
+            .min(self.document.source.chars().count());
         let selection = state
             .and_then(|state| state.cursor.char_range())
             .map(|range| range.as_sorted_char_range())
             .map(|range| {
-                range.start.0.min(self.source.chars().count())
-                    ..range.end.0.min(self.source.chars().count())
+                range.start.0.min(self.document.source.chars().count())
+                    ..range.end.0.min(self.document.source.chars().count())
             })
             .filter(|range| range.start != range.end);
         let (source, mapped_range) = toggle_line_comments(
-            &self.source,
+            &self.document.source,
             selection.clone().unwrap_or(cursor..cursor),
             "// ",
         );
-        if source == self.source {
+        if source == self.document.source {
             return;
         }
         self.record_editor_undo_point(context);
-        self.source = source;
+        self.document.source = source;
         self.search.clear();
         self.mark_edited();
         let cursor = if selection.is_some() {
@@ -5248,11 +4647,11 @@ impl EditorApp {
     }
 
     fn request_format_document(&mut self) {
-        if !self.document_kind.is_typst() {
+        if !self.document.kind.is_typst() {
             self.manual_format_revision = None;
             return;
         }
-        if !self.tinymist_lsp_ready {
+        if !self.preview.tinymist_lsp_ready {
             self.manual_format_revision = None;
             self.notice = Some(Notice {
                 message: "Tinymist is still starting; try formatting again in a moment".to_owned(),
@@ -5279,10 +4678,11 @@ impl EditorApp {
             });
             return;
         }
-        match self
-            .tinymist
-            .format_document(generation, uri, revision_as_i32(self.revision))
-        {
+        match self.tinymist.format_document(
+            generation,
+            uri,
+            revision_as_i32(self.document.revision),
+        ) {
             Ok(()) => {
                 self.notice = Some(Notice {
                     message: "Formatting with Tinymist…".to_owned(),
@@ -5300,8 +4700,8 @@ impl EditorApp {
     }
 
     fn request_format_after_manual_save(&mut self) {
-        if self.document_kind.is_typst() {
-            self.manual_format_revision = Some(self.revision);
+        if self.document.kind.is_typst() {
+            self.manual_format_revision = Some(self.document.revision);
             self.request_format_document();
         }
     }
@@ -5316,7 +4716,7 @@ impl EditorApp {
     ) {
         if self.tinymist_generation != Some(generation)
             || self.tinymist_uri.as_deref() != Some(uri)
-            || version != revision_as_i32(self.revision)
+            || version != revision_as_i32(self.document.revision)
         {
             return;
         }
@@ -5336,13 +4736,13 @@ impl EditorApp {
             });
             return;
         }
-        let cursor = if self.reset_editor_history {
+        let cursor = if self.document.reset_editor_history {
             CCursorRange::one(CCursor::new(0))
         } else {
             self.editor_snapshot(context).cursor
         };
         let applied = match apply_text_edits(
-            &self.source,
+            &self.document.source,
             &edits,
             [cursor.primary.index.0, cursor.secondary.index.0],
         ) {
@@ -5362,7 +4762,7 @@ impl EditorApp {
             h_pos: cursor.h_pos,
         };
         let formatted = applied.text;
-        if formatted == self.source {
+        if formatted == self.document.source {
             self.manual_format_revision = None;
             self.notice = Some(Notice {
                 message: "Document is already formatted".to_owned(),
@@ -5371,19 +4771,18 @@ impl EditorApp {
             return;
         }
         self.pending_editor_selection = None;
-        self.push_editor_undo_snapshot(EditorSnapshot {
-            source: self.source.clone(),
-            cursor,
-        });
-        self.source = formatted;
+        self.prepare_editor_source_data();
+        let source = self.editor_data.source_snapshot();
+        self.push_editor_undo_snapshot(EditorSnapshot { source, cursor });
+        self.document.source = formatted;
         self.store_editor_cursor(context, mapped_cursor);
-        self.reset_editor_history = false;
+        self.document.reset_editor_history = false;
         self.search.clear();
-        let save_after_format = self.manual_format_revision == Some(self.revision);
+        let save_after_format = self.manual_format_revision == Some(self.document.revision);
         self.manual_format_revision = None;
         self.mark_edited();
         let saved_after_format = if save_after_format {
-            if let Some(path) = self.path.clone() {
+            if let Some(path) = self.document.path.clone() {
                 if !self.save_to_with_intent(path, SaveIntent::Explicit) {
                     return;
                 }
@@ -5418,7 +4817,9 @@ impl EditorApp {
     }
 
     fn show_rename_dialog(&mut self, context: &egui::Context) {
-        if self.rename_dialog.is_none() || self.app_modal.is_some() || self.rename_overlay_suspended
+        if self.rename_dialog.is_none()
+            || self.document_workflow.modal.is_some()
+            || self.rename_overlay_suspended
         {
             return;
         }
@@ -5429,7 +4830,6 @@ impl EditorApp {
             .clamp(1.0, METRICS.popup.rename_max_width);
         let theme = context.theme();
         let style = context.style_of(theme);
-        let native_theme = theme::native_theme(theme);
         let Some(dialog) = &mut self.rename_dialog else {
             return;
         };
@@ -5438,56 +4838,44 @@ impl EditorApp {
         let mut overlay_had_focus = self.rename_overlay_had_focus;
         let mut suspend_overlay = false;
         let captures = self.captures.clone();
-        context.show_viewport_immediate(
-            scoped_child_viewport_id(context, "tiptoptyp-rename-overlay"),
-            theme::popup_viewport_builder("Rename")
-                .with_position(window_rect.min)
-                .with_inner_size(window_rect.size())
-                .with_min_inner_size(window_rect.size())
-                .with_max_inner_size(window_rect.size())
-                .with_active(true),
-            |ui, _class| {
-                captures.begin_viewport(ui.ctx());
-                ui.set_style(style.clone());
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::SetTheme(native_theme));
-                cancel |= ui.ctx().input(|input| {
-                    if input.viewport().focused == Some(true) {
-                        overlay_had_focus = true;
-                    }
-                    suspend_overlay |= overlay_had_focus && input.viewport().focused == Some(false);
-                    input.viewport().close_requested() || input.key_pressed(egui::Key::Escape)
-                });
-                if suspend_overlay {
-                    ui.ctx()
-                        .send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        let spec =
+            ChildViewSpec::modal("tiptoptyp-rename-overlay", "Rename", window_rect, "rename");
+        ChildViewHost::show(context, &captures, spec, theme, &style, |ui, input| {
+            cancel |= {
+                if input.focused == Some(true) {
+                    overlay_had_focus = true;
                 }
-                egui::Area::new(viewport_scoped_id(ui.ctx(), "rename-document-dialog"))
-                    .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-                    .show(ui.ctx(), |ui| {
-                        theme::dialog_card_frame(&style).show(ui, |ui| {
-                            ui.set_min_width(dialog_width);
-                            ui.set_max_width(dialog_width);
-                            ui.label(RichText::new("Rename").strong());
-                            let response = ui.add_sized(
-                                [dialog_width, METRICS.popup.rename_input_height],
-                                egui::TextEdit::singleline(&mut dialog.name).id_salt("rename-name"),
-                            );
-                            if dialog.focus {
-                                response.request_focus();
-                                dialog.focus = false;
-                            }
-                            submit |= response.lost_focus()
-                                && ui.input(|input| input.key_pressed(egui::Key::Enter));
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                submit |= ui.button("Rename").clicked();
-                                cancel |= ui.button("Cancel").clicked();
-                            });
+                suspend_overlay |= overlay_had_focus && input.focused == Some(false);
+                input.close_requested || input.escape_pressed
+            };
+            if suspend_overlay {
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            }
+            egui::Area::new(viewport_scoped_id(ui.ctx(), "rename-document-dialog"))
+                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+                .show(ui.ctx(), |ui| {
+                    theme::dialog_card_frame(&style).show(ui, |ui| {
+                        ui.set_min_width(dialog_width);
+                        ui.set_max_width(dialog_width);
+                        ui.label(RichText::new("Rename").strong());
+                        let response = ui.add_sized(
+                            [dialog_width, METRICS.popup.rename_input_height],
+                            egui::TextEdit::singleline(&mut dialog.name).id_salt("rename-name"),
+                        );
+                        if dialog.focus {
+                            response.request_focus();
+                            dialog.focus = false;
+                        }
+                        submit |= response.lost_focus()
+                            && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            submit |= ui.button("Rename").clicked();
+                            cancel |= ui.button("Cancel").clicked();
                         });
                     });
-                captures.end_glow_viewport(ui, "rename");
-            },
-        );
+                });
+        });
         self.rename_overlay_had_focus = overlay_had_focus;
         if suspend_overlay {
             self.rename_overlay_suspended = true;
@@ -5507,7 +4895,7 @@ impl EditorApp {
     }
 
     fn show_workspace_chooser(&mut self, context: &egui::Context) {
-        if !self.workspace_chooser_visible || self.app_modal.is_some() {
+        if !self.workspace_chooser_visible || self.document_workflow.modal.is_some() {
             return;
         }
         let Some(window_rect) = context.input(|input| input.viewport().inner_rect) else {
@@ -5616,10 +5004,10 @@ impl EditorApp {
     }
 
     fn show_app_modal_window(&mut self, context: &egui::Context) {
-        if self.app_modal_suspended {
+        if self.document_workflow.modal_suspended {
             return;
         }
-        let Some(modal) = self.app_modal.clone() else {
+        let Some(modal) = self.document_workflow.modal.clone() else {
             return;
         };
         let Some(window_rect) = context.input(|input| input.viewport().inner_rect) else {
@@ -5635,7 +5023,7 @@ impl EditorApp {
             METRICS.popup.modal_message_max_height,
         );
         let mut choice = None;
-        let mut overlay_had_focus = self.app_modal_had_focus;
+        let mut overlay_had_focus = self.document_workflow.modal_had_focus;
         let mut suspend_overlay = false;
         let captures = self.captures.clone();
 
@@ -5734,67 +5122,60 @@ impl EditorApp {
                 captures.end_glow_viewport(ui, "modal");
             },
         );
-        self.app_modal_had_focus = overlay_had_focus;
+        self.document_workflow.modal_had_focus = overlay_had_focus;
         if suspend_overlay {
-            self.app_modal_suspended = true;
+            self.document_workflow.modal_suspended = true;
         }
 
         let Some(choice) = choice else {
             return;
         };
-        self.app_modal = None;
-        self.app_modal_had_focus = false;
-        self.app_modal_suspended = false;
+        self.document_workflow.clear_modal();
         context.send_viewport_cmd(egui::ViewportCommand::Focus);
         match (modal, choice) {
             (AppModal::Alert { .. }, _) => {}
             (AppModal::Unsaved { pending, .. }, AppModalChoice::Primary) => {
-                self.pending_document_action = Some(PendingDocumentAction {
+                self.document_workflow.pending_action = Some(PendingDocumentAction {
                     action: DeferredDocumentAction::SaveThen(Box::new(pending)),
-                    document_epoch: self.document_epoch,
-                    revision: self.revision,
+                    key: self.document.key(),
                     allow_discard: true,
                     description: "saving the current document".to_owned(),
                 });
             }
             (AppModal::Unsaved { mut pending, .. }, AppModalChoice::Secondary) => {
-                self.post_save_action = None;
-                pending.document_epoch = self.document_epoch;
-                pending.revision = self.revision;
+                self.document_workflow.post_save_action = None;
+                pending.key = self.document.key();
                 pending.allow_discard = true;
-                self.pending_document_action = Some(pending);
+                self.document_workflow.pending_action = Some(pending);
             }
             (AppModal::Unsaved { .. }, AppModalChoice::Cancel) => {
-                self.post_save_action = None;
+                self.document_workflow.post_save_action = None;
                 self.schedule_autosave_if_needed();
             }
             (
                 AppModal::Overwrite {
                     path,
-                    document_epoch,
-                    revision,
+                    key,
                     expected_disk_fingerprint,
                     observed_disk_fingerprint,
                     ..
                 },
                 AppModalChoice::Primary,
             ) => {
-                self.pending_document_action = Some(PendingDocumentAction {
+                self.document_workflow.pending_action = Some(PendingDocumentAction {
                     action: DeferredDocumentAction::ForceSave {
                         path,
-                        document_epoch,
-                        revision,
+                        key,
                         expected_disk_fingerprint,
                         observed_disk_fingerprint,
                     },
-                    document_epoch: self.document_epoch,
-                    revision: self.revision,
+                    key: self.document.key(),
                     allow_discard: true,
                     description: "overwriting the current file".to_owned(),
                 });
             }
             (AppModal::Overwrite { .. }, _) => {
-                self.post_save_action = None;
+                self.document_workflow.post_save_action = None;
                 self.schedule_autosave_if_needed();
             }
         }
@@ -5822,6 +5203,7 @@ impl EditorApp {
             return;
         }
         let renames_current_document = self
+            .document
             .path
             .as_ref()
             .is_some_and(|current| same_path(current, &old_path));
@@ -5831,7 +5213,7 @@ impl EditorApp {
         let preserve_designated_preview = renames_current_document
             && !renames_preview_document
             && self.should_keep_designated_preview(&new_path);
-        let reload_binary_document = renames_current_document && self.document_kind.preview_only();
+        let reload_binary_document = renames_current_document && self.document.kind.preview_only();
         let destination_is_same_entry = old_path
             .canonicalize()
             .ok()
@@ -5865,27 +5247,27 @@ impl EditorApp {
         }
         if reload_binary_document {
             // Reload from the renamed file so detection sees the real binary
-            // bytes. Using `self.source` here would pass an empty buffer for
+            // bytes. Using `self.document.source` here would pass an empty buffer for
             // PDFs/images and could incorrectly turn them into editable text.
             self.load_path(new_path.clone());
         } else if renames_current_document {
-            self.path = Some(new_path.clone());
-            self.document_epoch = self.document_epoch.wrapping_add(1);
-            self.document_kind = DocumentKind::detect(&new_path, self.source.as_bytes())
+            self.document.path = Some(new_path.clone());
+            self.document.epoch = self.document.epoch.wrapping_add(1);
+            self.document.kind = DocumentKind::detect(&new_path, self.document.source.as_bytes())
                 .ok()
                 .filter(|kind| kind.is_editable())
                 .unwrap_or(DocumentKind::Text);
             self.remember_open_document(&new_path);
             if preserve_designated_preview {
-                self.reopen_tinymist_current_document(&new_path, self.document_kind);
+                self.reopen_tinymist_current_document(&new_path, self.document.kind);
                 self.refresh_workspace();
             } else {
                 self.reset_document_services();
             }
-            if self.document_kind.is_typst() {
+            if self.document.kind.is_typst() {
                 self.schedule_compile_now();
             } else {
-                self.status = PreviewStatus::Ready(Duration::ZERO);
+                self.preview.status = PreviewStatus::Ready(Duration::ZERO);
             }
         }
         self.refresh_workspace();
@@ -5902,7 +5284,10 @@ impl EditorApp {
     }
 
     fn show_settings_window(&mut self, context: &egui::Context, frame: &eframe::Frame) {
-        if !self.settings_visible || self.app_modal.is_some() || self.rename_dialog.is_some() {
+        if !self.settings_visible
+            || self.document_workflow.modal.is_some()
+            || self.rename_dialog.is_some()
+        {
             return;
         }
         let active_theme = self
@@ -5916,37 +5301,30 @@ impl EditorApp {
                 }
             });
         let style = context.style_of(active_theme);
-        let native_theme = theme::native_theme(active_theme);
         let mut close_requested = false;
         let captures = self.captures.clone();
         let web_link_sender = self.web_link_sender.clone();
-        let viewport = child_viewport_builder(
-            egui::ViewportBuilder::default()
-                .with_title("tiptoptyp Settings")
-                .with_inner_size([
-                    METRICS.chrome.settings_width,
-                    METRICS.chrome.settings_height,
-                ])
-                .with_min_inner_size(METRICS.chrome.settings_min_size)
-                .with_fullsize_content_view(true)
-                .with_title_shown(false)
-                .with_titlebar_shown(false)
-                .with_maximize_button(false)
-                .with_maximized(false)
-                .with_fullscreen(false),
+        let spec = ChildViewSpec::persistent(
+            "tiptoptyp-settings",
+            "tiptoptyp Settings",
+            [
+                METRICS.chrome.settings_width,
+                METRICS.chrome.settings_height,
+            ],
+            METRICS.chrome.settings_min_size,
+            "settings",
         );
-        context.show_viewport_immediate(
-            scoped_child_viewport_id(context, "tiptoptyp-settings"),
-            viewport,
-            |ui, _class| {
-                captures.begin_viewport(ui.ctx());
-                ui.set_style(style.clone());
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::SetTheme(native_theme));
+        ChildViewHost::show(
+            context,
+            &captures,
+            spec,
+            active_theme,
+            &style,
+            |ui, input| {
                 let settings_tooltip_id = settings_hover_tooltip_id(ui.ctx());
                 ui.ctx()
                     .data_mut(|data| data.remove::<HoverTooltipOverlay>(settings_tooltip_id));
-                close_requested |= ui.ctx().input(|input| input.viewport().close_requested());
+                close_requested |= input.close_requested;
                 if ui.ctx().input(|input| input.viewport().fullscreen) == Some(true) {
                     ui.ctx()
                         .send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
@@ -6011,7 +5389,6 @@ impl EditorApp {
                         &web_link_sender,
                     );
                 }
-                captures.end_glow_viewport(ui, "settings");
             },
         );
         if close_requested {
@@ -6027,7 +5404,7 @@ impl EditorApp {
 
     fn show_typst_overrides_window(&mut self, context: &egui::Context) {
         if !self.typst_overrides_visible
-            || self.app_modal.is_some()
+            || self.document_workflow.modal.is_some()
             || self.rename_dialog.is_some()
             || self.pending_tool_picker.is_some()
         {
@@ -6314,7 +5691,7 @@ impl EditorApp {
             || self.settings_visible
             || self.rename_dialog.is_some()
             || self.app_popup.is_some()
-            || self.app_modal.is_some()
+            || self.document_workflow.modal.is_some()
         {
             return;
         }
@@ -6332,7 +5709,7 @@ impl EditorApp {
     }
 
     fn show_app_popup_window(&mut self, context: &egui::Context) {
-        if self.app_modal.is_some()
+        if self.document_workflow.modal.is_some()
             || self.settings_visible
             || self.typst_overrides_visible
             || self.workspace_chooser_visible
@@ -6350,7 +5727,6 @@ impl EditorApp {
         };
         let theme = context.theme();
         let style = context.style_of(theme);
-        let native_theme = theme::native_theme(theme);
         let (anchor, desired_size) = match &popup {
             AppPopup::File { anchor } => (*anchor, METRICS.menu.file_size),
             AppPopup::Edit { anchor } => (*anchor, METRICS.menu.edit_size),
@@ -6386,118 +5762,105 @@ impl EditorApp {
         };
         let (can_undo, can_redo) = self.editor_history_availability(context);
         let has_selection = self.selected_editor_chars(context).is_some();
-        let can_format = self.document_kind.is_typst();
-        let can_sync_preview = self.document_kind.is_typst() && self.interactive_preview_active();
+        let can_format = self.document.kind.is_typst();
+        let can_sync_preview = self.document.kind.is_typst() && self.interactive_preview_active();
         let mut close = false;
         let mut action = None;
         let mut had_focus = self.app_popup_had_focus;
         let mut blur_started = self.app_popup_blur_started;
         let popup_generation = self.app_popup_generation;
         let captures = self.captures.clone();
+        let spec = ChildViewSpec::dismiss_on_blur(
+            "tiptoptyp-popup-overlay",
+            "tiptoptyp menu",
+            window_rect.min + anchor.to_vec2(),
+            estimated_size,
+            "popup",
+        );
 
-        context.show_viewport_immediate(
-            scoped_child_viewport_id(context, "tiptoptyp-popup-overlay"),
-            theme::popup_viewport_builder("tiptoptyp menu")
-                .with_position(window_rect.min + anchor.to_vec2())
-                .with_inner_size(estimated_size)
-                .with_min_inner_size(estimated_size)
-                .with_max_inner_size(estimated_size)
-                .with_active(true),
-            |ui, _class| {
-                captures.begin_viewport(ui.ctx());
-                ui.set_style(style.clone());
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::SetTheme(native_theme));
-                let (focused, close_requested, escape_pressed) = ui.ctx().input(|input| {
-                    (
-                        input.viewport().focused,
-                        input.viewport().close_requested(),
-                        input.key_pressed(egui::Key::Escape),
-                    )
-                });
-                close |= close_requested || escape_pressed;
-                let now = Instant::now();
-                close |= popup_focus_should_close(&mut had_focus, &mut blur_started, focused, now);
-                if let Some(started) = blur_started {
-                    let elapsed = now.saturating_duration_since(started);
-                    if elapsed < POPUP_BLUR_GRACE {
-                        ui.ctx().request_repaint_after(POPUP_BLUR_GRACE - elapsed);
-                    }
+        ChildViewHost::show(context, &captures, spec, theme, &style, |ui, input| {
+            close |= input.close_requested || input.escape_pressed;
+            let now = Instant::now();
+            close |=
+                popup_focus_should_close(&mut had_focus, &mut blur_started, input.focused, now);
+            if let Some(started) = blur_started {
+                let elapsed = now.saturating_duration_since(started);
+                if elapsed < POPUP_BLUR_GRACE {
+                    ui.ctx().request_repaint_after(POPUP_BLUR_GRACE - elapsed);
                 }
+            }
 
-                egui::Area::new(viewport_scoped_id(ui.ctx(), "app-popup-card"))
-                    .order(egui::Order::Foreground)
-                    .fixed_pos(Pos2::ZERO)
-                    .show(ui.ctx(), |ui| {
-                        menu_frame.show(ui, |ui| {
-                            ui.set_min_width(menu_width);
-                            ui.set_max_width(menu_width);
-                            egui::ScrollArea::vertical()
-                                .id_salt(app_popup_scroll_id(popup_generation))
-                                .max_height(menu_height)
-                                .show(ui, |ui| match &popup {
-                                    AppPopup::File { .. } => {
-                                        show_file_popup_ui(ui, &mut action);
-                                    }
-                                    AppPopup::Edit { .. } => {
-                                        show_edit_popup_ui(
-                                            ui,
+            egui::Area::new(viewport_scoped_id(ui.ctx(), "app-popup-card"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(Pos2::ZERO)
+                .show(ui.ctx(), |ui| {
+                    menu_frame.show(ui, |ui| {
+                        ui.set_min_width(menu_width);
+                        ui.set_max_width(menu_width);
+                        egui::ScrollArea::vertical()
+                            .id_salt(app_popup_scroll_id(popup_generation))
+                            .max_height(menu_height)
+                            .show(ui, |ui| match &popup {
+                                AppPopup::File { .. } => {
+                                    show_file_popup_ui(ui, &mut action);
+                                }
+                                AppPopup::Edit { .. } => {
+                                    show_edit_popup_ui(
+                                        ui,
+                                        can_undo,
+                                        can_redo,
+                                        can_format,
+                                        &mut action,
+                                    );
+                                }
+                                AppPopup::View { .. } => {
+                                    show_view_popup_ui(ui, &mut action);
+                                }
+                                AppPopup::Workspace { path, is_file, .. } => {
+                                    let preview_selected = self
+                                        .designated_preview_path()
+                                        .is_some_and(|preview| same_path(&preview, path));
+                                    show_workspace_popup_ui(
+                                        ui,
+                                        path,
+                                        *is_file,
+                                        preview_selected,
+                                        &mut action,
+                                    );
+                                }
+                                AppPopup::Editor { link, .. } => {
+                                    let mut editor_action = None;
+                                    show_editor_context_menu_ui(
+                                        ui,
+                                        EditorContextMenuOptions {
                                             can_undo,
                                             can_redo,
+                                            has_selection,
                                             can_format,
-                                            &mut action,
-                                        );
+                                            can_sync_preview,
+                                            link: link.as_deref(),
+                                        },
+                                        &mut editor_action,
+                                    );
+                                    if let Some(editor_action) = editor_action {
+                                        action = Some(AppPopupAction::Editor(editor_action));
                                     }
-                                    AppPopup::View { .. } => {
-                                        show_view_popup_ui(ui, &mut action);
-                                    }
-                                    AppPopup::Workspace { path, is_file, .. } => {
-                                        let preview_selected = self
-                                            .designated_preview_path()
-                                            .is_some_and(|preview| same_path(&preview, path));
-                                        show_workspace_popup_ui(
-                                            ui,
-                                            path,
-                                            *is_file,
-                                            preview_selected,
-                                            &mut action,
-                                        );
-                                    }
-                                    AppPopup::Editor { link, .. } => {
-                                        let mut editor_action = None;
-                                        show_editor_context_menu_ui(
-                                            ui,
-                                            EditorContextMenuOptions {
-                                                can_undo,
-                                                can_redo,
-                                                has_selection,
-                                                can_format,
-                                                can_sync_preview,
-                                                link: link.as_deref(),
-                                            },
-                                            &mut editor_action,
-                                        );
-                                        if let Some(editor_action) = editor_action {
-                                            action = Some(AppPopupAction::Editor(editor_action));
-                                        }
-                                    }
-                                    AppPopup::StatusLog { .. } => {
-                                        show_status_log_popup_ui(ui, &self.status_log);
-                                    }
-                                    AppPopup::FontSelector { target, .. } => {
-                                        show_document_font_selector_ui(
-                                            ui,
-                                            &self.font_catalog,
-                                            target,
-                                            &mut action,
-                                        );
-                                    }
-                                });
-                        });
+                                }
+                                AppPopup::StatusLog { .. } => {
+                                    show_status_log_popup_ui(ui, &self.status_log);
+                                }
+                                AppPopup::FontSelector { target, .. } => {
+                                    show_document_font_selector_ui(
+                                        ui,
+                                        &self.font_catalog,
+                                        target,
+                                        &mut action,
+                                    );
+                                }
+                            });
                     });
-                captures.end_glow_viewport(ui, "popup");
-            },
-        );
+                });
+        });
         self.app_popup_had_focus = had_focus;
         self.app_popup_blur_started = blur_started;
 
@@ -6522,25 +5885,17 @@ impl EditorApp {
             return;
         };
         match action {
-            AppPopupAction::File(action) => self.execute_file_menu_action(action, frame),
-            AppPopupAction::Editor(action) => self.execute_editor_menu_action(action, context),
-            AppPopupAction::View(action) => match action {
-                ViewCommand::Problems => self.problems_visible = !self.problems_visible,
-                ViewCommand::Explorer => self.filesystem_visible = !self.filesystem_visible,
-                ViewCommand::Code => self.view_mode = ViewMode::Code,
-                ViewCommand::Split => self.view_mode = ViewMode::Split,
-                ViewCommand::Preview => self.view_mode = ViewMode::Preview,
-            },
-            AppPopupAction::Find(replace) => {
-                if replace {
-                    self.open_find(true);
-                } else {
-                    self.toggle_find();
-                }
+            AppPopupAction::Command(command) => self.execute_app_command(command, context, frame),
+            AppPopupAction::Editor(EditorMenuAction::Command(command)) => {
+                self.execute_app_command(command, context, frame)
+            }
+            AppPopupAction::Editor(EditorMenuAction::OpenLink(target)) => {
+                self.follow_preview_link(&target)
             }
             AppPopupAction::Workspace(action) => match action {
                 WorkspaceMenuAction::Open(path) => {
                     if self
+                        .document
                         .path
                         .as_ref()
                         .is_none_or(|current| !same_path(current, &path))
@@ -6594,9 +5949,15 @@ impl EditorApp {
         family: &str,
         context: &egui::Context,
     ) {
-        if target.value_range.end > self.source.len()
-            || !self.source.is_char_boundary(target.value_range.start)
-            || !self.source.is_char_boundary(target.value_range.end)
+        if target.value_range.end > self.document.source.len()
+            || !self
+                .document
+                .source
+                .is_char_boundary(target.value_range.start)
+            || !self
+                .document
+                .source
+                .is_char_boundary(target.value_range.end)
         {
             self.notice = Some(Notice {
                 message: "The font argument changed before it could be updated".to_owned(),
@@ -6606,9 +5967,13 @@ impl EditorApp {
         }
         let snapshot = self.editor_snapshot(context);
         let replacement = family.replace('\\', "\\\\").replace('"', "\\\"");
-        let selection_end =
-            self.source[..target.value_range.start].chars().count() + replacement.chars().count();
-        self.source.replace_range(target.value_range, &replacement);
+        let selection_end = self.document.source[..target.value_range.start]
+            .chars()
+            .count()
+            + replacement.chars().count();
+        self.document
+            .source
+            .replace_range(target.value_range, &replacement);
         self.push_editor_undo_snapshot(snapshot);
         self.pending_editor_selection = Some(selection_end..selection_end);
         self.search.clear();
@@ -6964,7 +6329,7 @@ impl EditorApp {
                         &mut self.staged_code_font_weight,
                         self.font_configuration.code_weight_support.as_ref(),
                     );
-                    if self.font_catalog_scan.is_some() {
+                    if self.font_catalog_scan.is_running() {
                         ui.label(RichText::new("Scanning fonts…").weak());
                     } else if !self.font_catalog.workspace_directories().is_empty() {
                         ui.label(
@@ -7101,7 +6466,7 @@ impl EditorApp {
                     fallback_notice(ui, "Preview fallback active", &reason);
                 }
                 if !deterministic_settings
-                    && self.settings.preview_preference == PreviewPreference::Interactive
+                    && self.preview.requested_backend == PreviewPreference::Interactive
                     && !self.interactive_preview_active()
                     && ui.button("Retry Tinymist").clicked()
                 {
@@ -7128,8 +6493,8 @@ impl EditorApp {
                     } else {
                         show_tool_status_chip(ui, "Typst", &self.typst_tool);
                         show_tool_status_chip(ui, "Tinymist", &self.tinymist_tool);
-                        show_service_status_chip(ui, "LSP", &self.tinymist_state);
-                        show_service_status_chip(ui, "Vector", &self.webview_state);
+                        show_service_status_chip(ui, "LSP", &self.preview.tinymist_state);
+                        show_service_status_chip(ui, "Vector", &self.preview.webview_state);
                         show_service_status_chip(ui, "Watcher", &self.compiler_service_state());
                         show_service_status_chip(ui, "PDF", &self.rasterizer_service_state());
                     }
@@ -7186,9 +6551,9 @@ impl EditorApp {
             return ServiceState::Disabled("The selected file is not compiled as Typst".to_owned());
         }
         if !self.may_run_compilation() {
-            return ServiceState::Disabled("Automatic compilation is paused".to_owned());
+            return ServiceState::Disabled("Automatic preview updates are paused".to_owned());
         }
-        match self.status {
+        match self.preview.status {
             PreviewStatus::Waiting => {
                 ServiceState::Starting("Build queued for persistent `typst watch`".to_owned())
             }
@@ -7201,6 +6566,7 @@ impl EditorApp {
             )),
             PreviewStatus::Error => {
                 let detail = self
+                    .preview
                     .raw_diagnostics
                     .lines()
                     .find(|line| !line.trim().is_empty())
@@ -7218,29 +6584,32 @@ impl EditorApp {
     }
 
     fn rasterizer_service_state(&self) -> ServiceState {
-        if self.document_kind == DocumentKind::Text && !self.typst_preview_available() {
+        if self.document.kind == DocumentKind::Text && !self.typst_preview_available() {
             return ServiceState::Disabled("Text files do not need a preview renderer".to_owned());
         }
-        if self.document_kind == DocumentKind::Image
+        if self.document.kind == DocumentKind::Image
             && !self.typst_preview_available()
-            && !self.pages.is_empty()
+            && !self.preview.pages.is_empty()
         {
             return ServiceState::Ready("The selected image decoded successfully".to_owned());
         }
-        if !self.pages.is_empty() && self.compiled_revision == Some(self.revision) {
+        if self.raster_content_freshness() == Some(RasterContentFreshness::Current) {
             return ServiceState::Ready(format!(
                 "Poppler rendered {} page(s) at {} DPI",
-                self.pages.len(),
+                self.preview.pages.len(),
                 crate::compiler::PREVIEW_DPI
             ));
         }
-        if !self.pages.is_empty() {
+        if self.raster_content_freshness() == Some(RasterContentFreshness::Stale) {
             return ServiceState::Degraded(format!(
                 "Showing {} page(s) from the last successful build",
-                self.pages.len()
+                self.preview.pages.len()
             ));
         }
-        match self.status {
+        if let Some(error) = &self.preview.raster_error {
+            return ServiceState::Degraded(error.clone());
+        }
+        match self.preview.status {
             PreviewStatus::Error => {
                 ServiceState::Failed("No rasterized pages are available".to_owned())
             }
@@ -7248,6 +6617,10 @@ impl EditorApp {
                 ServiceState::Starting("Waiting for the watched PDF to render".to_owned())
             }
         }
+    }
+
+    fn raster_content_freshness(&self) -> Option<RasterContentFreshness> {
+        self.preview.raster_freshness(self.document.revision)
     }
 
     fn show_workspace(&mut self, ui: &mut egui::Ui) {
@@ -7304,13 +6677,24 @@ impl EditorApp {
         let preview_path = self.designated_preview_path();
         let project_index = &self.project_index;
         let active = snapshot.as_ref().and_then(|snapshot| {
-            self.path.as_ref().and_then(|path| {
+            self.document.path.as_ref().and_then(|path| {
                 path.strip_prefix(&snapshot.root)
                     .ok()
                     .and_then(|relative| snapshot.find(relative))
                     .map(|node| node.path.clone())
             })
         });
+        let preview = snapshot
+            .as_ref()
+            .and_then(|snapshot| {
+                preview_path.as_ref().and_then(|path| {
+                    path.strip_prefix(&snapshot.root)
+                        .ok()
+                        .and_then(|relative| snapshot.find(relative))
+                        .map(|node| node.path.clone())
+                })
+            })
+            .or(preview_path);
         let mut open_path = None;
         let mut index_target = None;
         let mut popup_request = None;
@@ -7367,7 +6751,7 @@ impl EditorApp {
                                     builder,
                                     &snapshot.nodes,
                                     active.as_deref(),
-                                    preview_path.as_deref(),
+                                    preview.as_deref(),
                                     dark_mode,
                                 );
                             })
@@ -7403,6 +6787,7 @@ impl EditorApp {
 
         if let Some(path) = open_path
             && self
+                .document
                 .path
                 .as_ref()
                 .is_none_or(|current| !same_path(current, &path))
@@ -7414,6 +6799,7 @@ impl EditorApp {
         }
         if let Some((path, line)) = index_target {
             if self
+                .document
                 .path
                 .as_ref()
                 .is_some_and(|current| same_path(current, &path))
@@ -7440,13 +6826,18 @@ impl EditorApp {
         let mut find_previous = false;
         let mut replace_one = false;
         let mut replace_all = false;
-        let match_count = find_all_with_options(
-            &self.source,
+        let search_revision = SearchRevision::new(self.document.epoch, self.document.revision);
+        let search_results = self.search.results(
+            &self.document.source,
+            search_revision,
             &self.find_query,
             self.find_case_sensitive,
             self.find_regex,
-        )
-        .len();
+        );
+        let match_status = search_results.error().map_or_else(
+            || format!("{} matches", search_results.len()),
+            |_| "Invalid pattern".to_owned(),
+        );
 
         ui.horizontal_wrapped(|ui| {
             let response = ui.add(
@@ -7476,7 +6867,7 @@ impl EditorApp {
                 response.request_focus();
             }
             ui.label(
-                RichText::new(format!("{match_count} matches"))
+                RichText::new(match_status)
                     .size(theme::TYPE.supporting)
                     .weak(),
             );
@@ -7542,8 +6933,9 @@ impl EditorApp {
         if find_previous {
             self.pending_editor_selection = self
                 .search
-                .previous_with_options(
-                    &self.source,
+                .previous(
+                    &self.document.source,
+                    search_revision,
                     &self.find_query,
                     self.find_case_sensitive,
                     self.find_regex,
@@ -7553,8 +6945,9 @@ impl EditorApp {
         if find_next {
             self.pending_editor_selection = self
                 .search
-                .next_with_options(
-                    &self.source,
+                .next(
+                    &self.document.source,
+                    search_revision,
                     &self.find_query,
                     self.find_case_sensitive,
                     self.find_regex,
@@ -7562,10 +6955,11 @@ impl EditorApp {
                 .map(|matched| matched.char_range.clone());
         }
         if replace_one {
-            let before = self.source.clone();
+            let before = self.document.source.clone();
             let snapshot = self.editor_snapshot(ui.ctx());
-            let replaced = self.search.replace_one_with_options(
-                &mut self.source,
+            let replaced = self.search.replace_one(
+                &mut self.document.source,
+                search_revision,
                 &self.find_query,
                 &self.replacement,
                 self.find_case_sensitive,
@@ -7576,23 +6970,24 @@ impl EditorApp {
                     .search
                     .selected()
                     .map(|matched| matched.char_range.clone());
-                if self.source != before {
+                if self.document.source != before {
                     self.push_editor_undo_snapshot(snapshot);
                     self.mark_edited();
                 }
             }
         }
         if replace_all {
-            let before = self.source.clone();
+            let before = self.document.source.clone();
             let snapshot = self.editor_snapshot(ui.ctx());
-            let count = self.search.replace_all_with_options(
-                &mut self.source,
+            let count = self.search.replace_all(
+                &mut self.document.source,
+                search_revision,
                 &self.find_query,
                 &self.replacement,
                 self.find_case_sensitive,
                 self.find_regex,
             );
-            if count > 0 && self.source != before {
+            if count > 0 && self.document.source != before {
                 self.push_editor_undo_snapshot(snapshot);
                 self.notice = Some(Notice {
                     message: format!("Replaced {count} matches"),
@@ -7605,7 +7000,7 @@ impl EditorApp {
 
     fn show_editor(&mut self, ui: &mut egui::Ui) {
         ui.set_min_width(ui.available_width());
-        if self.reset_editor_history {
+        if self.document.reset_editor_history {
             let mut state =
                 egui::text_edit::TextEditState::load(ui.ctx(), source_editor_id(ui.ctx()))
                     .unwrap_or_default();
@@ -7614,22 +7009,16 @@ impl EditorApp {
                 .cursor
                 .set_char_range(Some(CCursorRange::one(CCursor::new(0))));
             state.store(ui.ctx(), source_editor_id(ui.ctx()));
-            self.reset_editor_history = false;
+            self.document.reset_editor_history = false;
         }
-        let line_diagnostics = self.line_diagnostics();
+        let source_revision = self.editor_revision();
+        self.prepare_editor_data();
+        let source_metrics = self.editor_data.source_metrics();
+        let line_diagnostics = self.editor_data.line_diagnostics();
         let available_width = ui.available_width();
-        let line_count = logical_line_count(&self.source);
-        let longest_line = self
-            .source
-            .lines()
-            .map(|line| line.chars().count())
-            .max()
-            .unwrap_or(0);
-        let longest_diagnostic = line_diagnostics
-            .iter()
-            .map(|diagnostic| diagnostic.summary.chars().count())
-            .max()
-            .unwrap_or(0);
+        let line_count = source_metrics.line_count;
+        let longest_line = source_metrics.longest_line_chars;
+        let longest_diagnostic = self.editor_data.longest_diagnostic_chars();
         let unwrapped_editor_width = available_width
             .max(
                 (longest_line as f32 * METRICS.editor.source_character_width)
@@ -7641,8 +7030,8 @@ impl EditorApp {
         let line_numbers = self.settings.line_numbers;
         let gutter_width = line_number_gutter_width(line_count, line_numbers);
         let dark_mode = ui.visuals().dark_mode;
-        let document_kind = self.document_kind;
-        let highlight_path = self.path.clone();
+        let document_kind = self.document.kind;
+        let highlight_path = self.document.path.clone();
         let source_preview_trigger = self.settings.source_preview_trigger;
         let preview_jump_enabled = document_kind.is_typst() && self.interactive_preview_active();
         let snapshot_before_edit = self.editor_snapshot(ui.ctx());
@@ -7702,7 +7091,7 @@ impl EditorApp {
                         job.wrap.max_width = if line_wrap { wrap_width } else { f32::INFINITY };
                         ui.fonts_mut(|fonts| fonts.layout_job(job))
                     };
-                let editor = egui::TextEdit::multiline(&mut self.source)
+                let editor = egui::TextEdit::multiline(&mut self.document.source)
                     .id(source_editor_id(ui.ctx()))
                     .code_editor()
                     .desired_width(editor_width)
@@ -7714,6 +7103,10 @@ impl EditorApp {
                     .layouter(&mut layouter);
                 let mut output = editor.show(ui);
                 changed = output.response.changed();
+                if changed {
+                    self.editor_data
+                        .prepare_source(source_revision.after_edit(), &self.document.source);
+                }
                 let mut current_char = output
                     .state
                     .cursor
@@ -7722,7 +7115,7 @@ impl EditorApp {
                 let line_rows = logical_line_row_ranges(&output.galley.rows);
 
                 if let Some(range) = pending_selection {
-                    let len = self.source.chars().count();
+                    let len = self.document.source.chars().count();
                     let range = range.start.min(len)..range.end.min(len);
                     let cursor_range =
                         CCursorRange::two(CCursor::new(range.start), CCursor::new(range.end));
@@ -7742,7 +7135,7 @@ impl EditorApp {
                 paint_editor_line_backgrounds(
                     ui,
                     &output,
-                    &self.source,
+                    &self.document.source,
                     current_char,
                     attention,
                     &line_rows,
@@ -7777,7 +7170,8 @@ impl EditorApp {
                         .cursor_from_pos(pointer - output.galley_pos)
                         .index
                         .0;
-                    if let Some(range) = typst_hover_token_range(&self.source, char_index) {
+                    if let Some(range) = typst_hover_token_range(&self.document.source, char_index)
+                    {
                         let start = output
                             .galley
                             .pos_from_cursor(CCursor::new(range.start))
@@ -7806,7 +7200,7 @@ impl EditorApp {
                         .cursor_from_pos(pointer - output.galley_pos)
                         .index
                         .0;
-                    if typst_web_link_at(&self.source, char_index).is_some() {
+                    if editor_web_link_at(&mut self.editor_data, char_index).is_some() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                     }
                 }
@@ -7824,9 +7218,10 @@ impl EditorApp {
                             .0
                     });
                     let target = char_index
-                        .and_then(|char_index| typst_font_argument_at(&self.source, char_index));
-                    let link = char_index
-                        .and_then(|char_index| typst_web_link_at(&self.source, char_index));
+                        .and_then(|char_index| self.editor_data.font_argument_at(char_index));
+                    let link = char_index.and_then(|char_index| {
+                        editor_web_link_at(&mut self.editor_data, char_index)
+                    });
                     popup_request = Some(match target {
                         Some(target) => AppPopup::FontSelector { anchor, target },
                         None => AppPopup::Editor { anchor, link },
@@ -7840,8 +7235,8 @@ impl EditorApp {
                             .cursor_from_pos(pointer - output.galley_pos)
                             .index
                             .0;
-                        typst_web_link_click_target(
-                            &self.source,
+                        editor_web_link_click_target(
+                            &mut self.editor_data,
                             char_index,
                             output.response.clicked(),
                             ui.input(|input| input.modifiers.command),
@@ -7924,7 +7319,7 @@ impl EditorApp {
                 state
                     .cursor
                     .set_char_range(Some(CCursorRange::one(CCursor::new(
-                        self.source.chars().count(),
+                        self.document.source.chars().count(),
                     ))));
                 state.store(ui.ctx(), editor_id);
                 ui.ctx()
@@ -7983,7 +7378,7 @@ impl EditorApp {
             self.editor_hover = None;
             return;
         };
-        let version = revision_as_i32(self.revision);
+        let version = revision_as_i32(self.document.revision);
         let changed = self.editor_hover.as_ref().is_none_or(|hover| {
             hover.range != range || hover.uri != uri || hover.version != version
         });
@@ -8010,14 +7405,14 @@ impl EditorApp {
             native_hover_tooltip_id(ui.ctx()).with("semantic-hover-timing"),
         );
 
-        let should_request = self.tinymist_lsp_ready
+        let should_request = self.preview.tinymist_lsp_ready
             && self.tinymist_current_open
             && self
                 .editor_hover
                 .as_ref()
                 .is_some_and(|hover| !hover.requested);
         if should_request {
-            let position = lsp_position_at_char(&self.source, range.start);
+            let position = lsp_position_at_char(&self.document.source, range.start);
             if let Some(hover) = &mut self.editor_hover {
                 hover.requested = true;
                 let _ = self.tinymist.hover_document(
@@ -8058,10 +7453,12 @@ impl EditorApp {
         match &diagnostic.source {
             DiagnosticSource::Main => self.current_is_preview_document(),
             DiagnosticSource::File(path) => {
-                self.path
+                self.document
+                    .path
                     .as_ref()
                     .is_some_and(|current| same_path(current, path))
-                    || (self.path.is_none() && same_path(&self.tinymist_document_path(), path))
+                    || (self.document.path.is_none()
+                        && same_path(&self.tinymist_document_path(), path))
             }
             DiagnosticSource::Global => false,
         }
@@ -8109,53 +7506,6 @@ impl EditorApp {
         );
     }
 
-    fn line_diagnostics(&self) -> Vec<LineDiagnostic> {
-        let mut by_line: BTreeMap<usize, Vec<&Diagnostic>> = BTreeMap::new();
-        for diagnostic in self.diagnostics.iter().chain(&self.tinymist_diagnostics) {
-            if self.diagnostic_targets_current_document(diagnostic)
-                && let Some(line) = diagnostic.line()
-            {
-                let entries = by_line.entry(line).or_default();
-                if let Some(existing) = entries.iter_mut().find(|existing| {
-                    existing.message == diagnostic.message
-                        && existing.severity == diagnostic.severity
-                }) {
-                    if diagnostic.details.len() > existing.details.len() {
-                        *existing = diagnostic;
-                    }
-                } else {
-                    entries.push(diagnostic);
-                }
-            }
-        }
-        by_line
-            .into_iter()
-            .map(|(line, diagnostics)| {
-                let severity = diagnostics
-                    .iter()
-                    .map(|diagnostic| diagnostic.severity)
-                    .min_by_key(|severity| severity_rank(*severity))
-                    .unwrap_or(DiagnosticSeverity::Unknown);
-                let summary = diagnostics
-                    .iter()
-                    .map(|diagnostic| diagnostic.message.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" · ");
-                let detail = diagnostics
-                    .iter()
-                    .map(|diagnostic| diagnostic.full_message())
-                    .collect::<Vec<_>>()
-                    .join("\n\n");
-                LineDiagnostic {
-                    line,
-                    severity,
-                    summary,
-                    detail,
-                }
-            })
-            .collect()
-    }
-
     fn show_preview(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         // The interactive viewer needs no toolbar, so its content aligns
         // exactly with the code panel. Raster-only page controls get one fixed
@@ -8169,11 +7519,15 @@ impl EditorApp {
         // WKWebView is a separate native layer and cannot be read by egui's
         // app-window framebuffer capture. Use the matching rasterised page for
         // this one QA frame; no desktop capture API is involved.
-        if self.captures.has_pending_for("main") {
-            if self.pages.is_empty()
-                && self.compile_deadline.is_none()
-                && self.status != PreviewStatus::Compiling
-            {
+        let main_capture_pending = self.captures.has_pending_for("main");
+        if main_capture_pending {
+            if capture_preview_build_needed(
+                main_capture_pending,
+                !self.preview.pages.is_empty(),
+                self.compile_deadline.is_some(),
+                self.preview.status,
+                self.preview.artifact_key.is_some(),
+            ) {
                 self.schedule_compile_now();
             }
             self.hide_webview();
@@ -8219,56 +7573,64 @@ impl EditorApp {
     fn show_preview_header_controls(&mut self, ui: &mut egui::Ui) {
         let header_width = ui.available_width();
         if !self.interactive_preview_active() {
-            let page_count = if snapshot_scene_hides_preview_pages(self.snapshot_scene) {
-                0
-            } else {
-                self.pages.len()
-            };
+            let raster_is_current =
+                self.raster_content_freshness() == Some(RasterContentFreshness::Current);
+            let page_count =
+                if snapshot_scene_hides_preview_pages(self.snapshot_scene) || !raster_is_current {
+                    0
+                } else {
+                    self.preview.pages.len()
+                };
             if header_width >= METRICS.preview.header_pages_min_width {
-                if icon_button_enabled(ui, self.visible_page > 0, UiIcon::Previous, "Previous page")
-                    .clicked()
+                if icon_button_enabled(
+                    ui,
+                    page_count > 0 && self.preview.visible_page > 0,
+                    UiIcon::Previous,
+                    "Previous page",
+                )
+                .clicked()
                 {
-                    self.requested_page = Some(self.visible_page - 1);
+                    self.preview.requested_page = Some(self.preview.visible_page - 1);
                 }
                 ui.label(if page_count == 0 {
                     "–/–".to_owned()
                 } else {
-                    format!("{}/{page_count}", self.visible_page + 1)
+                    format!("{}/{page_count}", self.preview.visible_page + 1)
                 });
                 if icon_button_enabled(
                     ui,
-                    self.visible_page + 1 < page_count,
+                    self.preview.visible_page + 1 < page_count,
                     UiIcon::Next,
                     "Next page",
                 )
                 .clicked()
                 {
-                    self.requested_page = Some(self.visible_page + 1);
+                    self.preview.requested_page = Some(self.preview.visible_page + 1);
                 }
             }
             if header_width >= METRICS.preview.header_zoom_min_width {
                 ui.separator();
                 if icon_button(ui, UiIcon::ZoomOut, "Zoom out").clicked() {
-                    self.requested_zoom = Some(
-                        (self.zoom / METRICS.preview.zoom_step)
+                    self.preview.requested_zoom = Some(
+                        (self.preview.zoom / METRICS.preview.zoom_step)
                             .clamp(MIN_PREVIEW_ZOOM, MAX_PREVIEW_ZOOM),
                     );
-                    self.fit_width = false;
+                    self.preview.fit_width = false;
                 }
                 if icon_button(ui, UiIcon::ZoomIn, "Zoom in").clicked() {
-                    self.requested_zoom = Some(
-                        (self.zoom * METRICS.preview.zoom_step)
+                    self.preview.requested_zoom = Some(
+                        (self.preview.zoom * METRICS.preview.zoom_step)
                             .clamp(MIN_PREVIEW_ZOOM, MAX_PREVIEW_ZOOM),
                     );
-                    self.fit_width = false;
+                    self.preview.fit_width = false;
                 }
                 if header_width >= METRICS.preview.header_percent_min_width {
-                    ui.label(format!("{:.0}%", self.zoom * 100.0));
+                    ui.label(format!("{:.0}%", self.preview.zoom * 100.0));
                 }
                 if icon_button(
                     ui,
                     UiIcon::FitWidth,
-                    if self.fit_width {
+                    if self.preview.fit_width {
                         "Fit page width (on)"
                     } else {
                         "Fit page width"
@@ -8276,7 +7638,7 @@ impl EditorApp {
                 )
                 .clicked()
                 {
-                    self.fit_width = !self.fit_width;
+                    self.preview.fit_width = !self.preview.fit_width;
                 }
             }
         }
@@ -8286,8 +7648,9 @@ impl EditorApp {
         let viewport_rect = ui.available_rect_before_wrap();
         ui.painter()
             .rect_filled(viewport_rect, 0.0, preview_background(ui));
-        if self.pages.is_empty() || snapshot_scene_hides_preview_pages(self.snapshot_scene) {
-            ui.centered_and_justified(|ui| match self.status {
+        if self.preview.pages.is_empty() || snapshot_scene_hides_preview_pages(self.snapshot_scene)
+        {
+            ui.centered_and_justified(|ui| match self.preview.status {
                 PreviewStatus::Error => {
                     ui.label(RichText::new("Fix the diagnostics to render a preview").weak());
                 }
@@ -8302,12 +7665,13 @@ impl EditorApp {
         }
 
         let widest_page = self
+            .preview
             .pages
             .iter()
             .map(|page| page.size[0] as f32 * PDF_POINTS_PER_PREVIEW_PIXEL)
             .fold(1.0_f32, f32::max);
-        if self.fit_width {
-            self.zoom = ((viewport_rect.width() - PAGE_MARGIN * 2.0) / widest_page)
+        if self.preview.fit_width {
+            self.preview.zoom = ((viewport_rect.width() - PAGE_MARGIN * 2.0) / widest_page)
                 .clamp(MIN_PREVIEW_ZOOM, MAX_PREVIEW_ZOOM);
         }
 
@@ -8316,12 +7680,15 @@ impl EditorApp {
         let pinch = ui.ctx().input(|input| input.zoom_delta());
         let pinch_active = pointer.is_some_and(|pointer| viewport_rect.contains(pointer))
             && (pinch - 1.0).abs() > 0.001;
-        let old_zoom = self.zoom;
+        let old_zoom = self.preview.zoom;
         let new_zoom = if pinch_active {
-            self.fit_width = false;
-            (self.zoom * pinch).clamp(MIN_PREVIEW_ZOOM, MAX_PREVIEW_ZOOM)
+            self.preview.fit_width = false;
+            (self.preview.zoom * pinch).clamp(MIN_PREVIEW_ZOOM, MAX_PREVIEW_ZOOM)
         } else {
-            self.requested_zoom.take().unwrap_or(self.zoom)
+            self.preview
+                .requested_zoom
+                .take()
+                .unwrap_or(self.preview.zoom)
         };
         if (new_zoom - old_zoom).abs() > f32::EPSILON {
             let anchor = pointer
@@ -8331,27 +7698,32 @@ impl EditorApp {
             state.offset =
                 zoom_anchored_offset(state.offset, anchor - viewport_rect.min, old_zoom, new_zoom);
             state.store(ui.ctx(), scroll_id);
-            self.zoom = new_zoom;
-            self.fit_width = false;
+            self.preview.zoom = new_zoom;
+            self.preview.fit_width = false;
         }
 
-        let geometries = page_stack_geometry(self.pages.iter().map(|page| page.size), self.zoom);
+        let geometries = page_stack_geometry(
+            self.preview.pages.iter().map(|page| page.size),
+            self.preview.zoom,
+        );
         let content_width = geometries
             .iter()
             .map(|page| page.size.x)
             .fold(viewport_rect.width(), f32::max)
             + PAGE_MARGIN * 2.0;
         let content_height = stack_height(&geometries);
-        let requested_page = self.requested_page.take();
+        let requested_page = self.preview.requested_page.take();
         let mut clicked_link = None;
+        let raster_is_current =
+            self.raster_content_freshness() == Some(RasterContentFreshness::Current);
 
         let output = egui::ScrollArea::both()
             .id_salt("pdf-preview-scroll")
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.set_min_size(Vec2::new(content_width, content_height));
-                let page_theme = theme::preview_palette(self.preview_dark);
-                for (page, geometry) in self.pages.iter().zip(&geometries) {
+                let page_theme = theme::preview_palette(self.preview.dark);
+                for (page, geometry) in self.preview.pages.iter().zip(&geometries) {
                     let left = ((content_width - geometry.size.x) * 0.5).max(PAGE_MARGIN);
                     let rect = Rect::from_min_size(
                         Pos2::new(
@@ -8386,6 +7758,9 @@ impl EditorApp {
                             .alt_text(format!("PDF page {}", geometry.index + 1)),
                     );
                     for (link_index, link) in page.links.iter().enumerate() {
+                        if !raster_is_current {
+                            continue;
+                        }
                         let [left, top, right, bottom] = link.rect;
                         let link_rect = Rect::from_min_max(
                             Pos2::new(
@@ -8420,7 +7795,7 @@ impl EditorApp {
                     }
                 }
             });
-        self.visible_page = visible_page(
+        self.preview.visible_page = visible_page(
             &geometries,
             output.state.offset.y,
             output.inner_rect.height(),
@@ -8437,14 +7812,15 @@ impl EditorApp {
             ui.label(
                 RichText::new(format!(
                     "{} diagnostics",
-                    self.diagnostics.len() + self.tinymist_diagnostics.len()
+                    self.preview.diagnostics.len() + self.preview.tinymist_diagnostics.len()
                 ))
                 .size(theme::TYPE.supporting)
                 .color(ui.visuals().weak_text_color()),
             );
         });
         ui.separator();
-        let diagnostic_count = self.diagnostics.len() + self.tinymist_diagnostics.len();
+        let diagnostic_count =
+            self.preview.diagnostics.len() + self.preview.tinymist_diagnostics.len();
         let mut jump_target = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -8454,9 +7830,10 @@ impl EditorApp {
                     ui.label(RichText::new("No compiler diagnostics").weak());
                 }
                 for (index, diagnostic) in self
+                    .preview
                     .diagnostics
                     .iter()
-                    .chain(&self.tinymist_diagnostics)
+                    .chain(&self.preview.tinymist_diagnostics)
                     .enumerate()
                 {
                     let color = diagnostic_color(diagnostic.severity, ui.visuals().dark_mode);
@@ -8523,9 +7900,9 @@ impl EditorApp {
                         }
                     }
                 }
-                if !self.raw_diagnostics.is_empty() {
+                if !self.preview.raw_diagnostics.is_empty() {
                     ui.collapsing("Raw CLI stdout", |ui| {
-                        ui.label(RichText::new(&self.raw_diagnostics).monospace());
+                        ui.label(RichText::new(&self.preview.raw_diagnostics).monospace());
                     });
                 }
             });
@@ -8535,16 +7912,16 @@ impl EditorApp {
     }
 
     fn record_status_transition(&mut self) {
-        if self.recorded_status == Some(self.status) {
+        if self.recorded_status == Some(self.preview.status) {
             return;
         }
-        let kind = match self.status {
+        let kind = match self.preview.status {
             PreviewStatus::Ready(_) => NoticeKind::Success,
             PreviewStatus::Error => NoticeKind::Error,
             PreviewStatus::Waiting | PreviewStatus::Compiling => NoticeKind::Info,
         };
         self.push_status_log(self.status_detail(), kind);
-        self.recorded_status = Some(self.status);
+        self.recorded_status = Some(self.preview.status);
     }
 
     fn record_notice_transition(&mut self) {
@@ -8571,10 +7948,11 @@ impl EditorApp {
     }
 
     fn document_extension_label(&self) -> Option<String> {
-        if self.document_kind.is_typst() {
+        if self.document.kind.is_typst() {
             return None;
         }
-        self.path
+        self.document
+            .path
             .as_ref()
             .and_then(|path| path.extension())
             .and_then(|extension| extension.to_str())
@@ -8582,7 +7960,7 @@ impl EditorApp {
             .map(|extension| format!(".{}", extension.to_ascii_lowercase()))
             .or_else(|| {
                 Some(
-                    match self.document_kind {
+                    match self.document.kind {
                         DocumentKind::Text => ".txt",
                         DocumentKind::Pdf => ".pdf",
                         DocumentKind::Image => ".img",
@@ -8594,17 +7972,19 @@ impl EditorApp {
     }
 
     fn cursor_coordinates(&self, context: &egui::Context) -> Option<(usize, usize)> {
-        if !self.document_kind.is_editable() {
+        if !self.document.kind.is_editable() {
             return None;
         }
         let char_index = egui::text_edit::TextEditState::load(context, source_editor_id(context))
             .and_then(|state| state.cursor.char_range())
             .map_or(0, |range| range.primary.index.0)
-            .min(self.source.chars().count());
-        Some(line_column_at_char(&self.source, char_index))
+            .min(self.document.source.chars().count());
+        Some(line_column_at_char(&self.document.source, char_index))
     }
 
     fn show_status_bar(&mut self, ui: &mut egui::Ui) {
+        self.prepare_editor_source_data();
+        let source_metrics = self.editor_data.source_metrics();
         let mut fallbacks = if self.snapshot_scene.is_some() {
             Vec::new()
         } else {
@@ -8616,15 +7996,14 @@ impl EditorApp {
             fallbacks.insert(0, format!("Preview: {reason}"));
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if self.document_kind.is_editable() {
+            if self.document.kind.is_editable() {
                 // This is intentionally the first right-to-left item: its
                 // position is pinned to the window edge regardless of status
                 // or notice length.
                 ui.label(
                     RichText::new(format!(
                         "{} lines · {} chars",
-                        logical_line_count(&self.source),
-                        self.source.chars().count()
+                        source_metrics.line_count, source_metrics.char_count
                     ))
                     .size(theme::TYPE.supporting),
                 );
@@ -8646,13 +8025,14 @@ impl EditorApp {
                 if !self.may_run_compilation() && self.typst_preview_available() {
                     (UiIcon::Waiting, neutral_color(dark_mode), None)
                 } else {
-                    match self.status {
+                    match self.preview.status {
                         PreviewStatus::Waiting => (UiIcon::Waiting, neutral_color(dark_mode), None),
                         PreviewStatus::Compiling => (UiIcon::Refresh, info_color(dark_mode), None),
                         PreviewStatus::Ready(elapsed) => (
                             UiIcon::Check,
                             success_color(dark_mode),
-                            self.document_kind
+                            self.document
+                                .kind
                                 .is_typst()
                                 .then(|| format!("{:.0} ms", elapsed.as_secs_f64() * 1000.0)),
                         ),
@@ -8662,7 +8042,7 @@ impl EditorApp {
             let status_detail = self.status_detail();
             let status_response = ui
                 .horizontal(|ui| {
-                    if matches!(self.status, PreviewStatus::Ready(_))
+                    if matches!(self.preview.status, PreviewStatus::Ready(_))
                         && let Some(extension) = self.document_extension_label()
                     {
                         ui.label(
@@ -8735,10 +8115,10 @@ impl EditorApp {
 
     fn status_detail(&self) -> String {
         if !self.may_run_compilation() && self.typst_preview_available() {
-            return "Automatic compilation paused".to_owned();
+            return "Automatic preview updates paused".to_owned();
         }
         if !self.typst_preview_available() {
-            return match (self.document_kind, self.status) {
+            return match (self.document.kind, self.preview.status) {
                 (DocumentKind::Text, _) => "Text file ready".to_owned(),
                 (DocumentKind::Image, PreviewStatus::Compiling) => "Decoding image".to_owned(),
                 (DocumentKind::Image, PreviewStatus::Ready(_)) => "Image ready".to_owned(),
@@ -8752,13 +8132,14 @@ impl EditorApp {
                 _ => "Opening file".to_owned(),
             };
         }
-        match self.status {
+        match self.preview.status {
             PreviewStatus::Waiting => "PDF build queued".to_owned(),
             PreviewStatus::Compiling => "Compiling PDF".to_owned(),
             PreviewStatus::Ready(elapsed) => {
                 format!("PDF ready in {:.0} ms", elapsed.as_secs_f64() * 1000.0)
             }
             PreviewStatus::Error => self
+                .preview
                 .raw_diagnostics
                 .lines()
                 .find(|line| !line.trim().is_empty())
@@ -8779,7 +8160,7 @@ impl EditorApp {
     ) -> bool {
         use wry::dpi::{LogicalPosition, LogicalSize};
 
-        let Some(url) = self.tinymist_url.clone() else {
+        let Some(url) = self.preview.interactive_url.clone() else {
             self.hide_webview();
             return false;
         };
@@ -8811,7 +8192,7 @@ impl EditorApp {
                 // WKWebView, including child web views. Defer creation until
                 // the user next activates this window so background service
                 // changes can never pull focus from another application.
-                self.webview_state = ServiceState::Starting(
+                self.preview.webview_state = ServiceState::Starting(
                     "Interactive preview will resume when the window is active".to_owned(),
                 );
                 return false;
@@ -8867,7 +8248,7 @@ impl EditorApp {
                 });
             let built = if self.window_host.is_root() {
                 let Some(window) = frame.winit_window() else {
-                    self.webview_state = ServiceState::Degraded(
+                    self.preview.webview_state = ServiceState::Degraded(
                         "The native window handle is temporarily unavailable".to_owned(),
                     );
                     return false;
@@ -8875,7 +8256,7 @@ impl EditorApp {
                 builder.build_as_child(window.as_ref())
             } else {
                 let Some(window) = self.native_window_parent.as_ref() else {
-                    self.webview_state = ServiceState::Starting(
+                    self.preview.webview_state = ServiceState::Starting(
                         "Waiting for this document window's native handle".to_owned(),
                     );
                     return false;
@@ -8898,11 +8279,11 @@ impl EditorApp {
                     self.webview_url = Some(url.clone());
                     self.webview_reload_pending = false;
                     self.webview_navigation = Some(shared_navigation);
-                    self.webview_state =
+                    self.preview.webview_state =
                         ServiceState::Ready("Tinymist vector frontend is embedded".to_owned());
                 }
                 Err(error) => {
-                    self.webview_state = ServiceState::Failed(format!(
+                    self.fail_local_webview(format!(
                         "Could not embed the Tinymist preview: {error}"
                     ));
                     return false;
@@ -8917,12 +8298,7 @@ impl EditorApp {
             if let Some(webview) = &self.webview
                 && let Err(error) = webview.load_url(&url)
             {
-                self.webview = None;
-                self.webview_url = None;
-                self.webview_reload_pending = false;
-                self.webview_navigation = None;
-                self.webview_state =
-                    ServiceState::Failed(format!("Could not load the Tinymist preview: {error}"));
+                self.fail_local_webview(format!("Could not load the Tinymist preview: {error}"));
                 return false;
             }
             self.webview_url = Some(url);
@@ -8936,26 +8312,16 @@ impl EditorApp {
                 background.a(),
             ));
             if let Err(error) = webview.set_bounds(bounds) {
-                self.webview_state =
-                    ServiceState::Failed(format!("Could not position the vector preview: {error}"));
-                self.webview = None;
-                self.webview_url = None;
-                self.webview_reload_pending = false;
-                self.webview_navigation = None;
+                self.fail_local_webview(format!("Could not position the vector preview: {error}"));
                 return false;
             }
             if let Err(error) = webview.set_visible(visible) {
-                self.webview_state =
-                    ServiceState::Failed(format!("Could not show the vector preview: {error}"));
-                self.webview = None;
-                self.webview_url = None;
-                self.webview_reload_pending = false;
-                self.webview_navigation = None;
+                self.fail_local_webview(format!("Could not show the vector preview: {error}"));
                 return false;
             }
         }
-        if self.tinymist_state.is_ready() {
-            self.webview_state =
+        if self.preview.tinymist_state.is_ready() {
+            self.preview.webview_state =
                 ServiceState::Ready("Tinymist vector frontend is embedded".to_owned());
         }
         true
@@ -9003,7 +8369,7 @@ impl EditorApp {
             self.webview_url = None;
             self.webview_reload_pending = false;
             self.webview_navigation = None;
-            self.webview_state =
+            self.preview.webview_state =
                 ServiceState::Starting("Attaching preview to this document window".to_owned());
         }
         self.native_window_parent = Some(parent);
@@ -9021,11 +8387,12 @@ impl EditorApp {
             || settings.auto_save_delay_ms != self.settings.auto_save_delay_ms;
         self.settings = settings;
         if autosave_changed {
-            self.autosave_deadline =
-                (self.settings.auto_save && self.path.is_some() && self.is_dirty()).then(|| {
-                    Instant::now()
-                        + Duration::from_millis(self.settings.auto_save_delay_ms.max(100))
-                });
+            self.autosave_deadline = (self.settings.auto_save
+                && self.document.path.is_some()
+                && self.is_dirty())
+            .then(|| {
+                Instant::now() + Duration::from_millis(self.settings.auto_save_delay_ms.max(100))
+            });
         }
         context.request_repaint();
     }
@@ -9085,9 +8452,9 @@ impl eframe::App for EditorApp {
             Duration::from_millis(self.settings.hover_fade_ms),
         );
         if context.input(|input| input.viewport().focused == Some(true)) {
-            if self.app_modal_suspended {
-                self.app_modal_had_focus = false;
-                self.app_modal_suspended = false;
+            if self.document_workflow.modal_suspended {
+                self.document_workflow.modal_had_focus = false;
+                self.document_workflow.modal_suspended = false;
             }
             if self.rename_overlay_suspended {
                 self.rename_overlay_had_focus = false;
@@ -9161,14 +8528,14 @@ impl eframe::App for EditorApp {
                 .show(ui, |ui| self.show_workspace(ui));
         }
         let designated_preview = self.designated_preview_path().is_some();
-        if self.document_kind.preview_only() {
+        if self.document.kind.preview_only() {
             // This presentation override intentionally does not mutate
             // `view_mode`: returning to a source file restores the user's Code,
             // Split, or Preview preference.
             egui::CentralPanel::default()
                 .frame(theme::content_panel_frame(ui.style()))
                 .show(ui, |ui| self.show_preview(ui, frame));
-        } else if self.document_kind == DocumentKind::Text && !designated_preview {
+        } else if self.document.kind == DocumentKind::Text && !designated_preview {
             self.hide_webview();
             egui::CentralPanel::default()
                 .frame(theme::content_panel_frame(ui.style()))
@@ -9216,7 +8583,7 @@ impl eframe::App for EditorApp {
 
 fn make_preview_texture(
     context: &egui::Context,
-    revision: u64,
+    key: ArtifactKey,
     index: usize,
     page: PreviewPage,
     dark: bool,
@@ -9228,7 +8595,7 @@ fn make_preview_texture(
         rgba.clone()
     };
     let texture = context.load_texture(
-        format!("preview-{revision}-{index}-{dark}"),
+        format!("preview-{}-{}-{index}-{dark}", key.revision, key.generation),
         preview_color_image(size, &pixels),
         TextureOptions::LINEAR,
     );
@@ -9533,6 +8900,7 @@ fn paint_line_numbers(
     }
 }
 
+#[cfg(test)]
 fn logical_line_count(source: &str) -> usize {
     source.bytes().filter(|byte| *byte == b'\n').count() + 1
 }
@@ -9577,8 +8945,8 @@ fn add_workspace_nodes(
     dark_mode: bool,
 ) {
     for node in nodes {
-        let is_active = active.is_some_and(|path| same_path(path, &node.path));
-        let is_preview = preview.is_some_and(|path| same_path(path, &node.path));
+        let is_active = active.is_some_and(|path| path == node.path);
+        let is_preview = preview.is_some_and(|path| path == node.path);
         let label = node.display_name().into_owned();
         if node.is_directory() {
             let color = workspace_entry_color(&node.path, true, false, dark_mode);
@@ -11091,7 +10459,8 @@ fn typst_override_toggle_tooltip(label: &str, value: Option<bool>) -> String {
 }
 
 fn rgba_from_color(color: Color32) -> Rgba {
-    Rgba::from_rgba(color.r(), color.g(), color.b(), color.a())
+    let [red, green, blue, alpha] = color.to_srgba_unmultiplied();
+    Rgba::from_rgba(red, green, blue, alpha)
 }
 
 fn color_from_rgba(color: Rgba) -> Color32 {
@@ -11251,37 +10620,6 @@ fn show_status_chip(ui: &mut egui::Ui, name: &str, status: &str, detail: &str, c
     settings_hover_text(response, detail);
 }
 
-fn preview_fallback_reason_for(
-    preference: PreviewPreference,
-    interactive_active: bool,
-    preview_url_available: bool,
-    tinymist_state: &ServiceState,
-    webview_state: &ServiceState,
-) -> Option<String> {
-    if preference != PreviewPreference::Interactive || interactive_active {
-        return None;
-    }
-    let state = if preview_url_available {
-        webview_state
-    } else {
-        tinymist_state
-    };
-    Some(format!("{}: {}", state.label(), state.detail()))
-}
-
-fn preview_backend_label_for(
-    preference: PreviewPreference,
-    interactive_active: bool,
-) -> &'static str {
-    if interactive_active {
-        "Interactive"
-    } else if preference == PreviewPreference::Interactive {
-        "Rasterised PDF · fallback"
-    } else {
-        "Rasterised PDF"
-    }
-}
-
 fn non_preview_fallback_details_for(
     settings: &AppSettings,
     system_theme: Option<egui::Theme>,
@@ -11328,16 +10666,6 @@ fn tinymist_diagnostic(diagnostic: TinymistDiagnostic, source: DiagnosticSource)
     }
 }
 
-fn severity_rank(severity: DiagnosticSeverity) -> u8 {
-    match severity {
-        DiagnosticSeverity::Error => 0,
-        DiagnosticSeverity::Warning => 1,
-        DiagnosticSeverity::Help => 2,
-        DiagnosticSeverity::Note => 3,
-        DiagnosticSeverity::Unknown => 4,
-    }
-}
-
 fn revision_as_i32(revision: u64) -> i32 {
     revision.min(i32::MAX as u64) as i32
 }
@@ -11375,14 +10703,6 @@ fn same_path(left: &Path, right: &Path) -> bool {
         (Ok(left), Ok(right)) => left == right,
         _ => left == right,
     }
-}
-
-fn viewport_scoped_id(context: &egui::Context, salt: &'static str) -> egui::Id {
-    egui::Id::new((context.viewport_id(), salt))
-}
-
-fn scoped_child_viewport_id(context: &egui::Context, salt: &'static str) -> egui::ViewportId {
-    egui::ViewportId::from_hash_of((context.viewport_id(), salt))
 }
 
 fn source_editor_id(context: &egui::Context) -> egui::Id {
@@ -11829,93 +11149,83 @@ fn show_native_tooltip_card(
             },
         );
     });
-    let native_theme = theme::native_theme(theme);
     let capture_viewport = captures.has_pending_for("diagnostic");
     let activate_viewport = capture_viewport || interaction.focus_requested || interaction.focused;
 
-    context.show_viewport_immediate(
-        scoped_child_viewport_id(context, viewport_salt),
-        theme::popup_viewport_builder("tiptoptyp")
-            .with_position(position)
-            .with_inner_size([width, height])
-            .with_min_inner_size([width, height])
-            .with_max_inner_size([width, height])
-            // Keep the popup non-activating in production, while still letting
-            // it receive pointer movement and wheel events for scrolling. A
-            // queued QA capture temporarily activates its isolated viewport so
-            // macOS supplies the repeated paint passes needed by the settling
-            // countdown and framebuffer callback.
-            .with_active(activate_viewport)
-            .with_mouse_passthrough(false),
-        |ui, _class| {
-            let popup_focused = if capture_viewport {
-                None
-            } else {
-                ui.input(|input| input.viewport().focused)
-            };
-            let dismiss_requested = ui.input(|input| input.key_pressed(egui::Key::Escape));
-            captures.begin_viewport(ui.ctx());
-            ui.set_style(style.clone());
-            ui.set_opacity(opacity);
-            ui.ctx()
-                .send_viewport_cmd(egui::ViewportCommand::SetTheme(native_theme));
-            let frame = if interaction.focused {
-                tooltip_frame.stroke(Stroke::new(
-                    1.0,
-                    style.visuals.widgets.active.bg_stroke.color,
-                ))
-            } else {
-                tooltip_frame
-            };
-            let frame_response = frame.show(ui, |ui| {
-                egui::ScrollArea::vertical()
-                    // Let short tooltips keep their natural height. Filling
-                    // the fixed native viewport makes the frame's content
-                    // rect reach the viewport edge, clipping its lower
-                    // rounded corners.
-                    .auto_shrink([false, true])
-                    .max_height(METRICS.popup.tooltip_max_height)
-                    .show(ui, |ui| show_markdown(ui, detail, link_sender));
-            });
-            let card_rect = frame_response.response.rect;
-            let pointer_inside_viewport = ui.rect_contains_pointer(ui.max_rect());
-            let pointer_inside_card = ui.rect_contains_pointer(card_rect);
-            let popup_interacted =
-                pointer_inside_card && ui.input(|input| input.pointer.any_pressed());
-            let interaction = update_tooltip_interaction_state(
-                interaction,
-                identity,
-                popup_interacted,
-                popup_focused,
-            );
-            let interaction = if dismiss_requested {
-                TooltipInteractionState {
-                    focused: false,
-                    focus_requested: false,
-                    dismissed: true,
-                    ..interaction
-                }
-            } else {
-                interaction
-            };
-            context.data_mut(|data| {
-                if let Some(geometry) = data.get_temp::<TooltipGeometry>(geometry_id)
-                    && let Some(geometry) =
-                        refresh_tooltip_child_geometry(geometry, identity, pointer_inside_viewport)
-                {
-                    // Lifetime follows the complete child viewport, including
-                    // transparent padding. Click/focus hit-testing above stays
-                    // restricted to the visibly painted card.
-                    data.insert_temp(geometry_id, geometry);
-                    data.insert_temp(interaction_id, interaction);
-                }
-            });
-            if popup_interacted {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
-            }
-            captures.end_glow_viewport(ui, "diagnostic");
-        },
+    // Keep the popup non-activating in production, while still letting it
+    // receive pointer movement and wheel events for scrolling. A queued QA
+    // capture temporarily activates its isolated viewport so macOS supplies
+    // the repeated paint passes needed by the settling countdown.
+    let spec = ChildViewSpec::tooltip(
+        viewport_salt,
+        "tiptoptyp",
+        position,
+        Vec2::new(width, height),
+        activate_viewport,
+        "diagnostic",
     );
+    ChildViewHost::show(context, captures, spec, theme, &style, |ui, input| {
+        let popup_focused = if capture_viewport {
+            None
+        } else {
+            input.focused
+        };
+        let dismiss_requested = input.escape_pressed;
+        ui.set_opacity(opacity);
+        let frame = if interaction.focused {
+            tooltip_frame.stroke(Stroke::new(
+                1.0,
+                style.visuals.widgets.active.bg_stroke.color,
+            ))
+        } else {
+            tooltip_frame
+        };
+        let frame_response = frame.show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                // Let short tooltips keep their natural height. Filling
+                // the fixed native viewport makes the frame's content
+                // rect reach the viewport edge, clipping its lower
+                // rounded corners.
+                .auto_shrink([false, true])
+                .max_height(METRICS.popup.tooltip_max_height)
+                .show(ui, |ui| show_markdown(ui, detail, link_sender));
+        });
+        let card_rect = frame_response.response.rect;
+        let pointer_inside_viewport = ui.rect_contains_pointer(ui.max_rect());
+        let pointer_inside_card = ui.rect_contains_pointer(card_rect);
+        let popup_interacted = pointer_inside_card && ui.input(|input| input.pointer.any_pressed());
+        let interaction = update_tooltip_interaction_state(
+            interaction,
+            identity,
+            popup_interacted,
+            popup_focused,
+        );
+        let interaction = if dismiss_requested {
+            TooltipInteractionState {
+                focused: false,
+                focus_requested: false,
+                dismissed: true,
+                ..interaction
+            }
+        } else {
+            interaction
+        };
+        context.data_mut(|data| {
+            if let Some(geometry) = data.get_temp::<TooltipGeometry>(geometry_id)
+                && let Some(geometry) =
+                    refresh_tooltip_child_geometry(geometry, identity, pointer_inside_viewport)
+            {
+                // Lifetime follows the complete child viewport, including
+                // transparent padding. Click/focus hit-testing above stays
+                // restricted to the visibly painted card.
+                data.insert_temp(geometry_id, geometry);
+                data.insert_temp(interaction_id, interaction);
+            }
+        });
+        if popup_interacted {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+    });
 }
 
 fn show_local_tooltip_card(
@@ -12512,62 +11822,58 @@ fn menu_item_enabled(
     .inner
 }
 
-fn show_file_popup_ui(ui: &mut egui::Ui, action: &mut Option<AppPopupAction>) {
-    let entries = [
-        (
-            "New",
-            KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::N),
-            FileMenuAction::New,
-        ),
-        (
-            "New Window",
-            KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, egui::Key::N),
-            FileMenuAction::NewWindow,
-        ),
-        (
-            "Open…",
-            KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::O),
-            FileMenuAction::Open,
-        ),
-        (
-            "Open in New Window…",
-            KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::ALT, egui::Key::O),
-            FileMenuAction::OpenInNewWindow,
-        ),
-        (
-            "Change Workspace Root…",
-            KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, egui::Key::O),
-            FileMenuAction::ChangeWorkspaceRoot,
-        ),
-        (
-            "Save",
-            KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::S),
-            FileMenuAction::Save,
-        ),
-        (
-            "Save As…",
-            KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, egui::Key::S),
-            FileMenuAction::SaveAs,
-        ),
-    ];
-    for (label, shortcut, file_action) in entries {
-        if menu_item(ui, label, Some(shortcut)).clicked() {
-            *action = Some(AppPopupAction::File(file_action));
+#[derive(Debug, Clone, Copy)]
+struct CommandAvailability {
+    can_undo: bool,
+    can_redo: bool,
+    typst_document: bool,
+    interactive_preview: bool,
+}
+
+impl CommandAvailability {
+    fn allows(self, requirement: CommandRequirement) -> bool {
+        match requirement {
+            CommandRequirement::Always => true,
+            CommandRequirement::Undo => self.can_undo,
+            CommandRequirement::Redo => self.can_redo,
+            CommandRequirement::TypstDocument => self.typst_document,
+            CommandRequirement::InteractivePreview => self.interactive_preview,
         }
     }
-    ui.separator();
-    if menu_item(
-        ui,
-        "Export PDF…",
-        Some(KeyboardShortcut::new(
-            Modifiers::COMMAND | Modifiers::SHIFT,
-            egui::Key::E,
-        )),
-    )
-    .clicked()
-    {
-        *action = Some(AppPopupAction::File(FileMenuAction::ExportPdf));
+}
+
+fn show_command_popup_ui(
+    ui: &mut egui::Ui,
+    menu: CommandMenu,
+    availability: CommandAvailability,
+    action: &mut Option<AppPopupAction>,
+) {
+    let mut previous_section = None;
+    for spec in command_specs(menu).filter(|spec| spec.popup_section.is_some()) {
+        if previous_section.is_some_and(|section| Some(section) != spec.popup_section) {
+            ui.separator();
+        }
+        let enabled = availability.allows(spec.requirement);
+        let shortcut = spec.shortcut.map(|shortcut| shortcut.egui());
+        if menu_item_enabled(ui, enabled, spec.popup_title, shortcut).clicked() {
+            *action = Some(AppPopupAction::Command(spec.command));
+        }
+        previous_section = spec.popup_section;
     }
+}
+
+fn show_file_popup_ui(ui: &mut egui::Ui, action: &mut Option<AppPopupAction>) {
+    show_command_popup_ui(
+        ui,
+        CommandMenu::File,
+        CommandAvailability {
+            can_undo: false,
+            can_redo: false,
+            typst_document: true,
+            interactive_preview: false,
+        },
+        action,
+    );
 }
 
 fn show_edit_popup_ui(
@@ -12577,106 +11883,31 @@ fn show_edit_popup_ui(
     can_format: bool,
     action: &mut Option<AppPopupAction>,
 ) {
-    if menu_item_enabled(
+    show_command_popup_ui(
         ui,
-        can_undo,
-        "Undo",
-        Some(KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Z)),
-    )
-    .clicked()
-    {
-        *action = Some(AppPopupAction::Editor(EditorMenuAction::Undo));
-    }
-    if menu_item_enabled(
-        ui,
-        can_redo,
-        "Redo",
-        Some(KeyboardShortcut::new(
-            Modifiers::COMMAND | Modifiers::SHIFT,
-            egui::Key::Z,
-        )),
-    )
-    .clicked()
-    {
-        *action = Some(AppPopupAction::Editor(EditorMenuAction::Redo));
-    }
-    ui.separator();
-    for (label, key, editor_action) in [
-        ("Cut", egui::Key::X, EditorMenuAction::Cut),
-        ("Copy", egui::Key::C, EditorMenuAction::Copy),
-        ("Paste", egui::Key::V, EditorMenuAction::Paste),
-        ("Select All", egui::Key::A, EditorMenuAction::SelectAll),
-    ] {
-        if menu_item(
-            ui,
-            label,
-            Some(KeyboardShortcut::new(Modifiers::COMMAND, key)),
-        )
-        .clicked()
-        {
-            *action = Some(AppPopupAction::Editor(editor_action));
-        }
-    }
-    if menu_item(
-        ui,
-        "Toggle Comment",
-        Some(KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Slash)),
-    )
-    .clicked()
-    {
-        *action = Some(AppPopupAction::Editor(EditorMenuAction::ToggleComment));
-    }
-    ui.separator();
-    if menu_item(
-        ui,
-        "Find…",
-        Some(KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::F)),
-    )
-    .clicked()
-    {
-        *action = Some(AppPopupAction::Find(false));
-    }
-    if menu_item(ui, "Find and Replace…", Some(replace_shortcut())).clicked() {
-        *action = Some(AppPopupAction::Find(true));
-    }
-    ui.separator();
-    if menu_item_enabled(ui, can_format, "Format Document", Some(format_shortcut())).clicked() {
-        *action = Some(AppPopupAction::Editor(EditorMenuAction::Format));
-    }
+        CommandMenu::Edit,
+        CommandAvailability {
+            can_undo,
+            can_redo,
+            typst_document: can_format,
+            interactive_preview: false,
+        },
+        action,
+    );
 }
 
 fn show_view_popup_ui(ui: &mut egui::Ui, action: &mut Option<AppPopupAction>) {
-    for (label, shortcut, command) in [
-        (
-            "Toggle Problems",
-            KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Num5),
-            ViewCommand::Problems,
-        ),
-        (
-            "Toggle Explorer",
-            KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Num1),
-            ViewCommand::Explorer,
-        ),
-        (
-            "Code",
-            KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Num2),
-            ViewCommand::Code,
-        ),
-        (
-            "Split",
-            KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Num3),
-            ViewCommand::Split,
-        ),
-        (
-            "Preview",
-            KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Num4),
-            ViewCommand::Preview,
-        ),
-    ] {
-        if menu_item(ui, label, Some(shortcut)).clicked() {
-            *action = Some(AppPopupAction::View(command));
-        }
-    }
+    show_command_popup_ui(
+        ui,
+        CommandMenu::View,
+        CommandAvailability {
+            can_undo: false,
+            can_redo: false,
+            typst_document: false,
+            interactive_preview: false,
+        },
+        action,
+    );
 }
 
 fn show_workspace_popup_ui(
@@ -12866,89 +12097,52 @@ fn child_viewport_builder(viewport: egui::ViewportBuilder) -> egui::ViewportBuil
     }
 }
 
+fn editor_web_link_at(data: &mut EditorDerivedData, char_index: usize) -> Option<String> {
+    data.web_link_at(char_index)
+        .and_then(|target| normalize_browser_link_target(&target))
+}
+
+fn editor_web_link_click_target(
+    data: &mut EditorDerivedData,
+    char_index: usize,
+    clicked: bool,
+    command: bool,
+) -> Option<String> {
+    (clicked && command)
+        .then(|| editor_web_link_at(data, char_index))
+        .flatten()
+}
+
+#[cfg(test)]
+fn prepared_editor_data(source: &str) -> EditorDerivedData {
+    let mut data = EditorDerivedData::default();
+    data.prepare_source(EditorRevision::new(0, 0), source);
+    data
+}
+
+#[cfg(test)]
 fn typst_font_argument_at(source: &str, char_index: usize) -> Option<FontArgumentTarget> {
-    use typst_syntax::{LinkedNode, Source, SyntaxKind};
-
-    fn walk(node: LinkedNode<'_>, cursor: usize) -> Option<FontArgumentTarget> {
-        if node.kind() == SyntaxKind::SetRule
-            && node.range().start <= cursor
-            && cursor <= node.range().end
-        {
-            let target_is_text = node
-                .children()
-                .find(|child| child.kind() == SyntaxKind::Ident)
-                .is_some_and(|target| target.leaf_text() == "text");
-            if target_is_text
-                && let Some(arguments) = node
-                    .children()
-                    .find(|child| child.kind() == SyntaxKind::Args)
-            {
-                for named in arguments
-                    .children()
-                    .filter(|child| child.kind() == SyntaxKind::Named)
-                {
-                    if cursor < named.range().start || cursor > named.range().end {
-                        continue;
-                    }
-                    let name_is_font = named
-                        .children()
-                        .find(|child| child.kind() == SyntaxKind::Ident)
-                        .is_some_and(|name| name.leaf_text() == "font");
-                    let value = named
-                        .children()
-                        .find(|child| child.kind() == SyntaxKind::Str);
-                    if name_is_font
-                        && let Some(value) = value
-                        && value.len() >= 2
-                    {
-                        return Some(FontArgumentTarget {
-                            value_range: value.range().start + 1..value.range().end - 1,
-                        });
-                    }
-                }
-            }
-        }
-        node.children().find_map(|child| walk(child, cursor))
-    }
-
-    let byte_index = char_range_to_byte_range(source, char_index..char_index).start;
-    let parsed = Source::detached(source);
-    walk(LinkedNode::new(parsed.root()), byte_index)
+    prepared_editor_data(source).font_argument_at(char_index)
 }
 
+#[cfg(test)]
 fn typst_web_link_at(source: &str, char_index: usize) -> Option<String> {
-    use typst_syntax::{LinkedNode, Source, ast};
-
-    fn walk(node: LinkedNode<'_>, source: &str, cursor: usize) -> Option<String> {
-        if node.kind() == typst_syntax::SyntaxKind::FuncCall
-            && node.range().start <= cursor
-            && cursor <= node.range().end
-            && node.range().start > 0
-            && source.as_bytes().get(node.range().start - 1) == Some(&b'#')
-            && let Some(call) = node.get().cast::<ast::FuncCall>()
-            && matches!(call.callee(), ast::Expr::Ident(ident) if ident.as_str() == "link")
-            && let Some(ast::Arg::Pos(ast::Expr::Str(target))) = call.args().items().next()
-        {
-            return normalize_browser_link_target(target.get().as_str());
-        }
-        node.children()
-            .find_map(|child| walk(child, source, cursor))
-    }
-
-    let byte_index = char_range_to_byte_range(source, char_index..char_index).start;
-    let parsed = Source::detached(source);
-    walk(LinkedNode::new(parsed.root()), source, byte_index)
+    editor_web_link_at(&mut prepared_editor_data(source), char_index)
 }
 
+#[cfg(test)]
 fn typst_web_link_click_target(
     source: &str,
     char_index: usize,
     clicked: bool,
     command: bool,
 ) -> Option<String> {
-    (clicked && command)
-        .then(|| typst_web_link_at(source, char_index))
-        .flatten()
+    editor_web_link_click_target(
+        &mut prepared_editor_data(source),
+        char_index,
+        clicked,
+        command,
+    )
 }
 
 fn normalize_browser_link_target(target: &str) -> Option<String> {
@@ -13020,42 +12214,42 @@ fn show_editor_context_menu_ui(
         ui.separator();
     }
     if menu_item_enabled(ui, options.can_undo, "Undo", None).clicked() {
-        *action = Some(EditorMenuAction::Undo);
+        *action = Some(EditorMenuAction::Command(AppCommand::Undo));
         ui.close();
     }
     if menu_item_enabled(ui, options.can_redo, "Redo", None).clicked() {
-        *action = Some(EditorMenuAction::Redo);
+        *action = Some(EditorMenuAction::Command(AppCommand::Redo));
         ui.close();
     }
     ui.separator();
     if menu_item_enabled(ui, options.has_selection, "Cut", None).clicked() {
-        *action = Some(EditorMenuAction::Cut);
+        *action = Some(EditorMenuAction::Command(AppCommand::Cut));
         ui.close();
     }
     if menu_item_enabled(ui, options.has_selection, "Copy", None).clicked() {
-        *action = Some(EditorMenuAction::Copy);
+        *action = Some(EditorMenuAction::Command(AppCommand::Copy));
         ui.close();
     }
     if menu_item(ui, "Paste", None).clicked() {
-        *action = Some(EditorMenuAction::Paste);
+        *action = Some(EditorMenuAction::Command(AppCommand::Paste));
         ui.close();
     }
     if menu_item(ui, "Select All", None).clicked() {
-        *action = Some(EditorMenuAction::SelectAll);
+        *action = Some(EditorMenuAction::Command(AppCommand::SelectAll));
         ui.close();
     }
     if menu_item(ui, "Toggle Comment", None).clicked() {
-        *action = Some(EditorMenuAction::ToggleComment);
+        *action = Some(EditorMenuAction::Command(AppCommand::ToggleComment));
         ui.close();
     }
     if menu_item_enabled(ui, options.can_sync_preview, "Reveal in Preview", None).clicked() {
-        *action = Some(EditorMenuAction::SyncPreview);
+        *action = Some(EditorMenuAction::Command(AppCommand::SyncPreview));
         ui.close();
     }
     if options.can_format {
         ui.separator();
         if menu_item(ui, "Format Document", None).clicked() {
-            *action = Some(EditorMenuAction::Format);
+            *action = Some(EditorMenuAction::Command(AppCommand::Format));
             ui.close();
         }
     }
@@ -13115,72 +12309,6 @@ fn show_status_log_popup_ui(ui: &mut egui::Ui, entries: &VecDeque<StatusLogEntry
     }
 }
 
-fn replace_shortcut() -> KeyboardShortcut {
-    #[cfg(target_os = "macos")]
-    {
-        KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::ALT, egui::Key::F)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        KeyboardShortcut::new(Modifiers::CTRL, egui::Key::H)
-    }
-}
-
-fn consume_file_shortcut(input: &mut egui::InputState) -> Option<FileMenuAction> {
-    // egui intentionally lets a shortcut with extra Shift/Option modifiers
-    // match a less-specific chord. Keep every modified variant before its
-    // base shortcut so the base action cannot consume it first.
-    for (shortcut, action) in [
-        (
-            KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, egui::Key::S),
-            FileMenuAction::SaveAs,
-        ),
-        (
-            KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::ALT, egui::Key::O),
-            FileMenuAction::OpenInNewWindow,
-        ),
-        (
-            KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, egui::Key::O),
-            FileMenuAction::ChangeWorkspaceRoot,
-        ),
-        (
-            KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, egui::Key::N),
-            FileMenuAction::NewWindow,
-        ),
-        (
-            KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, egui::Key::E),
-            FileMenuAction::ExportPdf,
-        ),
-        (
-            KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::S),
-            FileMenuAction::Save,
-        ),
-        (
-            KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::O),
-            FileMenuAction::Open,
-        ),
-        (
-            KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::N),
-            FileMenuAction::New,
-        ),
-    ] {
-        if input.consume_shortcut(&shortcut) {
-            return Some(action);
-        }
-    }
-    None
-}
-
-fn consume_find_shortcut(input: &mut egui::InputState) -> Option<FindShortcutAction> {
-    if input.consume_shortcut(&replace_shortcut()) {
-        Some(FindShortcutAction::Replace)
-    } else if input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::F)) {
-        Some(FindShortcutAction::Toggle)
-    } else {
-        None
-    }
-}
-
 fn consume_preview_zoom_shortcut(input: &mut egui::InputState) -> Option<PreviewZoomAction> {
     let modifiers = Modifiers::COMMAND | Modifiers::ALT;
     for (key, action) in [
@@ -13205,20 +12333,6 @@ fn consume_ui_scale_shortcut(input: &mut egui::InputState) -> Option<i16> {
     input
         .consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Minus))
         .then_some(-5)
-}
-
-fn format_shortcut() -> KeyboardShortcut {
-    KeyboardShortcut::new(Modifiers::SHIFT | Modifiers::ALT, egui::Key::F)
-}
-
-fn char_range_to_byte_range(source: &str, range: Range<usize>) -> Range<usize> {
-    fn byte_at(source: &str, index: usize) -> usize {
-        source
-            .char_indices()
-            .nth(index)
-            .map_or(source.len(), |(byte, _)| byte)
-    }
-    byte_at(source, range.start)..byte_at(source, range.end)
 }
 
 fn canonical_or_absolute(path: &Path) -> PathBuf {
@@ -13341,8 +12455,8 @@ fn reveal_in_file_manager(path: &Path) -> Result<(), String> {
     }
 }
 
-fn atomic_write(project_root: &Path, path: &Path, contents: &[u8]) -> Result<(), String> {
-    crate::private_workspace::atomic_write(project_root, path, contents)
+fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), String> {
+    crate::private_workspace::AtomicFileWriter::write(path, contents)
         .map_err(|error| format!("Could not replace {}: {error}", path.display()))
 }
 
@@ -13456,11 +12570,98 @@ mod tests {
 
     #[test]
     fn interactive_preview_does_not_duplicate_raster_compilation() {
-        assert!(!raster_preview_required_for(true, false, false, false));
-        assert!(raster_preview_required_for(true, true, false, false));
-        assert!(raster_preview_required_for(true, false, true, false));
-        assert!(raster_preview_required_for(true, false, false, true));
-        assert!(raster_preview_required_for(false, false, false, false));
+        assert!(!raster_preview_required_for(true, false, false));
+        assert!(raster_preview_required_for(true, true, false));
+        assert!(raster_preview_required_for(true, false, true));
+        assert!(raster_preview_required_for(false, false, false));
+    }
+
+    #[test]
+    fn local_webview_failure_schedules_the_first_raster_fallback() {
+        let raster_was_required = raster_preview_required_for(true, false, false);
+        let raster_is_required = raster_preview_required_for(true, true, false);
+
+        assert!(raster_fallback_compile_needed(
+            true,
+            true,
+            raster_was_required,
+            raster_is_required,
+        ));
+        assert!(!raster_fallback_compile_needed(
+            false,
+            true,
+            raster_was_required,
+            raster_is_required,
+        ));
+        assert!(!raster_fallback_compile_needed(
+            true,
+            false,
+            raster_was_required,
+            raster_is_required,
+        ));
+        assert!(!raster_fallback_compile_needed(true, true, true, true));
+    }
+
+    #[test]
+    fn raster_results_require_the_matching_current_artifact() {
+        let old = ArtifactKey {
+            revision: 9,
+            generation: 41,
+        };
+        let newer_same_revision = ArtifactKey {
+            revision: 9,
+            generation: 42,
+        };
+        assert!(raster_result_matches_artifact(
+            newer_same_revision,
+            9,
+            Some(newer_same_revision)
+        ));
+        assert!(!raster_result_matches_artifact(
+            old,
+            9,
+            Some(newer_same_revision)
+        ));
+        assert!(!raster_result_matches_artifact(old, 10, Some(old)));
+        assert!(!raster_result_matches_artifact(old, 9, None));
+    }
+
+    #[test]
+    fn same_revision_raster_from_an_older_artifact_is_stale_for_ui_actions() {
+        let old = ArtifactKey {
+            revision: 9,
+            generation: 41,
+        };
+        let newer_same_revision = ArtifactKey {
+            revision: 9,
+            generation: 42,
+        };
+
+        assert_eq!(
+            raster_content_freshness(true, Some(old), 9, Some(newer_same_revision)),
+            Some(RasterContentFreshness::Stale)
+        );
+        assert_eq!(
+            raster_content_freshness(
+                true,
+                Some(newer_same_revision),
+                9,
+                Some(newer_same_revision)
+            ),
+            Some(RasterContentFreshness::Current)
+        );
+        assert_eq!(
+            raster_content_freshness(false, Some(old), 9, Some(newer_same_revision)),
+            None
+        );
+    }
+
+    #[test]
+    fn egui_color_conversion_preserves_unmultiplied_alpha_channels() {
+        // Use channels that survive Color32's quantized premultiplied storage exactly.
+        let color = Color32::from_rgba_unmultiplied(255, 34, 68, 128);
+        assert_eq!(rgba_from_color(color), Rgba::from_rgba(255, 34, 68, 128));
+        assert_eq!(color_from_rgba(rgba_from_color(color)), color);
     }
 
     #[test]
@@ -13471,11 +12672,22 @@ mod tests {
         assert!(compilation_run_allowed(true, false, true));
         assert_eq!(
             compilation_toggle_copy(false),
-            ("Pause", "Pause automatic compilation")
+            (
+                "Pause",
+                "Pause automatic preview updates; Compile PDF stays available"
+            )
         );
         assert_eq!(
             compilation_toggle_copy(true),
-            ("Resume", "Resume automatic compilation")
+            ("Resume", "Resume automatic preview updates")
+        );
+        assert_eq!(
+            compilation_notice(true),
+            ("Automatic preview updates paused", NoticeKind::Info)
+        );
+        assert_eq!(
+            compilation_notice(false),
+            ("Automatic preview updates resumed", NoticeKind::Success)
         );
     }
 
@@ -13521,6 +12733,64 @@ mod tests {
             UiSnapshotScene::ProblemsPanel
         )));
         assert!(!snapshot_scene_hides_preview_pages(None));
+    }
+
+    #[test]
+    fn raster_gated_snapshot_scenes_do_not_clobber_an_in_flight_build() {
+        for scene in [
+            UiSnapshotScene::Main,
+            UiSnapshotScene::ProblemsPanel,
+            UiSnapshotScene::FindReplace,
+        ] {
+            assert_eq!(settled_snapshot_preview_status(scene, false), None);
+        }
+        assert_eq!(
+            settled_snapshot_preview_status(UiSnapshotScene::Main, true),
+            Some(PreviewStatus::Ready(Duration::ZERO))
+        );
+        assert_eq!(
+            settled_snapshot_preview_status(UiSnapshotScene::ProblemsPanel, true),
+            Some(PreviewStatus::Error)
+        );
+    }
+
+    #[test]
+    fn pending_main_capture_queues_only_one_build_while_waiting_for_its_raster() {
+        assert!(capture_preview_build_needed(
+            true,
+            false,
+            false,
+            PreviewStatus::Waiting,
+            false,
+        ));
+        assert!(!capture_preview_build_needed(
+            true,
+            false,
+            true,
+            PreviewStatus::Waiting,
+            false,
+        ));
+        assert!(!capture_preview_build_needed(
+            true,
+            false,
+            false,
+            PreviewStatus::Compiling,
+            false,
+        ));
+        assert!(!capture_preview_build_needed(
+            true,
+            false,
+            false,
+            PreviewStatus::Ready(Duration::ZERO),
+            true,
+        ));
+        assert!(!capture_preview_build_needed(
+            true,
+            false,
+            false,
+            PreviewStatus::Error,
+            false,
+        ));
     }
 
     #[test]
@@ -13717,8 +12987,8 @@ mod tests {
     fn atomic_write_replaces_a_file_with_exact_bytes() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("document.pdf");
-        atomic_write(directory.path(), &path, b"first").unwrap();
-        atomic_write(directory.path(), &path, b"%PDF-exact\0bytes").unwrap();
+        atomic_write(&path, b"first").unwrap();
+        atomic_write(&path, b"%PDF-exact\0bytes").unwrap();
         assert_eq!(std::fs::read(path).unwrap(), b"%PDF-exact\0bytes");
     }
 
@@ -14967,28 +14237,33 @@ mod tests {
     #[test]
     fn modified_shortcuts_win_over_their_generic_variants() {
         assert_eq!(
-            run_shortcut(
-                Modifiers::COMMAND | Modifiers::ALT,
-                egui::Key::O,
-                consume_file_shortcut,
-            ),
-            Some(FileMenuAction::OpenInNewWindow)
+            run_shortcut(Modifiers::COMMAND | Modifiers::ALT, egui::Key::O, |input| {
+                consume_shortcut(input, |command| {
+                    command_spec(command).menu == CommandMenu::File
+                })
+            },),
+            Some(AppCommand::OpenInNewWindow)
         );
         assert_eq!(
             run_shortcut(
                 Modifiers::COMMAND | Modifiers::SHIFT,
                 egui::Key::O,
-                consume_file_shortcut,
+                |input| consume_shortcut(input, |command| command_spec(command).menu
+                    == CommandMenu::File),
             ),
-            Some(FileMenuAction::ChangeWorkspaceRoot)
+            Some(AppCommand::ChangeWorkspaceRoot)
         );
+        let replace = command_spec(AppCommand::FindReplace)
+            .shortcut
+            .expect("find/replace has a shortcut")
+            .egui();
         assert_eq!(
-            run_shortcut(
-                replace_shortcut().modifiers,
-                replace_shortcut().logical_key,
-                consume_find_shortcut,
-            ),
-            Some(FindShortcutAction::Replace)
+            run_shortcut(replace.modifiers, replace.logical_key, |input| {
+                consume_shortcut(input, |command| {
+                    matches!(command, AppCommand::Find | AppCommand::FindReplace)
+                })
+            },),
+            Some(AppCommand::FindReplace)
         );
     }
 

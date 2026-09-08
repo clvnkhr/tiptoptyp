@@ -25,6 +25,7 @@ use syntect::{
 
 const MIN_TEXT_CONTRAST: f32 = 4.5;
 const MAX_VARIABLE_DEPTH: usize = 16;
+const DARK_BACKGROUND_LUMINANCE_THRESHOLD: f32 = 0.35;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ThemeFormat {
@@ -409,7 +410,7 @@ fn derive_palette(theme: &Theme, name: Option<&str>) -> (bool, SemanticPalette) 
         a: 255,
         ..raw_background
     };
-    let dark_mode = editor_background.relative_luminance() < 0.35;
+    let dark_mode = is_dark_background(editor_background);
     let defaults = Defaults::new(dark_mode);
     let highlighter = Highlighter::new(theme);
     let scoped = |scope: &str, fallback: Rgba| {
@@ -547,6 +548,12 @@ fn derive_palette(theme: &Theme, name: Option<&str>) -> (bool, SemanticPalette) 
         error_background: error.with_alpha(if dark_mode { 48 } else { 28 }),
     };
     (dark_mode, palette)
+}
+
+/// Applies the single appearance-classification policy used by imported and
+/// transformed themes.
+pub(crate) fn is_dark_background(color: Rgba) -> bool {
+    color.relative_luminance() < DARK_BACKGROUND_LUMINANCE_THRESHOLD
 }
 
 struct Defaults {

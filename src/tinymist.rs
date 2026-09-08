@@ -12,7 +12,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, ExitStatus, Stdio},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
         mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError},
     },
@@ -30,6 +30,12 @@ use crate::private_workspace::{PrivateTypstDocument, PrivateWorkspace};
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(300);
 const EXIT_TIMEOUT: Duration = Duration::from_millis(200);
+const WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(700);
+const FORCED_WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(500);
+const INITIALIZE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+const PREVIEW_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const INTERACTIVE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const FORMAT_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_HEADER_LINE_BYTES: usize = 8 * 1024;
 const MAX_HEADER_BYTES: usize = 32 * 1024;
 const MAX_MESSAGE_BYTES: usize = 32 * 1024 * 1024;
@@ -198,6 +204,7 @@ pub struct TinymistConfig {
     entry_path: Option<PathBuf>,
     program: PathBuf,
     arguments: Vec<OsString>,
+    request_timeout_override: Option<Duration>,
 }
 
 impl TinymistConfig {
@@ -209,6 +216,7 @@ impl TinymistConfig {
             entry_path: None,
             program: PathBuf::from("tinymist"),
             arguments: vec![OsString::from("lsp")],
+            request_timeout_override: None,
         }
     }
 
@@ -247,6 +255,12 @@ impl TinymistConfig {
     ) -> Self {
         self.program = program.into();
         self.arguments = arguments.into_iter().collect();
+        self
+    }
+
+    #[cfg(test)]
+    fn with_request_timeout(mut self, timeout: Duration) -> Self {
+        self.request_timeout_override = Some(timeout);
         self
     }
 
@@ -539,6 +553,76 @@ impl TinymistEvent {
     }
 }
 
+type SharedChild = Arc<Mutex<Child>>;
+
+#[derive(Clone)]
+struct ActiveProcess {
+    generation: Generation,
+    child: SharedChild,
+}
+
+/// Process handle shared with the sidecar owner so shutdown never depends on
+/// the protocol worker making progress through a potentially blocked pipe.
+#[derive(Default)]
+struct ProcessSupervisor {
+    active: Mutex<Option<ActiveProcess>>,
+}
+
+impl ProcessSupervisor {
+    fn install(&self, generation: Generation, child: &SharedChild) {
+        *self
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(ActiveProcess {
+            generation,
+            child: Arc::clone(child),
+        });
+    }
+
+    fn clear(&self, generation: Generation, child: &SharedChild) {
+        let mut active = self
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if active.as_ref().is_some_and(|active| {
+            active.generation == generation && Arc::ptr_eq(&active.child, child)
+        }) {
+            *active = None;
+        }
+    }
+
+    fn terminate_active(&self) {
+        let child = self
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .map(|active| Arc::clone(&active.child));
+        if let Some(child) = child {
+            // Never turn the independent shutdown path into another join on
+            // the protocol worker. In the blocked-stdin case this lock is
+            // free; if the worker is already reaping while holding it, the
+            // bounded completion wait below is sufficient.
+            let mut child = match child.try_lock() {
+                Ok(child) => child,
+                Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => return,
+            };
+            if !matches!(child.try_wait(), Ok(Some(_))) {
+                let _ = child.kill();
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn has_active_process(&self) -> bool {
+        self.active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_some()
+    }
+}
+
 /// Nonblocking controller for an optional Tinymist process.
 pub struct TinymistSidecar {
     commands: Option<Sender<WorkerCommand>>,
@@ -546,6 +630,8 @@ pub struct TinymistSidecar {
     worker: Option<thread::JoinHandle<()>>,
     next_generation: AtomicU64,
     current_generation: Arc<AtomicU64>,
+    process_supervisor: Arc<ProcessSupervisor>,
+    worker_done: Option<Receiver<()>>,
 }
 
 impl TinymistSidecar {
@@ -554,9 +640,21 @@ impl TinymistSidecar {
         let (event_tx, event_rx) = mpsc::channel();
         let current_generation = Arc::new(AtomicU64::new(0));
         let worker_generation = current_generation.clone();
+        let process_supervisor = Arc::new(ProcessSupervisor::default());
+        let worker_supervisor = Arc::clone(&process_supervisor);
+        let (worker_done_tx, worker_done_rx) = mpsc::channel();
         let worker = thread::Builder::new()
             .name("tiptoptyp-tinymist".to_owned())
-            .spawn(move || worker_loop(command_rx, event_tx, context, worker_generation))
+            .spawn(move || {
+                worker_loop(
+                    command_rx,
+                    event_tx,
+                    context,
+                    worker_generation,
+                    worker_supervisor,
+                );
+                let _ = worker_done_tx.send(());
+            })
             .expect("failed to start Tinymist worker");
 
         Self {
@@ -565,6 +663,8 @@ impl TinymistSidecar {
             worker: Some(worker),
             next_generation: AtomicU64::new(1),
             current_generation,
+            process_supervisor,
+            worker_done: Some(worker_done_rx),
         }
     }
 
@@ -746,7 +846,29 @@ impl Drop for TinymistSidecar {
             drop(commands);
         }
         if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
+            let worker_done = self.worker_done.take();
+            let mut finished = worker_done.as_ref().is_some_and(|done| {
+                !matches!(
+                    done.recv_timeout(WORKER_SHUTDOWN_TIMEOUT),
+                    Err(RecvTimeoutError::Timeout)
+                )
+            });
+            if !finished {
+                // The protocol worker may be blocked in a pipe write to a
+                // server which stopped reading. Kill through the independently
+                // shared child handle; this closes the pipe and lets the worker
+                // unwind without waiting for it to consume Shutdown first.
+                self.process_supervisor.terminate_active();
+                finished = worker_done.as_ref().is_some_and(|done| {
+                    !matches!(
+                        done.recv_timeout(FORCED_WORKER_SHUTDOWN_TIMEOUT),
+                        Err(RecvTimeoutError::Timeout)
+                    )
+                });
+            }
+            if finished {
+                let _ = worker.join();
+            }
         }
     }
 }
@@ -824,6 +946,33 @@ enum PendingRequest {
     },
 }
 
+impl PendingRequest {
+    fn method(&self) -> &'static str {
+        match self {
+            Self::Initialize => "initialize",
+            Self::StartPreview | Self::ScrollPreview => "workspace/executeCommand",
+            Self::FormatDocument { .. } => "textDocument/formatting",
+            Self::HoverDocument { .. } => "textDocument/hover",
+        }
+    }
+
+    fn timeout(&self) -> Duration {
+        match self {
+            Self::Initialize => INITIALIZE_REQUEST_TIMEOUT,
+            Self::StartPreview => PREVIEW_REQUEST_TIMEOUT,
+            Self::FormatDocument { .. } => FORMAT_REQUEST_TIMEOUT,
+            Self::ScrollPreview | Self::HoverDocument { .. } => INTERACTIVE_REQUEST_TIMEOUT,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PendingCall {
+    request: PendingRequest,
+    timeout: Duration,
+    deadline: Instant,
+}
+
 enum Incoming {
     Message(Value),
     Stderr(String),
@@ -834,22 +983,43 @@ enum Incoming {
 struct Session {
     generation: Generation,
     phase: SessionPhase,
-    child: Child,
+    child: SharedChild,
+    process_supervisor: Arc<ProcessSupervisor>,
     stdin: Option<ChildStdin>,
     incoming: Receiver<Incoming>,
     stdout_reader: Option<thread::JoinHandle<()>>,
     stderr_reader: Option<thread::JoinHandle<()>>,
     next_request_id: u64,
-    pending: HashMap<u64, PendingRequest>,
+    pending: HashMap<u64, PendingCall>,
     documents: HashMap<String, TextDocument>,
     settings: Value,
     start_preview: bool,
     root_uri: String,
     workspace_name: String,
+    request_timeout_override: Option<Duration>,
+    cleaned_up: bool,
 }
 
 impl Session {
-    fn spawn(generation: Generation, config: TinymistConfig) -> std::result::Result<Self, String> {
+    fn spawn(
+        generation: Generation,
+        config: TinymistConfig,
+        process_supervisor: Arc<ProcessSupervisor>,
+    ) -> std::result::Result<Self, String> {
+        Self::spawn_with_initializer(
+            generation,
+            config,
+            process_supervisor,
+            Self::send_initialize,
+        )
+    }
+
+    fn spawn_with_initializer(
+        generation: Generation,
+        config: TinymistConfig,
+        process_supervisor: Arc<ProcessSupervisor>,
+        initialize: impl FnOnce(&mut Self) -> std::result::Result<(), String>,
+    ) -> std::result::Result<Self, String> {
         let root = absolute_path(&config.workspace_root)
             .map_err(|error| format!("could not resolve workspace root: {error}"))?;
         let root_uri = Url::from_directory_path(&root)
@@ -911,10 +1081,13 @@ impl Session {
             }
         };
 
+        let child = Arc::new(Mutex::new(child));
+        process_supervisor.install(generation, &child);
         let mut session = Self {
             generation,
             phase: SessionPhase::Initializing,
             child,
+            process_supervisor,
             stdin: Some(stdin),
             incoming: incoming_rx,
             stdout_reader: Some(stdout_reader),
@@ -926,9 +1099,15 @@ impl Session {
             start_preview: config.start_preview,
             root_uri,
             workspace_name,
+            request_timeout_override: config.request_timeout_override,
+            cleaned_up: false,
         };
-        session.send_initialize()?;
+        initialize(&mut session)?;
         Ok(session)
+    }
+
+    fn mark_cleaned_up(&mut self) {
+        self.cleaned_up = true;
     }
 
     fn send_initialize(&mut self) -> std::result::Result<(), String> {
@@ -996,8 +1175,26 @@ impl Session {
             "method": method,
             "params": params,
         }))?;
-        self.pending.insert(id, pending);
+        let timeout = self
+            .request_timeout_override
+            .unwrap_or_else(|| pending.timeout());
+        self.pending.insert(
+            id,
+            PendingCall {
+                request: pending,
+                timeout,
+                deadline: Instant::now() + timeout,
+            },
+        );
         Ok(id)
+    }
+
+    fn expired_request(&self, now: Instant) -> Option<(u64, &PendingCall)> {
+        self.pending
+            .iter()
+            .filter(|(_, pending)| pending.deadline <= now)
+            .min_by_key(|(id, pending)| (pending.deadline, **id))
+            .map(|(id, pending)| (*id, pending))
     }
 
     fn notify(&mut self, method: &str, params: Value) -> std::result::Result<(), String> {
@@ -1072,6 +1269,22 @@ impl Session {
     }
 }
 
+impl Drop for Session {
+    fn drop(&mut self) {
+        if !self.cleaned_up {
+            // `Child` does not terminate on drop. Closing stdin first gives a
+            // cooperative server an EOF; bounded reaping then kills a server
+            // that remains alive. Reader handles are joined only after the
+            // process and its pipe writers are closed.
+            self.stdin.take();
+            let _ = reap_child(&self.child);
+            join_readers(self);
+            self.cleaned_up = true;
+        }
+        self.process_supervisor.clear(self.generation, &self.child);
+    }
+}
+
 fn absolute_path(path: &Path) -> io::Result<PathBuf> {
     if path.is_absolute() {
         Ok(path.to_owned())
@@ -1126,6 +1339,7 @@ fn worker_loop(
     events: Sender<TinymistEvent>,
     context: egui::Context,
     current_generation: Arc<AtomicU64>,
+    process_supervisor: Arc<ProcessSupervisor>,
 ) {
     let mut session: Option<Session> = None;
 
@@ -1154,6 +1368,20 @@ fn worker_loop(
             }
         }
 
+        if session_failure.is_none()
+            && let Some(active) = session.as_ref()
+            && let Some((id, pending)) = active.expired_request(Instant::now())
+        {
+            session_failure = Some((
+                "timeout",
+                format!(
+                    "Tinymist did not answer {} request {id} within {:?}",
+                    pending.request.method(),
+                    pending.timeout
+                ),
+            ));
+        }
+
         if let Some((stage, error)) = session_failure
             && let Some(active) = session.take()
         {
@@ -1179,7 +1407,7 @@ fn worker_loop(
         }
 
         if let Some(active) = session.as_mut() {
-            match active.child.try_wait() {
+            match try_wait_child(&active.child) {
                 Ok(Some(status)) => {
                     let active = session.take().expect("active session disappeared");
                     finish_exited_session(
@@ -1244,7 +1472,7 @@ fn worker_loop(
                     &current_generation,
                     TinymistEvent::Starting { generation },
                 );
-                match Session::spawn(generation, config) {
+                match Session::spawn(generation, config, Arc::clone(&process_supervisor)) {
                     Ok(active) => session = Some(active),
                     Err(error) => {
                         emit(
@@ -1688,6 +1916,7 @@ fn handle_rpc_message(
         // sidecar fatal because a server raced a workspace transition.
         return Ok(());
     };
+    let pending = pending.request;
 
     if let Some(error) = object.get("error").filter(|error| !error.is_null()) {
         let message = rpc_error_message(error);
@@ -2276,8 +2505,9 @@ fn finish_session(
 
     // Closing stdin also releases test/failure servers that wait for EOF.
     session.stdin.take();
-    let status = reap_child(&mut session.child);
+    let status = reap_child(&session.child);
     join_readers(&mut session);
+    session.mark_cleaned_up();
     emit(
         events,
         context,
@@ -2299,8 +2529,13 @@ fn finish_exited_session(
     current_generation: &AtomicU64,
 ) {
     session.stdin.take();
-    let _ = session.child.wait();
+    let _ = session
+        .child
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .wait();
     join_readers(&mut session);
+    session.mark_cleaned_up();
     emit(
         events,
         context,
@@ -2313,17 +2548,26 @@ fn finish_exited_session(
     );
 }
 
-fn reap_child(child: &mut Child) -> Option<ExitStatus> {
+fn try_wait_child(child: &SharedChild) -> io::Result<Option<ExitStatus>> {
+    child
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .try_wait()
+}
+
+fn reap_child(child: &SharedChild) -> Option<ExitStatus> {
     let deadline = Instant::now() + EXIT_TIMEOUT;
     loop {
-        match child.try_wait() {
+        match try_wait_child(child) {
             Ok(Some(status)) => return Some(status),
             Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
             Ok(None) => {
+                let mut child = child.lock().unwrap_or_else(|error| error.into_inner());
                 let _ = child.kill();
                 return child.wait().ok();
             }
             Err(_) => {
+                let mut child = child.lock().unwrap_or_else(|error| error.into_inner());
                 let _ = child.kill();
                 return child.wait().ok();
             }
@@ -2450,6 +2694,31 @@ mod tests {
         assert_eq!(read_lsp_message(&mut reader).unwrap(), Some(first));
         assert_eq!(read_lsp_message(&mut reader).unwrap(), Some(second));
         assert_eq!(read_lsp_message(&mut reader).unwrap(), None);
+    }
+
+    #[test]
+    fn request_deadline_policy_keeps_a_long_formatting_budget() {
+        let formatting = PendingRequest::FormatDocument {
+            uri: "file:///tmp/main.typ".to_owned(),
+            version: 1,
+        };
+        let hover = PendingRequest::HoverDocument {
+            uri: "file:///tmp/main.typ".to_owned(),
+            version: 1,
+            request_token: 1,
+        };
+
+        assert_eq!(
+            PendingRequest::Initialize.timeout(),
+            Duration::from_secs(15)
+        );
+        assert_eq!(
+            PendingRequest::StartPreview.timeout(),
+            Duration::from_secs(30)
+        );
+        assert_eq!(hover.timeout(), Duration::from_secs(10));
+        assert_eq!(formatting.timeout(), Duration::from_secs(120));
+        assert!(formatting.timeout() > PendingRequest::StartPreview.timeout());
     }
 
     #[test]
@@ -2812,6 +3081,8 @@ mod tests {
             worker: None,
             next_generation: AtomicU64::new(8),
             current_generation: Arc::new(AtomicU64::new(7)),
+            process_supervisor: Arc::new(ProcessSupervisor::default()),
+            worker_done: None,
         };
 
         sidecar
@@ -2908,6 +3179,180 @@ mod tests {
                 generation: Generation(2)
             }
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn initialization_write_failure_reaps_child_and_readers() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut pid = None;
+        let mut config = TinymistConfig::new(directory.path())
+            .with_command("/bin/sleep", [OsString::from("30")]);
+        config.start_preview = false;
+        let result = Session::spawn_with_initializer(
+            Generation(1),
+            config,
+            Arc::new(ProcessSupervisor::default()),
+            |session| {
+                pid = Some(
+                    session
+                        .child
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .id(),
+                );
+                session.stdin.take();
+                session.send_initialize()
+            },
+        );
+        let error = match result {
+            Ok(_) => panic!("injected closed stdin must fail initialization"),
+            Err(error) => error,
+        };
+        assert!(error.contains("stdin is closed"), "{error}");
+
+        let pid = pid.expect("spawned session did not expose its child pid");
+        let still_running = Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success());
+        assert!(!still_running, "startup failure leaked child process {pid}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dropping_sidecar_terminates_a_server_blocked_on_stdin() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("blocked-stdin-tinymist.sh");
+        let pid_path = directory.path().join("server.pid");
+        let hold_path = directory.path().join("hold.fifo");
+        let initialize = json!({"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}});
+        let payload = serde_json::to_string(&initialize).unwrap();
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nprintf '%s' \"$$\" > '{}'\nprintf '%s\\r\\n\\r\\n%s' 'Content-Length: {}' '{}'\nmkfifo '{}'\nexec cat '{}'\n",
+                pid_path.display(),
+                payload.len(),
+                payload,
+                hold_path.display(),
+                hold_path.display(),
+            ),
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script, permissions).unwrap();
+
+        let sidecar = TinymistSidecar::new(egui::Context::default());
+        let supervisor = Arc::clone(&sidecar.process_supervisor);
+        let mut config = TinymistConfig::new(directory.path())
+            .with_command(&script, std::iter::empty::<OsString>());
+        config.start_preview = false;
+        let generation = sidecar.start_workspace(config).unwrap();
+
+        let initialize_deadline = Instant::now() + FAKE_SERVER_TIMEOUT;
+        let mut initialized = false;
+        while Instant::now() < initialize_deadline && !initialized {
+            while let Some(event) = sidecar.try_recv() {
+                initialized |= matches!(event, TinymistEvent::Initialized { .. });
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(initialized, "fake server never initialized");
+        assert!(supervisor.has_active_process());
+        assert!(pid_path.is_file(), "fake server did not record its pid");
+
+        // Larger than ordinary pipe capacity: because the fake server never
+        // reads stdin, the worker cannot finish this didOpen before shutdown.
+        sidecar
+            .did_open(
+                generation,
+                TextDocument::typst("file:///tmp/blocked.typ", 1, "x".repeat(8 * 1024 * 1024)),
+            )
+            .unwrap();
+        let started = Instant::now();
+        drop(sidecar);
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed
+                < WORKER_SHUTDOWN_TIMEOUT
+                    + FORCED_WORKER_SHUTDOWN_TIMEOUT
+                    + Duration::from_millis(500),
+            "sidecar drop exceeded its termination bound: {elapsed:?}"
+        );
+        assert!(!supervisor.has_active_process());
+
+        let pid = fs::read_to_string(&pid_path).unwrap();
+        let still_running = Command::new("kill")
+            .args(["-0", pid.trim()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success());
+        assert!(!still_running, "blocked fake server survived drop: {pid}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unanswered_initialize_request_times_out_and_stops_the_session() {
+        let directory = tempfile::tempdir().unwrap();
+        let sidecar = TinymistSidecar::new(egui::Context::default());
+        let supervisor = Arc::clone(&sidecar.process_supervisor);
+        let mut config = TinymistConfig::new(directory.path())
+            // `sleep` keeps every pipe open but never reads the initialize
+            // request and never writes a response during the test.
+            .with_command("/bin/sleep", [OsString::from("30")])
+            .with_request_timeout(Duration::from_secs(3));
+        config.start_preview = false;
+        let generation = sidecar.start_workspace(config).unwrap();
+
+        let deadline = Instant::now() + FAKE_SERVER_TIMEOUT;
+        let mut timeout_error = None;
+        let mut stopped = false;
+        while Instant::now() < deadline && !stopped {
+            while let Some(event) = sidecar.try_recv() {
+                match event {
+                    TinymistEvent::Error {
+                        generation: event_generation,
+                        stage: "timeout",
+                        message,
+                        fatal: true,
+                    } => {
+                        assert_eq!(event_generation, generation);
+                        timeout_error = Some(message);
+                    }
+                    TinymistEvent::Stopped {
+                        generation: event_generation,
+                        reason,
+                        ..
+                    } => {
+                        assert_eq!(event_generation, generation);
+                        assert!(reason.contains("timeout"), "{reason}");
+                        stopped = true;
+                    }
+                    _ => {}
+                }
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+
+        let timeout_error = timeout_error.expect("missing request-timeout event");
+        assert!(
+            timeout_error.contains("initialize request 1"),
+            "{timeout_error}"
+        );
+        assert!(
+            timeout_error.contains("3s"),
+            "timeout should report its bound: {timeout_error}"
+        );
+        assert!(stopped, "timed-out session did not stop");
+        assert_eq!(sidecar.current_generation(), None);
+        assert!(!supervisor.has_active_process());
     }
 
     #[cfg(unix)]

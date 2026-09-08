@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 const OVERRIDE_ENVIRONMENT: [&str; 5] = [
@@ -40,6 +40,124 @@ fn lines(output: Output) -> Vec<String> {
         .lines()
         .map(ToOwned::to_owned)
         .collect()
+}
+
+fn gallery_transaction_source() -> String {
+    let source = std::fs::read_to_string(gallery_script()).expect("read gallery script");
+    let start = source
+        .find("backup_directory=\"\"\nrestore_outputs_on_exit=0\n")
+        .expect("gallery transaction start");
+    let end = source[start..]
+        .find("\napp_binary=\"\"\n")
+        .map(|offset| start + offset)
+        .expect("gallery transaction end");
+    source[start..end].to_owned()
+}
+
+fn run_gallery_transaction_fault(root: &Path, failed_move: usize, restore: bool) -> Output {
+    let shell = format!(
+        r#"set -euo pipefail
+{}
+latest_directory="$1/gallery"
+backup_directory="$1/backup"
+expected_outputs=(first.png second.png)
+move_count=0
+failed_move="$2"
+mv() {{
+  move_count=$((move_count + 1))
+  if (( move_count == failed_move )); then
+    printf 'injected move failure %d\n' "${{move_count}}" >&2
+    return 1
+  fi
+  command mv "$@"
+}}
+trap cleanup EXIT
+backup_requested_outputs
+if [[ "$3" == restore ]]; then
+  printf generated-first > "${{latest_directory}}/first.png"
+  printf generated-second > "${{latest_directory}}/second.png"
+  exit 23
+fi
+"#,
+        gallery_transaction_source()
+    );
+    Command::new("bash")
+        .arg("-c")
+        .arg(shell)
+        .arg("gallery-transaction-test")
+        .arg(root)
+        .arg(failed_move.to_string())
+        .arg(if restore { "restore" } else { "backup" })
+        .output()
+        .expect("run gallery transaction fault injection")
+}
+
+fn assert_original_survives(root: &Path, name: &str, expected: &[u8]) {
+    let gallery = root.join("gallery").join(name);
+    let backup = root.join("backup").join(name);
+    let survivors = [gallery, backup]
+        .into_iter()
+        .filter(|path| path.exists())
+        .map(|path| std::fs::read(path).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        survivors.len(),
+        1,
+        "original bytes for {name} did not survive exactly once"
+    );
+    assert_eq!(survivors[0], expected);
+}
+
+#[test]
+fn gallery_transaction_recovers_every_partial_backup_step() {
+    for failed_move in 1..=2 {
+        let temporary = tempfile::tempdir().unwrap();
+        let gallery = temporary.path().join("gallery");
+        let backup = temporary.path().join("backup");
+        std::fs::create_dir(&gallery).unwrap();
+        std::fs::create_dir(&backup).unwrap();
+        std::fs::write(gallery.join("first.png"), b"original-first").unwrap();
+        std::fs::write(gallery.join("second.png"), b"original-second").unwrap();
+
+        let output = run_gallery_transaction_fault(temporary.path(), failed_move, false);
+        assert!(!output.status.success());
+        assert_eq!(
+            std::fs::read(gallery.join("first.png")).unwrap(),
+            b"original-first"
+        );
+        assert_eq!(
+            std::fs::read(gallery.join("second.png")).unwrap(),
+            b"original-second"
+        );
+        assert!(
+            !backup.exists(),
+            "successful recovery should remove its backup"
+        );
+    }
+}
+
+#[test]
+fn gallery_transaction_retains_backups_after_every_failed_restore_step() {
+    for failed_move in 3..=4 {
+        let temporary = tempfile::tempdir().unwrap();
+        let gallery = temporary.path().join("gallery");
+        let backup = temporary.path().join("backup");
+        std::fs::create_dir(&gallery).unwrap();
+        std::fs::create_dir(&backup).unwrap();
+        std::fs::write(gallery.join("first.png"), b"original-first").unwrap();
+        std::fs::write(gallery.join("second.png"), b"original-second").unwrap();
+
+        let output = run_gallery_transaction_fault(temporary.path(), failed_move, true);
+        assert!(!output.status.success());
+        assert!(backup.exists(), "failed recovery must retain its backup");
+        assert_original_survives(temporary.path(), "first.png", b"original-first");
+        assert_original_survives(temporary.path(), "second.png", b"original-second");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("recovery was incomplete"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[test]

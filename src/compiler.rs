@@ -36,6 +36,9 @@ static TRACE_WATCH: LazyLock<bool> = LazyLock::new(|| std::env::var_os(TRACE_WAT
 #[derive(Debug, Clone)]
 pub struct CompileRequest {
     pub revision: u64,
+    /// Whether this build also needs page pixels. Export-only builds publish
+    /// their canonical artifact without invoking the optional rasterizer.
+    pub rasterize: bool,
     pub source: String,
     pub source_dir: PathBuf,
     pub project_root: PathBuf,
@@ -106,20 +109,48 @@ pub struct PreviewLink {
     pub target: String,
 }
 
-#[derive(Debug)]
-pub struct CompiledDocument {
-    pub pdf: Vec<u8>,
-    pub pages: Vec<PreviewPage>,
+#[derive(Debug, Clone)]
+pub struct CompileArtifact {
+    pub key: ArtifactKey,
+    pub pdf: Arc<[u8]>,
     pub diagnostics: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ArtifactKey {
+    pub revision: u64,
+    pub generation: u64,
+}
+
+impl ArtifactKey {
+    pub const fn unversioned(revision: u64) -> Self {
+        Self {
+            revision,
+            generation: 0,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum CompileEvent {
+    Started,
+    Failed(String),
+    Artifact(CompileArtifact),
+    Rasterized {
+        key: ArtifactKey,
+        pages: Vec<PreviewPage>,
+    },
+    RasterFailed {
+        key: ArtifactKey,
+        error: String,
+    },
 }
 
 #[derive(Debug)]
 pub struct CompileResult {
     pub revision: u64,
     pub elapsed: Duration,
-    /// `None` announces that Typst started rebuilding (including after an
-    /// imported dependency changed). `Some` is a terminal success or failure.
-    pub output: Option<Result<CompiledDocument, String>>,
+    pub event: CompileEvent,
 }
 
 enum CompilerCommand {
@@ -220,8 +251,10 @@ struct WatchSession {
     child: Child,
     reader: Option<thread::JoinHandle<()>>,
     pending_revision: u64,
+    pending_rasterize: bool,
     pending_display_name: String,
     active_revision: Option<u64>,
+    active_rasterize: bool,
     active_display_name: String,
     active_started: Instant,
     diagnostics: Vec<String>,
@@ -230,6 +263,7 @@ struct WatchSession {
 
 struct PendingCompletion {
     revision: u64,
+    rasterize: bool,
     elapsed: Duration,
     succeeded: bool,
     quiet_since: Instant,
@@ -328,8 +362,10 @@ impl WatchSession {
             child,
             reader: Some(reader),
             pending_revision: request.revision,
+            pending_rasterize: request.rasterize,
             pending_display_name: request.display_name.clone(),
             active_revision: None,
+            active_rasterize: request.rasterize,
             active_display_name: request.display_name.clone(),
             active_started: Instant::now(),
             diagnostics: Vec::new(),
@@ -342,6 +378,7 @@ impl WatchSession {
             format!("Could not update the private live-preview document: {error}")
         })?;
         self.pending_revision = request.revision;
+        self.pending_rasterize = request.rasterize;
         self.pending_display_name.clone_from(&request.display_name);
         Ok(())
     }
@@ -387,6 +424,7 @@ fn worker_loop(
 ) {
     let (watch_log_tx, watch_log_rx) = mpsc::channel::<WatchLog>();
     let mut next_session_id = 1_u64;
+    let mut next_artifact_generation = 1_u64;
     let mut session: Option<WatchSession> = None;
 
     loop {
@@ -397,6 +435,7 @@ fn worker_loop(
             &context,
             &shutdown,
             &latest_revision,
+            &mut next_artifact_generation,
         );
 
         // Only the latest queued command matters, whether it requests a new
@@ -421,6 +460,7 @@ fn worker_loop(
                     &context,
                     &shutdown,
                     &latest_revision,
+                    &mut next_artifact_generation,
                 );
 
                 // macOS filesystem notifications intentionally suppress
@@ -438,7 +478,7 @@ fn worker_loop(
                             CompileResult {
                                 revision: request.revision,
                                 elapsed: Duration::ZERO,
-                                output: Some(Err(error)),
+                                event: CompileEvent::Failed(error),
                             },
                         );
                         continue;
@@ -465,7 +505,7 @@ fn worker_loop(
                         CompileResult {
                             revision: request.revision,
                             elapsed: Duration::ZERO,
-                            output: Some(Err(error)),
+                            event: CompileEvent::Failed(error),
                         },
                     );
                 }
@@ -489,9 +529,9 @@ fn worker_loop(
                 CompileResult {
                     revision,
                     elapsed: Duration::ZERO,
-                    output: Some(Err(format!(
+                    event: CompileEvent::Failed(format!(
                         "`typst watch` stopped unexpectedly with {status}"
-                    ))),
+                    )),
                 },
             );
             session = None;
@@ -529,6 +569,7 @@ fn drain_watch_logs(
                 // that result no longer represents the live output path.
                 current.pending_completion = None;
                 current.active_revision = Some(current.pending_revision);
+                current.active_rasterize = current.pending_rasterize;
                 current
                     .active_display_name
                     .clone_from(&current.pending_display_name);
@@ -540,7 +581,7 @@ fn drain_watch_logs(
                     CompileResult {
                         revision: current.pending_revision,
                         elapsed: Duration::ZERO,
-                        output: None,
+                        event: CompileEvent::Started,
                     },
                 );
             }
@@ -551,6 +592,7 @@ fn drain_watch_logs(
                     .unwrap_or(current.pending_revision);
                 current.pending_completion = Some(PendingCompletion {
                     revision,
+                    rasterize: current.active_rasterize,
                     elapsed: current.active_started.elapsed(),
                     succeeded: true,
                     quiet_since: Instant::now(),
@@ -563,6 +605,7 @@ fn drain_watch_logs(
                     .unwrap_or(current.pending_revision);
                 current.pending_completion = Some(PendingCompletion {
                     revision,
+                    rasterize: current.active_rasterize,
                     elapsed: current.active_started.elapsed(),
                     succeeded: false,
                     quiet_since: Instant::now(),
@@ -584,6 +627,7 @@ fn finish_settled_completion(
     context: &egui::Context,
     shutdown: &AtomicBool,
     latest_revision: &AtomicU64,
+    next_artifact_generation: &mut u64,
 ) {
     let Some(current) = session.as_mut() else {
         return;
@@ -598,19 +642,31 @@ fn finish_settled_completion(
 
     let completion = current.pending_completion.take().unwrap();
     let diagnostics = current.diagnostics.join("\n");
-    let output = if completion.succeeded {
-        render_pdf(
+    if completion.succeeded {
+        let key = ArtifactKey {
+            revision: completion.revision,
+            generation: *next_artifact_generation,
+        };
+        *next_artifact_generation = (*next_artifact_generation).wrapping_add(1).max(1);
+        publish_compiled_artifact(
             &current.pdf_path,
             &current.context.project_root,
             diagnostics,
-            completion.revision,
+            key,
+            completion.elapsed,
+            completion.rasterize,
             shutdown,
             latest_revision,
-        )
-    } else if diagnostics.is_empty() {
-        Err("Typst could not compile the document".to_owned())
+            Path::new("pdftoppm"),
+            results,
+            context,
+        );
+        return;
+    }
+    let error = if diagnostics.is_empty() {
+        "Typst could not compile the document".to_owned()
     } else {
-        Err(diagnostics)
+        diagnostics
     };
     send_result(
         results,
@@ -618,32 +674,78 @@ fn finish_settled_completion(
         CompileResult {
             revision: completion.revision,
             elapsed: completion.elapsed,
-            output: Some(output),
+            event: CompileEvent::Failed(error),
         },
     );
 }
 
-fn render_pdf(
+#[allow(clippy::too_many_arguments)]
+fn publish_compiled_artifact(
     pdf_path: &Path,
     project_root: &Path,
     diagnostics: String,
-    revision: u64,
+    key: ArtifactKey,
+    elapsed: Duration,
+    rasterize: bool,
     shutdown: &AtomicBool,
     latest_revision: &AtomicU64,
-) -> Result<CompiledDocument, String> {
+    rasterizer: &Path,
+    results: &Sender<CompileResult>,
+    context: &egui::Context,
+) {
     // The watcher owns and may atomically replace `pdf_path` again (for example
-    // after a dependency edit). Snapshot once so page textures and exported
-    // bytes are guaranteed to describe the exact same build.
-    let pdf = fs::read(pdf_path)
-        .map_err(|error| format!("Could not snapshot the compiled PDF: {error}"))?;
-    let pages = rasterize_pdf(&pdf, project_root, || {
-        shutdown.load(Ordering::Acquire) || latest_revision.load(Ordering::Acquire) != revision
-    })?;
-    Ok(CompiledDocument {
-        pdf,
-        pages,
-        diagnostics,
-    })
+    // after a dependency edit). Snapshot exactly once and share those immutable
+    // bytes with export and rasterization so their artifact identity cannot
+    // drift even if the watcher writes a newer output while Poppler is active.
+    let pdf: Arc<[u8]> = match fs::read(pdf_path) {
+        Ok(pdf) => pdf.into(),
+        Err(error) => {
+            send_result(
+                results,
+                context,
+                CompileResult {
+                    revision: key.revision,
+                    elapsed,
+                    event: CompileEvent::Failed(format!(
+                        "Could not snapshot the compiled PDF: {error}"
+                    )),
+                },
+            );
+            return;
+        }
+    };
+    send_result(
+        results,
+        context,
+        CompileResult {
+            revision: key.revision,
+            elapsed,
+            event: CompileEvent::Artifact(CompileArtifact {
+                key,
+                pdf: pdf.clone(),
+                diagnostics,
+            }),
+        },
+    );
+    if !rasterize {
+        return;
+    }
+
+    let event = match rasterize_pdf_with_program(&pdf, project_root, rasterizer, || {
+        shutdown.load(Ordering::Acquire) || latest_revision.load(Ordering::Acquire) != key.revision
+    }) {
+        Ok(pages) => CompileEvent::Rasterized { key, pages },
+        Err(error) => CompileEvent::RasterFailed { key, error },
+    };
+    send_result(
+        results,
+        context,
+        CompileResult {
+            revision: key.revision,
+            elapsed,
+            event,
+        },
+    );
 }
 
 /// Rasterize already-snapshotted PDF bytes for either a Typst build or a PDF
@@ -652,6 +754,15 @@ fn render_pdf(
 pub(crate) fn rasterize_pdf(
     pdf: &[u8],
     project_root: &Path,
+    cancelled: impl FnMut() -> bool,
+) -> Result<Vec<PreviewPage>, String> {
+    rasterize_pdf_with_program(pdf, project_root, Path::new("pdftoppm"), cancelled)
+}
+
+fn rasterize_pdf_with_program(
+    pdf: &[u8],
+    project_root: &Path,
+    rasterizer: &Path,
     mut cancelled: impl FnMut() -> bool,
 ) -> Result<Vec<PreviewPage>, String> {
     let private = PrivateWorkspace::open(project_root).map_err(|error| {
@@ -667,7 +778,7 @@ pub(crate) fn rasterize_pdf(
     fs::write(&snapshot_path, pdf)
         .map_err(|error| format!("Could not stage the PDF preview: {error}"))?;
     let page_prefix = render_dir.path().join("page");
-    let mut render_child = Command::new("pdftoppm")
+    let mut render_child = Command::new(rasterizer)
         .arg("-png")
         .arg("-r")
         .arg(PREVIEW_DPI.to_string())
@@ -1021,8 +1132,9 @@ fn send_result(results: &Sender<CompileResult>, context: &egui::Context, result:
 #[cfg(test)]
 mod tests {
     use super::{
-        CompileRequest, CompileResult, Compiler, CompilerCommand, WatchContext, WatchLine,
-        classify_watch_line, parse_pdf_links, preview_page_number, worker_loop,
+        ArtifactKey, CompileEvent, CompileRequest, CompileResult, Compiler, CompilerCommand,
+        WatchContext, WatchLine, classify_watch_line, parse_pdf_links, preview_page_number,
+        publish_compiled_artifact, worker_loop,
     };
     use std::{
         fs,
@@ -1105,6 +1217,7 @@ mod tests {
                 let command = revision.map_or(CompilerCommand::Pause, |revision| {
                     CompilerCommand::Request(CompileRequest {
                         revision,
+                        rasterize: false,
                         source: String::new(),
                         // Resolve fails deterministically before starting a process.
                         source_dir: project.path().join("missing"),
@@ -1128,9 +1241,119 @@ mod tests {
             assert_eq!(results.len(), usize::from(expected_revision.is_some()));
             if let Some(revision) = expected_revision {
                 assert_eq!(results[0].revision, revision);
-                assert!(matches!(results[0].output, Some(Err(_))));
+                assert!(matches!(results[0].event, CompileEvent::Failed(_)));
             }
         }
+    }
+
+    #[test]
+    fn successful_artifact_is_published_before_missing_rasterizer_failure() {
+        let project = tempfile::tempdir().unwrap();
+        let pdf_path = project.path().join("compiled.pdf");
+        let expected = b"%PDF-exact-artifact\0bytes";
+        fs::write(&pdf_path, expected).unwrap();
+        let (result_tx, result_rx) = mpsc::channel();
+        let shutdown = AtomicBool::new(false);
+        let latest_revision = AtomicU64::new(7);
+
+        publish_compiled_artifact(
+            &pdf_path,
+            project.path(),
+            "warning diagnostic".to_owned(),
+            ArtifactKey {
+                revision: 7,
+                generation: 11,
+            },
+            Duration::from_millis(12),
+            true,
+            &shutdown,
+            &latest_revision,
+            &project.path().join("missing-pdftoppm"),
+            &result_tx,
+            &eframe::egui::Context::default(),
+        );
+
+        let results = result_rx.try_iter().collect::<Vec<_>>();
+        assert_eq!(results.len(), 2);
+        let CompileEvent::Artifact(artifact) = &results[0].event else {
+            panic!("artifact must be published before rasterization")
+        };
+        assert_eq!(artifact.pdf.as_ref(), expected);
+        assert_eq!(artifact.key.generation, 11);
+        assert_eq!(artifact.diagnostics, "warning diagnostic");
+        assert!(matches!(
+            &results[1].event,
+            CompileEvent::RasterFailed { key, error }
+                if key == &artifact.key && error.contains("Poppler was not found")
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_artifact_can_recover_after_a_rasterizer_failure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let project = tempfile::tempdir().unwrap();
+        let pdf_path = project.path().join("compiled.pdf");
+        fs::write(&pdf_path, b"%PDF-stable-snapshot").unwrap();
+        let fixture_path = project.path().join("fixture.png");
+        image::RgbaImage::from_pixel(2, 1, image::Rgba([12, 34, 56, 255]))
+            .save(&fixture_path)
+            .unwrap();
+        let rasterizer = project.path().join("fake-pdftoppm");
+        fs::write(
+            &rasterizer,
+            "#!/bin/sh\ncp \"${0%/*}/fixture.png\" \"${5}-1.png\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&rasterizer, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let (result_tx, result_rx) = mpsc::channel();
+        let shutdown = AtomicBool::new(false);
+        let latest_revision = AtomicU64::new(7);
+        for (generation, program) in [
+            (11, project.path().join("missing-pdftoppm")),
+            (12, rasterizer),
+        ] {
+            publish_compiled_artifact(
+                &pdf_path,
+                project.path(),
+                String::new(),
+                ArtifactKey {
+                    revision: 7,
+                    generation,
+                },
+                Duration::ZERO,
+                true,
+                &shutdown,
+                &latest_revision,
+                &program,
+                &result_tx,
+                &eframe::egui::Context::default(),
+            );
+        }
+
+        let results = result_rx.try_iter().collect::<Vec<_>>();
+        assert_eq!(results.len(), 4);
+        assert!(matches!(
+            &results[0].event,
+            CompileEvent::Artifact(artifact) if artifact.key.generation == 11
+        ));
+        assert!(matches!(
+            &results[1].event,
+            CompileEvent::RasterFailed { key, .. } if key.generation == 11
+        ));
+        assert!(matches!(
+            &results[2].event,
+            CompileEvent::Artifact(artifact) if artifact.key.generation == 12
+        ));
+        assert!(matches!(
+            &results[3].event,
+            CompileEvent::Rasterized { key, pages }
+                if key.generation == 12
+                    && pages.len() == 1
+                    && pages[0].size == [2, 1]
+        ));
     }
 
     #[test]
@@ -1140,6 +1363,7 @@ mod tests {
         std::fs::create_dir(&source).unwrap();
         let mut request = CompileRequest {
             revision: 1,
+            rasterize: false,
             source: String::new(),
             source_dir: source,
             project_root: root.path().to_path_buf(),
@@ -1161,6 +1385,7 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         let request = CompileRequest {
             revision: 1,
+            rasterize: false,
             source: String::new(),
             source_dir: project.path().to_path_buf(),
             project_root: project.path().to_path_buf(),
@@ -1189,6 +1414,7 @@ mod tests {
         symlink(&source, &alias).unwrap();
         let mut request = CompileRequest {
             revision: 1,
+            rasterize: false,
             source: String::new(),
             source_dir: source.canonicalize().unwrap(),
             project_root: project.path().canonicalize().unwrap(),
@@ -1214,6 +1440,7 @@ mod tests {
             .unwrap_or_else(|| PathBuf::from("typst"));
         let request = |revision, source: &str| CompileRequest {
             revision,
+            rasterize: true,
             source: source.to_owned(),
             source_dir: root.path().to_path_buf(),
             project_root: root.path().to_path_buf(),
@@ -1223,28 +1450,52 @@ mod tests {
         };
 
         compiler.request(request(1, "= First build")).unwrap();
-        let first = wait_for_revision(&compiler, 1);
-        assert_eq!(first.output.unwrap().unwrap().pages.len(), 1);
+        let first_artifact = wait_for_revision(&compiler, 1, |event| {
+            matches!(event, CompileEvent::Artifact(_))
+        });
+        assert!(matches!(
+            first_artifact.event,
+            CompileEvent::Artifact(artifact) if artifact.pdf.starts_with(b"%PDF")
+        ));
+        let first_raster = wait_for_revision(&compiler, 1, |event| {
+            matches!(event, CompileEvent::Rasterized { .. })
+        });
+        assert!(matches!(
+            first_raster.event,
+            CompileEvent::Rasterized { pages, .. } if pages.len() == 1
+        ));
 
         compiler.request(request(2, "#let broken =")).unwrap();
-        let error = wait_for_revision(&compiler, 2).output.unwrap().unwrap_err();
+        let failed = wait_for_revision(&compiler, 2, |event| {
+            matches!(event, CompileEvent::Failed(_))
+        });
+        let CompileEvent::Failed(error) = failed.event else {
+            unreachable!()
+        };
         assert!(error.contains("expected expression"), "{error}");
 
         compiler
             .request(request(3, "= Recovered\n#pagebreak()\n= Page two"))
             .unwrap();
-        let recovered = wait_for_revision(&compiler, 3).output.unwrap();
-        let recovered = recovered.unwrap();
-        assert_eq!(recovered.pages.len(), 2);
-        assert!(recovered.pdf.starts_with(b"%PDF"));
+        let recovered = wait_for_revision(&compiler, 3, |event| {
+            matches!(event, CompileEvent::Rasterized { .. })
+        });
+        assert!(matches!(
+            recovered.event,
+            CompileEvent::Rasterized { pages, .. } if pages.len() == 2
+        ));
     }
 
-    fn wait_for_revision(compiler: &Compiler, revision: u64) -> CompileResult {
+    fn wait_for_revision(
+        compiler: &Compiler,
+        revision: u64,
+        accepts: impl Fn(&CompileEvent) -> bool,
+    ) -> CompileResult {
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
             if let Some(result) = compiler.try_recv()
                 && result.revision == revision
-                && result.output.is_some()
+                && accepts(&result.event)
             {
                 return result;
             }

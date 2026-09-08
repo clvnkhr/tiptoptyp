@@ -13,7 +13,9 @@ use crate::{
     app::{EditorApp, EditorWindowRequest},
     native_menu::NativeMenuReceiver,
     open_requests::OpenRequestReceiver,
-    screenshot::{CaptureController, CaptureThemeProfile, UiCaptureStep, UiSnapshotScene},
+    screenshot::{
+        CaptureController, CaptureThemeProfile, LaunchMode, UiCaptureStep, UiSnapshotScene,
+    },
     settings::{AppSettings, normalize_workspace_root},
     theme,
 };
@@ -67,6 +69,7 @@ pub(crate) struct AppShell {
     captures: CaptureController,
     capture_batch: Option<CaptureBatch>,
     shared_settings: AppSettings,
+    launch_mode: LaunchMode,
 }
 
 impl AppShell {
@@ -78,6 +81,7 @@ impl AppShell {
         theme_override: Option<CaptureThemeProfile>,
         snapshot_scene: Option<UiSnapshotScene>,
         capture_steps: Vec<UiCaptureStep>,
+        launch_mode: LaunchMode,
         open_requests: OpenRequestReceiver,
         native_menu_commands: NativeMenuReceiver,
     ) -> Self {
@@ -109,6 +113,7 @@ impl AppShell {
             captures,
             capture_batch,
             shared_settings,
+            launch_mode,
         }
     }
 
@@ -371,10 +376,13 @@ impl eframe::App for AppShell {
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        if !self.launch_mode.persists_settings() {
+            return;
+        }
         let mut settings = self.shared_settings.clone();
         let active_settings = self.active_editor().settings_snapshot();
         self.merge_all_session_history(&mut settings, &active_settings);
-        settings.save(storage);
+        persist_shell_settings(self.launch_mode, storage, &settings);
     }
 
     fn auto_save_interval(&self) -> std::time::Duration {
@@ -386,7 +394,7 @@ impl eframe::App for AppShell {
     }
 
     fn persist_egui_memory(&self) -> bool {
-        self.primary.persist_egui_memory()
+        shell_persists_egui_memory(self.launch_mode, self.primary.persist_egui_memory())
     }
 
     fn raw_input_hook(&mut self, context: &egui::Context, raw_input: &mut egui::RawInput) {
@@ -482,9 +490,73 @@ fn merge_session_histories<'a>(
         .extend(active_session.preview_files.clone());
 }
 
+fn persist_shell_settings(
+    launch_mode: LaunchMode,
+    storage: &mut dyn eframe::Storage,
+    settings: &AppSettings,
+) {
+    if launch_mode.persists_settings() {
+        settings.save(storage);
+    }
+}
+
+const fn shell_persists_egui_memory(launch_mode: LaunchMode, editor_persists_memory: bool) -> bool {
+    launch_mode.persists_settings() && editor_persists_memory
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+
+    #[derive(Default)]
+    struct MemoryStorage(HashMap<String, String>);
+
+    impl eframe::Storage for MemoryStorage {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.0.get(key).cloned()
+        }
+
+        fn set_string(&mut self, key: &str, value: String) {
+            self.0.insert(key.to_owned(), value);
+        }
+
+        fn remove_string(&mut self, key: &str) {
+            self.0.remove(key);
+        }
+
+        fn flush(&mut self) {}
+    }
+
+    #[test]
+    fn deterministic_capture_shell_never_persists_fixture_settings() {
+        let fixture_settings = AppSettings {
+            recent_workspaces: vec!["/qa/fixture".to_owned()],
+            ..AppSettings::default()
+        };
+        let mut capture_storage = MemoryStorage::default();
+        persist_shell_settings(
+            LaunchMode::DeterministicCapture,
+            &mut capture_storage,
+            &fixture_settings,
+        );
+        assert!(capture_storage.0.is_empty());
+
+        let mut interactive_storage = MemoryStorage::default();
+        persist_shell_settings(
+            LaunchMode::Interactive,
+            &mut interactive_storage,
+            &fixture_settings,
+        );
+        assert_eq!(interactive_storage.0.len(), 1);
+
+        assert!(!shell_persists_egui_memory(
+            LaunchMode::DeterministicCapture,
+            true
+        ));
+        assert!(shell_persists_egui_memory(LaunchMode::Interactive, true));
+        assert!(!shell_persists_egui_memory(LaunchMode::Interactive, false));
+    }
 
     #[test]
     fn document_viewport_ids_are_stable_and_isolated() {
@@ -526,12 +598,8 @@ mod tests {
 
     #[test]
     fn native_commands_remain_typed_at_the_shell_boundary() {
-        let command =
-            crate::native_menu::NativeMenuCommand::File(crate::native_menu::FileCommand::NewWindow);
-        assert_eq!(
-            command,
-            crate::native_menu::NativeMenuCommand::File(crate::native_menu::FileCommand::NewWindow,)
-        );
+        let command = crate::native_menu::AppCommand::NewWindow;
+        assert_eq!(command, crate::native_menu::AppCommand::NewWindow);
     }
 
     #[test]

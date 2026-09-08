@@ -1,4 +1,4 @@
-use std::ops::Range;
+use std::ops::{Deref, Range};
 
 /// A match expressed in both of the coordinate systems used by the
 /// editor: UTF-8 byte offsets for editing `String`s and Unicode scalar offsets
@@ -12,6 +12,7 @@ pub struct SearchMatch {
 impl SearchMatch {
     /// Build a match from a byte range, rejecting ranges which are out of
     /// bounds, reversed, or not on UTF-8 character boundaries.
+    #[cfg(test)]
     fn from_byte_range(text: &str, byte_range: Range<usize>) -> Option<Self> {
         if byte_range.start > byte_range.end
             || byte_range.end > text.len()
@@ -27,6 +28,59 @@ impl SearchMatch {
             byte_range,
             char_range: char_start..char_start + char_len,
         })
+    }
+}
+
+/// The editor document generation searched by a [`SearchSession`].
+///
+/// The epoch separates different documents which happen to have the same edit
+/// revision. The revision changes after every edit to that document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SearchRevision {
+    document_epoch: u64,
+    revision: u64,
+}
+
+impl SearchRevision {
+    pub const fn new(document_epoch: u64, revision: u64) -> Self {
+        Self {
+            document_epoch,
+            revision,
+        }
+    }
+
+    fn after_edit(self) -> Self {
+        Self {
+            revision: self.revision.wrapping_add(1),
+            ..self
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SearchError {
+    InvalidRegex(String),
+}
+
+/// A completed search. Invalid patterns are deliberately distinguishable from
+/// valid searches with no matches.
+#[derive(Debug, Clone, Default)]
+pub struct SearchResults {
+    matches: Vec<SearchMatch>,
+    error: Option<SearchError>,
+}
+
+impl SearchResults {
+    pub fn error(&self) -> Option<&SearchError> {
+        self.error.as_ref()
+    }
+}
+
+impl Deref for SearchResults {
+    type Target = [SearchMatch];
+
+    fn deref(&self) -> &Self::Target {
+        &self.matches
     }
 }
 
@@ -57,69 +111,349 @@ fn find_all(text: &str, query: &str) -> Vec<SearchMatch> {
         .collect()
 }
 
-/// Find all non-overlapping literal matches while preserving UTF-8-safe
-/// ranges. Folding is performed per Unicode scalar, and a match always spans
-/// whole source characters.
-fn find_all_with_case(text: &str, query: &str, case_sensitive: bool) -> Vec<SearchMatch> {
-    if case_sensitive {
-        return find_all(text, query);
-    }
-    let folded_query = folded(query);
-    if folded_query.is_empty() {
-        return Vec::new();
-    }
-    let chars = text.char_indices().collect::<Vec<_>>();
-    let mut matches = Vec::new();
-    let mut index = 0;
-    while index < chars.len() {
-        let mut candidate = String::new();
-        let mut found = None;
-        for (end, (_, character)) in chars.iter().enumerate().skip(index) {
-            candidate.extend(character.to_lowercase());
-            if candidate == folded_query {
-                found = Some(end);
-                break;
-            }
-            if candidate.len() >= folded_query.len() {
-                break;
-            }
-        }
-        if let Some(end) = found {
-            let byte_start = chars[index].0;
-            let byte_end = chars.get(end + 1).map_or(text.len(), |(byte, _)| *byte);
-            matches.push(SearchMatch {
-                byte_range: byte_start..byte_end,
-                char_range: index..end + 1,
-            });
-            index = end + 1;
-        } else {
-            index += 1;
-        }
-    }
-    matches
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct QueryKey {
+    query: String,
+    case_sensitive: bool,
+    regex: bool,
 }
 
-/// Find UTF-8-safe matches using the bounded, non-backtracking engine already
-/// used by Syntect. Replacement text is literal (no capture expansion).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SearchKey {
+    document: SearchRevision,
+    query: QueryKey,
+}
+
+enum CompiledQuery {
+    Empty,
+    Literal(String),
+    FoldedLiteral(String),
+    Regex(regex_automata::meta::Regex),
+    InvalidRegex(String),
+}
+
+impl CompiledQuery {
+    fn compile(key: &QueryKey) -> Self {
+        if key.query.is_empty() {
+            return Self::Empty;
+        }
+        if !key.regex {
+            return if key.case_sensitive {
+                Self::Literal(key.query.clone())
+            } else {
+                Self::FoldedLiteral(fold(&key.query))
+            };
+        }
+        match regex_automata::meta::Regex::builder()
+            .syntax(
+                regex_automata::util::syntax::Config::new().case_insensitive(!key.case_sensitive),
+            )
+            .build(&key.query)
+        {
+            Ok(pattern) => Self::Regex(pattern),
+            Err(error) => Self::InvalidRegex(error.to_string()),
+        }
+    }
+
+    fn find(&self, text: &str) -> SearchResults {
+        let matches = match self {
+            Self::Empty | Self::InvalidRegex(_) => Vec::new(),
+            Self::Literal(query) => find_all(text, query),
+            Self::FoldedLiteral(query) => find_all_folded(text, query),
+            Self::Regex(pattern) => find_all_regex(text, pattern),
+        };
+        let error = match self {
+            Self::InvalidRegex(error) => Some(SearchError::InvalidRegex(error.clone())),
+            _ => None,
+        };
+        SearchResults { matches, error }
+    }
+}
+
+/// Stateful, revision-keyed search data shared by the count, navigation, and
+/// replacement controls.
+pub struct SearchSession {
+    key: Option<SearchKey>,
+    compiled_key: Option<QueryKey>,
+    query: CompiledQuery,
+    results: SearchResults,
+    selected: Option<usize>,
+    anchored_selection: Option<SearchMatch>,
+    #[cfg(test)]
+    compile_count: usize,
+    #[cfg(test)]
+    scan_count: usize,
+}
+
+impl Default for SearchSession {
+    fn default() -> Self {
+        Self {
+            key: None,
+            compiled_key: None,
+            query: CompiledQuery::Empty,
+            results: SearchResults::default(),
+            selected: None,
+            anchored_selection: None,
+            #[cfg(test)]
+            compile_count: 0,
+            #[cfg(test)]
+            scan_count: 0,
+        }
+    }
+}
+
+impl SearchSession {
+    pub fn results(
+        &mut self,
+        text: &str,
+        document: SearchRevision,
+        query: &str,
+        case_sensitive: bool,
+        regex: bool,
+    ) -> &SearchResults {
+        self.prepare(text, document, query, case_sensitive, regex);
+        &self.results
+    }
+
+    pub fn selected(&self) -> Option<&SearchMatch> {
+        self.anchored_selection.as_ref().or_else(|| {
+            self.selected
+                .and_then(|selected| self.results.get(selected))
+        })
+    }
+
+    /// Clear navigation without discarding a still-valid compiled query or
+    /// match result.
+    pub fn clear(&mut self) {
+        self.selected = None;
+        self.anchored_selection = None;
+    }
+
+    pub fn next(
+        &mut self,
+        text: &str,
+        document: SearchRevision,
+        query: &str,
+        case_sensitive: bool,
+        regex: bool,
+    ) -> Option<&SearchMatch> {
+        self.prepare(text, document, query, case_sensitive, regex);
+        self.anchored_selection = None;
+        self.selected = (!self.results.is_empty()).then(|| {
+            self.selected
+                .map_or(0, |selected| (selected + 1) % self.results.len())
+        });
+        self.selected()
+    }
+
+    pub fn previous(
+        &mut self,
+        text: &str,
+        document: SearchRevision,
+        query: &str,
+        case_sensitive: bool,
+        regex: bool,
+    ) -> Option<&SearchMatch> {
+        self.prepare(text, document, query, case_sensitive, regex);
+        self.anchored_selection = None;
+        self.selected = (!self.results.is_empty()).then(|| {
+            self.selected.map_or(self.results.len() - 1, |selected| {
+                selected.checked_sub(1).unwrap_or(self.results.len() - 1)
+            })
+        });
+        self.selected()
+    }
+
+    /// Replace the selected match, or the first match when none is selected.
+    /// The revised text is scanned exactly once and the next result is selected.
+    pub fn replace_one(
+        &mut self,
+        text: &mut String,
+        document: SearchRevision,
+        query: &str,
+        replacement: &str,
+        case_sensitive: bool,
+        regex: bool,
+    ) -> bool {
+        self.prepare(text, document, query, case_sensitive, regex);
+        let Some(matched) = self
+            .selected()
+            .cloned()
+            .or_else(|| self.results.first().cloned())
+        else {
+            self.selected = None;
+            return false;
+        };
+        let empty_noop_match = matched.byte_range.is_empty() && replacement.is_empty();
+        let changed = &text[matched.byte_range.clone()] != replacement;
+        let anchor = matched.byte_range.start + replacement.len();
+        text.replace_range(matched.byte_range, replacement);
+        let next_document = if changed {
+            document.after_edit()
+        } else {
+            document
+        };
+        self.prepare(text, next_document, query, case_sensitive, regex);
+        if case_sensitive && !regex {
+            // Preserve the editor's anchor semantics: a match may begin at the
+            // end of the replacement even when it overlaps the normal
+            // non-overlapping result sequence. Wrapping only examines the
+            // prefix, so a match straddling the anchor is not selected.
+            let anchored = find_at_or_after(text, query, anchor).or_else(|| {
+                text.get(..anchor)
+                    .and_then(|prefix| find_at_or_after(prefix, query, 0))
+            });
+            self.selected = anchored.as_ref().and_then(|anchored| {
+                self.results
+                    .iter()
+                    .position(|matched| matched.byte_range == anchored.byte_range)
+            });
+            self.anchored_selection = if self.selected.is_none() {
+                anchored
+            } else {
+                None
+            };
+        } else {
+            self.selected = self
+                .results
+                .iter()
+                .position(|matched| {
+                    if empty_noop_match {
+                        matched.byte_range.start > anchor
+                    } else {
+                        matched.byte_range.start >= anchor
+                    }
+                })
+                .or((!self.results.is_empty()).then_some(0));
+        }
+        true
+    }
+
+    /// Replace the cached, original non-overlapping result set. Replacement
+    /// text is literal even in regex mode.
+    pub fn replace_all(
+        &mut self,
+        text: &mut String,
+        document: SearchRevision,
+        query: &str,
+        replacement: &str,
+        case_sensitive: bool,
+        regex: bool,
+    ) -> usize {
+        self.prepare(text, document, query, case_sensitive, regex);
+        self.selected = None;
+        self.anchored_selection = None;
+        if self.results.is_empty() {
+            return 0;
+        }
+        let matches = self.results.matches.clone();
+        let mut result = String::with_capacity(text.len());
+        let mut copied_until = 0;
+        for matched in &matches {
+            result.push_str(&text[copied_until..matched.byte_range.start]);
+            result.push_str(replacement);
+            copied_until = matched.byte_range.end;
+        }
+        result.push_str(&text[copied_until..]);
+        let changed = result != *text;
+        *text = result;
+        let next_document = if changed {
+            document.after_edit()
+        } else {
+            document
+        };
+        self.prepare(text, next_document, query, case_sensitive, regex);
+        self.selected = None;
+        self.anchored_selection = None;
+        matches.len()
+    }
+
+    fn prepare(
+        &mut self,
+        text: &str,
+        document: SearchRevision,
+        query: &str,
+        case_sensitive: bool,
+        regex: bool,
+    ) {
+        let same_key = self.key.as_ref().is_some_and(|key| {
+            key.document == document
+                && key.query.query == query
+                && key.query.case_sensitive == case_sensitive
+                && key.query.regex == regex
+        });
+        if same_key {
+            return;
+        }
+        let same_query = self.compiled_key.as_ref().is_some_and(|key| {
+            key.query == query && key.case_sensitive == case_sensitive && key.regex == regex
+        });
+        if !same_query {
+            let query_key = QueryKey {
+                query: query.to_owned(),
+                case_sensitive,
+                regex,
+            };
+            self.query = CompiledQuery::compile(&query_key);
+            self.compiled_key = Some(query_key);
+            #[cfg(test)]
+            {
+                self.compile_count += 1;
+            }
+        }
+        self.results = self.query.find(text);
+        self.key = Some(SearchKey {
+            document,
+            query: self.compiled_key.clone().unwrap_or(QueryKey {
+                query: query.to_owned(),
+                case_sensitive,
+                regex,
+            }),
+        });
+        self.selected = None;
+        self.anchored_selection = None;
+        #[cfg(test)]
+        {
+            self.scan_count += 1;
+        }
+    }
+
+    #[cfg(test)]
+    fn work_counts(&self) -> (usize, usize) {
+        (self.compile_count, self.scan_count)
+    }
+}
+
+/// One-off search used by low-level callers and the audit probe. UI code
+/// should retain a [`SearchSession`] instead.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn find_all_with_options(
     text: &str,
     query: &str,
     case_sensitive: bool,
     regex: bool,
-) -> Vec<SearchMatch> {
-    if !regex {
-        return find_all_with_case(text, query, case_sensitive);
-    }
+) -> SearchResults {
+    CompiledQuery::compile(&QueryKey {
+        query: query.to_owned(),
+        case_sensitive,
+        regex,
+    })
+    .find(text)
+}
+
+fn find_all_folded(text: &str, query: &str) -> Vec<SearchMatch> {
     if query.is_empty() {
         return Vec::new();
     }
-    let Ok(pattern) = regex_automata::meta::Regex::builder()
-        .syntax(regex_automata::util::syntax::Config::new().case_insensitive(!case_sensitive))
-        .build(query)
-    else {
-        return Vec::new();
-    };
-    // Convert sorted byte ranges in one pass, including zero-width matches.
+    let folded = FoldedText::new(text);
+    folded
+        .text
+        .match_indices(query)
+        .filter_map(|(start, matched)| folded.source_range(start..start + matched.len()))
+        .collect()
+}
+
+fn find_all_regex(text: &str, pattern: &regex_automata::meta::Regex) -> Vec<SearchMatch> {
     let mut byte_cursor = 0;
     let mut char_cursor = 0;
     pattern
@@ -137,12 +471,65 @@ pub fn find_all_with_options(
         .collect()
 }
 
-fn folded(text: &str) -> String {
+fn fold(text: &str) -> String {
     text.chars().flat_map(char::to_lowercase).collect()
+}
+
+fn find_at_or_after(text: &str, query: &str, start: usize) -> Option<SearchMatch> {
+    if query.is_empty() {
+        return None;
+    }
+    let suffix = text.get(start..)?;
+    let offset = suffix.find(query)?;
+    let byte_start = start + offset;
+    let byte_range = byte_start..byte_start + query.len();
+    let char_start = text[..byte_start].chars().count();
+    let char_len = text[byte_range.clone()].chars().count();
+    Some(SearchMatch {
+        byte_range,
+        char_range: char_start..char_start + char_len,
+    })
+}
+
+struct FoldedText {
+    text: String,
+    /// Boundaries after each original scalar: folded byte, source byte, and
+    /// source scalar offsets. Matches which split a scalar's folded expansion
+    /// are intentionally rejected.
+    boundaries: Vec<(usize, usize, usize)>,
+}
+
+impl FoldedText {
+    fn new(source: &str) -> Self {
+        let mut text = String::with_capacity(source.len());
+        let mut boundaries = Vec::with_capacity(source.chars().count() + 1);
+        boundaries.push((0, 0, 0));
+        for (character_index, (byte, character)) in source.char_indices().enumerate() {
+            text.extend(character.to_lowercase());
+            boundaries.push((text.len(), byte + character.len_utf8(), character_index + 1));
+        }
+        Self { text, boundaries }
+    }
+
+    fn source_range(&self, folded: Range<usize>) -> Option<SearchMatch> {
+        let start = self
+            .boundaries
+            .binary_search_by_key(&folded.start, |boundary| boundary.0)
+            .ok()?;
+        let end = self
+            .boundaries
+            .binary_search_by_key(&folded.end, |boundary| boundary.0)
+            .ok()?;
+        Some(SearchMatch {
+            byte_range: self.boundaries[start].1..self.boundaries[end].1,
+            char_range: self.boundaries[start].2..self.boundaries[end].2,
+        })
+    }
 }
 
 /// Find the match after `selected`, wrapping to the first match at the end.
 /// A stale or unrelated selection is ignored.
+#[cfg(test)]
 fn find_next_with_options(
     text: &str,
     query: &str,
@@ -166,11 +553,12 @@ fn find_next_with_options(
                 })
                 .cloned()
         })
-        .or_else(|| matches.into_iter().next())
+        .or_else(|| matches.first().cloned())
 }
 
 /// Find the match before `selected`, wrapping to the final match at the start.
 /// A stale or unrelated selection starts at the final match.
+#[cfg(test)]
 fn find_previous_with_options(
     text: &str,
     query: &str,
@@ -194,145 +582,16 @@ fn find_previous_with_options(
                 })
                 .cloned()
         })
-        .or_else(|| matches.into_iter().last())
-}
-
-/// Stateful selection for a find/replace panel. The query and replacement text
-/// can remain UI-owned; passing a changed query automatically invalidates a
-/// selection which no longer matches it.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SearchState {
-    selected: Option<SearchMatch>,
-}
-
-impl SearchState {
-    pub fn selected(&self) -> Option<&SearchMatch> {
-        self.selected.as_ref()
-    }
-
-    pub fn clear(&mut self) {
-        self.selected = None;
-    }
-
-    pub fn next_with_options(
-        &mut self,
-        text: &str,
-        query: &str,
-        case_sensitive: bool,
-        regex: bool,
-    ) -> Option<&SearchMatch> {
-        self.selected =
-            find_next_with_options(text, query, self.selected.as_ref(), case_sensitive, regex);
-        self.selected.as_ref()
-    }
-
-    pub fn previous_with_options(
-        &mut self,
-        text: &str,
-        query: &str,
-        case_sensitive: bool,
-        regex: bool,
-    ) -> Option<&SearchMatch> {
-        self.selected =
-            find_previous_with_options(text, query, self.selected.as_ref(), case_sensitive, regex);
-        self.selected.as_ref()
-    }
-
-    /// Replace the selected match. When there is no valid selection, the first
-    /// match is selected and replaced. The following match is then selected.
-    pub fn replace_one_with_options(
-        &mut self,
-        text: &mut String,
-        query: &str,
-        replacement: &str,
-        case_sensitive: bool,
-        regex: bool,
-    ) -> bool {
-        let matches = find_all_with_options(text, query, case_sensitive, regex);
-        let selected = self.selected.take().filter(|selected| {
-            matches
-                .iter()
-                .any(|matched| matched.byte_range == selected.byte_range)
-        });
-        let Some(selected) = selected.or_else(|| matches.into_iter().next()) else {
-            return false;
-        };
-        let next_search_byte = selected.byte_range.start + replacement.len();
-        text.replace_range(selected.byte_range, replacement);
-
-        // Search after the inserted text so a replacement containing the query
-        // does not immediately reselect itself, wrapping at the end.
-        self.selected = find_next_after_anchor_with_options(
-            text,
-            query,
-            next_search_byte,
-            case_sensitive,
-            regex,
-        );
-        true
-    }
-
-    /// Replace the original non-overlapping matches, then clear the selection.
-    /// Replacement text is literal, even in regex mode.
-    pub fn replace_all_with_options(
-        &mut self,
-        text: &mut String,
-        query: &str,
-        replacement: &str,
-        case_sensitive: bool,
-        regex: bool,
-    ) -> usize {
-        self.clear();
-        let matches = find_all_with_options(text, query, case_sensitive, regex);
-        if matches.is_empty() {
-            return 0;
-        }
-        let mut result = String::with_capacity(text.len());
-        let mut copied_until = 0;
-        for matched in &matches {
-            result.push_str(&text[copied_until..matched.byte_range.start]);
-            result.push_str(replacement);
-            copied_until = matched.byte_range.end;
-        }
-        result.push_str(&text[copied_until..]);
-        *text = result;
-        matches.len()
-    }
-}
-
-fn find_next_after_anchor_with_options(
-    text: &str,
-    query: &str,
-    start: usize,
-    case_sensitive: bool,
-    regex: bool,
-) -> Option<SearchMatch> {
-    if case_sensitive && !regex {
-        // Search each side of the anchor independently: a literal match may
-        // overlap the original non-overlapping sequence after replacement.
-        return find_at_or_after(text, query, start).or_else(|| {
-            text.get(..start)
-                .and_then(|prefix| find_at_or_after(prefix, query, 0))
-        });
-    }
-    let matches = find_all_with_options(text, query, case_sensitive, regex);
-    matches
-        .iter()
-        .find(|matched| matched.byte_range.start >= start)
-        .cloned()
-        .or_else(|| matches.into_iter().next())
-}
-
-fn find_at_or_after(text: &str, query: &str, start: usize) -> Option<SearchMatch> {
-    let suffix = text.get(start..)?;
-    let offset = suffix.find(query)?;
-    let byte_start = start + offset;
-    SearchMatch::from_byte_range(text, byte_start..byte_start + query.len())
+        .or_else(|| matches.last().cloned())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn revision(revision: u64) -> SearchRevision {
+        SearchRevision::new(7, revision)
+    }
 
     fn byte_ranges(matches: &[SearchMatch]) -> Vec<Range<usize>> {
         matches
@@ -376,8 +635,77 @@ mod tests {
 
     #[test]
     fn invalid_editor_regex_fails_closed() {
-        assert!(find_all_with_options("abc", "[", true, true).is_empty());
-        assert!(find_all_with_options("abc", "", true, true).is_empty());
+        let invalid = find_all_with_options("abc", "[", true, true);
+        assert!(invalid.is_empty());
+        assert!(matches!(
+            invalid.error(),
+            Some(SearchError::InvalidRegex(_))
+        ));
+        let empty = find_all_with_options("abc", "", true, true);
+        assert!(empty.is_empty());
+        assert_eq!(empty.error(), None);
+    }
+
+    #[test]
+    fn unchanged_revision_reuses_compilation_and_scan() {
+        let mut session = SearchSession::default();
+        let text = "one two one";
+
+        assert_eq!(
+            session.results(text, revision(3), "one", true, false).len(),
+            2
+        );
+        assert_eq!(
+            session.results(text, revision(3), "one", true, false).len(),
+            2
+        );
+        session.next(text, revision(3), "one", true, false);
+        session.previous(text, revision(3), "one", true, false);
+        assert_eq!(session.work_counts(), (1, 1));
+
+        assert_eq!(
+            session
+                .results("one", revision(4), "one", true, false)
+                .len(),
+            1
+        );
+        assert_eq!(session.work_counts(), (1, 2));
+        assert_eq!(
+            session
+                .results("two", revision(4), "two", true, false)
+                .len(),
+            1
+        );
+        assert_eq!(session.work_counts(), (2, 3));
+    }
+
+    #[test]
+    fn replacement_rescans_new_revision_once_and_reuses_compiled_query() {
+        let mut session = SearchSession::default();
+        let mut text = "one two one".to_owned();
+        session.next(&text, revision(0), "one", true, false);
+        assert!(session.replace_one(&mut text, revision(0), "one", "1", true, false,));
+        assert_eq!(text, "1 two one");
+        assert_eq!(session.work_counts(), (1, 2));
+        assert_eq!(
+            session
+                .results(&text, revision(1), "one", true, false)
+                .len(),
+            1
+        );
+        assert_eq!(session.work_counts(), (1, 2));
+    }
+
+    #[test]
+    fn folded_matching_maps_only_complete_source_scalars() {
+        let source = "İ i\u{307}";
+        let lowercase_i = find_all_with_options(source, "i", false, false);
+        assert_eq!(byte_ranges(&lowercase_i), vec![3..4]);
+        assert_eq!(char_ranges(&lowercase_i), vec![2..3]);
+
+        let expanded = find_all_with_options(source, "i\u{307}", false, false);
+        assert_eq!(byte_ranges(&expanded), vec![0..2, 3..6]);
+        assert_eq!(char_ranges(&expanded), vec![0..1, 2..4]);
     }
 
     #[test]
@@ -400,36 +728,55 @@ mod tests {
 
     #[test]
     fn zero_width_regex_navigation_advances_and_wraps() {
-        let mut state = SearchState::default();
+        let mut state = SearchSession::default();
         let text = "é x";
         assert_eq!(
             state
-                .next_with_options(text, r"\b", true, true)
+                .next(text, revision(0), r"\b", true, true)
                 .unwrap()
                 .byte_range,
             0..0
         );
         assert_eq!(
             state
-                .next_with_options(text, r"\b", true, true)
+                .next(text, revision(0), r"\b", true, true)
                 .unwrap()
                 .byte_range,
             2..2
         );
         assert_eq!(
             state
-                .previous_with_options(text, r"\b", true, true)
+                .previous(text, revision(0), r"\b", true, true)
                 .unwrap()
                 .byte_range,
             0..0
         );
         assert_eq!(
             state
-                .previous_with_options(text, r"\b", true, true)
+                .previous(text, revision(0), r"\b", true, true)
                 .unwrap()
                 .byte_range,
             4..4
         );
+    }
+
+    #[test]
+    fn empty_replacement_of_zero_width_regex_advances_and_wraps() {
+        let mut state = SearchSession::default();
+        let mut text = "é x".to_owned();
+        assert_eq!(
+            state
+                .next(&text, revision(0), r"\b", true, true)
+                .unwrap()
+                .byte_range,
+            0..0
+        );
+
+        for expected in [2..2, 3..3, 4..4, 0..0] {
+            assert!(state.replace_one(&mut text, revision(0), r"\b", "", true, true));
+            assert_eq!(text, "é x");
+            assert_eq!(state.selected().unwrap().byte_range, expected);
+        }
     }
 
     #[test]
@@ -525,7 +872,7 @@ mod tests {
 
         let mut text = "abc".to_owned();
         assert_eq!(
-            SearchState::default().replace_all_with_options(&mut text, "", "x", true, false),
+            SearchSession::default().replace_all(&mut text, revision(0), "", "x", true, false,),
             0
         );
         assert_eq!(text, "abc");
@@ -534,20 +881,20 @@ mod tests {
     #[test]
     fn replace_one_uses_utf8_safe_offsets_and_selects_the_next_match() {
         let mut text = "🦀 and 🦀 and 🦀".to_owned();
-        let mut search = SearchState::default();
+        let mut search = SearchSession::default();
         assert_eq!(
             search
-                .next_with_options(&text, "🦀", true, false)
+                .next(&text, revision(0), "🦀", true, false)
                 .unwrap()
                 .char_range,
             0..1
         );
 
-        assert!(search.replace_one_with_options(&mut text, "🦀", "café", true, false));
+        assert!(search.replace_one(&mut text, revision(0), "🦀", "café", true, false,));
         assert_eq!(text, "café and 🦀 and 🦀");
         assert_eq!(search.selected().unwrap().char_range, 9..10);
 
-        assert!(search.replace_one_with_options(&mut text, "🦀", "x", true, false));
+        assert!(search.replace_one(&mut text, revision(1), "🦀", "x", true, false,));
         assert_eq!(text, "café and x and 🦀");
         assert_eq!(search.selected().unwrap().char_range, 15..16);
     }
@@ -555,8 +902,8 @@ mod tests {
     #[test]
     fn replace_one_selects_and_replaces_when_no_match_was_selected() {
         let mut text = "one two one".to_owned();
-        let mut search = SearchState::default();
-        assert!(search.replace_one_with_options(&mut text, "one", "1", true, false));
+        let mut search = SearchSession::default();
+        assert!(search.replace_one(&mut text, revision(0), "one", "1", true, false,));
         assert_eq!(text, "1 two one");
         assert_eq!(search.selected().unwrap().byte_range, 6..9);
     }
@@ -564,9 +911,9 @@ mod tests {
     #[test]
     fn replace_one_does_not_immediately_select_query_inside_replacement() {
         let mut text = "a then a".to_owned();
-        let mut search = SearchState::default();
-        search.next_with_options(&text, "a", true, false);
-        assert!(search.replace_one_with_options(&mut text, "a", "aa", true, false));
+        let mut search = SearchSession::default();
+        search.next(&text, revision(0), "a", true, false);
+        assert!(search.replace_one(&mut text, revision(0), "a", "aa", true, false,));
         assert_eq!(text, "aa then a");
         assert_eq!(search.selected().unwrap().byte_range, 8..9);
     }
@@ -575,7 +922,7 @@ mod tests {
     fn replace_all_terminates_when_replacement_contains_query() {
         let mut text = "a banana".to_owned();
         assert_eq!(
-            SearchState::default().replace_all_with_options(&mut text, "a", "aa", true, false),
+            SearchSession::default().replace_all(&mut text, revision(0), "a", "aa", true, false,),
             4
         );
         assert_eq!(text, "aa baanaanaa");
@@ -585,15 +932,16 @@ mod tests {
     fn replace_all_uses_original_non_overlapping_matches() {
         let mut text = "aaaa".to_owned();
         assert_eq!(
-            SearchState::default().replace_all_with_options(&mut text, "aa", "aaa", true, false),
+            SearchSession::default().replace_all(&mut text, revision(0), "aa", "aaa", true, false,),
             2
         );
         assert_eq!(text, "aaaaaa");
 
         let mut unicode = "🙂🙂 x 🙂🙂".to_owned();
         assert_eq!(
-            SearchState::default().replace_all_with_options(
+            SearchSession::default().replace_all(
                 &mut unicode,
+                revision(0),
                 "🙂🙂",
                 "🙂",
                 true,
@@ -607,16 +955,16 @@ mod tests {
     #[test]
     fn state_clears_after_replace_all_and_on_empty_replace_one() {
         let mut text = "x x".to_owned();
-        let mut state = SearchState::default();
-        state.next_with_options(&text, "x", true, false);
+        let mut state = SearchSession::default();
+        state.next(&text, revision(0), "x", true, false);
         assert_eq!(
-            state.replace_all_with_options(&mut text, "x", "y", true, false),
+            state.replace_all(&mut text, revision(0), "x", "y", true, false),
             2
         );
         assert!(state.selected().is_none());
 
-        state.next_with_options(&text, "y", true, false);
-        assert!(!state.replace_one_with_options(&mut text, "", "z", true, false));
+        state.next(&text, revision(1), "y", true, false);
+        assert!(!state.replace_one(&mut text, revision(1), "", "z", true, false,));
         assert!(state.selected().is_none());
     }
 
@@ -631,11 +979,12 @@ mod tests {
             ("é x", r"\b", "_", true, true, 4, "_é_ _x_"),
         ] {
             let mut text = original.to_owned();
-            let mut state = SearchState::default();
-            state.next_with_options(&text, query, case_sensitive, regex);
+            let mut state = SearchSession::default();
+            state.next(&text, revision(0), query, case_sensitive, regex);
             assert_eq!(
-                state.replace_all_with_options(
+                state.replace_all(
                     &mut text,
+                    revision(0),
                     query,
                     replacement,
                     case_sensitive,
@@ -654,11 +1003,12 @@ mod tests {
             for regex in [false, true] {
                 for query in ["", "missing"] {
                     let mut text = "x".to_owned();
-                    let mut state = SearchState::default();
-                    state.next_with_options(&text, "x", case_sensitive, regex);
+                    let mut state = SearchSession::default();
+                    state.next(&text, revision(0), "x", case_sensitive, regex);
                     assert_eq!(
-                        state.replace_all_with_options(
+                        state.replace_all(
                             &mut text,
+                            revision(0),
                             query,
                             "y",
                             case_sensitive,
@@ -675,19 +1025,31 @@ mod tests {
 
     #[test]
     fn replace_one_literal_search_starts_at_the_end_of_the_replacement() {
-        let mut state = SearchState::default();
+        let mut state = SearchSession::default();
         let mut text = "aaaa".to_owned();
-        assert!(state.replace_one_with_options(&mut text, "aa", "a", true, false));
+        assert!(state.replace_one(&mut text, revision(0), "aa", "a", true, false,));
         assert_eq!(text, "aaa");
         assert_eq!(state.selected().unwrap().byte_range, 1..3);
 
-        // Wrapping searches the prefix without including a match which
-        // straddles the end of the replacement.
+        // Navigation and replacement consume the same cached, non-overlapping
+        // result set after the edit.
         state.clear();
         text = "aaa".to_owned();
-        assert!(state.replace_one_with_options(&mut text, "aa", "a", true, false));
+        assert!(state.replace_one(&mut text, revision(1), "aa", "a", true, false,));
         assert_eq!(text, "aa");
         assert!(state.selected().is_none());
+    }
+
+    #[test]
+    fn replace_one_consumes_an_anchored_overlapping_selection() {
+        let mut state = SearchSession::default();
+        let mut text = "aaaa".to_owned();
+        assert!(state.replace_one(&mut text, revision(0), "aa", "a", true, false));
+        assert_eq!(state.selected().unwrap().byte_range, 1..3);
+
+        assert!(state.replace_one(&mut text, revision(1), "aa", "a", true, false));
+        assert_eq!(text, "aa");
+        assert_eq!(state.selected().unwrap().byte_range, 0..2);
     }
 
     #[test]
@@ -716,7 +1078,7 @@ mod tests {
     fn replacing_many_matches_preserves_original_non_overlapping_semantics() {
         let mut text = "ab".repeat(10_000);
         assert_eq!(
-            SearchState::default().replace_all_with_options(&mut text, "ab", "xyz", true, false),
+            SearchSession::default().replace_all(&mut text, revision(0), "ab", "xyz", true, false,),
             10_000
         );
         assert_eq!(text.len(), 30_000);

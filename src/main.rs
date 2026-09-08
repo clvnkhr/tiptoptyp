@@ -1,9 +1,11 @@
 mod app;
 mod asset;
 mod builtin_themes;
+mod child_view;
 mod compiler;
 mod diagnostics;
 mod document;
+mod editor_data;
 mod font_catalog;
 mod generic_highlight;
 mod highlight;
@@ -11,6 +13,7 @@ mod lsp_text;
 mod native_menu;
 mod native_window;
 mod open_requests;
+mod presentation;
 mod preview;
 mod private_workspace;
 mod project_index;
@@ -24,6 +27,8 @@ mod theme_transform;
 mod tinymist;
 mod toolchain;
 mod windowing;
+mod worker;
+mod workflow;
 mod workspace;
 
 use eframe::egui;
@@ -31,32 +36,31 @@ use screenshot::{CaptureController, LaunchOptions, ScreenshotApp};
 use windowing::AppShell;
 
 fn main() -> eframe::Result {
-    let launch = match LaunchOptions::from_process() {
-        Ok(launch) => launch,
-        Err(error) => {
-            eprintln!("Invalid UI screenshot configuration: {error}");
-            return Ok(());
-        }
-    };
+    let launch = LaunchOptions::from_process().map_err(invalid_launch_configuration)?;
     if let Some(profile) = &launch.theme_profile
         && profile.name != settings::SYSTEM_THEME_ID
         && builtin_themes::find(&profile.name).is_none()
     {
-        eprintln!("Unknown built-in UI theme {:?}", profile.name);
-        return Ok(());
+        return Err(invalid_launch_configuration(format!(
+            "Unknown built-in UI theme {:?}",
+            profile.name
+        )));
     }
     if let Some(step) = launch.ui_capture_steps.iter().find(|step| {
         step.theme.name != settings::SYSTEM_THEME_ID
             && builtin_themes::find(&step.theme.name).is_none()
     }) {
-        eprintln!("Unknown built-in UI theme {:?}", step.theme.name);
-        return Ok(());
+        return Err(invalid_launch_configuration(format!(
+            "Unknown built-in UI theme {:?}",
+            step.theme.name
+        )));
     }
+    let launch_mode = launch.mode;
     let initial_path = launch.initial_path;
     let theme_profile = launch.theme_profile;
     let ui_snapshot_scene = launch.ui_snapshot_scene;
     let ui_capture_steps = launch.ui_capture_steps;
-    let deterministic_snapshot = ui_snapshot_scene.is_some();
+    let deterministic_snapshot = !launch_mode.persists_settings();
     let mut capture_config = launch.captures;
     if let Some(scene) = ui_snapshot_scene
         && ui_capture_steps.is_empty()
@@ -94,6 +98,7 @@ fn main() -> eframe::Result {
                     theme_profile,
                     ui_snapshot_scene,
                     ui_capture_steps,
+                    launch_mode,
                     open_requests,
                     native_menu_commands,
                 );
@@ -120,6 +125,7 @@ fn main() -> eframe::Result {
                     theme_profile,
                     ui_snapshot_scene,
                     ui_capture_steps,
+                    launch_mode,
                     open_requests,
                     native_menu_commands,
                 );
@@ -127,6 +133,16 @@ fn main() -> eframe::Result {
             }),
         )
     }
+}
+
+fn invalid_launch_configuration(error: impl std::fmt::Display) -> eframe::Error {
+    eframe::Error::AppCreation(
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("Invalid UI screenshot configuration: {error}"),
+        )
+        .into(),
+    )
 }
 
 fn native_options(deterministic_snapshot: bool) -> eframe::NativeOptions {

@@ -325,6 +325,7 @@ impl CaptureConfig {
 /// Screenshot-related launch options plus an optional workspace or document path.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LaunchOptions {
+    pub mode: LaunchMode,
     pub initial_path: Option<PathBuf>,
     pub captures: CaptureConfig,
     /// Explicit QA-only theme override. Normal launches leave this unset so
@@ -334,6 +335,19 @@ pub struct LaunchOptions {
     pub ui_snapshot_scene: Option<UiSnapshotScene>,
     /// Ordered captures performed by one live application instance.
     pub ui_capture_steps: Vec<UiCaptureStep>,
+}
+
+/// Outer-shell policy selected before any editor state is constructed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LaunchMode {
+    Interactive,
+    DeterministicCapture,
+}
+
+impl LaunchMode {
+    pub const fn persists_settings(self) -> bool {
+        matches!(self, Self::Interactive)
+    }
 }
 
 impl LaunchOptions {
@@ -884,8 +898,18 @@ where
             theme_profile
                 .get_or_insert_with(CaptureThemeProfile::default)
                 .hue_shift_degrees = parse_hue_shift(value)?;
+        } else if parse_options
+            && argument
+                .to_str()
+                .is_some_and(|argument| argument.starts_with('-'))
+        {
+            return Err(format!(
+                "unknown option {argument:?}; use -- before a dash-prefixed path"
+            ));
         } else if initial_path.is_none() {
             initial_path = Some(PathBuf::from(argument));
+        } else {
+            return Err(format!("unexpected extra launch path {argument:?}"));
         }
         index += 1;
     }
@@ -911,10 +935,28 @@ where
                 .to_owned(),
         );
     }
+    if !captures.enabled
+        && (ui_snapshot_scene.is_some()
+            || !ui_capture_steps.is_empty()
+            || !captures.startup_captures.is_empty())
+    {
+        return Err(
+            "--no-ui-screenshots cannot follow a snapshot scene or requested capture".to_owned(),
+        );
+    }
     captures.filename_theme_profile = theme_profile.clone().unwrap_or_default();
     captures.filename_scene = ui_snapshot_scene;
+    let mode = if ui_snapshot_scene.is_some()
+        || !ui_capture_steps.is_empty()
+        || !captures.startup_captures.is_empty()
+    {
+        LaunchMode::DeterministicCapture
+    } else {
+        LaunchMode::Interactive
+    };
 
     Ok(LaunchOptions {
+        mode,
         initial_path,
         captures,
         theme_profile,
@@ -1247,6 +1289,7 @@ mod tests {
         assert_eq!(launch.captures.shortcut, Some(default_shortcut()));
         assert_eq!(launch.theme_profile, None);
         assert_eq!(launch.ui_snapshot_scene, None);
+        assert_eq!(launch.mode, LaunchMode::Interactive);
         assert!(!launch.captures.latest_filenames);
         assert!(!launch.captures.close_after_captures);
     }
@@ -1301,6 +1344,7 @@ mod tests {
             ]
         );
         assert_eq!(launch.captures.settle_frames, 4);
+        assert_eq!(launch.mode, LaunchMode::DeterministicCapture);
         assert_eq!(
             launch.captures.shortcut,
             Some(egui::KeyboardShortcut::new(
@@ -1322,6 +1366,7 @@ mod tests {
             separate.ui_snapshot_scene,
             Some(UiSnapshotScene::DiagnosticTooltip)
         );
+        assert_eq!(separate.mode, LaunchMode::DeterministicCapture);
         assert_eq!(
             separate.captures.filename_scene,
             Some(UiSnapshotScene::DiagnosticTooltip)
@@ -1673,6 +1718,55 @@ mod tests {
     }
 
     #[test]
+    fn unknown_options_are_rejected_but_non_utf8_paths_remain_positional() {
+        let error = parse_launch_options(
+            ["--definitely-not-an-option"],
+            Path::new("/project"),
+            no_environment,
+        )
+        .unwrap_err();
+        assert!(error.contains("unknown option"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let path = OsString::from_vec(vec![b'-', b'd', b'r', b'a', b'f', b't', 0xff]);
+            let launch =
+                parse_launch_options([path.clone()], Path::new("/project"), no_environment)
+                    .unwrap();
+            assert_eq!(launch.initial_path, Some(PathBuf::from(path)));
+        }
+    }
+
+    #[test]
+    fn disabling_screenshots_after_a_capture_request_is_a_launch_error() {
+        let error = parse_launch_options(
+            [
+                "--ui-screenshot-step",
+                "catppuccin-latte,main,false,0",
+                "--no-ui-screenshots",
+            ],
+            Path::new("/project"),
+            no_environment,
+        )
+        .unwrap_err();
+        assert!(error.contains("--no-ui-screenshots"));
+
+        let enabled_again = parse_launch_options(
+            [
+                "--no-ui-screenshots",
+                "--ui-screenshot-step",
+                "catppuccin-latte,main,false,0",
+            ],
+            Path::new("/project"),
+            no_environment,
+        )
+        .unwrap();
+        assert!(enabled_again.captures.enabled);
+        assert_eq!(enabled_again.mode, LaunchMode::DeterministicCapture);
+    }
+
+    #[test]
     fn shortcut_keys_keep_the_original_letter_and_function_key_contract() {
         for letter in 'a'..='z' {
             assert!(parse_key(&letter.to_string()).is_ok());
@@ -1717,7 +1811,7 @@ mod tests {
                 OsString::from("diagnostic-tooltip"),
             ),
         ]);
-        let launch = parse_launch_options(
+        let error = parse_launch_options(
             [
                 "--ui-screenshot-settle=1",
                 "--no-ui-screenshots",
@@ -1726,15 +1820,8 @@ mod tests {
             Path::new("/project"),
             |name| environment.get(name).cloned(),
         )
-        .unwrap();
-        assert!(!launch.captures.enabled);
-        assert_eq!(launch.captures.settle_frames, 1);
-        assert_eq!(launch.captures.startup_captures.len(), 2);
-        let theme_profile = launch.theme_profile.unwrap();
-        assert_eq!(theme_profile.name, "catppuccin-latte");
-        assert!(theme_profile.invert);
-        assert_eq!(theme_profile.hue_shift_degrees, 45);
-        assert_eq!(launch.ui_snapshot_scene, Some(UiSnapshotScene::EditMenu));
+        .unwrap_err();
+        assert!(error.contains("--no-ui-screenshots"));
     }
 
     #[test]

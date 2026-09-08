@@ -803,18 +803,22 @@ fn parse_hex_color_string(text: &str) -> Option<Color32> {
 }
 
 fn composite_over_editor(color: Color32, dark: bool) -> Color32 {
+    composite_over(color, theme::syntax_palette(dark).editor_background)
+}
+
+fn composite_over(color: Color32, background: Color32) -> Color32 {
     if color.a() == 255 {
         return color;
     }
-    let base = theme::syntax_palette(dark).editor_background;
-    let alpha = color.a() as u16;
+    let [red, green, blue, alpha] = color.to_srgba_unmultiplied();
+    let alpha = alpha as u16;
     let blend = |foreground: u8, background: u8| {
         ((foreground as u16 * alpha + background as u16 * (255 - alpha) + 127) / 255) as u8
     };
     Color32::from_rgb(
-        blend(color.r(), base.r()),
-        blend(color.g(), base.g()),
-        blend(color.b(), base.b()),
+        blend(red, background.r()),
+        blend(green, background.g()),
+        blend(blue, background.b()),
     )
 }
 
@@ -1190,5 +1194,18 @@ mod tests {
         assert_eq!(parse_hex_color_string(r##""#not-a-color""##), None);
         assert_eq!(contrast_text(Color32::BLACK), Color32::WHITE);
         assert_eq!(contrast_text(Color32::WHITE), Color32::BLACK);
+    }
+
+    #[test]
+    fn transparent_swatches_composite_unpremultiplied_channels_once() {
+        let half_red = Color32::from_rgba_unmultiplied(255, 0, 0, 128);
+        assert_eq!(
+            composite_over(half_red, Color32::WHITE),
+            Color32::from_rgb(255, 127, 127)
+        );
+        assert_eq!(
+            composite_over(half_red, Color32::BLACK),
+            Color32::from_rgb(128, 0, 0)
+        );
     }
 }

@@ -3,21 +3,14 @@ use std::{
     sync::mpsc::{self, Receiver, Sender, TryIter},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum NativeMenuCommand {
-    Application(ApplicationCommand),
-    File(FileCommand),
-    Edit(EditCommand),
-    View(ViewCommand),
-}
+use eframe::egui::{self, KeyboardShortcut, Modifiers};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ApplicationCommand {
+/// Every application action which can be invoked without a dynamic payload.
+/// Native menus, egui menus and keyboard routing all consume `CommandSpec`
+/// entries for this type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum AppCommand {
     Settings,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FileCommand {
     New,
     NewWindow,
     Open,
@@ -26,23 +19,17 @@ pub(crate) enum FileCommand {
     Save,
     SaveAs,
     ExportPdf,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EditCommand {
     Undo,
     Redo,
     Cut,
     Copy,
     Paste,
     SelectAll,
+    ToggleComment,
     Find,
     FindReplace,
     Format,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ViewCommand {
+    SyncPreview,
     Problems,
     Explorer,
     Code,
@@ -50,46 +37,503 @@ pub(crate) enum ViewCommand {
     Preview,
 }
 
-/// Commands already assigned to a document window but not yet executed.
-///
-/// Keeping this queue on `EditorApp` is important for multi-window editing:
-/// egui text state is scoped to the viewport context, so a process-wide menu
-/// callback may choose the target session, but only that session's next `ui`
-/// pass may execute the command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CommandMenu {
+    Application,
+    File,
+    Edit,
+    View,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CommandRequirement {
+    Always,
+    Undo,
+    Redo,
+    TypstDocument,
+    InteractivePreview,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Chord {
+    key: &'static str,
+    primary: bool,
+    control: bool,
+    shift: bool,
+    alt: bool,
+}
+
+impl Chord {
+    const fn primary(key: &'static str) -> Self {
+        Self {
+            key,
+            primary: true,
+            control: false,
+            shift: false,
+            alt: false,
+        }
+    }
+
+    const fn shift(mut self) -> Self {
+        self.shift = true;
+        self
+    }
+
+    const fn alt(mut self) -> Self {
+        self.alt = true;
+        self
+    }
+
+    const fn control(key: &'static str) -> Self {
+        Self {
+            key,
+            primary: false,
+            control: true,
+            shift: false,
+            alt: false,
+        }
+    }
+
+    fn egui(self) -> KeyboardShortcut {
+        let mut modifiers = Modifiers::NONE;
+        if self.primary {
+            modifiers |= Modifiers::COMMAND;
+        }
+        if self.control {
+            modifiers |= Modifiers::CTRL;
+        }
+        if self.shift {
+            modifiers |= Modifiers::SHIFT;
+        }
+        if self.alt {
+            modifiers |= Modifiers::ALT;
+        }
+        KeyboardShortcut::new(modifiers, egui_key(self.key))
+    }
+
+    fn specificity(self) -> u8 {
+        u8::from(self.primary) + u8::from(self.control) + u8::from(self.shift) + u8::from(self.alt)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CommandShortcut {
+    macos: Chord,
+    other: Chord,
+}
+
+impl CommandShortcut {
+    const fn same(chord: Chord) -> Self {
+        Self {
+            macos: chord,
+            other: chord,
+        }
+    }
+
+    fn platform(self) -> Chord {
+        if cfg!(target_os = "macos") {
+            self.macos
+        } else {
+            self.other
+        }
+    }
+
+    pub(crate) fn egui(self) -> KeyboardShortcut {
+        self.platform().egui()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CommandSpec {
+    pub(crate) command: AppCommand,
+    pub(crate) title: &'static str,
+    pub(crate) popup_title: &'static str,
+    pub(crate) menu: CommandMenu,
+    pub(crate) popup_section: Option<u8>,
+    pub(crate) requirement: CommandRequirement,
+    pub(crate) shortcut: Option<CommandShortcut>,
+    native_id: Option<isize>,
+    native_section: u8,
+}
+
+macro_rules! spec {
+    ($command:ident, $title:literal, $popup:literal, $menu:ident, $section:expr, $requirement:ident, $shortcut:expr, $native_id:expr) => {
+        CommandSpec {
+            command: AppCommand::$command,
+            title: $title,
+            popup_title: $popup,
+            menu: CommandMenu::$menu,
+            popup_section: Some($section),
+            requirement: CommandRequirement::$requirement,
+            shortcut: $shortcut,
+            native_id: $native_id,
+            native_section: $section,
+        }
+    };
+}
+
+pub(crate) const COMMAND_SPECS: &[CommandSpec] = &[
+    spec!(
+        Settings,
+        "Settings…",
+        "Settings…",
+        Application,
+        0,
+        Always,
+        Some(CommandShortcut::same(Chord::primary(","))),
+        Some(1)
+    ),
+    spec!(
+        New,
+        "New",
+        "New",
+        File,
+        0,
+        Always,
+        Some(CommandShortcut::same(Chord::primary("n"))),
+        Some(100)
+    ),
+    spec!(
+        NewWindow,
+        "New Window",
+        "New Window",
+        File,
+        0,
+        Always,
+        Some(CommandShortcut::same(Chord::primary("n").shift())),
+        Some(106)
+    ),
+    spec!(
+        Open,
+        "Open…",
+        "Open…",
+        File,
+        0,
+        Always,
+        Some(CommandShortcut::same(Chord::primary("o"))),
+        Some(101)
+    ),
+    spec!(
+        OpenInNewWindow,
+        "Open in New Window…",
+        "Open in New Window…",
+        File,
+        0,
+        Always,
+        Some(CommandShortcut::same(Chord::primary("o").alt())),
+        Some(107)
+    ),
+    spec!(
+        ChangeWorkspaceRoot,
+        "Change Workspace Root…",
+        "Change Workspace Root…",
+        File,
+        0,
+        Always,
+        Some(CommandShortcut::same(Chord::primary("o").shift())),
+        Some(102)
+    ),
+    spec!(
+        Save,
+        "Save",
+        "Save",
+        File,
+        1,
+        Always,
+        Some(CommandShortcut::same(Chord::primary("s"))),
+        Some(103)
+    ),
+    spec!(
+        SaveAs,
+        "Save As…",
+        "Save As…",
+        File,
+        1,
+        Always,
+        Some(CommandShortcut::same(Chord::primary("s").shift())),
+        Some(104)
+    ),
+    spec!(
+        ExportPdf,
+        "Export PDF…",
+        "Export PDF…",
+        File,
+        2,
+        TypstDocument,
+        Some(CommandShortcut::same(Chord::primary("e").shift())),
+        Some(105)
+    ),
+    spec!(
+        Undo,
+        "Undo",
+        "Undo",
+        Edit,
+        0,
+        Undo,
+        Some(CommandShortcut::same(Chord::primary("z"))),
+        Some(200)
+    ),
+    spec!(
+        Redo,
+        "Redo",
+        "Redo",
+        Edit,
+        0,
+        Redo,
+        Some(CommandShortcut::same(Chord::primary("z").shift())),
+        Some(201)
+    ),
+    spec!(
+        Cut,
+        "Cut",
+        "Cut",
+        Edit,
+        1,
+        Always,
+        Some(CommandShortcut::same(Chord::primary("x"))),
+        Some(202)
+    ),
+    spec!(
+        Copy,
+        "Copy",
+        "Copy",
+        Edit,
+        1,
+        Always,
+        Some(CommandShortcut::same(Chord::primary("c"))),
+        Some(203)
+    ),
+    spec!(
+        Paste,
+        "Paste",
+        "Paste",
+        Edit,
+        1,
+        Always,
+        Some(CommandShortcut::same(Chord::primary("v"))),
+        Some(204)
+    ),
+    spec!(
+        SelectAll,
+        "Select All",
+        "Select All",
+        Edit,
+        1,
+        Always,
+        Some(CommandShortcut::same(Chord::primary("a"))),
+        Some(205)
+    ),
+    spec!(
+        ToggleComment,
+        "Toggle Comment",
+        "Toggle Comment",
+        Edit,
+        1,
+        Always,
+        Some(CommandShortcut::same(Chord::primary("/"))),
+        None
+    ),
+    spec!(
+        Find,
+        "Find…",
+        "Find…",
+        Edit,
+        2,
+        Always,
+        Some(CommandShortcut::same(Chord::primary("f"))),
+        Some(206)
+    ),
+    CommandSpec {
+        shortcut: Some(CommandShortcut {
+            macos: Chord::primary("f").alt(),
+            other: Chord::control("h"),
+        }),
+        ..spec!(
+            FindReplace,
+            "Find and Replace…",
+            "Find and Replace…",
+            Edit,
+            2,
+            Always,
+            None,
+            Some(207)
+        )
+    },
+    CommandSpec {
+        shortcut: Some(CommandShortcut::same(Chord {
+            key: "f",
+            primary: false,
+            control: false,
+            shift: true,
+            alt: true,
+        })),
+        ..spec!(
+            Format,
+            "Format Document",
+            "Format Document",
+            Edit,
+            3,
+            TypstDocument,
+            None,
+            Some(208)
+        )
+    },
+    CommandSpec {
+        popup_section: None,
+        ..spec!(
+            SyncPreview,
+            "Sync Preview",
+            "Sync Preview",
+            Edit,
+            3,
+            InteractivePreview,
+            None,
+            None
+        )
+    },
+    spec!(
+        Problems,
+        "Problems",
+        "Toggle Problems",
+        View,
+        0,
+        Always,
+        Some(CommandShortcut::same(Chord::primary("5"))),
+        Some(300)
+    ),
+    spec!(
+        Explorer,
+        "Explorer",
+        "Toggle Explorer",
+        View,
+        0,
+        Always,
+        Some(CommandShortcut::same(Chord::primary("1"))),
+        Some(301)
+    ),
+    spec!(
+        Code,
+        "Code",
+        "Code",
+        View,
+        1,
+        Always,
+        Some(CommandShortcut::same(Chord::primary("2"))),
+        Some(302)
+    ),
+    spec!(
+        Split,
+        "Split",
+        "Split",
+        View,
+        1,
+        Always,
+        Some(CommandShortcut::same(Chord::primary("3"))),
+        Some(303)
+    ),
+    spec!(
+        Preview,
+        "Preview",
+        "Preview",
+        View,
+        1,
+        Always,
+        Some(CommandShortcut::same(Chord::primary("4"))),
+        Some(304)
+    ),
+];
+
+pub(crate) fn command_spec(command: AppCommand) -> &'static CommandSpec {
+    COMMAND_SPECS
+        .iter()
+        .find(|spec| spec.command == command)
+        .expect("every AppCommand has one descriptor")
+}
+
+pub(crate) fn command_specs(menu: CommandMenu) -> impl Iterator<Item = &'static CommandSpec> {
+    COMMAND_SPECS.iter().filter(move |spec| spec.menu == menu)
+}
+
+/// Consume the most-specific matching chord first. egui deliberately permits
+/// extra modifiers, so this ordering keeps Shift/Alt variants ahead of their
+/// base commands without duplicating a hand-maintained shortcut list.
+pub(crate) fn consume_shortcut(
+    input: &mut egui::InputState,
+    accepts: impl Fn(AppCommand) -> bool,
+) -> Option<AppCommand> {
+    for specificity in (0..=4).rev() {
+        for spec in COMMAND_SPECS {
+            let Some(shortcut) = spec.shortcut else {
+                continue;
+            };
+            let chord = shortcut.platform();
+            if chord.specificity() == specificity
+                && accepts(spec.command)
+                && input.consume_shortcut(&chord.egui())
+            {
+                return Some(spec.command);
+            }
+        }
+    }
+    None
+}
+
+fn egui_key(key: &str) -> egui::Key {
+    match key {
+        "," => egui::Key::Comma,
+        "/" => egui::Key::Slash,
+        "1" => egui::Key::Num1,
+        "2" => egui::Key::Num2,
+        "3" => egui::Key::Num3,
+        "4" => egui::Key::Num4,
+        "5" => egui::Key::Num5,
+        "a" => egui::Key::A,
+        "c" => egui::Key::C,
+        "e" => egui::Key::E,
+        "f" => egui::Key::F,
+        "h" => egui::Key::H,
+        "n" => egui::Key::N,
+        "o" => egui::Key::O,
+        "s" => egui::Key::S,
+        "v" => egui::Key::V,
+        "x" => egui::Key::X,
+        "z" => egui::Key::Z,
+        _ => unreachable!("command registry contains an unsupported key"),
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct NativeMenuCommandQueue {
-    pending: VecDeque<NativeMenuCommand>,
+    pending: VecDeque<AppCommand>,
 }
 
 impl NativeMenuCommandQueue {
-    pub(crate) fn push(&mut self, command: NativeMenuCommand) {
+    pub(crate) fn push(&mut self, command: AppCommand) {
         self.pending.push_back(command);
     }
 
-    pub(crate) fn pop(&mut self) -> Option<NativeMenuCommand> {
+    pub(crate) fn pop(&mut self) -> Option<AppCommand> {
         self.pending.pop_front()
     }
 }
 
-/// Process-wide native menu commands. The application shell drains this once
-/// and assigns each command to the focused document session's local queue.
 pub(crate) struct NativeMenuReceiver {
-    receiver: Receiver<NativeMenuCommand>,
+    receiver: Receiver<AppCommand>,
 }
 
 impl NativeMenuReceiver {
-    pub(crate) fn pending(&self) -> TryIter<'_, NativeMenuCommand> {
+    pub(crate) fn pending(&self) -> TryIter<'_, AppCommand> {
         self.receiver.try_iter()
     }
 }
 
-pub(crate) fn channel() -> (Sender<NativeMenuCommand>, NativeMenuReceiver) {
+pub(crate) fn channel() -> (Sender<AppCommand>, NativeMenuReceiver) {
     let (sender, receiver) = mpsc::channel();
     (sender, NativeMenuReceiver { receiver })
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn install_macos_handler(sender: Sender<NativeMenuCommand>) -> Result<(), String> {
+pub(crate) fn install_macos_handler(sender: Sender<AppCommand>) -> Result<(), String> {
     macos::install_handler(sender)
 }
 
@@ -118,9 +562,9 @@ mod macos {
     use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSMenu, NSMenuItem};
     use objc2_foundation::{NSInteger, NSString};
 
-    use super::{ApplicationCommand, EditCommand, FileCommand, NativeMenuCommand, ViewCommand};
+    use super::{AppCommand, Chord, CommandMenu, command_spec, command_specs};
 
-    static COMMAND_SENDER: Mutex<Option<Sender<NativeMenuCommand>>> = Mutex::new(None);
+    static COMMAND_SENDER: Mutex<Option<Sender<AppCommand>>> = Mutex::new(None);
     static REPAINT_CONTEXT: Mutex<Option<eframe::egui::Context>> = Mutex::new(None);
     static MENU_INSTALLED: AtomicBool = AtomicBool::new(false);
 
@@ -128,222 +572,39 @@ mod macos {
         sel!(tiptoptypPerformMenuCommand:)
     }
 
-    #[derive(Clone, Copy)]
-    struct Modifiers(u8);
-
-    impl Modifiers {
-        const COMMAND: Self = Self(1 << 0);
-        const SHIFT: Self = Self(1 << 1);
-        const OPTION: Self = Self(1 << 2);
-
-        const fn with(self, other: Self) -> Self {
-            Self(self.0 | other.0)
+    fn appkit_modifiers(chord: Chord) -> NSEventModifierFlags {
+        let mut flags = NSEventModifierFlags::empty();
+        if chord.primary {
+            flags |= NSEventModifierFlags::Command;
         }
-
-        fn appkit(self) -> NSEventModifierFlags {
-            let mut flags = NSEventModifierFlags::empty();
-            if self.0 & Self::COMMAND.0 != 0 {
-                flags |= NSEventModifierFlags::Command;
-            }
-            if self.0 & Self::SHIFT.0 != 0 {
-                flags |= NSEventModifierFlags::Shift;
-            }
-            if self.0 & Self::OPTION.0 != 0 {
-                flags |= NSEventModifierFlags::Option;
-            }
-            flags
+        if chord.control {
+            flags |= NSEventModifierFlags::Control;
         }
+        if chord.shift {
+            flags |= NSEventModifierFlags::Shift;
+        }
+        if chord.alt {
+            flags |= NSEventModifierFlags::Option;
+        }
+        flags
     }
 
-    #[derive(Clone, Copy)]
-    enum ItemSpec {
-        Command {
-            title: &'static str,
-            key: &'static str,
-            modifiers: Modifiers,
-            command: NativeMenuCommand,
-        },
-        Separator,
-    }
-
-    const FILE_ITEMS: &[ItemSpec] = &[
-        command(
-            "New",
-            "n",
-            Modifiers::COMMAND,
-            NativeMenuCommand::File(FileCommand::New),
-        ),
-        command(
-            "New Window",
-            "n",
-            Modifiers::COMMAND.with(Modifiers::SHIFT),
-            NativeMenuCommand::File(FileCommand::NewWindow),
-        ),
-        command(
-            "Open…",
-            "o",
-            Modifiers::COMMAND,
-            NativeMenuCommand::File(FileCommand::Open),
-        ),
-        command(
-            "Open in New Window…",
-            "o",
-            Modifiers::COMMAND.with(Modifiers::OPTION),
-            NativeMenuCommand::File(FileCommand::OpenInNewWindow),
-        ),
-        command(
-            "Change Workspace Root…",
-            "o",
-            Modifiers::COMMAND.with(Modifiers::SHIFT),
-            NativeMenuCommand::File(FileCommand::ChangeWorkspaceRoot),
-        ),
-        ItemSpec::Separator,
-        command(
-            "Save",
-            "s",
-            Modifiers::COMMAND,
-            NativeMenuCommand::File(FileCommand::Save),
-        ),
-        command(
-            "Save As…",
-            "s",
-            Modifiers::COMMAND.with(Modifiers::SHIFT),
-            NativeMenuCommand::File(FileCommand::SaveAs),
-        ),
-        command(
-            "Export PDF…",
-            "e",
-            Modifiers::COMMAND.with(Modifiers::SHIFT),
-            NativeMenuCommand::File(FileCommand::ExportPdf),
-        ),
-    ];
-
-    const EDIT_ITEMS: &[ItemSpec] = &[
-        command(
-            "Undo",
-            "z",
-            Modifiers::COMMAND,
-            NativeMenuCommand::Edit(EditCommand::Undo),
-        ),
-        command(
-            "Redo",
-            "z",
-            Modifiers::COMMAND.with(Modifiers::SHIFT),
-            NativeMenuCommand::Edit(EditCommand::Redo),
-        ),
-        ItemSpec::Separator,
-        command(
-            "Cut",
-            "x",
-            Modifiers::COMMAND,
-            NativeMenuCommand::Edit(EditCommand::Cut),
-        ),
-        command(
-            "Copy",
-            "c",
-            Modifiers::COMMAND,
-            NativeMenuCommand::Edit(EditCommand::Copy),
-        ),
-        command(
-            "Paste",
-            "v",
-            Modifiers::COMMAND,
-            NativeMenuCommand::Edit(EditCommand::Paste),
-        ),
-        command(
-            "Select All",
-            "a",
-            Modifiers::COMMAND,
-            NativeMenuCommand::Edit(EditCommand::SelectAll),
-        ),
-        ItemSpec::Separator,
-        command(
-            "Find…",
-            "f",
-            Modifiers::COMMAND,
-            NativeMenuCommand::Edit(EditCommand::Find),
-        ),
-        command(
-            "Find and Replace…",
-            "f",
-            Modifiers::COMMAND.with(Modifiers::OPTION),
-            NativeMenuCommand::Edit(EditCommand::FindReplace),
-        ),
-        ItemSpec::Separator,
-        command(
-            "Format Document",
-            "f",
-            Modifiers::OPTION.with(Modifiers::SHIFT),
-            NativeMenuCommand::Edit(EditCommand::Format),
-        ),
-    ];
-
-    const VIEW_ITEMS: &[ItemSpec] = &[
-        command(
-            "Problems",
-            "5",
-            Modifiers::COMMAND,
-            NativeMenuCommand::View(ViewCommand::Problems),
-        ),
-        command(
-            "Explorer",
-            "1",
-            Modifiers::COMMAND,
-            NativeMenuCommand::View(ViewCommand::Explorer),
-        ),
-        ItemSpec::Separator,
-        command(
-            "Code",
-            "2",
-            Modifiers::COMMAND,
-            NativeMenuCommand::View(ViewCommand::Code),
-        ),
-        command(
-            "Split",
-            "3",
-            Modifiers::COMMAND,
-            NativeMenuCommand::View(ViewCommand::Split),
-        ),
-        command(
-            "Preview",
-            "4",
-            Modifiers::COMMAND,
-            NativeMenuCommand::View(ViewCommand::Preview),
-        ),
-    ];
-
-    const fn command(
-        title: &'static str,
-        key: &'static str,
-        modifiers: Modifiers,
-        command: NativeMenuCommand,
-    ) -> ItemSpec {
-        ItemSpec::Command {
-            title,
-            key,
-            modifiers,
-            command,
-        }
-    }
-
-    pub(super) fn install_handler(sender: Sender<NativeMenuCommand>) -> Result<(), String> {
+    pub(super) fn install_handler(sender: Sender<AppCommand>) -> Result<(), String> {
         *COMMAND_SENDER
             .lock()
             .map_err(|_| "macOS menu command channel was poisoned".to_owned())? = Some(sender);
-
         let class = AnyClass::get(c"WinitApplicationDelegate")
             .ok_or_else(|| "winit's macOS application delegate is unavailable".to_owned())?;
         if class.responds_to(action_selector()) {
             return Ok(());
         }
-
         let implementation =
             perform_menu_command as unsafe extern "C-unwind" fn(&AnyObject, Sel, &NSMenuItem);
         // SAFETY: Objective-C erases IMP argument types. This callback and the
         // encoding below both describe `void self selector object`.
         let implementation: Imp = unsafe { std::mem::transmute(implementation) };
         // SAFETY: winit's registered delegate class lives for the process. We
-        // only append a uniquely named action selector and leave its lifecycle
+        // append one uniquely named action selector and leave its lifecycle
         // methods and ivars untouched.
         let added = unsafe {
             ffi::class_addMethod(
@@ -366,7 +627,6 @@ mod macos {
         if MENU_INSTALLED.swap(true, Ordering::AcqRel) {
             return Ok(());
         }
-
         let result = build_menu();
         if result.is_err() {
             MENU_INSTALLED.store(false, Ordering::Release);
@@ -391,19 +651,12 @@ mod macos {
             .and_then(|item| item.submenu())
             .ok_or_else(|| "the tiptoptyp application menu is unavailable".to_owned())?;
         app_menu.setAutoenablesItems(false);
-        let settings = make_item(
-            mtm,
-            "Settings…",
-            ",",
-            Modifiers::COMMAND,
-            NativeMenuCommand::Application(ApplicationCommand::Settings),
-            target,
-        );
+        let settings = make_item(mtm, command_spec(AppCommand::Settings), target);
         app_menu.insertItem_atIndex(&settings, app_menu.numberOfItems().min(1));
 
-        add_top_level_menu(mtm, &main_menu, "File", FILE_ITEMS, target);
-        add_top_level_menu(mtm, &main_menu, "Edit", EDIT_ITEMS, target);
-        add_top_level_menu(mtm, &main_menu, "View", VIEW_ITEMS, target);
+        add_top_level_menu(mtm, &main_menu, "File", CommandMenu::File, target);
+        add_top_level_menu(mtm, &main_menu, "Edit", CommandMenu::Edit, target);
+        add_top_level_menu(mtm, &main_menu, "View", CommandMenu::View, target);
         Ok(())
     }
 
@@ -411,23 +664,20 @@ mod macos {
         mtm: MainThreadMarker,
         main_menu: &NSMenu,
         title: &str,
-        specs: &[ItemSpec],
+        menu: CommandMenu,
         target: &AnyObject,
     ) {
         let title = NSString::from_str(title);
         let submenu = NSMenu::new(mtm);
         submenu.setTitle(&title);
         submenu.setAutoenablesItems(false);
-        for spec in specs {
-            match *spec {
-                ItemSpec::Command {
-                    title,
-                    key,
-                    modifiers,
-                    command,
-                } => submenu.addItem(&make_item(mtm, title, key, modifiers, command, target)),
-                ItemSpec::Separator => submenu.addItem(&NSMenuItem::separatorItem(mtm)),
+        let mut previous_section = None;
+        for spec in command_specs(menu).filter(|spec| spec.native_id.is_some()) {
+            if previous_section.is_some_and(|section| section != spec.native_section) {
+                submenu.addItem(&NSMenuItem::separatorItem(mtm));
             }
+            submenu.addItem(&make_item(mtm, spec, target));
+            previous_section = Some(spec.native_section);
         }
         let root = NSMenuItem::new(mtm);
         root.setTitle(&title);
@@ -437,16 +687,14 @@ mod macos {
 
     fn make_item(
         mtm: MainThreadMarker,
-        title: &str,
-        key: &str,
-        modifiers: Modifiers,
-        command: NativeMenuCommand,
+        spec: &super::CommandSpec,
         target: &AnyObject,
     ) -> Retained<NSMenuItem> {
-        let title = NSString::from_str(title);
-        let key = NSString::from_str(key);
-        // SAFETY: ACTION_SELECTOR is installed on `target` before the AppKit
-        // menu is created, and its signature accepts the sending menu item.
+        let shortcut = spec.shortcut.expect("native commands have shortcuts").macos;
+        let title = NSString::from_str(spec.title);
+        let key = NSString::from_str(shortcut.key);
+        // SAFETY: the action selector is installed on `target` before menu
+        // creation and accepts the sending menu item.
         let item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
                 mtm.alloc(),
@@ -455,70 +703,20 @@ mod macos {
                 &key,
             )
         };
-        item.setKeyEquivalentModifierMask(modifiers.appkit());
-        item.setTag(command_tag(command));
+        item.setKeyEquivalentModifierMask(appkit_modifiers(shortcut));
+        item.setTag(spec.native_id.expect("native command has a tag"));
         item.setEnabled(true);
-        // SAFETY: `target` is the retained NSApplication delegate, which
-        // outlives every menu item attached to the application menu.
+        // SAFETY: `target` is the retained NSApplication delegate and outlives
+        // every menu item attached to the application menu.
         unsafe { item.setTarget(Some(target)) };
         item
     }
 
-    const fn command_tag(command: NativeMenuCommand) -> NSInteger {
-        match command {
-            NativeMenuCommand::Application(ApplicationCommand::Settings) => 1,
-            NativeMenuCommand::File(FileCommand::New) => 100,
-            NativeMenuCommand::File(FileCommand::Open) => 101,
-            NativeMenuCommand::File(FileCommand::ChangeWorkspaceRoot) => 102,
-            NativeMenuCommand::File(FileCommand::Save) => 103,
-            NativeMenuCommand::File(FileCommand::SaveAs) => 104,
-            NativeMenuCommand::File(FileCommand::ExportPdf) => 105,
-            NativeMenuCommand::File(FileCommand::NewWindow) => 106,
-            NativeMenuCommand::File(FileCommand::OpenInNewWindow) => 107,
-            NativeMenuCommand::Edit(EditCommand::Undo) => 200,
-            NativeMenuCommand::Edit(EditCommand::Redo) => 201,
-            NativeMenuCommand::Edit(EditCommand::Cut) => 202,
-            NativeMenuCommand::Edit(EditCommand::Copy) => 203,
-            NativeMenuCommand::Edit(EditCommand::Paste) => 204,
-            NativeMenuCommand::Edit(EditCommand::SelectAll) => 205,
-            NativeMenuCommand::Edit(EditCommand::Find) => 206,
-            NativeMenuCommand::Edit(EditCommand::FindReplace) => 207,
-            NativeMenuCommand::Edit(EditCommand::Format) => 208,
-            NativeMenuCommand::View(ViewCommand::Problems) => 300,
-            NativeMenuCommand::View(ViewCommand::Explorer) => 301,
-            NativeMenuCommand::View(ViewCommand::Code) => 302,
-            NativeMenuCommand::View(ViewCommand::Split) => 303,
-            NativeMenuCommand::View(ViewCommand::Preview) => 304,
-        }
-    }
-
-    const fn command_from_tag(tag: NSInteger) -> Option<NativeMenuCommand> {
-        Some(match tag {
-            1 => NativeMenuCommand::Application(ApplicationCommand::Settings),
-            100 => NativeMenuCommand::File(FileCommand::New),
-            101 => NativeMenuCommand::File(FileCommand::Open),
-            102 => NativeMenuCommand::File(FileCommand::ChangeWorkspaceRoot),
-            103 => NativeMenuCommand::File(FileCommand::Save),
-            104 => NativeMenuCommand::File(FileCommand::SaveAs),
-            105 => NativeMenuCommand::File(FileCommand::ExportPdf),
-            106 => NativeMenuCommand::File(FileCommand::NewWindow),
-            107 => NativeMenuCommand::File(FileCommand::OpenInNewWindow),
-            200 => NativeMenuCommand::Edit(EditCommand::Undo),
-            201 => NativeMenuCommand::Edit(EditCommand::Redo),
-            202 => NativeMenuCommand::Edit(EditCommand::Cut),
-            203 => NativeMenuCommand::Edit(EditCommand::Copy),
-            204 => NativeMenuCommand::Edit(EditCommand::Paste),
-            205 => NativeMenuCommand::Edit(EditCommand::SelectAll),
-            206 => NativeMenuCommand::Edit(EditCommand::Find),
-            207 => NativeMenuCommand::Edit(EditCommand::FindReplace),
-            208 => NativeMenuCommand::Edit(EditCommand::Format),
-            300 => NativeMenuCommand::View(ViewCommand::Problems),
-            301 => NativeMenuCommand::View(ViewCommand::Explorer),
-            302 => NativeMenuCommand::View(ViewCommand::Code),
-            303 => NativeMenuCommand::View(ViewCommand::Split),
-            304 => NativeMenuCommand::View(ViewCommand::Preview),
-            _ => return None,
-        })
+    fn command_from_tag(tag: NSInteger) -> Option<AppCommand> {
+        super::COMMAND_SPECS
+            .iter()
+            .find(|spec| spec.native_id == Some(tag))
+            .map(|spec| spec.command)
     }
 
     unsafe extern "C-unwind" fn perform_menu_command(
@@ -526,7 +724,6 @@ mod macos {
         _selector: Sel,
         sender: &NSMenuItem,
     ) {
-        // Never allow a Rust panic to unwind into AppKit.
         let _ = catch_unwind(AssertUnwindSafe(|| {
             let Some(command) = command_from_tag(sender.tag()) else {
                 return;
@@ -549,42 +746,17 @@ mod macos {
         use super::*;
 
         #[test]
-        fn every_native_item_tag_round_trips_to_its_typed_command() {
-            for spec in FILE_ITEMS.iter().chain(EDIT_ITEMS).chain(VIEW_ITEMS) {
-                if let ItemSpec::Command { command, .. } = spec {
-                    assert_eq!(command_from_tag(command_tag(*command)), Some(*command));
-                }
-            }
-            let settings = NativeMenuCommand::Application(ApplicationCommand::Settings);
-            assert_eq!(command_from_tag(command_tag(settings)), Some(settings));
-            assert_eq!(command_from_tag(-1), None);
-        }
-
-        #[test]
-        fn view_items_advertise_the_editor_command_number_shortcuts() {
-            let shortcuts = VIEW_ITEMS
+        fn every_native_descriptor_tag_round_trips() {
+            for spec in super::super::COMMAND_SPECS
                 .iter()
-                .filter_map(|spec| match spec {
-                    ItemSpec::Command {
-                        key,
-                        modifiers,
-                        command: NativeMenuCommand::View(command),
-                        ..
-                    } => Some((*command, *key, modifiers.0)),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-
-            assert_eq!(
-                shortcuts,
-                [
-                    (ViewCommand::Problems, "5", Modifiers::COMMAND.0),
-                    (ViewCommand::Explorer, "1", Modifiers::COMMAND.0),
-                    (ViewCommand::Code, "2", Modifiers::COMMAND.0),
-                    (ViewCommand::Split, "3", Modifiers::COMMAND.0),
-                    (ViewCommand::Preview, "4", Modifiers::COMMAND.0),
-                ]
-            );
+                .filter(|spec| spec.native_id.is_some())
+            {
+                assert_eq!(
+                    command_from_tag(spec.native_id.unwrap()),
+                    Some(spec.command)
+                );
+            }
+            assert_eq!(command_from_tag(-1), None);
         }
     }
 }
@@ -594,39 +766,56 @@ mod tests {
     use super::*;
 
     #[test]
-    fn receiver_drains_typed_commands_in_order() {
-        let (sender, receiver) = channel();
-        sender
-            .send(NativeMenuCommand::Application(ApplicationCommand::Settings))
-            .unwrap();
-        sender
-            .send(NativeMenuCommand::View(ViewCommand::Split))
-            .unwrap();
-        assert_eq!(
-            receiver.pending().collect::<Vec<_>>(),
-            [
-                NativeMenuCommand::Application(ApplicationCommand::Settings),
-                NativeMenuCommand::View(ViewCommand::Split),
-            ]
-        );
-        assert!(receiver.pending().next().is_none());
+    fn every_command_has_exactly_one_descriptor() {
+        for (index, spec) in COMMAND_SPECS.iter().enumerate() {
+            assert!(
+                !COMMAND_SPECS[..index]
+                    .iter()
+                    .any(|other| other.command == spec.command)
+            );
+            assert_eq!(command_spec(spec.command).command, spec.command);
+        }
     }
 
     #[test]
-    fn assigned_window_queue_preserves_command_order() {
-        let mut queue = NativeMenuCommandQueue::default();
-        queue.push(NativeMenuCommand::Edit(EditCommand::Undo));
-        queue.push(NativeMenuCommand::Edit(EditCommand::Copy));
-        queue.push(NativeMenuCommand::View(ViewCommand::Preview));
+    fn receiver_and_window_queue_preserve_command_order() {
+        let (sender, receiver) = channel();
+        sender.send(AppCommand::Settings).unwrap();
+        sender.send(AppCommand::Split).unwrap();
+        assert_eq!(
+            receiver.pending().collect::<Vec<_>>(),
+            [AppCommand::Settings, AppCommand::Split]
+        );
 
+        let mut queue = NativeMenuCommandQueue::default();
+        queue.push(AppCommand::Undo);
+        queue.push(AppCommand::Copy);
+        queue.push(AppCommand::Preview);
         assert_eq!(
             [queue.pop(), queue.pop(), queue.pop()],
             [
-                Some(NativeMenuCommand::Edit(EditCommand::Undo)),
-                Some(NativeMenuCommand::Edit(EditCommand::Copy)),
-                Some(NativeMenuCommand::View(ViewCommand::Preview)),
+                Some(AppCommand::Undo),
+                Some(AppCommand::Copy),
+                Some(AppCommand::Preview),
             ]
         );
         assert_eq!(queue.pop(), None);
+    }
+
+    #[test]
+    fn view_descriptors_advertise_the_expected_number_shortcuts() {
+        let shortcuts = command_specs(CommandMenu::View)
+            .map(|spec| (spec.command, spec.shortcut.unwrap().platform().key))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            shortcuts,
+            [
+                (AppCommand::Problems, "5"),
+                (AppCommand::Explorer, "1"),
+                (AppCommand::Code, "2"),
+                (AppCommand::Split, "3"),
+                (AppCommand::Preview, "4"),
+            ]
+        );
     }
 }

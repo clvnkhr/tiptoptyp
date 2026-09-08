@@ -522,37 +522,83 @@ prune_obsolete_pngs() {
 
 backup_directory=""
 restore_outputs_on_exit=0
+backup_completed=0
+backed_up_outputs=()
 
 restore_requested_outputs() {
   local expected
-  for expected in "${expected_outputs[@]}"; do
-    rm -f -- "${latest_directory}/${expected}"
-    if [[ -e "${backup_directory}/${expected}" \
-      || -L "${backup_directory}/${expected}" ]]; then
-      mv -- "${backup_directory}/${expected}" "${latest_directory}/${expected}"
+  local restore_failed=0
+  local backed_up
+
+  # Once backup completed, every requested destination belongs to this failed
+  # transaction, including newly created slots with no original.
+  if (( backup_completed == 1 )); then
+    for expected in "${expected_outputs[@]}"; do
+      if ! rm -f -- "${latest_directory}/${expected}"; then
+        printf 'Could not clear failed gallery output before recovery: %s\n' \
+          "${latest_directory}/${expected}" >&2
+        restore_failed=1
+      fi
+    done
+  fi
+
+  for backed_up in ${backed_up_outputs[@]+"${backed_up_outputs[@]}"}; do
+    if [[ -e "${backup_directory}/${backed_up}" \
+      || -L "${backup_directory}/${backed_up}" ]]; then
+      if (( backup_completed == 0 )) \
+        && ! rm -f -- "${latest_directory}/${backed_up}"; then
+        printf 'Could not clear partial gallery output before recovery: %s\n' \
+          "${latest_directory}/${backed_up}" >&2
+        restore_failed=1
+        continue
+      fi
+      if ! mv -- "${backup_directory}/${backed_up}" \
+      "${latest_directory}/${backed_up}"; then
+        printf 'Could not restore gallery original: %s\n' \
+          "${latest_directory}/${backed_up}" >&2
+        restore_failed=1
+      fi
+    elif [[ ! -e "${latest_directory}/${backed_up}" \
+      && ! -L "${latest_directory}/${backed_up}" ]]; then
+      printf 'Gallery original and recovery backup are both missing: %s\n' \
+        "${latest_directory}/${backed_up}" >&2
+      restore_failed=1
     fi
   done
+  return "${restore_failed}"
 }
 
 backup_requested_outputs() {
   local expected
+  # Activate recovery before the first move. The completed-move ledger keeps
+  # cleanup from deleting originals that have not yet reached the backup.
+  restore_outputs_on_exit=1
   for expected in "${expected_outputs[@]}"; do
     if [[ -e "${latest_directory}/${expected}" \
       || -L "${latest_directory}/${expected}" ]]; then
+      backed_up_outputs[${#backed_up_outputs[@]}]="${expected}"
       mv -- "${latest_directory}/${expected}" "${backup_directory}/${expected}"
     fi
   done
-  restore_outputs_on_exit=1
+  backup_completed=1
 }
 
 cleanup() {
   local status=$?
+  local recovery_failed=0
   trap - EXIT
   if (( restore_outputs_on_exit == 1 )); then
-    restore_requested_outputs || true
+    if ! restore_requested_outputs; then
+      recovery_failed=1
+      status=1
+    fi
   fi
-  if [[ -n "${backup_directory}" && -d "${backup_directory}" ]]; then
+  if (( recovery_failed == 0 )) \
+    && [[ -n "${backup_directory}" && -d "${backup_directory}" ]]; then
     rm -rf -- "${backup_directory}"
+  elif (( recovery_failed == 1 )); then
+    printf 'Gallery recovery was incomplete; originals remain in %s\n' \
+      "${backup_directory}" >&2
   fi
   exit "${status}"
 }

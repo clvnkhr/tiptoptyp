@@ -1,4 +1,185 @@
-use std::path::Path;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
+use eframe::egui::text::CCursorRange;
+
+/// Stable identity for work that must not cross a document replacement or
+/// overwrite a newer edit in the same document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DocumentKey {
+    pub(crate) epoch: u64,
+    pub(crate) revision: u64,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct EditorSnapshot {
+    pub(crate) source: Arc<str>,
+    pub(crate) cursor: CCursorRange,
+}
+
+/// Owns the editor buffer, on-disk identity, revision clock, and undo history.
+///
+/// Document replacement and save transitions live here so their epoch,
+/// revision, dirty-state, and history updates cannot drift apart in
+/// `EditorApp`.
+pub(crate) struct DocumentSession {
+    pub(crate) source: String,
+    pub(crate) saved_source: String,
+    pub(crate) path: Option<PathBuf>,
+    pub(crate) epoch: u64,
+    pub(crate) revision: u64,
+    pub(crate) disk_fingerprint: Option<u64>,
+    pub(crate) kind: DocumentKind,
+    pub(crate) reset_editor_history: bool,
+    undo: Vec<EditorSnapshot>,
+    redo: Vec<EditorSnapshot>,
+}
+
+impl DocumentSession {
+    pub(crate) fn new(source: impl Into<String>, kind: DocumentKind) -> Self {
+        let source = source.into();
+        Self {
+            saved_source: source.clone(),
+            source,
+            path: None,
+            epoch: 0,
+            revision: 0,
+            disk_fingerprint: None,
+            kind,
+            reset_editor_history: true,
+            undo: Vec::new(),
+            redo: Vec::new(),
+        }
+    }
+
+    pub(crate) const fn key(&self) -> DocumentKey {
+        DocumentKey {
+            epoch: self.epoch,
+            revision: self.revision,
+        }
+    }
+
+    pub(crate) fn is_dirty(&self) -> bool {
+        self.kind.is_editable() && self.source != self.saved_source
+    }
+
+    pub(crate) fn name(&self) -> String {
+        self.path
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Untitled.typ".to_owned())
+    }
+
+    pub(crate) fn mark_edited(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    pub(crate) fn restore_saved_source(&mut self) {
+        if self.source != self.saved_source {
+            self.revision = self.revision.wrapping_add(1);
+        }
+        self.source.clone_from(&self.saved_source);
+    }
+
+    pub(crate) fn replace_untitled(&mut self, source: impl Into<String>) {
+        self.replace(source.into(), None, DocumentKind::Typst, None);
+    }
+
+    pub(crate) fn replace_loaded(
+        &mut self,
+        source: String,
+        path: PathBuf,
+        kind: DocumentKind,
+        disk_fingerprint: Option<u64>,
+    ) {
+        self.replace(source, Some(path), kind, disk_fingerprint);
+    }
+
+    fn replace(
+        &mut self,
+        source: String,
+        path: Option<PathBuf>,
+        kind: DocumentKind,
+        disk_fingerprint: Option<u64>,
+    ) {
+        self.saved_source = source.clone();
+        self.source = source;
+        self.path = path;
+        self.epoch = self.epoch.wrapping_add(1);
+        self.revision = self.revision.wrapping_add(1);
+        self.disk_fingerprint = disk_fingerprint;
+        self.kind = kind;
+        self.clear_history();
+    }
+
+    pub(crate) fn complete_save(
+        &mut self,
+        path: PathBuf,
+        kind: DocumentKind,
+        disk_fingerprint: u64,
+        path_changed: bool,
+    ) {
+        self.path = Some(path);
+        self.disk_fingerprint = Some(disk_fingerprint);
+        if path_changed {
+            self.epoch = self.epoch.wrapping_add(1);
+            self.revision = self.revision.wrapping_add(1);
+            self.kind = kind;
+        }
+        self.saved_source.clone_from(&self.source);
+    }
+
+    pub(crate) fn clear_history(&mut self) {
+        self.reset_editor_history = true;
+        self.undo.clear();
+        self.redo.clear();
+    }
+
+    pub(crate) fn history_availability(&self) -> (bool, bool) {
+        (
+            self.kind.is_editable() && !self.undo.is_empty(),
+            self.kind.is_editable() && !self.redo.is_empty(),
+        )
+    }
+
+    pub(crate) fn history_step(
+        &mut self,
+        redo: bool,
+        current: EditorSnapshot,
+    ) -> Option<EditorSnapshot> {
+        if redo {
+            let next = self.redo.pop();
+            if next.is_some() {
+                self.undo.push(current);
+            }
+            next
+        } else {
+            let next = self.undo.pop();
+            if next.is_some() {
+                self.redo.push(current);
+            }
+            next
+        }
+    }
+
+    pub(crate) fn push_undo_snapshot(&mut self, snapshot: EditorSnapshot) {
+        if self
+            .undo
+            .last()
+            .is_none_or(|latest| latest.source != snapshot.source)
+        {
+            self.undo.push(snapshot);
+            const MAX_EDITOR_HISTORY: usize = 100;
+            if self.undo.len() > MAX_EDITOR_HISTORY {
+                self.undo.remove(0);
+            }
+        }
+        self.redo.clear();
+    }
+}
 
 /// How the currently selected file should be presented.
 ///
@@ -100,6 +281,8 @@ const TEXT_EXTENSIONS: &[&str] = &[
 
 #[cfg(test)]
 mod tests {
+    use eframe::egui::text::CCursor;
+
     use super::*;
 
     #[test]
@@ -171,5 +354,51 @@ mod tests {
         let error = DocumentKind::detect(Path::new("broken.toml"), b"\xff\xfe").unwrap_err();
         assert!(error.contains("UTF-8"));
         assert!(error.contains("broken.toml"));
+    }
+
+    #[test]
+    fn replacement_advances_identity_and_resets_history_as_one_transition() {
+        let mut document = DocumentSession::new("old", DocumentKind::Typst);
+        document.push_undo_snapshot(EditorSnapshot {
+            source: Arc::from("before"),
+            cursor: CCursorRange::one(CCursor::new(0)),
+        });
+        let previous = document.key();
+
+        document.replace_loaded(
+            "new".to_owned(),
+            PathBuf::from("chapter.typ"),
+            DocumentKind::Typst,
+            Some(7),
+        );
+
+        assert_eq!(document.epoch, previous.epoch.wrapping_add(1));
+        assert_eq!(document.revision, previous.revision.wrapping_add(1));
+        assert_eq!(document.source, "new");
+        assert_eq!(document.saved_source, "new");
+        assert!(!document.is_dirty());
+        assert_eq!(document.history_availability(), (false, false));
+        assert!(document.reset_editor_history);
+    }
+
+    #[test]
+    fn save_as_changes_identity_but_an_in_place_save_does_not() {
+        let mut document = DocumentSession::new("draft", DocumentKind::Typst);
+        document.source.push('!');
+        document.mark_edited();
+        let edited = document.key();
+
+        document.complete_save(PathBuf::from("draft.typ"), DocumentKind::Typst, 11, true);
+        assert_eq!(document.epoch, edited.epoch.wrapping_add(1));
+        assert_eq!(document.revision, edited.revision.wrapping_add(1));
+        assert!(!document.is_dirty());
+
+        let saved = document.key();
+        document.source.push('?');
+        document.mark_edited();
+        document.complete_save(PathBuf::from("draft.typ"), DocumentKind::Typst, 12, false);
+        assert_eq!(document.epoch, saved.epoch);
+        assert_eq!(document.revision, saved.revision.wrapping_add(1));
+        assert!(!document.is_dirty());
     }
 }

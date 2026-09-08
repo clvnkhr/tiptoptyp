@@ -7,6 +7,7 @@
 //! and panics still clean them up.
 
 use std::{
+    collections::HashSet,
     ffi::{OsStr, OsString},
     fs,
     io::{self, Write},
@@ -40,7 +41,16 @@ impl PrivateWorkspace {
         match fs::symlink_metadata(&directory) {
             Ok(metadata) => validate_private_directory(&directory, &metadata)?,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                create_private_directory(&directory)?;
+                // Another session may create the same project-local directory
+                // after our metadata check. That is an ordinary successful
+                // initialization as long as the winner created a valid root;
+                // the validation below remains authoritative for symlinks,
+                // files, and other invalid replacements.
+                if let Err(error) = create_private_directory(&directory)
+                    && error.kind() != io::ErrorKind::AlreadyExists
+                {
+                    return Err(error);
+                }
             }
             Err(error) => return Err(error),
         }
@@ -236,16 +246,28 @@ pub fn project_root_for_path(path: &Path) -> io::Result<PathBuf> {
         .to_owned())
 }
 
-/// Atomically writes a user file while staging its temporary inode in the
-/// project's private directory. Callers should choose the project root using
-/// the destination path so both locations stay on the same filesystem.
-pub fn atomic_write(
-    project_root: impl AsRef<Path>,
-    destination: impl AsRef<Path>,
+/// Destination-local writer for atomic user-file replacement.
+///
+/// Temporary inodes live below a private directory beside the destination,
+/// which guarantees that `persist` does not cross filesystem boundaries even
+/// when Save As or PDF export targets another mounted volume.
+pub struct AtomicFileWriter;
+
+impl AtomicFileWriter {
+    pub fn write(destination: impl AsRef<Path>, contents: &[u8]) -> io::Result<()> {
+        atomic_write_with_staging_root(destination.as_ref(), contents, |destination| {
+            destination_local_staging_root(destination)
+        })
+    }
+}
+
+fn atomic_write_with_staging_root(
+    destination: &Path,
     contents: &[u8],
+    select_staging_root: impl FnOnce(&Path) -> io::Result<PathBuf>,
 ) -> io::Result<()> {
-    let private = PrivateWorkspace::open(project_root)?;
-    let destination = destination.as_ref();
+    let staging_root = select_staging_root(destination)?;
+    let private = PrivateWorkspace::open(staging_root)?;
     let existing_permissions = fs::metadata(destination)
         .ok()
         .map(|metadata| metadata.permissions());
@@ -260,6 +282,24 @@ pub fn atomic_write(
         .map_err(|error| error.error)?;
     sync_parent(destination)?;
     Ok(())
+}
+
+fn destination_local_staging_root(destination: &Path) -> io::Result<PathBuf> {
+    let absolute = if destination.is_absolute() {
+        destination.to_owned()
+    } else {
+        std::env::current_dir()?.join(destination)
+    };
+    let parent = absolute.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "atomic-write destination has no parent directory: {}",
+                destination.display()
+            ),
+        )
+    })?;
+    parent.canonicalize()
 }
 
 fn create_private_directory(path: &Path) -> io::Result<()> {
@@ -351,6 +391,22 @@ fn populate_mirror(
     relative_source_dir: &Path,
     display_name: &OsStr,
 ) -> io::Result<()> {
+    populate_mirror_with_mode(
+        project_root,
+        mirror_root,
+        relative_source_dir,
+        display_name,
+        MirrorMode::PreferSymlink,
+    )
+}
+
+fn populate_mirror_with_mode(
+    project_root: &Path,
+    mirror_root: &Path,
+    relative_source_dir: &Path,
+    display_name: &OsStr,
+    mode: MirrorMode,
+) -> io::Result<()> {
     if relative_source_dir
         .components()
         .any(|component| !matches!(component, Component::Normal(_)))
@@ -366,7 +422,15 @@ fn populate_mirror(
         relative_source_dir,
         display_name,
         true,
+        mode,
     )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MirrorMode {
+    PreferSymlink,
+    #[cfg(test)]
+    Copy,
 }
 
 fn populate_mirror_level(
@@ -375,8 +439,14 @@ fn populate_mirror_level(
     remaining_source_dir: &Path,
     display_name: &OsStr,
     at_project_root: bool,
+    mode: MirrorMode,
 ) -> io::Result<()> {
     fs::create_dir_all(mirror)?;
+    let mut expected_entries = HashSet::new();
+    if remaining_source_dir.as_os_str().is_empty() {
+        // The live private source may have no on-disk counterpart yet.
+        expected_entries.insert(display_name.to_owned());
+    }
     let mut remaining = remaining_source_dir.components();
     let next_directory = remaining.next().and_then(|component| match component {
         Component::Normal(name) => Some(name),
@@ -389,6 +459,7 @@ fn populate_mirror_level(
         if at_project_root && name == OsStr::new(PRIVATE_DIRECTORY_NAME) {
             continue;
         }
+        expected_entries.insert(name.clone());
         if remaining_source_dir.as_os_str().is_empty() && name == display_name {
             // This is the live buffer's private replacement.
             continue;
@@ -405,16 +476,27 @@ fn populate_mirror_level(
                     ),
                 ));
             }
-            fs::create_dir_all(&mirror_path)?;
+            ensure_directory(&mirror_path)?;
             populate_mirror_level(
                 &source_path,
                 &mirror_path,
                 following_directories,
                 display_name,
                 false,
+                mode,
             )?;
         } else {
-            mirror_entry(&source_path, &mirror_path, entry.file_type()?)?;
+            mirror_entry(&source_path, &mirror_path, entry.file_type()?, mode)?;
+        }
+    }
+
+    // A copied fallback is a mirror, not an accumulating cache. Remove entries
+    // deleted from the source while preserving the private replacement for the
+    // live document itself.
+    for entry in fs::read_dir(mirror)? {
+        let entry = entry?;
+        if !expected_entries.contains(&entry.file_name()) {
+            remove_entry(&entry.path())?;
         }
     }
 
@@ -433,25 +515,32 @@ fn populate_mirror_level(
     Ok(())
 }
 
-fn mirror_entry(source: &Path, destination: &Path, file_type: fs::FileType) -> io::Result<()> {
+fn mirror_entry(
+    source: &Path,
+    destination: &Path,
+    file_type: fs::FileType,
+    mode: MirrorMode,
+) -> io::Result<()> {
     if let Ok(metadata) = fs::symlink_metadata(destination) {
-        // Unix symlinks always reflect the source. Fallback copies are updated
-        // below by replacing only their private copy.
-        if metadata.file_type().is_symlink() {
+        // Symlinks always reflect replacement at the source path. Forced-copy
+        // mode removes them so tests and restricted platforms exercise the
+        // complete synchronization path independently of host privileges.
+        if metadata.file_type().is_symlink() && mode == MirrorMode::PreferSymlink {
             return Ok(());
         }
-        if file_type.is_file() {
-            fs::copy(source, destination)?;
+        if metadata.file_type().is_symlink() {
+            fs::remove_file(destination)?;
         }
-        return Ok(());
     }
 
-    match create_symlink(source, destination, file_type) {
-        Ok(()) => Ok(()),
-        Err(_) if file_type.is_file() => fs::copy(source, destination).map(|_| ()),
-        Err(_) if file_type.is_dir() => copy_directory(source, destination),
-        Err(error) => Err(error),
+    if mode == MirrorMode::PreferSymlink && !destination.exists() {
+        match create_symlink(source, destination, file_type) {
+            Ok(()) => return Ok(()),
+            Err(error) if !file_type.is_file() && !file_type.is_dir() => return Err(error),
+            Err(_) => {}
+        }
     }
+    sync_copied_entry(source, destination, file_type)
 }
 
 #[cfg(unix)]
@@ -476,24 +565,65 @@ fn create_symlink(_source: &Path, _destination: &Path, _file_type: fs::FileType)
     ))
 }
 
-fn copy_directory(source: &Path, destination: &Path) -> io::Result<()> {
-    fs::create_dir_all(destination)?;
+fn sync_copied_entry(source: &Path, destination: &Path, file_type: fs::FileType) -> io::Result<()> {
+    if file_type.is_file() {
+        if let Ok(metadata) = fs::symlink_metadata(destination)
+            && !metadata.is_file()
+        {
+            remove_entry(destination)?;
+        }
+        fs::copy(source, destination).map(|_| ())
+    } else if file_type.is_dir() {
+        ensure_directory(destination)?;
+        sync_copied_directory(source, destination)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!("cannot copy unsupported mirror entry {}", source.display()),
+        ))
+    }
+}
+
+fn sync_copied_directory(source: &Path, destination: &Path) -> io::Result<()> {
+    ensure_directory(destination)?;
+    let mut expected_entries = HashSet::new();
     for entry in fs::read_dir(source)? {
         let entry = entry?;
         let name = entry.file_name();
         if name == OsStr::new(PRIVATE_DIRECTORY_NAME) {
             continue;
         }
+        expected_entries.insert(name.clone());
         let source_path = entry.path();
         let destination_path = destination.join(name);
         let file_type = entry.file_type()?;
-        if file_type.is_dir() {
-            copy_directory(&source_path, &destination_path)?;
-        } else if file_type.is_file() {
-            fs::copy(source_path, destination_path)?;
+        sync_copied_entry(&source_path, &destination_path, file_type)?;
+    }
+    for entry in fs::read_dir(destination)? {
+        let entry = entry?;
+        if !expected_entries.contains(&entry.file_name()) {
+            remove_entry(&entry.path())?;
         }
     }
     Ok(())
+}
+
+fn ensure_directory(path: &Path) -> io::Result<()> {
+    if let Ok(metadata) = fs::symlink_metadata(path)
+        && (metadata.file_type().is_symlink() || !metadata.is_dir())
+    {
+        remove_entry(path)?;
+    }
+    fs::create_dir_all(path)
+}
+
+fn remove_entry(path: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
+    }
 }
 
 fn sync_parent(destination: &Path) -> io::Result<()> {
@@ -509,6 +639,7 @@ fn sync_parent(destination: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Barrier};
 
     #[test]
     fn artifacts_are_project_local_and_guards_clean_ephemeral_entries() {
@@ -566,6 +697,33 @@ mod tests {
 
         let error = PrivateWorkspace::open(project.path()).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn concurrent_valid_opens_share_the_created_private_root() {
+        let project = tempfile::tempdir().unwrap();
+        let project_path = Arc::new(project.path().to_path_buf());
+        let barrier = Arc::new(Barrier::new(16));
+        let workers = (0..16)
+            .map(|_| {
+                let project_path = project_path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    PrivateWorkspace::open(project_path.as_path())
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let opened = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap().unwrap())
+            .collect::<Vec<_>>();
+        assert!(
+            opened
+                .iter()
+                .all(|private| private.path() == opened[0].path())
+        );
     }
 
     #[test]
@@ -672,6 +830,65 @@ mod tests {
     }
 
     #[test]
+    fn forced_copy_mirror_synchronizes_nested_changes_and_type_replacements() {
+        let project = tempfile::tempdir().unwrap();
+        let mirror_owner = tempfile::tempdir().unwrap();
+        let mirror = mirror_owner.path().join("mirror");
+        let assets = project.path().join("assets");
+        fs::create_dir_all(assets.join("nested")).unwrap();
+        fs::write(assets.join("nested/changed.txt"), "old").unwrap();
+        fs::write(assets.join("nested/deleted.txt"), "delete me").unwrap();
+        fs::write(assets.join("becomes-directory"), "file").unwrap();
+        fs::create_dir(assets.join("becomes-file")).unwrap();
+        fs::write(assets.join("becomes-file/old.txt"), "old").unwrap();
+
+        populate_mirror_with_mode(
+            project.path(),
+            &mirror,
+            Path::new(""),
+            OsStr::new("main.typ"),
+            MirrorMode::Copy,
+        )
+        .unwrap();
+
+        fs::write(assets.join("nested/changed.txt"), "new").unwrap();
+        fs::remove_file(assets.join("nested/deleted.txt")).unwrap();
+        fs::write(assets.join("nested/added.txt"), "added").unwrap();
+        fs::remove_file(assets.join("becomes-directory")).unwrap();
+        fs::create_dir(assets.join("becomes-directory")).unwrap();
+        fs::write(assets.join("becomes-directory/new.txt"), "directory").unwrap();
+        fs::remove_dir_all(assets.join("becomes-file")).unwrap();
+        fs::write(assets.join("becomes-file"), "replacement file").unwrap();
+
+        populate_mirror_with_mode(
+            project.path(),
+            &mirror,
+            Path::new(""),
+            OsStr::new("main.typ"),
+            MirrorMode::Copy,
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(mirror.join("assets/nested/changed.txt")).unwrap(),
+            "new"
+        );
+        assert!(!mirror.join("assets/nested/deleted.txt").exists());
+        assert_eq!(
+            fs::read_to_string(mirror.join("assets/nested/added.txt")).unwrap(),
+            "added"
+        );
+        assert_eq!(
+            fs::read_to_string(mirror.join("assets/becomes-directory/new.txt")).unwrap(),
+            "directory"
+        );
+        assert_eq!(
+            fs::read_to_string(mirror.join("assets/becomes-file")).unwrap(),
+            "replacement file"
+        );
+    }
+
+    #[test]
     fn atomic_write_stages_privately_and_preserves_permissions() {
         let project = tempfile::tempdir().unwrap();
         let destination = project.path().join("main.typ");
@@ -682,7 +899,7 @@ mod tests {
             fs::set_permissions(&destination, fs::Permissions::from_mode(0o640)).unwrap();
         }
 
-        atomic_write(project.path(), &destination, b"new").unwrap();
+        AtomicFileWriter::write(&destination, b"new").unwrap();
         assert_eq!(fs::read(&destination).unwrap(), b"new");
         let private = PrivateWorkspace::open(project.path()).unwrap();
         assert_eq!(fs::read_dir(private.path()).unwrap().count(), 0);
@@ -694,6 +911,29 @@ mod tests {
                 0o640
             );
         }
+    }
+
+    #[test]
+    fn atomic_writer_selects_staging_from_the_destination_parent() {
+        let destination_root = tempfile::tempdir().unwrap();
+        let destination = destination_root.path().join("export.pdf");
+        assert_eq!(
+            destination_local_staging_root(&destination).unwrap(),
+            destination_root.path().canonicalize().unwrap()
+        );
+
+        let injected_root = tempfile::tempdir().unwrap();
+        let selected_for = std::cell::RefCell::new(None);
+        atomic_write_with_staging_root(&destination, b"pdf bytes", |path| {
+            selected_for.replace(Some(path.to_owned()));
+            Ok(injected_root.path().to_path_buf())
+        })
+        .unwrap();
+        assert_eq!(
+            selected_for.into_inner().as_deref(),
+            Some(destination.as_path())
+        );
+        assert_eq!(fs::read(destination).unwrap(), b"pdf bytes");
     }
 
     #[test]
