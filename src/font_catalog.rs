@@ -42,6 +42,36 @@ pub(crate) struct FontFace {
     pub(crate) variable_weight: Option<(u16, u16, u16)>,
 }
 
+/// Normalize a variable-font weight axis before exposing it to sliders or
+/// Typst. A malformed font can report its bounds in reverse (or as NaN), and
+/// `f32::clamp` panics when its minimum exceeds its maximum.
+pub(crate) fn normalize_variable_weight_axis(
+    min_value: f32,
+    max_value: f32,
+    default_value: f32,
+) -> (u16, u16, u16) {
+    let normalize = |value: f32| {
+        if value.is_finite() {
+            value.round().clamp(1.0, 1_000.0) as u16
+        } else {
+            400
+        }
+    };
+    let first = normalize(min_value);
+    let second = normalize(max_value);
+    let (min, max) = if first <= second {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    let default = if default_value.is_finite() {
+        default_value.round().clamp(f32::from(min), f32::from(max)) as u16
+    } else {
+        min
+    };
+    (min, max, default)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FontFamily {
     pub(crate) name: String,
@@ -293,13 +323,7 @@ fn append_font_file(records: &mut Vec<FontRecord>, path: &Path, origin: FontOrig
         };
         let attributes = font.attributes();
         let variable_weight = font.axes().get_by_tag(weight_tag).map(|axis| {
-            let min = axis.min_value().round().clamp(1.0, 1_000.0) as u16;
-            let max = axis.max_value().round().clamp(f32::from(min), 1_000.0) as u16;
-            let default = axis
-                .default_value()
-                .round()
-                .clamp(f32::from(min), f32::from(max)) as u16;
-            (min, max, default)
+            normalize_variable_weight_axis(axis.min_value(), axis.max_value(), axis.default_value())
         });
         records.push((
             name,
@@ -535,5 +559,14 @@ mod tests {
                 && face.path == path
                 && face.weight > 0
         }));
+    }
+
+    #[test]
+    fn reversed_or_non_finite_variable_weight_bounds_are_safe() {
+        assert_eq!(normalize_variable_weight_axis(9.0, 8.0, 8.5), (8, 9, 9));
+        assert_eq!(
+            normalize_variable_weight_axis(f32::NAN, f32::INFINITY, f32::NAN),
+            (400, 400, 400)
+        );
     }
 }

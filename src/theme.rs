@@ -17,7 +17,7 @@ use eframe::egui::{self, Align, Color32, FontFamily, FontId, Layout, Rect, RichT
 use skrifa::{MetadataProvider as _, Tag, attribute::Style as FontStyle};
 
 use crate::{
-    font_catalog::{FontFace, FontFamily as CatalogFontFamily},
+    font_catalog::{FontFace, FontFamily as CatalogFontFamily, normalize_variable_weight_axis},
     sublime_theme::{Rgba, SemanticPalette},
 };
 
@@ -239,13 +239,11 @@ impl PreparedFontFile {
                 let font = font.ok()?;
                 let attributes = font.attributes();
                 let variable_weight = font.axes().get_by_tag(Tag::new(b"wght")).map(|axis| {
-                    let min = axis.min_value().round().clamp(1.0, 1_000.0) as u16;
-                    let max = axis.max_value().round().clamp(f32::from(min), 1_000.0) as u16;
-                    let default =
-                        axis.default_value()
-                            .round()
-                            .clamp(f32::from(min), f32::from(max)) as u16;
-                    (min, max, default)
+                    normalize_variable_weight_axis(
+                        axis.min_value(),
+                        axis.max_value(),
+                        axis.default_value(),
+                    )
                 });
                 Some(PreparedFontFace {
                     index: index as u32,

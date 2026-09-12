@@ -808,6 +808,18 @@ pub(crate) struct PackageCatalogLoad {
 }
 
 impl PackageCatalogLoad {
+    /// Load the local view without waiting for the published registry. The UI
+    /// can show installed packages immediately while `load` fetches the
+    /// optional online index in the background.
+    pub(crate) fn load_installed(roots: &PackageRoots) -> Self {
+        let scan = scan_installed_packages(roots);
+        Self {
+            catalog: PackageCatalog::from_sources(scan.packages, Vec::new()),
+            warnings: scan.warnings,
+            official_index_error: None,
+        }
+    }
+
     pub(crate) fn load(roots: &PackageRoots) -> Self {
         load_catalog_with(roots, fetch_official_index)
     }
@@ -1356,6 +1368,28 @@ enabled = true
         assert_eq!(
             loaded.official_index_error.unwrap().kind,
             CatalogErrorKind::Network
+        );
+    }
+
+    #[test]
+    fn installed_load_is_available_without_registry_access() {
+        let directory = tempfile::tempdir().unwrap();
+        install(
+            directory.path(),
+            "local",
+            "offline",
+            "1.0.0",
+            &package_manifest("offline", "1.0.0", "Works offline"),
+        );
+        let roots = PackageRoots::from_roots(vec![PackageRoot::data(directory.path())]);
+        let loaded = PackageCatalogLoad::load_installed(&roots);
+        assert_eq!(loaded.catalog.packages().len(), 1);
+        assert!(loaded.official_index_error.is_none());
+        assert_eq!(
+            loaded.catalog.packages()[0]
+                .display_release()
+                .and_then(|release| release.metadata.description.as_deref()),
+            Some("Works offline")
         );
     }
 

@@ -362,6 +362,10 @@ fn preview_visible_for(document_kind: DocumentKind, view_mode: ViewMode, designa
         || (typst_preview_available_for(document_kind, designated) && view_mode.shows_preview())
 }
 
+const fn view_mode_controls_enabled(document_kind: DocumentKind) -> bool {
+    matches!(document_kind, DocumentKind::Typst)
+}
+
 #[cfg(test)]
 const fn raster_preview_required_for(
     interactive_requested: bool,
@@ -738,6 +742,7 @@ struct HoverTooltipOverlay {
 struct AssetHoverCandidate {
     origin: Rect,
     anchor: Pos2,
+    placement: TooltipPlacement,
     path: PathBuf,
     kind: DocumentKind,
     opacity: f32,
@@ -757,6 +762,7 @@ enum AssetHoverContent {
 struct AssetHoverState {
     origin: Rect,
     anchor: Pos2,
+    placement: TooltipPlacement,
     path: PathBuf,
     kind: DocumentKind,
     opacity: f32,
@@ -966,6 +972,7 @@ enum AppPopupAction {
     Command(AppCommand),
     Editor(EditorMenuAction),
     Workspace(WorkspaceMenuAction),
+    OpenPackages,
     SetDocumentFont {
         target: FontArgumentTarget,
         family: String,
@@ -1814,6 +1821,9 @@ impl EditorApp {
 
     fn request_package_catalog(&mut self, context: &egui::Context) {
         let roots = PackageRoots::standard();
+        if self.package_catalog.is_none() {
+            self.package_catalog = Some(PackageCatalogLoad::load_installed(&roots));
+        }
         if let Err(error) = self.package_catalog_job.start_and_repaint(
             "tiptoptyp-package-catalog",
             context,
@@ -1857,6 +1867,7 @@ impl EditorApp {
         let mut close_requested = false;
         let mut refresh_requested = false;
         let mut copied = None;
+        let mut open_link = None;
         let spec = ChildViewSpec::persistent(
             "tiptoptyp-packages",
             "tiptoptyp Packages",
@@ -1911,6 +1922,7 @@ impl EditorApp {
                             catalog.as_ref(),
                             loading,
                             &mut copied,
+                            &mut open_link,
                         );
                     });
             },
@@ -1928,6 +1940,9 @@ impl EditorApp {
                 message: "Copied package import".to_owned(),
                 kind: NoticeKind::Success,
             });
+        }
+        if let Some(target) = open_link {
+            self.follow_preview_link(&target);
         }
     }
 
@@ -2447,6 +2462,7 @@ impl EditorApp {
             self.asset_hover = Some(AssetHoverState {
                 origin: candidate.origin,
                 anchor: candidate.anchor,
+                placement: candidate.placement,
                 path: candidate.path,
                 kind: candidate.kind,
                 opacity: candidate.opacity,
@@ -2457,6 +2473,7 @@ impl EditorApp {
         } else if let Some(hover) = &mut self.asset_hover {
             hover.origin = candidate.origin;
             hover.anchor = candidate.anchor;
+            hover.placement = candidate.placement;
             hover.opacity = candidate.opacity;
         }
     }
@@ -3820,6 +3837,11 @@ impl EditorApp {
             String::new()
         };
         let path = path.canonicalize().unwrap_or(path);
+        let reloading_current_document = self
+            .document
+            .path
+            .as_ref()
+            .is_some_and(|current| same_path(current, &path));
         let keep_designated_preview = self.should_keep_designated_preview(&path);
         let workspace_root_changed = !path.starts_with(&self.workspace_root);
         let preserve_workspace_snapshot = preserve_workspace_snapshot_for_open(
@@ -3853,6 +3875,13 @@ impl EditorApp {
             } else {
                 self.restart_tinymist();
             }
+        } else if reloading_current_document
+            && kind.is_typst()
+            && self.tinymist_generation.is_some()
+        {
+            // Reloading an externally changed document only needs a fresh LSP
+            // document. Keep the running Tinymist workspace and preview alive.
+            self.reopen_tinymist_current_document(&path, kind);
         } else {
             self.restart_tinymist();
         }
@@ -5233,12 +5262,7 @@ impl EditorApp {
         }
 
         if let Some(target) = normalize_browser_link_target(target) {
-            if let Err(error) = open_in_system_browser(&target) {
-                self.notice = Some(Notice {
-                    message: error,
-                    kind: NoticeKind::Error,
-                });
-            }
+            self.open_external_link(&target);
             return;
         }
 
@@ -5272,17 +5296,24 @@ impl EditorApp {
         }
 
         if matches!(url.scheme(), "mailto" | "tel") {
-            if let Err(error) = open_in_system_browser(url.as_str()) {
-                self.notice = Some(Notice {
-                    message: error,
-                    kind: NoticeKind::Error,
-                });
-            }
+            self.open_external_link(url.as_str());
         } else {
             self.notice = Some(Notice {
                 message: format!("Unsupported link scheme: {}", url.scheme()),
                 kind: NoticeKind::Error,
             });
+        }
+    }
+
+    fn open_external_link(&mut self, target: &str) {
+        match open_in_system_browser(target) {
+            Ok(()) => self.notice = Some(external_link_opened_notice(target)),
+            Err(error) => {
+                self.notice = Some(Notice {
+                    message: error,
+                    kind: NoticeKind::Error,
+                });
+            }
         }
     }
 
@@ -5626,6 +5657,7 @@ impl EditorApp {
 
             let toolbar_width = ui.available_width();
             let compact = toolbar_width < METRICS.toolbar.compact_breakpoint;
+            let view_mode_enabled = view_mode_controls_enabled(self.document.kind);
             if compact {
                 theme::apply_dense_toolbar_spacing(ui);
             }
@@ -5731,30 +5763,32 @@ impl EditorApp {
                 {
                     self.problems_visible = !self.problems_visible;
                 }
-                native_hover_text(
-                    ui.selectable_value(
-                        &mut self.view_mode,
-                        ViewMode::Preview,
-                        if compact { "P" } else { "Preview" },
-                    ),
-                    "Preview",
-                );
-                native_hover_text(
-                    ui.selectable_value(
-                        &mut self.view_mode,
-                        ViewMode::Split,
-                        if compact { "S" } else { "Split" },
-                    ),
-                    "Split",
-                );
-                native_hover_text(
-                    ui.selectable_value(
-                        &mut self.view_mode,
-                        ViewMode::Code,
-                        if compact { "C" } else { "Code" },
-                    ),
-                    "Code",
-                );
+                ui.add_enabled_ui(view_mode_enabled, |ui| {
+                    native_hover_text(
+                        ui.selectable_value(
+                            &mut self.view_mode,
+                            ViewMode::Preview,
+                            if compact { "P" } else { "Preview" },
+                        ),
+                        "Preview (Typst documents only)",
+                    );
+                    native_hover_text(
+                        ui.selectable_value(
+                            &mut self.view_mode,
+                            ViewMode::Split,
+                            if compact { "S" } else { "Split" },
+                        ),
+                        "Split (Typst documents only)",
+                    );
+                    native_hover_text(
+                        ui.selectable_value(
+                            &mut self.view_mode,
+                            ViewMode::Code,
+                            if compact { "C" } else { "Code" },
+                        ),
+                        "Code (Typst documents only)",
+                    );
+                });
                 let explorer_label = if compact { "Files" } else { "Explorer" };
                 if native_hover_text(
                     ui.selectable_label(self.filesystem_phase.panel_visible(), explorer_label),
@@ -7138,7 +7172,7 @@ impl EditorApp {
             hover.origin,
             hover.anchor,
             size,
-            TooltipPlacement::Below,
+            hover.placement,
             METRICS.popup.viewport_edge,
         );
         let position = window_rect.min + root_local_card.min.to_vec2();
@@ -7369,10 +7403,11 @@ impl EditorApp {
         };
         let theme = context.theme();
         let style = context.style_of(theme);
+        let rename_path = self.document.path.clone();
         let (anchor, desired_size) = match &popup {
-            AppPopup::File { anchor } => (*anchor, METRICS.menu.file_size),
+            AppPopup::File { anchor } => (*anchor, file_popup_size()),
             AppPopup::Edit { anchor } => (*anchor, METRICS.menu.edit_size),
-            AppPopup::View { anchor } => (*anchor, METRICS.menu.view_size),
+            AppPopup::View { anchor } => (*anchor, view_popup_size()),
             AppPopup::Workspace {
                 anchor, is_file, ..
             } => (*anchor, workspace_context_menu_size(*is_file)),
@@ -7451,7 +7486,13 @@ impl EditorApp {
                             .max_height(menu_height)
                             .show(ui, |ui| match &popup {
                                 AppPopup::File { .. } => {
-                                    show_file_popup_ui(ui, can_export_pdf, &shortcuts, &mut action);
+                                    show_file_popup_ui(
+                                        ui,
+                                        can_export_pdf,
+                                        rename_path.as_deref(),
+                                        &shortcuts,
+                                        &mut action,
+                                    );
                                 }
                                 AppPopup::Edit { .. } => {
                                     show_edit_popup_ui(
@@ -7597,6 +7638,7 @@ impl EditorApp {
                     }
                 }
             },
+            AppPopupAction::OpenPackages => self.open_package_manager(context),
             AppPopupAction::SetDocumentFont { target, family } => {
                 self.replace_document_font(target, &family, context);
             }
@@ -9182,7 +9224,13 @@ impl EditorApp {
                             PreviewAssetKind::Image => DocumentKind::Image,
                             PreviewAssetKind::Pdf => DocumentKind::Pdf,
                         };
-                        offer_asset_hover(&response, origin, target.resolved_path, kind);
+                        offer_asset_hover(
+                            &response,
+                            origin,
+                            target.resolved_path,
+                            kind,
+                            TooltipPlacement::Below,
+                        );
                         hovered_asset_literal = true;
                     }
                 } else if let Some(range) =
@@ -9438,30 +9486,8 @@ impl EditorApp {
             self.follow_preview_link(&target);
         }
 
-        let find_overlay_rect = if self.find_visible {
-            let context = ui.ctx().clone();
-            let overlay_width = (scroll_output.inner_rect.width() - 4.0 * theme::SPACE.content)
-                .clamp(1.0, METRICS.editor.find_overlay_max_width);
-            let anchor = scroll_output.inner_rect.left_top()
-                + egui::vec2(theme::SPACE.content, theme::SPACE.content);
-            let output = egui::Area::new(viewport_scoped_id(&context, "find-replace-overlay"))
-                .order(egui::Order::Foreground)
-                .fixed_pos(anchor)
-                .constrain_to(ui.clip_rect())
-                .show(&context, |ui| {
-                    theme::popup_card_frame(ui.style()).show(ui, |ui| {
-                        ui.set_max_width(overlay_width);
-                        self.show_find_bar(ui);
-                    });
-                });
-            Some(output.response.rect)
-        } else {
-            None
-        };
-
         let sticky_context_rows = sticky_context.as_ref().and_then(|sticky_context| {
-            let geometry =
-                sticky_context_overlay_geometry(scroll_output.inner_rect, find_overlay_rect)?;
+            let geometry = sticky_context_overlay_geometry(scroll_output.inner_rect, None)?;
             let query = self.editor_data.sticky_context_query();
             sticky_context_rows_for_snapshot(
                 &query,
@@ -9474,7 +9500,7 @@ impl EditorApp {
             && let Some(target) = show_sticky_context_overlay(
                 ui.ctx(),
                 scroll_output.inner_rect,
-                find_overlay_rect,
+                None,
                 &rows,
                 &sticky_context,
                 line_numbers,
@@ -9486,6 +9512,26 @@ impl EditorApp {
             ui.ctx()
                 .memory_mut(|memory| memory.request_focus(editor_id));
             ui.ctx().request_repaint();
+        }
+
+        // Paint Find/Replace after the sticky rows so it remains the topmost
+        // editor overlay without reserving any layout space below it.
+        if self.find_visible {
+            let context = ui.ctx().clone();
+            let overlay_width = (scroll_output.inner_rect.width() - 4.0 * theme::SPACE.content)
+                .clamp(1.0, METRICS.editor.find_overlay_max_width);
+            let anchor = scroll_output.inner_rect.left_top()
+                + egui::vec2(theme::SPACE.content, theme::SPACE.content);
+            egui::Area::new(viewport_scoped_id(&context, "find-replace-overlay"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(anchor)
+                .constrain_to(ui.clip_rect())
+                .show(&context, |ui| {
+                    theme::popup_card_frame(ui.style()).show(ui, |ui| {
+                        ui.set_max_width(overlay_width);
+                        self.show_find_bar(ui);
+                    });
+                });
         }
     }
 
@@ -11619,18 +11665,12 @@ struct StickyContextOverlayGeometry {
 
 fn sticky_context_overlay_geometry(
     viewport: Rect,
-    find_overlay: Option<Rect>,
+    _find_overlay: Option<Rect>,
 ) -> Option<StickyContextOverlayGeometry> {
     if !viewport.is_positive() {
         return None;
     }
-    let mut top = viewport.top();
-    if let Some(find_overlay) = find_overlay
-        && find_overlay.intersects(viewport)
-    {
-        top = top.max(find_overlay.bottom());
-    }
-    let anchor = Pos2::new(viewport.left(), top);
+    let anchor = viewport.left_top();
     let width = viewport.width();
     let available_height = viewport.bottom() - anchor.y;
     let max_height = available_height.min(viewport.height() * STICKY_CONTEXT_MAX_VIEWPORT_FRACTION);
@@ -12201,6 +12241,7 @@ fn add_workspace_nodes(
                                 hover_rect,
                                 hover_path.clone(),
                                 kind,
+                                TooltipPlacement::Right,
                             );
                         }
                     }),
@@ -13592,6 +13633,13 @@ fn open_in_system_browser(target: &str) -> Result<(), String> {
         .map_err(|error| format!("Could not open the link in the system browser: {error}"))
 }
 
+fn external_link_opened_notice(target: &str) -> Notice {
+    Notice {
+        message: format!("Opened {target} in the system browser"),
+        kind: NoticeKind::Success,
+    }
+}
+
 fn diagnostic_color(severity: DiagnosticSeverity, dark_mode: bool) -> Color32 {
     match severity {
         DiagnosticSeverity::Error => error_color(dark_mode),
@@ -14534,16 +14582,31 @@ fn tooltip_interaction_id(context: &egui::Context) -> egui::Id {
     native_hover_tooltip_id(context).with("interaction")
 }
 
-fn offer_asset_hover(response: &egui::Response, origin: Rect, path: PathBuf, kind: DocumentKind) {
+fn offer_asset_hover(
+    response: &egui::Response,
+    origin: Rect,
+    path: PathBuf,
+    kind: DocumentKind,
+    placement: TooltipPlacement,
+) {
     if native_tooltip_handoff_blocks(&response.ctx, origin) {
         return;
     }
     let Some(opacity) = hover_opacity(response, asset_hover_timing_id(&response.ctx)) else {
         return;
     };
+    let anchor = match placement {
+        TooltipPlacement::Below => {
+            origin.left_bottom() + egui::vec2(0.0, METRICS.editor.tooltip_gap)
+        }
+        TooltipPlacement::Right => {
+            origin.right_center() + egui::vec2(METRICS.editor.tooltip_gap, 0.0)
+        }
+    };
     let candidate = AssetHoverCandidate {
         origin,
-        anchor: origin.left_bottom() + egui::vec2(0.0, METRICS.editor.tooltip_gap),
+        anchor,
+        placement,
         path,
         kind,
         opacity,
@@ -15789,7 +15852,10 @@ fn toggle_line_comments(
             });
         } else {
             edits.push(CommentEdit {
-                at: content.max(line),
+                // Keep the comment marker at column zero. This mirrors the
+                // editor's line-comment command and avoids shifting the
+                // marker when indentation changes.
+                at: line,
                 remove: 0,
                 insert: prefix.to_owned(),
             });
@@ -15907,6 +15973,7 @@ fn show_command_popup_ui(
 fn show_file_popup_ui(
     ui: &mut egui::Ui,
     typst_preview: bool,
+    rename_path: Option<&Path>,
     shortcuts: &ShortcutBindings,
     action: &mut Option<AppPopupAction>,
 ) {
@@ -15923,6 +15990,14 @@ fn show_file_popup_ui(
         shortcuts,
         action,
     );
+    ui.separator();
+    if menu_item_enabled(ui, rename_path.is_some(), "Rename…", None).clicked()
+        && let Some(path) = rename_path
+    {
+        *action = Some(AppPopupAction::Workspace(WorkspaceMenuAction::Rename(
+            path.to_path_buf(),
+        )));
+    }
 }
 
 fn show_edit_popup_ui(
@@ -15966,6 +16041,10 @@ fn show_view_popup_ui(
         shortcuts,
         action,
     );
+    ui.separator();
+    if menu_item(ui, "Packages…", None).clicked() {
+        *action = Some(AppPopupAction::OpenPackages);
+    }
 }
 
 fn show_workspace_popup_ui(
@@ -16107,6 +16186,14 @@ fn editor_context_menu_size(has_link: bool, can_edit_table: bool) -> Vec2 {
         size.y += METRICS.menu.row_height + theme::SPACE.control;
     }
     size
+}
+
+fn file_popup_size() -> Vec2 {
+    METRICS.menu.file_size + Vec2::new(0.0, METRICS.menu.row_height + theme::SPACE.control)
+}
+
+fn view_popup_size() -> Vec2 {
+    METRICS.menu.view_size + Vec2::new(0.0, METRICS.menu.row_height + theme::SPACE.control)
 }
 
 fn workspace_context_menu_size(is_file: bool) -> Vec2 {
@@ -16601,6 +16688,7 @@ fn show_package_browser_ui(
     load: Option<&PackageCatalogLoad>,
     loading: bool,
     copied: &mut Option<String>,
+    open_link: &mut Option<String>,
 ) {
     ui.horizontal(|ui| {
         ui.add(
@@ -16699,6 +16787,16 @@ fn show_package_browser_ui(
                                 RichText::new("Update available")
                                     .color(warning_color(ui.visuals().dark_mode)),
                             );
+                        }
+                        if let Some(website) = release.and_then(|release| {
+                            release
+                                .metadata
+                                .homepage
+                                .as_deref()
+                                .or(release.metadata.repository.as_deref())
+                        }) && ui.button("Website").clicked()
+                        {
+                            *open_link = Some(website.to_owned());
                         }
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if ui
@@ -18331,6 +18429,7 @@ mod tests {
                 "missing {label}"
             );
         }
+        assert!(harness.query_by_label_contains(reveal_label()).is_some());
         harness.get_by_label_contains("Copy Relative Path").click();
         harness.run();
 
@@ -18345,6 +18444,47 @@ mod tests {
             workspace_context_menu_size(true).y,
             workspace_context_menu_size(false).y + METRICS.menu.row_height * 2.0
         );
+    }
+
+    #[test]
+    fn title_bar_file_and_view_popups_expose_their_dynamic_actions() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+
+        let shortcuts = ShortcutBindings::current_defaults();
+        let path = PathBuf::from("/project/main.typ");
+        let file_shortcuts = shortcuts.clone();
+        let mut file_harness = Harness::builder()
+            .with_size(Vec2::new(320.0, 360.0))
+            .build_ui_state(
+                move |ui, action| {
+                    show_file_popup_ui(ui, true, Some(&path), &file_shortcuts, action);
+                },
+                None::<AppPopupAction>,
+            );
+        file_harness.run();
+        file_harness.get_by_label_contains("Rename").click();
+        file_harness.run();
+        assert!(matches!(
+            file_harness.state(),
+            Some(AppPopupAction::Workspace(WorkspaceMenuAction::Rename(path)))
+                if path == &PathBuf::from("/project/main.typ")
+        ));
+
+        let mut view_harness = Harness::builder()
+            .with_size(Vec2::new(320.0, 360.0))
+            .build_ui_state(
+                move |ui, action| show_view_popup_ui(ui, &shortcuts, action),
+                None::<AppPopupAction>,
+            );
+        view_harness.run();
+        view_harness.get_by_label_contains("Packages").click();
+        view_harness.run();
+        assert!(matches!(
+            view_harness.state(),
+            Some(AppPopupAction::OpenPackages)
+        ));
+        assert!(file_popup_size().y > METRICS.menu.file_size.y);
+        assert!(view_popup_size().y > METRICS.menu.view_size.y);
     }
 
     #[test]
@@ -18894,6 +19034,17 @@ mod tests {
     }
 
     #[test]
+    fn external_browser_links_report_a_success_notice() {
+        assert_eq!(
+            external_link_opened_notice("https://example.com"),
+            Notice {
+                message: "Opened https://example.com in the system browser".to_owned(),
+                kind: NoticeKind::Success,
+            }
+        );
+    }
+
+    #[test]
     fn refresh_arrow_geometry_stays_outside_the_arc() {
         let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(14.0, 12.0));
         let geometry = refresh_icon_geometry(rect);
@@ -19353,6 +19504,14 @@ mod tests {
     }
 
     #[test]
+    fn view_mode_controls_are_only_enabled_for_typst_documents() {
+        assert!(view_mode_controls_enabled(DocumentKind::Typst));
+        for kind in [DocumentKind::Text, DocumentKind::Image, DocumentKind::Pdf] {
+            assert!(!view_mode_controls_enabled(kind));
+        }
+    }
+
+    #[test]
     fn tooltip_bridge_keeps_pointer_transitively_connected_to_the_card() {
         let origin = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(10.0, 10.0));
         let card = Rect::from_min_max(Pos2::new(30.0, 0.0), Pos2::new(80.0, 30.0));
@@ -19489,6 +19648,7 @@ mod tests {
         let active = AssetHoverState {
             origin: Rect::from_min_size(Pos2::ZERO, Vec2::splat(10.0)),
             anchor: Pos2::new(0.0, 12.0),
+            placement: TooltipPlacement::Below,
             path: PathBuf::from("current.png"),
             kind: DocumentKind::Image,
             opacity: 1.0,
@@ -19582,6 +19742,7 @@ mod tests {
                         response.rect,
                         PathBuf::from("assets/diagram.png"),
                         DocumentKind::Image,
+                        TooltipPlacement::Right,
                     );
                 })
                 .drop_without_applying_deltas();
@@ -19597,6 +19758,8 @@ mod tests {
             .expect("the hovered asset row should publish a preview candidate");
         assert_eq!(candidate.path, PathBuf::from("assets/diagram.png"));
         assert_eq!(candidate.kind, DocumentKind::Image);
+        assert_eq!(candidate.placement, TooltipPlacement::Right);
+        assert!(candidate.anchor.x > candidate.origin.right());
         assert_eq!(candidate.opacity, 1.0);
     }
 
@@ -20350,7 +20513,7 @@ mod tests {
         let source = "  alpha\n\tbeta\n\n  gamma";
         let selected = 2..source.chars().count();
         let (commented, mapped) = toggle_line_comments(source, selected.clone(), "// ");
-        assert_eq!(commented, "  // alpha\n\t// beta\n\n  // gamma");
+        assert_eq!(commented, "//   alpha\n// \tbeta\n\n//   gamma");
         assert_eq!(mapped, 5..commented.chars().count());
 
         let (restored, restored_range) = toggle_line_comments(&commented, mapped, "// ");
@@ -20394,7 +20557,7 @@ mod tests {
     }
 
     #[test]
-    fn sticky_context_geometry_stays_below_the_find_overlay() {
+    fn sticky_context_geometry_stays_at_the_editor_top() {
         let viewport = Rect::from_min_size(Pos2::new(10.0, 20.0), Vec2::new(600.0, 400.0));
         let without_find = sticky_context_overlay_geometry(viewport, None).unwrap();
         assert_eq!(without_find.anchor, viewport.left_top());
@@ -20402,9 +20565,9 @@ mod tests {
         assert_eq!(without_find.max_height, 180.0);
 
         let find = Rect::from_min_size(Pos2::new(18.0, 28.0), Vec2::new(360.0, 76.0));
-        let below_find = sticky_context_overlay_geometry(viewport, Some(find)).unwrap();
-        assert_eq!(below_find.anchor, Pos2::new(viewport.left(), find.bottom()));
-        assert_eq!(below_find.width, viewport.width());
+        let at_editor_top = sticky_context_overlay_geometry(viewport, Some(find)).unwrap();
+        assert_eq!(at_editor_top.anchor, viewport.left_top());
+        assert_eq!(at_editor_top.width, viewport.width());
 
         let unrelated = Rect::from_min_size(Pos2::new(800.0, 28.0), Vec2::new(100.0, 76.0));
         assert_eq!(

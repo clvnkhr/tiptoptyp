@@ -114,10 +114,10 @@ Update the checkbox only when the entire task is complete and verified.
 85. [x] add a Pause/Resume control for automatic preview updates and make Compile write the effective Typst entry's PDF beside its source, using an output picker only for an unsaved document
 86. [x] fix the native startup deadlock that leaves the application unresponsive before any UI appears
 87. [ ] allow dragging a file into the file explorer to add it into that folder. current file behavior should be scoped to falling on the code editor instead
-88. [ ] we should be able to right click on a file and Show in Finder
-89. [ ] when we reload from external inputs to the file, we should not need to reload the tinymist server since it was listening. I think just the code panel needs to be updated.
-90. [ ] if we open a link in an external window then the greentext in the bottom should log that
-91. [ ] I got this panic: ❯ cargo run --release
+88. [x] we should be able to right click on a file and Show in Finder
+89. [x] when we reload from external inputs to the file, we should not need to reload the tinymist server since it was listening. I think just the code panel needs to be updated.
+90. [x] if we open a link in an external window then the greentext in the bottom should log that
+91. [x] I got this panic: ❯ cargo run --release
   Finished `release` profile [optimized] target(s) in 0.55s
   Running `target/release/tiptoptyp`
 
@@ -125,22 +125,22 @@ thread 'main' (37498614) panicked at /Users/calvinkhor/.rustup/toolchains/stable
 min > max, or either was NaN. min = 9.0, max = 8.0
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 I was using two different windows with two different workspaces. Possibly i was choosing a file. I guess we need to make sure all the stuff between windows are completely separate
-92. [ ] the file preview should appear on the right of the cursor and in particular not on top of the file tree so it is easy to browse
+92. [x] the file preview should appear on the right of the cursor and in particular not on top of the file tree so it is easy to browse
 93. [ ] there should be a keyboard shortcut (or two?) to open/close the tooltip under the mouse cursor and under the keyboard cursor
 94. [ ] We need to also be able to delete files from the explorer
 95. [ ] Git integration - allow the most basic git functionality, enough for basic use.
-96. [ ] when we are editing a non-typ file, grey out Code Split Preview buttons
+96. [x] when we are editing a non-typ file, grey out Code Split Preview buttons
 97. [ ] completions should filter as i type more chars.
 98. [ ] font completions should similarly filter, I should be able to type ```typ #set text(font: "``` and then have the full list. current behavior is the completions show when I type ```typ #set text(font:``` but disappear on the space.
 99. [ ] font completion and also font selection in the settings
 100. [ ] there should be an uninstall button in the package UI
-101. [ ] we should be able to access packages UI from View title bar
-102. [ ] we should be able to rename from title bar File > Rename
-103. [ ] there should be a button to go to the package desc on the website
-104. [ ] Currently, we need to wait for the online packages to be fetched before any is shown. The installed packages should immediately appear, followed by the online generated list once they are ready.
-105. [ ] when we comment a line out with cmd-/ the '//' should be added at the start of the line, not after the whitespace and at the first non-whitespace char.
+101. [x] we should be able to access packages UI from View title bar
+102. [x] we should be able to rename from title bar File > Rename
+103. [x] there should be a button to go to the package desc on the website
+104. [x] Currently, we need to wait for the online packages to be fetched before any is shown. The installed packages should immediately appear, followed by the online generated list once they are ready.
+105. [x] when we comment a line out with cmd-/ the '//' should be added at the start of the line, not after the whitespace and at the first non-whitespace char.
 106. [ ] There should be better completions for references. Firstly, the thing on the left should be the code, and after that should follow the other data. Secondly, it should filter as I type. 
-107. [ ] find and replace should appear on top of the sticky rows, not push them down
+107. [x] find and replace should appear on top of the sticky rows, not push them down
 = resolved in the 2026-09-07 pass
 
 Items 1, 2, and 26 remain deferred. This history records completed work and partial
@@ -327,4 +327,21 @@ Open work is represented by the unchecked entries in the running list above.
 - Item 85 correction: Pause/Resume controls automatic preview refresh only. Paused documents continue sending Tinymist LSP changes so completion, diagnostics, and formatting remain live. Compile/Export waits for a strictly newer artifact after pending edits and writes the effective saved Typst entry beside its source, using a picker only where required.
 - Item 86: Removed the startup deadlock by deriving viewport-scoped egui IDs before entering context data/memory locks. Compiler, rasterizer, and Tinymist pipe readers now also have bounded shutdown after their direct child exits, so a wrapper descendant retaining stdout/stderr cannot wedge stop, restart, or application exit.
 - Verification: Formatting, strict Clippy, and diff checks pass. The repository suite passes 540 tests with 2 explicitly environment-dependent tests ignored; all 8 packaging tests pass. All 68 maintained PNGs were freshly generated and decoded, representative light/dark main, Settings, menu, tooltip, and icon captures were inspected, and a final traced native launch painted, captured, reported in-bounds preview geometry, and exited normally.
-Only deferred items 1, 2, and 26 remain open.
+At that point, only deferred items 1, 2, and 26 remained open.
+
+= correctness audit (2026-09-12 easy backlog)
+
+- Items 88, 89, 90, 91, 92, 96, 101, 102, 103, 104, 105, and 107: Added the
+  Finder/file-manager action to the Explorer menu, reused a live Tinymist
+  session for in-place external reloads, recorded successful browser launches
+  as green status notices, normalized malformed variable-font axes, placed
+  asset previews to the right of Explorer rows, disabled non-Typst view-mode
+  controls, added Packages and Rename to title-bar menus, exposed package
+  website links, surfaced installed packages before the registry fetch,
+  inserted line comments at column zero, and painted Find/Replace after the
+  sticky context overlay.
+- Verification: Formatting, strict Clippy, 517 application tests (2 ignored),
+  26 integration tests, and 8 packaging tests pass. New regressions cover
+  variable-axis normalization, popup actions, package-local loading, external
+  link notices, comment placement, view-mode availability, and sticky/find
+  geometry.
