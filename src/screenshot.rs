@@ -68,6 +68,7 @@ impl UiCaptureStep {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum UiSnapshotScene {
     Main,
+    StickyContext,
     FileMenu,
     EditMenu,
     SettingsWindow,
@@ -92,8 +93,9 @@ pub enum UiSnapshotScene {
 }
 
 impl UiSnapshotScene {
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 23] = [
         Self::Main,
+        Self::StickyContext,
         Self::FileMenu,
         Self::EditMenu,
         Self::SettingsWindow,
@@ -120,6 +122,7 @@ impl UiSnapshotScene {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Main => "main",
+            Self::StickyContext => "sticky-context",
             Self::FileMenu => "file-menu",
             Self::EditMenu => "edit-menu",
             Self::SettingsWindow => "settings-window",
@@ -147,9 +150,11 @@ impl UiSnapshotScene {
     /// Logical framebuffer target used by [`CaptureController`].
     pub const fn viewport_target(self) -> &'static str {
         match self {
-            Self::Main | Self::ProblemsPanel | Self::FindReplace | Self::PreviewCompiling => {
-                ROOT_VIEWPORT_NAME
-            }
+            Self::Main
+            | Self::StickyContext
+            | Self::ProblemsPanel
+            | Self::FindReplace
+            | Self::PreviewCompiling => ROOT_VIEWPORT_NAME,
             Self::FileMenu
             | Self::EditMenu
             | Self::EditorContextMenu
@@ -180,6 +185,7 @@ impl UiSnapshotScene {
         let value = value.trim();
         let scene = match value {
             "main" => Self::Main,
+            "sticky-context" => Self::StickyContext,
             "file-menu" => Self::FileMenu,
             "edit-menu" => Self::EditMenu,
             "settings-window" => Self::SettingsWindow,
@@ -398,6 +404,7 @@ struct CaptureState {
     pending: VecDeque<CaptureRequest>,
     in_flight: HashMap<u64, String>,
     results: VecDeque<CaptureResult>,
+    viewport_targets: HashMap<egui::ViewportId, String>,
 }
 
 /// A cloneable controller shared by the root app wrapper and child viewports.
@@ -406,14 +413,17 @@ pub struct CaptureController {
     service_id: u64,
     config: CaptureConfig,
     state: Arc<Mutex<CaptureState>>,
+    manual_shortcut: Arc<Mutex<Option<egui::KeyboardShortcut>>>,
 }
 
 impl CaptureController {
     pub fn new(config: CaptureConfig) -> Self {
+        let manual_shortcut = config.shortcut;
         let controller = Self {
             service_id: NEXT_SERVICE_ID.fetch_add(1, Ordering::Relaxed),
             config,
             state: Arc::new(Mutex::new(CaptureState::default())),
+            manual_shortcut: Arc::new(Mutex::new(manual_shortcut)),
         };
         if controller.config.enabled {
             for spec in &controller.config.startup_captures {
@@ -432,6 +442,22 @@ impl CaptureController {
             self.config.filename_theme_profile.clone(),
             self.config.filename_scene,
         )
+    }
+
+    /// Queue the normal manual capture for the logical target registered by a
+    /// viewport. Editor shortcut routing calls this before widgets process the
+    /// same key event, which is essential when users bind capture to a chord
+    /// that a focused TextEdit would otherwise interpret.
+    pub(crate) fn queue_for_viewport(&self, viewport: egui::ViewportId) -> Option<u64> {
+        let target = self
+            .state()
+            .viewport_targets
+            .get(&viewport)
+            .cloned()
+            .or_else(|| {
+                (viewport == egui::ViewportId::ROOT).then(|| ROOT_VIEWPORT_NAME.to_owned())
+            })?;
+        self.queue(&target, &target)
     }
 
     /// Queue one scene with its own filename theme. Batch runners use this to
@@ -535,7 +561,10 @@ impl CaptureController {
 
     /// Handle returned screenshot events. Call this near the start of the UI
     /// pass for every supported viewport.
-    pub fn begin_viewport(&self, context: &egui::Context) {
+    pub fn begin_viewport(&self, context: &egui::Context, target: &str) {
+        self.state()
+            .viewport_targets
+            .insert(context.viewport_id(), safe_slug(target));
         let captures = context.input(|input| {
             input
                 .events
@@ -630,6 +659,19 @@ impl CaptureController {
         &self.config.output_directory
     }
 
+    /// Update the normal interactive capture binding. Launch-time capture
+    /// requests remain independent and do not need a keyboard shortcut.
+    pub(crate) fn set_manual_shortcut_override(
+        &self,
+        shortcut: Option<Option<egui::KeyboardShortcut>>,
+    ) {
+        *self
+            .manual_shortcut
+            .lock()
+            .expect("screenshot shortcut state was poisoned") =
+            shortcut.unwrap_or(self.config.shortcut);
+    }
+
     pub fn closes_after_captures(&self) -> bool {
         self.config.close_after_captures
     }
@@ -640,8 +682,11 @@ impl CaptureController {
         }
         let target = safe_slug(target);
         if self
-            .config
-            .shortcut
+            .manual_shortcut
+            .lock()
+            .expect("screenshot shortcut state was poisoned")
+            .as_ref()
+            .copied()
             .is_some_and(|shortcut| context.input_mut(|input| input.consume_shortcut(&shortcut)))
         {
             self.queue(&target, &target);
@@ -739,7 +784,7 @@ impl<A: eframe::App> eframe::App for ScreenshotApp<A> {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        self.captures.begin_viewport(ui.ctx());
+        self.captures.begin_viewport(ui.ctx(), ROOT_VIEWPORT_NAME);
         self.inner.ui(ui, frame);
         self.captures.end_viewport(ui.ctx(), ROOT_VIEWPORT_NAME);
         if self.close_after_captures && !self.captures.has_pending() {
@@ -1469,6 +1514,25 @@ mod tests {
             inline.ui_snapshot_scene,
             Some(UiSnapshotScene::ExplorerContextMenu)
         );
+
+        let sticky = parse_launch_options(
+            ["--ui-snapshot-scene=sticky-context"],
+            Path::new("/project"),
+            no_environment,
+        )
+        .unwrap();
+        assert_eq!(
+            sticky.ui_snapshot_scene,
+            Some(UiSnapshotScene::StickyContext)
+        );
+        assert_eq!(UiSnapshotScene::StickyContext.viewport_target(), "main");
+        assert_eq!(
+            UiSnapshotScene::StickyContext.capture_spec(),
+            CaptureSpec {
+                target: "main".to_owned(),
+                name: "sticky-context".to_owned(),
+            }
+        );
     }
 
     #[test]
@@ -1647,6 +1711,14 @@ mod tests {
             .iter()
             .filter(|scene| scene.role == "component")
             .count();
+        assert_eq!(
+            contract
+                .scenes
+                .iter()
+                .find(|scene| scene.id == UiSnapshotScene::StickyContext.as_str())
+                .map(|scene| scene.role),
+            Some("targeted")
+        );
         let default_output_count = contract.themes.len()
             + component_count * contract.scene_themes.len()
             + contract.variants.len();
@@ -1993,6 +2065,21 @@ mod tests {
         assert_eq!(state.pending[0].remaining_frames, 2);
         drop(state);
         assert!(controller.has_pending());
+    }
+
+    #[test]
+    fn manual_capture_uses_the_registered_logical_viewport_target() {
+        let controller =
+            CaptureController::new(CaptureConfig::for_working_directory(Path::new("/project")));
+        let viewport = egui::ViewportId::from_hash_of("settings-child");
+        controller
+            .state()
+            .viewport_targets
+            .insert(viewport, "settings".to_owned());
+        assert_eq!(controller.queue_for_viewport(viewport), Some(1));
+        let state = controller.state();
+        assert_eq!(state.pending[0].target, "settings");
+        assert_eq!(state.pending[0].name, "settings");
     }
 
     #[test]

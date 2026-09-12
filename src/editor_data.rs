@@ -7,7 +7,10 @@ use std::{
 
 use typst_syntax::{LinkedNode, Source, SyntaxKind, ast};
 
-use crate::diagnostics::{Diagnostic, DiagnosticSeverity, DiagnosticSource};
+use crate::{
+    diagnostics::{Diagnostic, DiagnosticSeverity, DiagnosticSource},
+    editor_features::StickyContextQuery,
+};
 
 /// Identity of the source metadata derived for one open document revision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,6 +200,18 @@ impl EditorDerivedData {
 
     pub(crate) fn char_range_to_byte(&self, range: Range<usize>) -> Range<usize> {
         self.char_to_byte(range.start)..self.char_to_byte(range.end)
+    }
+
+    /// Borrow a reusable sticky-context query for the prepared source
+    /// revision. Syntax parsing remains revision-cached; only the query's
+    /// compact line index is built here.
+    pub(crate) fn sticky_context_query(&mut self) -> StickyContextQuery<'_> {
+        self.prepare_syntax();
+        StickyContextQuery::new(
+            &self.parsed_source,
+            &self.source_snapshot,
+            &self.char_starts,
+        )
     }
 
     pub(crate) fn font_argument_at(&mut self, char_index: usize) -> Option<FontArgumentTarget> {
@@ -510,6 +525,69 @@ mod tests {
         );
         assert_eq!(data.rebuild_counts(), (1, 0));
         assert_eq!(data.syntax_rebuild_count(), 1);
+    }
+
+    #[test]
+    fn sticky_context_queries_reuse_one_syntax_parse_per_revision() {
+        let mut data = EditorDerivedData::default();
+        let source = "= Section\n#let render(\n  body,\n) = {\n  body\n}\n";
+        data.prepare_source(revision(1), source);
+
+        {
+            let query = data.sticky_context_query();
+            assert_eq!(
+                query
+                    .rows(0)
+                    .iter()
+                    .map(|row| row.text.as_str())
+                    .collect::<Vec<_>>(),
+                ["= Section"]
+            );
+            let body = source[..source.rfind("  body\n").unwrap()].chars().count();
+            assert_eq!(
+                query
+                    .rows(body)
+                    .iter()
+                    .map(|row| row.text.as_str())
+                    .collect::<Vec<_>>(),
+                ["= Section", "#let render(", "body,", ") = {"]
+            );
+            assert!(query.rows(source.chars().count() + 1).is_empty());
+        }
+        assert_eq!(data.syntax_rebuild_count(), 1);
+
+        data.prepare_source(revision(1), source);
+        {
+            let query = data.sticky_context_query();
+            assert_eq!(query.rows(0).len(), 1);
+            assert_eq!(query.rows(0).len(), 1);
+        }
+        assert_eq!(
+            data.syntax_rebuild_count(),
+            1,
+            "unchanged source revisions must reuse the parsed syntax tree"
+        );
+
+        data.prepare_source(revision(2), "= Next section\nbody");
+        assert_eq!(
+            data.syntax_rebuild_count(),
+            1,
+            "syntax rebuild remains lazy until the next query"
+        );
+        {
+            let query = data.sticky_context_query();
+            assert_eq!(
+                query
+                    .rows("= Next section\n".chars().count())
+                    .iter()
+                    .map(|row| row.text.as_str())
+                    .collect::<Vec<_>>(),
+                ["= Next section"]
+            );
+        }
+        assert_eq!(data.syntax_rebuild_count(), 2);
+        data.sticky_context_query();
+        assert_eq!(data.syntax_rebuild_count(), 2);
     }
 
     #[test]

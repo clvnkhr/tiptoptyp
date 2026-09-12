@@ -56,6 +56,7 @@ The accepted scenes and their framebuffer targets are:
 | Scene | Capture target | Themed state |
 | --- | --- | --- |
 | `main` | `main` | Main split editor and preview |
+| `sticky-context` | `main` | Scrolled source editor with stacked headings and a multiline function header pinned independently of the caret |
 | `file-menu` | `popup` | File menu |
 | `edit-menu` | `popup` | Edit menu and shortcut alignment |
 | `settings-window` | `settings` | Settings child window |

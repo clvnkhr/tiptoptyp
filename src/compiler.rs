@@ -27,6 +27,7 @@ use crate::private_workspace::{PrivateTypstDocument, PrivateWorkspace};
 pub const PREVIEW_DPI: f32 = 144.0;
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(15);
 const WATCH_LOG_QUIET_PERIOD: Duration = Duration::from_millis(40);
+const PIPE_READER_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(250);
 const IGNORE_SYSTEM_FONTS_ENV: &str = "TIPTOPTYP_IGNORE_SYSTEM_FONTS";
 const TRACE_WATCH_ENV: &str = "TIPTOPTYP_TRACE_WATCH";
 static IGNORE_SYSTEM_FONTS: LazyLock<bool> =
@@ -406,13 +407,29 @@ impl WatchSession {
 impl Drop for WatchSession {
     fn drop(&mut self) {
         // Killing the child first releases its handles, then the private
-        // document's TempDir removes the complete mirrored session.
+        // document's TempDir removes the complete mirrored session. A wrapper
+        // may have spawned a descendant which inherited stderr, so never let
+        // that unrelated writer turn compiler shutdown into an unbounded join.
         let _ = self.child.kill();
         let _ = self.child.wait();
         if let Some(reader) = self.reader.take() {
-            let _ = reader.join();
+            let _ = finish_reader_with_timeout(reader, PIPE_READER_SHUTDOWN_TIMEOUT);
         }
     }
+}
+
+/// Join a pipe reader only after it has actually completed.
+///
+/// `Child::wait` closes the direct child's pipe handles, but an executable
+/// wrapper can leave the same handles open in a descendant. Rust cannot cancel
+/// a thread blocked in `Read`, so timing out deliberately detaches that reader
+/// instead of hanging the owning worker or the application during `Drop`.
+fn finish_reader_with_timeout<T>(reader: thread::JoinHandle<T>, timeout: Duration) -> Option<T> {
+    let deadline = Instant::now() + timeout;
+    while !reader.is_finished() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    reader.is_finished().then(|| reader.join().ok()).flatten()
 }
 
 fn worker_loop(
@@ -731,9 +748,16 @@ fn publish_compiled_artifact(
         return;
     }
 
-    let event = match rasterize_pdf_with_program(&pdf, project_root, rasterizer, || {
-        shutdown.load(Ordering::Acquire) || latest_revision.load(Ordering::Acquire) != key.revision
-    }) {
+    let event = match rasterize_pdf_with_program(
+        &pdf,
+        project_root,
+        rasterizer,
+        PdfRasterMode::Document,
+        || {
+            shutdown.load(Ordering::Acquire)
+                || latest_revision.load(Ordering::Acquire) != key.revision
+        },
+    ) {
         Ok(pages) => CompileEvent::Rasterized { key, pages },
         Err(error) => CompileEvent::RasterFailed { key, error },
     };
@@ -756,13 +780,47 @@ pub(crate) fn rasterize_pdf(
     project_root: &Path,
     cancelled: impl FnMut() -> bool,
 ) -> Result<Vec<PreviewPage>, String> {
-    rasterize_pdf_with_program(pdf, project_root, Path::new("pdftoppm"), cancelled)
+    rasterize_pdf_with_program(
+        pdf,
+        project_root,
+        Path::new("pdftoppm"),
+        PdfRasterMode::Document,
+        cancelled,
+    )
+}
+
+/// Render only the first page of a PDF, capped to `max_dimension` pixels on
+/// its longest edge. Hover previews use this path so a large PDF cannot fill
+/// the thumbnail cache with every page or full-resolution pixels.
+pub(crate) fn rasterize_pdf_first_page(
+    pdf: &[u8],
+    project_root: &Path,
+    max_dimension: u32,
+    cancelled: impl FnMut() -> bool,
+) -> Result<PreviewPage, String> {
+    let mut pages = rasterize_pdf_with_program(
+        pdf,
+        project_root,
+        Path::new("pdftoppm"),
+        PdfRasterMode::FirstPage { max_dimension },
+        cancelled,
+    )?;
+    pages
+        .pop()
+        .ok_or_else(|| "The PDF renderer produced no preview pages".to_owned())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PdfRasterMode {
+    Document,
+    FirstPage { max_dimension: u32 },
 }
 
 fn rasterize_pdf_with_program(
     pdf: &[u8],
     project_root: &Path,
     rasterizer: &Path,
+    mode: PdfRasterMode,
     mut cancelled: impl FnMut() -> bool,
 ) -> Result<Vec<PreviewPage>, String> {
     let private = PrivateWorkspace::open(project_root).map_err(|error| {
@@ -778,12 +836,31 @@ fn rasterize_pdf_with_program(
     fs::write(&snapshot_path, pdf)
         .map_err(|error| format!("Could not stage the PDF preview: {error}"))?;
     let page_prefix = render_dir.path().join("page");
-    let mut render_child = Command::new(rasterizer)
-        .arg("-png")
-        .arg("-r")
-        .arg(PREVIEW_DPI.to_string())
-        .arg(&snapshot_path)
-        .arg(&page_prefix)
+    let mut render_command = Command::new(rasterizer);
+    render_command.arg("-png");
+    match mode {
+        PdfRasterMode::Document => {
+            // Keep this argument order stable: release/testing wrappers may
+            // treat the final two arguments as the input and output paths.
+            render_command
+                .arg("-r")
+                .arg(PREVIEW_DPI.to_string())
+                .arg(&snapshot_path)
+                .arg(&page_prefix);
+        }
+        PdfRasterMode::FirstPage { max_dimension } => {
+            render_command
+                .arg("-f")
+                .arg("1")
+                .arg("-l")
+                .arg("1")
+                .arg("-scale-to")
+                .arg(max_dimension.max(1).to_string())
+                .arg(&snapshot_path)
+                .arg(&page_prefix);
+        }
+    }
+    let mut render_child = render_command
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
@@ -814,7 +891,7 @@ fn rasterize_pdf_with_program(
         if cancelled() {
             let _ = render_child.kill();
             let _ = render_child.wait();
-            let _ = stderr_reader.join();
+            let _ = finish_reader_with_timeout(stderr_reader, PIPE_READER_SHUTDOWN_TIMEOUT);
             return Err("Preview rendering was superseded by a newer edit".to_owned());
         }
         match render_child.try_wait() {
@@ -823,12 +900,13 @@ fn rasterize_pdf_with_program(
             Err(error) => {
                 let _ = render_child.kill();
                 let _ = render_child.wait();
-                let _ = stderr_reader.join();
+                let _ = finish_reader_with_timeout(stderr_reader, PIPE_READER_SHUTDOWN_TIMEOUT);
                 return Err(format!("Could not wait for the PDF renderer: {error}"));
             }
         }
     };
-    let render_stderr = stderr_reader.join().unwrap_or_default();
+    let render_stderr =
+        finish_reader_with_timeout(stderr_reader, PIPE_READER_SHUTDOWN_TIMEOUT).unwrap_or_default();
 
     if !render_status.success() {
         let details = String::from_utf8_lossy(&render_stderr);
@@ -847,6 +925,11 @@ fn rasterize_pdf_with_program(
         })
         .collect::<Vec<_>>();
     page_paths.sort_by_key(|path| preview_page_number(path));
+    if matches!(mode, PdfRasterMode::FirstPage { .. }) {
+        // Honour the thumbnail memory contract even if a wrapper or older
+        // Poppler binary ignores the requested page range.
+        page_paths.truncate(1);
+    }
 
     if page_paths.is_empty() {
         return Err("The PDF renderer produced no preview pages".to_owned());
@@ -854,7 +937,12 @@ fn rasterize_pdf_with_program(
 
     // Link extraction is best-effort: raster rendering remains useful when an
     // older/minimal Poppler installation lacks `pdftohtml`.
-    let mut page_links = extract_pdf_links(&snapshot_path, render_dir.path(), &mut cancelled);
+    let mut page_links = match mode {
+        PdfRasterMode::Document => {
+            extract_pdf_links(&snapshot_path, render_dir.path(), &mut cancelled)
+        }
+        PdfRasterMode::FirstPage { .. } => Vec::new(),
+    };
     let mut pages = Vec::with_capacity(page_paths.len());
     for (index, page_path) in page_paths.into_iter().enumerate() {
         if cancelled() {
@@ -1128,8 +1216,8 @@ fn send_result(results: &Sender<CompileResult>, context: &egui::Context, result:
 mod tests {
     use super::{
         ArtifactKey, CompileEvent, CompileRequest, CompileResult, Compiler, CompilerCommand,
-        WatchContext, WatchLine, classify_watch_line, parse_pdf_links, preview_page_number,
-        publish_compiled_artifact, worker_loop,
+        PdfRasterMode, WatchContext, WatchLine, classify_watch_line, parse_pdf_links,
+        preview_page_number, publish_compiled_artifact, rasterize_pdf_with_program, worker_loop,
     };
     use std::{
         fs,
@@ -1349,6 +1437,126 @@ mod tests {
                     && pages.len() == 1
                     && pages[0].size == [2, 1]
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hover_pdf_rasterization_requests_one_bounded_page() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let project = tempfile::tempdir().unwrap();
+        let fixture_path = project.path().join("fixture.png");
+        image::RgbaImage::from_pixel(2, 1, image::Rgba([12, 34, 56, 255]))
+            .save(&fixture_path)
+            .unwrap();
+        let rasterizer = project.path().join("fake-thumbnail-pdftoppm");
+        fs::write(
+            &rasterizer,
+            concat!(
+                "#!/bin/sh\n",
+                "[ \"$1\" = \"-png\" ] || exit 21\n",
+                "[ \"$2\" = \"-f\" ] || exit 22\n",
+                "[ \"$3\" = \"1\" ] || exit 23\n",
+                "[ \"$4\" = \"-l\" ] || exit 24\n",
+                "[ \"$5\" = \"1\" ] || exit 25\n",
+                "[ \"$6\" = \"-scale-to\" ] || exit 26\n",
+                "[ \"$7\" = \"333\" ] || exit 27\n",
+                "cp \"${0%/*}/fixture.png\" \"${9}-1.png\"\n",
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&rasterizer, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let pages = rasterize_pdf_with_program(
+            b"%PDF-hover-fixture",
+            project.path(),
+            &rasterizer,
+            PdfRasterMode::FirstPage { max_dimension: 333 },
+            || false,
+        )
+        .unwrap();
+
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].size, [2, 1]);
+        assert!(pages[0].links.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rasterizer_exit_does_not_wait_for_a_descendant_holding_stderr() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let project = tempfile::tempdir().unwrap();
+        image::RgbaImage::from_pixel(2, 1, image::Rgba([12, 34, 56, 255]))
+            .save(project.path().join("fixture.png"))
+            .unwrap();
+        let rasterizer = project.path().join("inherited-stderr-pdftoppm");
+        fs::write(
+            &rasterizer,
+            concat!(
+                "#!/bin/sh\n",
+                // The finite lifetime makes the fixture self-cleaning even if
+                // the regression fails before its explicit kill below.
+                "sleep 8 >&2 &\n",
+                "printf '%s' \"$!\" > \"${0%/*}/descendant.pid\"\n",
+                "cp \"${0%/*}/fixture.png\" \"${9}-1.png\"\n",
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&rasterizer, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let started = Instant::now();
+        let pages = rasterize_pdf_with_program(
+            b"%PDF-inherited-stderr-fixture",
+            project.path(),
+            &rasterizer,
+            PdfRasterMode::FirstPage { max_dimension: 333 },
+            || false,
+        )
+        .unwrap();
+        let elapsed = started.elapsed();
+
+        let pid = fs::read_to_string(project.path().join("descendant.pid")).unwrap();
+        let kill_status = std::process::Command::new("kill")
+            .args(["-9", pid.trim()])
+            .status()
+            .unwrap();
+
+        assert_eq!(pages.len(), 1);
+        assert!(
+            kill_status.success(),
+            "could not terminate fixture pid {pid}"
+        );
+        assert!(
+            elapsed < super::PIPE_READER_SHUTDOWN_TIMEOUT + Duration::from_secs(4),
+            "rasterizer waited for a descendant-owned stderr pipe: {elapsed:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn completed_rasterizer_stderr_is_drained_before_reporting_failure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let project = tempfile::tempdir().unwrap();
+        let rasterizer = project.path().join("failing-pdftoppm");
+        fs::write(
+            &rasterizer,
+            "#!/bin/sh\nprintf '%s\\n' 'distinct renderer failure' >&2\nexit 23\n",
+        )
+        .unwrap();
+        fs::set_permissions(&rasterizer, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let error = rasterize_pdf_with_program(
+            b"%PDF-failing-fixture",
+            project.path(),
+            &rasterizer,
+            PdfRasterMode::FirstPage { max_dimension: 333 },
+            || false,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("distinct renderer failure"), "{error}");
     }
 
     #[test]

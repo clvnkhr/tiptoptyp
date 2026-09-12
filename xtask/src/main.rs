@@ -1,3 +1,6 @@
+#![deny(unsafe_code)]
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use std::{
     env,
     ffi::{OsStr, OsString},
@@ -14,6 +17,7 @@ const TYPST_LICENSE_SHA256: &str =
 const TYPST_NOTICE_SHA256: &str =
     "1778244777547c281b6f5fa9fc0c18ab21f8d4491c803f64e09046800f5fcb26";
 const PACKAGE_TARGET_ENV: &str = "TIPTOPTYP_PACKAGE_TARGET";
+const MACOS_APP_ICON: &str = "tiptoptyp.icns";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Artifact {
@@ -124,6 +128,8 @@ fn verify_package(target: &str) -> Result<(), String> {
     let executable_dir = app.join("Contents/MacOS");
     let resources = app.join("Contents/Resources");
     require_file(&executable_dir.join("tiptoptyp"))?;
+    require_file(&resources.join(MACOS_APP_ICON))?;
+    verify_bundle_icon_reference(&app.join("Contents/Info.plist"), MACOS_APP_ICON)?;
 
     let artifacts = parse_manifest(MANIFEST)?;
     for artifact in artifacts
@@ -186,6 +192,36 @@ fn require_file(path: &Path) -> Result<(), String> {
     }
 }
 
+fn verify_bundle_icon_reference(info_plist: &Path, expected: &str) -> Result<(), String> {
+    let contents = fs::read_to_string(info_plist)
+        .map_err(|error| format!("could not read {}: {error}", info_plist.display()))?;
+    if bundle_icon_reference(&contents, expected) {
+        Ok(())
+    } else if !contents.contains("<key>CFBundleIconFile</key>") {
+        Err(format!(
+            "{} does not declare CFBundleIconFile",
+            info_plist.display()
+        ))
+    } else {
+        Err(format!(
+            "{} does not reference {expected} as CFBundleIconFile",
+            info_plist.display()
+        ))
+    }
+}
+
+fn bundle_icon_reference(info_plist: &str, expected: &str) -> bool {
+    let Some(after_key) = info_plist
+        .split_once("<key>CFBundleIconFile</key>")
+        .map(|(_, tail)| tail)
+    else {
+        return false;
+    };
+    let value_scope = after_key.split("<key>").next().unwrap_or(after_key);
+    let expected_value = format!("<string>{expected}</string>");
+    value_scope.contains(&expected_value)
+}
+
 fn verify_hash(path: &Path, expected: &str) -> Result<(), String> {
     require_file(path)?;
     let actual = sha256(path)?;
@@ -220,8 +256,8 @@ fn host_target() -> Result<String, String> {
 
 fn target_or_host(explicit: Option<String>) -> Result<String, String> {
     selected_package_target(explicit, env::var_os(PACKAGE_TARGET_ENV))
-    .map(Ok)
-    .unwrap_or_else(host_target)
+        .map(Ok)
+        .unwrap_or_else(host_target)
 }
 
 fn selected_package_target(
@@ -684,17 +720,27 @@ mod tests {
     fn package_target_prefers_explicit_then_tiptoptyp_environment() {
         let environment = Some(OsString::from("environment-target"));
         assert_eq!(
-            selected_package_target(
-                Some("explicit-target".to_owned()),
-                environment.clone(),
-            )
-            .as_deref(),
+            selected_package_target(Some("explicit-target".to_owned()), environment.clone(),)
+                .as_deref(),
             Some("explicit-target")
         );
         assert_eq!(
             selected_package_target(None, environment).as_deref(),
             Some("environment-target")
         );
+    }
+
+    #[test]
+    fn macos_bundle_icon_reference_is_exact_and_scoped_to_its_key() {
+        let valid = "<key>CFBundleIconFile</key>\n<string>tiptoptyp.icns</string>\n<key>CFBundleName</key>\n<string>tiptoptyp</string>";
+        assert!(bundle_icon_reference(valid, MACOS_APP_ICON));
+
+        let stale = "<key>CFBundleIconFile</key>\n<string>old.icns</string>\n<key>Note</key>\n<string>tiptoptyp.icns</string>";
+        assert!(!bundle_icon_reference(stale, MACOS_APP_ICON));
+        assert!(!bundle_icon_reference(
+            "<string>tiptoptyp.icns</string>",
+            MACOS_APP_ICON
+        ));
     }
 
     #[test]

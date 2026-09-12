@@ -1469,6 +1469,12 @@ pub fn configure_styles(context: &egui::Context) {
         // time-based, which can strand menus in a translucent state when a
         // secondary viewport is not receiving regular repaint ticks.
         style.animation_time = 0.0;
+        // Most labels in the application are chrome: toolbar captions,
+        // settings descriptions, tree entries, and status text. Making all of
+        // them selectable creates accidental text selections during ordinary
+        // navigation. Document-like surfaces opt back in locally (the source
+        // editor, diagnostic bodies, and rich tooltip text).
+        style.interaction.selectable_labels = false;
         style.spacing.item_spacing = METRICS.spacing.global_item;
         style.spacing.button_padding = METRICS.spacing.global_button_padding;
         style.visuals.menu_corner_radius = egui::CornerRadius::same(RADIUS.card);
@@ -1796,6 +1802,25 @@ mod tests {
             "positive selection control should select"
         );
         assert!(!drag_select(false), "chrome label must remain inert");
+    }
+
+    #[test]
+    fn configured_styles_make_labels_inert_by_default() {
+        let context = egui::Context::default();
+        configure_styles(&context);
+
+        assert!(
+            !context
+                .style_of(egui::Theme::Dark)
+                .interaction
+                .selectable_labels
+        );
+        assert!(
+            !context
+                .style_of(egui::Theme::Light)
+                .interaction
+                .selectable_labels
+        );
     }
 
     #[test]

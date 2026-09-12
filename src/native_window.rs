@@ -112,6 +112,21 @@ mod platform {
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) use platform::{ActiveWindowHandle, active_window_handle};
 
+/// Enable WKWebView's native trackpad magnification gesture.
+///
+/// Wry exposes this AppKit property as unsafe because the caller must uphold
+/// WKWebView's main-thread requirement. tiptoptyp creates and configures every
+/// webview from eframe's UI callback, so the requirement is established once
+/// here instead of leaking an unsafe block into application state code.
+#[cfg(target_os = "macos")]
+pub(crate) fn enable_native_webview_magnification(webview: &wry::WebView) {
+    use wry::WebViewExtMacOS as _;
+
+    // SAFETY: this helper is called synchronously from eframe's main-thread UI
+    // callback immediately after Wry constructs the WKWebView on that thread.
+    unsafe { webview.webview().setAllowsMagnification(true) };
+}
+
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[derive(Clone, Copy)]
 pub(crate) struct ActiveWindowHandle;

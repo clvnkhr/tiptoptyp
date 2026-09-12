@@ -175,7 +175,7 @@ impl ChildViewHost {
         let viewport = spec.viewport();
         let native_theme = theme::native_theme(appearance);
         context.show_viewport_immediate(id, viewport, |ui, _class| {
-            captures.begin_viewport(ui.ctx());
+            captures.begin_viewport(ui.ctx(), spec.capture_target);
             ui.set_style(style.clone());
             ui.ctx()
                 .send_viewport_cmd(egui::ViewportCommand::SetTheme(native_theme));

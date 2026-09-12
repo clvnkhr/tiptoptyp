@@ -6,7 +6,11 @@ use std::{
 use eframe::{Storage, egui};
 use serde::{Deserialize, Serialize};
 
-use crate::{builtin_themes, syntax_theme::TypstOverrideThemes};
+use crate::{
+    builtin_themes,
+    shortcuts::{ShortcutBindings, ShortcutOverrides},
+    syntax_theme::TypstOverrideThemes,
+};
 
 const STORAGE_KEY: &str = "tiptoptyp.settings.v1";
 pub(crate) const DEFAULT_HOVER_DELAY_MS: u64 = 300;
@@ -218,6 +222,8 @@ pub(crate) struct AppSettings {
     pub(crate) preview_preference: PreviewPreference,
     pub(crate) line_wrap: bool,
     pub(crate) line_numbers: bool,
+    #[serde(default = "default_true")]
+    pub(crate) sticky_context_rows: bool,
     pub(crate) source_preview_trigger: SourcePreviewTrigger,
     pub(crate) auto_save: bool,
     pub(crate) auto_save_delay_ms: u64,
@@ -246,6 +252,10 @@ pub(crate) struct AppSettings {
     /// Keep the in-window File/Edit/View controls visible beside the document
     /// title. Native macOS menus remain available when this is disabled.
     pub(crate) titlebar_menus: bool,
+    /// User changes from the current platform's built-in command bindings.
+    /// Action IDs and chords are normalized after deserialization.
+    #[serde(default, skip_serializing_if = "ShortcutOverrides::is_empty")]
+    pub(crate) shortcut_overrides: ShortcutOverrides,
     /// Optional Typst-only style layers for each interface appearance.
     pub(crate) typst_overrides: TypstOverrideThemes,
     /// Most recently used canonical workspace roots, newest first.
@@ -270,6 +280,7 @@ impl Default for AppSettings {
             preview_preference: PreviewPreference::Interactive,
             line_wrap: true,
             line_numbers: true,
+            sticky_context_rows: true,
             source_preview_trigger: SourcePreviewTrigger::DoubleClick,
             auto_save: true,
             auto_save_delay_ms: 750,
@@ -286,6 +297,7 @@ impl Default for AppSettings {
             code_font_face_index: 0,
             code_font_weight: DEFAULT_UI_FONT_WEIGHT,
             titlebar_menus: true,
+            shortcut_overrides: ShortcutOverrides::default(),
             typst_overrides: TypstOverrideThemes::default(),
             recent_workspaces: Vec::new(),
             last_opened_files: BTreeMap::new(),
@@ -294,6 +306,10 @@ impl Default for AppSettings {
             tinymist: ToolPreference::default(),
         }
     }
+}
+
+const fn default_true() -> bool {
+    true
 }
 
 impl AppSettings {
@@ -351,6 +367,7 @@ impl AppSettings {
         settings.code_font_weight = settings.code_font_weight.clamp(1, 1_000);
         settings.normalize_builtin_theme_slots();
         settings.normalize_workspace_history();
+        settings.shortcut_overrides.normalize();
         settings
     }
 
@@ -386,9 +403,15 @@ impl AppSettings {
     }
 
     pub(crate) fn save(&self, storage: &mut dyn Storage) {
-        if let Ok(serialized) = serde_json::to_string(self) {
+        let mut normalized = self.clone();
+        normalized.shortcut_overrides.normalize();
+        if let Ok(serialized) = serde_json::to_string(&normalized) {
             storage.set_string(STORAGE_KEY, serialized);
         }
+    }
+
+    pub(crate) fn effective_shortcuts(&self) -> ShortcutBindings {
+        ShortcutBindings::current(&self.shortcut_overrides)
     }
 }
 
@@ -439,7 +462,12 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::{sublime_theme::Rgba, syntax_theme::TypstSyntaxRole, theme};
+    use crate::{
+        shortcuts::{ShortcutAction, ShortcutChord, ShortcutPlatform},
+        sublime_theme::Rgba,
+        syntax_theme::TypstSyntaxRole,
+        theme,
+    };
 
     #[derive(Default)]
     struct MemoryStorage(HashMap<String, String>);
@@ -487,6 +515,8 @@ mod tests {
         assert_eq!(settings.hover_delay_ms, DEFAULT_HOVER_DELAY_MS);
         assert_eq!(settings.hover_fade_ms, DEFAULT_HOVER_FADE_MS);
         assert_eq!(settings.typst_overrides, TypstOverrideThemes::default());
+        assert!(settings.shortcut_overrides.is_empty());
+        assert!(settings.effective_shortcuts().conflicts().is_empty());
         assert!(settings.last_opened_files.is_empty());
         assert!(settings.preview_files.is_empty());
         assert!(settings.recent_workspaces.is_empty());
@@ -568,6 +598,7 @@ mod tests {
             preview_preference: PreviewPreference::Native,
             line_wrap: false,
             line_numbers: false,
+            sticky_context_rows: false,
             source_preview_trigger: SourcePreviewTrigger::ModifierClick,
             auto_save: false,
             auto_save_delay_ms: 1_500,
@@ -584,6 +615,7 @@ mod tests {
             code_font_face_index: 1,
             code_font_weight: 450,
             titlebar_menus: false,
+            shortcut_overrides: ShortcutOverrides::default(),
             typst_overrides,
             last_opened_files: BTreeMap::from([(
                 "/workspace".to_owned(),
@@ -627,6 +659,70 @@ mod tests {
         let settings = AppSettings::load(Some(&storage));
         assert_eq!(settings.ui_font_weight, 1);
         assert_eq!(settings.code_font_weight, 1_000);
+    }
+
+    #[test]
+    fn shortcut_overrides_round_trip_and_resolve_from_settings() {
+        let mut settings = AppSettings::default();
+        settings.shortcut_overrides.set(
+            ShortcutAction::Save,
+            Some(ShortcutChord::parse("Primary+Shift+K").unwrap()),
+        );
+        settings
+            .shortcut_overrides
+            .set(ShortcutAction::ExportPdf, None);
+        let mut storage = MemoryStorage::default();
+        settings.save(&mut storage);
+
+        let restored = AppSettings::load(Some(&storage));
+        assert_eq!(restored, settings);
+        let shortcuts = restored.effective_shortcuts();
+        assert_eq!(
+            shortcuts
+                .binding(ShortcutAction::Save)
+                .unwrap()
+                .config_string(),
+            "Primary+Shift+K"
+        );
+        assert_eq!(shortcuts.binding(ShortcutAction::ExportPdf), None);
+    }
+
+    #[test]
+    fn loading_settings_drops_only_invalid_shortcut_entries() {
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        value["shortcut_overrides"] = serde_json::json!({
+            "file.save": "cmd + shift + k",
+            "edit.copy": null,
+            "edit.find": "Primary+NoSuchKey",
+            "future.action": "Primary+Q",
+        });
+        let mut storage = MemoryStorage::default();
+        storage.set_string(STORAGE_KEY, serde_json::to_string(&value).unwrap());
+
+        let settings = AppSettings::load(Some(&storage));
+        let shortcuts = settings.effective_shortcuts();
+        assert_eq!(
+            shortcuts
+                .binding(ShortcutAction::Save)
+                .unwrap()
+                .config_string(),
+            "Primary+Shift+K"
+        );
+        assert_eq!(shortcuts.binding(ShortcutAction::Copy), None);
+        assert_eq!(
+            shortcuts.binding(ShortcutAction::Find),
+            crate::shortcuts::ShortcutBindings::defaults(ShortcutPlatform::current())
+                .binding(ShortcutAction::Find)
+        );
+
+        let normalized = serde_json::to_value(&settings.shortcut_overrides).unwrap();
+        assert_eq!(
+            normalized,
+            serde_json::json!({
+                "edit.copy": null,
+                "file.save": "Primary+Shift+K",
+            })
+        );
     }
 
     #[test]

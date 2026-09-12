@@ -17,7 +17,7 @@ use egui_ltreeview::{Action as TreeAction, NodeBuilder, TreeView, TreeViewBuilde
 use rfd::AsyncFileDialog;
 
 use crate::{
-    asset::{AssetLoader, LoadedAsset},
+    asset::{AssetLoader, AssetThumbnailLoader, AssetThumbnailResult, LoadedAsset},
     builtin_themes,
     child_view::{ChildViewHost, ChildViewSpec, scoped_child_viewport_id, viewport_scoped_id},
     compiler::{ArtifactKey, CompileEvent, CompileRequest, Compiler, PreviewPage},
@@ -25,8 +25,12 @@ use crate::{
         Diagnostic, DiagnosticLocation, DiagnosticSeverity, DiagnosticSource,
         normalize_diagnostics, parse_typst_short_output,
     },
-    document::{DocumentKind, DocumentSession, EditorSnapshot},
+    document::{DocumentKey, DocumentKind, DocumentSession, EditorSnapshot},
     editor_data::{EditorDerivedData, EditorRevision, FontArgumentTarget, LineDiagnostic},
+    editor_features::{
+        EditableTable, PreviewAssetKind, SourceEdit, StickyContextQuery, StickyContextRow,
+        editable_table_at, literal_asset_target_at,
+    },
     font_catalog::{FontCatalog, FontFamily, ignored_workspace_directory, is_font_path},
     generic_highlight::GenericSyntaxHighlighter,
     highlight::SyntaxHighlighter,
@@ -37,6 +41,7 @@ use crate::{
         AppCommand, CommandMenu, CommandRequirement, NativeMenuCommandQueue, command_spec,
         command_specs, consume_shortcut,
     },
+    package_catalog::{PackageCatalogLoad, PackageRecord, PackageRootKind, PackageRoots},
     presentation::{
         ActiveThemeRequest, AppliedPresentation, ResolvedPresentationRequest,
         active_theme_preference, active_theme_request, load_active_theme_or_fallback,
@@ -55,13 +60,16 @@ use crate::{
         DEFAULT_UI_FONT_WEIGHT, DEFAULT_UI_SCALE_PERCENT, DocumentTheme, InterfaceTheme,
         PreviewPreference, SourcePreviewTrigger, ToolMode, ToolPreference,
     },
+    shortcuts::{
+        ShortcutAction, ShortcutBindings, ShortcutChord, ShortcutPlatform, consume_shortcut_action,
+    },
     sublime_theme::{self, ImportedTheme, Rgba},
     syntax_theme::{ResolvedTypstStyles, TypstStyleOverride, TypstStyleOverrides, TypstSyntaxRole},
     theme::{self, METRICS},
     tinymist::{
-        DiagnosticSeverity as TinymistDiagnosticSeverity, Generation, InvertColors, LspRange,
-        LspTextEdit, TextDocument, TinymistConfig, TinymistDiagnostic, TinymistEvent,
-        TinymistSidecar, UnsavedTextDocument,
+        CompletionItem, DiagnosticSeverity as TinymistDiagnosticSeverity, Generation, InvertColors,
+        LspRange, LspTextEdit, PreviewRefresh, TextDocument, TinymistConfig, TinymistDiagnostic,
+        TinymistEvent, TinymistSidecar, UnsavedTextDocument,
     },
     toolchain::{ToolKind, ToolOrigin, ToolResolution, resolve_tool},
     worker::{LatestJob, LatestJobPoll},
@@ -73,6 +81,8 @@ use crate::{
     workspace::{WorkspaceNode, WorkspaceSnapshot, WorkspaceTree},
 };
 
+#[cfg(test)]
+use crate::editor_features::{StickyContextKind, sticky_context_rows};
 #[cfg(test)]
 use crate::presentation::{ThemeSourceRequest, load_active_theme};
 #[cfg(test)]
@@ -93,6 +103,18 @@ const POPUP_BLUR_GRACE: Duration = Duration::from_millis(120);
 const STATUS_LOG_LIMIT: usize = 100;
 const STATUS_LOG_TIMESTAMP_WIDTH: f32 = 74.0;
 const STATUS_LOG_ROW_HEIGHT: f32 = 24.0;
+const COMPLETION_POPUP_WIDTH: f32 = 360.0;
+const COMPLETION_POPUP_MAX_HEIGHT: f32 = 248.0;
+const COMPLETION_ROW_HEIGHT: f32 = 26.0;
+const COMPLETION_ITEM_LIMIT: usize = 200;
+const STICKY_CONTEXT_MAX_VIEWPORT_FRACTION: f32 = 0.45;
+const STICKY_CONTEXT_STACK_RESOLUTION_LIMIT: usize = 32;
+const STICKY_CONTEXT_BOTTOM_COVER: f32 = 1.0;
+const STICKY_CONTEXT_SNAPSHOT_SCROLL_OFFSET: f32 = 176.0;
+const ASSET_HOVER_CARD_MAX_IMAGE: Vec2 = Vec2::new(420.0, 300.0);
+const ASSET_HOVER_LOADING_SIZE: Vec2 = Vec2::new(260.0, 112.0);
+const ASSET_HOVER_ERROR_SIZE: Vec2 = Vec2::new(360.0, 144.0);
+const WIDGET_PASTE_ADMISSION_FRAME_BUDGET: u64 = 8;
 
 fn tinymist_invert_colors(document_theme: DocumentTheme, preview_dark: bool) -> InvertColors {
     match document_theme {
@@ -146,6 +168,139 @@ Inline math is highlighted too: $ integral_0^infinity e^(-x) dif x = 1 $.
 ]
 "##;
 
+const STICKY_CONTEXT_SNAPSHOT_SOURCE: &str = r##"#set page(paper: "a4", margin: 2.2cm)
+#set text(size: 11pt)
+#set heading(numbering: "1.")
+#let accent = rgb("#4f8cff")
+
+= Running todo list
+== Active subsection
+#let review(
+  task,
+  state,
+) = 2
+
+#let review_checks = (
+    "Review the task",
+    "Keep the declaration header visible",
+    "Compare every sticky-row boundary",
+    "Preserve the source indentation",
+    "Preserve the syntax colors",
+    "Preserve the editor gutter",
+    "Keep the caret at the beginning",
+    "Scroll through the function body",
+    "Check the first stacked row",
+    "Check the second stacked row",
+    "Check the third stacked row",
+    "Check the remaining signature rows",
+    "Confirm the lower floating shadow",
+    "Continue below the pinned context",
+)
+
+#review("the workspace", "progress")
+
+- Review the workspace layout
+- Confirm the document entry point
+- Check the active preview backend
+- Read the compiler diagnostics
+- Verify the selected color theme
+- Inspect the source editor gutter
+- Confirm syntax highlighting
+- Check wrapped source lines
+- Review the current section
+- Update the first task
+- Update the second task
+- Update the third task
+- Re-run the focused tests
+- Inspect the test output
+- Check the status bar
+- Confirm the saved document path
+- Review the package catalog
+- Inspect installed package versions
+- Search the settings controls
+- Check the configured shortcuts
+- Exercise completion results
+- Review the table editor
+- Add a table row
+- Remove a table column
+- Inspect the Explorer outline
+- Check the active file styling
+- Browse the package directory
+- Open the Problems panel
+- Select a diagnostic
+- Jump to its source line
+- Inspect the diagnostic tooltip
+- Move through the tooltip bridge
+- Verify the tooltip dismissal edge
+- Check the asset preview
+- Inspect the application icon
+- Review external-link handling
+- Save the current document
+- Save the document under a new name
+- Compile the current PDF
+- Pause automatic preview updates
+- Resume automatic preview updates
+- Check the newest preview generation
+- Open the File menu
+- Open the Edit menu
+- Review menu shortcut labels
+- Check the native Quit workflow
+- Reopen the workspace chooser
+- Verify the sticky section reminder
+- Scroll farther through the section
+- Confirm the heading remains pinned
+- Confirm the caret remains at the start
+- Compare the gutter alignment
+- Compare the source baseline
+- Compare the syntax colors
+- Check the lower floating shadow
+- Review the light theme
+- Review the dark theme
+- Capture the deterministic scene
+- Validate the capture filename
+- Finish the visual review
+- Recheck the pinned source row
+- Confirm the final gutter baseline
+- Inspect the floating edge
+- Compare the editor background
+- Verify the heading token colors
+- Check the source text weight
+- Confirm the sticky row width
+- Review the bottom shadow
+- Keep the caret above the viewport
+- Complete the sticky-context audit
+"##;
+
+const fn source_editor_snapshot_scroll_offset(scene: Option<UiSnapshotScene>) -> Option<f32> {
+    match scene {
+        Some(UiSnapshotScene::StickyContext) => Some(STICKY_CONTEXT_SNAPSHOT_SCROLL_OFFSET),
+        _ => None,
+    }
+}
+
+fn prepare_sticky_context_snapshot_document(document: &mut DocumentSession) -> bool {
+    if document.source == STICKY_CONTEXT_SNAPSHOT_SOURCE {
+        return false;
+    }
+    document.source = STICKY_CONTEXT_SNAPSHOT_SOURCE.to_owned();
+    document.revision = document.revision.wrapping_add(1);
+    // `show_editor` consumes this flag by clearing TextEdit's undo state and
+    // putting its caret at character zero. The forced ScrollArea offset does
+    // not move that caret, which makes this scene exercise scroll-derived
+    // sticky context rather than the old cursor-derived behavior.
+    document.reset_editor_history = true;
+    true
+}
+
+const fn close_request_requires_confirmation(
+    close_requested: bool,
+    dirty: bool,
+    allow_close: bool,
+    snapshot_scene: bool,
+) -> bool {
+    close_requested && dirty && !allow_close && !snapshot_scene
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ViewMode {
     Code,
@@ -160,6 +315,41 @@ impl ViewMode {
 
     fn shows_preview(self) -> bool {
         matches!(self, Self::Split | Self::Preview)
+    }
+}
+
+/// The Explorer closes in two render steps so its contents disappear before
+/// the resizable panel itself does. Besides avoiding a distracting flash of
+/// clipped rows, this keeps the panel's last width available to egui until the
+/// blank frame has been painted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExplorerPanelPhase {
+    Open,
+    HideContents,
+    Closed,
+}
+
+impl ExplorerPanelPhase {
+    fn toggle(self) -> Self {
+        match self {
+            Self::Open => Self::HideContents,
+            Self::HideContents | Self::Closed => Self::Open,
+        }
+    }
+
+    fn panel_visible(self) -> bool {
+        !matches!(self, Self::Closed)
+    }
+
+    fn contents_visible(self) -> bool {
+        matches!(self, Self::Open)
+    }
+
+    fn finish_frame(self) -> Self {
+        match self {
+            Self::HideContents => Self::Closed,
+            other => other,
+        }
     }
 }
 
@@ -197,6 +387,49 @@ const fn compilation_run_allowed(
     screenshot_pending: bool,
 ) -> bool {
     !paused || export_pending || screenshot_pending
+}
+
+const fn tinymist_preview_refresh(paused: bool) -> PreviewRefresh {
+    if paused {
+        // tiptoptyp never emits textDocument/didSave. Tinymist therefore keeps
+        // serving the currently rendered document while its LSP still receives
+        // every didChange needed by diagnostics, hover, formatting, and
+        // completion.
+        PreviewRefresh::OnSave
+    } else {
+        PreviewRefresh::OnType
+    }
+}
+
+fn tinymist_language_features_ready(
+    document_kind: DocumentKind,
+    lsp_ready: bool,
+    current_document_open: bool,
+) -> bool {
+    document_kind.is_typst() && lsp_ready && current_document_open
+}
+
+fn pdf_output_requires_new_artifact(
+    typst_output: bool,
+    automatic_preview_paused: bool,
+    compile_scheduled: bool,
+    status: PreviewStatus,
+) -> bool {
+    typst_output
+        && (automatic_preview_paused
+            || compile_scheduled
+            || !matches!(status, PreviewStatus::Ready(_)))
+}
+
+fn pdf_artifact_reusable_for_output(
+    artifact_key: Option<ArtifactKey>,
+    has_pdf: bool,
+    document_revision: u64,
+    requires_new_artifact: bool,
+) -> bool {
+    !requires_new_artifact
+        && has_pdf
+        && artifact_key.is_some_and(|key| key.revision == document_revision)
 }
 
 fn default_compile_pdf_path(
@@ -392,6 +625,98 @@ struct EditorHoverState {
     detail: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct EditorCaretState {
+    key: DocumentKey,
+    char_index: usize,
+    rect: Rect,
+}
+
+#[derive(Debug, Clone)]
+struct EditorCompletionState {
+    generation: Generation,
+    uri: String,
+    version: i32,
+    request_token: u64,
+    cursor: usize,
+    anchor: Rect,
+    explicit: bool,
+    is_incomplete: bool,
+    selected: usize,
+    items: Vec<CompletionItem>,
+}
+
+#[derive(Debug, Clone)]
+struct EditorCompletionResponse {
+    generation: Generation,
+    uri: String,
+    version: i32,
+    request_token: u64,
+    is_incomplete: bool,
+    items: Vec<CompletionItem>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClipboardSemanticKind {
+    Cut,
+    Copy,
+    Paste,
+}
+
+impl ClipboardSemanticKind {
+    const fn key(self) -> egui::Key {
+        match self {
+            Self::Cut => egui::Key::X,
+            Self::Copy => egui::Key::C,
+            Self::Paste => egui::Key::V,
+        }
+    }
+
+    const fn action(self) -> ShortcutAction {
+        match self {
+            Self::Cut => ShortcutAction::Cut,
+            Self::Copy => ShortcutAction::Copy,
+            Self::Paste => ShortcutAction::Paste,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingWidgetPaste {
+    viewport: egui::ViewportId,
+    expires_after_frame: u64,
+}
+
+impl PendingWidgetPaste {
+    fn new(viewport: egui::ViewportId, requested_on_frame: u64) -> Self {
+        Self {
+            viewport,
+            expires_after_frame: requested_on_frame
+                .saturating_add(WIDGET_PASTE_ADMISSION_FRAME_BUDGET),
+        }
+    }
+
+    fn admits(self, viewport: egui::ViewportId, frame: u64) -> bool {
+        self.viewport == viewport && frame <= self.expires_after_frame
+    }
+
+    fn expired(self, frame: u64) -> bool {
+        frame > self.expires_after_frame
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompletionApplication {
+    source: String,
+    cursor: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SnippetExpansion {
+    text: String,
+    cursor: usize,
+}
+
 #[derive(Debug, Clone)]
 struct DiagnosticTooltipOverlay {
     origin: Rect,
@@ -407,6 +732,36 @@ struct HoverTooltipOverlay {
     anchor: Pos2,
     detail: String,
     opacity: f32,
+}
+
+#[derive(Debug, Clone)]
+struct AssetHoverCandidate {
+    origin: Rect,
+    anchor: Pos2,
+    path: PathBuf,
+    kind: DocumentKind,
+    opacity: f32,
+}
+
+#[derive(Clone)]
+enum AssetHoverContent {
+    Loading,
+    Ready {
+        texture: egui::TextureHandle,
+        source_size: [usize; 2],
+    },
+    Error(String),
+}
+
+#[derive(Clone)]
+struct AssetHoverState {
+    origin: Rect,
+    anchor: Pos2,
+    path: PathBuf,
+    kind: DocumentKind,
+    opacity: f32,
+    token: u64,
+    content: AssetHoverContent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -514,6 +869,29 @@ enum WorkspaceCopyKind {
 enum EditorMenuAction {
     Command(AppCommand),
     OpenLink(String),
+    EditTable(EditableTable),
+}
+
+#[derive(Debug, Clone)]
+struct TableEditorDialog {
+    table: EditableTable,
+    original_call: String,
+    document_key: DocumentKey,
+    focus_first_cell: bool,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TableEditorUiAction {
+    Apply,
+    Cancel,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PreparedTableSourceEdit {
+    byte_range: Range<usize>,
+    replacement: String,
+    cursor: usize,
 }
 
 /// A document-window request emitted by one editor session and fulfilled by
@@ -572,6 +950,7 @@ enum AppPopup {
     Editor {
         anchor: Pos2,
         link: Option<String>,
+        table: Option<EditableTable>,
     },
     FontSelector {
         anchor: Pos2,
@@ -593,6 +972,266 @@ enum AppPopupAction {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PackageFilter {
+    All,
+    Installed,
+    Available,
+    Updates,
+}
+
+impl PackageFilter {
+    const ALL: [Self; 4] = [Self::All, Self::Installed, Self::Available, Self::Updates];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Installed => "Installed",
+            Self::Available => "Available",
+            Self::Updates => "Updates",
+        }
+    }
+
+    fn allows(self, package: &PackageRecord) -> bool {
+        match self {
+            Self::All => true,
+            Self::Installed => package.is_installed(),
+            Self::Available => package.latest_available.is_some(),
+            Self::Updates => package.has_update(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettingsSection {
+    Appearance,
+    Editor,
+    Tools,
+    Preview,
+    Status,
+}
+
+impl SettingsSection {
+    const fn title(self) -> &'static str {
+        match self {
+            Self::Appearance => "Appearance",
+            Self::Editor => "Editor",
+            Self::Tools => "Tool binaries",
+            Self::Preview => "Preview backend",
+            Self::Status => "Toolchain status",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettingsTarget {
+    Appearance,
+    TypstSyntax,
+    LightTheme,
+    DarkTheme,
+    InvertColors,
+    HueShift,
+    PageTheme,
+    WrapLines,
+    LineNumbers,
+    StickyContextRows,
+    AutoSave,
+    AutoSaveDelay,
+    KeyboardShortcuts,
+    InterfaceScale,
+    TitleBarMenus,
+    UiFont,
+    UiFontWeight,
+    CodeFont,
+    CodeFontWeight,
+    PreviewJump,
+    HoverDelay,
+    HoverFade,
+    TypstCompiler,
+    TinymistLanguageServer,
+    RefreshBinaryStatus,
+    BrowseTypstPackages,
+    PreviewBackend,
+    ToolchainStatus,
+    ProjectRoot,
+    UiScreenshots,
+}
+
+impl SettingsTarget {
+    const ALL: [Self; 30] = [
+        Self::Appearance,
+        Self::TypstSyntax,
+        Self::LightTheme,
+        Self::DarkTheme,
+        Self::InvertColors,
+        Self::HueShift,
+        Self::PageTheme,
+        Self::WrapLines,
+        Self::LineNumbers,
+        Self::StickyContextRows,
+        Self::AutoSave,
+        Self::AutoSaveDelay,
+        Self::KeyboardShortcuts,
+        Self::InterfaceScale,
+        Self::TitleBarMenus,
+        Self::UiFont,
+        Self::UiFontWeight,
+        Self::CodeFont,
+        Self::CodeFontWeight,
+        Self::PreviewJump,
+        Self::HoverDelay,
+        Self::HoverFade,
+        Self::TypstCompiler,
+        Self::TinymistLanguageServer,
+        Self::RefreshBinaryStatus,
+        Self::BrowseTypstPackages,
+        Self::PreviewBackend,
+        Self::ToolchainStatus,
+        Self::ProjectRoot,
+        Self::UiScreenshots,
+    ];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Appearance => "Appearance",
+            Self::TypstSyntax => "Typst syntax",
+            Self::LightTheme => "Light theme",
+            Self::DarkTheme => "Dark theme",
+            Self::InvertColors => "Invert colors",
+            Self::HueShift => "Hue shift",
+            Self::PageTheme => "Page",
+            Self::WrapLines => "Wrap lines",
+            Self::LineNumbers => "Line numbers",
+            Self::StickyContextRows => "Sticky context rows",
+            Self::AutoSave => "Auto-save",
+            Self::AutoSaveDelay => "Auto-save delay",
+            Self::KeyboardShortcuts => "Keyboard shortcuts…",
+            Self::InterfaceScale => "Interface scale",
+            Self::TitleBarMenus => "Show title-bar menus",
+            Self::UiFont => "UI font",
+            Self::UiFontWeight => "UI font weight",
+            Self::CodeFont => "Code font",
+            Self::CodeFontWeight => "Code font weight",
+            Self::PreviewJump => "Preview jump",
+            Self::HoverDelay => "Hover delay",
+            Self::HoverFade => "Hover fade",
+            Self::TypstCompiler => "Typst compiler",
+            Self::TinymistLanguageServer => "Tinymist language server",
+            Self::RefreshBinaryStatus => "Refresh binary status",
+            Self::BrowseTypstPackages => "Browse Typst packages…",
+            Self::PreviewBackend => "Preview backend",
+            Self::ToolchainStatus => "Toolchain status",
+            Self::ProjectRoot => "Project root",
+            Self::UiScreenshots => "UI screenshots",
+        }
+    }
+
+    const fn section(self) -> SettingsSection {
+        match self {
+            Self::Appearance
+            | Self::TypstSyntax
+            | Self::LightTheme
+            | Self::DarkTheme
+            | Self::InvertColors
+            | Self::HueShift
+            | Self::PageTheme => SettingsSection::Appearance,
+            Self::WrapLines
+            | Self::LineNumbers
+            | Self::StickyContextRows
+            | Self::AutoSave
+            | Self::AutoSaveDelay
+            | Self::KeyboardShortcuts
+            | Self::InterfaceScale
+            | Self::TitleBarMenus
+            | Self::UiFont
+            | Self::UiFontWeight
+            | Self::CodeFont
+            | Self::CodeFontWeight
+            | Self::PreviewJump
+            | Self::HoverDelay
+            | Self::HoverFade => SettingsSection::Editor,
+            Self::TypstCompiler
+            | Self::TinymistLanguageServer
+            | Self::RefreshBinaryStatus
+            | Self::BrowseTypstPackages => SettingsSection::Tools,
+            Self::PreviewBackend => SettingsSection::Preview,
+            Self::ToolchainStatus | Self::ProjectRoot | Self::UiScreenshots => {
+                SettingsSection::Status
+            }
+        }
+    }
+
+    const fn search_text(self) -> &'static str {
+        match self {
+            Self::Appearance => "interface system light dark theme mode active",
+            Self::TypstSyntax => "colors colours overrides decorations theme",
+            Self::LightTheme => "color colour palette import sublime builtin",
+            Self::DarkTheme => "color colour palette import sublime builtin",
+            Self::InvertColors => "theme transform inverse both themes",
+            Self::HueShift => "theme transform degrees both themes color colour",
+            Self::PageTheme => "document light dark follow interface effective",
+            Self::WrapLines => "editor soft wrapping",
+            Self::LineNumbers => "editor gutter",
+            Self::StickyContextRows => "editor headings scopes sections breadcrumbs",
+            Self::AutoSave => "editor autosave automatic save",
+            Self::AutoSaveDelay => "editor autosave automatic save milliseconds timing",
+            Self::KeyboardShortcuts => "editor keys bindings configurable commands",
+            Self::InterfaceScale => "editor ui zoom percent size",
+            Self::TitleBarMenus => "editor titlebar file edit view chrome",
+            Self::UiFont => "editor interface family system choose",
+            Self::UiFontWeight => "editor interface bold variable",
+            Self::CodeFont => "editor source monospace family choose",
+            Self::CodeFontWeight => "editor source monospace bold variable",
+            Self::PreviewJump => "editor source sync click double modifier",
+            Self::HoverDelay => "editor tooltip wait milliseconds timing",
+            Self::HoverFade => "editor tooltip opacity animation milliseconds timing",
+            Self::TypstCompiler => "tools binary custom bundled path",
+            Self::TinymistLanguageServer => "tools binary lsp custom bundled path",
+            Self::RefreshBinaryStatus => "tools rescan reload",
+            Self::BrowseTypstPackages => "tools package manager registry installed published",
+            Self::PreviewBackend => "interactive raster pdf tinymist native retry",
+            Self::ToolchainStatus => "tools typst tinymist lsp vector watcher pdf syntax ready",
+            Self::ProjectRoot => "workspace folder directory path",
+            Self::UiScreenshots => "capture png main settings both output directory",
+        }
+    }
+
+    fn matches(self, query: &str) -> bool {
+        let haystack = format!(
+            "{} {} {}",
+            self.label(),
+            self.section().title(),
+            self.search_text()
+        )
+        .to_lowercase();
+        query
+            .split_whitespace()
+            .map(str::to_lowercase)
+            .all(|term| haystack.contains(&term))
+    }
+}
+
+fn settings_search_results(query: &str) -> Vec<SettingsTarget> {
+    if query.trim().is_empty() {
+        return Vec::new();
+    }
+    SettingsTarget::ALL
+        .into_iter()
+        .filter(|target| target.matches(query))
+        .collect()
+}
+
+fn take_settings_scroll_target(
+    pending: &mut Option<SettingsTarget>,
+    rendered: SettingsTarget,
+) -> bool {
+    if *pending != Some(rendered) {
+        return false;
+    }
+    *pending = None;
+    true
+}
+
 pub struct EditorApp {
     document: DocumentSession,
     highlighter: SyntaxHighlighter,
@@ -601,6 +1240,9 @@ pub struct EditorApp {
     compiler: Compiler,
     asset_loader: AssetLoader,
     asset_token: u64,
+    asset_thumbnail_loader: AssetThumbnailLoader,
+    asset_thumbnail_token: u64,
+    asset_hover: Option<AssetHoverState>,
     pending_asset_page: Option<usize>,
     compile_deadline: Option<Instant>,
     compilation_paused: bool,
@@ -608,9 +1250,17 @@ pub struct EditorApp {
     editor_data: EditorDerivedData,
 
     view_mode: ViewMode,
-    filesystem_visible: bool,
+    filesystem_phase: ExplorerPanelPhase,
+    explorer_query: String,
     problems_visible: bool,
     settings_visible: bool,
+    settings_query: String,
+    settings_scroll_target: Option<SettingsTarget>,
+    shortcut_editor_visible: bool,
+    shortcut_query: String,
+    shortcut_capture: Option<ShortcutAction>,
+    shortcut_notice: Option<String>,
+    pending_widget_paste: Option<PendingWidgetPaste>,
     typst_overrides_visible: bool,
     typst_overrides_dark: bool,
     settings: AppSettings,
@@ -623,6 +1273,11 @@ pub struct EditorApp {
     font_catalog_revision: u64,
     font_catalog_scan: LatestJob<(PathBuf, FontCatalog)>,
     font_catalog_root: PathBuf,
+    packages_visible: bool,
+    package_query: String,
+    package_filter: PackageFilter,
+    package_catalog: Option<PackageCatalogLoad>,
+    package_catalog_job: LatestJob<PackageCatalogLoad>,
     staged_ui_font_weight: Option<u16>,
     staged_code_font_weight: Option<u16>,
     tool_refresh_requested: bool,
@@ -656,7 +1311,11 @@ pub struct EditorApp {
     editor_attention: Option<EditorAttention>,
     editor_hover: Option<EditorHoverState>,
     next_editor_hover_token: u64,
+    editor_completion: Option<EditorCompletionState>,
+    next_editor_completion_token: u64,
+    last_editor_caret: Option<EditorCaretState>,
     manual_format_revision: Option<u64>,
+    format_when_tinymist_ready: Option<DocumentKey>,
     autosave_deadline: Option<Instant>,
     diagnostic_tooltip: Option<DiagnosticTooltipOverlay>,
     app_popup: Option<AppPopup>,
@@ -668,6 +1327,9 @@ pub struct EditorApp {
     rename_dialog: Option<RenameDialog>,
     rename_overlay_had_focus: bool,
     rename_overlay_suspended: bool,
+    table_editor: Option<TableEditorDialog>,
+    table_editor_had_focus: bool,
+    table_editor_suspended: bool,
 
     pending_tool_picker: Option<PendingDialog<ToolPickerTarget>>,
     notice: Option<Notice>,
@@ -809,15 +1471,26 @@ impl EditorApp {
             compiler: Compiler::new(context.clone()),
             asset_loader: AssetLoader::new(context.clone()),
             asset_token: 0,
+            asset_thumbnail_loader: AssetThumbnailLoader::new(context.clone()),
+            asset_thumbnail_token: 0,
+            asset_hover: None,
             pending_asset_page: None,
             compile_deadline: Some(Instant::now()),
             compilation_paused: false,
             preview: PreviewController::new(preview_dark, settings.preview_preference),
             editor_data: EditorDerivedData::default(),
             view_mode: ViewMode::Split,
-            filesystem_visible: true,
+            filesystem_phase: ExplorerPanelPhase::Open,
+            explorer_query: String::new(),
             problems_visible: false,
             settings_visible: false,
+            settings_query: String::new(),
+            settings_scroll_target: None,
+            shortcut_editor_visible: false,
+            shortcut_query: String::new(),
+            shortcut_capture: None,
+            shortcut_notice: None,
+            pending_widget_paste: None,
             typst_overrides_visible: false,
             typst_overrides_dark: active_theme.dark_mode,
             settings: settings.clone(),
@@ -830,6 +1503,11 @@ impl EditorApp {
             font_catalog_revision: 0,
             font_catalog_scan: LatestJob::default(),
             font_catalog_root: workspace_root.clone(),
+            packages_visible: false,
+            package_query: String::new(),
+            package_filter: PackageFilter::All,
+            package_catalog: None,
+            package_catalog_job: LatestJob::default(),
             staged_ui_font_weight: None,
             staged_code_font_weight: None,
             tool_refresh_requested: false,
@@ -862,7 +1540,11 @@ impl EditorApp {
             editor_attention: None,
             editor_hover: None,
             next_editor_hover_token: 1,
+            editor_completion: None,
+            next_editor_completion_token: 1,
+            last_editor_caret: None,
             manual_format_revision: None,
+            format_when_tinymist_ready: None,
             autosave_deadline: None,
             diagnostic_tooltip: None,
             app_popup: None,
@@ -874,6 +1556,9 @@ impl EditorApp {
             rename_dialog: None,
             rename_overlay_had_focus: false,
             rename_overlay_suspended: false,
+            table_editor: None,
+            table_editor_had_focus: false,
+            table_editor_suspended: false,
             pending_tool_picker: None,
             notice: None,
             status_log: VecDeque::new(),
@@ -982,6 +1667,18 @@ impl EditorApp {
             .as_ref()
             .unwrap_or(&self.settings)
             .clone()
+    }
+
+    pub(crate) fn native_command_enabled(&self, command: AppCommand) -> bool {
+        match command_spec(command).requirement {
+            CommandRequirement::Always => true,
+            // Undo/redo history is viewport-local egui state. Keep these menu
+            // items enabled so the active viewport can make the final choice.
+            CommandRequirement::Undo | CommandRequirement::Redo => true,
+            CommandRequirement::TypstDocument => self.document.kind.is_typst(),
+            CommandRequirement::TypstPreview => self.typst_preview_available(),
+            CommandRequirement::InteractivePreview => self.interactive_preview_active(),
+        }
     }
 
     pub(crate) fn take_window_request(&mut self) -> Option<EditorWindowRequest> {
@@ -1104,6 +1801,133 @@ impl EditorApp {
         if font_files_changed {
             self.restart_tinymist();
             self.schedule_compile_now();
+        }
+    }
+
+    fn open_package_manager(&mut self, context: &egui::Context) {
+        self.packages_visible = true;
+        self.close_app_popup();
+        if self.package_catalog.is_none() && !self.package_catalog_job.is_running() {
+            self.request_package_catalog(context);
+        }
+    }
+
+    fn request_package_catalog(&mut self, context: &egui::Context) {
+        let roots = PackageRoots::standard();
+        if let Err(error) = self.package_catalog_job.start_and_repaint(
+            "tiptoptyp-package-catalog",
+            context,
+            move || Ok(PackageCatalogLoad::load(&roots)),
+        ) {
+            self.notice = Some(Notice {
+                message: format!("Could not start package discovery: {error}"),
+                kind: NoticeKind::Error,
+            });
+        }
+    }
+
+    fn poll_package_catalog(&mut self, context: &egui::Context) {
+        match self.package_catalog_job.poll() {
+            LatestJobPoll::Ready(catalog) => self.package_catalog = Some(catalog),
+            LatestJobPoll::Failed(error) => {
+                self.notice = Some(Notice {
+                    message: format!("Package discovery stopped: {error}"),
+                    kind: NoticeKind::Error,
+                });
+            }
+            LatestJobPoll::Pending => {
+                context.request_repaint_after(Duration::from_millis(100));
+            }
+            LatestJobPoll::Idle => {}
+        }
+    }
+
+    fn show_package_manager_window(&mut self, context: &egui::Context) {
+        if !self.packages_visible
+            || self.document_workflow.modal.is_some()
+            || self.rename_dialog.is_some()
+        {
+            return;
+        }
+        let active_theme = context.theme();
+        let style = context.style_of(active_theme);
+        let captures = self.captures.clone();
+        let catalog = self.package_catalog.clone();
+        let loading = self.package_catalog_job.is_running();
+        let mut close_requested = false;
+        let mut refresh_requested = false;
+        let mut copied = None;
+        let spec = ChildViewSpec::persistent(
+            "tiptoptyp-packages",
+            "tiptoptyp Packages",
+            [760.0, 620.0],
+            [520.0, 360.0],
+            "packages",
+        );
+        ChildViewHost::show(
+            context,
+            &captures,
+            spec,
+            active_theme,
+            &style,
+            |ui, input| {
+                close_requested |= input.close_requested;
+                if ui.ctx().input(|input| input.viewport().fullscreen) == Some(true) {
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                }
+                ui.painter()
+                    .rect_filled(ui.max_rect(), 0.0, ui.visuals().panel_fill);
+                egui::Panel::top("packages-titlebar")
+                    .exact_size(METRICS.chrome.toolbar_height)
+                    .frame(theme::settings_title_frame(ui.style()))
+                    .show(ui, |ui| {
+                        ui.horizontal_centered(|ui| {
+                            #[cfg(target_os = "macos")]
+                            ui.add_space(
+                                METRICS.toolbar.traffic_lights_fallback_width
+                                    + METRICS.toolbar.traffic_lights_gap,
+                            );
+                            theme::show_logo(ui);
+                            ui.label(RichText::new("Typst packages").strong());
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                refresh_requested |= ui
+                                    .add_enabled(!loading, egui::Button::new("Refresh"))
+                                    .clicked();
+                                #[cfg(not(target_os = "macos"))]
+                                if icon_button(ui, UiIcon::Close, "Close Packages").clicked() {
+                                    close_requested = true;
+                                }
+                            });
+                        });
+                    });
+                egui::CentralPanel::default()
+                    .frame(theme::settings_content_frame(ui.style()))
+                    .show(ui, |ui| {
+                        show_package_browser_ui(
+                            ui,
+                            &mut self.package_query,
+                            &mut self.package_filter,
+                            catalog.as_ref(),
+                            loading,
+                            &mut copied,
+                        );
+                    });
+            },
+        );
+        if close_requested {
+            self.packages_visible = false;
+            context.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+        if refresh_requested {
+            self.request_package_catalog(context);
+        }
+        if let Some(import) = copied {
+            context.copy_text(import);
+            self.notice = Some(Notice {
+                message: "Copied package import".to_owned(),
+                kind: NoticeKind::Success,
+            });
         }
     }
 
@@ -1300,9 +2124,11 @@ impl EditorApp {
 
     fn mark_edited(&mut self) {
         self.manual_format_revision = None;
+        self.format_when_tinymist_ready = None;
         self.document.mark_edited();
         self.notice = None;
         self.editor_hover = None;
+        self.editor_completion = None;
         if self.document.kind.is_typst() {
             // Tinymist sees unsaved edits in every open source file. The CLI
             // fallback can only see an imported subfile after it is saved, so
@@ -1314,9 +2140,10 @@ impl EditorApp {
             if self.compile_deadline.is_some() {
                 self.preview.status = PreviewStatus::Waiting;
             }
-            if !self.compilation_paused
-                && let Err(error) = self.sync_tinymist_change()
-            {
+            // Pausing freezes preview output, not the language server. Keep the
+            // exact document version synchronized so completions, hover,
+            // formatting, and diagnostics continue to describe this buffer.
+            if let Err(error) = self.sync_tinymist_change() {
                 self.preview.tinymist_state = ServiceState::Degraded(error);
             }
             self.schedule_project_index();
@@ -1327,7 +2154,8 @@ impl EditorApp {
     }
 
     fn schedule_autosave_if_needed(&mut self) {
-        self.autosave_deadline = (self.settings.auto_save
+        self.autosave_deadline = (self.snapshot_scene.is_none()
+            && self.settings.auto_save
             && self.document.path.is_some()
             && self.document.source != self.document.saved_source)
             .then(|| {
@@ -1336,6 +2164,10 @@ impl EditorApp {
     }
 
     fn tick_autosave(&mut self, context: &egui::Context) {
+        if self.snapshot_scene.is_some() {
+            self.autosave_deadline = None;
+            return;
+        }
         if self.document_workflow.pending_dialog.is_some() || self.document_workflow.modal.is_some()
         {
             return;
@@ -1548,6 +2380,95 @@ impl EditorApp {
         }
     }
 
+    fn receive_asset_thumbnail_results(&mut self, context: &egui::Context) {
+        while let Some(result) = self.asset_thumbnail_loader.try_recv() {
+            if !asset_thumbnail_result_matches(self.asset_hover.as_ref(), &result) {
+                continue;
+            }
+            let content = match result.output {
+                Ok(thumbnail) => {
+                    let expected_bytes = thumbnail.size[0]
+                        .checked_mul(thumbnail.size[1])
+                        .and_then(|pixels| pixels.checked_mul(4));
+                    if expected_bytes != Some(thumbnail.rgba.len()) {
+                        AssetHoverContent::Error(
+                            "The decoded asset thumbnail had invalid pixel data".to_owned(),
+                        )
+                    } else {
+                        let image = ColorImage::from_rgba_unmultiplied(
+                            thumbnail.size,
+                            thumbnail.rgba.as_ref(),
+                        );
+                        let texture = context.load_texture(
+                            format!("asset-hover-{}", result.token),
+                            image,
+                            TextureOptions::LINEAR,
+                        );
+                        AssetHoverContent::Ready {
+                            texture,
+                            source_size: thumbnail.size,
+                        }
+                    }
+                }
+                Err(error) => AssetHoverContent::Error(error),
+            };
+            if let Some(hover) = &mut self.asset_hover {
+                hover.content = content;
+            }
+        }
+    }
+
+    fn update_asset_hover(&mut self, context: &egui::Context) {
+        let candidate = current_asset_hover_candidate(context);
+        let Some(candidate) = candidate else {
+            if !native_tooltip_handoff_active(context, false) {
+                self.clear_asset_hover();
+            }
+            return;
+        };
+        if native_tooltip_handoff_blocks(context, candidate.origin) {
+            return;
+        }
+
+        self.diagnostic_tooltip = None;
+        self.editor_hover = None;
+        clear_native_hover_overlay(context);
+
+        let target_changed = self
+            .asset_hover
+            .as_ref()
+            .is_none_or(|hover| hover.path != candidate.path || hover.kind != candidate.kind);
+        if target_changed {
+            self.asset_thumbnail_token = self.asset_thumbnail_token.wrapping_add(1).max(1);
+            let token = self.asset_thumbnail_token;
+            let request =
+                self.asset_thumbnail_loader
+                    .request(token, candidate.path.clone(), candidate.kind);
+            self.asset_hover = Some(AssetHoverState {
+                origin: candidate.origin,
+                anchor: candidate.anchor,
+                path: candidate.path,
+                kind: candidate.kind,
+                opacity: candidate.opacity,
+                token,
+                content: request
+                    .map_or_else(AssetHoverContent::Error, |_| AssetHoverContent::Loading),
+            });
+        } else if let Some(hover) = &mut self.asset_hover {
+            hover.origin = candidate.origin;
+            hover.anchor = candidate.anchor;
+            hover.opacity = candidate.opacity;
+        }
+    }
+
+    fn clear_asset_hover(&mut self) {
+        if self.asset_hover.take().is_some() {
+            self.asset_thumbnail_token = self.asset_thumbnail_token.wrapping_add(1).max(1);
+            self.asset_thumbnail_loader
+                .cancel_before(self.asset_thumbnail_token);
+        }
+    }
+
     fn set_compile_error(&mut self, error: String) {
         self.preview.artifact_key = None;
         self.preview.status = PreviewStatus::Error;
@@ -1595,14 +2516,25 @@ impl EditorApp {
                     return;
                 }
             }
+            if let Some(generation) = self.tinymist_generation
+                && let Err(error) = self
+                    .tinymist
+                    .set_preview_refresh(generation, PreviewRefresh::OnSave)
+            {
+                self.preview.tinymist_state = ServiceState::Degraded(error.to_string());
+            }
             let (message, kind) = compilation_notice(true);
             self.notice = Some(Notice {
                 message: message.to_owned(),
                 kind,
             });
         } else {
-            if let Err(error) = self.sync_tinymist_change() {
-                self.preview.tinymist_state = ServiceState::Degraded(error);
+            if let Some(generation) = self.tinymist_generation
+                && let Err(error) = self
+                    .tinymist
+                    .set_preview_refresh(generation, PreviewRefresh::OnType)
+            {
+                self.preview.tinymist_state = ServiceState::Degraded(error.to_string());
             }
             self.schedule_compile_now();
             let (message, kind) = compilation_notice(false);
@@ -1637,6 +2569,7 @@ impl EditorApp {
 
     fn clear_preview_for_document(&mut self, preserve_designated_preview: bool) {
         self.manual_format_revision = None;
+        self.format_when_tinymist_ready = None;
         self.external_file_change_notice = None;
         self.next_external_file_check = Instant::now();
         self.asset_token = self.asset_token.wrapping_add(1);
@@ -1645,6 +2578,7 @@ impl EditorApp {
             .clear_for_document(self.document.revision, preserve_designated_preview);
         self.pending_asset_page = None;
         self.editor_hover = None;
+        self.clear_asset_hover();
         if let Some(pending) = self.document_workflow.pending_export.take() {
             self.notice = Some(Notice {
                 message: format!(
@@ -1657,54 +2591,131 @@ impl EditorApp {
     }
 
     fn handle_shortcuts(&mut self, context: &egui::Context, frame: &eframe::Frame) {
-        let refresh = KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::R);
-        let global_command = context.input_mut(|input| {
-            consume_shortcut(input, |command| {
+        let shortcut_viewport = focused_input_viewport(context);
+        if self.handle_shortcut_capture(context, shortcut_viewport) {
+            return;
+        }
+        let shortcuts = self.settings.effective_shortcuts();
+        // Age the request on the owning document viewport's frame clock. The
+        // target may be a child viewport that closes before clipboard delivery;
+        // consulting a removed child's clock would panic in debug builds and
+        // would not provide a bounded lifetime if that child stops rendering.
+        let owner_frame = context.cumulative_frame_nr();
+        let allow_requested_paste = self
+            .pending_widget_paste
+            .is_some_and(|pending| pending.admits(shortcut_viewport, owner_frame));
+        let requested_paste_admitted = context.input_mut_for(shortcut_viewport, |input| {
+            normalize_text_edit_shortcut_events(input, &shortcuts, allow_requested_paste)
+        });
+        let pending_paste_expired = self
+            .pending_widget_paste
+            .is_some_and(|pending| pending.expired(owner_frame));
+        if requested_paste_admitted || pending_paste_expired {
+            self.pending_widget_paste = None;
+        }
+        let editor_id = source_editor_id(context);
+        let source_focused = context.memory(|memory| memory.focused()) == Some(editor_id);
+        self.handle_editor_completion_keys(context);
+        let completion_requested = source_focused
+            && shortcuts
+                .egui(ShortcutAction::Complete)
+                .is_some_and(|shortcut| {
+                    context
+                        .input_mut_for(shortcut_viewport, |input| input.consume_shortcut(&shortcut))
+                });
+        if completion_requested {
+            let snapshot = self.editor_snapshot(context);
+            if snapshot.cursor.primary.index == snapshot.cursor.secondary.index {
+                let cursor = snapshot.cursor.primary.index.0;
+                let key = self.document.key();
+                let anchor = self
+                    .last_editor_caret
+                    .filter(|caret| caret.key == key && caret.char_index == cursor)
+                    .map(|caret| caret.rect)
+                    .unwrap_or_else(|| {
+                        context
+                            .input(|input| input.viewport().inner_rect)
+                            .map(|rect| Rect::from_center_size(rect.center(), Vec2::splat(1.0)))
+                            .unwrap_or_else(|| Rect::from_min_size(Pos2::ZERO, Vec2::splat(1.0)))
+                    });
+                self.request_editor_completion(cursor, anchor, true);
+            } else {
+                self.editor_completion = None;
+                self.notice = Some(Notice {
+                    message: "Place the caret at one position to request completions".to_owned(),
+                    kind: NoticeKind::Info,
+                });
+            }
+        }
+        let other_text_input_focused = !source_focused && context.egui_wants_keyboard_input();
+        let can_sync_preview = self.document.kind.is_typst() && self.interactive_preview_active();
+        let global_command = context.input_mut_for(shortcut_viewport, |input| {
+            consume_shortcut(input, &shortcuts, |command| {
                 matches!(
                     command_spec(command).menu,
                     CommandMenu::Application | CommandMenu::File | CommandMenu::View
-                ) || matches!(
-                    command,
-                    AppCommand::Find
-                        | AppCommand::FindReplace
-                        | AppCommand::Format
-                        | AppCommand::ToggleComment
-                )
+                ) || matches!(command, AppCommand::Find | AppCommand::FindReplace)
+                    || (can_sync_preview && command == AppCommand::SyncPreview)
+                    || (!other_text_input_focused
+                        && matches!(command, AppCommand::Format | AppCommand::ToggleComment))
             })
         });
         if let Some(command) = global_command {
             self.execute_app_command(command, context, frame);
         }
-        if context.input_mut(|input| input.consume_shortcut(&refresh)) {
+        if shortcuts
+            .egui(ShortcutAction::Compile)
+            .is_some_and(|shortcut| {
+                context.input_mut_for(shortcut_viewport, |input| input.consume_shortcut(&shortcut))
+            })
+        {
             self.compile_pdf(frame);
         }
-        let editor_id = source_editor_id(context);
-        let source_focused = context.memory(|memory| memory.focused()) == Some(editor_id);
-        if source_focused || !context.egui_wants_keyboard_input() {
-            let history_command = context.input_mut(|input| {
-                consume_shortcut(input, |command| {
-                    matches!(command, AppCommand::Undo | AppCommand::Redo)
-                })
-            });
-            if let Some(command) = history_command {
-                self.execute_app_command(command, context, frame);
-            }
+        if shortcuts
+            .egui(ShortcutAction::ToggleCompilation)
+            .is_some_and(|shortcut| {
+                context.input_mut_for(shortcut_viewport, |input| input.consume_shortcut(&shortcut))
+            })
+        {
+            self.toggle_compilation_paused();
         }
-        let focus_tooltip = focus_tooltip_shortcut();
-        if context.input_mut(|input| input.consume_shortcut(&focus_tooltip)) {
-            let target = self
-                .diagnostic_tooltip
+        let edit_command = context.input_mut_for(shortcut_viewport, |input| {
+            consume_shortcut(input, &shortcuts, |command| {
+                matches!(
+                    command,
+                    AppCommand::Undo
+                        | AppCommand::Redo
+                        | AppCommand::Cut
+                        | AppCommand::Copy
+                        | AppCommand::Paste
+                        | AppCommand::SelectAll
+                )
+            })
+        });
+        if shortcuts
+            .egui(ShortcutAction::FocusTooltip)
+            .is_some_and(|shortcut| {
+                context.input_mut_for(shortcut_viewport, |input| input.consume_shortcut(&shortcut))
+            })
+        {
+            let native_tooltip_id = native_hover_tooltip_id(context);
+            let target_identity = self
+                .asset_hover
                 .as_ref()
-                .map(|tooltip| (tooltip.origin, tooltip.detail.clone()))
+                .map(|hover| asset_tooltip_identity(hover.origin, &hover.path))
+                .or_else(|| {
+                    self.diagnostic_tooltip
+                        .as_ref()
+                        .map(|tooltip| tooltip_identity(tooltip.origin, &tooltip.detail))
+                })
                 .or_else(|| {
                     context.data(|data| {
-                        data.get_temp::<HoverTooltipOverlay>(native_hover_tooltip_id(context))
-                            .map(|tooltip| (tooltip.origin, tooltip.detail.clone()))
+                        data.get_temp::<HoverTooltipOverlay>(native_tooltip_id)
+                            .map(|tooltip| tooltip_identity(tooltip.origin, &tooltip.detail))
                     })
                 });
-            if let Some((origin, detail)) = target {
+            if let Some(identity) = target_identity {
                 let interaction_id = tooltip_interaction_id(context);
-                let identity = tooltip_identity(origin, &detail);
                 context.data_mut(|data| {
                     let mut state = data
                         .get_temp::<TooltipInteractionState>(interaction_id)
@@ -1718,7 +2729,10 @@ impl EditorApp {
             }
         }
         if self.find_visible
-            && context.input_mut(|input| input.consume_key(Modifiers::NONE, egui::Key::Escape))
+            && shortcut_viewport == context.viewport_id()
+            && context.input_mut_for(shortcut_viewport, |input| {
+                input.consume_key(Modifiers::NONE, egui::Key::Escape)
+            })
         {
             self.find_visible = false;
             self.replace_visible = false;
@@ -1726,7 +2740,9 @@ impl EditorApp {
         }
 
         if self.view_mode.shows_preview() && !self.interactive_preview_active() {
-            match context.input_mut(consume_preview_zoom_shortcut) {
+            match context.input_mut_for(shortcut_viewport, |input| {
+                consume_preview_zoom_shortcut(input, &shortcuts)
+            }) {
                 Some(PreviewZoomAction::In) => {
                     self.preview.requested_zoom = Some(
                         (self.preview.zoom * METRICS.preview.zoom_step)
@@ -1749,9 +2765,124 @@ impl EditorApp {
             }
         }
 
-        if let Some(delta) = context.input_mut(consume_ui_scale_shortcut) {
+        if let Some(delta) = context.input_mut_for(shortcut_viewport, |input| {
+            consume_ui_scale_shortcut(input, &shortcuts)
+        }) {
             self.adjust_ui_scale(delta, context);
         }
+
+        if shortcuts
+            .egui(ShortcutAction::Minimize)
+            .is_some_and(|shortcut| {
+                context.input_mut_for(shortcut_viewport, |input| input.consume_shortcut(&shortcut))
+            })
+        {
+            context.send_viewport_cmd_to(shortcut_viewport, egui::ViewportCommand::Minimized(true));
+        }
+        if shortcuts
+            .egui(ShortcutAction::ToggleFullscreen)
+            .is_some_and(|shortcut| {
+                context.input_mut_for(shortcut_viewport, |input| input.consume_shortcut(&shortcut))
+            })
+        {
+            let fullscreen = context
+                .input_for(shortcut_viewport, |input| input.viewport().fullscreen)
+                .unwrap_or(false);
+            context.send_viewport_cmd_to(
+                shortcut_viewport,
+                egui::ViewportCommand::Fullscreen(!fullscreen),
+            );
+        }
+        if shortcuts
+            .egui(ShortcutAction::CloseWindow)
+            .is_some_and(|shortcut| {
+                context.input_mut_for(shortcut_viewport, |input| input.consume_shortcut(&shortcut))
+            })
+        {
+            context.send_viewport_cmd_to(shortcut_viewport, egui::ViewportCommand::Close);
+        }
+
+        if shortcuts
+            .egui(ShortcutAction::CaptureUi)
+            .is_some_and(|shortcut| {
+                context.input_mut_for(shortcut_viewport, |input| input.consume_shortcut(&shortcut))
+            })
+        {
+            self.captures.queue_for_viewport(shortcut_viewport);
+        }
+
+        // Consume any effective binding which is intentionally unavailable in
+        // the current focus/context so it cannot masquerade as a TextEdit
+        // built-in. Then remove disabled platform editing chords as well.
+        context.input_mut_for(shortcut_viewport, |input| {
+            consume_shortcut_action(input, &shortcuts, |_| true);
+            remove_unhandled_text_edit_builtin_events(input);
+        });
+
+        if let Some(command) = edit_command {
+            if other_text_input_focused {
+                self.route_edit_command_to_focused_widget(command, context, shortcut_viewport);
+            } else if source_focused || !context.egui_wants_keyboard_input() {
+                self.execute_app_command(command, context, frame);
+            }
+        }
+    }
+
+    /// Shortcut capture owns the next key event in whichever native viewport
+    /// is active. Consuming it before normal routing prevents the old binding
+    /// from firing and keeps the key out of an unrelated text field.
+    fn handle_shortcut_capture(
+        &mut self,
+        context: &egui::Context,
+        viewport: egui::ViewportId,
+    ) -> bool {
+        let Some(action) = self.shortcut_capture else {
+            return false;
+        };
+        let event = context.input_mut_for(viewport, take_shortcut_capture_event);
+        let Some((key, modifiers)) = event else {
+            return true;
+        };
+
+        let mut edited = self
+            .pending_settings
+            .clone()
+            .unwrap_or_else(|| self.settings.clone());
+        if key == egui::Key::Escape {
+            self.shortcut_capture = None;
+            self.shortcut_notice = Some("Shortcut capture canceled".to_owned());
+        } else if key == egui::Key::Backspace && !modifiers.any() {
+            edited.shortcut_overrides.set(action, None);
+            self.shortcut_capture = None;
+            self.shortcut_notice = Some(format!("Disabled {}", action.label()));
+        } else {
+            match ShortcutChord::from_egui(
+                KeyboardShortcut::new(modifiers, key),
+                ShortcutPlatform::current(),
+            ) {
+                Ok(chord) => {
+                    let displaced = edited.shortcut_overrides.assign(
+                        action,
+                        chord,
+                        ShortcutPlatform::current(),
+                    );
+                    self.shortcut_capture = None;
+                    self.shortcut_notice = Some(displaced.map_or_else(
+                        || format!("Changed {}", action.label()),
+                        |displaced| {
+                            format!(
+                                "Changed {}; {} was unassigned to avoid a conflict",
+                                action.label(),
+                                displaced.label()
+                            )
+                        },
+                    ));
+                }
+                Err(error) => self.shortcut_notice = Some(error.to_string()),
+            }
+        }
+        self.queue_settings(edited, context);
+        true
     }
 
     fn execute_app_command(
@@ -1803,7 +2934,10 @@ impl EditorApp {
                 self.jump_source_to_preview(cursor);
             }
             AppCommand::Problems => self.problems_visible = !self.problems_visible,
-            AppCommand::Explorer => self.filesystem_visible = !self.filesystem_visible,
+            AppCommand::Explorer => {
+                self.filesystem_phase = self.filesystem_phase.toggle();
+                context.request_repaint();
+            }
             AppCommand::Code => self.view_mode = ViewMode::Code,
             AppCommand::Split => self.view_mode = ViewMode::Split,
             AppCommand::Preview => self.view_mode = ViewMode::Preview,
@@ -1811,20 +2945,75 @@ impl EditorApp {
     }
 
     fn process_native_menu_commands(&mut self, context: &egui::Context, frame: &eframe::Frame) {
+        let focused_viewport = focused_input_viewport(context);
         while let Some(command) = self.queued_native_menu_commands.pop() {
+            if self.route_edit_command_to_focused_widget(command, context, focused_viewport) {
+                continue;
+            }
             self.execute_app_command(command, context, frame);
         }
     }
 
+    fn route_edit_command_to_focused_widget(
+        &mut self,
+        command: AppCommand,
+        context: &egui::Context,
+        viewport: egui::ViewportId,
+    ) -> bool {
+        let focused = context.memory(|memory| memory.focused());
+        if focused == Some(source_editor_id(context)) || !context.egui_wants_keyboard_input() {
+            return false;
+        }
+        match command {
+            AppCommand::Cut => context.input_mut_for(viewport, |input| {
+                input.events.push(egui::Event::Cut);
+            }),
+            AppCommand::Copy => context.input_mut_for(viewport, |input| {
+                input.events.push(egui::Event::Copy);
+            }),
+            AppCommand::Paste => self.request_widget_paste(context, viewport),
+            AppCommand::Undo | AppCommand::Redo | AppCommand::SelectAll => {
+                if let Some(shortcut) = standard_text_edit_shortcut(command) {
+                    context.input_mut_for(viewport, |input| {
+                        input.events.push(egui::Event::Key {
+                            key: shortcut.logical_key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: shortcut.modifiers,
+                        });
+                    });
+                }
+            }
+            // Source-only editing commands must not mutate the document while
+            // a find, settings, rename, package, or table field owns focus.
+            AppCommand::ToggleComment | AppCommand::Format => {}
+            _ => return false,
+        }
+        true
+    }
+
+    fn request_widget_paste(&mut self, context: &egui::Context, viewport: egui::ViewportId) {
+        self.pending_widget_paste = Some(PendingWidgetPaste::new(
+            viewport,
+            context.cumulative_frame_nr(),
+        ));
+        context.send_viewport_cmd_to(viewport, egui::ViewportCommand::RequestPaste);
+    }
+
     fn document_flow_busy(&self) -> bool {
         self.document_workflow.is_busy(
-            self.rename_dialog.is_some(),
+            self.rename_dialog.is_some() || self.table_editor.is_some(),
             self.pending_tool_picker.is_some(),
         )
     }
 
     fn set_settings_visible(&mut self, visible: bool) {
         self.settings_visible = visible;
+        if !visible {
+            self.shortcut_editor_visible = false;
+            self.shortcut_capture = None;
+        }
         if visible {
             // A root popup and a child settings window must never compete for
             // native focus. Settings owns transient interaction until closed.
@@ -1852,6 +3041,7 @@ impl EditorApp {
     }
 
     fn open_find(&mut self, replace: bool) {
+        self.editor_completion = None;
         self.find_visible = true;
         self.replace_visible |= replace;
         self.focus_find = true;
@@ -1917,6 +3107,16 @@ impl EditorApp {
                 self.problems_visible = false;
                 self.find_visible = false;
                 self.replace_visible = false;
+            }
+            UiSnapshotScene::StickyContext => {
+                self.notice = None;
+                self.view_mode = ViewMode::Code;
+                self.problems_visible = false;
+                self.find_visible = false;
+                self.replace_visible = false;
+                if prepare_sticky_context_snapshot_document(&mut self.document) {
+                    self.prepare_editor_source_data();
+                }
             }
             UiSnapshotScene::FileMenu => {
                 self.app_popup = Some(AppPopup::File {
@@ -1988,6 +3188,7 @@ impl EditorApp {
                 self.app_popup = Some(AppPopup::Editor {
                     anchor: Pos2::new(430.0, 250.0),
                     link: None,
+                    table: None,
                 });
             }
             UiSnapshotScene::DocumentFontSelector => {
@@ -2123,13 +3324,17 @@ impl EditorApp {
             .snapshot_scene
             .is_some_and(|scene| scene.viewport_target() != step.scene.viewport_target());
         self.settings_visible = false;
+        self.shortcut_editor_visible = false;
+        self.packages_visible = false;
         self.typst_overrides_visible = false;
         self.workspace_chooser_visible = false;
         self.problems_visible = false;
         self.find_visible = false;
         self.replace_visible = false;
+        self.view_mode = ViewMode::Split;
         self.search.clear();
         self.focus_find = false;
+        self.pending_editor_selection = None;
         self.diagnostic_tooltip = None;
         self.close_app_popup();
         self.document_workflow.clear_modal();
@@ -2150,6 +3355,9 @@ impl EditorApp {
         self.document.restore_saved_source();
         self.theme_override = Some(step.theme.clone());
         self.snapshot_scene = Some(step.scene);
+        if step.scene == UiSnapshotScene::StickyContext {
+            self.document.reset_editor_history = true;
+        }
 
         if capture_target_changed {
             // Immediate child viewports have their own renderer texture state.
@@ -2378,7 +3586,12 @@ impl EditorApp {
 
     fn handle_close_request(&mut self, context: &egui::Context) {
         let close_requested = context.input(|input| input.viewport().close_requested());
-        if close_requested && self.is_dirty() && !self.document_workflow.allow_close {
+        if close_request_requires_confirmation(
+            close_requested,
+            self.is_dirty(),
+            self.document_workflow.allow_close,
+            self.snapshot_scene.is_some(),
+        ) {
             context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             if self.document_workflow.modal.is_none() {
                 self.request_document_replacement(
@@ -2711,6 +3924,13 @@ impl EditorApp {
     }
 
     fn save_to_with_intent(&mut self, path: PathBuf, intent: SaveIntent) -> bool {
+        // Snapshot scenes freely replace and manipulate the in-memory source
+        // to construct deterministic UI states. No capture path is allowed to
+        // persist those synthetic edits to the fixture supplied on the CLI.
+        if self.snapshot_scene.is_some() {
+            self.autosave_deadline = None;
+            return false;
+        }
         let path_changed = self
             .document
             .path
@@ -3128,7 +4348,19 @@ impl EditorApp {
                 if typst && path.extension().is_none() {
                     path.set_extension("typ");
                 }
-                self.save_to(path);
+                let saved = self.save_to(path);
+                if let Some(key) =
+                    save_as_format_handoff(saved, self.document.kind, self.document.key())
+                {
+                    // Save As changes the document URI and restarts Tinymist.
+                    // Remember this exact saved revision and request formatting
+                    // only after the replacement LSP session has opened it.
+                    self.format_when_tinymist_ready = Some(key);
+                    self.notice = Some(Notice {
+                        message: "Saved; formatting when Tinymist is ready…".to_owned(),
+                        kind: NoticeKind::Info,
+                    });
+                }
             }
         }
     }
@@ -3145,17 +4377,30 @@ impl EditorApp {
             path.set_extension("pdf");
         }
 
+        let typst_output = self.typst_preview_available();
+        let requires_new_artifact = pdf_output_requires_new_artifact(
+            typst_output,
+            self.compilation_paused,
+            self.compile_deadline.is_some(),
+            self.preview.status,
+        );
+        let reusable = pdf_artifact_reusable_for_output(
+            self.preview.artifact_key,
+            self.preview.pdf.is_some(),
+            self.document.revision,
+            requires_new_artifact,
+        );
         self.document_workflow.pending_export = Some(PendingExport {
             path,
             document_epoch: self.document.epoch,
             intent,
+            after_artifact_generation: if typst_output && !reusable {
+                self.preview.artifact_key.map(|key| key.generation)
+            } else {
+                None
+            },
         });
-        if self
-            .preview
-            .artifact_key
-            .is_some_and(|key| key.revision == self.document.revision)
-            && self.preview.pdf.is_some()
-        {
+        if reusable {
             self.complete_pending_export();
             return;
         }
@@ -3169,12 +4414,14 @@ impl EditorApp {
     }
 
     fn complete_pending_export(&mut self) {
-        let (Some(pending), Some(pdf)) = (
-            take_matching_export(
-                &mut self.document_workflow.pending_export,
-                self.document.epoch,
-            ),
-            self.preview.pdf.as_deref(),
+        let Some(pdf) = self.preview.pdf.as_deref() else {
+            return;
+        };
+        let Some(pending) = take_ready_export(
+            &mut self.document_workflow.pending_export,
+            self.document.epoch,
+            self.document.revision,
+            self.preview.artifact_key,
         ) else {
             return;
         };
@@ -3469,7 +4716,7 @@ impl EditorApp {
         if self.workspace_scan.is_running() {
             context.request_repaint_after(Duration::from_millis(50));
         }
-        if !self.filesystem_visible {
+        if !self.filesystem_phase.panel_visible() {
             return;
         }
         let now = Instant::now();
@@ -3560,6 +4807,7 @@ impl EditorApp {
         // A restart invalidates every outstanding formatting request. Do not
         // carry save-after-format intent into the replacement generation.
         self.manual_format_revision = None;
+        self.editor_completion = None;
         let start_preview = self.tinymist_session_requested();
         self.preview.tinymist_preview_enabled = start_preview;
         if let Some(generation) = self.tinymist_generation.take() {
@@ -3650,6 +4898,7 @@ impl EditorApp {
         config.start_preview = start_preview;
         config.preview.invert_colors =
             tinymist_invert_colors(self.settings.document_theme, self.preview.dark);
+        config.preview.refresh = tinymist_preview_refresh(self.compilation_paused);
         match self.tinymist.start_workspace(config) {
             Ok(generation) => {
                 let version = revision_as_i32(self.document.revision);
@@ -3760,6 +5009,7 @@ impl EditorApp {
         while let Some(event) = self.tinymist.try_recv() {
             match event {
                 TinymistEvent::Starting { .. } => {
+                    self.editor_completion = None;
                     self.preview.tinymist_lsp_ready = false;
                     self.preview.tinymist_state =
                         ServiceState::Starting("Launching Tinymist LSP".to_owned());
@@ -3787,6 +5037,13 @@ impl EditorApp {
                                     ServiceState::Degraded(error.to_string())
                             }
                         }
+                    }
+                    if take_ready_format_handoff(
+                        &mut self.format_when_tinymist_ready,
+                        self.document.key(),
+                        self.tinymist_generation == Some(generation) && self.tinymist_current_open,
+                    ) {
+                        self.request_format_after_manual_save();
                     }
                 }
                 TinymistEvent::PreviewReady { url, .. } => {
@@ -3851,6 +5108,57 @@ impl EditorApp {
                         hover.detail = contents;
                     }
                 }
+                TinymistEvent::Completed {
+                    generation,
+                    uri,
+                    version,
+                    request_token,
+                    is_incomplete,
+                    items,
+                } => self.receive_editor_completions(
+                    EditorCompletionResponse {
+                        generation,
+                        uri,
+                        version,
+                        request_token,
+                        is_incomplete,
+                        items,
+                    },
+                    context,
+                ),
+                TinymistEvent::CompletionFailed {
+                    generation,
+                    uri,
+                    version,
+                    request_token,
+                    message,
+                } => {
+                    let matches = self.editor_completion.as_ref().is_some_and(|completion| {
+                        completion_response_matches(
+                            completion,
+                            generation,
+                            &uri,
+                            version,
+                            request_token,
+                            self.tinymist_generation,
+                            self.tinymist_uri.as_deref(),
+                            revision_as_i32(self.document.revision),
+                        )
+                    });
+                    if matches {
+                        let explicit = self
+                            .editor_completion
+                            .as_ref()
+                            .is_some_and(|completion| completion.explicit);
+                        self.editor_completion = None;
+                        if explicit {
+                            self.notice = Some(Notice {
+                                message: format!("Completion failed: {message}"),
+                                kind: NoticeKind::Error,
+                            });
+                        }
+                    }
+                }
                 TinymistEvent::Error {
                     stage,
                     message,
@@ -3871,6 +5179,7 @@ impl EditorApp {
                     }
                     let detail = format!("{stage}: {message}");
                     self.preview.tinymist_state = if fatal {
+                        self.format_when_tinymist_ready = None;
                         self.preview.tinymist_lsp_ready = false;
                         self.preview.interactive_url = None;
                         self.preview.webview_state = ServiceState::Failed(
@@ -3885,6 +5194,8 @@ impl EditorApp {
                     }
                 }
                 TinymistEvent::Stopped { reason, .. } => {
+                    self.format_when_tinymist_ready = None;
+                    self.editor_completion = None;
                     self.preview.tinymist_lsp_ready = false;
                     self.preview.interactive_url = None;
                     let detail = match &self.preview.tinymist_state {
@@ -4277,6 +5588,7 @@ impl EditorApp {
     }
 
     fn show_toolbar(&mut self, ui: &mut egui::Ui, frame: &eframe::Frame) {
+        let shortcuts = self.settings.effective_shortcuts();
         #[cfg(target_os = "macos")]
         {
             // The toolbar occupies the native title-bar row. Controls start to
@@ -4367,7 +5679,12 @@ impl EditorApp {
                 self.show_view_menu(ui);
                 ui.separator();
             }
-            if native_hover_text(ui.button("Find"), "Find · Cmd+F").clicked() {
+            if native_hover_text(
+                ui.button("Find"),
+                shortcut_tooltip("Find", &shortcuts, ShortcutAction::Find),
+            )
+            .clicked()
+            {
                 self.toggle_find();
             }
             let (pause_label, pause_hint) = compilation_toggle_copy(self.compilation_paused);
@@ -4376,7 +5693,7 @@ impl EditorApp {
                     self.typst_preview_available(),
                     egui::Button::new(pause_label).selected(self.compilation_paused),
                 ),
-                pause_hint,
+                shortcut_tooltip(pause_hint, &shortcuts, ShortcutAction::ToggleCompilation),
             )
             .clicked()
             {
@@ -4384,7 +5701,11 @@ impl EditorApp {
             }
             if native_hover_text(
                 ui.add_enabled(self.typst_preview_available(), egui::Button::new("Compile")),
-                "Compile PDF beside the Typst source · Cmd+R",
+                shortcut_tooltip(
+                    "Compile PDF beside the Typst source",
+                    &shortcuts,
+                    ShortcutAction::Compile,
+                ),
             )
             .clicked()
             {
@@ -4400,7 +5721,11 @@ impl EditorApp {
                         self.problems_visible,
                         if compact { "!" } else { "Problems" },
                     ),
-                    "Toggle compiler diagnostics · Cmd+5",
+                    shortcut_tooltip(
+                        "Toggle compiler diagnostics",
+                        &shortcuts,
+                        ShortcutAction::Problems,
+                    ),
                 )
                 .clicked()
                 {
@@ -4432,12 +5757,13 @@ impl EditorApp {
                 );
                 let explorer_label = if compact { "Files" } else { "Explorer" };
                 if native_hover_text(
-                    ui.selectable_label(self.filesystem_visible, explorer_label),
+                    ui.selectable_label(self.filesystem_phase.panel_visible(), explorer_label),
                     "Toggle the file explorer",
                 )
                 .clicked()
                 {
-                    self.filesystem_visible = !self.filesystem_visible;
+                    self.filesystem_phase = self.filesystem_phase.toggle();
+                    ui.ctx().request_repaint();
                 }
                 if native_hover_text(
                     ui.selectable_label(
@@ -4600,7 +5926,7 @@ impl EditorApp {
             }
             let editor_id = source_editor_id(context);
             context.memory_mut(|memory| memory.request_focus(editor_id));
-            context.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+            self.request_widget_paste(context, context.viewport_id());
         }
     }
 
@@ -4816,6 +6142,123 @@ impl EditorApp {
         });
     }
 
+    fn begin_table_editor(&mut self, table: EditableTable) {
+        let Some(original_call) =
+            char_range_slice(&self.document.source, table.source_range.clone())
+        else {
+            self.notice = Some(Notice {
+                message: "The table changed before it could be opened".to_owned(),
+                kind: NoticeKind::Info,
+            });
+            return;
+        };
+        self.table_editor = Some(TableEditorDialog {
+            table,
+            original_call: original_call.to_owned(),
+            document_key: self.document.key(),
+            focus_first_cell: true,
+            error: None,
+        });
+        self.table_editor_had_focus = false;
+        self.table_editor_suspended = false;
+    }
+
+    fn show_table_editor_window(&mut self, context: &egui::Context) {
+        if self.table_editor.is_none()
+            || self.document_workflow.modal.is_some()
+            || self.table_editor_suspended
+        {
+            return;
+        }
+        let Some(window_rect) = context.input(|input| input.viewport().inner_rect) else {
+            return;
+        };
+        let card_width = (window_rect.width() - METRICS.popup.modal_window_inset).clamp(1.0, 900.0);
+        let cells_height = (window_rect.height() - 190.0).clamp(80.0, 420.0);
+        let theme = context.theme();
+        let style = context.style_of(theme);
+        let Some(dialog) = &mut self.table_editor else {
+            return;
+        };
+        let mut requested_action = None;
+        let mut overlay_had_focus = self.table_editor_had_focus;
+        let mut suspend_overlay = false;
+        let captures = self.captures.clone();
+        let spec = ChildViewSpec::modal(
+            "tiptoptyp-table-editor-overlay",
+            "Table editor",
+            window_rect,
+            "table-editor",
+        );
+        ChildViewHost::show(context, &captures, spec, theme, &style, |ui, input| {
+            if input.focused == Some(true) {
+                overlay_had_focus = true;
+            }
+            suspend_overlay |= overlay_had_focus && input.focused == Some(false);
+            if input.close_requested || input.escape_pressed {
+                requested_action = Some(TableEditorUiAction::Cancel);
+            }
+            if suspend_overlay {
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            }
+            egui::Area::new(viewport_scoped_id(ui.ctx(), "table-editor-dialog"))
+                .order(egui::Order::Foreground)
+                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+                .show(ui.ctx(), |ui| {
+                    theme::dialog_card_frame(&style).show(ui, |ui| {
+                        ui.set_width(card_width);
+                        if let Some(action) =
+                            show_table_editor_ui(ui, dialog, card_width, cells_height)
+                        {
+                            requested_action = Some(action);
+                        }
+                    });
+                });
+        });
+        self.table_editor_had_focus = overlay_had_focus;
+        if suspend_overlay {
+            self.table_editor_suspended = true;
+        }
+
+        match requested_action {
+            Some(TableEditorUiAction::Cancel) => {
+                self.table_editor = None;
+                self.table_editor_had_focus = false;
+                self.table_editor_suspended = false;
+                context.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+            Some(TableEditorUiAction::Apply) => {
+                let mut dialog = self.table_editor.take().expect("table editor exists");
+                match prepare_table_source_edit(&self.document.source, self.document.key(), &dialog)
+                {
+                    Ok(edit) => {
+                        let snapshot = self.editor_snapshot(context);
+                        self.document
+                            .source
+                            .replace_range(edit.byte_range, &edit.replacement);
+                        self.push_editor_undo_snapshot(snapshot);
+                        self.pending_editor_selection = Some(edit.cursor..edit.cursor);
+                        self.search.clear();
+                        self.mark_edited();
+                        self.notice = Some(Notice {
+                            message: "Updated table".to_owned(),
+                            kind: NoticeKind::Success,
+                        });
+                        self.table_editor_had_focus = false;
+                        self.table_editor_suspended = false;
+                        context.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    }
+                    Err(error) => {
+                        dialog.error = Some(error);
+                        self.table_editor = Some(dialog);
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+
     fn begin_rename(&mut self, path: PathBuf) {
         let Some(name) = path.file_name() else {
             return;
@@ -4941,7 +6384,7 @@ impl EditorApp {
                 .with_max_inner_size(window_rect.size())
                 .with_active(true),
             |ui, _class| {
-                captures.begin_viewport(ui.ctx());
+                captures.begin_viewport(ui.ctx(), "workspace");
                 ui.set_style(style.clone());
                 ui.ctx()
                     .send_viewport_cmd(egui::ViewportCommand::SetTheme(native_theme));
@@ -5049,7 +6492,7 @@ impl EditorApp {
                 .with_max_inner_size(window_rect.size())
                 .with_active(true),
             |ui, _class| {
-                captures.begin_viewport(ui.ctx());
+                captures.begin_viewport(ui.ctx(), "modal");
                 ui.set_style(style.clone());
                 ui.ctx()
                     .send_viewport_cmd(egui::ViewportCommand::SetTheme(native_theme));
@@ -5406,6 +6849,8 @@ impl EditorApp {
         );
         if close_requested {
             self.settings_visible = false;
+            self.shortcut_editor_visible = false;
+            self.shortcut_capture = None;
             self.staged_ui_font_weight = None;
             self.staged_code_font_weight = None;
             // macOS does not consistently reactivate the parent after its
@@ -5499,7 +6944,7 @@ impl EditorApp {
             scoped_child_viewport_id(context, "tiptoptyp-typst-overrides"),
             viewport,
             |ui, _class| {
-                captures.begin_viewport(ui.ctx());
+                captures.begin_viewport(ui.ctx(), "typst-overrides");
                 ui.set_style(style.clone());
                 ui.ctx()
                     .send_viewport_cmd(egui::ViewportCommand::SetTheme(native_theme));
@@ -5621,7 +7066,183 @@ impl EditorApp {
         }
     }
 
+    fn show_asset_hover_window(&mut self, context: &egui::Context) {
+        let Some(hover) = self.asset_hover.clone() else {
+            return;
+        };
+        let interaction_id = tooltip_interaction_id(context);
+        let geometry_id = tooltip_geometry_id(context);
+        let identity = asset_tooltip_identity(hover.origin, &hover.path);
+        let interaction = context.data(|data| {
+            data.get_temp::<TooltipInteractionState>(interaction_id)
+                .filter(|state| state.identity == identity)
+                .unwrap_or(TooltipInteractionState::new(identity))
+        });
+        if interaction.dismissed {
+            self.clear_asset_hover();
+            context.data_mut(|data| {
+                data.remove::<TooltipGeometry>(geometry_id);
+                data.remove::<TooltipInteractionState>(interaction_id);
+            });
+            return;
+        }
+        let root_focused = context.input(|input| {
+            input.viewport().focused == Some(true) && input.viewport().visible() != Some(false)
+        });
+        let geometry = context.data(|data| data.get_temp::<TooltipGeometry>(geometry_id));
+        let handoff_active = native_tooltip_handoff_active(context, false);
+        let blocked_by_overlay = self.settings_visible
+            || self.packages_visible
+            || self.rename_dialog.is_some()
+            || self.table_editor.is_some()
+            || self.app_popup.is_some()
+            || self.document_workflow.modal.is_some();
+        if blocked_by_overlay {
+            self.clear_asset_hover();
+            context.data_mut(|data| {
+                if data
+                    .get_temp::<TooltipGeometry>(geometry_id)
+                    .is_some_and(|geometry| geometry.identity == identity)
+                {
+                    data.remove::<TooltipGeometry>(geometry_id);
+                    data.remove::<TooltipInteractionState>(interaction_id);
+                }
+            });
+            return;
+        }
+        if !tooltip_viewport_should_render(
+            false,
+            root_focused,
+            handoff_active,
+            identity,
+            geometry,
+            Some(interaction),
+        ) {
+            return;
+        }
+        let Some(window_rect) = context.input(|input| input.viewport().inner_rect) else {
+            return;
+        };
+        let theme = context.theme();
+        let style = context.style_of(theme);
+        let tooltip_frame = theme::tooltip_card_frame(&style);
+        let frame_margin = tooltip_frame.total_margin().sum();
+        let size = asset_hover_card_size(
+            &hover.content,
+            window_rect.size(),
+            frame_margin,
+            METRICS.popup.viewport_edge,
+        );
+        let root_local_card = place_native_tooltip_card(
+            Rect::from_min_size(Pos2::ZERO, window_rect.size()),
+            hover.origin,
+            hover.anchor,
+            size,
+            TooltipPlacement::Below,
+            METRICS.popup.viewport_edge,
+        );
+        let position = window_rect.min + root_local_card.min.to_vec2();
+        let now = context.input(|input| input.time);
+        let previous = context.data(|data| {
+            data.get_temp::<TooltipGeometry>(geometry_id)
+                .filter(|geometry| geometry.identity == identity)
+        });
+        let fade = continue_tooltip_fade(
+            hover.opacity,
+            previous.map(|geometry| geometry.fade),
+            now,
+            hover_runtime_config(context).fade,
+        );
+        if fade.opacity < 1.0 {
+            context.request_repaint_after(METRICS.motion.animation_frame);
+        }
+        context.data_mut(|data| {
+            data.insert_temp(
+                geometry_id,
+                TooltipGeometry {
+                    identity,
+                    origin: hover.origin,
+                    card: root_local_card,
+                    fade,
+                    pointer_inside_viewport: previous
+                        .is_some_and(|geometry| geometry.pointer_inside_viewport),
+                    handoff_until: previous.map_or_else(
+                        || tooltip_handoff_deadline(now),
+                        |geometry| geometry.handoff_until,
+                    ),
+                },
+            );
+        });
+
+        let spec = ChildViewSpec::tooltip(
+            "asset-hover-overlay",
+            "tiptoptyp asset preview",
+            position,
+            size,
+            interaction.focus_requested || interaction.focused,
+            "asset-hover",
+        );
+        let content_size = frame_content_size(size, frame_margin);
+        ChildViewHost::show(context, &self.captures, spec, theme, &style, |ui, input| {
+            let dismiss_requested = input.escape_pressed;
+            ui.set_opacity(fade.opacity);
+            let frame = if interaction.focused {
+                tooltip_frame.stroke(Stroke::new(
+                    1.0,
+                    style.visuals.widgets.active.bg_stroke.color,
+                ))
+            } else {
+                tooltip_frame
+            };
+            let frame_response = frame.show(ui, |ui| {
+                show_asset_hover_contents(
+                    ui,
+                    &hover.path,
+                    hover.kind,
+                    &hover.content,
+                    content_size,
+                );
+            });
+            let card_rect = frame_response.response.rect;
+            let pointer_inside_viewport = ui.rect_contains_pointer(ui.max_rect());
+            let pointer_inside_card = ui.rect_contains_pointer(card_rect);
+            let popup_interacted =
+                pointer_inside_card && ui.input(|input| input.pointer.any_pressed());
+            let interaction = update_tooltip_interaction_state(
+                interaction,
+                identity,
+                popup_interacted,
+                input.focused,
+            );
+            let interaction = if dismiss_requested {
+                TooltipInteractionState {
+                    focused: false,
+                    focus_requested: false,
+                    dismissed: true,
+                    ..interaction
+                }
+            } else {
+                interaction
+            };
+            context.data_mut(|data| {
+                if let Some(geometry) = data.get_temp::<TooltipGeometry>(geometry_id)
+                    && let Some(geometry) =
+                        refresh_tooltip_child_geometry(geometry, identity, pointer_inside_viewport)
+                {
+                    data.insert_temp(geometry_id, geometry);
+                    data.insert_temp(interaction_id, interaction);
+                }
+            });
+            if popup_interacted {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+        });
+    }
+
     fn show_diagnostic_tooltip_window(&mut self, context: &egui::Context) {
+        if self.asset_hover.is_some() {
+            return;
+        }
         let native_tooltip_id = native_hover_tooltip_id(context);
         let (origin, anchor, detail, severity, placement, opacity) = if self.snapshot_scene
             == Some(UiSnapshotScene::DiagnosticTooltip)
@@ -5706,6 +7327,7 @@ impl EditorApp {
         );
         if !root_ready
             || self.settings_visible
+            || self.packages_visible
             || self.rename_dialog.is_some()
             || self.app_popup.is_some()
             || self.document_workflow.modal.is_some()
@@ -5729,9 +7351,11 @@ impl EditorApp {
     fn show_app_popup_window(&mut self, context: &egui::Context) {
         if self.document_workflow.modal.is_some()
             || self.settings_visible
+            || self.packages_visible
             || self.typst_overrides_visible
             || self.workspace_chooser_visible
             || self.rename_dialog.is_some()
+            || self.table_editor.is_some()
         {
             self.close_app_popup();
             return;
@@ -5752,9 +7376,14 @@ impl EditorApp {
             AppPopup::Workspace {
                 anchor, is_file, ..
             } => (*anchor, workspace_context_menu_size(*is_file)),
-            AppPopup::Editor { anchor, link } => {
-                (*anchor, editor_context_menu_size(link.is_some()))
-            }
+            AppPopup::Editor {
+                anchor,
+                link,
+                table,
+            } => (
+                *anchor,
+                editor_context_menu_size(link.is_some(), table.is_some()),
+            ),
             AppPopup::StatusLog { anchor } => {
                 (*anchor, status_log_popup_size(self.status_log.len()))
             }
@@ -5779,8 +7408,10 @@ impl EditorApp {
             clamp_popup_anchor(anchor, estimated_size, window_rect.size())
         };
         let (can_undo, can_redo) = self.editor_history_availability(context);
+        let shortcuts = self.settings.effective_shortcuts();
         let has_selection = self.selected_editor_chars(context).is_some();
         let can_format = self.document.kind.is_typst();
+        let can_export_pdf = self.typst_preview_available();
         let can_sync_preview = self.document.kind.is_typst() && self.interactive_preview_active();
         let mut close = false;
         let mut action = None;
@@ -5820,7 +7451,7 @@ impl EditorApp {
                             .max_height(menu_height)
                             .show(ui, |ui| match &popup {
                                 AppPopup::File { .. } => {
-                                    show_file_popup_ui(ui, &mut action);
+                                    show_file_popup_ui(ui, can_export_pdf, &shortcuts, &mut action);
                                 }
                                 AppPopup::Edit { .. } => {
                                     show_edit_popup_ui(
@@ -5828,11 +7459,12 @@ impl EditorApp {
                                         can_undo,
                                         can_redo,
                                         can_format,
+                                        &shortcuts,
                                         &mut action,
                                     );
                                 }
                                 AppPopup::View { .. } => {
-                                    show_view_popup_ui(ui, &mut action);
+                                    show_view_popup_ui(ui, &shortcuts, &mut action);
                                 }
                                 AppPopup::Workspace { path, is_file, .. } => {
                                     let preview_selected = self
@@ -5846,7 +7478,7 @@ impl EditorApp {
                                         &mut action,
                                     );
                                 }
-                                AppPopup::Editor { link, .. } => {
+                                AppPopup::Editor { link, table, .. } => {
                                     let mut editor_action = None;
                                     show_editor_context_menu_ui(
                                         ui,
@@ -5857,7 +7489,9 @@ impl EditorApp {
                                             can_format,
                                             can_sync_preview,
                                             link: link.as_deref(),
+                                            table: table.as_ref(),
                                         },
+                                        &shortcuts,
                                         &mut editor_action,
                                     );
                                     if let Some(editor_action) = editor_action {
@@ -5903,12 +7537,20 @@ impl EditorApp {
             return;
         };
         match action {
-            AppPopupAction::Command(command) => self.execute_app_command(command, context, frame),
+            AppPopupAction::Command(command) => {
+                let viewport = focused_input_viewport(context);
+                if !self.route_edit_command_to_focused_widget(command, context, viewport) {
+                    self.execute_app_command(command, context, frame);
+                }
+            }
             AppPopupAction::Editor(EditorMenuAction::Command(command)) => {
                 self.execute_app_command(command, context, frame)
             }
             AppPopupAction::Editor(EditorMenuAction::OpenLink(target)) => {
                 self.follow_preview_link(&target)
+            }
+            AppPopupAction::Editor(EditorMenuAction::EditTable(table)) => {
+                self.begin_table_editor(table)
             }
             AppPopupAction::Workspace(action) => match action {
                 WorkspaceMenuAction::Open(path) => {
@@ -6005,6 +7647,32 @@ impl EditorApp {
     fn show_settings(&mut self, ui: &mut egui::Ui, frame: &eframe::Frame) {
         ui.set_min_width(ui.available_width());
 
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Search settings").strong());
+            ui.add(
+                egui::TextEdit::singleline(&mut self.settings_query)
+                    .hint_text("Theme, fonts, shortcuts, preview, tools…")
+                    .desired_width(f32::INFINITY),
+            );
+        });
+        if !self.settings_query.trim().is_empty() {
+            let matches = settings_search_results(&self.settings_query);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("Matches").weak());
+                if matches.is_empty() {
+                    ui.label(RichText::new("No settings found").weak());
+                }
+                for target in matches {
+                    let response = ui.button(target.label());
+                    let response = settings_hover_text(response, target.section().title());
+                    if response.clicked() {
+                        self.settings_scroll_target = Some(target);
+                    }
+                }
+            });
+            ui.separator();
+        }
+
         let deterministic_settings = matches!(
             self.snapshot_scene,
             Some(
@@ -6031,8 +7699,9 @@ impl EditorApp {
         } else {
             settings_scroll
         };
+        let mut settings_scroll_target = self.settings_scroll_target.take();
         settings_scroll.show(ui, |ui| {
-                ui.heading("Appearance");
+                settings_heading(ui, SettingsSection::Appearance);
                 let system_theme = ui.ctx().system_theme();
                 let effective_theme = ui.ctx().theme();
                 let theme_overridden = self.theme_override.is_some();
@@ -6044,6 +7713,11 @@ impl EditorApp {
                                 | UiSnapshotScene::SettingsDarkThemePicker
                         )
                     );
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::Appearance,
+                    &mut settings_scroll_target,
+                );
                 ui.horizontal_wrapped(|ui| {
                     theme::apply_compact_control_spacing(ui);
                     ui.add_sized(
@@ -6051,7 +7725,9 @@ impl EditorApp {
                             METRICS.settings.appearance_label_width,
                             METRICS.icon.button_size.y,
                         ],
-                        egui::Label::new(RichText::new("Appearance").strong()),
+                        egui::Label::new(
+                            RichText::new(SettingsTarget::Appearance.label()).strong(),
+                        ),
                     );
                     ui.add_enabled_ui(theme_picker_enabled, |ui| {
                         for appearance in InterfaceTheme::ALL {
@@ -6072,9 +7748,14 @@ impl EditorApp {
                     ui.separator();
                     settings_inline_value(ui, "Active", theme_label(Some(effective_theme)));
                 });
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::TypstSyntax,
+                    &mut settings_scroll_target,
+                );
                 ui.horizontal_wrapped(|ui| {
                     theme::apply_compact_control_spacing(ui);
-                    ui.label(RichText::new("Typst syntax").strong());
+                    ui.label(RichText::new(SettingsTarget::TypstSyntax.label()).strong());
                     if ui.button("Overrides…").clicked() {
                         self.typst_overrides_dark = effective_theme == egui::Theme::Dark;
                         self.typst_overrides_visible = true;
@@ -6085,10 +7766,19 @@ impl EditorApp {
                     );
                 });
 
-                for (appearance, label, picker_id) in [
-                    (egui::Theme::Light, "Light theme", "light-color-theme"),
-                    (egui::Theme::Dark, "Dark theme", "dark-color-theme"),
+                for (appearance, target, picker_id) in [
+                    (
+                        egui::Theme::Light,
+                        SettingsTarget::LightTheme,
+                        "light-color-theme",
+                    ),
+                    (
+                        egui::Theme::Dark,
+                        SettingsTarget::DarkTheme,
+                        "dark-color-theme",
+                    ),
                 ] {
+                    settings_target_anchor(ui, target, &mut settings_scroll_target);
                     let selected_name = color_theme_choice_label(edited.color_theme(appearance));
                     let imported_path = match edited.color_theme(appearance) {
                         ColorThemeChoice::Sublime(path) => Some(path.clone()),
@@ -6101,7 +7791,7 @@ impl EditorApp {
                                 METRICS.settings.appearance_label_width,
                                 METRICS.icon.button_size.y,
                             ],
-                            egui::Label::new(RichText::new(label).strong()),
+                            egui::Label::new(RichText::new(target.label()).strong()),
                         );
                         ui.add_enabled_ui(theme_picker_enabled, |ui| {
                             let open_picker = matches!(
@@ -6171,13 +7861,26 @@ impl EditorApp {
                     .map_or((edited.theme_invert, edited.theme_hue_shift_degrees), |profile| {
                         (profile.invert, profile.hue_shift_degrees)
                     });
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::InvertColors,
+                    &mut settings_scroll_target,
+                );
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::HueShift,
+                    &mut settings_scroll_target,
+                );
                 ui.horizontal_wrapped(|ui| {
                     theme::apply_compact_control_spacing(ui);
                     ui.label(RichText::new("Transform").strong());
                     ui.add_enabled_ui(!theme_overridden, |ui| {
-                        ui.checkbox(&mut displayed_invert, "Invert");
+                        ui.checkbox(
+                            &mut displayed_invert,
+                            SettingsTarget::InvertColors.label(),
+                        );
                         ui.separator();
-                        ui.label("Hue");
+                        ui.label(SettingsTarget::HueShift.label());
                         ui.add_sized(
                             [190.0, METRICS.icon.button_size.y],
                             egui::Slider::new(&mut displayed_hue_shift, -180..=180).suffix("°"),
@@ -6214,8 +7917,13 @@ impl EditorApp {
                     );
                 }
 
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::PageTheme,
+                    &mut settings_scroll_target,
+                );
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("Page").strong());
+                    ui.label(RichText::new(SettingsTarget::PageTheme.label()).strong());
                     for theme in DocumentTheme::ALL {
                         ui.selectable_value(&mut edited.document_theme, theme, theme.label());
                     }
@@ -6229,13 +7937,29 @@ impl EditorApp {
 
                 ui.add_space(theme::SPACE.small);
                 ui.separator();
-                ui.heading("Editor");
+                settings_heading(ui, SettingsSection::Editor);
+                for target in [
+                    SettingsTarget::WrapLines,
+                    SettingsTarget::LineNumbers,
+                    SettingsTarget::StickyContextRows,
+                    SettingsTarget::AutoSave,
+                    SettingsTarget::AutoSaveDelay,
+                ] {
+                    settings_target_anchor(ui, target, &mut settings_scroll_target);
+                }
                 ui.horizontal_wrapped(|ui| {
-                    ui.checkbox(&mut edited.line_wrap, "Wrap lines");
-                    ui.checkbox(&mut edited.line_numbers, "Line numbers");
-                    ui.checkbox(&mut edited.auto_save, "Auto-save");
+                    ui.checkbox(&mut edited.line_wrap, SettingsTarget::WrapLines.label());
+                    ui.checkbox(
+                        &mut edited.line_numbers,
+                        SettingsTarget::LineNumbers.label(),
+                    );
+                    ui.checkbox(
+                        &mut edited.sticky_context_rows,
+                        SettingsTarget::StickyContextRows.label(),
+                    );
+                    ui.checkbox(&mut edited.auto_save, SettingsTarget::AutoSave.label());
                     ui.add_enabled_ui(edited.auto_save, |ui| {
-                        ui.label("Auto-save delay");
+                        ui.label(SettingsTarget::AutoSaveDelay.label());
                         ui.add(
                             egui::Slider::new(&mut edited.auto_save_delay_ms, 250..=5_000)
                                 .suffix(" ms")
@@ -6243,20 +7967,59 @@ impl EditorApp {
                         );
                     });
                 });
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::KeyboardShortcuts,
+                    &mut settings_scroll_target,
+                );
                 ui.horizontal_wrapped(|ui| {
                     theme::apply_compact_control_spacing(ui);
-                    ui.label(RichText::new("Interface scale").strong());
+                    ui.label(RichText::new("Keyboard").strong());
+                    if ui
+                        .button(SettingsTarget::KeyboardShortcuts.label())
+                        .clicked()
+                    {
+                        self.shortcut_editor_visible = true;
+                    }
+                    ui.label(
+                        RichText::new("All application, editor, build, preview, and window bindings")
+                            .size(theme::TYPE.supporting)
+                        .weak(),
+                    );
+                });
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::InterfaceScale,
+                    &mut settings_scroll_target,
+                );
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::TitleBarMenus,
+                    &mut settings_scroll_target,
+                );
+                ui.horizontal_wrapped(|ui| {
+                    theme::apply_compact_control_spacing(ui);
+                    ui.label(RichText::new(SettingsTarget::InterfaceScale.label()).strong());
                     ui.add(
                         egui::Slider::new(&mut edited.ui_scale_percent, 75..=150)
                             .suffix("%")
                             .clamping(egui::SliderClamping::Always),
                     );
                     ui.separator();
-                    ui.checkbox(&mut edited.titlebar_menus, "Show title-bar menus");
+                    ui.checkbox(
+                        &mut edited.titlebar_menus,
+                        SettingsTarget::TitleBarMenus.label(),
+                    );
                 });
+                settings_target_anchor(ui, SettingsTarget::UiFont, &mut settings_scroll_target);
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::UiFontWeight,
+                    &mut settings_scroll_target,
+                );
                 ui.horizontal_wrapped(|ui| {
                     theme::apply_compact_control_spacing(ui);
-                    ui.label(RichText::new("UI font").strong());
+                    ui.label(RichText::new(SettingsTarget::UiFont.label()).strong());
                     if let Some(selection) = show_font_family_picker(
                         ui,
                         "ui-font-family",
@@ -6307,9 +8070,15 @@ impl EditorApp {
                         self.font_configuration.ui_weight_support.as_ref(),
                     );
                 });
+                settings_target_anchor(ui, SettingsTarget::CodeFont, &mut settings_scroll_target);
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::CodeFontWeight,
+                    &mut settings_scroll_target,
+                );
                 ui.horizontal_wrapped(|ui| {
                     theme::apply_compact_control_spacing(ui);
-                    ui.label(RichText::new("Code font").strong());
+                    ui.label(RichText::new(SettingsTarget::CodeFont.label()).strong());
                     if let Some(selection) = show_font_family_picker(
                         ui,
                         "code-font-family",
@@ -6364,9 +8133,24 @@ impl EditorApp {
                         );
                     }
                 });
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::PreviewJump,
+                    &mut settings_scroll_target,
+                );
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::HoverDelay,
+                    &mut settings_scroll_target,
+                );
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::HoverFade,
+                    &mut settings_scroll_target,
+                );
                 ui.horizontal_wrapped(|ui| {
                     theme::apply_compact_control_spacing(ui);
-                    ui.label(RichText::new("Preview jump").strong());
+                    ui.label(RichText::new(SettingsTarget::PreviewJump.label()).strong());
                     let trigger = egui::ComboBox::from_id_salt("source-preview-trigger")
                         .width(METRICS.settings.source_preview_trigger_width)
                         .selected_text(edited.source_preview_trigger.label())
@@ -6386,14 +8170,14 @@ impl EditorApp {
                     settings_hover_text(trigger, edited.source_preview_trigger.description());
                     ui.separator();
                     ui.label(RichText::new("Hovers").strong());
-                    ui.label("wait");
+                    ui.label(SettingsTarget::HoverDelay.label());
                     ui.add(
                         egui::DragValue::new(&mut edited.hover_delay_ms)
                             .range(0..=2_000)
                             .speed(10)
                             .suffix(" ms"),
                     );
-                    ui.label("fade");
+                    ui.label(SettingsTarget::HoverFade.label());
                     ui.add(
                         egui::DragValue::new(&mut edited.hover_fade_ms)
                             .range(0..=500)
@@ -6404,7 +8188,7 @@ impl EditorApp {
 
                 ui.add_space(theme::SPACE.small);
                 ui.separator();
-                ui.heading("Tool binaries");
+                settings_heading(ui, SettingsSection::Tools);
                 ui.label(
                     RichText::new(
                         "Packaged builds use pinned sidecars. A custom path overrides one tool without changing the other.",
@@ -6417,9 +8201,14 @@ impl EditorApp {
                 } else {
                     resolve_tool(ToolKind::Typst, &edited.typst)
                 };
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::TypstCompiler,
+                    &mut settings_scroll_target,
+                );
                 if tool_preference_editor(
                     ui,
-                    "Typst compiler",
+                    SettingsTarget::TypstCompiler.label(),
                     &mut edited.typst,
                     &staged_typst,
                     deterministic_settings,
@@ -6437,9 +8226,14 @@ impl EditorApp {
                 } else {
                     resolve_tool(ToolKind::Tinymist, &edited.tinymist)
                 };
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::TinymistLanguageServer,
+                    &mut settings_scroll_target,
+                );
                 if tool_preference_editor(
                     ui,
-                    "Tinymist language server",
+                    SettingsTarget::TinymistLanguageServer.label(),
                     &mut edited.tinymist,
                     &staged_tinymist,
                     deterministic_settings,
@@ -6451,14 +8245,40 @@ impl EditorApp {
                 {
                     fallback_notice(ui, "Binary fallback active", reason);
                 }
-                if ui.button("Refresh binary status").clicked() {
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::RefreshBinaryStatus,
+                    &mut settings_scroll_target,
+                );
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::BrowseTypstPackages,
+                    &mut settings_scroll_target,
+                );
+                if ui
+                    .button(SettingsTarget::RefreshBinaryStatus.label())
+                    .clicked()
+                {
                     self.tool_refresh_requested = true;
                     ui.ctx().request_repaint();
+                }
+                if ui
+                    .button(SettingsTarget::BrowseTypstPackages.label())
+                    .clicked()
+                {
+                    self.settings_visible = false;
+                    self.shortcut_editor_visible = false;
+                    self.open_package_manager(ui.ctx());
                 }
 
                 ui.add_space(theme::SPACE.small);
                 ui.separator();
-                ui.heading("Preview backend");
+                settings_heading(ui, SettingsSection::Preview);
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::PreviewBackend,
+                    &mut settings_scroll_target,
+                );
                 ui.horizontal_wrapped(|ui| {
                     for preference in PreviewPreference::ALL {
                         ui.selectable_value(
@@ -6493,7 +8313,12 @@ impl EditorApp {
 
                 ui.add_space(theme::SPACE.small);
                 ui.separator();
-                ui.heading("Toolchain status");
+                settings_heading(ui, SettingsSection::Status);
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::ToolchainStatus,
+                    &mut settings_scroll_target,
+                );
                 ui.horizontal_wrapped(|ui| {
                     let syntax_color = success_color(ui.visuals().dark_mode);
                     if deterministic_settings {
@@ -6524,17 +8349,27 @@ impl EditorApp {
                         syntax_color,
                     );
                 });
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::ProjectRoot,
+                    &mut settings_scroll_target,
+                );
                 settings_value_row(
                     ui,
-                    "Project root",
+                    SettingsTarget::ProjectRoot.label(),
                     &if deterministic_settings {
                         "Theme gallery workspace".to_owned()
                     } else {
                         self.project_root().display().to_string()
                     },
                 );
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::UiScreenshots,
+                    &mut settings_scroll_target,
+                );
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("UI screenshots").strong());
+                    ui.label(RichText::new(SettingsTarget::UiScreenshots.label()).strong());
                     if ui.button("Main").clicked() {
                         self.captures.queue("main", "main");
                     }
@@ -6545,9 +8380,13 @@ impl EditorApp {
                         self.captures.queue("main", "main");
                         self.captures.queue("settings", "settings");
                     }
+                    let screenshot_shortcut = edited
+                        .effective_shortcuts()
+                        .display(ShortcutAction::CaptureUi)
+                        .unwrap_or_else(|| "Unassigned".to_owned());
                     settings_hover_text(
                         ui.label(
-                            RichText::new("Cmd+Shift+F12")
+                            RichText::new(screenshot_shortcut)
                                 .size(theme::TYPE.supporting)
                                 .weak(),
                         ),
@@ -6558,6 +8397,17 @@ impl EditorApp {
                     );
                 });
             });
+
+        self.settings_scroll_target = settings_scroll_target;
+
+        show_shortcut_editor_window(
+            ui.ctx(),
+            &mut self.shortcut_editor_visible,
+            &mut self.shortcut_query,
+            &mut self.shortcut_capture,
+            &mut self.shortcut_notice,
+            &mut edited,
+        );
 
         if !deterministic_settings {
             self.queue_settings(edited, ui.ctx());
@@ -6680,6 +8530,26 @@ impl EditorApp {
                 self.refresh_workspace();
             }
         });
+        theme::panel_header(ui, "workspace-search-header", |ui| {
+            let show_clear = !self.explorer_query.is_empty();
+            let clear_width = if show_clear {
+                METRICS.icon.button_size.x + ui.spacing().item_spacing.x
+            } else {
+                0.0
+            };
+            ui.add_sized(
+                [
+                    (ui.available_width() - clear_width).max(1.0),
+                    METRICS.explorer.header_row_height,
+                ],
+                egui::TextEdit::singleline(&mut self.explorer_query)
+                    .id_salt("explorer-search")
+                    .hint_text("Search Explorer"),
+            );
+            if show_clear && icon_button(ui, UiIcon::Close, "Clear Explorer search").clicked() {
+                self.explorer_query.clear();
+            }
+        });
 
         // A tree row can be much wider than the pane. Keep the body width in a
         // clipped child UI so it becomes scrollable content instead of feeding
@@ -6714,24 +8584,58 @@ impl EditorApp {
             })
             .or(preview_path);
         let mut open_path = None;
-        let mut index_target = None;
         let mut popup_request = None;
         let dark_mode = ui.visuals().dark_mode;
-        let section_body_height = explorer_section_body_height(ui);
-        explorer_section(
+        let explorer_query = normalize_explorer_query(&self.explorer_query);
+        let filter_active = !explorer_query.is_empty();
+        let section_defaults = if filter_active {
+            explorer_section_query_matches(snapshot, project_index, &explorer_query)
+        } else {
+            std::array::from_fn(|index| EXPLORER_SECTION_SPECS[index].1)
+        };
+        let open_sections = explorer_section_open_states(ui, filter_active, section_defaults);
+        let open_section_count = open_sections.iter().filter(|is_open| **is_open).count();
+        let section_frame_height = theme::explorer_section_frame(ui.style())
+            .total_margin()
+            .sum()
+            .y;
+        let section_body_budget = available_explorer_section_body_height(
+            ui.available_height(),
+            open_section_count,
+            section_frame_height,
+        ) * open_section_count as f32;
+        let section_layout_id = explorer_section_layout_id(ui);
+        let mut section_layout = ui.ctx().data_mut(|data| {
+            data.get_temp::<ExplorerSectionLayout>(section_layout_id)
+                .unwrap_or_default()
+        });
+        let section_body_heights = section_layout.body_heights(open_sections, section_body_budget);
+        let mut section_resize = None;
+        let resize_delta = explorer_section_resizable(
             ui,
-            "workspace-files",
-            "Files",
-            true,
-            section_body_height,
+            ExplorerSectionRenderSpec {
+                id_salt: "workspace-files",
+                title: "Files",
+                default_open: section_defaults[0],
+                body_height: section_body_heights[0],
+                show_resize_handle: next_open_explorer_section(open_sections, 0).is_some(),
+                filtered: filter_active,
+            },
             |ui| {
                 if let Some(snapshot) = &snapshot {
-                    let tree_id = ui.id().with((
-                        "workspace-tree",
-                        snapshot.root.clone(),
-                        self.workspace.as_ref().map_or(0, WorkspaceTree::generation),
-                    ));
+                    // A scan generation describes fresh filesystem data, not a
+                    // new UI. Keeping it out of the identity preserves opened
+                    // folders, selection, and the surrounding ScrollArea's
+                    // offset when a file open triggers a background rescan.
+                    let tree_id = workspace_tree_state_id(ui, &snapshot.root, filter_active);
                     let mut tree_state = TreeViewState::load(ui, tree_id).unwrap_or_default();
+                    if filter_active {
+                        open_matching_workspace_ancestors(
+                            &mut tree_state,
+                            &snapshot.nodes,
+                            &explorer_query,
+                        );
+                    }
                     if let Some(active) = &active {
                         // Keep the document shown in the editor selected so the
                         // entire explorer row gets the same kind of tint as the
@@ -6771,6 +8675,7 @@ impl EditorApp {
                                     active.as_deref(),
                                     preview.as_deref(),
                                     dark_mode,
+                                    &explorer_query,
                                 );
                             })
                         })
@@ -6786,6 +8691,14 @@ impl EditorApp {
                             });
                         }
                     }
+                    if filter_active
+                        && !snapshot
+                            .nodes
+                            .iter()
+                            .any(|node| workspace_node_matches_query(node, &explorer_query))
+                    {
+                        ui.label(RichText::new("No matching files").weak());
+                    }
                 } else {
                     ui.label(RichText::new("No project folder").weak());
                 }
@@ -6794,14 +8707,41 @@ impl EditorApp {
                 }
             },
         );
+        if resize_delta.abs() > f32::EPSILON {
+            section_resize = Some((0, resize_delta));
+        }
 
-        show_project_index_sections(
+        let ExplorerProjectSectionsOutcome {
+            resize_request,
+            open_package_manager,
+            target: index_target,
+        } = show_project_index_sections(
             ui,
-            project_root,
-            project_index,
-            section_body_height,
-            &mut index_target,
+            ExplorerProjectSectionsSpec {
+                root: project_root,
+                index: project_index,
+                query: &explorer_query,
+                filtered: filter_active,
+                section_defaults,
+                open_sections,
+                body_heights: section_body_heights,
+            },
         );
+        if resize_request.is_some() {
+            section_resize = resize_request;
+        }
+
+        if open_package_manager {
+            self.open_package_manager(ui.ctx());
+        }
+
+        if let Some((section, delta)) = section_resize
+            && section_layout.resize_after(open_sections, section_body_budget, section, delta)
+        {
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(section_layout_id, section_layout));
+            ui.ctx().request_repaint();
+        }
 
         if let Some(path) = open_path
             && self
@@ -7044,14 +8984,22 @@ impl EditorApp {
                     + METRICS.editor.unwrapped_width_padding,
             )
             .max(METRICS.editor.unwrapped_minimum_width);
-        let line_wrap = self.settings.line_wrap;
-        let line_numbers = self.settings.line_numbers;
+        let sticky_context_snapshot = self.snapshot_scene == Some(UiSnapshotScene::StickyContext);
+        let line_wrap = sticky_context_snapshot || self.settings.line_wrap;
+        let line_numbers = sticky_context_snapshot || self.settings.line_numbers;
         let gutter_width = line_number_gutter_width(line_count, line_numbers);
         let dark_mode = ui.visuals().dark_mode;
         let document_kind = self.document.kind;
         let highlight_path = self.document.path.clone();
+        let asset_source_path = self.document.path.clone();
+        let asset_workspace_root = self.workspace_root.clone();
         let source_preview_trigger = self.settings.source_preview_trigger;
         let preview_jump_enabled = document_kind.is_typst() && self.interactive_preview_active();
+        let sticky_context_enabled = document_kind.is_typst()
+            && (sticky_context_snapshot || self.settings.sticky_context_rows);
+        let snapshot_scroll_offset = source_editor_snapshot_scroll_offset(self.snapshot_scene);
+        let completion_edit_triggered = document_kind.is_typst()
+            && ui.input(|input| completion_requested_after_events(&input.events));
         let snapshot_before_edit = self.editor_snapshot(ui.ctx());
         let highlighter = &mut self.highlighter;
         let generic_highlighter = &mut self.generic_highlighter;
@@ -7071,7 +9019,11 @@ impl EditorApp {
         let mut preview_jump_char = None;
         let mut clicked_web_link = None;
         let mut hovered_semantic_token = None;
+        let mut hovered_asset_literal = false;
         let mut popup_request = None;
+        let mut completion_cursor: Option<usize> = None;
+        let mut completion_anchor: Option<Rect> = None;
+        let mut editor_has_focus = false;
         let editor_base_slot = ui.painter().add(egui::Shape::Noop);
         let editor_margin = egui::Margin {
             left: gutter_width,
@@ -7080,221 +9032,315 @@ impl EditorApp {
             bottom: theme::SPACE.tight as i8,
         };
 
-        let scroll_output = egui::ScrollArea::new([!line_wrap, true])
+        let scroll_area = egui::ScrollArea::new([!line_wrap, true])
             .id_salt("source-editor-scroll")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                let editor_width = if line_wrap {
-                    ui.available_width()
-                        .max(METRICS.editor.wrapped_minimum_width)
+            .auto_shrink([false, false]);
+        let scroll_area = if let Some(offset) = snapshot_scroll_offset {
+            scroll_area.vertical_scroll_offset(offset)
+        } else {
+            scroll_area
+        };
+        let scroll_output = scroll_area.show(ui, |ui| {
+            let editor_width = if line_wrap {
+                ui.available_width()
+                    .max(METRICS.editor.wrapped_minimum_width)
+            } else {
+                unwrapped_editor_width
+            };
+            let current_line_slot = ui.painter().add(egui::Shape::Noop);
+            let background_slots = line_diagnostics
+                .iter()
+                .map(|_| ui.painter().add(egui::Shape::Noop))
+                .collect::<Vec<_>>();
+            let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, wrap_width: f32| {
+                let mut job = if document_kind.is_typst() {
+                    highlighter.highlight(buffer.as_str(), dark_mode, generic_highlighter)
                 } else {
-                    unwrapped_editor_width
+                    generic_highlighter.highlight(
+                        buffer.as_str(),
+                        highlight_path.as_deref(),
+                        dark_mode,
+                    )
                 };
-                let current_line_slot = ui.painter().add(egui::Shape::Noop);
-                let background_slots = line_diagnostics
-                    .iter()
-                    .map(|_| ui.painter().add(egui::Shape::Noop))
-                    .collect::<Vec<_>>();
-                let mut layouter =
-                    |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, wrap_width: f32| {
-                        let mut job = if document_kind.is_typst() {
-                            highlighter.highlight(buffer.as_str(), dark_mode, generic_highlighter)
-                        } else {
-                            generic_highlighter.highlight(
-                                buffer.as_str(),
-                                highlight_path.as_deref(),
-                                dark_mode,
-                            )
-                        };
-                        job.wrap.max_width = if line_wrap { wrap_width } else { f32::INFINITY };
-                        ui.fonts_mut(|fonts| fonts.layout_job(job))
-                    };
-                let editor = egui::TextEdit::multiline(&mut self.document.source)
-                    .id(source_editor_id(ui.ctx()))
-                    .code_editor()
-                    .desired_width(editor_width)
-                    .min_size(Vec2::new(editor_width, 0.0))
-                    // The surface is painted across the complete viewport
-                    // below. Keep TextEdit's own frame empty so its intrinsic
-                    // document height cannot leave an internal border behind.
-                    .frame(egui::Frame::new().inner_margin(editor_margin))
-                    .layouter(&mut layouter);
-                let mut output = editor.show(ui);
-                changed = output.response.changed();
-                if changed {
-                    self.editor_data
-                        .prepare_source(source_revision.after_edit(), &self.document.source);
-                }
-                let mut current_char = output
-                    .state
-                    .cursor
-                    .char_range()
-                    .map(|range| range.primary.index.0);
-                let line_rows = logical_line_row_ranges(&output.galley.rows);
+                job.wrap.max_width = if line_wrap { wrap_width } else { f32::INFINITY };
+                ui.fonts_mut(|fonts| fonts.layout_job(job))
+            };
+            let editor = egui::TextEdit::multiline(&mut self.document.source)
+                .id(source_editor_id(ui.ctx()))
+                .code_editor()
+                .desired_width(editor_width)
+                .min_size(Vec2::new(editor_width, 0.0))
+                // The surface is painted across the complete viewport
+                // below. Keep TextEdit's own frame empty so its intrinsic
+                // document height cannot leave an internal border behind.
+                .frame(egui::Frame::new().inner_margin(editor_margin))
+                .layouter(&mut layouter);
+            let mut output = editor.show(ui);
+            changed = output.response.changed();
+            if changed {
+                self.editor_data
+                    .prepare_source(source_revision.after_edit(), &self.document.source);
+            }
+            let mut current_char = output
+                .state
+                .cursor
+                .char_range()
+                .map(|range| range.primary.index.0);
+            let line_rows = logical_line_row_ranges(&output.galley.rows);
 
-                if let Some(range) = pending_selection {
-                    let len = self.document.source.chars().count();
-                    let range = range.start.min(len)..range.end.min(len);
-                    let cursor_range =
-                        CCursorRange::two(CCursor::new(range.start), CCursor::new(range.end));
-                    output.state.cursor.set_char_range(Some(cursor_range));
-                    current_char = Some(range.end);
-                    output.state.clone().store(ui.ctx(), output.response.id);
-                    if !self.find_visible {
-                        output.response.request_focus();
+            if let Some(range) = pending_selection {
+                let len = self.document.source.chars().count();
+                let range = range.start.min(len)..range.end.min(len);
+                let cursor_range =
+                    CCursorRange::two(CCursor::new(range.start), CCursor::new(range.end));
+                output.state.cursor.set_char_range(Some(cursor_range));
+                current_char = Some(range.end);
+                output.state.clone().store(ui.ctx(), output.response.id);
+                if !self.find_visible {
+                    output.response.request_focus();
+                }
+                let cursor_rect = output
+                    .galley
+                    .pos_from_cursor(CCursor::new(range.start))
+                    .translate(output.galley_pos.to_vec2());
+                ui.scroll_to_rect(cursor_rect, Some(Align::Center));
+            }
+
+            editor_has_focus = output.response.has_focus();
+            if let Some(range) = output.state.cursor.char_range()
+                && range.primary.index == range.secondary.index
+            {
+                let cursor = range.primary.index.0;
+                completion_cursor = Some(cursor);
+                completion_anchor = Some(
+                    output
+                        .galley
+                        .pos_from_cursor(CCursor::new(cursor))
+                        .translate(output.galley_pos.to_vec2()),
+                );
+            }
+
+            paint_editor_line_backgrounds(
+                ui,
+                &output,
+                &self.document.source,
+                current_char,
+                attention,
+                &line_rows,
+                current_line_slot,
+            );
+            if let Some(tooltip) =
+                paint_line_diagnostics(ui, &output, &line_diagnostics, &line_rows, background_slots)
+                && !native_tooltip_handoff_blocks(ui.ctx(), tooltip.origin)
+            {
+                // Keep the last diagnostic payload while the pointer is
+                // crossing the root-local bridge or sitting in the
+                // native child. The root is deliberately no longer
+                // hovering the diagnostic row in that frame, but the
+                // popup still needs the payload in order to repaint and
+                // accept scroll input.
+                self.diagnostic_tooltip = Some(tooltip);
+            }
+            if line_numbers {
+                paint_line_numbers(ui, &output, &line_rows);
+            }
+
+            if document_kind.is_typst()
+                && output.response.hovered()
+                && let Some(pointer) = ui.ctx().pointer_hover_pos()
+            {
+                let char_index = output
+                    .galley
+                    .cursor_from_pos(pointer - output.galley_pos)
+                    .index
+                    .0;
+                let asset_target = asset_source_path.as_deref().and_then(|source_path| {
+                    literal_asset_target_at(
+                        &self.document.source,
+                        char_index,
+                        source_path,
+                        &asset_workspace_root,
+                    )
+                });
+                if let Some(target) = asset_target
+                    && target.literal_range.contains(&char_index)
+                {
+                    let literal_rect = editor_char_range_rect(&output, &target.literal_range);
+                    let origin = literal_rect.expand(theme::SPACE.tight);
+                    if origin.contains(pointer) && !native_tooltip_handoff_blocks(ui.ctx(), origin)
+                    {
+                        let response = ui.interact(
+                            origin,
+                            output.response.id.with((
+                                "asset-hover",
+                                target.literal_range.start,
+                                target.literal_range.end,
+                            )),
+                            Sense::hover(),
+                        );
+                        let kind = match target.asset_kind {
+                            PreviewAssetKind::Image => DocumentKind::Image,
+                            PreviewAssetKind::Pdf => DocumentKind::Pdf,
+                        };
+                        offer_asset_hover(&response, origin, target.resolved_path, kind);
+                        hovered_asset_literal = true;
                     }
-                    let cursor_rect = output
+                } else if let Some(range) =
+                    typst_hover_token_range(&self.document.source, char_index)
+                {
+                    let start = output
                         .galley
                         .pos_from_cursor(CCursor::new(range.start))
                         .translate(output.galley_pos.to_vec2());
-                    ui.scroll_to_rect(cursor_rect, Some(Align::Center));
-                }
-
-                paint_editor_line_backgrounds(
-                    ui,
-                    &output,
-                    &self.document.source,
-                    current_char,
-                    attention,
-                    &line_rows,
-                    current_line_slot,
-                );
-                if let Some(tooltip) = paint_line_diagnostics(
-                    ui,
-                    &output,
-                    &line_diagnostics,
-                    &line_rows,
-                    background_slots,
-                ) && !native_tooltip_handoff_blocks(ui.ctx(), tooltip.origin)
-                {
-                    // Keep the last diagnostic payload while the pointer is
-                    // crossing the root-local bridge or sitting in the
-                    // native child. The root is deliberately no longer
-                    // hovering the diagnostic row in that frame, but the
-                    // popup still needs the payload in order to repaint and
-                    // accept scroll input.
-                    self.diagnostic_tooltip = Some(tooltip);
-                }
-                if line_numbers {
-                    paint_line_numbers(ui, &output, &line_rows);
-                }
-
-                if document_kind.is_typst()
-                    && output.response.hovered()
-                    && let Some(pointer) = ui.ctx().pointer_hover_pos()
-                {
-                    let char_index = output
+                    let end = output
                         .galley
-                        .cursor_from_pos(pointer - output.galley_pos)
-                        .index
-                        .0;
-                    if let Some(range) = typst_hover_token_range(&self.document.source, char_index)
-                    {
-                        let start = output
-                            .galley
-                            .pos_from_cursor(CCursor::new(range.start))
-                            .translate(output.galley_pos.to_vec2());
-                        let end = output
-                            .galley
-                            .pos_from_cursor(CCursor::new(range.end))
-                            .translate(output.galley_pos.to_vec2());
-                        let token_rect = Rect::from_min_max(
-                            start.left_top(),
-                            Pos2::new(end.left().max(start.left() + 1.0), start.bottom()),
-                        );
-                        if token_rect.expand(theme::SPACE.tight).contains(pointer) {
-                            hovered_semantic_token = Some((range, token_rect));
-                        }
-                    }
-                }
-
-                if document_kind.is_typst()
-                    && output.response.hovered()
-                    && ui.input(|input| input.modifiers.command)
-                    && let Some(pointer) = ui.ctx().pointer_hover_pos()
-                {
-                    let char_index = output
-                        .galley
-                        .cursor_from_pos(pointer - output.galley_pos)
-                        .index
-                        .0;
-                    if editor_web_link_at(&mut self.editor_data, char_index).is_some() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                    }
-                }
-
-                if output.response.secondary_clicked() {
-                    let anchor = ui
-                        .ctx()
-                        .pointer_latest_pos()
-                        .unwrap_or_else(|| output.response.rect.center());
-                    let char_index = output.response.interact_pointer_pos().map(|pointer| {
-                        output
-                            .galley
-                            .cursor_from_pos(pointer - output.galley_pos)
-                            .index
-                            .0
-                    });
-                    let target = char_index
-                        .and_then(|char_index| self.editor_data.font_argument_at(char_index));
-                    let link = char_index.and_then(|char_index| {
-                        editor_web_link_at(&mut self.editor_data, char_index)
-                    });
-                    popup_request = Some(match target {
-                        Some(target) => AppPopup::FontSelector { anchor, target },
-                        None => AppPopup::Editor { anchor, link },
-                    });
-                }
-
-                let clicked_link = if document_kind.is_typst() {
-                    output.response.interact_pointer_pos().and_then(|pointer| {
-                        let char_index = output
-                            .galley
-                            .cursor_from_pos(pointer - output.galley_pos)
-                            .index
-                            .0;
-                        editor_web_link_click_target(
-                            &mut self.editor_data,
-                            char_index,
-                            output.response.clicked(),
-                            ui.input(|input| input.modifiers.command),
-                        )
-                    })
-                } else {
-                    None
-                };
-                clicked_web_link = clicked_link.clone();
-
-                let jump_gesture = source_preview_jump_gesture(
-                    source_preview_trigger,
-                    output.response.clicked(),
-                    output.response.double_clicked(),
-                    ui.input(|input| input.modifiers.command),
-                    clicked_link.is_some(),
-                );
-                if preview_jump_enabled
-                    && jump_gesture
-                    && let Some(pointer) = output.response.interact_pointer_pos()
-                {
-                    preview_jump_char = Some(
-                        output
-                            .galley
-                            .cursor_from_pos(pointer - output.galley_pos)
-                            .index
-                            .0,
+                        .pos_from_cursor(CCursor::new(range.end))
+                        .translate(output.galley_pos.to_vec2());
+                    let token_rect = Rect::from_min_max(
+                        start.left_top(),
+                        Pos2::new(end.left().max(start.left() + 1.0), start.bottom()),
                     );
+                    if token_rect.expand(theme::SPACE.tight).contains(pointer) {
+                        hovered_semantic_token = Some((range, token_rect));
+                    }
                 }
+            }
 
-                let visuals = *ui.style().interact(&output.response);
-                let border = if output.response.has_focus() {
-                    ui.visuals().selection.stroke
-                } else {
-                    visuals.bg_stroke
-                };
-                (output.response.rect, visuals.corner_radius, border)
+            if document_kind.is_typst()
+                && output.response.hovered()
+                && ui.input(|input| input.modifiers.command)
+                && let Some(pointer) = ui.ctx().pointer_hover_pos()
+            {
+                let char_index = output
+                    .galley
+                    .cursor_from_pos(pointer - output.galley_pos)
+                    .index
+                    .0;
+                if editor_web_link_at(&mut self.editor_data, char_index).is_some() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+            }
+
+            if output.response.secondary_clicked() {
+                let anchor = ui
+                    .ctx()
+                    .pointer_latest_pos()
+                    .unwrap_or_else(|| output.response.rect.center());
+                let char_index = output.response.interact_pointer_pos().map(|pointer| {
+                    output
+                        .galley
+                        .cursor_from_pos(pointer - output.galley_pos)
+                        .index
+                        .0
+                });
+                let target =
+                    char_index.and_then(|char_index| self.editor_data.font_argument_at(char_index));
+                let link = char_index
+                    .and_then(|char_index| editor_web_link_at(&mut self.editor_data, char_index));
+                let table = (document_kind.is_typst())
+                    .then(|| {
+                        char_index.and_then(|char_index| {
+                            editable_table_at(&self.document.source, char_index)
+                        })
+                    })
+                    .flatten();
+                popup_request = Some(match target {
+                    Some(target) => AppPopup::FontSelector { anchor, target },
+                    None => AppPopup::Editor {
+                        anchor,
+                        link,
+                        table,
+                    },
+                });
+            }
+
+            let clicked_link = if document_kind.is_typst() {
+                output.response.interact_pointer_pos().and_then(|pointer| {
+                    let char_index = output
+                        .galley
+                        .cursor_from_pos(pointer - output.galley_pos)
+                        .index
+                        .0;
+                    editor_web_link_click_target(
+                        &mut self.editor_data,
+                        char_index,
+                        output.response.clicked(),
+                        ui.input(|input| input.modifiers.command),
+                    )
+                })
+            } else {
+                None
+            };
+            clicked_web_link = clicked_link.clone();
+
+            let jump_gesture = source_preview_jump_gesture(
+                source_preview_trigger,
+                output.response.clicked(),
+                output.response.double_clicked(),
+                ui.input(|input| input.modifiers.command),
+                clicked_link.is_some(),
+            );
+            if preview_jump_enabled
+                && jump_gesture
+                && let Some(pointer) = output.response.interact_pointer_pos()
+            {
+                preview_jump_char = Some(
+                    output
+                        .galley
+                        .cursor_from_pos(pointer - output.galley_pos)
+                        .index
+                        .0,
+                );
+            }
+
+            let visuals = *ui.style().interact(&output.response);
+            let border = if output.response.has_focus() {
+                ui.visuals().selection.stroke
+            } else {
+                visuals.bg_stroke
+            };
+            let sticky_context = sticky_context_enabled.then(|| {
+                let scroll_lines = sticky_context_scroll_lines(
+                    &line_rows,
+                    |index| {
+                        output
+                            .galley
+                            .rows
+                            .get(index)
+                            .map(|row| row.rect().top() + output.galley_pos.y)
+                    },
+                    |index| {
+                        output
+                            .galley
+                            .rows
+                            .get(index)
+                            .map(|row| row.char_count_including_newline().0)
+                    },
+                    |index| {
+                        output
+                            .galley
+                            .rows
+                            .get(index)
+                            .map(|row| row.ends_with_newline)
+                    },
+                )
+                .unwrap_or_default();
+                StickyContextEditorSnapshot {
+                    galley: Arc::clone(&output.galley),
+                    galley_pos: output.galley_pos,
+                    line_rows,
+                    scroll_lines,
+                }
             });
+            (
+                output.response.rect,
+                visuals.corner_radius,
+                border,
+                sticky_context,
+            )
+        });
 
-        let (editor_rect, corner_radius, border) = scroll_output.inner;
+        let (editor_rect, corner_radius, border, sticky_context) = scroll_output.inner;
         let surface_rect = editor_surface_rect(editor_rect, scroll_output.inner_rect);
         ui.painter().set(
             editor_base_slot,
@@ -7307,7 +9353,10 @@ impl EditorApp {
         ui.painter()
             .rect_stroke(surface_rect, corner_radius, border, StrokeKind::Inside);
 
-        if self.diagnostic_tooltip.is_none() {
+        if hovered_asset_literal {
+            self.diagnostic_tooltip = None;
+            self.editor_hover = None;
+        } else if self.diagnostic_tooltip.is_none() {
             self.update_editor_hover(ui, hovered_semantic_token);
         } else {
             self.editor_hover = None;
@@ -7354,6 +9403,34 @@ impl EditorApp {
             self.search.clear();
             self.mark_edited();
         }
+        if let (Some(cursor), Some(anchor)) = (completion_cursor, completion_anchor) {
+            let key = self.document.key();
+            self.last_editor_caret = Some(EditorCaretState {
+                key,
+                char_index: cursor,
+                rect: anchor,
+            });
+            let completion_still_current = self.editor_completion.as_ref().is_none_or(|state| {
+                state.cursor == cursor
+                    && state.version == revision_as_i32(self.document.revision)
+                    && self.tinymist_generation == Some(state.generation)
+                    && self.tinymist_uri.as_deref() == Some(state.uri.as_str())
+            });
+            if completion_still_current {
+                if let Some(state) = &mut self.editor_completion {
+                    state.anchor = anchor;
+                }
+            } else {
+                self.editor_completion = None;
+            }
+            if changed && completion_edit_triggered && editor_has_focus {
+                self.request_editor_completion(cursor, anchor, false);
+            }
+        } else if editor_has_focus {
+            self.last_editor_caret = None;
+            self.editor_completion = None;
+        }
+        self.show_editor_completion_popup(ui.ctx(), scroll_output.inner_rect);
         if let Some(char_index) = preview_jump_char {
             self.jump_source_to_preview(char_index);
         }
@@ -7361,13 +9438,13 @@ impl EditorApp {
             self.follow_preview_link(&target);
         }
 
-        if self.find_visible {
+        let find_overlay_rect = if self.find_visible {
             let context = ui.ctx().clone();
             let overlay_width = (scroll_output.inner_rect.width() - 4.0 * theme::SPACE.content)
                 .clamp(1.0, METRICS.editor.find_overlay_max_width);
             let anchor = scroll_output.inner_rect.left_top()
                 + egui::vec2(theme::SPACE.content, theme::SPACE.content);
-            egui::Area::new(viewport_scoped_id(&context, "find-replace-overlay"))
+            let output = egui::Area::new(viewport_scoped_id(&context, "find-replace-overlay"))
                 .order(egui::Order::Foreground)
                 .fixed_pos(anchor)
                 .constrain_to(ui.clip_rect())
@@ -7377,6 +9454,38 @@ impl EditorApp {
                         self.show_find_bar(ui);
                     });
                 });
+            Some(output.response.rect)
+        } else {
+            None
+        };
+
+        let sticky_context_rows = sticky_context.as_ref().and_then(|sticky_context| {
+            let geometry =
+                sticky_context_overlay_geometry(scroll_output.inner_rect, find_overlay_rect)?;
+            let query = self.editor_data.sticky_context_query();
+            sticky_context_rows_for_snapshot(
+                &query,
+                sticky_context,
+                geometry.anchor.y,
+                geometry.max_height,
+            )
+        });
+        if let (Some(sticky_context), Some(rows)) = (sticky_context, sticky_context_rows)
+            && let Some(target) = show_sticky_context_overlay(
+                ui.ctx(),
+                scroll_output.inner_rect,
+                find_overlay_rect,
+                &rows,
+                &sticky_context,
+                line_numbers,
+            )
+        {
+            self.pending_editor_selection = Some(target..target);
+            self.editor_completion = None;
+            let editor_id = source_editor_id(ui.ctx());
+            ui.ctx()
+                .memory_mut(|memory| memory.request_focus(editor_id));
+            ui.ctx().request_repaint();
         }
     }
 
@@ -7464,6 +9573,293 @@ impl EditorApp {
                 ui.ctx()
                     .data_mut(|data| data.insert_temp(tooltip_id, tooltip));
             }
+        }
+    }
+
+    fn request_editor_completion(&mut self, cursor: usize, anchor: Rect, explicit: bool) {
+        let ready = tinymist_language_features_ready(
+            self.document.kind,
+            self.preview.tinymist_lsp_ready,
+            self.tinymist_current_open,
+        );
+        let (Some(generation), Some(uri)) = (self.tinymist_generation, self.tinymist_uri.clone())
+        else {
+            self.editor_completion = None;
+            if explicit {
+                self.notice = Some(Notice {
+                    message: "Completions are unavailable until Tinymist is ready".to_owned(),
+                    kind: NoticeKind::Info,
+                });
+            }
+            return;
+        };
+        if !ready {
+            self.editor_completion = None;
+            if explicit {
+                self.notice = Some(Notice {
+                    message: "Completions are unavailable until Tinymist is ready".to_owned(),
+                    kind: NoticeKind::Info,
+                });
+            }
+            return;
+        }
+
+        let cursor = cursor.min(self.document.source.chars().count());
+        let version = revision_as_i32(self.document.revision);
+        let request_token = self.next_editor_completion_token;
+        self.next_editor_completion_token =
+            self.next_editor_completion_token.wrapping_add(1).max(1);
+        let position = lsp_position_at_char(&self.document.source, cursor);
+        match self.tinymist.complete_document(
+            generation,
+            uri.clone(),
+            version,
+            position,
+            request_token,
+        ) {
+            Ok(()) => {
+                self.editor_completion = Some(EditorCompletionState {
+                    generation,
+                    uri,
+                    version,
+                    request_token,
+                    cursor,
+                    anchor,
+                    explicit,
+                    is_incomplete: false,
+                    selected: 0,
+                    items: Vec::new(),
+                });
+            }
+            Err(error) => {
+                self.editor_completion = None;
+                if explicit {
+                    self.notice = Some(Notice {
+                        message: format!("Could not request completions: {error}"),
+                        kind: NoticeKind::Error,
+                    });
+                }
+            }
+        }
+    }
+
+    fn receive_editor_completions(
+        &mut self,
+        response: EditorCompletionResponse,
+        context: &egui::Context,
+    ) {
+        let EditorCompletionResponse {
+            generation,
+            uri,
+            version,
+            request_token,
+            is_incomplete,
+            mut items,
+        } = response;
+        let Some(completion) = &mut self.editor_completion else {
+            return;
+        };
+        let current = completion_response_matches(
+            completion,
+            generation,
+            &uri,
+            version,
+            request_token,
+            self.tinymist_generation,
+            self.tinymist_uri.as_deref(),
+            revision_as_i32(self.document.revision),
+        );
+        if !current {
+            return;
+        }
+        items.retain(|item| !item.label.trim().is_empty());
+        items.sort_by(|left, right| {
+            left.sort_text
+                .as_deref()
+                .unwrap_or(&left.label)
+                .cmp(right.sort_text.as_deref().unwrap_or(&right.label))
+                .then_with(|| left.label.cmp(&right.label))
+        });
+        items.truncate(COMPLETION_ITEM_LIMIT);
+        if items.is_empty() {
+            self.editor_completion = None;
+            return;
+        }
+        completion.is_incomplete = is_incomplete;
+        completion.selected = 0;
+        completion.items = items;
+        context.request_repaint();
+    }
+
+    fn apply_editor_completion(&mut self, index: usize, context: &egui::Context) {
+        let Some(completion) = self.editor_completion.as_ref() else {
+            return;
+        };
+        let current = self.tinymist_generation == Some(completion.generation)
+            && self.tinymist_uri.as_deref() == Some(completion.uri.as_str())
+            && completion.version == revision_as_i32(self.document.revision);
+        if !current {
+            self.editor_completion = None;
+            return;
+        }
+        let Some(item) = completion.items.get(index).cloned() else {
+            return;
+        };
+        let request_cursor = completion.cursor;
+        let application =
+            match prepare_completion_application(&self.document.source, request_cursor, &item) {
+                Ok(application) => application,
+                Err(error) => {
+                    self.editor_completion = None;
+                    self.notice = Some(Notice {
+                        message: format!("Could not apply completion: {error}"),
+                        kind: NoticeKind::Error,
+                    });
+                    return;
+                }
+            };
+
+        let snapshot = self.editor_snapshot(context);
+        self.document.source = application.source;
+        self.push_editor_undo_snapshot(snapshot);
+        self.pending_editor_selection = Some(application.cursor..application.cursor);
+        self.search.clear();
+        self.editor_completion = None;
+        self.mark_edited();
+        self.notice = Some(Notice {
+            message: format!("Completed {}", item.label),
+            kind: NoticeKind::Success,
+        });
+        let editor_id = source_editor_id(context);
+        context.memory_mut(|memory| memory.request_focus(editor_id));
+        context.request_repaint();
+    }
+
+    fn handle_editor_completion_keys(&mut self, context: &egui::Context) {
+        let Some(completion) = &mut self.editor_completion else {
+            return;
+        };
+        if context.input_mut(|input| input.consume_key(Modifiers::NONE, egui::Key::Escape)) {
+            self.editor_completion = None;
+            return;
+        }
+        if completion.items.is_empty() {
+            return;
+        }
+        let len = completion.items.len();
+        if context.input_mut(|input| input.consume_key(Modifiers::NONE, egui::Key::ArrowDown)) {
+            completion.selected = (completion.selected + 1) % len;
+            context.request_repaint();
+        }
+        if context.input_mut(|input| input.consume_key(Modifiers::NONE, egui::Key::ArrowUp)) {
+            completion.selected = completion.selected.checked_sub(1).unwrap_or(len - 1);
+            context.request_repaint();
+        }
+        let accept = context.input_mut(|input| {
+            input.consume_key(Modifiers::NONE, egui::Key::Enter)
+                || input.consume_key(Modifiers::NONE, egui::Key::Tab)
+        });
+        if accept {
+            let selected = completion.selected;
+            self.apply_editor_completion(selected, context);
+        }
+    }
+
+    fn show_editor_completion_popup(&mut self, context: &egui::Context, viewport: Rect) {
+        let Some(completion) = self.editor_completion.as_ref() else {
+            return;
+        };
+        if completion.items.is_empty() || !viewport.is_positive() {
+            return;
+        }
+
+        let items = completion.items.clone();
+        let selected = completion.selected.min(items.len().saturating_sub(1));
+        let is_incomplete = completion.is_incomplete;
+        let anchor = completion.anchor;
+        let popup_width = COMPLETION_POPUP_WIDTH.min((viewport.width() - 8.0).max(1.0));
+        let list_height = (items.len() as f32 * COMPLETION_ROW_HEIGHT)
+            .clamp(COMPLETION_ROW_HEIGHT, COMPLETION_POPUP_MAX_HEIGHT);
+        let footer_height = if is_incomplete {
+            COMPLETION_ROW_HEIGHT
+        } else {
+            0.0
+        };
+        let desired_size = Vec2::new(popup_width, list_height + footer_height);
+        let position = completion_popup_position(anchor, desired_size, viewport);
+        let mut clicked = None;
+        let mut hovered = None;
+
+        let popup = egui::Area::new(viewport_scoped_id(context, "editor-completion-popup"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(position)
+            .constrain_to(viewport)
+            .show(context, |ui| {
+                theme::popup_card_frame(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(popup_width);
+                    ui.set_max_width(popup_width);
+                    egui::ScrollArea::vertical()
+                        .id_salt("editor-completion-items")
+                        .max_height(list_height)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for (index, item) in items.iter().enumerate() {
+                                let label = item.detail.as_deref().map_or_else(
+                                    || item.label.clone(),
+                                    |detail| format!("{}  —  {detail}", item.label),
+                                );
+                                let mut response = ui.add_sized(
+                                    [ui.available_width(), COMPLETION_ROW_HEIGHT],
+                                    egui::Button::selectable(
+                                        index == selected,
+                                        RichText::new(label).monospace(),
+                                    )
+                                    .truncate(),
+                                );
+                                if let Some(documentation) = item.documentation.as_deref() {
+                                    response = response.on_hover_text(documentation);
+                                }
+                                if response.hovered() {
+                                    hovered = Some(index);
+                                }
+                                if response.clicked() {
+                                    clicked = Some(index);
+                                }
+                                if index == selected {
+                                    response.scroll_to_me(Some(Align::Center));
+                                }
+                            }
+                        });
+                    if is_incomplete {
+                        ui.separator();
+                        ui.label(
+                            RichText::new("Keep typing for more suggestions")
+                                .size(theme::TYPE.supporting)
+                                .weak(),
+                        );
+                    }
+                });
+            });
+
+        if let Some(index) = hovered
+            && let Some(completion) = &mut self.editor_completion
+        {
+            completion.selected = index;
+        }
+        if let Some(index) = clicked {
+            self.apply_editor_completion(index, context);
+            return;
+        }
+
+        let clicked_outside = context.input(|input| {
+            input.pointer.any_pressed()
+                && input
+                    .pointer
+                    .interact_pos()
+                    .is_some_and(|pointer| !popup.response.rect.contains(pointer))
+        });
+        if clicked_outside {
+            self.editor_completion = None;
         }
     }
 
@@ -7866,31 +10262,41 @@ impl EditorApp {
                                         .color(color),
                                 );
                                 if let Some(location) = diagnostic.location {
-                                    ui.label(
-                                        RichText::new(format!(
-                                            "{}:{}",
-                                            location.line, location.column
-                                        ))
-                                        .monospace()
-                                        .color(ui.visuals().weak_text_color()),
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(format!(
+                                                "{}:{}",
+                                                location.line, location.column
+                                            ))
+                                            .monospace()
+                                            .color(ui.visuals().weak_text_color()),
+                                        )
+                                        .selectable(true),
                                     );
                                 }
-                                ui.label(&diagnostic.message);
+                                ui.add(
+                                    egui::Label::new(&diagnostic.message)
+                                        .selectable(true)
+                                        .wrap(),
+                                );
                             });
                             for detail in &diagnostic.details {
                                 ui.horizontal(|ui| {
                                     ui.add_space(METRICS.problems.detail_indent);
-                                    ui.label(
-                                        RichText::new(detail)
-                                            .size(theme::TYPE.supporting)
-                                            .monospace()
-                                            .weak(),
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(detail)
+                                                .size(theme::TYPE.supporting)
+                                                .monospace()
+                                                .weak(),
+                                        )
+                                        .selectable(true)
+                                        .wrap(),
                                     );
                                 });
                             }
                         })
-                        .response
-                        .interact(Sense::click());
+                        .response;
                     let row = if self.snapshot_scene == Some(UiSnapshotScene::ProblemsPanel)
                         && index == 0
                     {
@@ -7898,7 +10304,11 @@ impl EditorApp {
                     } else {
                         row
                     };
-                    if row.hovered() || row.highlighted() {
+                    let pointer_in_row = row
+                        .ctx
+                        .pointer_latest_pos()
+                        .is_some_and(|position| row.rect.contains(position));
+                    if pointer_in_row || row.highlighted() {
                         ui.painter().set(
                             background_slot,
                             egui::Shape::rect_filled(
@@ -7912,15 +10322,28 @@ impl EditorApp {
                         );
                     }
                     if diagnostic.location.is_some() {
-                        native_hover_text(row.clone(), "Double-click to open this location");
-                        if row.double_clicked() {
-                            jump_target = Some(diagnostic.clone());
+                        let hover = ui.interact(
+                            row.rect,
+                            ui.id().with(("problem-row-hover", index)),
+                            Sense::hover(),
+                        );
+                        native_hover_text(hover, "Double-click to open this location");
+                        if let Some(diagnostic) =
+                            problem_row_jump_target(diagnostic, problem_row_double_clicked(&row))
+                        {
+                            jump_target = Some(diagnostic);
                         }
                     }
                 }
                 if !self.preview.raw_diagnostics.is_empty() {
                     ui.collapsing("Raw CLI stdout", |ui| {
-                        ui.label(RichText::new(&self.preview.raw_diagnostics).monospace());
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(&self.preview.raw_diagnostics).monospace(),
+                            )
+                            .selectable(true)
+                            .wrap(),
+                        );
                     });
                 }
             });
@@ -8284,15 +10707,7 @@ impl EditorApp {
             match built {
                 Ok(webview) => {
                     #[cfg(target_os = "macos")]
-                    {
-                        use wry::WebViewExtMacOS as _;
-                        // WKWebView disables trackpad magnification by default.
-                        // Enabling the native gesture preserves the trackpad's
-                        // focal point and momentum inside the vector preview.
-                        unsafe {
-                            webview.webview().setAllowsMagnification(true);
-                        }
-                    }
+                    crate::native_window::enable_native_webview_magnification(&webview);
                     self.webview = Some(webview);
                     self.webview_url = Some(url.clone());
                     self.webview_reload_pending = false;
@@ -8416,6 +10831,22 @@ impl EditorApp {
     }
 }
 
+fn problem_row_jump_target(diagnostic: &Diagnostic, double_clicked: bool) -> Option<Diagnostic> {
+    (double_clicked && diagnostic.location.is_some()).then(|| diagnostic.clone())
+}
+
+fn problem_row_double_clicked(response: &egui::Response) -> bool {
+    response
+        .ctx
+        .pointer_latest_pos()
+        .is_some_and(|position| response.rect.contains(position))
+        && response.ctx.input(|input| {
+            input
+                .pointer
+                .button_double_clicked(egui::PointerButton::Primary)
+        })
+}
+
 impl eframe::App for EditorApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         Color32::TRANSPARENT.to_normalized_gamma_f32()
@@ -8469,6 +10900,12 @@ impl eframe::App for EditorApp {
             Duration::from_millis(self.settings.hover_delay_ms),
             Duration::from_millis(self.settings.hover_fade_ms),
         );
+        self.captures.set_manual_shortcut_override(
+            self.settings
+                .shortcut_overrides
+                .get(ShortcutAction::CaptureUi)
+                .map(|binding| binding.map(ShortcutChord::egui)),
+        );
         if context.input(|input| input.viewport().focused == Some(true)) {
             if self.document_workflow.modal_suspended {
                 self.document_workflow.modal_had_focus = false;
@@ -8477,6 +10914,10 @@ impl eframe::App for EditorApp {
             if self.rename_overlay_suspended {
                 self.rename_overlay_had_focus = false;
                 self.rename_overlay_suspended = false;
+            }
+            if self.table_editor_suspended {
+                self.table_editor_had_focus = false;
+                self.table_editor_suspended = false;
             }
         }
         // The GL surface is alpha-capable for child popup viewports. Keep the
@@ -8487,8 +10928,10 @@ impl eframe::App for EditorApp {
         let geometry_id = tooltip_geometry_id(&context);
         let interaction_id = tooltip_interaction_id(&context);
         let tooltip_retained = native_tooltip_handoff_active(&context, true);
+        clear_asset_hover_candidate(&context);
         if !tooltip_retained {
             self.diagnostic_tooltip = None;
+            self.clear_asset_hover();
             context.data_mut(|data| {
                 data.remove::<HoverTooltipOverlay>(native_tooltip_id);
                 data.remove::<TooltipGeometry>(geometry_id);
@@ -8496,19 +10939,24 @@ impl eframe::App for EditorApp {
             });
         }
         self.process_open_requests(&context);
-        self.process_native_menu_commands(&context, frame);
-        self.execute_pending_app_popup_action(&context, frame);
         self.execute_pending_document_action(&context, frame);
         self.poll_font_catalog(&context);
+        self.poll_package_catalog(&context);
         self.sync_runtime_settings(&context);
         self.receive_compile_results(&context);
         self.receive_asset_results(&context);
+        self.receive_asset_thumbnail_results(&context);
         self.poll_export_dialog(&context);
         self.poll_tool_picker(&context);
         self.poll_document_dialog(&context);
         self.receive_tinymist_events(&context);
         self.receive_web_links();
         self.handle_shortcuts(&context, frame);
+        // Menu-driven TextEdit commands may inject semantic events. Process
+        // them after shortcut normalization so they reach the focused widget
+        // unchanged during the UI pass below.
+        self.process_native_menu_commands(&context, frame);
+        self.execute_pending_app_popup_action(&context, frame);
         self.handle_dropped_file(&context);
         self.handle_close_request(&context);
         self.update_title(&context);
@@ -8537,13 +10985,23 @@ impl eframe::App for EditorApp {
             };
             panel.show(ui, |ui| self.show_problems(ui));
         }
-        if self.filesystem_visible {
+        if self.filesystem_phase.panel_visible() {
+            let show_contents = self.filesystem_phase.contents_visible();
             egui::Panel::left("filesystem")
                 .frame(theme::content_panel_frame(ui.style()))
                 .resizable(true)
                 .default_size(METRICS.chrome.explorer_default_width)
                 .min_size(METRICS.chrome.explorer_min_width)
-                .show(ui, |ui| self.show_workspace(ui));
+                .show(ui, |ui| {
+                    if show_contents {
+                        self.show_workspace(ui);
+                    }
+                });
+            let next_phase = self.filesystem_phase.finish_frame();
+            if next_phase != self.filesystem_phase {
+                self.filesystem_phase = next_phase;
+                context.request_repaint();
+            }
         }
         let designated_preview = self.designated_preview_path().is_some();
         if self.document.kind.preview_only() {
@@ -8586,13 +11044,17 @@ impl eframe::App for EditorApp {
                 }
             }
         }
+        self.update_asset_hover(&context);
         self.show_app_popup_window(&context);
         self.show_rename_dialog(&context);
+        self.show_table_editor_window(&context);
         self.show_app_modal_window(&context);
+        self.show_asset_hover_window(&context);
         self.show_diagnostic_tooltip_window(&context);
         self.show_settings_window(&context, frame);
         self.show_typst_overrides_window(&context);
         self.show_workspace_chooser(&context);
+        self.show_package_manager_window(&context);
         self.sync_preview_visibility();
         self.tick_autosave(&context);
         self.tick_compile(&context);
@@ -8630,13 +11092,24 @@ fn preview_color_image(size: [usize; 2], rgba: &[u8]) -> ColorImage {
     ColorImage::from_rgba_unmultiplied(size, rgba)
 }
 
-fn take_matching_export(
+fn take_ready_export(
     pending: &mut Option<PendingExport>,
     document_epoch: u64,
+    document_revision: u64,
+    artifact_key: Option<ArtifactKey>,
 ) -> Option<PendingExport> {
-    pending
-        .take()
-        .filter(|export| export.document_epoch == document_epoch)
+    let export = pending.as_ref()?;
+    if export.document_epoch != document_epoch {
+        pending.take();
+        return None;
+    }
+    let ready = artifact_key.is_some_and(|key| {
+        key.revision == document_revision
+            && export
+                .after_artifact_generation
+                .is_none_or(|generation| key.generation > generation)
+    });
+    if ready { pending.take() } else { None }
 }
 
 fn paint_editor_line_backgrounds(
@@ -8808,12 +11281,671 @@ fn typst_hover_token_range(source: &str, char_index: usize) -> Option<Range<usiz
     (start < end).then_some(start..end)
 }
 
+fn completion_requested_after_events(events: &[egui::Event]) -> bool {
+    events.iter().any(|event| match event {
+        egui::Event::Text(text) => text.chars().last().is_some_and(|character| {
+            character.is_alphanumeric()
+                || matches!(character, '_' | '-' | '.' | '#' | '@' | ':' | '/')
+        }),
+        egui::Event::Key {
+            key: egui::Key::Backspace | egui::Key::Delete,
+            pressed: true,
+            modifiers,
+            ..
+        } => !modifiers.command && !modifiers.ctrl && !modifiers.alt,
+        _ => false,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn completion_response_matches(
+    pending: &EditorCompletionState,
+    generation: Generation,
+    uri: &str,
+    version: i32,
+    request_token: u64,
+    active_generation: Option<Generation>,
+    active_uri: Option<&str>,
+    active_version: i32,
+) -> bool {
+    pending.generation == generation
+        && pending.uri == uri
+        && pending.version == version
+        && pending.request_token == request_token
+        && active_generation == Some(generation)
+        && active_uri == Some(uri)
+        && active_version == version
+}
+
+fn completion_popup_position(anchor: Rect, desired_size: Vec2, viewport: Rect) -> Pos2 {
+    let edge = 4.0;
+    let gap = theme::SPACE.tight;
+    let min_x = viewport.left() + edge;
+    let max_x = (viewport.right() - edge - desired_size.x).max(min_x);
+    let x = anchor.left().clamp(min_x, max_x);
+    let below = anchor.bottom() + gap;
+    let above = anchor.top() - gap - desired_size.y;
+    let preferred_y =
+        if below + desired_size.y <= viewport.bottom() - edge || above < viewport.top() + edge {
+            below
+        } else {
+            above
+        };
+    let min_y = viewport.top() + edge;
+    let max_y = (viewport.bottom() - edge - desired_size.y).max(min_y);
+    Pos2::new(x, preferred_y.clamp(min_y, max_y))
+}
+
+fn completion_prefix_range(source: &str, cursor: usize) -> Range<usize> {
+    let cursor = cursor.min(source.chars().count());
+    let prefix = source.chars().take(cursor).collect::<Vec<_>>();
+    let start = prefix
+        .iter()
+        .rev()
+        .take_while(|&&character| character.is_alphanumeric() || matches!(character, '_' | '-'))
+        .count();
+    cursor.saturating_sub(start)..cursor
+}
+
+fn completion_ranges_conflict(left: &Range<usize>, right: &Range<usize>) -> bool {
+    if left.is_empty() && right.is_empty() {
+        return left.start == right.start;
+    }
+    if left.is_empty() {
+        return right.start <= left.start && left.start <= right.end;
+    }
+    if right.is_empty() {
+        return left.start <= right.start && right.start <= left.end;
+    }
+    left.start < right.end && right.start < left.end
+}
+
+fn prepare_completion_application(
+    source: &str,
+    request_cursor: usize,
+    item: &CompletionItem,
+) -> Result<CompletionApplication, String> {
+    let source_len = source.chars().count();
+    if request_cursor > source_len {
+        return Err("the completion cursor is outside the document".to_owned());
+    }
+
+    let mut main_edit = item.text_edit.clone().unwrap_or_else(|| {
+        let range = completion_prefix_range(source, request_cursor);
+        LspTextEdit {
+            range: LspRange {
+                start: lsp_position_at_char(source, range.start),
+                end: lsp_position_at_char(source, range.end),
+            },
+            new_text: item.insert_text.clone(),
+        }
+    });
+    let expansion = if item.insert_text_is_snippet {
+        expand_lsp_snippet(&main_edit.new_text)?
+    } else {
+        SnippetExpansion {
+            cursor: main_edit.new_text.chars().count(),
+            text: main_edit.new_text.clone(),
+        }
+    };
+    main_edit.new_text = expansion.text.clone();
+    let main_range = range_to_char_range(source, &main_edit.range);
+
+    for additional in &item.additional_text_edits {
+        let additional_range = range_to_char_range(source, &additional.range);
+        if completion_ranges_conflict(&main_range, &additional_range) {
+            return Err("the completion's main and additional edits overlap".to_owned());
+        }
+    }
+
+    let mut edits = Vec::with_capacity(1 + item.additional_text_edits.len());
+    edits.push(main_edit);
+    edits.extend(item.additional_text_edits.iter().cloned());
+    let applied = apply_text_edits(source, &edits, [main_range.end, main_range.end])?;
+    let inserted_len = expansion.text.chars().count();
+    let cursor = applied.mapped_offsets[0]
+        .saturating_sub(inserted_len)
+        .saturating_add(expansion.cursor.min(inserted_len));
+    Ok(CompletionApplication {
+        source: applied.text,
+        cursor,
+    })
+}
+
+#[derive(Default)]
+struct SnippetCursorTracker {
+    first_tabstop: Option<(u32, usize)>,
+    final_tabstop: Option<usize>,
+}
+
+impl SnippetCursorTracker {
+    fn record(&mut self, tabstop: u32, cursor: usize) {
+        if tabstop == 0 {
+            self.final_tabstop.get_or_insert(cursor);
+        } else if self
+            .first_tabstop
+            .is_none_or(|(current, _)| tabstop < current)
+        {
+            self.first_tabstop = Some((tabstop, cursor));
+        }
+    }
+}
+
+fn expand_lsp_snippet(snippet: &str) -> Result<SnippetExpansion, String> {
+    let characters = snippet.chars().collect::<Vec<_>>();
+    let mut output = String::with_capacity(snippet.len());
+    let mut tracker = SnippetCursorTracker::default();
+    expand_lsp_snippet_fragment(&characters, &mut output, &mut tracker)?;
+    let cursor = tracker
+        .first_tabstop
+        .map(|(_, cursor)| cursor)
+        .or(tracker.final_tabstop)
+        .unwrap_or_else(|| output.chars().count());
+    Ok(SnippetExpansion {
+        text: output,
+        cursor,
+    })
+}
+
+fn expand_lsp_snippet_fragment(
+    characters: &[char],
+    output: &mut String,
+    tracker: &mut SnippetCursorTracker,
+) -> Result<(), String> {
+    let mut index = 0;
+    while index < characters.len() {
+        match characters[index] {
+            '\\' if index + 1 < characters.len()
+                && matches!(characters[index + 1], '$' | '}' | '\\') =>
+            {
+                output.push(characters[index + 1]);
+                index += 2;
+            }
+            '$' if index + 1 < characters.len() && characters[index + 1].is_ascii_digit() => {
+                let (tabstop, next) = parse_snippet_number(characters, index + 1);
+                tracker.record(tabstop, output.chars().count());
+                index = next;
+            }
+            '$' if index + 1 < characters.len() && characters[index + 1] == '{' => {
+                let close = snippet_closing_brace(characters, index + 2)
+                    .ok_or_else(|| "an LSP snippet placeholder is not closed".to_owned())?;
+                expand_braced_snippet(&characters[index + 2..close], output, tracker)?;
+                index = close + 1;
+            }
+            '$' if index + 1 < characters.len()
+                && (characters[index + 1].is_ascii_alphabetic()
+                    || characters[index + 1] == '_') =>
+            {
+                index += 2;
+                while index < characters.len()
+                    && (characters[index].is_ascii_alphanumeric() || characters[index] == '_')
+                {
+                    index += 1;
+                }
+            }
+            character => {
+                output.push(character);
+                index += 1;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn parse_snippet_number(characters: &[char], start: usize) -> (u32, usize) {
+    let mut value = 0_u32;
+    let mut index = start;
+    while index < characters.len() && characters[index].is_ascii_digit() {
+        value = value
+            .saturating_mul(10)
+            .saturating_add(characters[index].to_digit(10).unwrap_or(0));
+        index += 1;
+    }
+    (value, index)
+}
+
+fn snippet_closing_brace(characters: &[char], start: usize) -> Option<usize> {
+    let mut depth = 0_usize;
+    let mut escaped = false;
+    for (index, character) in characters.iter().copied().enumerate().skip(start) {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if character == '\\' {
+            escaped = true;
+        } else if character == '{' {
+            depth += 1;
+        } else if character == '}' {
+            if depth == 0 {
+                return Some(index);
+            }
+            depth -= 1;
+        }
+    }
+    None
+}
+
+fn expand_braced_snippet(
+    body: &[char],
+    output: &mut String,
+    tracker: &mut SnippetCursorTracker,
+) -> Result<(), String> {
+    if body
+        .first()
+        .is_some_and(|character| character.is_ascii_digit())
+    {
+        let (tabstop, after_number) = parse_snippet_number(body, 0);
+        let cursor = output.chars().count();
+        tracker.record(tabstop, cursor);
+        match body.get(after_number) {
+            None => {}
+            Some(':') => {
+                expand_lsp_snippet_fragment(&body[after_number + 1..], output, tracker)?;
+            }
+            Some('|') if body.last() == Some(&'|') => {
+                let choice = first_snippet_choice(&body[after_number + 1..body.len() - 1]);
+                output.extend(choice);
+            }
+            _ => return Err("an LSP snippet tabstop has an unsupported form".to_owned()),
+        }
+        return Ok(());
+    }
+
+    let separator = body.iter().position(|character| *character == ':');
+    if let Some(separator) = separator {
+        expand_lsp_snippet_fragment(&body[separator + 1..], output, tracker)?;
+    } else if body
+        .iter()
+        .all(|character| character.is_ascii_alphanumeric() || *character == '_')
+    {
+        // Unknown variables have an empty value, as required by the snippet
+        // fallback rules when no default is supplied.
+    } else {
+        return Err("an LSP snippet variable has an unsupported form".to_owned());
+    }
+    Ok(())
+}
+
+fn first_snippet_choice(characters: &[char]) -> Vec<char> {
+    let mut choice = Vec::new();
+    let mut escaped = false;
+    for character in characters.iter().copied() {
+        if escaped {
+            choice.push(character);
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == ',' {
+            break;
+        } else {
+            choice.push(character);
+        }
+    }
+    if escaped {
+        choice.push('\\');
+    }
+    choice
+}
+
 fn editor_attention_progress(elapsed: Duration) -> f32 {
     (elapsed.as_secs_f32() / METRICS.motion.editor_attention.as_secs_f32()).clamp(0.0, 1.0)
 }
 
 fn editor_surface_rect(editor_rect: Rect, viewport_rect: Rect) -> Rect {
     editor_rect.union(viewport_rect)
+}
+
+#[derive(Clone)]
+struct StickyContextEditorSnapshot {
+    galley: Arc<egui::Galley>,
+    galley_pos: Pos2,
+    line_rows: Vec<Range<usize>>,
+    scroll_lines: Vec<StickyContextScrollLine>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct StickyContextScrollLine {
+    top: f32,
+    anchor: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct StickyContextOverlayGeometry {
+    anchor: Pos2,
+    width: f32,
+    max_height: f32,
+}
+
+fn sticky_context_overlay_geometry(
+    viewport: Rect,
+    find_overlay: Option<Rect>,
+) -> Option<StickyContextOverlayGeometry> {
+    if !viewport.is_positive() {
+        return None;
+    }
+    let mut top = viewport.top();
+    if let Some(find_overlay) = find_overlay
+        && find_overlay.intersects(viewport)
+    {
+        top = top.max(find_overlay.bottom());
+    }
+    let anchor = Pos2::new(viewport.left(), top);
+    let width = viewport.width();
+    let available_height = viewport.bottom() - anchor.y;
+    let max_height = available_height.min(viewport.height() * STICKY_CONTEXT_MAX_VIEWPORT_FRACTION);
+    (width > 1.0 && max_height > 1.0).then_some(StickyContextOverlayGeometry {
+        anchor,
+        width,
+        max_height,
+    })
+}
+
+fn sticky_context_jump_target(row: &StickyContextRow, clicked: bool) -> Option<usize> {
+    clicked.then_some(row.char_index)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct EditorGutterGeometry {
+    line_number_right: f32,
+    separator_x: f32,
+}
+
+fn editor_gutter_geometry(galley_x: f32) -> EditorGutterGeometry {
+    EditorGutterGeometry {
+        line_number_right: galley_x - METRICS.editor.line_number_right_gap,
+        separator_x: galley_x - METRICS.editor.line_number_separator_gap,
+    }
+}
+
+fn sticky_context_source_row_bounds(
+    snapshot: &StickyContextEditorSnapshot,
+    one_based_line: usize,
+) -> Option<(f32, f32)> {
+    let visual_rows = snapshot.line_rows.get(one_based_line.checked_sub(1)?)?;
+    let first = snapshot.galley.rows.get(visual_rows.start)?.rect();
+    let last = snapshot
+        .galley
+        .rows
+        .get(visual_rows.end.checked_sub(1)?)?
+        .rect();
+    (last.bottom() > first.top()).then_some((first.top(), last.bottom()))
+}
+
+struct StickyContextRenderRow<'a> {
+    row: &'a StickyContextRow,
+    source_top: f32,
+    height: f32,
+}
+
+fn sticky_context_row_reached_boundary(
+    source_top: f32,
+    overlay_top: f32,
+    preceding_sticky_height: f32,
+) -> bool {
+    source_top <= overlay_top + preceding_sticky_height
+}
+
+fn sticky_context_visible_rows<'a>(
+    rows: &'a [StickyContextRow],
+    snapshot: &StickyContextEditorSnapshot,
+    overlay_top: f32,
+    max_height: f32,
+) -> Vec<StickyContextRenderRow<'a>> {
+    let mut visible = Vec::new();
+    let mut height = 0.0;
+    for row in rows {
+        let Some((source_top, source_bottom)) =
+            sticky_context_source_row_bounds(snapshot, row.line)
+        else {
+            continue;
+        };
+        let row_height = source_bottom - source_top;
+        let source_screen_top = source_top + snapshot.galley_pos.y;
+        if !sticky_context_row_reached_boundary(source_screen_top, overlay_top, height) {
+            break;
+        }
+        if height + row_height > max_height {
+            break;
+        }
+        visible.push(StickyContextRenderRow {
+            row,
+            source_top,
+            height: row_height,
+        });
+        height += row_height;
+    }
+    visible
+}
+
+fn sticky_context_stacked_scroll_anchor(
+    viewport_top: f32,
+    max_height: f32,
+    mut anchor_at_boundary: impl FnMut(f32) -> Option<usize>,
+    mut stack_at_anchor: impl FnMut(usize) -> StickyContextStackProbe,
+) -> Option<usize> {
+    let mut boundary = viewport_top;
+    let mut retained = None;
+    for _ in 0..STICKY_CONTEXT_STACK_RESOLUTION_LIMIT {
+        let anchor = anchor_at_boundary(boundary)?;
+        let mut candidate = stack_at_anchor(anchor);
+        candidate.height = candidate.height.clamp(0.0, max_height);
+        if retained
+            .as_ref()
+            .is_none_or(|(_, current)| sticky_context_probe_supersedes(current, &candidate))
+        {
+            retained = Some((anchor, candidate));
+        }
+        // Probing at the bottom of the accumulated stack can land just after
+        // a short declaration. Keep a strict-prefix result from erasing the
+        // context already found, while still admitting a divergent sibling.
+        let (_, retained_probe) = retained.as_ref()?;
+        let next_boundary = boundary.max(viewport_top + retained_probe.height);
+        if (next_boundary - boundary).abs() <= 0.5 {
+            return retained.map(|(anchor, _)| anchor);
+        }
+        boundary = next_boundary;
+    }
+    retained.map(|(anchor, _)| anchor)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct StickyContextStackProbe {
+    /// Identity of each visible row, ordered outermost to innermost.
+    signature: Vec<(usize, usize)>,
+    height: f32,
+}
+
+fn sticky_context_probe_supersedes(
+    current: &StickyContextStackProbe,
+    candidate: &StickyContextStackProbe,
+) -> bool {
+    let candidate_is_strict_prefix = candidate.signature.len() < current.signature.len()
+        && current.signature[..candidate.signature.len()] == candidate.signature;
+    !candidate_is_strict_prefix
+}
+
+fn sticky_context_rows_for_snapshot(
+    query: &StickyContextQuery<'_>,
+    snapshot: &StickyContextEditorSnapshot,
+    viewport_top: f32,
+    max_height: f32,
+) -> Option<Vec<StickyContextRow>> {
+    let mut rows_by_anchor = BTreeMap::new();
+    let anchor = sticky_context_stacked_scroll_anchor(
+        viewport_top,
+        max_height,
+        |boundary| sticky_context_scroll_anchor(&snapshot.scroll_lines, boundary),
+        |anchor| {
+            let rows = rows_by_anchor
+                .entry(anchor)
+                .or_insert_with(|| query.rows(anchor));
+            let visible = sticky_context_visible_rows(rows, snapshot, viewport_top, max_height);
+            StickyContextStackProbe {
+                signature: visible
+                    .iter()
+                    .map(|row| (row.row.line, row.row.char_index))
+                    .collect(),
+                height: visible.iter().map(|row| row.height).sum(),
+            }
+        },
+    )?;
+    Some(
+        rows_by_anchor
+            .remove(&anchor)
+            .unwrap_or_else(|| query.rows(anchor)),
+    )
+}
+
+fn sticky_context_shadow(dark_mode: bool) -> egui::epaint::Shadow {
+    egui::epaint::Shadow {
+        offset: [0, 2],
+        blur: 6,
+        spread: 0,
+        color: Color32::from_black_alpha(if dark_mode { 40 } else { 24 }),
+    }
+}
+
+fn sticky_context_shadow_clip(overlay: Rect, viewport: Rect) -> Rect {
+    Rect::from_min_max(
+        Pos2::new(viewport.left(), overlay.bottom()),
+        viewport.right_bottom(),
+    )
+}
+
+fn sticky_context_opaque_cover(overlay: Rect, viewport: Rect) -> Rect {
+    Rect::from_min_max(
+        overlay.min,
+        Pos2::new(
+            overlay.right(),
+            (overlay.bottom() + STICKY_CONTEXT_BOTTOM_COVER).min(viewport.bottom()),
+        ),
+    )
+}
+
+fn show_sticky_context_overlay(
+    context: &egui::Context,
+    viewport: Rect,
+    find_overlay: Option<Rect>,
+    rows: &[StickyContextRow],
+    snapshot: &StickyContextEditorSnapshot,
+    line_numbers: bool,
+) -> Option<usize> {
+    let geometry = sticky_context_overlay_geometry(viewport, find_overlay)?;
+    if rows.is_empty() {
+        return None;
+    }
+
+    let visible_rows =
+        sticky_context_visible_rows(rows, snapshot, geometry.anchor.y, geometry.max_height);
+    if visible_rows.is_empty() {
+        return None;
+    }
+    let overlay_height = visible_rows.iter().map(|row| row.height).sum();
+
+    let mut jump_target = None;
+    egui::Area::new(viewport_scoped_id(context, "sticky-context-overlay"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(geometry.anchor)
+        .fade_in(false)
+        .constrain_to(viewport)
+        .show(context, |ui| {
+            ui.set_min_size(Vec2::new(geometry.width, overlay_height));
+            let overlay =
+                Rect::from_min_size(geometry.anchor, Vec2::new(geometry.width, overlay_height));
+            let shadow_clip = sticky_context_shadow_clip(overlay, viewport);
+            ui.painter()
+                .with_clip_rect(shadow_clip)
+                .add(sticky_context_shadow(ui.visuals().dark_mode).as_shape(overlay, 0));
+            ui.painter().rect_filled(
+                sticky_context_opaque_cover(overlay, viewport),
+                0.0,
+                ui.visuals().text_edit_bg_color(),
+            );
+
+            let gutter = editor_gutter_geometry(snapshot.galley_pos.x);
+            if line_numbers {
+                ui.painter().line_segment(
+                    [
+                        Pos2::new(gutter.separator_x, overlay.top()),
+                        Pos2::new(gutter.separator_x, overlay.bottom()),
+                    ],
+                    Stroke::new(
+                        METRICS.editor.line_number_separator_width,
+                        ui.visuals().widgets.noninteractive.bg_stroke.color,
+                    ),
+                );
+            }
+
+            let mut destination_top = overlay.top();
+            for visible in visible_rows {
+                let row = visible.row;
+                let row_rect = Rect::from_min_size(
+                    Pos2::new(overlay.left(), destination_top),
+                    Vec2::new(overlay.width(), visible.height),
+                );
+                let response = ui.interact(
+                    row_rect,
+                    ui.id()
+                        .with(("sticky-context-row", row.line, row.char_index)),
+                    Sense::click(),
+                );
+                if response.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+
+                let painter = ui.painter().with_clip_rect(row_rect.intersect(viewport));
+                painter.galley(
+                    Pos2::new(snapshot.galley_pos.x, row_rect.top() - visible.source_top),
+                    Arc::clone(&snapshot.galley),
+                    ui.visuals().text_color(),
+                );
+                if line_numbers {
+                    painter.text(
+                        Pos2::new(gutter.line_number_right, row_rect.top()),
+                        egui::Align2::RIGHT_TOP,
+                        row.line.to_string(),
+                        theme::annotation_font(),
+                        ui.visuals().weak_text_color(),
+                    );
+                }
+                if let Some(target) = sticky_context_jump_target(row, response.clicked()) {
+                    jump_target = Some(target);
+                }
+                destination_top += visible.height;
+            }
+        });
+    jump_target
+}
+
+fn editor_char_range_rect(output: &egui::text_edit::TextEditOutput, range: &Range<usize>) -> Rect {
+    let start = output
+        .galley
+        .pos_from_cursor(CCursor::new(range.start))
+        .translate(output.galley_pos.to_vec2());
+    let end = output
+        .galley
+        .pos_from_cursor(CCursor::new(range.end))
+        .translate(output.galley_pos.to_vec2());
+    editor_range_rect(output.response.rect, start, end)
+}
+
+fn editor_range_rect(editor: Rect, start: Rect, end: Rect) -> Rect {
+    let same_row = (start.top() - end.top()).abs() <= 0.5;
+    let rect = if same_row {
+        Rect::from_min_max(
+            start.left_top(),
+            Pos2::new(end.left().max(start.left() + 1.0), start.bottom()),
+        )
+    } else {
+        // Multiline literals are unusual, but keeping the entire intervening
+        // row width hoverable is less surprising than two disconnected slivers.
+        Rect::from_min_max(
+            Pos2::new(editor.left(), start.top()),
+            Pos2::new(editor.right(), end.bottom().max(start.bottom())),
+        )
+    };
+    rect.intersect(editor)
 }
 
 fn paint_line_diagnostics(
@@ -8889,16 +12021,15 @@ fn paint_line_numbers(
     line_rows: &[Range<usize>],
 ) {
     let painter = ui.painter();
-    let right = output.galley_pos.x - METRICS.editor.line_number_right_gap;
-    let separator_x = output.galley_pos.x - METRICS.editor.line_number_separator_gap;
+    let gutter = editor_gutter_geometry(output.galley_pos.x);
     let separator = Stroke::new(
         METRICS.editor.line_number_separator_width,
         ui.visuals().widgets.noninteractive.bg_stroke.color,
     );
     painter.line_segment(
         [
-            Pos2::new(separator_x, output.response.rect.top()),
-            Pos2::new(separator_x, output.response.rect.bottom()),
+            Pos2::new(gutter.separator_x, output.response.rect.top()),
+            Pos2::new(gutter.separator_x, output.response.rect.bottom()),
         ],
         separator,
     );
@@ -8909,7 +12040,7 @@ fn paint_line_numbers(
         };
         let row_rect = row.rect().translate(output.galley_pos.to_vec2());
         painter.text(
-            Pos2::new(right, row_rect.top()),
+            Pos2::new(gutter.line_number_right, row_rect.top()),
             egui::Align2::RIGHT_TOP,
             (line + 1).to_string(),
             theme::annotation_font(),
@@ -8955,14 +12086,59 @@ fn logical_line_row_ranges_from_breaks(
     ranges
 }
 
+/// Build a compact logical-line index over the laid-out editor rows.
+///
+/// Character counts include an implicit newline where the galley row ends a
+/// source line. Each anchor is the final character before that newline, so a
+/// scope beginning on a line is visible to the parser as soon as the line
+/// reaches its sticky boundary. Wrapped logical lines retain the top of their
+/// first visual row.
+fn sticky_context_scroll_lines(
+    logical_lines: &[Range<usize>],
+    mut visual_row_top: impl FnMut(usize) -> Option<f32>,
+    mut visual_row_char_count: impl FnMut(usize) -> Option<usize>,
+    mut visual_row_ends_with_newline: impl FnMut(usize) -> Option<bool>,
+) -> Option<Vec<StickyContextScrollLine>> {
+    let mut lines = Vec::with_capacity(logical_lines.len());
+    let mut line_start = 0usize;
+    for visual_rows in logical_lines {
+        let top = visual_row_top(visual_rows.start)?;
+        let line_char_count = visual_rows.clone().try_fold(0usize, |count, row| {
+            visual_row_char_count(row).map(|row_count| count + row_count)
+        })?;
+        let newline_chars = usize::from(visual_row_ends_with_newline(
+            visual_rows.end.checked_sub(1)?,
+        )?);
+        lines.push(StickyContextScrollLine {
+            top,
+            anchor: line_start + line_char_count.saturating_sub(newline_chars + 1),
+        });
+        line_start += line_char_count;
+    }
+    Some(lines)
+}
+
+/// Return the representative source character for the last logical line whose
+/// first visual row has reached the requested sticky boundary.
+fn sticky_context_scroll_anchor(lines: &[StickyContextScrollLine], boundary: f32) -> Option<usize> {
+    let index = lines
+        .partition_point(|line| line.top <= boundary)
+        .checked_sub(1)?;
+    Some(lines.get(index)?.anchor)
+}
+
 fn add_workspace_nodes(
     builder: &mut TreeViewBuilder<'_, PathBuf>,
     nodes: &[WorkspaceNode],
     active: Option<&Path>,
     preview: Option<&Path>,
     dark_mode: bool,
+    query: &str,
 ) {
     for node in nodes {
+        if !workspace_node_matches_query(node, query) {
+            continue;
+        }
         let is_active = active.is_some_and(|path| path == node.path);
         let is_preview = preview.is_some_and(|path| path == node.path);
         let label = node.display_name().into_owned();
@@ -8973,21 +12149,33 @@ fn add_workspace_nodes(
                     .default_open(active.is_some_and(|path| path.starts_with(&node.path)))
                     .icon(|ui| paint_tree_icon(ui, true))
                     .label_ui(move |ui| {
+                        let color = workspace_entry_resolved_color(
+                            color,
+                            is_active,
+                            ui.visuals().strong_text_color(),
+                        );
                         let text = RichText::new(&label).color(color);
                         ui.add(workspace_entry_label(text, is_active));
                     }),
             );
             if open {
-                add_workspace_nodes(builder, &node.children, active, preview, dark_mode);
+                add_workspace_nodes(builder, &node.children, active, preview, dark_mode, query);
             }
             builder.close_dir();
         } else if node.is_file() {
             let color = workspace_entry_color(&node.path, false, false, dark_mode);
+            let hover_path = node.path.clone();
+            let hover_kind = DocumentKind::preview_kind_for_path(&hover_path);
             builder.node(
                 NodeBuilder::leaf(node.path.clone())
                     .icon(|ui| paint_tree_icon(ui, false))
                     .label_ui(move |ui| {
-                        ui.horizontal(|ui| {
+                        let row = ui.horizontal(|ui| {
+                            let color = workspace_entry_resolved_color(
+                                color,
+                                is_active,
+                                ui.visuals().strong_text_color(),
+                            );
                             let text = RichText::new(&label).color(color);
                             ui.add(workspace_entry_label(text, is_active));
                             if is_preview {
@@ -8998,6 +12186,23 @@ fn add_workspace_nodes(
                                 );
                             }
                         });
+                        if let Some(kind) = hover_kind {
+                            let hover_rect = Rect::from_min_max(
+                                row.response.rect.left_top(),
+                                Pos2::new(ui.max_rect().right(), row.response.rect.bottom()),
+                            );
+                            let hover_response = ui.interact(
+                                hover_rect,
+                                ui.id().with(("asset-row-hover", &hover_path)),
+                                Sense::hover(),
+                            );
+                            offer_asset_hover(
+                                &hover_response,
+                                hover_rect,
+                                hover_path.clone(),
+                                kind,
+                            );
+                        }
                     }),
             );
         } else if node.is_symlink() {
@@ -9006,12 +12211,124 @@ fn add_workspace_nodes(
                 NodeBuilder::leaf(node.path.clone())
                     .icon(|ui| paint_tree_icon(ui, false))
                     .label_ui(move |ui| {
+                        let color = workspace_entry_resolved_color(
+                            color,
+                            is_active,
+                            ui.visuals().strong_text_color(),
+                        );
                         let text = RichText::new(format!("{label} (link)")).color(color);
                         ui.add(workspace_entry_label(text, is_active));
                     }),
             );
         }
     }
+}
+
+fn normalize_explorer_query(query: &str) -> String {
+    query.trim().to_lowercase()
+}
+
+fn explorer_text_matches_query(text: &str, normalized_query: &str) -> bool {
+    normalized_query.is_empty() || text.to_lowercase().contains(normalized_query)
+}
+
+fn explorer_path_matches_query(path: &Path, normalized_query: &str) -> bool {
+    explorer_text_matches_query(&path.to_string_lossy(), normalized_query)
+}
+
+fn workspace_node_self_matches_query(node: &WorkspaceNode, normalized_query: &str) -> bool {
+    explorer_text_matches_query(&node.display_name(), normalized_query)
+        || explorer_path_matches_query(&node.relative_path, normalized_query)
+}
+
+fn workspace_node_matches_query(node: &WorkspaceNode, normalized_query: &str) -> bool {
+    workspace_node_self_matches_query(node, normalized_query)
+        || node
+            .children
+            .iter()
+            .any(|child| workspace_node_matches_query(child, normalized_query))
+}
+
+fn open_matching_workspace_ancestors(
+    state: &mut TreeViewState<PathBuf>,
+    nodes: &[WorkspaceNode],
+    normalized_query: &str,
+) {
+    for node in nodes.iter().filter(|node| node.is_directory()) {
+        if workspace_node_matches_query(node, normalized_query) {
+            state.set_openness(node.path.clone(), true);
+            open_matching_workspace_ancestors(state, &node.children, normalized_query);
+        }
+    }
+}
+
+fn outline_entry_matches_query(
+    entry: &crate::project_index::OutlineEntry,
+    normalized_query: &str,
+) -> bool {
+    explorer_text_matches_query(&entry.title, normalized_query)
+        || explorer_path_matches_query(&entry.path, normalized_query)
+        || explorer_text_matches_query(&entry.line.to_string(), normalized_query)
+}
+
+fn symbol_entry_matches_query(
+    entry: &crate::project_index::SymbolEntry,
+    normalized_query: &str,
+) -> bool {
+    explorer_text_matches_query(&entry.name, normalized_query)
+        || explorer_text_matches_query(entry.kind.label(), normalized_query)
+        || explorer_path_matches_query(&entry.path, normalized_query)
+        || explorer_text_matches_query(&entry.line.to_string(), normalized_query)
+}
+
+fn reference_entry_matches_query(
+    entry: &crate::project_index::ReferenceEntry,
+    normalized_query: &str,
+) -> bool {
+    explorer_text_matches_query(&entry.label, normalized_query)
+        || explorer_path_matches_query(&entry.path, normalized_query)
+        || explorer_text_matches_query(&entry.line.to_string(), normalized_query)
+}
+
+fn explorer_section_query_matches(
+    snapshot: Option<&WorkspaceSnapshot>,
+    index: &ProjectIndex,
+    normalized_query: &str,
+) -> [bool; EXPLORER_SECTION_SPECS.len()] {
+    let mut matches = [
+        snapshot.is_some_and(|snapshot| {
+            snapshot
+                .nodes
+                .iter()
+                .any(|node| workspace_node_matches_query(node, normalized_query))
+        }),
+        index
+            .outline
+            .iter()
+            .any(|entry| outline_entry_matches_query(entry, normalized_query)),
+        index
+            .subfiles
+            .iter()
+            .any(|path| explorer_path_matches_query(path, normalized_query)),
+        index
+            .symbols
+            .iter()
+            .any(|entry| symbol_entry_matches_query(entry, normalized_query)),
+        index
+            .packages
+            .iter()
+            .any(|package| explorer_text_matches_query(package, normalized_query)),
+        index
+            .references
+            .iter()
+            .any(|entry| reference_entry_matches_query(entry, normalized_query)),
+    ];
+    if !matches.into_iter().any(|matched| matched) {
+        // Keep one result surface visible so an empty search has a clear
+        // outcome instead of presenting six closed section headers.
+        matches[0] = true;
+    }
+    matches
 }
 
 fn workspace_entry_label(text: RichText, is_active: bool) -> egui::Label {
@@ -9021,6 +12338,18 @@ fn workspace_entry_label(text: RichText, is_active: bool) -> egui::Label {
         text
     };
     theme::nonselectable_label(text)
+}
+
+fn workspace_entry_resolved_color(
+    category_color: Color32,
+    is_active: bool,
+    strong_text_color: Color32,
+) -> Color32 {
+    if is_active {
+        strong_text_color
+    } else {
+        category_color
+    }
 }
 
 fn workspace_entry_color(path: &Path, directory: bool, symlink: bool, dark_mode: bool) -> Color32 {
@@ -9059,21 +12388,150 @@ const EXPLORER_SECTION_SPECS: [(&str, bool); 6] = [
     ("workspace-references", false),
 ];
 
-fn explorer_section_state_id(ui: &egui::Ui, id_salt: &'static str) -> egui::Id {
-    ui.make_persistent_id(("explorer-section", id_salt))
+const EXPLORER_SECTION_MIN_BODY_HEIGHT: f32 = 44.0;
+const EXPLORER_SECTION_RESIZE_HANDLE_HEIGHT: f32 = 5.0;
+
+#[derive(Clone, Debug, PartialEq)]
+struct ExplorerSectionLayout {
+    weights: [f32; EXPLORER_SECTION_SPECS.len()],
 }
 
+impl Default for ExplorerSectionLayout {
+    fn default() -> Self {
+        Self {
+            weights: [1.0; EXPLORER_SECTION_SPECS.len()],
+        }
+    }
+}
+
+impl ExplorerSectionLayout {
+    fn body_heights(
+        &self,
+        open: [bool; EXPLORER_SECTION_SPECS.len()],
+        available: f32,
+    ) -> [f32; EXPLORER_SECTION_SPECS.len()] {
+        let mut heights = [0.0; EXPLORER_SECTION_SPECS.len()];
+        let open_count = open.iter().filter(|is_open| **is_open).count();
+        if open_count == 0 {
+            return heights;
+        }
+
+        let available = available.max(0.0);
+        let minimum = EXPLORER_SECTION_MIN_BODY_HEIGHT.min(available / open_count as f32);
+        let remainder = (available - minimum * open_count as f32).max(0.0);
+        let weight_sum = self
+            .weights
+            .iter()
+            .zip(open)
+            .filter_map(|(weight, is_open)| {
+                is_open.then_some(if weight.is_finite() && *weight > 0.0 {
+                    *weight
+                } else {
+                    1.0
+                })
+            })
+            .sum::<f32>()
+            .max(f32::EPSILON);
+
+        for (index, is_open) in open.into_iter().enumerate() {
+            if is_open {
+                let weight = self.weights[index];
+                let weight = if weight.is_finite() && weight > 0.0 {
+                    weight
+                } else {
+                    1.0
+                };
+                heights[index] = minimum + remainder * weight / weight_sum;
+            }
+        }
+        heights
+    }
+
+    fn resize_after(
+        &mut self,
+        open: [bool; EXPLORER_SECTION_SPECS.len()],
+        available: f32,
+        upper_index: usize,
+        requested_delta: f32,
+    ) -> bool {
+        if !requested_delta.is_finite() || requested_delta.abs() <= f32::EPSILON {
+            return false;
+        }
+        let Some(lower_index) = next_open_explorer_section(open, upper_index) else {
+            return false;
+        };
+        let mut heights = self.body_heights(open, available);
+        let open_count = open.iter().filter(|is_open| **is_open).count();
+        let minimum =
+            EXPLORER_SECTION_MIN_BODY_HEIGHT.min(available.max(0.0) / open_count.max(1) as f32);
+        let applied_delta = requested_delta.clamp(
+            minimum - heights[upper_index],
+            heights[lower_index] - minimum,
+        );
+        if applied_delta.abs() <= f32::EPSILON {
+            return false;
+        }
+        heights[upper_index] += applied_delta;
+        heights[lower_index] -= applied_delta;
+
+        // Store relative preferences. Recomputing from these weights lets the
+        // split scale with the panel while retaining the user's proportions.
+        for (index, is_open) in open.into_iter().enumerate() {
+            if is_open {
+                self.weights[index] = (heights[index] - minimum).max(f32::EPSILON);
+            }
+        }
+        true
+    }
+}
+
+fn next_open_explorer_section(
+    open: [bool; EXPLORER_SECTION_SPECS.len()],
+    after: usize,
+) -> Option<usize> {
+    open.iter()
+        .enumerate()
+        .skip(after.saturating_add(1))
+        .find_map(|(index, is_open)| (*is_open).then_some(index))
+}
+
+fn explorer_section_open_states(
+    ui: &egui::Ui,
+    filtered: bool,
+    defaults: [bool; EXPLORER_SECTION_SPECS.len()],
+) -> [bool; EXPLORER_SECTION_SPECS.len()] {
+    std::array::from_fn(|index| {
+        let (id_salt, _) = EXPLORER_SECTION_SPECS[index];
+        if filtered {
+            return defaults[index];
+        }
+        egui::collapsing_header::CollapsingState::load_with_default_open(
+            ui.ctx(),
+            explorer_section_state_id(ui, id_salt, false),
+            defaults[index],
+        )
+        .is_open()
+    })
+}
+
+fn explorer_section_layout_id(ui: &egui::Ui) -> egui::Id {
+    ui.make_persistent_id("explorer-section-layout")
+}
+
+fn explorer_section_state_id(ui: &egui::Ui, id_salt: &'static str, filtered: bool) -> egui::Id {
+    ui.make_persistent_id(("explorer-section", id_salt, filtered))
+}
+
+fn workspace_tree_state_id(ui: &egui::Ui, root: &Path, filtered: bool) -> egui::Id {
+    ui.make_persistent_id(("workspace-tree", root, filtered))
+}
+
+#[cfg(test)]
 fn explorer_section_body_height(ui: &egui::Ui) -> f32 {
-    let open_sections = EXPLORER_SECTION_SPECS
-        .iter()
-        .filter(|(id_salt, default_open)| {
-            egui::collapsing_header::CollapsingState::load_with_default_open(
-                ui.ctx(),
-                explorer_section_state_id(ui, id_salt),
-                *default_open,
-            )
-            .is_open()
-        })
+    let defaults = std::array::from_fn(|index| EXPLORER_SECTION_SPECS[index].1);
+    let open_sections = explorer_section_open_states(ui, false, defaults)
+        .into_iter()
+        .filter(|is_open| *is_open)
         .count();
     let frame_height = theme::explorer_section_frame(ui.style())
         .total_margin()
@@ -9096,6 +12554,7 @@ fn available_explorer_section_body_height(
     ((available_height - reserved_headers - reserved_gaps) / open_sections as f32).max(0.0)
 }
 
+#[cfg(test)]
 fn explorer_section(
     ui: &mut egui::Ui,
     id_salt: &'static str,
@@ -9104,12 +12563,47 @@ fn explorer_section(
     body_height: f32,
     add_body: impl FnOnce(&mut egui::Ui),
 ) {
-    let state = egui::collapsing_header::CollapsingState::load_with_default_open(
-        ui.ctx(),
-        explorer_section_state_id(ui, id_salt),
-        default_open,
+    let _ = explorer_section_resizable(
+        ui,
+        ExplorerSectionRenderSpec {
+            id_salt,
+            title,
+            default_open,
+            body_height,
+            show_resize_handle: false,
+            filtered: false,
+        },
+        add_body,
     );
-    theme::explorer_section_frame(ui.style()).show(ui, move |ui| {
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ExplorerSectionRenderSpec {
+    id_salt: &'static str,
+    title: &'static str,
+    default_open: bool,
+    body_height: f32,
+    show_resize_handle: bool,
+    filtered: bool,
+}
+
+fn explorer_section_resizable(
+    ui: &mut egui::Ui,
+    spec: ExplorerSectionRenderSpec,
+    add_body: impl FnOnce(&mut egui::Ui),
+) -> f32 {
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
+        ui.ctx(),
+        explorer_section_state_id(ui, spec.id_salt, spec.filtered),
+        spec.default_open,
+    );
+    if spec.filtered {
+        // Filtered results are transient and should always expose the sections
+        // that contain matches without mutating the user's normal open state.
+        state.set_open(spec.default_open);
+    }
+    let mut resize_delta = 0.0;
+    theme::explorer_section_frame(ui.style()).show(ui, |ui| {
         ui.set_width(ui.available_width().max(0.0));
         ui.spacing_mut().item_spacing.y = 0.0;
         let mut title_clicked = false;
@@ -9119,7 +12613,7 @@ fn explorer_section(
                     ui.available_width().max(0.0),
                     METRICS.explorer.section_header_height,
                 ],
-                egui::Button::new(RichText::new(title).strong()).frame(false),
+                egui::Button::new(RichText::new(spec.title).strong()).frame(false),
             );
             title_clicked = response.clicked();
         });
@@ -9127,41 +12621,104 @@ fn explorer_section(
             header.toggle();
         }
         header.body_unindented(|ui| {
+            let handle_height = if spec.show_resize_handle {
+                EXPLORER_SECTION_RESIZE_HANDLE_HEIGHT.min(spec.body_height.max(0.0))
+            } else {
+                0.0
+            };
             egui::ScrollArea::both()
-                .id_salt((id_salt, "scroll"))
+                .id_salt((spec.id_salt, "scroll", spec.filtered))
                 .max_width(ui.available_width().max(0.0))
-                .max_height(body_height)
+                .max_height((spec.body_height - handle_height).max(0.0))
                 .min_scrolled_width(0.0)
                 .min_scrolled_height(0.0)
                 .auto_shrink([false, false])
                 .show(ui, add_body);
+            if handle_height > 0.0 {
+                let (rect, response) = ui.allocate_exact_size(
+                    Vec2::new(ui.available_width().max(0.0), handle_height),
+                    Sense::drag(),
+                );
+                let response = response.on_hover_cursor(egui::CursorIcon::ResizeVertical);
+                let stroke = if response.hovered() || response.dragged() {
+                    Stroke::new(1.5, ui.visuals().widgets.hovered.fg_stroke.color)
+                } else {
+                    ui.visuals().widgets.noninteractive.bg_stroke
+                };
+                ui.painter().line_segment(
+                    [
+                        Pos2::new(rect.left(), rect.center().y),
+                        Pos2::new(rect.right(), rect.center().y),
+                    ],
+                    stroke,
+                );
+                resize_delta = response.drag_delta().y;
+            }
         });
     });
+    resize_delta
+}
+
+struct ExplorerProjectSectionsSpec<'a> {
+    root: &'a Path,
+    index: &'a ProjectIndex,
+    query: &'a str,
+    filtered: bool,
+    section_defaults: [bool; EXPLORER_SECTION_SPECS.len()],
+    open_sections: [bool; EXPLORER_SECTION_SPECS.len()],
+    body_heights: [f32; EXPLORER_SECTION_SPECS.len()],
+}
+
+#[derive(Default)]
+struct ExplorerProjectSectionsOutcome {
+    resize_request: Option<(usize, f32)>,
+    open_package_manager: bool,
+    target: Option<(PathBuf, usize)>,
 }
 
 fn show_project_index_sections(
     ui: &mut egui::Ui,
-    root: &Path,
-    index: &ProjectIndex,
-    body_height: f32,
-    target: &mut Option<(PathBuf, usize)>,
-) {
-    explorer_section(
+    spec: ExplorerProjectSectionsSpec<'_>,
+) -> ExplorerProjectSectionsOutcome {
+    let ExplorerProjectSectionsSpec {
+        root,
+        index,
+        query,
+        filtered,
+        section_defaults,
+        open_sections,
+        body_heights,
+    } = spec;
+    let mut outcome = ExplorerProjectSectionsOutcome::default();
+    let resize_delta = explorer_section_resizable(
         ui,
-        "workspace-contents",
-        "Contents",
-        true,
-        body_height,
+        ExplorerSectionRenderSpec {
+            id_salt: "workspace-contents",
+            title: "Contents",
+            default_open: section_defaults[1],
+            body_height: body_heights[1],
+            show_resize_handle: next_open_explorer_section(open_sections, 1).is_some(),
+            filtered,
+        },
         |ui| {
-            if index.outline.is_empty() {
+            let entries = index
+                .outline
+                .iter()
+                .filter(|entry| outline_entry_matches_query(entry, query))
+                .collect::<Vec<_>>();
+            if entries.is_empty() {
                 ui.label(
-                    RichText::new("No headings")
-                        .size(theme::TYPE.supporting)
-                        .weak(),
+                    RichText::new(if filtered {
+                        "No matches"
+                    } else {
+                        "No headings"
+                    })
+                    .size(theme::TYPE.supporting)
+                    .weak(),
                 );
                 return;
             }
-            for entry in &index.outline {
+            for entry in entries {
                 let indent = entry
                     .level
                     .saturating_sub(1)
@@ -9175,53 +12732,85 @@ fn show_project_index_sections(
                 let response =
                     explorer_index_row(ui, &entry.title, Some(&entry.line.to_string()), indent);
                 if native_hover_text(response, location).clicked() {
-                    *target = Some((entry.path.clone(), entry.line));
+                    outcome.target = Some((entry.path.clone(), entry.line));
                 }
             }
         },
     );
+    if resize_delta.abs() > f32::EPSILON {
+        outcome.resize_request = Some((1, resize_delta));
+    }
 
-    explorer_section(
+    let resize_delta = explorer_section_resizable(
         ui,
-        "workspace-subfiles",
-        "Subfiles",
-        false,
-        body_height,
+        ExplorerSectionRenderSpec {
+            id_salt: "workspace-subfiles",
+            title: "Subfiles",
+            default_open: section_defaults[2],
+            body_height: body_heights[2],
+            show_resize_handle: next_open_explorer_section(open_sections, 2).is_some(),
+            filtered,
+        },
         |ui| {
-            if index.subfiles.is_empty() {
+            let paths = index
+                .subfiles
+                .iter()
+                .filter(|path| explorer_path_matches_query(path, query))
+                .collect::<Vec<_>>();
+            if paths.is_empty() {
                 ui.label(
-                    RichText::new("No included files")
-                        .size(theme::TYPE.supporting)
-                        .weak(),
+                    RichText::new(if filtered {
+                        "No matches"
+                    } else {
+                        "No included files"
+                    })
+                    .size(theme::TYPE.supporting)
+                    .weak(),
                 );
                 return;
             }
-            for path in &index.subfiles {
+            for path in paths {
                 let label = project_relative_path(root, path);
                 let response = explorer_index_row(ui, &label, None, 0.0);
                 if native_hover_text(response, path.display().to_string()).clicked() {
-                    *target = Some((path.clone(), 1));
+                    outcome.target = Some((path.clone(), 1));
                 }
             }
         },
     );
+    if resize_delta.abs() > f32::EPSILON {
+        outcome.resize_request = Some((2, resize_delta));
+    }
 
-    explorer_section(
+    let resize_delta = explorer_section_resizable(
         ui,
-        "workspace-symbols",
-        "Symbols",
-        false,
-        body_height,
+        ExplorerSectionRenderSpec {
+            id_salt: "workspace-symbols",
+            title: "Symbols",
+            default_open: section_defaults[3],
+            body_height: body_heights[3],
+            show_resize_handle: next_open_explorer_section(open_sections, 3).is_some(),
+            filtered,
+        },
         |ui| {
-            if index.symbols.is_empty() {
+            let symbols = index
+                .symbols
+                .iter()
+                .filter(|entry| symbol_entry_matches_query(entry, query))
+                .collect::<Vec<_>>();
+            if symbols.is_empty() {
                 ui.label(
-                    RichText::new("No definitions or functions")
-                        .size(theme::TYPE.supporting)
-                        .weak(),
+                    RichText::new(if filtered {
+                        "No matches"
+                    } else {
+                        "No definitions or functions"
+                    })
+                    .size(theme::TYPE.supporting)
+                    .weak(),
                 );
                 return;
             }
-            for symbol in &index.symbols {
+            for symbol in symbols {
                 let kind = symbol.kind.label();
                 let location = format!(
                     "{}:{} · {kind}",
@@ -9230,49 +12819,85 @@ fn show_project_index_sections(
                 );
                 let response = explorer_index_row(ui, &symbol.name, Some(kind), 0.0);
                 if native_hover_text(response, location).clicked() {
-                    *target = Some((symbol.path.clone(), symbol.line));
+                    outcome.target = Some((symbol.path.clone(), symbol.line));
                 }
             }
         },
     );
+    if resize_delta.abs() > f32::EPSILON {
+        outcome.resize_request = Some((3, resize_delta));
+    }
 
-    explorer_section(
+    let resize_delta = explorer_section_resizable(
         ui,
-        "workspace-packages",
-        "Packages",
-        false,
-        body_height,
+        ExplorerSectionRenderSpec {
+            id_salt: "workspace-packages",
+            title: "Packages",
+            default_open: section_defaults[4],
+            body_height: body_heights[4],
+            show_resize_handle: next_open_explorer_section(open_sections, 4).is_some(),
+            filtered,
+        },
         |ui| {
-            if index.packages.is_empty() {
+            if ui.button("Browse packages…").clicked() {
+                outcome.open_package_manager = true;
+            }
+            ui.separator();
+            let packages = index
+                .packages
+                .iter()
+                .filter(|package| explorer_text_matches_query(package, query))
+                .collect::<Vec<_>>();
+            if packages.is_empty() {
                 ui.label(
-                    RichText::new("No packages")
-                        .size(theme::TYPE.supporting)
-                        .weak(),
+                    RichText::new(if filtered {
+                        "No matches"
+                    } else {
+                        "No packages"
+                    })
+                    .size(theme::TYPE.supporting)
+                    .weak(),
                 );
             } else {
-                for package in &index.packages {
+                for package in packages {
                     explorer_index_row(ui, package, None, 0.0);
                 }
             }
         },
     );
+    if resize_delta.abs() > f32::EPSILON {
+        outcome.resize_request = Some((4, resize_delta));
+    }
 
-    explorer_section(
+    let resize_delta = explorer_section_resizable(
         ui,
-        "workspace-references",
-        "Tags and references",
-        false,
-        body_height,
+        ExplorerSectionRenderSpec {
+            id_salt: "workspace-references",
+            title: "Tags and references",
+            default_open: section_defaults[5],
+            body_height: body_heights[5],
+            show_resize_handle: next_open_explorer_section(open_sections, 5).is_some(),
+            filtered,
+        },
         |ui| {
-            if index.references.is_empty() {
+            let references = index
+                .references
+                .iter()
+                .filter(|entry| reference_entry_matches_query(entry, query))
+                .collect::<Vec<_>>();
+            if references.is_empty() {
                 ui.label(
-                    RichText::new("No tags or references")
-                        .size(theme::TYPE.supporting)
-                        .weak(),
+                    RichText::new(if filtered {
+                        "No matches"
+                    } else {
+                        "No tags or references"
+                    })
+                    .size(theme::TYPE.supporting)
+                    .weak(),
                 );
                 return;
             }
-            for reference in &index.references {
+            for reference in references {
                 let location = format!(
                     "{}:{}",
                     project_relative_path(root, &reference.path),
@@ -9285,11 +12910,15 @@ fn show_project_index_sections(
                     0.0,
                 );
                 if native_hover_text(response, location).clicked() {
-                    *target = Some((reference.path.clone(), reference.line));
+                    outcome.target = Some((reference.path.clone(), reference.line));
                 }
             }
         },
     );
+    if resize_delta.abs() > f32::EPSILON {
+        outcome.resize_request = Some((5, resize_delta));
+    }
+    outcome
 }
 
 fn project_relative_path(root: &Path, path: &Path) -> String {
@@ -10727,8 +14356,174 @@ fn source_editor_id(context: &egui::Context) -> egui::Id {
     viewport_scoped_id(context, "tiptoptyp-source-editor")
 }
 
+fn focused_input_viewport(context: &egui::Context) -> egui::ViewportId {
+    let current = context.viewport_id();
+    // Only consider this document window and its own overlays. Every
+    // `EditorApp` is rendered once per pass, so scanning all focused viewports
+    // would let the primary editor steal shortcuts typed into a secondary
+    // document before that document's callback runs.
+    let owned = [
+        current,
+        scoped_child_viewport_id(context, "tiptoptyp-packages"),
+        scoped_child_viewport_id(context, "tiptoptyp-table-editor-overlay"),
+        scoped_child_viewport_id(context, "tiptoptyp-rename-overlay"),
+        scoped_child_viewport_id(context, "tiptoptyp-workspace-chooser"),
+        scoped_child_viewport_id(context, "tiptoptyp-modal-overlay"),
+        scoped_child_viewport_id(context, "tiptoptyp-settings"),
+        scoped_child_viewport_id(context, "tiptoptyp-typst-overrides"),
+        scoped_child_viewport_id(context, "asset-hover-overlay"),
+        scoped_child_viewport_id(context, "tiptoptyp-popup-overlay"),
+        scoped_child_viewport_id(context, "diagnostic-tooltip-overlay"),
+    ];
+    context.input(|input| {
+        owned
+            .into_iter()
+            .find(|viewport| {
+                input
+                    .raw
+                    .viewports
+                    .get(viewport)
+                    .is_some_and(|info| info.focused == Some(true))
+            })
+            .unwrap_or(current)
+    })
+}
+
+fn clipboard_semantic_kind(event: &egui::Event) -> Option<ClipboardSemanticKind> {
+    match event {
+        egui::Event::Cut => Some(ClipboardSemanticKind::Cut),
+        egui::Event::Copy => Some(ClipboardSemanticKind::Copy),
+        egui::Event::Paste(_) => Some(ClipboardSemanticKind::Paste),
+        _ => None,
+    }
+}
+
+/// egui-winit translates the platform's conventional clipboard chords into
+/// semantic events before the app sees them. Recover the physical chord so a
+/// disabled or rebound shortcut cannot leak through to `TextEdit`'s built-in
+/// behavior. A semantic paste produced by our own `RequestPaste` is admitted
+/// exactly once without being mistaken for a physical Primary+V press.
+fn normalize_text_edit_shortcut_events(
+    input: &mut egui::InputState,
+    shortcuts: &ShortcutBindings,
+    allow_requested_paste: bool,
+) -> bool {
+    let mut modifiers = input.modifiers;
+    let mut requested_paste_admitted = false;
+    let mut normalized = Vec::with_capacity(input.events.len());
+    for event in std::mem::take(&mut input.events) {
+        if let egui::Event::ModifiersChanged(changed) = event {
+            modifiers = changed;
+            normalized.push(event);
+            continue;
+        }
+        let Some(kind) = clipboard_semantic_kind(&event) else {
+            normalized.push(event);
+            continue;
+        };
+        if kind == ClipboardSemanticKind::Paste
+            && allow_requested_paste
+            && !requested_paste_admitted
+        {
+            requested_paste_admitted = true;
+            normalized.push(event);
+            continue;
+        }
+
+        match shortcuts.action_for_key_event(kind.key(), modifiers) {
+            Some(action) if action == kind.action() => normalized.push(event),
+            Some(_) => normalized.push(egui::Event::Key {
+                key: kind.key(),
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            }),
+            None => {}
+        }
+    }
+    input.events = normalized;
+    requested_paste_admitted
+}
+
+fn take_shortcut_capture_event(input: &mut egui::InputState) -> Option<(egui::Key, Modifiers)> {
+    let mut modifiers = input.modifiers;
+    for index in 0..input.events.len() {
+        match &input.events[index] {
+            egui::Event::ModifiersChanged(changed) => modifiers = *changed,
+            egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } => {
+                let result = (*key, *modifiers);
+                input.events.remove(index);
+                return Some(result);
+            }
+            event => {
+                if let Some(kind) = clipboard_semantic_kind(event) {
+                    input.events.remove(index);
+                    return Some((kind.key(), modifiers));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn remove_unhandled_text_edit_builtin_events(input: &mut egui::InputState) {
+    input.events.retain(|event| {
+        !matches!(
+            event,
+            egui::Event::Key {
+                key: egui::Key::A | egui::Key::Y | egui::Key::Z,
+                pressed: true,
+                modifiers,
+                ..
+            } if modifiers.command
+        )
+    });
+}
+
+fn standard_text_edit_shortcut(command: AppCommand) -> Option<KeyboardShortcut> {
+    let (modifiers, key) = match command {
+        AppCommand::Undo => (Modifiers::COMMAND, egui::Key::Z),
+        AppCommand::Redo => (Modifiers::COMMAND | Modifiers::SHIFT, egui::Key::Z),
+        AppCommand::SelectAll => (Modifiers::COMMAND, egui::Key::A),
+        _ => return None,
+    };
+    Some(KeyboardShortcut::new(modifiers, key))
+}
+
 fn native_hover_tooltip_id(context: &egui::Context) -> egui::Id {
     viewport_scoped_id(context, "tiptoptyp-native-hover-tooltip")
+}
+
+fn asset_hover_candidate_id(context: &egui::Context) -> egui::Id {
+    viewport_scoped_id(context, "tiptoptyp-asset-hover-candidate")
+}
+
+fn current_asset_hover_candidate(context: &egui::Context) -> Option<AssetHoverCandidate> {
+    // Derive the viewport-scoped ID before entering the data lock. Calling
+    // `viewport_id()` from inside `Context::data` would re-enter the same lock
+    // and deadlock the first UI frame.
+    let id = asset_hover_candidate_id(context);
+    context.data(|data| data.get_temp::<AssetHoverCandidate>(id))
+}
+
+fn clear_asset_hover_candidate(context: &egui::Context) {
+    let id = asset_hover_candidate_id(context);
+    context.data_mut(|data| data.remove::<AssetHoverCandidate>(id));
+}
+
+fn clear_native_hover_overlay(context: &egui::Context) {
+    let id = native_hover_tooltip_id(context);
+    context.data_mut(|data| data.remove::<HoverTooltipOverlay>(id));
+}
+
+fn asset_hover_timing_id(context: &egui::Context) -> egui::Id {
+    native_hover_tooltip_id(context).with("asset-hover-timing")
 }
 
 fn tooltip_geometry_id(context: &egui::Context) -> egui::Id {
@@ -10737,6 +14532,144 @@ fn tooltip_geometry_id(context: &egui::Context) -> egui::Id {
 
 fn tooltip_interaction_id(context: &egui::Context) -> egui::Id {
     native_hover_tooltip_id(context).with("interaction")
+}
+
+fn offer_asset_hover(response: &egui::Response, origin: Rect, path: PathBuf, kind: DocumentKind) {
+    if native_tooltip_handoff_blocks(&response.ctx, origin) {
+        return;
+    }
+    let Some(opacity) = hover_opacity(response, asset_hover_timing_id(&response.ctx)) else {
+        return;
+    };
+    let candidate = AssetHoverCandidate {
+        origin,
+        anchor: origin.left_bottom() + egui::vec2(0.0, METRICS.editor.tooltip_gap),
+        path,
+        kind,
+        opacity,
+    };
+    let id = asset_hover_candidate_id(&response.ctx);
+    response
+        .ctx
+        .data_mut(|data| data.insert_temp(id, candidate));
+}
+
+fn asset_thumbnail_result_matches(
+    hover: Option<&AssetHoverState>,
+    result: &AssetThumbnailResult,
+) -> bool {
+    hover.is_some_and(|hover| {
+        hover.token == result.token && hover.path == result.path && hover.kind == result.kind
+    })
+}
+
+fn asset_tooltip_identity(origin: Rect, path: &Path) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    path.hash(&mut hasher);
+    for coordinate in [origin.min.x, origin.min.y, origin.max.x, origin.max.y] {
+        coordinate.to_bits().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+fn fit_asset_preview_size(source: [usize; 2], bounds: Vec2) -> Vec2 {
+    let source = Vec2::new(source[0].max(1) as f32, source[1].max(1) as f32);
+    let bounds = Vec2::new(bounds.x.max(1.0), bounds.y.max(1.0));
+    let scale = (bounds.x / source.x).min(bounds.y / source.y).min(1.0);
+    (source * scale).max(Vec2::splat(1.0))
+}
+
+fn asset_hover_card_size(
+    content: &AssetHoverContent,
+    viewport_size: Vec2,
+    frame_margin: Vec2,
+    edge: f32,
+) -> Vec2 {
+    let desired = match content {
+        AssetHoverContent::Loading => ASSET_HOVER_LOADING_SIZE,
+        AssetHoverContent::Error(_) => ASSET_HOVER_ERROR_SIZE,
+        AssetHoverContent::Ready { source_size, .. } => {
+            let image = fit_asset_preview_size(*source_size, ASSET_HOVER_CARD_MAX_IMAGE);
+            Vec2::new(
+                (image.x + frame_margin.x).max(METRICS.popup.tooltip_min_width),
+                image.y + frame_margin.y + METRICS.popup.tooltip_title_height * 2.0,
+            )
+        }
+    };
+    let available = (viewport_size - Vec2::splat(edge.max(0.0) * 2.0)).max(Vec2::splat(1.0));
+    desired.min(available).max(Vec2::splat(1.0))
+}
+
+fn show_asset_hover_contents(
+    ui: &mut egui::Ui,
+    path: &Path,
+    kind: DocumentKind,
+    content: &AssetHoverContent,
+    content_size: Vec2,
+) {
+    ui.set_min_size(content_size);
+    ui.set_max_size(content_size);
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    match content {
+        AssetHoverContent::Loading => {
+            ui.vertical_centered(|ui| {
+                ui.add_space((content_size.y - 44.0).max(0.0) * 0.5);
+                ui.spinner();
+                ui.label(format!("Loading preview for {file_name}…"));
+            });
+        }
+        AssetHoverContent::Error(error) => {
+            ui.add_sized(
+                [content_size.x, METRICS.popup.tooltip_title_height],
+                egui::Label::new(RichText::new(file_name).strong())
+                    .selectable(true)
+                    .truncate(),
+            );
+            ui.separator();
+            ui.add(egui::Label::new(error).selectable(true).wrap());
+        }
+        AssetHoverContent::Ready {
+            texture,
+            source_size,
+        } => {
+            let caption_height = METRICS.popup.tooltip_title_height * 2.0;
+            let image_bounds =
+                Vec2::new(content_size.x, (content_size.y - caption_height).max(1.0));
+            let image_size = fit_asset_preview_size(*source_size, image_bounds);
+            ui.vertical_centered(|ui| {
+                ui.add(
+                    egui::Image::new(texture)
+                        .fit_to_exact_size(image_size)
+                        .alt_text(format!("Preview of {file_name}")),
+                );
+                ui.add_sized(
+                    [content_size.x, METRICS.popup.tooltip_title_height],
+                    egui::Label::new(RichText::new(&file_name).strong())
+                        .selectable(true)
+                        .truncate(),
+                );
+                let kind = match kind {
+                    DocumentKind::Pdf => "PDF · first page",
+                    DocumentKind::Image => "Image",
+                    DocumentKind::Typst | DocumentKind::Text => "Asset",
+                };
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!(
+                            "{kind} · {} × {} px",
+                            source_size[0], source_size[1]
+                        ))
+                        .size(theme::TYPE.supporting)
+                        .weak(),
+                    )
+                    .selectable(true),
+                );
+            });
+        }
+    }
 }
 
 fn native_tooltip_handoff_active(context: &egui::Context, emit_trace: bool) -> bool {
@@ -10782,8 +14715,9 @@ fn native_tooltip_handoff_active(context: &egui::Context, emit_trace: bool) -> b
 
 fn native_tooltip_handoff_blocks(context: &egui::Context, candidate_origin: Rect) -> bool {
     let active = native_tooltip_handoff_active(context, false);
+    let geometry_id = tooltip_geometry_id(context);
     let active_origin = context.data(|data| {
-        data.get_temp::<TooltipGeometry>(tooltip_geometry_id(context))
+        data.get_temp::<TooltipGeometry>(geometry_id)
             .map(|geometry| geometry.origin)
     });
     tooltip_handoff_blocks(active, active_origin, candidate_origin)
@@ -10923,10 +14857,6 @@ fn trace_native_tooltip_handoff(
 
 fn format_pos(pos: Pos2) -> String {
     format!("({:.1},{:.1})", pos.x, pos.y)
-}
-
-fn focus_tooltip_shortcut() -> KeyboardShortcut {
-    KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, egui::Key::Space)
 }
 
 fn settings_hover_tooltip_id(context: &egui::Context) -> egui::Id {
@@ -11924,11 +15854,19 @@ fn menu_item_enabled(
     .inner
 }
 
+fn shortcut_tooltip(label: &str, shortcuts: &ShortcutBindings, action: ShortcutAction) -> String {
+    shortcuts.display(action).map_or_else(
+        || label.to_owned(),
+        |shortcut| format!("{label} · {shortcut}"),
+    )
+}
+
 #[derive(Debug, Clone, Copy)]
 struct CommandAvailability {
     can_undo: bool,
     can_redo: bool,
     typst_document: bool,
+    typst_preview: bool,
     interactive_preview: bool,
 }
 
@@ -11939,6 +15877,7 @@ impl CommandAvailability {
             CommandRequirement::Undo => self.can_undo,
             CommandRequirement::Redo => self.can_redo,
             CommandRequirement::TypstDocument => self.typst_document,
+            CommandRequirement::TypstPreview => self.typst_preview,
             CommandRequirement::InteractivePreview => self.interactive_preview,
         }
     }
@@ -11948,6 +15887,7 @@ fn show_command_popup_ui(
     ui: &mut egui::Ui,
     menu: CommandMenu,
     availability: CommandAvailability,
+    shortcuts: &ShortcutBindings,
     action: &mut Option<AppPopupAction>,
 ) {
     let mut previous_section = None;
@@ -11956,7 +15896,7 @@ fn show_command_popup_ui(
             ui.separator();
         }
         let enabled = availability.allows(spec.requirement);
-        let shortcut = spec.shortcut.map(|shortcut| shortcut.egui());
+        let shortcut = shortcuts.egui(spec.shortcut_action);
         if menu_item_enabled(ui, enabled, spec.popup_title, shortcut).clicked() {
             *action = Some(AppPopupAction::Command(spec.command));
         }
@@ -11964,16 +15904,23 @@ fn show_command_popup_ui(
     }
 }
 
-fn show_file_popup_ui(ui: &mut egui::Ui, action: &mut Option<AppPopupAction>) {
+fn show_file_popup_ui(
+    ui: &mut egui::Ui,
+    typst_preview: bool,
+    shortcuts: &ShortcutBindings,
+    action: &mut Option<AppPopupAction>,
+) {
     show_command_popup_ui(
         ui,
         CommandMenu::File,
         CommandAvailability {
             can_undo: false,
             can_redo: false,
-            typst_document: true,
+            typst_document: false,
+            typst_preview,
             interactive_preview: false,
         },
+        shortcuts,
         action,
     );
 }
@@ -11983,6 +15930,7 @@ fn show_edit_popup_ui(
     can_undo: bool,
     can_redo: bool,
     can_format: bool,
+    shortcuts: &ShortcutBindings,
     action: &mut Option<AppPopupAction>,
 ) {
     show_command_popup_ui(
@@ -11992,13 +15940,19 @@ fn show_edit_popup_ui(
             can_undo,
             can_redo,
             typst_document: can_format,
+            typst_preview: false,
             interactive_preview: false,
         },
+        shortcuts,
         action,
     );
 }
 
-fn show_view_popup_ui(ui: &mut egui::Ui, action: &mut Option<AppPopupAction>) {
+fn show_view_popup_ui(
+    ui: &mut egui::Ui,
+    shortcuts: &ShortcutBindings,
+    action: &mut Option<AppPopupAction>,
+) {
     show_command_popup_ui(
         ui,
         CommandMenu::View,
@@ -12006,8 +15960,10 @@ fn show_view_popup_ui(ui: &mut egui::Ui, action: &mut Option<AppPopupAction>) {
             can_undo: false,
             can_redo: false,
             typst_document: false,
+            typst_preview: false,
             interactive_preview: false,
         },
+        shortcuts,
         action,
     );
 }
@@ -12142,9 +16098,12 @@ fn status_log_popup_size(entry_count: usize) -> Vec2 {
     )
 }
 
-fn editor_context_menu_size(has_link: bool) -> Vec2 {
+fn editor_context_menu_size(has_link: bool, can_edit_table: bool) -> Vec2 {
     let mut size = METRICS.menu.editor_size;
     if has_link {
+        size.y += METRICS.menu.row_height + theme::SPACE.control;
+    }
+    if can_edit_table {
         size.y += METRICS.menu.row_height + theme::SPACE.control;
     }
     size
@@ -12301,11 +16260,13 @@ struct EditorContextMenuOptions<'a> {
     can_format: bool,
     can_sync_preview: bool,
     link: Option<&'a str>,
+    table: Option<&'a EditableTable>,
 }
 
 fn show_editor_context_menu_ui(
     ui: &mut egui::Ui,
     options: EditorContextMenuOptions<'_>,
+    shortcuts: &ShortcutBindings,
     action: &mut Option<EditorMenuAction>,
 ) {
     if let Some(link) = options.link {
@@ -12315,46 +16276,268 @@ fn show_editor_context_menu_ui(
         }
         ui.separator();
     }
-    if menu_item_enabled(ui, options.can_undo, "Undo", None).clicked() {
+    if let Some(table) = options.table {
+        if menu_item(ui, "Edit Table…", None).clicked() {
+            *action = Some(EditorMenuAction::EditTable(table.clone()));
+            ui.close();
+        }
+        ui.separator();
+    }
+    if menu_item_enabled(
+        ui,
+        options.can_undo,
+        "Undo",
+        shortcuts.egui(ShortcutAction::Undo),
+    )
+    .clicked()
+    {
         *action = Some(EditorMenuAction::Command(AppCommand::Undo));
         ui.close();
     }
-    if menu_item_enabled(ui, options.can_redo, "Redo", None).clicked() {
+    if menu_item_enabled(
+        ui,
+        options.can_redo,
+        "Redo",
+        shortcuts.egui(ShortcutAction::Redo),
+    )
+    .clicked()
+    {
         *action = Some(EditorMenuAction::Command(AppCommand::Redo));
         ui.close();
     }
     ui.separator();
-    if menu_item_enabled(ui, options.has_selection, "Cut", None).clicked() {
+    if menu_item_enabled(
+        ui,
+        options.has_selection,
+        "Cut",
+        shortcuts.egui(ShortcutAction::Cut),
+    )
+    .clicked()
+    {
         *action = Some(EditorMenuAction::Command(AppCommand::Cut));
         ui.close();
     }
-    if menu_item_enabled(ui, options.has_selection, "Copy", None).clicked() {
+    if menu_item_enabled(
+        ui,
+        options.has_selection,
+        "Copy",
+        shortcuts.egui(ShortcutAction::Copy),
+    )
+    .clicked()
+    {
         *action = Some(EditorMenuAction::Command(AppCommand::Copy));
         ui.close();
     }
-    if menu_item(ui, "Paste", None).clicked() {
+    if menu_item(ui, "Paste", shortcuts.egui(ShortcutAction::Paste)).clicked() {
         *action = Some(EditorMenuAction::Command(AppCommand::Paste));
         ui.close();
     }
-    if menu_item(ui, "Select All", None).clicked() {
+    if menu_item(ui, "Select All", shortcuts.egui(ShortcutAction::SelectAll)).clicked() {
         *action = Some(EditorMenuAction::Command(AppCommand::SelectAll));
         ui.close();
     }
-    if menu_item(ui, "Toggle Comment", None).clicked() {
+    if menu_item(
+        ui,
+        "Toggle Comment",
+        shortcuts.egui(ShortcutAction::ToggleComment),
+    )
+    .clicked()
+    {
         *action = Some(EditorMenuAction::Command(AppCommand::ToggleComment));
         ui.close();
     }
-    if menu_item_enabled(ui, options.can_sync_preview, "Reveal in Preview", None).clicked() {
+    if menu_item_enabled(
+        ui,
+        options.can_sync_preview,
+        "Reveal in Preview",
+        shortcuts.egui(ShortcutAction::SyncPreview),
+    )
+    .clicked()
+    {
         *action = Some(EditorMenuAction::Command(AppCommand::SyncPreview));
         ui.close();
     }
     if options.can_format {
         ui.separator();
-        if menu_item(ui, "Format Document", None).clicked() {
+        if menu_item(
+            ui,
+            "Format Document",
+            shortcuts.egui(ShortcutAction::Format),
+        )
+        .clicked()
+        {
             *action = Some(EditorMenuAction::Command(AppCommand::Format));
             ui.close();
         }
     }
+}
+
+fn show_table_editor_ui(
+    ui: &mut egui::Ui,
+    dialog: &mut TableEditorDialog,
+    available_width: f32,
+    cells_height: f32,
+) -> Option<TableEditorUiAction> {
+    ui.label(RichText::new("Table editor").strong());
+    ui.label(
+        RichText::new(
+            "Edit static Typst markup cells. Dynamic expressions stay protected and cannot be applied.",
+        )
+        .size(theme::TYPE.supporting)
+        .color(ui.visuals().weak_text_color()),
+    );
+    ui.add_space(theme::SPACE.small);
+
+    let mut changed = false;
+    ui.horizontal_wrapped(|ui| {
+        ui.label(format!(
+            "{} × {}",
+            dialog.table.row_count(),
+            dialog.table.columns
+        ));
+        if ui.button("Add row").clicked() {
+            dialog.table.add_row();
+            dialog.focus_first_cell = dialog.table.row_count() == 1;
+            changed = true;
+        }
+        if ui
+            .add_enabled(
+                dialog.table.row_count() > 0,
+                egui::Button::new("Remove last row"),
+            )
+            .clicked()
+        {
+            let last = dialog.table.row_count() - 1;
+            dialog.table.remove_row(last);
+            changed = true;
+        }
+        if ui.button("Add column").clicked() {
+            dialog.table.add_column();
+            changed = true;
+        }
+        if ui
+            .add_enabled(
+                dialog.table.columns > 1,
+                egui::Button::new("Remove last column"),
+            )
+            .clicked()
+        {
+            dialog.table.remove_column();
+            changed = true;
+        }
+    });
+    ui.separator();
+
+    let cell_width =
+        ((available_width - 112.0) / dialog.table.columns.min(4) as f32).clamp(112.0, 220.0);
+    let mut remove_row = None;
+    egui::ScrollArea::both()
+        .id_salt("table-editor-cells")
+        .max_height(cells_height)
+        .show(ui, |ui| {
+            egui::Grid::new(viewport_scoped_id(ui.ctx(), "table-editor-grid"))
+                .spacing(Vec2::new(theme::SPACE.small, theme::SPACE.small))
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.label("");
+                    for column in 0..dialog.table.columns {
+                        ui.label(RichText::new(format!("Column {}", column + 1)).strong());
+                    }
+                    ui.label("");
+                    ui.end_row();
+
+                    for row in 0..dialog.table.row_count() {
+                        ui.label(RichText::new(format!("Row {}", row + 1)).strong());
+                        for column in 0..dialog.table.columns {
+                            let response = ui.add_sized(
+                                [cell_width, 56.0],
+                                egui::TextEdit::multiline(&mut dialog.table.cells[row][column])
+                                    .id_salt(("table-cell", row, column))
+                                    .desired_width(cell_width)
+                                    .desired_rows(2),
+                            );
+                            if dialog.focus_first_cell && row == 0 && column == 0 {
+                                response.request_focus();
+                                dialog.focus_first_cell = false;
+                            }
+                            changed |= response.changed();
+                        }
+                        if ui.small_button("Remove").clicked() {
+                            remove_row = Some(row);
+                        }
+                        ui.end_row();
+                    }
+                });
+        });
+    if let Some(row) = remove_row {
+        dialog.table.remove_row(row);
+        changed = true;
+    }
+    if changed {
+        dialog.error = None;
+    }
+
+    if let Some(error) = &dialog.error {
+        ui.add_space(theme::SPACE.small);
+        ui.label(RichText::new(error).color(ui.visuals().error_fg_color));
+    }
+    ui.add_space(theme::SPACE.control);
+    let mut action = None;
+    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        if ui.button("Apply").clicked() {
+            action = Some(TableEditorUiAction::Apply);
+        }
+        if ui.button("Cancel").clicked() {
+            action = Some(TableEditorUiAction::Cancel);
+        }
+    });
+    action
+}
+
+fn prepare_table_source_edit(
+    source: &str,
+    document_key: DocumentKey,
+    dialog: &TableEditorDialog,
+) -> Result<PreparedTableSourceEdit, String> {
+    if document_key != dialog.document_key {
+        return Err("The document changed while the table editor was open. Reopen the table to edit the latest source.".to_owned());
+    }
+    let SourceEdit { range, replacement } = dialog
+        .table
+        .source_edit()
+        .map_err(|error| format!("Cannot apply this table: {error}"))?;
+    let byte_range = char_range_to_byte_range(source, range.clone())
+        .ok_or_else(|| "The table range is no longer valid".to_owned())?;
+    if source.get(byte_range.clone()) != Some(dialog.original_call.as_str()) {
+        return Err(
+            "The table source changed while the table editor was open. Reopen it to continue."
+                .to_owned(),
+        );
+    }
+    let cursor = range.start + replacement.chars().count();
+    Ok(PreparedTableSourceEdit {
+        byte_range,
+        replacement,
+        cursor,
+    })
+}
+
+fn char_range_to_byte_range(source: &str, range: Range<usize>) -> Option<Range<usize>> {
+    let start = char_index_to_byte(source, range.start)?;
+    let end = char_index_to_byte(source, range.end)?;
+    Some(start..end)
+}
+
+fn char_index_to_byte(source: &str, index: usize) -> Option<usize> {
+    if index == source.chars().count() {
+        Some(source.len())
+    } else {
+        source.char_indices().nth(index).map(|(byte, _)| byte)
+    }
+}
+
+fn char_range_slice(source: &str, range: Range<usize>) -> Option<&str> {
+    source.get(char_range_to_byte_range(source, range)?)
 }
 
 fn push_status_log_entry(entries: &mut VecDeque<StatusLogEntry>, entry: StatusLogEntry) {
@@ -12411,29 +16594,364 @@ fn show_status_log_popup_ui(ui: &mut egui::Ui, entries: &VecDeque<StatusLogEntry
     }
 }
 
-fn consume_preview_zoom_shortcut(input: &mut egui::InputState) -> Option<PreviewZoomAction> {
-    let modifiers = Modifiers::COMMAND | Modifiers::ALT;
-    for (key, action) in [
-        (egui::Key::Plus, PreviewZoomAction::In),
-        (egui::Key::Equals, PreviewZoomAction::In),
-        (egui::Key::Minus, PreviewZoomAction::Out),
-        (egui::Key::Num0, PreviewZoomAction::Reset),
+fn show_package_browser_ui(
+    ui: &mut egui::Ui,
+    query: &mut String,
+    filter: &mut PackageFilter,
+    load: Option<&PackageCatalogLoad>,
+    loading: bool,
+    copied: &mut Option<String>,
+) {
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(query)
+                .hint_text("Search package names, descriptions, authors, or versions")
+                .desired_width(f32::INFINITY),
+        );
+    });
+    ui.horizontal_wrapped(|ui| {
+        theme::apply_compact_control_spacing(ui);
+        for choice in PackageFilter::ALL {
+            ui.selectable_value(filter, choice, choice.label());
+        }
+        if loading {
+            ui.spinner();
+            ui.label("Refreshing local and published packages…");
+        }
+    });
+    ui.separator();
+
+    let Some(load) = load else {
+        ui.vertical_centered(|ui| {
+            ui.add_space(theme::SPACE.content);
+            if loading {
+                ui.spinner();
+                ui.label("Inspecting Typst package directories and registry…");
+            } else {
+                ui.label(RichText::new("No package catalog has been loaded").weak());
+            }
+        });
+        return;
+    };
+
+    if let Some(error) = &load.official_index_error {
+        ui.colored_label(
+            warning_color(ui.visuals().dark_mode),
+            format!("Published registry unavailable: {error}. Local packages are still shown."),
+        );
+    }
+    if !load.warnings.is_empty() {
+        egui::CollapsingHeader::new(format!(
+            "{} local package scan warning{}",
+            load.warnings.len(),
+            if load.warnings.len() == 1 { "" } else { "s" }
+        ))
+        .show(ui, |ui| {
+            for warning in &load.warnings {
+                ui.label(format!("{}: {}", warning.path.display(), warning.message));
+            }
+        });
+    }
+
+    let packages = load
+        .catalog
+        .filtered(query)
+        .into_iter()
+        .filter(|package| filter.allows(package))
+        .collect::<Vec<_>>();
+    ui.label(
+        RichText::new(format!(
+            "{} package{}",
+            packages.len(),
+            if packages.len() == 1 { "" } else { "s" }
+        ))
+        .size(theme::TYPE.supporting)
+        .weak(),
+    );
+    egui::ScrollArea::vertical()
+        .id_salt("package-catalog-scroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for package in packages {
+                let version = package
+                    .latest_available
+                    .or_else(|| package.latest_installed());
+                let release = package.display_release();
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal_wrapped(|ui| {
+                        let identity = version.map_or_else(
+                            || format!("@{}/{}", package.namespace, package.name),
+                            |version| format!("@{}/{}:{version}", package.namespace, package.name),
+                        );
+                        ui.label(RichText::new(&identity).monospace().strong());
+                        if package.is_installed() {
+                            ui.label(
+                                RichText::new("Installed")
+                                    .color(success_color(ui.visuals().dark_mode)),
+                            );
+                        }
+                        if package.latest_available.is_some() {
+                            ui.label(RichText::new("Published").weak());
+                        }
+                        if package.has_update() {
+                            ui.label(
+                                RichText::new("Update available")
+                                    .color(warning_color(ui.visuals().dark_mode)),
+                            );
+                        }
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui
+                                .add_enabled(version.is_some(), egui::Button::new("Copy import"))
+                                .clicked()
+                                && let Some(version) = version
+                            {
+                                *copied = Some(format!(
+                                    "#import \"@{}/{}:{version}\": *",
+                                    package.namespace, package.name
+                                ));
+                            }
+                        });
+                    });
+                    if let Some(description) =
+                        release.and_then(|release| release.metadata.description.as_deref())
+                    {
+                        ui.label(description);
+                    }
+                    if let Some(installed) = package.latest_installed() {
+                        ui.label(
+                            RichText::new(format!("Latest local version: {installed}"))
+                                .size(theme::TYPE.supporting)
+                                .weak(),
+                        );
+                    }
+                    for local_release in package.installed_releases() {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(
+                                RichText::new(format!("Installed {}", local_release.version))
+                                    .monospace()
+                                    .strong(),
+                            );
+                            if local_release.available {
+                                ui.label(RichText::new("Published release").weak());
+                            }
+                        });
+                        for installation in &local_release.installations {
+                            let root_kind = match installation.root.kind {
+                                PackageRootKind::Data => "data",
+                                PackageRootKind::Cache => "cache",
+                            };
+                            let root_kind = if installation.root.custom {
+                                format!("custom {root_kind}")
+                            } else {
+                                root_kind.to_owned()
+                            };
+                            ui.label(
+                                RichText::new(format!(
+                                    "{root_kind}: {}",
+                                    installation.package_path.display()
+                                ))
+                                .size(theme::TYPE.supporting)
+                                .monospace()
+                                .weak(),
+                            );
+                        }
+                    }
+                });
+                ui.add_space(theme::SPACE.tight);
+            }
+        });
+}
+
+fn settings_heading(ui: &mut egui::Ui, section: SettingsSection) {
+    ui.heading(section.title());
+}
+
+fn settings_target_anchor(
+    ui: &mut egui::Ui,
+    target: SettingsTarget,
+    pending: &mut Option<SettingsTarget>,
+) {
+    if take_settings_scroll_target(pending, target) {
+        let rect = Rect::from_min_size(
+            ui.next_widget_position(),
+            Vec2::new(ui.available_width().max(1.0), ui.spacing().interact_size.y),
+        );
+        ui.scroll_to_rect(rect, Some(Align::Min));
+    }
+}
+
+fn show_shortcut_editor_window(
+    context: &egui::Context,
+    visible: &mut bool,
+    query: &mut String,
+    capture: &mut Option<ShortcutAction>,
+    notice: &mut Option<String>,
+    settings: &mut AppSettings,
+) {
+    if !*visible {
+        *capture = None;
+        return;
+    }
+
+    let mut open = *visible;
+    egui::Window::new("Keyboard shortcuts")
+        .id(viewport_scoped_id(context, "keyboard-shortcut-editor"))
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(true)
+        .default_size([620.0, 540.0])
+        .min_size([440.0, 300.0])
+        .show(context, |ui| {
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(query)
+                        .hint_text("Search actions or groups")
+                        .desired_width(f32::INFINITY),
+                );
+                if ui.button("Reset all").clicked() {
+                    settings.shortcut_overrides.reset_all();
+                    *notice = Some("Restored all default shortcuts".to_owned());
+                }
+            });
+            if let Some(action) = *capture {
+                ui.colored_label(
+                    ui.visuals().selection.stroke.color,
+                    format!(
+                        "Press the new shortcut for {} · Backspace disables · Esc cancels",
+                        action.label()
+                    ),
+                );
+            } else if let Some(message) = notice.as_deref() {
+                ui.label(RichText::new(message).weak());
+            }
+            ui.separator();
+
+            let terms = query
+                .split_whitespace()
+                .map(str::to_lowercase)
+                .collect::<Vec<_>>();
+            let bindings = settings.effective_shortcuts();
+            if !bindings.conflicts().is_empty() {
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    format!(
+                        "{} saved shortcut conflict{} could not be activated",
+                        bindings.conflicts().len(),
+                        if bindings.conflicts().len() == 1 {
+                            ""
+                        } else {
+                            "s"
+                        }
+                    ),
+                );
+            }
+            egui::ScrollArea::vertical()
+                .id_salt("shortcut-editor-scroll")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    let mut group = None;
+                    let mut shown = 0usize;
+                    for action in ShortcutAction::ALL {
+                        let haystack =
+                            format!("{} {} {}", action.group(), action.label(), action.id())
+                                .to_lowercase();
+                        if !terms.iter().all(|term| haystack.contains(term)) {
+                            continue;
+                        }
+                        if group != Some(action.group()) {
+                            if group.is_some() {
+                                ui.separator();
+                            }
+                            ui.label(RichText::new(action.group()).strong());
+                            group = Some(action.group());
+                        }
+                        shown += 1;
+                        ui.horizontal(|ui| {
+                            let controls_width = 290.0;
+                            let label_width = (ui.available_width() - controls_width).max(100.0);
+                            ui.add_sized(
+                                [label_width, METRICS.menu.row_height],
+                                egui::Label::new(action.label()),
+                            );
+                            ui.add_sized(
+                                [100.0, METRICS.menu.row_height],
+                                egui::Label::new(
+                                    RichText::new(
+                                        bindings
+                                            .display(action)
+                                            .unwrap_or_else(|| "Unassigned".to_owned()),
+                                    )
+                                    .monospace(),
+                                ),
+                            );
+                            if ui
+                                .selectable_label(*capture == Some(action), "Change")
+                                .clicked()
+                            {
+                                *capture = Some(action);
+                                *notice = None;
+                            }
+                            if ui.button("Disable").clicked() {
+                                settings.shortcut_overrides.set(action, None);
+                                *capture = None;
+                                *notice = Some(format!("Disabled {}", action.label()));
+                            }
+                            if ui
+                                .add_enabled(
+                                    settings.shortcut_overrides.get(action).is_some(),
+                                    egui::Button::new("Reset"),
+                                )
+                                .clicked()
+                            {
+                                settings.shortcut_overrides.reset(action);
+                                *notice = Some(format!("Restored {}", action.label()));
+                            }
+                        });
+                    }
+                    if shown == 0 {
+                        ui.label(RichText::new("No shortcut actions found").weak());
+                    }
+                });
+        });
+    *visible = open;
+    if !open {
+        *capture = None;
+    }
+}
+
+fn consume_preview_zoom_shortcut(
+    input: &mut egui::InputState,
+    shortcuts: &ShortcutBindings,
+) -> Option<PreviewZoomAction> {
+    for (shortcut_action, action) in [
+        (ShortcutAction::PreviewZoomIn, PreviewZoomAction::In),
+        (ShortcutAction::PreviewZoomOut, PreviewZoomAction::Out),
+        (ShortcutAction::PreviewZoomReset, PreviewZoomAction::Reset),
     ] {
-        if input.consume_shortcut(&KeyboardShortcut::new(modifiers, key)) {
+        if shortcuts
+            .egui(shortcut_action)
+            .is_some_and(|shortcut| input.consume_shortcut(&shortcut))
+        {
             return Some(action);
         }
     }
     None
 }
 
-fn consume_ui_scale_shortcut(input: &mut egui::InputState) -> Option<i16> {
-    for key in [egui::Key::Plus, egui::Key::Equals] {
-        if input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, key)) {
-            return Some(5);
-        }
+fn consume_ui_scale_shortcut(
+    input: &mut egui::InputState,
+    shortcuts: &ShortcutBindings,
+) -> Option<i16> {
+    if shortcuts
+        .egui(ShortcutAction::UiScaleIn)
+        .is_some_and(|shortcut| input.consume_shortcut(&shortcut))
+    {
+        return Some(5);
     }
-    input
-        .consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Minus))
+    shortcuts
+        .egui(ShortcutAction::UiScaleOut)
+        .is_some_and(|shortcut| input.consume_shortcut(&shortcut))
         .then_some(-5)
 }
 
@@ -12447,6 +16965,27 @@ fn canonical_or_absolute(path: &Path) -> PathBuf {
                 .unwrap_or_else(|_| path.to_owned())
         }
     })
+}
+
+fn save_as_format_handoff(
+    saved: bool,
+    destination_kind: DocumentKind,
+    key: DocumentKey,
+) -> Option<DocumentKey> {
+    (saved && destination_kind.is_typst()).then_some(key)
+}
+
+fn take_ready_format_handoff(
+    pending: &mut Option<DocumentKey>,
+    current: DocumentKey,
+    session_ready: bool,
+) -> bool {
+    if session_ready && *pending == Some(current) {
+        pending.take();
+        true
+    } else {
+        false
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12589,6 +17128,20 @@ mod tests {
     use super::*;
     use crate::tinymist::LspPosition;
 
+    fn completion_item(insert_text: &str) -> CompletionItem {
+        CompletionItem {
+            label: insert_text.to_owned(),
+            detail: None,
+            documentation: None,
+            filter_text: None,
+            sort_text: None,
+            insert_text: insert_text.to_owned(),
+            insert_text_is_snippet: false,
+            text_edit: None,
+            additional_text_edits: Vec::new(),
+        }
+    }
+
     fn run_shortcut<T>(
         modifiers: Modifiers,
         key: egui::Key,
@@ -12617,6 +17170,420 @@ mod tests {
     }
 
     #[test]
+    fn completion_trigger_accepts_typing_and_plain_deletion_only() {
+        assert!(completion_requested_after_events(&[egui::Event::Text(
+            "hea".to_owned()
+        )]));
+        assert!(completion_requested_after_events(&[egui::Event::Text(
+            ".".to_owned()
+        )]));
+        assert!(!completion_requested_after_events(&[egui::Event::Text(
+            " ".to_owned()
+        )]));
+        assert!(completion_requested_after_events(&[egui::Event::Key {
+            key: egui::Key::Backspace,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }]));
+        assert!(!completion_requested_after_events(&[egui::Event::Key {
+            key: egui::Key::Backspace,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::COMMAND,
+        }]));
+    }
+
+    #[test]
+    fn focused_viewport_and_standard_text_edit_commands_are_explicit() {
+        let context = egui::Context::default();
+        let child = scoped_child_viewport_id(&context, "tiptoptyp-settings");
+        let mut input = egui::RawInput::default();
+        input
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .focused = Some(false);
+        input.viewports.entry(child).or_default().focused = Some(true);
+        context
+            .run_ui(input, |ui| {
+                assert_eq!(focused_input_viewport(ui.ctx()), child);
+            })
+            .drop_without_applying_deltas();
+
+        let context = egui::Context::default();
+        let sibling_document = egui::ViewportId::from_hash_of("other-document");
+        let mut input = egui::RawInput::default();
+        input
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .focused = Some(false);
+        input.viewports.entry(sibling_document).or_default().focused = Some(true);
+        context
+            .run_ui(input, |ui| {
+                assert_eq!(focused_input_viewport(ui.ctx()), egui::ViewportId::ROOT);
+            })
+            .drop_without_applying_deltas();
+
+        assert_eq!(
+            standard_text_edit_shortcut(AppCommand::Undo),
+            Some(KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::Z))
+        );
+        assert_eq!(
+            standard_text_edit_shortcut(AppCommand::Redo),
+            Some(KeyboardShortcut::new(
+                Modifiers::COMMAND | Modifiers::SHIFT,
+                egui::Key::Z,
+            ))
+        );
+        assert_eq!(
+            standard_text_edit_shortcut(AppCommand::SelectAll),
+            Some(KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::A))
+        );
+        assert_eq!(standard_text_edit_shortcut(AppCommand::Copy), None);
+    }
+
+    #[test]
+    fn semantic_clipboard_events_obey_effective_shortcuts_and_capture() {
+        use crate::shortcuts::ShortcutOverrides;
+
+        let defaults = ShortcutBindings::current_defaults();
+        let mut copy = egui::InputState::default();
+        copy.modifiers = Modifiers::COMMAND;
+        copy.events = vec![egui::Event::Copy];
+        assert!(!normalize_text_edit_shortcut_events(
+            &mut copy, &defaults, false
+        ));
+        assert_eq!(copy.events, [egui::Event::Copy]);
+
+        let mut capture = egui::InputState::default();
+        capture.modifiers = Modifiers::COMMAND;
+        capture.events = vec![egui::Event::Copy];
+        assert_eq!(
+            take_shortcut_capture_event(&mut capture),
+            Some((egui::Key::C, Modifiers::COMMAND))
+        );
+        assert!(capture.events.is_empty());
+
+        let mut overrides = ShortcutOverrides::default();
+        overrides.set(ShortcutAction::Copy, None);
+        let disabled = ShortcutBindings::current(&overrides);
+        let mut ignored = egui::InputState::default();
+        ignored.modifiers = Modifiers::COMMAND;
+        ignored.events = vec![egui::Event::Copy];
+        normalize_text_edit_shortcut_events(&mut ignored, &disabled, false);
+        assert!(ignored.events.is_empty());
+
+        let mut overrides = ShortcutOverrides::default();
+        overrides.assign(
+            ShortcutAction::Copy,
+            ShortcutChord::primary(egui::Key::X),
+            ShortcutPlatform::current(),
+        );
+        let rebound = ShortcutBindings::current(&overrides);
+        let mut cut_chord = egui::InputState::default();
+        cut_chord.modifiers = Modifiers::COMMAND;
+        cut_chord.events = vec![egui::Event::Cut];
+        normalize_text_edit_shortcut_events(&mut cut_chord, &rebound, false);
+        assert!(matches!(
+            cut_chord.events.as_slice(),
+            [egui::Event::Key {
+                key: egui::Key::X,
+                pressed: true,
+                modifiers,
+                ..
+            }] if *modifiers == Modifiers::COMMAND
+        ));
+    }
+
+    #[test]
+    fn requested_paste_bypasses_rebound_primary_v_exactly_once() {
+        use crate::shortcuts::ShortcutOverrides;
+
+        let mut overrides = ShortcutOverrides::default();
+        overrides.set(ShortcutAction::Paste, None);
+        let shortcuts = ShortcutBindings::current(&overrides);
+        let mut input = egui::InputState::default();
+        input.events = vec![egui::Event::Paste("fresh".to_owned())];
+        assert!(normalize_text_edit_shortcut_events(
+            &mut input, &shortcuts, true
+        ));
+        assert_eq!(input.events, [egui::Event::Paste("fresh".to_owned())]);
+
+        assert!(!normalize_text_edit_shortcut_events(
+            &mut input, &shortcuts, false
+        ));
+        assert!(input.events.is_empty());
+    }
+
+    #[test]
+    fn requested_paste_admission_is_viewport_local_and_survives_multiple_frames() {
+        let target = egui::ViewportId::from_hash_of("paste-target");
+        let sibling = egui::ViewportId::from_hash_of("paste-sibling");
+        let requested = PendingWidgetPaste::new(target, 10);
+
+        assert!(requested.admits(target, 10));
+        assert!(requested.admits(target, 14));
+        assert!(requested.admits(target, 10 + WIDGET_PASTE_ADMISSION_FRAME_BUDGET));
+        assert!(!requested.admits(sibling, 14));
+        assert!(!requested.expired(10 + WIDGET_PASTE_ADMISSION_FRAME_BUDGET));
+        assert!(requested.expired(11 + WIDGET_PASTE_ADMISSION_FRAME_BUDGET));
+    }
+
+    #[test]
+    fn disabled_text_edit_key_commands_are_removed_before_widgets() {
+        let mut input = egui::InputState::default();
+        input.events = vec![
+            egui::Event::Key {
+                key: egui::Key::A,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::COMMAND,
+            },
+            egui::Event::Key {
+                key: egui::Key::Z,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::COMMAND,
+            },
+            egui::Event::Text("kept".to_owned()),
+        ];
+        remove_unhandled_text_edit_builtin_events(&mut input);
+        assert_eq!(input.events, [egui::Event::Text("kept".to_owned())]);
+    }
+
+    #[test]
+    fn completion_popup_prefers_below_then_flips_and_clamps() {
+        let viewport = Rect::from_min_size(Pos2::ZERO, Vec2::new(300.0, 200.0));
+        let size = Vec2::new(100.0, 60.0);
+        let near_top = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::new(1.0, 16.0));
+        assert_eq!(
+            completion_popup_position(near_top, size, viewport),
+            Pos2::new(20.0, near_top.bottom() + theme::SPACE.tight)
+        );
+
+        let near_bottom = Rect::from_min_size(Pos2::new(290.0, 180.0), Vec2::new(1.0, 16.0));
+        assert_eq!(
+            completion_popup_position(near_bottom, size, viewport),
+            Pos2::new(196.0, near_bottom.top() - theme::SPACE.tight - size.y)
+        );
+    }
+
+    #[test]
+    fn completion_responses_require_exact_request_and_document_identity() {
+        let pending = EditorCompletionState {
+            generation: Generation(7),
+            uri: "file:///project/main.typ".to_owned(),
+            version: 12,
+            request_token: 41,
+            cursor: 3,
+            anchor: Rect::ZERO,
+            explicit: false,
+            is_incomplete: false,
+            selected: 0,
+            items: Vec::new(),
+        };
+        assert!(completion_response_matches(
+            &pending,
+            Generation(7),
+            "file:///project/main.typ",
+            12,
+            41,
+            Some(Generation(7)),
+            Some("file:///project/main.typ"),
+            12,
+        ));
+        for (generation, uri, version, token, active_generation, active_uri, active_version) in [
+            (
+                Generation(8),
+                "file:///project/main.typ",
+                12,
+                41,
+                Some(Generation(8)),
+                Some("file:///project/main.typ"),
+                12,
+            ),
+            (
+                Generation(7),
+                "file:///project/other.typ",
+                12,
+                41,
+                Some(Generation(7)),
+                Some("file:///project/other.typ"),
+                12,
+            ),
+            (
+                Generation(7),
+                "file:///project/main.typ",
+                11,
+                41,
+                Some(Generation(7)),
+                Some("file:///project/main.typ"),
+                11,
+            ),
+            (
+                Generation(7),
+                "file:///project/main.typ",
+                12,
+                40,
+                Some(Generation(7)),
+                Some("file:///project/main.typ"),
+                12,
+            ),
+            (
+                Generation(7),
+                "file:///project/main.typ",
+                12,
+                41,
+                Some(Generation(7)),
+                Some("file:///project/main.typ"),
+                13,
+            ),
+        ] {
+            assert!(!completion_response_matches(
+                &pending,
+                generation,
+                uri,
+                version,
+                token,
+                active_generation,
+                active_uri,
+                active_version,
+            ));
+        }
+    }
+
+    #[test]
+    fn completion_snippets_expand_placeholders_choices_and_cursor() {
+        assert_eq!(
+            expand_lsp_snippet("heading(${1:body}, ${2|red,blue|})$0").unwrap(),
+            SnippetExpansion {
+                text: "heading(body, red)".to_owned(),
+                cursor: "heading(".chars().count(),
+            }
+        );
+        assert_eq!(
+            expand_lsp_snippet(r"\$cash ${1:value}").unwrap(),
+            SnippetExpansion {
+                text: "$cash value".to_owned(),
+                cursor: "$cash ".chars().count(),
+            }
+        );
+        assert_eq!(
+            expand_lsp_snippet("done$0").unwrap(),
+            SnippetExpansion {
+                text: "done".to_owned(),
+                cursor: 4,
+            }
+        );
+        assert!(expand_lsp_snippet("${1:unfinished").is_err());
+    }
+
+    #[test]
+    fn completion_without_server_range_replaces_only_identifier_prefix() {
+        let applied =
+            prepare_completion_application("#hea", 4, &completion_item("heading")).unwrap();
+        assert_eq!(
+            applied,
+            CompletionApplication {
+                source: "#heading".to_owned(),
+                cursor: 8,
+            }
+        );
+    }
+
+    #[test]
+    fn completion_applies_snippet_and_additional_edits_atomically() {
+        let mut item = completion_item("ignored fallback");
+        item.label = "bar".to_owned();
+        item.insert_text_is_snippet = true;
+        item.text_edit = Some(LspTextEdit {
+            range: LspRange {
+                start: LspPosition {
+                    line: 1,
+                    character: 0,
+                },
+                end: LspPosition {
+                    line: 1,
+                    character: 2,
+                },
+            },
+            new_text: "bar(${1:x})$0".to_owned(),
+        });
+        item.additional_text_edits.push(LspTextEdit {
+            range: LspRange {
+                start: LspPosition {
+                    line: 0,
+                    character: 0,
+                },
+                end: LspPosition {
+                    line: 0,
+                    character: 0,
+                },
+            },
+            new_text: "#let helper = 1\n".to_owned(),
+        });
+
+        let applied = prepare_completion_application("foo\nba", 6, &item).unwrap();
+        assert_eq!(applied.source, "#let helper = 1\nfoo\nbar(x)");
+        assert_eq!(
+            applied.cursor,
+            applied
+                .source
+                .chars()
+                .position(|character| character == 'x')
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn completion_rejects_invalid_and_overlapping_server_edits() {
+        let mut item = completion_item("replacement");
+        item.text_edit = Some(LspTextEdit {
+            range: LspRange {
+                start: LspPosition {
+                    line: 0,
+                    character: 1,
+                },
+                end: LspPosition {
+                    line: 0,
+                    character: 3,
+                },
+            },
+            new_text: "ok".to_owned(),
+        });
+        item.additional_text_edits.push(LspTextEdit {
+            range: LspRange {
+                start: LspPosition {
+                    line: 0,
+                    character: 2,
+                },
+                end: LspPosition {
+                    line: 0,
+                    character: 2,
+                },
+            },
+            new_text: "overlap".to_owned(),
+        });
+        assert!(
+            prepare_completion_application("abcd", 3, &item)
+                .unwrap_err()
+                .contains("overlap")
+        );
+
+        item.additional_text_edits.clear();
+        item.text_edit.as_mut().unwrap().range.start.character = 99;
+        item.text_edit.as_mut().unwrap().range.end.character = 100;
+        assert!(prepare_completion_application("abcd", 3, &item).is_err());
+        assert!(prepare_completion_application("abcd", 99, &completion_item("x")).is_err());
+    }
+
+    #[test]
     fn first_frame_hover_state_installs_without_reentering_the_context_lock() {
         let context = egui::Context::default();
         let delay = Duration::from_millis(275);
@@ -12629,6 +17596,9 @@ mod tests {
                 // nested context lock as a deadlock, so completing this call
                 // is the regression assertion.
                 install_hover_runtime_config(ui.ctx(), delay, fade);
+                clear_asset_hover_candidate(ui.ctx());
+                clear_native_hover_overlay(ui.ctx());
+                assert!(current_asset_hover_candidate(ui.ctx()).is_none());
             })
             .drop_without_applying_deltas();
 
@@ -12772,6 +17742,28 @@ mod tests {
         assert!(!compilation_run_allowed(true, false, false));
         assert!(compilation_run_allowed(true, true, false));
         assert!(compilation_run_allowed(true, false, true));
+        assert_eq!(tinymist_preview_refresh(false), PreviewRefresh::OnType);
+        assert_eq!(tinymist_preview_refresh(true), PreviewRefresh::OnSave);
+        assert!(tinymist_language_features_ready(
+            DocumentKind::Typst,
+            true,
+            true
+        ));
+        assert!(!tinymist_language_features_ready(
+            DocumentKind::Typst,
+            false,
+            true
+        ));
+        assert!(!tinymist_language_features_ready(
+            DocumentKind::Typst,
+            true,
+            false
+        ));
+        assert!(!tinymist_language_features_ready(
+            DocumentKind::Text,
+            true,
+            true
+        ));
         assert_eq!(
             compilation_toggle_copy(false),
             (
@@ -13033,17 +18025,139 @@ mod tests {
             path: PathBuf::from("old-document.pdf"),
             document_epoch: 7,
             intent: PdfWriteIntent::Export,
+            after_artifact_generation: None,
         });
-        assert_eq!(take_matching_export(&mut pending, 8), None);
+        assert_eq!(
+            take_ready_export(
+                &mut pending,
+                8,
+                12,
+                Some(ArtifactKey {
+                    revision: 12,
+                    generation: 41,
+                }),
+            ),
+            None
+        );
         assert!(pending.is_none());
 
         let expected = PendingExport {
             path: PathBuf::from("current-document.pdf"),
             document_epoch: 8,
             intent: PdfWriteIntent::Compile,
+            after_artifact_generation: None,
         };
         let mut pending = Some(expected.clone());
-        assert_eq!(take_matching_export(&mut pending, 8), Some(expected));
+        assert_eq!(
+            take_ready_export(
+                &mut pending,
+                8,
+                13,
+                Some(ArtifactKey {
+                    revision: 13,
+                    generation: 42,
+                }),
+            ),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn queued_export_waits_for_a_strictly_newer_current_artifact() {
+        let expected = PendingExport {
+            path: PathBuf::from("rebuilt-document.pdf"),
+            document_epoch: 8,
+            intent: PdfWriteIntent::Export,
+            after_artifact_generation: Some(41),
+        };
+        let mut pending = Some(expected.clone());
+
+        assert_eq!(
+            take_ready_export(
+                &mut pending,
+                8,
+                13,
+                Some(ArtifactKey {
+                    revision: 13,
+                    generation: 41,
+                }),
+            ),
+            None,
+            "the cached same-revision artifact must not satisfy the export"
+        );
+        assert!(pending.is_some());
+        assert_eq!(
+            take_ready_export(
+                &mut pending,
+                8,
+                13,
+                Some(ArtifactKey {
+                    revision: 12,
+                    generation: 42,
+                }),
+            ),
+            None,
+            "a newer artifact for a stale editor revision must not satisfy it"
+        );
+        assert!(pending.is_some());
+        assert_eq!(
+            take_ready_export(
+                &mut pending,
+                8,
+                13,
+                Some(ArtifactKey {
+                    revision: 13,
+                    generation: 42,
+                }),
+            ),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn pdf_output_reuses_only_a_stable_current_artifact() {
+        let current = Some(ArtifactKey {
+            revision: 13,
+            generation: 41,
+        });
+
+        let stable = pdf_output_requires_new_artifact(
+            true,
+            false,
+            false,
+            PreviewStatus::Ready(Duration::ZERO),
+        );
+        assert!(!stable);
+        assert!(pdf_artifact_reusable_for_output(current, true, 13, stable));
+
+        for requires_new in [
+            pdf_output_requires_new_artifact(
+                true,
+                true,
+                false,
+                PreviewStatus::Ready(Duration::ZERO),
+            ),
+            pdf_output_requires_new_artifact(
+                true,
+                false,
+                true,
+                PreviewStatus::Ready(Duration::ZERO),
+            ),
+            pdf_output_requires_new_artifact(true, false, false, PreviewStatus::Waiting),
+            pdf_output_requires_new_artifact(true, false, false, PreviewStatus::Compiling),
+            pdf_output_requires_new_artifact(true, false, false, PreviewStatus::Error),
+        ] {
+            assert!(requires_new);
+            assert!(!pdf_artifact_reusable_for_output(
+                current,
+                true,
+                13,
+                requires_new
+            ));
+        }
+
+        assert!(!pdf_artifact_reusable_for_output(current, false, 13, false));
+        assert!(!pdf_artifact_reusable_for_output(current, true, 14, false));
     }
 
     #[test]
@@ -13316,6 +18430,39 @@ mod tests {
     }
 
     #[test]
+    fn fallback_menu_rows_keep_their_caption_left_aligned() {
+        let context = egui::Context::default();
+        context
+            .run_ui(Default::default(), |ui| {
+                for shortcut in [
+                    None,
+                    Some(KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::S)),
+                ] {
+                    let button = menu_button(ui, "Save", shortcut);
+                    let atoms = button.atoms();
+                    assert!(
+                        atoms.iter().skip(1).any(|atom| atom.grow),
+                        "a growing atom after the caption pins it to the left: {atoms:?}"
+                    );
+                }
+            })
+            .drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn menu_availability_distinguishes_the_document_from_a_pinned_typst_preview() {
+        let text_with_pinned_preview = CommandAvailability {
+            can_undo: false,
+            can_redo: false,
+            typst_document: false,
+            typst_preview: true,
+            interactive_preview: false,
+        };
+        assert!(text_with_pinned_preview.allows(command_spec(AppCommand::ExportPdf).requirement));
+        assert!(!text_with_pinned_preview.allows(command_spec(AppCommand::Format).requirement));
+    }
+
+    #[test]
     fn settings_font_dropdown_opens_and_selects_a_catalog_family() {
         use egui_kittest::{Harness, kittest::Queryable as _};
 
@@ -13387,7 +18534,9 @@ mod tests {
                             can_format: true,
                             can_sync_preview: true,
                             link: Some("https://example.com/docs"),
+                            table: None,
                         },
+                        &ShortcutBindings::current_defaults(),
                         action,
                     );
                 },
@@ -13404,7 +18553,187 @@ mod tests {
                 "https://example.com/docs".to_owned()
             ))
         );
-        assert!(editor_context_menu_size(true).y > editor_context_menu_size(false).y);
+        assert!(editor_context_menu_size(true, false).y > editor_context_menu_size(false, false).y);
+    }
+
+    #[test]
+    fn editor_context_menu_offers_the_static_table_under_the_pointer() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+
+        let source = "#table(columns: 2, [Name], [Value])";
+        let cursor = source[..source.find("Name").unwrap()].chars().count();
+        let table = editable_table_at(source, cursor).expect("static table");
+        let expected = table.clone();
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(320.0, 400.0))
+            .build_ui_state(
+                move |ui, action| {
+                    show_editor_context_menu_ui(
+                        ui,
+                        EditorContextMenuOptions {
+                            can_undo: false,
+                            can_redo: false,
+                            has_selection: false,
+                            can_format: true,
+                            can_sync_preview: true,
+                            link: None,
+                            table: Some(&table),
+                        },
+                        &ShortcutBindings::current_defaults(),
+                        action,
+                    );
+                },
+                None::<EditorMenuAction>,
+            );
+        harness.run();
+        harness.get_by_label_contains("Edit Table…").click();
+        harness.run();
+
+        assert_eq!(
+            harness.state(),
+            &Some(EditorMenuAction::EditTable(expected))
+        );
+        assert!(editor_context_menu_size(false, true).y > editor_context_menu_size(false, false).y);
+    }
+
+    #[test]
+    fn table_editor_controls_keep_rows_and_columns_rectangular() {
+        use egui_kittest::{
+            Harness,
+            kittest::{Queryable as _, by},
+        };
+
+        let source = "#table(columns: 2, [A], [B])";
+        let cursor = source[..source.find("[A]").unwrap()].chars().count();
+        let table = editable_table_at(source, cursor).unwrap();
+        let original_call = char_range_slice(source, table.source_range.clone())
+            .unwrap()
+            .to_owned();
+        let dialog = TableEditorDialog {
+            table,
+            original_call,
+            document_key: DocumentKey {
+                epoch: 3,
+                revision: 7,
+            },
+            focus_first_cell: false,
+            error: None,
+        };
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(760.0, 520.0))
+            .build_ui_state(
+                |ui, state| {
+                    if let Some(action) = show_table_editor_ui(ui, &mut state.0, 700.0, 330.0) {
+                        state.1 = Some(action);
+                    }
+                },
+                (dialog, None::<TableEditorUiAction>),
+            );
+        harness.run();
+        harness
+            .get(
+                by().role(egui::accesskit::Role::MultilineTextInput)
+                    .value("A"),
+            )
+            .focus();
+        harness.run();
+        harness
+            .get(
+                by().role(egui::accesskit::Role::MultilineTextInput)
+                    .value("A"),
+            )
+            .type_text("Edited ");
+        harness.run();
+        assert!(harness.state().0.table.cells[0][0].contains("Edited"));
+        harness.get_by_label("Add row").click();
+        harness.run();
+        harness.get_by_label("Add column").click();
+        harness.run();
+
+        assert_eq!(harness.state().0.table.row_count(), 2);
+        assert_eq!(harness.state().0.table.columns, 3);
+        assert!(
+            harness
+                .state()
+                .0
+                .table
+                .cells
+                .iter()
+                .all(|row| row.len() == 3)
+        );
+        harness.get_by_label("Apply").click();
+        harness.run();
+        assert_eq!(harness.state().1, Some(TableEditorUiAction::Apply));
+    }
+
+    #[test]
+    fn prepared_table_edit_is_one_unicode_safe_replacement_and_rejects_stale_source() {
+        let source = "Préface\n#table(columns: 2, [Nom], [Valeur])\nFin";
+        let cursor = source[..source.find("Nom").unwrap()].chars().count();
+        let mut table = editable_table_at(source, cursor).unwrap();
+        let original_call = char_range_slice(source, table.source_range.clone())
+            .unwrap()
+            .to_owned();
+        table.cells[0][1] = "Édité".to_owned();
+        let key = DocumentKey {
+            epoch: 4,
+            revision: 9,
+        };
+        let dialog = TableEditorDialog {
+            table,
+            original_call,
+            document_key: key,
+            focus_first_cell: false,
+            error: None,
+        };
+
+        let edit = prepare_table_source_edit(source, key, &dialog).unwrap();
+        let mut applied = source.to_owned();
+        applied.replace_range(edit.byte_range.clone(), &edit.replacement);
+        assert!(applied.contains("[Édité]"));
+        assert_eq!(
+            edit.cursor,
+            source[..edit.byte_range.start].chars().count() + edit.replacement.chars().count()
+        );
+
+        let stale = prepare_table_source_edit(
+            source,
+            DocumentKey {
+                epoch: 4,
+                revision: 10,
+            },
+            &dialog,
+        )
+        .unwrap_err();
+        assert!(stale.contains("document changed"));
+
+        let changed_source = source.replacen("[Nom]", "[Other]", 1);
+        let stale = prepare_table_source_edit(&changed_source, key, &dialog).unwrap_err();
+        assert!(stale.contains("table source changed"));
+    }
+
+    #[test]
+    fn prepared_table_edit_refuses_dynamic_cell_source() {
+        let source = "#table([Safe])";
+        let mut table = editable_table_at(source, 2).unwrap();
+        let original_call = char_range_slice(source, table.source_range.clone())
+            .unwrap()
+            .to_owned();
+        table.cells[0][0] = "#unsafe-expression".to_owned();
+        let key = DocumentKey {
+            epoch: 0,
+            revision: 0,
+        };
+        let dialog = TableEditorDialog {
+            table,
+            original_call,
+            document_key: key,
+            focus_first_cell: false,
+            error: None,
+        };
+
+        let error = prepare_table_source_edit(source, key, &dialog).unwrap_err();
+        assert!(error.contains("not static Typst markup"));
     }
 
     #[test]
@@ -13794,6 +19123,160 @@ mod tests {
     }
 
     #[test]
+    fn explorer_section_resize_moves_only_the_adjacent_open_split() {
+        let open = [true, false, true, true, false, false];
+        let mut layout = ExplorerSectionLayout::default();
+        let before = layout.body_heights(open, 300.0);
+        assert!((before[0] - 100.0).abs() < 0.01);
+        assert!((before[2] - 100.0).abs() < 0.01);
+        assert!((before[3] - 100.0).abs() < 0.01);
+
+        assert!(layout.resize_after(open, 300.0, 0, 30.0));
+        let after = layout.body_heights(open, 300.0);
+        assert!((after[0] - 130.0).abs() < 0.01, "{after:?}");
+        assert!((after[2] - 70.0).abs() < 0.01, "{after:?}");
+        assert!((after[3] - 100.0).abs() < 0.01, "{after:?}");
+        assert!((after.iter().sum::<f32>() - 300.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn explorer_search_is_unicode_case_insensitive_and_retains_ancestors() {
+        let leaf = WorkspaceNode {
+            name: std::ffi::OsString::from("Résumé.TYP"),
+            path: PathBuf::from("/workspace/chapters/Résumé.TYP"),
+            relative_path: PathBuf::from("chapters/Résumé.TYP"),
+            kind: crate::workspace::WorkspaceNodeKind::File,
+            children: Vec::new(),
+        };
+        let directory = WorkspaceNode {
+            name: std::ffi::OsString::from("chapters"),
+            path: PathBuf::from("/workspace/chapters"),
+            relative_path: PathBuf::from("chapters"),
+            kind: crate::workspace::WorkspaceNodeKind::Directory,
+            children: vec![leaf.clone()],
+        };
+        let unrelated = WorkspaceNode {
+            name: std::ffi::OsString::from("notes.txt"),
+            path: PathBuf::from("/workspace/notes.txt"),
+            relative_path: PathBuf::from("notes.txt"),
+            kind: crate::workspace::WorkspaceNodeKind::File,
+            children: Vec::new(),
+        };
+        let query = normalize_explorer_query("  RÉSUMÉ  ");
+
+        assert!(workspace_node_matches_query(&leaf, &query));
+        assert!(
+            workspace_node_matches_query(&directory, &query),
+            "the parent directory must remain visible for a matching descendant"
+        );
+        assert!(!workspace_node_matches_query(&unrelated, &query));
+        assert!(workspace_node_matches_query(&unrelated, ""));
+    }
+
+    #[test]
+    fn explorer_search_covers_every_project_index_section() {
+        let root = PathBuf::from("/workspace");
+        let snapshot = WorkspaceSnapshot {
+            root: root.clone(),
+            nodes: Vec::new(),
+        };
+        let index = ProjectIndex {
+            outline: vec![crate::project_index::OutlineEntry {
+                path: root.join("paper.typ"),
+                line: 7,
+                level: 1,
+                title: "Introduction".to_owned(),
+            }],
+            subfiles: vec![root.join("appendix.typ")],
+            symbols: vec![crate::project_index::SymbolEntry {
+                path: root.join("paper.typ"),
+                line: 12,
+                name: "accent-color".to_owned(),
+                kind: crate::project_index::SymbolKind::Definition,
+            }],
+            packages: vec!["@preview/cetz:0.4.2".to_owned()],
+            references: vec![crate::project_index::ReferenceEntry {
+                path: root.join("paper.typ"),
+                line: 20,
+                label: "fig:overview".to_owned(),
+            }],
+            ..ProjectIndex::default()
+        };
+
+        for (query, section) in [
+            ("introduction", 1),
+            ("appendix", 2),
+            ("ACCENT-COLOR", 3),
+            ("cetz", 4),
+            ("fig:overview", 5),
+        ] {
+            let query = normalize_explorer_query(query);
+            let matches = explorer_section_query_matches(Some(&snapshot), &index, &query);
+            assert!(matches[section], "query {query:?}: {matches:?}");
+        }
+
+        assert_eq!(
+            explorer_section_query_matches(Some(&snapshot), &index, "does-not-exist"),
+            [true, false, false, false, false, false],
+            "an empty result keeps the Files surface open for its empty-state message"
+        );
+    }
+
+    #[test]
+    fn explorer_section_resize_clamps_to_a_usable_minimum() {
+        let open = [true, true, false, false, false, false];
+        let mut layout = ExplorerSectionLayout::default();
+        assert!(layout.resize_after(open, 200.0, 0, 1_000.0));
+        let heights = layout.body_heights(open, 200.0);
+        assert!((heights[0] - 156.0).abs() < 0.01, "{heights:?}");
+        assert!((heights[1] - EXPLORER_SECTION_MIN_BODY_HEIGHT).abs() < 0.01);
+
+        let tiny = layout.body_heights(open, 40.0);
+        assert_eq!(tiny, [20.0, 20.0, 0.0, 0.0, 0.0, 0.0]);
+        assert!(!layout.resize_after(open, 40.0, 0, 5.0));
+    }
+
+    #[test]
+    fn explorer_close_hides_contents_one_frame_before_the_panel() {
+        let hiding = ExplorerPanelPhase::Open.toggle();
+        assert_eq!(hiding, ExplorerPanelPhase::HideContents);
+        assert!(hiding.panel_visible());
+        assert!(!hiding.contents_visible());
+
+        let closed = hiding.finish_frame();
+        assert_eq!(closed, ExplorerPanelPhase::Closed);
+        assert!(!closed.panel_visible());
+        assert_eq!(closed.toggle(), ExplorerPanelPhase::Open);
+        assert_eq!(hiding.toggle(), ExplorerPanelPhase::Open);
+    }
+
+    #[test]
+    fn workspace_tree_state_survives_a_filesystem_refresh() {
+        let context = egui::Context::default();
+        let root = PathBuf::from("/workspace/project");
+        let directory = root.join("chapters");
+
+        context
+            .run_ui(Default::default(), |ui| {
+                let id = workspace_tree_state_id(ui, &root, false);
+                let mut state = TreeViewState::load(ui, id).unwrap_or_default();
+                state.set_openness(directory.clone(), true);
+                state.store(ui, id);
+            })
+            .drop_without_applying_deltas();
+
+        // A later filesystem generation renders through the same stable UI
+        // identity. Loading it must recover the user's expansion state.
+        context
+            .run_ui(Default::default(), |ui| {
+                let id = workspace_tree_state_id(ui, &root, false);
+                let state = TreeViewState::load(ui, id).expect("tree state from prior scan");
+                assert_eq!(state.is_open(&directory), Some(true));
+            })
+            .drop_without_applying_deltas();
+    }
+
+    #[test]
     fn explorer_section_bodies_start_at_the_section_root() {
         let context = egui::Context::default();
         theme::configure_styles(&context);
@@ -13976,6 +19459,145 @@ mod tests {
             continue_tooltip_fade(0.0, None, 1.0, Duration::ZERO).opacity,
             1.0
         );
+    }
+
+    #[test]
+    fn asset_preview_sizes_are_bounded_and_never_upscaled() {
+        let landscape = fit_asset_preview_size([800, 400], Vec2::new(420.0, 300.0));
+        assert!((landscape.x - 420.0).abs() < 0.01);
+        assert!((landscape.y - 210.0).abs() < 0.01);
+        let portrait = fit_asset_preview_size([400, 800], Vec2::new(420.0, 300.0));
+        assert!((portrait.x - 150.0).abs() < 0.01);
+        assert!((portrait.y - 300.0).abs() < 0.01);
+        assert_eq!(
+            fit_asset_preview_size([40, 20], Vec2::new(420.0, 300.0)),
+            Vec2::new(40.0, 20.0)
+        );
+
+        let card = asset_hover_card_size(
+            &AssetHoverContent::Loading,
+            Vec2::new(180.0, 90.0),
+            Vec2::new(16.0, 16.0),
+            8.0,
+        );
+        assert!(card.x <= 164.0);
+        assert!(card.y <= 74.0);
+    }
+
+    #[test]
+    fn stale_asset_thumbnail_results_cannot_replace_the_active_hover() {
+        let active = AssetHoverState {
+            origin: Rect::from_min_size(Pos2::ZERO, Vec2::splat(10.0)),
+            anchor: Pos2::new(0.0, 12.0),
+            path: PathBuf::from("current.png"),
+            kind: DocumentKind::Image,
+            opacity: 1.0,
+            token: 9,
+            content: AssetHoverContent::Loading,
+        };
+        let result = |token, path: &str, kind| AssetThumbnailResult {
+            token,
+            path: PathBuf::from(path),
+            kind,
+            output: Err("unused".to_owned()),
+        };
+
+        assert!(asset_thumbnail_result_matches(
+            Some(&active),
+            &result(9, "current.png", DocumentKind::Image)
+        ));
+        assert!(!asset_thumbnail_result_matches(
+            Some(&active),
+            &result(8, "current.png", DocumentKind::Image)
+        ));
+        assert!(!asset_thumbnail_result_matches(
+            Some(&active),
+            &result(9, "old.png", DocumentKind::Image)
+        ));
+        assert!(!asset_thumbnail_result_matches(
+            None,
+            &result(9, "current.png", DocumentKind::Image)
+        ));
+    }
+
+    #[test]
+    fn multiline_editor_asset_range_uses_a_connected_hover_region() {
+        let editor = Rect::from_min_max(Pos2::ZERO, Pos2::new(320.0, 180.0));
+        let start = Rect::from_min_size(Pos2::new(80.0, 20.0), Vec2::new(1.0, 18.0));
+        let end = Rect::from_min_size(Pos2::new(40.0, 56.0), Vec2::new(1.0, 18.0));
+
+        let range = editor_range_rect(editor, start, end);
+
+        assert_eq!(range.left(), editor.left());
+        assert_eq!(range.right(), editor.right());
+        assert_eq!(range.top(), start.top());
+        assert_eq!(range.bottom(), end.bottom());
+    }
+
+    #[test]
+    fn asset_hover_error_card_keeps_file_and_failure_visible() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(360.0, 144.0))
+            .build_ui(|ui| {
+                show_asset_hover_contents(
+                    ui,
+                    Path::new("assets/missing diagram.pdf"),
+                    DocumentKind::Pdf,
+                    &AssetHoverContent::Error("Could not read the PDF".to_owned()),
+                    Vec2::new(340.0, 124.0),
+                );
+            });
+        harness.run();
+
+        assert!(
+            harness
+                .query_by_label_contains("missing diagram.pdf")
+                .is_some()
+        );
+        assert!(
+            harness
+                .query_by_label_contains("Could not read the PDF")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn hovered_asset_row_publishes_a_preview_candidate_after_its_delay() {
+        let context = egui::Context::default();
+        install_hover_runtime_config(&context, Duration::ZERO, Duration::ZERO);
+        let row_rect = std::cell::Cell::new(Rect::NOTHING);
+        let draw = |input| {
+            context
+                .run_ui(input, |ui| {
+                    let response = ui.add(
+                        egui::Label::new("diagram.png")
+                            .selectable(false)
+                            .sense(Sense::hover()),
+                    );
+                    row_rect.set(response.rect);
+                    offer_asset_hover(
+                        &response,
+                        response.rect,
+                        PathBuf::from("assets/diagram.png"),
+                        DocumentKind::Image,
+                    );
+                })
+                .drop_without_applying_deltas();
+        };
+        draw(egui::RawInput::default());
+        clear_asset_hover_candidate(&context);
+        draw(egui::RawInput {
+            events: vec![egui::Event::PointerMoved(row_rect.get().center())],
+            ..Default::default()
+        });
+
+        let candidate = current_asset_hover_candidate(&context)
+            .expect("the hovered asset row should publish a preview candidate");
+        assert_eq!(candidate.path, PathBuf::from("assets/diagram.png"));
+        assert_eq!(candidate.kind, DocumentKind::Image);
+        assert_eq!(candidate.opacity, 1.0);
     }
 
     #[test]
@@ -14169,8 +19791,11 @@ mod tests {
     #[test]
     fn tooltip_focus_shortcut_is_stable() {
         assert_eq!(
-            focus_tooltip_shortcut(),
-            KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, egui::Key::Space)
+            ShortcutBindings::current_defaults().egui(ShortcutAction::FocusTooltip),
+            Some(KeyboardShortcut::new(
+                Modifiers::COMMAND | Modifiers::SHIFT,
+                egui::Key::Space,
+            ))
         );
     }
 
@@ -14439,10 +20064,112 @@ mod tests {
     }
 
     #[test]
+    fn settings_search_indexes_every_visible_setting_label() {
+        for target in SettingsTarget::ALL {
+            assert!(
+                settings_search_results(target.label()).contains(&target),
+                "missing searchable label {:?}: {}",
+                target,
+                target.label()
+            );
+        }
+        assert_eq!(
+            settings_search_results("auto save delay"),
+            vec![SettingsTarget::AutoSaveDelay]
+        );
+        assert!(settings_search_results("autosave").contains(&SettingsTarget::AutoSave));
+        assert_eq!(
+            settings_search_results("titlebar"),
+            vec![SettingsTarget::TitleBarMenus]
+        );
+        assert_eq!(
+            settings_search_results("custom compiler"),
+            vec![SettingsTarget::TypstCompiler]
+        );
+        assert_eq!(
+            settings_search_results("raster pdf"),
+            vec![SettingsTarget::PreviewBackend]
+        );
+        assert_eq!(
+            settings_search_results("output directory"),
+            vec![SettingsTarget::UiScreenshots]
+        );
+        assert!(settings_search_results("missing setting").is_empty());
+    }
+
+    #[test]
+    fn settings_search_routes_to_the_exact_individual_target() {
+        let mut pending = Some(SettingsTarget::CodeFontWeight);
+        assert!(!take_settings_scroll_target(
+            &mut pending,
+            SettingsTarget::UiFontWeight
+        ));
+        assert_eq!(pending, Some(SettingsTarget::CodeFontWeight));
+        assert!(take_settings_scroll_target(
+            &mut pending,
+            SettingsTarget::CodeFontWeight
+        ));
+        assert_eq!(pending, None);
+    }
+
+    #[test]
+    fn save_as_format_handoff_waits_for_the_matching_ready_document() {
+        let key = DocumentKey {
+            epoch: 3,
+            revision: 7,
+        };
+        // The destination kind wins: Text -> .typ formats, while Typst ->
+        // .txt does not carry the source document's formatting policy across.
+        assert_eq!(
+            save_as_format_handoff(true, DocumentKind::Typst, key),
+            Some(key)
+        );
+        assert_eq!(
+            save_as_format_handoff(false, DocumentKind::Typst, key),
+            None
+        );
+        assert_eq!(save_as_format_handoff(true, DocumentKind::Text, key), None);
+
+        let mut pending = Some(key);
+        assert!(!take_ready_format_handoff(&mut pending, key, false));
+        assert_eq!(pending, Some(key));
+        assert!(!take_ready_format_handoff(
+            &mut pending,
+            DocumentKey {
+                epoch: 4,
+                revision: 7,
+            },
+            true,
+        ));
+        assert_eq!(pending, Some(key));
+        assert!(take_ready_format_handoff(&mut pending, key, true));
+        assert_eq!(pending, None);
+    }
+
+    #[test]
+    fn toolbar_shortcut_copy_uses_effective_configured_binding() {
+        let mut overrides = crate::shortcuts::ShortcutOverrides::default();
+        overrides.set(
+            ShortcutAction::Compile,
+            Some(ShortcutChord::parse("Primary+Shift+B").unwrap()),
+        );
+        let bindings = ShortcutBindings::current(&overrides);
+        assert_eq!(
+            shortcut_tooltip("Compile", &bindings, ShortcutAction::Compile),
+            if cfg!(target_os = "macos") {
+                "Compile · Cmd+Shift+B"
+            } else {
+                "Compile · Ctrl+Shift+B"
+            }
+        );
+    }
+
+    #[test]
     fn modified_shortcuts_win_over_their_generic_variants() {
+        let shortcuts = ShortcutBindings::current_defaults();
         assert_eq!(
             run_shortcut(Modifiers::COMMAND | Modifiers::ALT, egui::Key::O, |input| {
-                consume_shortcut(input, |command| {
+                consume_shortcut(input, &shortcuts, |command| {
                     command_spec(command).menu == CommandMenu::File
                 })
             },),
@@ -14452,18 +20179,17 @@ mod tests {
             run_shortcut(
                 Modifiers::COMMAND | Modifiers::SHIFT,
                 egui::Key::O,
-                |input| consume_shortcut(input, |command| command_spec(command).menu
+                |input| consume_shortcut(input, &shortcuts, |command| command_spec(command).menu
                     == CommandMenu::File),
             ),
             Some(AppCommand::ChangeWorkspaceRoot)
         );
-        let replace = command_spec(AppCommand::FindReplace)
-            .shortcut
-            .expect("find/replace has a shortcut")
-            .egui();
+        let replace = shortcuts
+            .egui(command_spec(AppCommand::FindReplace).shortcut_action)
+            .expect("find/replace has a shortcut");
         assert_eq!(
             run_shortcut(replace.modifiers, replace.logical_key, |input| {
-                consume_shortcut(input, |command| {
+                consume_shortcut(input, &shortcuts, |command| {
                     matches!(command, AppCommand::Find | AppCommand::FindReplace)
                 })
             },),
@@ -14473,29 +20199,24 @@ mod tests {
 
     #[test]
     fn preview_zoom_and_interface_scale_have_distinct_shortcuts() {
+        let shortcuts = ShortcutBindings::current_defaults();
         let preview_modifiers = Modifiers::COMMAND | Modifiers::ALT;
         assert_eq!(
-            run_shortcut(
-                preview_modifiers,
-                egui::Key::Plus,
-                consume_preview_zoom_shortcut,
-            ),
+            run_shortcut(preview_modifiers, egui::Key::Plus, |input| {
+                consume_preview_zoom_shortcut(input, &shortcuts)
+            },),
             Some(PreviewZoomAction::In)
         );
         assert_eq!(
-            run_shortcut(
-                Modifiers::COMMAND,
-                egui::Key::Plus,
-                consume_preview_zoom_shortcut,
-            ),
+            run_shortcut(Modifiers::COMMAND, egui::Key::Plus, |input| {
+                consume_preview_zoom_shortcut(input, &shortcuts)
+            },),
             None
         );
         assert_eq!(
-            run_shortcut(
-                Modifiers::COMMAND,
-                egui::Key::Plus,
-                consume_ui_scale_shortcut,
-            ),
+            run_shortcut(Modifiers::COMMAND, egui::Key::Plus, |input| {
+                consume_ui_scale_shortcut(input, &shortcuts)
+            },),
             Some(5)
         );
     }
@@ -14518,6 +20239,79 @@ mod tests {
             workspace_entry_color(Path::new("favicon.ico"), false, false, false),
             theme::palette(false).info
         );
+        let category = Color32::from_rgb(8, 20, 36);
+        let strong = Color32::from_rgb(245, 244, 240);
+        assert_eq!(
+            workspace_entry_resolved_color(category, false, strong),
+            category
+        );
+        assert_eq!(
+            workspace_entry_resolved_color(category, true, strong),
+            strong
+        );
+    }
+
+    #[test]
+    fn problems_row_double_click_dispatches_only_located_diagnostics() {
+        let located = Diagnostic {
+            severity: DiagnosticSeverity::Error,
+            source: DiagnosticSource::File(PathBuf::from("chapter.typ")),
+            location: Some(DiagnosticLocation {
+                line: 17,
+                column: 4,
+            }),
+            message: "expected expression".to_owned(),
+            details: Vec::new(),
+        };
+        assert_eq!(problem_row_jump_target(&located, false), None);
+        assert_eq!(problem_row_jump_target(&located, true), Some(located));
+
+        let unlocated = Diagnostic {
+            severity: DiagnosticSeverity::Error,
+            source: DiagnosticSource::Global,
+            location: None,
+            message: "compiler unavailable".to_owned(),
+            details: Vec::new(),
+        };
+        assert_eq!(problem_row_jump_target(&unlocated, true), None);
+    }
+
+    #[test]
+    fn problems_row_detects_a_real_pointer_double_click_without_covering_its_text() {
+        let context = egui::Context::default();
+        let jumped = std::cell::Cell::new(false);
+        let row_rect = std::cell::Cell::new(Rect::NOTHING);
+        let run_frame = |time: f64, events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(320.0, 100.0))),
+                time: Some(time),
+                events,
+                ..Default::default()
+            };
+            let mut output = context.run_ui(input, |ui| {
+                let response =
+                    ui.add(egui::Label::new("selectable diagnostic message").selectable(true));
+                row_rect.set(response.rect);
+                jumped.set(jumped.get() || problem_row_double_clicked(&response));
+            });
+            output.textures_delta.clear();
+        };
+
+        run_frame(0.0, Vec::new());
+        let position = row_rect.get().center();
+        for (time, pressed) in [(0.01, true), (0.02, false), (0.03, true), (0.04, false)] {
+            run_frame(
+                time,
+                vec![egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::default(),
+                }],
+            );
+        }
+
+        assert!(jumped.get());
     }
 
     #[test]
@@ -14597,6 +20391,383 @@ mod tests {
             assert_eq!(surface.top(), viewport.top());
             assert_eq!(surface.bottom(), viewport.bottom());
         }
+    }
+
+    #[test]
+    fn sticky_context_geometry_stays_below_the_find_overlay() {
+        let viewport = Rect::from_min_size(Pos2::new(10.0, 20.0), Vec2::new(600.0, 400.0));
+        let without_find = sticky_context_overlay_geometry(viewport, None).unwrap();
+        assert_eq!(without_find.anchor, viewport.left_top());
+        assert_eq!(without_find.width, viewport.width());
+        assert_eq!(without_find.max_height, 180.0);
+
+        let find = Rect::from_min_size(Pos2::new(18.0, 28.0), Vec2::new(360.0, 76.0));
+        let below_find = sticky_context_overlay_geometry(viewport, Some(find)).unwrap();
+        assert_eq!(below_find.anchor, Pos2::new(viewport.left(), find.bottom()));
+        assert_eq!(below_find.width, viewport.width());
+
+        let unrelated = Rect::from_min_size(Pos2::new(800.0, 28.0), Vec2::new(100.0, 76.0));
+        assert_eq!(
+            sticky_context_overlay_geometry(viewport, Some(unrelated)),
+            Some(without_find)
+        );
+    }
+
+    #[test]
+    fn sticky_context_uses_the_editor_gutter_and_a_bottom_only_shadow() {
+        let galley_x = 132.0;
+        assert_eq!(
+            editor_gutter_geometry(galley_x),
+            EditorGutterGeometry {
+                line_number_right: galley_x - METRICS.editor.line_number_right_gap,
+                separator_x: galley_x - METRICS.editor.line_number_separator_gap,
+            }
+        );
+
+        let viewport = Rect::from_min_size(Pos2::new(10.0, 20.0), Vec2::new(600.0, 400.0));
+        let overlay = Rect::from_min_size(viewport.min, Vec2::new(viewport.width(), 24.0));
+        let clip = sticky_context_shadow_clip(overlay, viewport);
+        assert_eq!(clip.top(), overlay.bottom());
+        assert_eq!(clip.left(), viewport.left());
+        assert_eq!(clip.right_bottom(), viewport.right_bottom());
+        let cover = sticky_context_opaque_cover(overlay, viewport);
+        assert_eq!(cover.min, overlay.min);
+        assert_eq!(cover.right(), overlay.right());
+        assert_eq!(
+            cover.bottom(),
+            overlay.bottom() + STICKY_CONTEXT_BOTTOM_COVER
+        );
+
+        for dark_mode in [false, true] {
+            let shadow = sticky_context_shadow(dark_mode);
+            assert_eq!(shadow.offset, [0, 2]);
+            assert_eq!(shadow.spread, 0);
+            assert!(shadow.blur > 0);
+            assert!(shadow.color.a() > 0);
+        }
+    }
+
+    #[test]
+    fn sticky_context_rows_activate_at_successive_stack_boundaries() {
+        let row_tops = [0.0, 20.0, 40.0, 60.0, 80.0, 100.0, 120.0];
+        let anchor_at_boundary = |boundary: f32| row_tops.iter().rposition(|top| *top <= boundary);
+        let stack = |anchor| match anchor {
+            0..=1 => StickyContextStackProbe {
+                signature: vec![(1, 0)],
+                height: 20.0,
+            },
+            2..=3 => StickyContextStackProbe {
+                signature: vec![(1, 0), (3, 20)],
+                height: 40.0,
+            },
+            _ => StickyContextStackProbe {
+                signature: vec![(1, 0), (3, 20), (5, 40)],
+                height: 60.0,
+            },
+        };
+        let anchor_at = |viewport_top| {
+            sticky_context_stacked_scroll_anchor(viewport_top, 180.0, anchor_at_boundary, stack)
+        };
+
+        assert_eq!(anchor_at(-0.5), None);
+        assert_eq!(anchor_at(0.0), Some(1));
+        assert_eq!(anchor_at(19.5), Some(1));
+        assert_eq!(
+            anchor_at(20.0),
+            Some(3),
+            "row two must join when it reaches the bottom of sticky row one"
+        );
+        assert_eq!(
+            anchor_at(40.0),
+            Some(5),
+            "row three must join at the bottom of the first two sticky rows"
+        );
+
+        assert!(!sticky_context_row_reached_boundary(40.0, 20.0, 19.5));
+        assert!(sticky_context_row_reached_boundary(40.0, 20.0, 20.0));
+        assert!(sticky_context_row_reached_boundary(40.0, 20.5, 20.0));
+    }
+
+    #[test]
+    fn sticky_context_resolver_retains_a_multiline_scalar_definition() {
+        let source = "#let a(\nb,\nc,\n) = 2\nordinary";
+        let lines = source.split_inclusive('\n').collect::<Vec<_>>();
+        let line_char_counts = lines
+            .iter()
+            .map(|line| line.chars().count())
+            .collect::<Vec<_>>();
+        let logical_lines = (0..line_char_counts.len())
+            .map(|line| line..line + 1)
+            .collect::<Vec<_>>();
+        let line_tops = (0..line_char_counts.len())
+            .map(|line| line as f32 * 20.0)
+            .collect::<Vec<_>>();
+        let scroll_lines = sticky_context_scroll_lines(
+            &logical_lines,
+            |row| line_tops.get(row).copied(),
+            |row| line_char_counts.get(row).copied(),
+            |row| lines.get(row).map(|line| line.ends_with('\n')),
+        )
+        .unwrap();
+        let ordinary_anchor = sticky_context_scroll_anchor(&scroll_lines, 80.0).unwrap();
+        assert!(sticky_context_rows(source, ordinary_anchor).is_empty());
+
+        let resolved = sticky_context_stacked_scroll_anchor(
+            0.0,
+            180.0,
+            |boundary| sticky_context_scroll_anchor(&scroll_lines, boundary),
+            |anchor| {
+                let rows = sticky_context_rows(source, anchor);
+                StickyContextStackProbe {
+                    signature: rows.iter().map(|row| (row.line, row.char_index)).collect(),
+                    height: rows.len() as f32 * 20.0,
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            sticky_context_rows(source, resolved)
+                .iter()
+                .map(|row| row.text.as_str())
+                .collect::<Vec<_>>(),
+            ["#let a(", "b,", "c,", ") = 2"]
+        );
+    }
+
+    #[test]
+    fn sticky_context_resolver_adopts_a_shallower_sibling_path() {
+        let source = "= Old\n== Nested\nold body\n= New\nnew body";
+        let old_body = source[..source.find("old body").unwrap()].chars().count();
+        let new_heading = source[..source.find("= New").unwrap()].chars().count() + 4;
+        let old_rows = sticky_context_rows(source, old_body);
+        let new_rows = sticky_context_rows(source, new_heading);
+        assert_eq!(
+            old_rows
+                .iter()
+                .map(|row| row.text.as_str())
+                .collect::<Vec<_>>(),
+            ["= Old", "== Nested"]
+        );
+        assert_eq!(
+            new_rows
+                .iter()
+                .map(|row| row.text.as_str())
+                .collect::<Vec<_>>(),
+            ["= New"]
+        );
+
+        let resolved = sticky_context_stacked_scroll_anchor(
+            0.0,
+            180.0,
+            |boundary| Some(usize::from(boundary >= 40.0)),
+            |anchor| {
+                let rows = if anchor == 0 { &old_rows } else { &new_rows };
+                StickyContextStackProbe {
+                    signature: rows.iter().map(|row| (row.line, row.char_index)).collect(),
+                    height: rows.len() as f32 * 20.0,
+                }
+            },
+        );
+        assert_eq!(resolved, Some(1));
+    }
+
+    #[test]
+    fn sticky_context_snapshot_fixture_scrolls_past_its_line_six_heading() {
+        let lines = STICKY_CONTEXT_SNAPSHOT_SOURCE.lines().collect::<Vec<_>>();
+        assert_eq!(lines.get(5), Some(&"= Running todo list"));
+        assert_eq!(lines.get(6), Some(&"== Active subsection"));
+        assert_eq!(lines.get(7), Some(&"#let review("));
+        assert_eq!(lines.get(10), Some(&") = 2"));
+        assert!(
+            lines.len() as f32 * theme::TYPE.content
+                > METRICS.chrome.main_size.y + STICKY_CONTEXT_SNAPSHOT_SCROLL_OFFSET,
+            "the fixture must remain tall enough for the forced offset"
+        );
+        const {
+            assert!(
+                STICKY_CONTEXT_SNAPSHOT_SCROLL_OFFSET > 11.0 * theme::TYPE.content,
+                "the multiline definition must have crossed the viewport top"
+            );
+        }
+        let initializer_byte = STICKY_CONTEXT_SNAPSHOT_SOURCE.find(") = 2").unwrap() + ") = ".len();
+        let initializer_char = STICKY_CONTEXT_SNAPSHOT_SOURCE[..initializer_byte]
+            .chars()
+            .count();
+        assert_eq!(
+            sticky_context_rows(STICKY_CONTEXT_SNAPSHOT_SOURCE, initializer_char)
+                .iter()
+                .map(|row| row.text.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "= Running todo list",
+                "== Active subsection",
+                "#let review(",
+                "task,",
+                "state,",
+                ") = 2",
+            ]
+        );
+        assert_eq!(
+            source_editor_snapshot_scroll_offset(Some(UiSnapshotScene::StickyContext)),
+            Some(STICKY_CONTEXT_SNAPSHOT_SCROLL_OFFSET)
+        );
+        assert_eq!(
+            source_editor_snapshot_scroll_offset(Some(UiSnapshotScene::Main)),
+            None
+        );
+        assert_eq!(source_editor_snapshot_scroll_offset(None), None);
+
+        let mut document = DocumentSession::new("old source", DocumentKind::Typst);
+        document.reset_editor_history = false;
+        let revision = document.revision;
+        assert!(prepare_sticky_context_snapshot_document(&mut document));
+        assert_eq!(document.source, STICKY_CONTEXT_SNAPSHOT_SOURCE);
+        assert_eq!(document.revision, revision + 1);
+        assert!(
+            document.reset_editor_history,
+            "show_editor must reset the deterministic scene caret to character zero"
+        );
+        assert!(!prepare_sticky_context_snapshot_document(&mut document));
+    }
+
+    #[test]
+    fn snapshot_capture_close_is_not_blocked_by_ephemeral_scene_edits() {
+        assert!(!close_request_requires_confirmation(
+            true, true, false, true
+        ));
+        assert!(close_request_requires_confirmation(
+            true, true, false, false
+        ));
+        assert!(!close_request_requires_confirmation(
+            false, true, false, false
+        ));
+        assert!(!close_request_requires_confirmation(
+            true, false, false, false
+        ));
+        assert!(!close_request_requires_confirmation(
+            true, true, true, false
+        ));
+    }
+
+    #[test]
+    fn sticky_context_click_targets_the_rows_exact_source_character() {
+        let row = StickyContextRow {
+            kind: StickyContextKind::Function,
+            line: 12,
+            char_index: 137,
+            text: "#let render(body) = {".to_owned(),
+        };
+        assert_eq!(sticky_context_jump_target(&row, false), None);
+        assert_eq!(sticky_context_jump_target(&row, true), Some(137));
+    }
+
+    #[test]
+    fn sticky_context_activates_at_the_scroll_boundary_not_the_caret() {
+        let source = "intro\n= Section\nbody\n";
+        let logical_lines = [0..1, 1..2, 2..3];
+        let visual_tops = [8.0, 32.0, 56.0];
+        let visual_char_counts = [6, 10, 5];
+        let visual_newlines = [true, true, true];
+        let scroll_lines = sticky_context_scroll_lines(
+            &logical_lines,
+            |row| visual_tops.get(row).copied(),
+            |row| visual_char_counts.get(row).copied(),
+            |row| visual_newlines.get(row).copied(),
+        )
+        .unwrap();
+        let anchor_at = |viewport_top| sticky_context_scroll_anchor(&scroll_lines, viewport_top);
+
+        assert_eq!(anchor_at(7.5), None);
+        assert_eq!(anchor_at(8.0), Some(4));
+        assert!(sticky_context_rows(source, anchor_at(31.5).unwrap()).is_empty());
+
+        let section_anchor = anchor_at(32.0).unwrap();
+        assert_eq!(section_anchor, "intro\n= Section".chars().count() - 1);
+        assert_eq!(
+            sticky_context_rows(source, section_anchor)
+                .iter()
+                .map(|row| row.text.as_str())
+                .collect::<Vec<_>>(),
+            ["= Section"]
+        );
+        assert_eq!(
+            sticky_context_rows(source, anchor_at(80.0).unwrap())
+                .iter()
+                .map(|row| row.text.as_str())
+                .collect::<Vec<_>>(),
+            ["= Section"]
+        );
+    }
+
+    #[test]
+    fn sticky_context_scroll_anchor_uses_the_first_row_of_a_wrapped_line() {
+        let source = "intro\n= A deliberately long section\nbody\n";
+        let section_chars = "= A deliberately long section\n".chars().count();
+        let logical_lines = [0..1, 1..3, 3..4];
+        let visual_tops = [8.0, 32.0, 52.0, 72.0];
+        let visual_char_counts = [6, 12, section_chars - 12, 5];
+        let visual_newlines = [true, false, true, true];
+        let scroll_lines = sticky_context_scroll_lines(
+            &logical_lines,
+            |row| visual_tops.get(row).copied(),
+            |row| visual_char_counts.get(row).copied(),
+            |row| visual_newlines.get(row).copied(),
+        )
+        .unwrap();
+        let anchor_at = |viewport_top| sticky_context_scroll_anchor(&scroll_lines, viewport_top);
+
+        assert_eq!(anchor_at(31.5), Some(4));
+        assert_eq!(
+            anchor_at(32.0),
+            Some("intro\n= A deliberately long section".chars().count() - 1)
+        );
+        assert_eq!(anchor_at(52.0), anchor_at(32.0));
+        assert_eq!(
+            anchor_at(72.0),
+            Some("intro\n= A deliberately long section\nbody".chars().count() - 1)
+        );
+        assert_eq!(
+            sticky_context_rows(source, anchor_at(52.0).unwrap())
+                .iter()
+                .map(|row| row.text.as_str())
+                .collect::<Vec<_>>(),
+            ["= A deliberately long section"]
+        );
+    }
+
+    #[test]
+    fn sticky_context_scroll_anchor_builds_parser_derived_ancestor_stacks() {
+        let source = "= Outer\nintro\n== Inner\n#let render(body) = {\n  body\n}\n";
+        let logical_lines = [0..1, 1..2, 2..3, 3..4, 4..5, 5..6];
+        let visual_tops = [0.0, 20.0, 40.0, 60.0, 80.0, 100.0];
+        let visual_char_counts = source
+            .split_inclusive('\n')
+            .map(str::chars)
+            .map(Iterator::count)
+            .collect::<Vec<_>>();
+        let visual_newlines = [true; 6];
+        let scroll_lines = sticky_context_scroll_lines(
+            &logical_lines,
+            |row| visual_tops.get(row).copied(),
+            |row| visual_char_counts.get(row).copied(),
+            |row| visual_newlines.get(row).copied(),
+        )
+        .unwrap();
+        let anchor_at =
+            |viewport_top| sticky_context_scroll_anchor(&scroll_lines, viewport_top).unwrap();
+        let row_text_at = |viewport_top| {
+            sticky_context_rows(source, anchor_at(viewport_top))
+                .into_iter()
+                .map(|row| row.text)
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(row_text_at(20.0), ["= Outer"]);
+        assert_eq!(row_text_at(40.0), ["= Outer", "== Inner"]);
+        assert_eq!(
+            row_text_at(60.0),
+            ["= Outer", "== Inner", "#let render(body) = {"]
+        );
     }
 
     #[test]

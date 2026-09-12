@@ -25,7 +25,7 @@ a rasterised recovery viewer.
 - UTF-8-safe literal find/replace with wraparound navigation
 - New, Open, Save, Save As, undo/redo, formatting, auto-save, drag-and-drop,
   dirty-file guards, and atomic writes
-- Pause/resume control for automatic live compilation. Compile writes the
+- Pause/resume control for automatic preview updates. Compile writes the
   current canonical PDF beside its saved Typst entry; unsaved documents ask
   for a destination. Export PDF remains available for choosing another path.
 - Thirty-two bundled interface themes, with independent light and dark choices:
@@ -142,6 +142,8 @@ The package hook downloads and verifies the pinned platform archives, checks
 both reported versions, performs the release build, and installs Typst and
 Tinymist as external sidecars beside `tiptoptyp`. Typst's `LICENSE`/`NOTICE`,
 Tinymist's `LICENSE`, and per-artifact provenance are included as resources.
+The canonical `ttt` application mark is embedded in direct executable launches
+and supplied as native ICNS/ICO/PNG artwork to packaged builds.
 The committed target/URL/hash matrix is
 [`toolchain/manifest.tsv`](toolchain/manifest.tsv).
 

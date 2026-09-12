@@ -30,6 +30,7 @@ use crate::private_workspace::{PrivateTypstDocument, PrivateWorkspace};
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(300);
 const EXIT_TIMEOUT: Duration = Duration::from_millis(200);
+const PIPE_READER_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(250);
 const WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(700);
 const FORCED_WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(500);
 const INITIALIZE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
@@ -111,9 +112,30 @@ impl InvertColors {
     }
 }
 
+/// Controls when Tinymist's interactive preview consumes synchronized LSP
+/// document changes. `OnSave` is also useful as a paused-preview policy in
+/// clients which deliberately keep language intelligence live without sending
+/// `textDocument/didSave` notifications.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PreviewRefresh {
+    #[default]
+    OnType,
+    OnSave,
+}
+
+impl PreviewRefresh {
+    const fn as_setting(self) -> &'static str {
+        match self {
+            Self::OnType => "onType",
+            Self::OnSave => "onSave",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PreviewOptions {
     pub invert_colors: InvertColors,
+    pub refresh: PreviewRefresh,
 }
 
 impl PreviewOptions {
@@ -144,6 +166,7 @@ impl PreviewOptions {
     fn settings(&self, entry_path: Option<&Path>) -> Value {
         json!({
             "preview": {
+                "refresh": self.refresh.as_setting(),
                 "browsing": {
                     "args": self.command_line(entry_path),
                 }
@@ -398,6 +421,23 @@ pub struct LspTextEdit {
     pub new_text: String,
 }
 
+/// One completion candidate returned by Tinymist.
+///
+/// The model intentionally keeps only the standard fields the editor can
+/// apply safely. Commands attached to completion items are not executed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletionItem {
+    pub label: String,
+    pub detail: Option<String>,
+    pub documentation: Option<String>,
+    pub filter_text: Option<String>,
+    pub sort_text: Option<String>,
+    pub insert_text: String,
+    pub insert_text_is_snippet: bool,
+    pub text_edit: Option<LspTextEdit>,
+    pub additional_text_edits: Vec<LspTextEdit>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticSeverity {
     Error,
@@ -477,6 +517,23 @@ pub enum TinymistEvent {
         contents: Option<String>,
         range: Option<LspRange>,
     },
+    /// Completion candidates for one exact document version and UI request.
+    Completed {
+        generation: Generation,
+        uri: String,
+        version: i32,
+        request_token: u64,
+        is_incomplete: bool,
+        items: Vec<CompletionItem>,
+    },
+    /// A malformed completion response for one exact UI request.
+    CompletionFailed {
+        generation: Generation,
+        uri: String,
+        version: i32,
+        request_token: u64,
+        message: String,
+    },
     Log {
         generation: Generation,
         level: Option<u32>,
@@ -511,6 +568,8 @@ impl TinymistEvent {
             | Self::PublishDiagnostics { generation, .. }
             | Self::Formatted { generation, .. }
             | Self::Hovered { generation, .. }
+            | Self::Completed { generation, .. }
+            | Self::CompletionFailed { generation, .. }
             | Self::Log { generation, .. }
             | Self::Notification { generation, .. }
             | Self::Error { generation, .. }
@@ -689,6 +748,23 @@ impl TinymistSidecar {
         )
     }
 
+    /// Changes only the interactive preview's refresh trigger. The Tinymist
+    /// process and its open LSP documents stay intact, so language features do
+    /// not disappear while automatic preview updates are paused.
+    pub fn set_preview_refresh(
+        &self,
+        generation: Generation,
+        refresh: PreviewRefresh,
+    ) -> Result<()> {
+        self.send_for_generation(
+            generation,
+            WorkerCommand::SetPreviewRefresh {
+                generation,
+                refresh,
+            },
+        )
+    }
+
     /// Requests whole-document formatting for one exact open-document version.
     ///
     /// The eventual [`TinymistEvent::Formatted`] repeats the URI and version so
@@ -724,6 +800,29 @@ impl TinymistSidecar {
         self.send_for_generation(
             generation,
             WorkerCommand::HoverDocument {
+                generation,
+                uri: uri.into(),
+                version,
+                position,
+                request_token,
+            },
+        )
+    }
+
+    /// Requests completion candidates for one exact open-document version.
+    /// New requests for the same URI cancel older in-flight completion work in
+    /// the worker; `request_token` still lets the UI reject a raced response.
+    pub fn complete_document(
+        &self,
+        generation: Generation,
+        uri: impl Into<String>,
+        version: i32,
+        position: LspPosition,
+        request_token: u64,
+    ) -> Result<()> {
+        self.send_for_generation(
+            generation,
+            WorkerCommand::CompleteDocument {
                 generation,
                 uri: uri.into(),
                 version,
@@ -858,12 +957,23 @@ enum WorkerCommand {
         generation: Generation,
         uri: String,
     },
+    SetPreviewRefresh {
+        generation: Generation,
+        refresh: PreviewRefresh,
+    },
     FormatDocument {
         generation: Generation,
         uri: String,
         version: i32,
     },
     HoverDocument {
+        generation: Generation,
+        uri: String,
+        version: i32,
+        position: LspPosition,
+        request_token: u64,
+    },
+    CompleteDocument {
         generation: Generation,
         uri: String,
         version: i32,
@@ -910,6 +1020,11 @@ enum PendingRequest {
         version: i32,
         request_token: u64,
     },
+    CompleteDocument {
+        uri: String,
+        version: i32,
+        request_token: u64,
+    },
 }
 
 impl PendingRequest {
@@ -919,6 +1034,7 @@ impl PendingRequest {
             Self::StartPreview | Self::ScrollPreview => "workspace/executeCommand",
             Self::FormatDocument { .. } => "textDocument/formatting",
             Self::HoverDocument { .. } => "textDocument/hover",
+            Self::CompleteDocument { .. } => "textDocument/completion",
         }
     }
 
@@ -927,7 +1043,9 @@ impl PendingRequest {
             Self::Initialize => INITIALIZE_REQUEST_TIMEOUT,
             Self::StartPreview => PREVIEW_REQUEST_TIMEOUT,
             Self::FormatDocument { .. } => FORMAT_REQUEST_TIMEOUT,
-            Self::ScrollPreview | Self::HoverDocument { .. } => INTERACTIVE_REQUEST_TIMEOUT,
+            Self::ScrollPreview | Self::HoverDocument { .. } | Self::CompleteDocument { .. } => {
+                INTERACTIVE_REQUEST_TIMEOUT
+            }
         }
     }
 }
@@ -1042,7 +1160,10 @@ impl Session {
             Err(error) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                let _ = stdout_reader.join();
+                let _ = finish_reader_before(
+                    stdout_reader,
+                    Instant::now() + PIPE_READER_SHUTDOWN_TIMEOUT,
+                );
                 return Err(format!("could not start Tinymist stderr reader: {error}"));
             }
         };
@@ -1097,6 +1218,15 @@ impl Session {
                     },
                     "formatting": {
                         "dynamicRegistration": false,
+                    },
+                    "completion": {
+                        "dynamicRegistration": false,
+                        "contextSupport": true,
+                        "completionItem": {
+                            "snippetSupport": true,
+                            "documentationFormat": ["markdown", "plaintext"],
+                            "insertReplaceSupport": true,
+                        },
                     },
                     "publishDiagnostics": {
                         "relatedInformation": true,
@@ -1155,6 +1285,28 @@ impl Session {
         Ok(id)
     }
 
+    fn cancel_pending_completions(&mut self, uri: &str) -> std::result::Result<(), String> {
+        let ids = self
+            .pending
+            .iter()
+            .filter_map(|(id, call)| {
+                matches!(
+                    &call.request,
+                    PendingRequest::CompleteDocument {
+                        uri: pending_uri,
+                        ..
+                    } if pending_uri == uri
+                )
+                .then_some(*id)
+            })
+            .collect::<Vec<_>>();
+        for id in ids {
+            self.pending.remove(&id);
+            self.notify("$/cancelRequest", json!({ "id": id }))?;
+        }
+        Ok(())
+    }
+
     fn expired_request(&self, now: Instant) -> Option<(u64, &PendingCall)> {
         self.pending
             .iter()
@@ -1169,6 +1321,18 @@ impl Session {
             "method": method,
             "params": params,
         }))
+    }
+
+    fn set_preview_refresh(&mut self, refresh: PreviewRefresh) -> std::result::Result<(), String> {
+        self.settings["preview"]["refresh"] = Value::String(refresh.as_setting().to_owned());
+        if self.phase.can_sync_documents() {
+            let settings = self.settings.clone();
+            self.notify(
+                "workspace/didChangeConfiguration",
+                json!({ "settings": settings }),
+            )?;
+        }
+        Ok(())
     }
 
     fn write(&mut self, message: &impl Serialize) -> std::result::Result<(), String> {
@@ -1595,6 +1759,24 @@ fn worker_loop(
                     );
                 }
             }
+            WorkerCommand::SetPreviewRefresh {
+                generation,
+                refresh,
+            } => {
+                let Some(active) = matching_session(session.as_mut(), generation) else {
+                    continue;
+                };
+                if let Err(error) = active.set_preview_refresh(refresh) {
+                    fail_active_session(
+                        &mut session,
+                        "write",
+                        error,
+                        &events,
+                        &context,
+                        &current_generation,
+                    );
+                }
+            }
             WorkerCommand::FormatDocument {
                 generation,
                 uri,
@@ -1702,6 +1884,56 @@ fn worker_loop(
                         request_token,
                     },
                 ) {
+                    fail_active_session(
+                        &mut session,
+                        "write",
+                        error,
+                        &events,
+                        &context,
+                        &current_generation,
+                    );
+                }
+            }
+            WorkerCommand::CompleteDocument {
+                generation,
+                uri,
+                version,
+                position,
+                request_token,
+            } => {
+                let Some(active) = matching_session(session.as_mut(), generation) else {
+                    continue;
+                };
+                let current_version = active.documents.get(&uri).map(|document| document.version);
+                if current_version != Some(version) || !active.phase.can_sync_documents() {
+                    emit(
+                        &events,
+                        &context,
+                        &current_generation,
+                        TinymistEvent::Completed {
+                            generation,
+                            uri,
+                            version,
+                            request_token,
+                            is_incomplete: false,
+                            items: Vec::new(),
+                        },
+                    );
+                    continue;
+                }
+                let result = active.cancel_pending_completions(&uri).and_then(|()| {
+                    active.send_request(
+                        "textDocument/completion",
+                        completion_document_params(&uri, position),
+                        PendingRequest::CompleteDocument {
+                            uri,
+                            version,
+                            request_token,
+                        },
+                    )?;
+                    Ok(())
+                });
+                if let Err(error) = result {
                     fail_active_session(
                         &mut session,
                         "write",
@@ -1951,6 +2183,25 @@ fn handle_rpc_message(
                 );
                 return Ok(());
             }
+            PendingRequest::CompleteDocument {
+                uri,
+                version,
+                request_token,
+            } => {
+                emit(
+                    events,
+                    context,
+                    current_generation,
+                    TinymistEvent::CompletionFailed {
+                        generation: session.generation,
+                        uri,
+                        version,
+                        request_token,
+                        message,
+                    },
+                );
+                return Ok(());
+            }
         }
     }
 
@@ -2073,6 +2324,37 @@ fn handle_rpc_message(
                 },
             );
         }
+        PendingRequest::CompleteDocument {
+            uri,
+            version,
+            request_token,
+        } => match parse_completion_result(&result) {
+            Ok((is_incomplete, items)) => emit(
+                events,
+                context,
+                current_generation,
+                TinymistEvent::Completed {
+                    generation: session.generation,
+                    uri,
+                    version,
+                    request_token,
+                    is_incomplete,
+                    items,
+                },
+            ),
+            Err(error) => emit(
+                events,
+                context,
+                current_generation,
+                TinymistEvent::CompletionFailed {
+                    generation: session.generation,
+                    uri,
+                    version,
+                    request_token,
+                    message: format!("invalid textDocument/completion response: {error}"),
+                },
+            ),
+        },
     }
     Ok(())
 }
@@ -2091,6 +2373,14 @@ fn hover_document_params(uri: &str, position: LspPosition) -> Value {
     json!({
         "textDocument": { "uri": uri },
         "position": position,
+    })
+}
+
+fn completion_document_params(uri: &str, position: LspPosition) -> Value {
+    json!({
+        "textDocument": { "uri": uri },
+        "position": position,
+        "context": { "triggerKind": 1 },
     })
 }
 
@@ -2129,6 +2419,140 @@ fn flatten_hover_contents(contents: &Value) -> Option<String> {
             ))
         }
         Value::Null | Value::Bool(_) | Value::Number(_) => None,
+    }
+}
+
+fn parse_completion_result(
+    result: &Value,
+) -> std::result::Result<(bool, Vec<CompletionItem>), String> {
+    if result.is_null() {
+        return Ok((false, Vec::new()));
+    }
+    let (is_incomplete, items, defaults) = if let Some(items) = result.as_array() {
+        (false, items.as_slice(), None)
+    } else {
+        let object = result
+            .as_object()
+            .ok_or_else(|| "completion result is neither a list nor CompletionList".to_owned())?;
+        let items = object
+            .get("items")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "CompletionList.items is not an array".to_owned())?;
+        (
+            object
+                .get("isIncomplete")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            items.as_slice(),
+            object.get("itemDefaults").and_then(Value::as_object),
+        )
+    };
+
+    let default_range = defaults
+        .and_then(|defaults| defaults.get("editRange"))
+        .and_then(completion_edit_range);
+    let default_snippet = defaults
+        .and_then(|defaults| defaults.get("insertTextFormat"))
+        .and_then(Value::as_u64)
+        == Some(2);
+    let mut parsed = Vec::with_capacity(items.len());
+    for value in items {
+        let object = value
+            .as_object()
+            .ok_or_else(|| "completion item is not an object".to_owned())?;
+        let label = object
+            .get("label")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "completion item has no string label".to_owned())?
+            .to_owned();
+        let inserted = object
+            .get("textEditText")
+            .or_else(|| object.get("insertText"))
+            .and_then(Value::as_str)
+            .unwrap_or(&label)
+            .to_owned();
+        let text_edit = match object.get("textEdit") {
+            Some(value) => Some(parse_completion_text_edit(value)?),
+            None => default_range.map(|range| LspTextEdit {
+                range,
+                new_text: inserted.clone(),
+            }),
+        };
+        let additional_text_edits = object
+            .get("additionalTextEdits")
+            .map(parse_completion_additional_edits)
+            .transpose()?
+            .unwrap_or_default();
+        parsed.push(CompletionItem {
+            label,
+            detail: object
+                .get("detail")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            documentation: object
+                .get("documentation")
+                .and_then(completion_documentation),
+            filter_text: object
+                .get("filterText")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            sort_text: object
+                .get("sortText")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            insert_text: inserted,
+            insert_text_is_snippet: object
+                .get("insertTextFormat")
+                .and_then(Value::as_u64)
+                .map_or(default_snippet, |format| format == 2),
+            text_edit,
+            additional_text_edits,
+        });
+    }
+    Ok((is_incomplete, parsed))
+}
+
+fn completion_edit_range(value: &Value) -> Option<LspRange> {
+    serde_json::from_value(value.clone()).ok().or_else(|| {
+        value
+            .get("replace")
+            .or_else(|| value.get("insert"))
+            .and_then(|range| serde_json::from_value(range.clone()).ok())
+    })
+}
+
+fn parse_completion_text_edit(value: &Value) -> std::result::Result<LspTextEdit, String> {
+    let new_text = value
+        .get("newText")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "completion textEdit has no newText".to_owned())?
+        .to_owned();
+    let range = value
+        .get("range")
+        .or_else(|| value.get("replace"))
+        .or_else(|| value.get("insert"))
+        .and_then(|range| serde_json::from_value(range.clone()).ok())
+        .ok_or_else(|| "completion textEdit has no valid range".to_owned())?;
+    Ok(LspTextEdit { range, new_text })
+}
+
+fn parse_completion_additional_edits(
+    value: &Value,
+) -> std::result::Result<Vec<LspTextEdit>, String> {
+    let values = value
+        .as_array()
+        .ok_or_else(|| "additionalTextEdits is not an array".to_owned())?;
+    values.iter().map(parse_completion_text_edit).collect()
+}
+
+fn completion_documentation(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Object(object) => object
+            .get("value")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        _ => None,
     }
 }
 
@@ -2542,12 +2966,24 @@ fn reap_child(child: &SharedChild) -> Option<ExitStatus> {
 }
 
 fn join_readers(session: &mut Session) {
+    // A server wrapper can exit while a descendant keeps inherited stdout or
+    // stderr open. Give ordinary readers time to drain all remaining logs, but
+    // share one deadline and detach any thread still blocked in `Read` so a
+    // stop/restart cannot wedge the protocol worker indefinitely.
+    let deadline = Instant::now() + PIPE_READER_SHUTDOWN_TIMEOUT;
     if let Some(reader) = session.stdout_reader.take() {
-        let _ = reader.join();
+        let _ = finish_reader_before(reader, deadline);
     }
     if let Some(reader) = session.stderr_reader.take() {
-        let _ = reader.join();
+        let _ = finish_reader_before(reader, deadline);
     }
+}
+
+fn finish_reader_before<T>(reader: thread::JoinHandle<T>, deadline: Instant) -> Option<T> {
+    while !reader.is_finished() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    reader.is_finished().then(|| reader.join().ok()).flatten()
 }
 
 fn write_lsp_message(writer: &mut impl Write, message: &impl Serialize) -> io::Result<()> {
@@ -2755,6 +3191,19 @@ mod tests {
         assert!(args.contains(&"--invert-colors=auto"));
         assert!(args.contains(&"--partial-rendering=false"));
         assert!(args.contains(&"--no-open"));
+        assert_eq!(settings["preview"]["refresh"], "onType");
+        assert_eq!(settings["customizedShowDocument"], false);
+    }
+
+    #[test]
+    fn paused_preview_refresh_policy_is_serialized_without_disabling_lsp() {
+        let options = PreviewOptions {
+            refresh: PreviewRefresh::OnSave,
+            ..PreviewOptions::default()
+        };
+        let settings = options.settings(None);
+
+        assert_eq!(settings["preview"]["refresh"], "onSave");
         assert_eq!(settings["customizedShowDocument"], false);
     }
 
@@ -2800,6 +3249,99 @@ mod tests {
         );
         assert_eq!(parse_hover_result(&Value::Null), (None, None));
         assert_eq!(parse_hover_result(&json!({ "contents": [] })), (None, None));
+    }
+
+    #[test]
+    fn completion_request_uses_standard_utf16_lsp_position() {
+        assert_eq!(
+            completion_document_params(
+                "file:///project/main.typ",
+                LspPosition {
+                    line: 4,
+                    character: 11,
+                },
+            ),
+            json!({
+                "textDocument": { "uri": "file:///project/main.typ" },
+                "position": { "line": 4, "character": 11 },
+                "context": { "triggerKind": 1 },
+            })
+        );
+    }
+
+    #[test]
+    fn completion_results_accept_lists_and_completion_list_defaults() {
+        let (incomplete, plain) = parse_completion_result(&json!([
+            { "label": "text", "detail": "function" },
+            { "label": "table", "insertText": "table()", "sortText": "01" }
+        ]))
+        .unwrap();
+        assert!(!incomplete);
+        assert_eq!(plain.len(), 2);
+        assert_eq!(plain[0].insert_text, "text");
+        assert_eq!(plain[1].insert_text, "table()");
+
+        let (incomplete, listed) = parse_completion_result(&json!({
+            "isIncomplete": true,
+            "itemDefaults": {
+                "editRange": {
+                    "insert": {
+                        "start": { "line": 2, "character": 3 },
+                        "end": { "line": 2, "character": 5 }
+                    },
+                    "replace": {
+                        "start": { "line": 2, "character": 3 },
+                        "end": { "line": 2, "character": 8 }
+                    }
+                },
+                "insertTextFormat": 2
+            },
+            "items": [{
+                "label": "heading",
+                "textEditText": "heading(${1:body})$0",
+                "documentation": { "kind": "markdown", "value": "A heading." }
+            }]
+        }))
+        .unwrap();
+        assert!(incomplete);
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].insert_text_is_snippet);
+        assert_eq!(listed[0].documentation.as_deref(), Some("A heading."));
+        assert_eq!(listed[0].text_edit.as_ref().unwrap().range.end.character, 8);
+    }
+
+    #[test]
+    fn completion_results_preserve_text_and_additional_edits() {
+        let (_, items) = parse_completion_result(&json!({
+            "items": [{
+                "label": "accent",
+                "filterText": "acc",
+                "insertTextFormat": 2,
+                "textEdit": {
+                    "newText": "accent($1)$0",
+                    "replace": {
+                        "start": { "line": 1, "character": 2 },
+                        "end": { "line": 1, "character": 6 }
+                    }
+                },
+                "additionalTextEdits": [{
+                    "range": {
+                        "start": { "line": 0, "character": 0 },
+                        "end": { "line": 0, "character": 0 }
+                    },
+                    "newText": "#import \"helpers.typ\": accent\n"
+                }]
+            }]
+        }))
+        .unwrap();
+        assert_eq!(items[0].insert_text, "accent");
+        assert_eq!(
+            items[0].text_edit.as_ref().unwrap().new_text,
+            "accent($1)$0"
+        );
+        assert_eq!(items[0].additional_text_edits.len(), 1);
+        assert!(parse_completion_result(&json!({ "items": [42] })).is_err());
+        assert!(parse_completion_result(&json!({ "items": "wrong" })).is_err());
     }
 
     #[test]
@@ -3265,6 +3807,128 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn exited_sidecar_does_not_wait_for_a_descendant_holding_output_pipes() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("inherited-pipes-tinymist.sh");
+        let pid_path = directory.path().join("descendant.pid");
+        let initialize = json!({"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}});
+        let payload = serde_json::to_string(&initialize).unwrap();
+        fs::write(
+            &script,
+            format!(
+                concat!(
+                    "#!/bin/sh\n",
+                    "sleep 30 &\n",
+                    "printf '%s' \"$!\" > '{}'\n",
+                    "printf '%s\\n' 'inherited pipe fixture log' >&2\n",
+                    "printf '%s\\r\\n\\r\\n%s' 'Content-Length: {}' '{}'\n",
+                    "sleep 0.1\n",
+                ),
+                pid_path.display(),
+                payload.len(),
+                payload,
+            ),
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script, permissions).unwrap();
+
+        let sidecar = TinymistSidecar::new(egui::Context::default());
+        let mut config = TinymistConfig::new(directory.path())
+            .with_command(&script, std::iter::empty::<OsString>());
+        config.start_preview = false;
+        let generation = sidecar.start_workspace(config).unwrap();
+        // The repository test suite runs many process-heavy fixtures in
+        // parallel. Wait until this wrapper has actually started its pipe-
+        // holding descendant before measuring cleanup, otherwise scheduler
+        // delay is indistinguishable from a blocked reader and the PID file
+        // itself can race this assertion.
+        let fixture_deadline = Instant::now() + FAKE_SERVER_TIMEOUT;
+        let pid = loop {
+            if let Ok(pid) = fs::read_to_string(&pid_path)
+                && !pid.trim().is_empty()
+            {
+                break pid;
+            }
+            assert!(
+                Instant::now() < fixture_deadline,
+                "Tinymist inherited-pipe fixture never started"
+            );
+            thread::sleep(Duration::from_millis(5));
+        };
+        let cleanup_started = Instant::now();
+        let deadline = cleanup_started + Duration::from_secs(4);
+        let mut log_seen = false;
+        let mut stopped = false;
+        while Instant::now() < deadline && !stopped {
+            while let Some(event) = sidecar.try_recv() {
+                match event {
+                    TinymistEvent::Log { message, .. }
+                        if message.contains("inherited pipe fixture log") =>
+                    {
+                        log_seen = true;
+                    }
+                    TinymistEvent::Stopped {
+                        generation: event_generation,
+                        ..
+                    } if event_generation == generation => stopped = true,
+                    _ => {}
+                }
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        let elapsed = cleanup_started.elapsed();
+
+        let kill_status = Command::new("kill")
+            .args(["-9", pid.trim()])
+            .status()
+            .unwrap();
+        assert!(
+            kill_status.success(),
+            "could not terminate fixture pid {pid}"
+        );
+        assert!(log_seen, "stderr emitted before exit was not delivered");
+        assert!(
+            stopped,
+            "session waited for descendant-owned output pipes for {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(4),
+            "session cleanup exceeded its reader bound: {elapsed:?}"
+        );
+
+        // A blocked cleanup must not consume the worker permanently: the next
+        // workspace still reaches its normal start transition.
+        let replacement = sidecar
+            .start_workspace(
+                TinymistConfig::new(directory.path())
+                    .with_command("/bin/sleep", [OsString::from("30")]),
+            )
+            .unwrap();
+        let replacement_deadline = Instant::now() + Duration::from_secs(2);
+        let mut replacement_started = false;
+        while Instant::now() < replacement_deadline && !replacement_started {
+            while let Some(event) = sidecar.try_recv() {
+                replacement_started |= matches!(
+                    event,
+                    TinymistEvent::Starting {
+                        generation: event_generation
+                    } if event_generation == replacement
+                );
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            replacement_started,
+            "Tinymist worker did not accept a replacement"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn unanswered_initialize_request_times_out_and_stops_the_session() {
         let directory = tempfile::tempdir().unwrap();
         let sidecar = TinymistSidecar::new(egui::Context::default());
@@ -3323,7 +3987,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn lsp_only_session_syncs_current_buffer_for_formatting_without_preview() {
+    fn preview_refresh_update_keeps_buffer_sync_and_formatting_live() {
         use std::os::unix::fs::PermissionsExt;
 
         let directory = tempfile::tempdir().unwrap();
@@ -3367,6 +4031,10 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         assert!(initialized, "LSP-only session never initialized");
+
+        sidecar
+            .set_preview_refresh(generation, PreviewRefresh::OnSave)
+            .unwrap();
 
         // Resuming without edits must not send a duplicate LSP version or
         // degrade the session. Explicit formatting after paused edits must
@@ -3430,6 +4098,12 @@ mod tests {
             captured.find("textDocument/didChange") < captured.find("textDocument/formatting"),
             "{captured:?}"
         );
+        assert_eq!(
+            captured.matches("workspace/didChangeConfiguration").count(),
+            2,
+            "the paused policy should update the existing LSP session: {captured:?}"
+        );
+        assert!(captured.contains("\"refresh\":\"onSave\""), "{captured:?}");
         assert!(!captured.contains("tinymist.startDefaultPreview"));
     }
 

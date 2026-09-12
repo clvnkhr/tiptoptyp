@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Canonical tiptoptyp application mark.
+
+  The three hand-drawn lowercase t shapes mirror the in-app `ttt` wordmark:
+  the first two use the primary foreground and the final t uses the app accent.
+  Raster and platform icon files in this directory are derived from this SVG.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">tiptoptyp</title>
+  <desc id="desc">Three rounded lowercase t letters, with the final letter in blue.</desc>
+  <defs>
+    <linearGradient id="surface" x1="180" y1="96" x2="844" y2="928" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#303747"/>
+      <stop offset="1" stop-color="#171b24"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="48" y="48" width="928" height="928" rx="214" fill="url(#surface)"/>
+  <rect x="66" y="66" width="892" height="892" rx="198" fill="none" stroke="#ffffff" stroke-opacity="0.09" stroke-width="12"/>
+
+  <g fill="none" stroke="#f4f1ea" stroke-width="76" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M164 331 H322"/>
+    <path d="M243 238 V652 C243 720 282 758 342 758 H358"/>
+    <path d="M413 331 H571"/>
+    <path d="M492 238 V652 C492 720 531 758 591 758 H607"/>
+  </g>
+
+  <g fill="none" stroke="#4f8cff" stroke-width="76" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M662 331 H820"/>
+    <path d="M741 238 V652 C741 720 780 758 840 758 H856"/>
+  </g>
+</svg>

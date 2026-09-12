@@ -1,17 +1,27 @@
+#![deny(unsafe_code)]
+#![deny(unsafe_op_in_unsafe_fn)]
+
 mod app;
+#[allow(unsafe_code)]
+mod app_icon;
 mod asset;
 mod child_view;
 mod compiler;
 mod diagnostics;
 mod document;
 mod editor_data;
+mod editor_features;
 mod font_catalog;
 mod generic_highlight;
 mod highlight;
 mod lsp_text;
+#[allow(unsafe_code)]
 mod native_menu;
+#[allow(unsafe_code)]
 mod native_window;
+#[allow(unsafe_code)]
 mod open_requests;
+mod package_catalog;
 mod presentation;
 mod preview;
 mod private_workspace;
@@ -19,6 +29,7 @@ mod project_index;
 mod screenshot;
 mod search;
 mod settings;
+mod shortcuts;
 mod syntax_theme;
 mod theme;
 mod tinymist;
@@ -30,6 +41,7 @@ mod workspace;
 
 use eframe::egui;
 use screenshot::{CaptureController, LaunchOptions, ScreenshotApp};
+use shortcuts::ShortcutBindings;
 use tiptoptyp::themes::{
     builtin as builtin_themes, sublime as sublime_theme, transform as theme_transform,
 };
@@ -82,6 +94,8 @@ fn main() -> eframe::Result {
         // registers its NSApplicationDelegate and before AppKit can dispatch
         // Finder's document-open event.
         let event_loop = EventLoop::<eframe::UserEvent>::with_user_event().build()?;
+        app_icon::install_macos_application_icon()
+            .map_err(|error| eframe::Error::AppCreation(error.into()))?;
         open_requests::install_macos_handler(open_request_sender)
             .map_err(|error| eframe::Error::AppCreation(error.into()))?;
         native_menu::install_macos_handler(native_menu_sender)
@@ -90,7 +104,10 @@ fn main() -> eframe::Result {
             "tiptoptyp",
             options,
             Box::new(move |context| {
-                native_menu::install_macos_menu(context.egui_ctx.clone())?;
+                native_menu::install_macos_menu(
+                    context.egui_ctx.clone(),
+                    &ShortcutBindings::current_defaults(),
+                )?;
                 let app = AppShell::new(
                     context,
                     initial_path,
@@ -148,6 +165,7 @@ fn invalid_launch_configuration(error: impl std::fmt::Display) -> eframe::Error 
 fn native_options(deterministic_snapshot: bool) -> eframe::NativeOptions {
     eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
+            .with_icon(app_icon::runtime_icon())
             .with_inner_size(theme::METRICS.chrome.main_size)
             .with_min_inner_size(theme::METRICS.chrome.main_min_size)
             // Child popup viewports use real alpha so rounded cards can sit
@@ -178,9 +196,12 @@ mod tests {
         let normal = native_options(false);
         assert!(normal.persist_window);
         assert!(normal.centered);
+        let icon = normal.viewport.icon.as_ref().expect("runtime icon");
+        assert_eq!((icon.width, icon.height), (256, 256));
 
         let snapshot = native_options(true);
         assert!(!snapshot.persist_window);
         assert!(snapshot.centered);
+        assert_eq!(snapshot.viewport.icon, normal.viewport.icon);
     }
 }

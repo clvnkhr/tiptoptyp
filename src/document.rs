@@ -235,6 +235,13 @@ impl DocumentKind {
     pub fn supports_path(path: &Path) -> bool {
         extension_kind(path).is_some()
     }
+
+    /// Classify a path which can be previewed without reading it. Explorer
+    /// hover uses this only to decide whether to enqueue background decoding;
+    /// the loader still validates the actual file contents.
+    pub(crate) fn preview_kind_for_path(path: &Path) -> Option<Self> {
+        extension_kind(path).filter(|kind| kind.preview_only())
+    }
 }
 
 fn utf8_document(bytes: &[u8], kind: DocumentKind, path: &Path) -> Result<DocumentKind, String> {
@@ -347,6 +354,22 @@ mod tests {
             );
         }
         assert!(!DocumentKind::supports_path(Path::new("archive.zip")));
+    }
+
+    #[test]
+    fn hover_preview_classification_excludes_editable_files() {
+        assert_eq!(
+            DocumentKind::preview_kind_for_path(Path::new("photo.JPEG")),
+            Some(DocumentKind::Image)
+        );
+        assert_eq!(
+            DocumentKind::preview_kind_for_path(Path::new("paper.PDF")),
+            Some(DocumentKind::Pdf)
+        );
+        assert_eq!(
+            DocumentKind::preview_kind_for_path(Path::new("chapter.typ")),
+            None
+        );
     }
 
     #[test]

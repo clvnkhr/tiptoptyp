@@ -1,5 +1,8 @@
 //! Reusable, UI-independent parts of tiptoptyp.
 
+#![deny(unsafe_code)]
+#![deny(unsafe_op_in_unsafe_fn)]
+
 mod builtin_themes;
 mod sublime_theme;
 mod theme_transform;

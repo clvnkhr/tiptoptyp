@@ -130,6 +130,10 @@ pub(crate) struct PendingExport {
     pub(crate) path: PathBuf,
     pub(crate) document_epoch: u64,
     pub(crate) intent: PdfWriteIntent,
+    /// When present, an already-cached artifact was known to precede a queued
+    /// rebuild. The export must wait for a strictly newer compiler generation
+    /// instead of materializing those stale bytes.
+    pub(crate) after_artifact_generation: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy)]

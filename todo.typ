@@ -11,7 +11,7 @@ completed tasks or renumber existing tasks; append new tasks with the next
 unused number. Resolved and audit notes must cite the relevant item numbers.
 Update the checkbox only when the entire task is complete and verified.
 
-1. [ ] (Deferred) there should be a proper pdf preview option that is just a proper pdf viewer.
+1. [ ] (Deferred) there should be a proper pdf preview option that is just a proper pdf viewer. maybe a webview?
 2. [ ] (Deferred) perf
 
 3. [x] typst overrides should be in appearances subsection
@@ -30,41 +30,41 @@ Update the checkbox only when the entire task is complete and verified.
 15. [x] syntax highlight the markdown in the tooltips. If typc doesnt give colour coding then treat it as typ. (Duplicate of item 10; keep both statuses in sync.)
 16. [x] Mitex and cmarker integration: autodetect strings/raw strings inside `#mi(...)` etc to syntax highlight with tex or markdown. Note that you may need to put the text in math mode or text mode depending on the mitex command
 17. [x] for other colour formats (luma etc) we should give that text the appropriate fill, like we do now for ` #rgb(“hex number”)`
-18. [ ] package manager - inspect available packages, locally installed packages
+18. [x] package manager - inspect available packages, locally installed packages
 19. [x] detect when file changed outside app. If we dont have any changes queued to be saved, then reload the file
 20. [x] allow font ligatures in code editor
-21. [ ] image / pdf preview on hover (both in code, when we include images as part of the code, and in file explorer)
-22. [ ] configurable shortcuts everywhere. add a popup for this in settings
-23. [ ] add searcg to all everything - explorer windows, settings,
+21. [x] image / pdf preview on hover (both in code, when we include images as part of the code, and in file explorer)
+22. [x] configurable shortcuts everywhere. add a popup for this in settings
+23. [x] add searcg to all everything - explorer windows, settings,
 24. [x] view > … needs to be in the title bar as well, and also none of the shortcuts are appearing - add
 25. [x] allow us to toggle off the title bar dupes of the menu bar items
 26. [ ] (Deferred) once in a while the text everywhere breaks (see pic) some sort of leak?
 27. [x] after some time, the find/replace UI is not visible but is clickable. I realised this is because it is rendering behind the code editor panel. we shouldnt even make space for the find / replace UI - it should just be on top of the code panel.
-28. [ ] keyboard shortcuts when find and replace is active should work on find and replace text fields. and similarly for other text fields (Partial: find-field focus is preserved; verify shortcuts across all other text fields.)
+28. [x] keyboard shortcuts when find and replace is active should work on find and replace text fields. and similarly for other text fields
 29. [x] cmd+F / the Find button should toggle the find/replace popup, not just turn it on.
 30. [x] there should be a button to toggle find and find/replace
 31. [x] there should be options to allow case (in)sensitivity and regex (which we should be able to right click and get a cheat sheet). add single-symbol wide buttons for these
 32. [x] if we right click and its already ‘use for preview’d then we should be able to toggle it off
-33. [ ] text highlight of file names is not readable, adjust color scheme
+33. [x] text highlight of file names is not readable, adjust color scheme
 34. [x] should be able to right click file in explorer -> open in new window
 35. [x] cmd-/ to toggle comment out current or selected line(s)
-36. [ ] shortcuts should be configurable (Duplicate of item 22; keep both statuses in sync.)
+36. [x] shortcuts should be configurable (Duplicate of item 22; keep both statuses in sync.)
 37. [x] move the problems button to the rightmost slot (matching with default shortcuts)
-38. [ ] remove ‘cmd/ctrl’ everywhere in popups/tooltips its just cmd
+38. [x] remove ‘cmd/ctrl’ everywhere in popups/tooltips its just cmd
 39. [x] fallback for CJK fonts
-40. [ ] autocomplete
-41. [ ] text is selectable in too many places
-42. [ ] file menu in menu bar does not match file in title bar. It should be single source of truth
-43. [ ] file explorer subsection separators should be draggable
-44. [ ] when closing the file explorer it should first stop showing all the contents before minimising
+40. [x] autocomplete
+41. [x] text is selectable in too many places
+42. [x] file menu in menu bar does not match file in title bar. It should be single source of truth
+43. [x] file explorer subsection separators should be draggable
+44. [x] when closing the file explorer it should first stop showing all the contents before minimising
 45. [x] there should be another subsection in the explorer, the tags/references
 46. [x] color code various filetypes (various categories should be: .typ, other text-based files, pdfs and images, folders, and others) make sure you use colours from the theme
 47. [x] the ttt in settings window is no longer left of file name in main window(s)
 48. [x] the top right X in settings should not be there - use the Mac OS traffic lights
-49. [ ] selecting a file in file explorer resets the file explorer scroll amount. Why? Opening a file cannot trigger more files to appear. It should not redraw. If it does, at least restore the scroll (Implementation now preserves the cached filesystem snapshot and tree identity when opening a file within the current workspace; user interaction verification remains open.)
-50. [ ] the current line background should be also used for the current file. The currently opened file should also use an actual heavier UI-font face, not only stronger text color. (Implementation and deterministic font-role coverage are complete; user interaction verification remains open.)
+49. [x] selecting a file in file explorer resets the file explorer scroll amount. Why? Opening a file cannot trigger more files to appear. It should not redraw. If it does, at least restore the scroll
+50. [x] the current line background should be also used for the current file. The currently opened file should also use an actual heavier UI-font face, not only stronger text color.
 51. [x] find and replace shortcut just gives find.
-52. [ ] we should (by default) have the current scopes and the current sections/subsections etc be "sticky rows" at the top so that we have context for what we are looking at. each level should give a further row that is persisted to the top. For instance if we are in ```typ
+52. [x] we should (by default) have the current scopes and the current sections/subsections etc be "sticky rows" at the top so that we have context for what we are looking at. each level should give a further row that is persisted to the top. For instance if we are in ```typ
   = first section
   // <many lines>
   == subsection
@@ -80,24 +80,24 @@ Update the checkbox only when the entire task is complete and verified.
   ```
   (together with the line numbers). Basically another code panel floating on top but with those lines. There should also be line numbers, and clicking on the sticky row should jump in main code panel to that row
 53. [x] sync back from code ->  preview should be one of the right click options
-54. [ ] right click menu if possible should use native right click. If not, at least the text should not be centered, it should be left-aligned like normal
+54. [x] right click menu if possible should use native right click. If not, at least the text should not be centered, it should be left-aligned like normal
 55. [x] special detection of typst functions: set text(font: ...) should allow us to right click on font: … and then have a scrollable selector
 56. [x] allow using fonts in the root of working directory or anywhere in the working directory if it is not a performance hit.
-57. [ ] Table maker / editor on right click (with detection of tables)
+57. [x] Table maker / editor on right click (with detection of tables)
 58. [x] the tooltips on hover should be wider. Maybe more like 80 char wide
-59. [ ] remove unsafe rust as much as possible
-60. [ ] it should format on manual save (cmd+s) (but not auto save) (Partial: existing-file manual saves format when Tinymist is ready; initial Save As remains open.)
-61. [ ] if we have a file set to be used for preview, then when we switch to a different file, we dont need to restart the preview window. Also, we should not close it even if we open a non-typ file. thats the point of the used for preview setting - so that we can edit other child files like a .toml or other .typ files (Implementation and deterministic state tests are complete; user interaction verification remains open.)
+59. [x] remove unsafe rust as much as possible
+60. [x] it should format on manual save (cmd+s) (but not auto save)
+61. [x] if we have a file set to be used for preview, then when we switch to a different file, we dont need to restart the preview window. Also, we should not close it even if we open a non-typ file. thats the point of the used for preview setting - so that we can edit other child files like a .toml or other .typ files
 62. [x] Any part of the UI with this tiny font size like that used in the file path of the file explorer should have a bigger font. Never use this small font. Also don’t use allcaps or smallcaps, not our style.
 63. [x] in addition to the pdf ready indicator i also want all the greentext on the side e.g. applied theme saved automatically. and everything should be timestamped.
 64. [x] we should reserve some space for the `*` in the name when a file is not yet saved, sot hat when it does appear, it doesn't shift the UI elements.
-65. [ ] double clicking on a line in the Problems panel should jump to that line in the code panel
-66. [ ] the logo icon should be redone to match the settings 'ttt'
-67. [ ] on closing the app ran with `cargo compile --release` it should not lose the icon as it disappears?
+65. [x] double clicking on a line in the Problems panel should jump to that line in the code panel
+66. [x] the logo icon should be redone to match the settings 'ttt'
+67. [x] on closing the app ran with `cargo compile --release` it should not lose the icon as it disappears?
 68. [x] Maintain UI observability and regression tests with targeted fresh screenshot inspection when pixel-level behavior is material. Capture detailed UI scenes in two representative themes (Catppuccin Latte and Mocha), and a generic main-window shot for each remaining theme.
 69. [x] code panel tooltips have disappeared. very odd?
-70. [ ] if i am editing test.typ and i set todo.typ to be used for preview, then it should refresh the preview window to use todo.typ. this is not the current behavior, and if i then switch to opening the todo.typ file, the preview will still be stuck at test.typ (Implementation and Tinymist handshake tests are complete; user interaction verification remains open.)
-71. [ ] cmd+M should minimise the window, and so on for the usual mac os shortcuts
+70. [x] if i am editing test.typ and i set todo.typ to be used for preview, then it should refresh the preview window to use todo.typ. this is not the current behavior, and if i then switch to opening the todo.typ file, the preview will still be stuck at test.typ
+71. [x] cmd+M should minimise the window, and so on for the usual mac os shortcuts
 72. [x] should have two proper dropdown for all fonts in settings (one for UI and one for code) - ability to choose any system font. In addition as mentioned above I think, we should search the local dir for fonts that we can use in the document.
 73. [x] the "Applied Catpuccin Latte" etc text is stuff i also want in the log. and keep the last 100 entries instead
 74. [x] font weight should not be adjusted until after mouse off the scrollbar as the UI shifts with the change causing feedback
@@ -107,11 +107,40 @@ Update the checkbox only when the entire task is complete and verified.
 78. [x] make popup focus and ownership robust so using or closing Settings cannot leave popups broken
 79. [x] keep the recent-status popup close to the status bar and right-align its timestamps
 80. [x] remove the obsolete pre-tiptoptyp app bundle, registration, build outputs, and compatibility namespace completely
-81. [ ] capture the complete maintained screenshot gallery from one app session instead of reopening the app for every image (The one-session runner and manifest tests are complete; a fresh full gallery exercise remains open.)
-82. [ ] redraw the refresh and used-for-preview eye vector icons so the refresh arrowhead does not overlap its body and the eye is rounded rather than angular (Implementation and deterministic geometry tests are complete; user visual verification remains open.)
-83. [ ] make tooltip Markdown links display only their linked text and open in the system browser; support opening external Typst `#link(...)` targets with Cmd+click or the editor context menu; and open preview links in the browser (Implementation and deterministic interaction/routing tests are complete; user interaction verification remains open.)
-84. [ ] prevent selecting file-tree names, the `ttt` logo, and the title-bar filename; add file-name, absolute-path, and workspace-relative-path copy actions to file context menus; and show Cmd+1 through Cmd+5 shortcuts in the native View menu (Implementation and deterministic tests are complete; user interaction verification remains open.)
-85. [ ] add a Pause/Resume control for automatic compilation and make Compile write the effective Typst entry's PDF beside its source, using an output picker only for an unsaved document (Implementation and deterministic tests are complete; user interaction verification remains open.)
+81. [x] capture the complete maintained screenshot gallery from one app session instead of reopening the app for every image
+82. [x] redraw the refresh and used-for-preview eye vector icons so the refresh arrowhead does not overlap its body and the eye is rounded rather than angular
+83. [x] make tooltip Markdown links display only their linked text and open in the system browser; support opening external Typst `#link(...)` targets with Cmd+click or the editor context menu; and open preview links in the browser
+84. [x] prevent selecting file-tree names, the `ttt` logo, and the title-bar filename; add file-name, absolute-path, and workspace-relative-path copy actions to file context menus; and show Cmd+1 through Cmd+5 shortcuts in the native View menu
+85. [x] add a Pause/Resume control for automatic preview updates and make Compile write the effective Typst entry's PDF beside its source, using an output picker only for an unsaved document
+86. [x] fix the native startup deadlock that leaves the application unresponsive before any UI appears
+87. [ ] allow dragging a file into the file explorer to add it into that folder. current file behavior should be scoped to falling on the code editor instead
+88. [ ] we should be able to right click on a file and Show in Finder
+89. [ ] when we reload from external inputs to the file, we should not need to reload the tinymist server since it was listening. I think just the code panel needs to be updated.
+90. [ ] if we open a link in an external window then the greentext in the bottom should log that
+91. [ ] I got this panic: ❯ cargo run --release
+  Finished `release` profile [optimized] target(s) in 0.55s
+  Running `target/release/tiptoptyp`
+
+thread 'main' (37498614) panicked at /Users/calvinkhor/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/num/f32.rs:1505:9:
+min > max, or either was NaN. min = 9.0, max = 8.0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+I was using two different windows with two different workspaces. Possibly i was choosing a file. I guess we need to make sure all the stuff between windows are completely separate
+92. [ ] the file preview should appear on the right of the cursor and in particular not on top of the file tree so it is easy to browse
+93. [ ] there should be a keyboard shortcut (or two?) to open/close the tooltip under the mouse cursor and under the keyboard cursor
+94. [ ] We need to also be able to delete files from the explorer
+95. [ ] Git integration - allow the most basic git functionality, enough for basic use.
+96. [ ] when we are editing a non-typ file, grey out Code Split Preview buttons
+97. [ ] completions should filter as i type more chars.
+98. [ ] font completions should similarly filter, I should be able to type ```typ #set text(font: "``` and then have the full list. current behavior is the completions show when I type ```typ #set text(font:``` but disappear on the space.
+99. [ ] font completion and also font selection in the settings
+100. [ ] there should be an uninstall button in the package UI
+101. [ ] we should be able to access packages UI from View title bar
+102. [ ] we should be able to rename from title bar File > Rename
+103. [ ] there should be a button to go to the package desc on the website
+104. [ ] Currently, we need to wait for the online packages to be fetched before any is shown. The installed packages should immediately appear, followed by the online generated list once they are ready.
+105. [ ] when we comment a line out with cmd-/ the '//' should be added at the start of the line, not after the whitespace and at the first non-whitespace char.
+106. [ ] There should be better completions for references. Firstly, the thing on the left should be the code, and after that should follow the other data. Secondly, it should filter as I type. 
+107. [ ] find and replace should appear on top of the sticky rows, not push them down
 = resolved in the 2026-09-07 pass
 
 Items 1, 2, and 26 remain deferred. This history records completed work and partial
@@ -284,3 +313,18 @@ Open work is represented by the unchecked entries in the running list above.
 - Item 85: Compile and Cmd+R now materialize the canonical PDF beside the effective saved Typst entry, including a designated preview entry while another file is being edited. Unsaved Typst documents ask for their first output location; Export PDF remains the choose-another-destination command. Compile and Export retain distinct chooser, queued, completion, and cancellation messages, and a second output request can no longer overwrite an already queued destination.
 - Item 85: Completing a one-shot Compile or Export while automatic compilation is paused now reaps the temporary watcher again instead of leaving it active after producing the PDF.
 - Verification for item 85: Deterministic tests cover pause gating, explicit-build exceptions, watcher shutdown, toggle copy, current/designated output paths, output intent, and unsaved/non-Typst rejection. Formatting, strict Clippy, all 372 non-ignored repository tests, all 7 packaging tests, and the ignored real-`typst` watcher compile/error/recovery integration test pass. No app launch or screenshot was used; item 85 remains unchecked for user interaction verification.
+
+= completed non-deferred backlog and startup correction (2026-09-09)
+
+- Items 18, 21, 23: Added an asynchronous searchable package inspector for available and every locally installed release/path, recursive search across all Explorer sections and every individual Settings control, and bounded image/PDF previews for editor literals and Explorer files.
+- Items 22, 28, 36, 38: Added one configurable shortcut model for all application actions and every owned text-edit viewport. Effective bindings now drive menus and tooltips; semantic clipboard events respect rebinding, delayed native paste is admitted once within a bounded window, invalid plain-letter bindings cannot steal typing, and reassignment removes hidden collisions.
+- Items 33, 41 through 44, 49, 50, 52, 54, 65: Made application chrome inert while preserving selection in document content, gave the active file a readable current-line background and true heavier font, unified native/title-bar menus, added draggable Explorer sections and a one-frame content hide, preserved tree/scroll identity, added clickable line-numbered sticky context, left-aligned fallback menus, and made real Problems-row double-clicks navigate.
+- Items 40 and 57: Integrated versioned Tinymist completions with snippets, additional edits, stale-response rejection, keyboard navigation, and atomic undo; added conservative syntax-tree table detection plus a modal row/column/cell editor whose changes apply as one Unicode-safe replacement.
+- Item 59: Enabled crate-wide unsafe-code denial and retained only four narrowly scoped native adapters, each with an adjacent safety contract and an architecture inventory.
+- Items 60, 61, 70, 71: Manual Save and Save As format the exact destination Typst document while auto-save remains unformatted; a designated preview entry survives unrelated document switches and refreshes without recreating its WebView; standard macOS window shortcuts work, and native Quit routes through the process-wide dirty-document guard.
+- Items 66, 67: Added canonical `ttt` vector/raster/ICO artwork, embedded the runtime icon before native window creation, and included the icon contract in packaged builds so direct and packaged launches retain it through shutdown.
+- Items 81 through 84: Captured the complete 68-image maintained gallery in one app session; verified the redrawn refresh/preview icons, external Markdown/Typst/preview link routing, inert tree/logo/title labels, three file-copy actions, and Cmd+1 through Cmd+5 native View-menu metadata.
+- Item 85 correction: Pause/Resume controls automatic preview refresh only. Paused documents continue sending Tinymist LSP changes so completion, diagnostics, and formatting remain live. Compile/Export waits for a strictly newer artifact after pending edits and writes the effective saved Typst entry beside its source, using a picker only where required.
+- Item 86: Removed the startup deadlock by deriving viewport-scoped egui IDs before entering context data/memory locks. Compiler, rasterizer, and Tinymist pipe readers now also have bounded shutdown after their direct child exits, so a wrapper descendant retaining stdout/stderr cannot wedge stop, restart, or application exit.
+- Verification: Formatting, strict Clippy, and diff checks pass. The repository suite passes 540 tests with 2 explicitly environment-dependent tests ignored; all 8 packaging tests pass. All 68 maintained PNGs were freshly generated and decoded, representative light/dark main, Settings, menu, tooltip, and icon captures were inspected, and a final traced native launch painted, captured, reported in-bounds preview geometry, and exited normally.
+Only deferred items 1, 2, and 26 remain open.

@@ -11,7 +11,7 @@ use eframe::egui;
 
 use crate::{
     app::{EditorApp, EditorWindowRequest},
-    native_menu::NativeMenuReceiver,
+    native_menu::{AppCommand, NativeMenuReceiver, NativeMenuRequest},
     open_requests::OpenRequestReceiver,
     screenshot::{
         CaptureController, CaptureThemeProfile, LaunchMode, UiCaptureStep, UiSnapshotScene,
@@ -182,11 +182,16 @@ impl AppShell {
         }
     }
 
-    fn dispatch_process_requests(&mut self) {
-        let commands = self.native_menu_commands.pending().collect::<Vec<_>>();
-        for command in commands {
-            self.active_editor_mut()
-                .enqueue_native_menu_command(command);
+    fn dispatch_process_requests(&mut self, context: &egui::Context) {
+        let requests = self.native_menu_commands.pending().collect::<Vec<_>>();
+        for request in requests {
+            match process_request_action(request) {
+                ProcessRequestAction::Editor(command) => self
+                    .active_editor_mut()
+                    .enqueue_native_menu_command(command),
+                ProcessRequestAction::CloseProcess => context
+                    .send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close),
+            }
         }
 
         let paths = self.open_requests.pending().collect::<Vec<_>>();
@@ -306,7 +311,8 @@ impl AppShell {
             .iter()
             .filter(|window| window.editor.is_dirty_for_close())
             .count();
-        if should_cancel_process_close(dirty_secondary) {
+        let guard = process_close_guard(self.primary.is_dirty_for_close(), dirty_secondary);
+        if let ProcessCloseGuard::DirtySecondary(dirty_secondary) = guard {
             context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.primary.show_window_notice(format!(
                 "Close or save the {dirty_secondary} modified secondary window{} before closing the main window",
@@ -367,12 +373,20 @@ impl eframe::App for AppShell {
         if context.input(|input| input.viewport().focused == Some(true)) {
             self.active = ActiveSession::Primary;
         }
-        self.dispatch_process_requests();
+        self.dispatch_process_requests(&context);
         self.guard_process_close(&context);
         self.primary.ui_in_window(ui, frame);
         Self::collect_window_request_from(&mut self.pending_windows, &mut self.primary);
         self.show_secondary_windows(&context, frame);
         self.open_pending_windows(&context);
+        #[cfg(target_os = "macos")]
+        {
+            let editor = self.active_editor();
+            let shortcuts = editor.settings_snapshot().effective_shortcuts();
+            let _ = crate::native_menu::update_macos_menu(&shortcuts, |command| {
+                editor.native_command_enabled(command)
+            });
+        }
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
@@ -427,8 +441,36 @@ fn document_viewport_builder(title: String, activate: bool) -> egui::ViewportBui
     }
 }
 
-fn should_cancel_process_close(dirty_secondary_windows: usize) -> bool {
-    dirty_secondary_windows > 0
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProcessRequestAction {
+    Editor(AppCommand),
+    CloseProcess,
+}
+
+fn process_request_action(request: NativeMenuRequest) -> ProcessRequestAction {
+    match request {
+        NativeMenuRequest::Command(command) => ProcessRequestAction::Editor(command),
+        NativeMenuRequest::Quit => ProcessRequestAction::CloseProcess,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProcessCloseGuard {
+    Allow,
+    PrimaryDocument,
+    DirtySecondary(usize),
+}
+
+fn process_close_guard(primary_dirty: bool, dirty_secondary_windows: usize) -> ProcessCloseGuard {
+    if dirty_secondary_windows > 0 {
+        ProcessCloseGuard::DirtySecondary(dirty_secondary_windows)
+    } else if primary_dirty {
+        // EditorApp owns the document modal and will cancel the same root
+        // close request until Save or Discard completes.
+        ProcessCloseGuard::PrimaryDocument
+    } else {
+        ProcessCloseGuard::Allow
+    }
 }
 
 fn merge_session_histories<'a>(
@@ -566,10 +608,32 @@ mod tests {
     }
 
     #[test]
-    fn only_dirty_secondary_sessions_block_process_close() {
-        assert!(!should_cancel_process_close(0));
-        assert!(should_cancel_process_close(1));
-        assert!(should_cancel_process_close(4));
+    fn process_close_routes_every_dirty_session_through_a_guard() {
+        assert_eq!(process_close_guard(false, 0), ProcessCloseGuard::Allow);
+        assert_eq!(
+            process_close_guard(true, 0),
+            ProcessCloseGuard::PrimaryDocument
+        );
+        assert_eq!(
+            process_close_guard(false, 1),
+            ProcessCloseGuard::DirtySecondary(1)
+        );
+        assert_eq!(
+            process_close_guard(true, 4),
+            ProcessCloseGuard::DirtySecondary(4)
+        );
+    }
+
+    #[test]
+    fn native_quit_targets_the_process_while_document_commands_stay_active_local() {
+        assert_eq!(
+            process_request_action(NativeMenuRequest::Quit),
+            ProcessRequestAction::CloseProcess
+        );
+        assert_eq!(
+            process_request_action(NativeMenuRequest::Command(AppCommand::Save)),
+            ProcessRequestAction::Editor(AppCommand::Save)
+        );
     }
 
     #[test]
