@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, VecDeque, hash_map::DefaultHasher},
     fs,
     hash::{Hash, Hasher},
@@ -1203,7 +1204,7 @@ impl SettingsTarget {
         }
     }
 
-    fn matches(self, query: &str) -> bool {
+    fn matches_terms(self, terms: &[String]) -> bool {
         let haystack = format!(
             "{} {} {}",
             self.label(),
@@ -1211,10 +1212,7 @@ impl SettingsTarget {
             self.search_text()
         )
         .to_lowercase();
-        query
-            .split_whitespace()
-            .map(str::to_lowercase)
-            .all(|term| haystack.contains(&term))
+        terms.iter().all(|term| haystack.contains(term))
     }
 }
 
@@ -1222,9 +1220,13 @@ fn settings_search_results(query: &str) -> Vec<SettingsTarget> {
     if query.trim().is_empty() {
         return Vec::new();
     }
+    let terms = query
+        .split_whitespace()
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>();
     SettingsTarget::ALL
         .into_iter()
-        .filter(|target| target.matches(query))
+        .filter(|target| target.matches_terms(&terms))
         .collect()
 }
 
@@ -1862,7 +1864,7 @@ impl EditorApp {
         let active_theme = context.theme();
         let style = context.style_of(active_theme);
         let captures = self.captures.clone();
-        let catalog = self.package_catalog.clone();
+        let catalog = self.package_catalog.as_ref();
         let loading = self.package_catalog_job.is_running();
         let mut close_requested = false;
         let mut refresh_requested = false;
@@ -1919,7 +1921,7 @@ impl EditorApp {
                             ui,
                             &mut self.package_query,
                             &mut self.package_filter,
-                            catalog.as_ref(),
+                            catalog,
                             loading,
                             &mut copied,
                             &mut open_link,
@@ -3084,9 +3086,10 @@ impl EditorApp {
             .unwrap_or_else(|| self.settings.clone());
         let current = i16::try_from(edited.ui_scale_percent).unwrap_or(100);
         edited.ui_scale_percent = current.saturating_add(delta).clamp(75, 150) as u16;
-        self.queue_settings(edited.clone(), context);
-        apply_ui_scale(context, edited.ui_scale_percent);
-        self.presentation.record_ui_scale(edited.ui_scale_percent);
+        let ui_scale_percent = edited.ui_scale_percent;
+        self.queue_settings(edited, context);
+        apply_ui_scale(context, ui_scale_percent);
+        self.presentation.record_ui_scale(ui_scale_percent);
     }
 
     fn queue_settings(&mut self, settings: AppSettings, context: &egui::Context) {
@@ -3830,9 +3833,10 @@ impl EditorApp {
                 return false;
             }
         };
+        let disk_fingerprint = kind.is_editable().then(|| fingerprint(&bytes));
         let source = if kind.is_editable() {
             // DocumentKind::detect already validated UTF-8.
-            String::from_utf8(bytes.clone()).expect("validated UTF-8 document")
+            String::from_utf8(bytes).expect("validated UTF-8 document")
         } else {
             String::new()
         };
@@ -3855,12 +3859,8 @@ impl EditorApp {
         let workspace_root = self.workspace_root.clone();
         self.remember_workspace(&workspace_root);
 
-        self.document.replace_loaded(
-            source,
-            path.clone(),
-            kind,
-            kind.is_editable().then(|| fingerprint(&bytes)),
-        );
+        self.document
+            .replace_loaded(source, path.clone(), kind, disk_fingerprint);
         self.autosave_deadline = None;
         self.pending_editor_selection = None;
         self.editor_attention = None;
@@ -5244,8 +5244,7 @@ impl EditorApp {
     }
 
     fn receive_web_links(&mut self) {
-        let targets = self.web_link_receiver.try_iter().collect::<Vec<_>>();
-        for target in targets {
+        while let Ok(target) = self.web_link_receiver.try_recv() {
             self.handle_web_link(&target);
         }
     }
@@ -5663,14 +5662,11 @@ impl EditorApp {
             }
 
             theme::show_logo(ui);
-            let title = format!(
-                "{}{}",
-                self.document_name(),
-                if self.is_dirty() { "*" } else { "" }
-            );
+            let document_name = self.document_name();
+            let title = format!("{document_name}{}", if self.is_dirty() { "*" } else { "" });
             // Reserve the dirty marker's slot even while the document is
             // clean, so saving never shifts the menu and view controls.
-            let natural_title_width = (self.document_name().chars().count() + 1) as f32
+            let natural_title_width = (document_name.chars().count() + 1) as f32
                 * METRICS.toolbar.title_character_width
                 + METRICS.toolbar.title_padding;
             let title_width = if compact {
@@ -6497,10 +6493,10 @@ impl EditorApp {
         if self.document_workflow.modal_suspended {
             return;
         }
-        let Some(modal) = self.document_workflow.modal.clone() else {
+        let Some(window_rect) = context.input(|input| input.viewport().inner_rect) else {
             return;
         };
-        let Some(window_rect) = context.input(|input| input.viewport().inner_rect) else {
+        let Some(modal) = self.document_workflow.modal.as_ref() else {
             return;
         };
         let theme = context.theme();
@@ -6620,6 +6616,11 @@ impl EditorApp {
         let Some(choice) = choice else {
             return;
         };
+        let modal = self
+            .document_workflow
+            .modal
+            .take()
+            .expect("modal exists while handling its choice");
         self.document_workflow.clear_modal();
         context.send_viewport_cmd(egui::ViewportCommand::Focus);
         match (modal, choice) {
@@ -7101,12 +7102,15 @@ impl EditorApp {
     }
 
     fn show_asset_hover_window(&mut self, context: &egui::Context) {
-        let Some(hover) = self.asset_hover.clone() else {
+        let Some(identity) = self
+            .asset_hover
+            .as_ref()
+            .map(|hover| asset_tooltip_identity(hover.origin, &hover.path))
+        else {
             return;
         };
         let interaction_id = tooltip_interaction_id(context);
         let geometry_id = tooltip_geometry_id(context);
-        let identity = asset_tooltip_identity(hover.origin, &hover.path);
         let interaction = context.data(|data| {
             data.get_temp::<TooltipInteractionState>(interaction_id)
                 .filter(|state| state.identity == identity)
@@ -7155,6 +7159,9 @@ impl EditorApp {
             return;
         }
         let Some(window_rect) = context.input(|input| input.viewport().inner_rect) else {
+            return;
+        };
+        let Some(hover) = self.asset_hover.as_ref() else {
             return;
         };
         let theme = context.theme();
@@ -7287,7 +7294,9 @@ impl EditorApp {
                     Vec2::splat(1.0),
                 ),
                 Pos2::new(420.0, METRICS.chrome.toolbar_height + 86.0),
-                "The character `#` is not valid in code\nHint: you are already in code mode\nHint: try removing the `#`".to_owned(),
+                Cow::Borrowed(
+                    "The character `#` is not valid in code\nHint: you are already in code mode\nHint: try removing the `#`",
+                ),
                 Some(DiagnosticSeverity::Error),
                 TooltipPlacement::Right,
                 1.0,
@@ -7299,17 +7308,18 @@ impl EditorApp {
                     Vec2::splat(1.0),
                 ),
                 Pos2::new(420.0, METRICS.chrome.toolbar_height + 86.0),
-                "```typc\ntext(body, size: length = 1em, fill: color = black)\n```\nDisplays content as text with the selected size and fill."
-                    .to_owned(),
+                Cow::Borrowed(
+                    "```typc\ntext(body, size: length = 1em, fill: color = black)\n```\nDisplays content as text with the selected size and fill.",
+                ),
                 None,
                 TooltipPlacement::Below,
                 1.0,
             )
-        } else if let Some(tooltip) = self.diagnostic_tooltip.clone() {
+        } else if let Some(tooltip) = self.diagnostic_tooltip.as_ref() {
             (
                 tooltip.origin,
                 tooltip.anchor,
-                tooltip.detail,
+                Cow::Borrowed(tooltip.detail.as_str()),
                 Some(tooltip.severity),
                 TooltipPlacement::Right,
                 tooltip.opacity,
@@ -7320,7 +7330,7 @@ impl EditorApp {
             (
                 tooltip.origin,
                 tooltip.anchor,
-                tooltip.detail,
+                Cow::Owned(tooltip.detail),
                 None,
                 TooltipPlacement::Below,
                 tooltip.opacity,
@@ -7394,7 +7404,7 @@ impl EditorApp {
             self.close_app_popup();
             return;
         }
-        let Some(popup) = self.app_popup.clone() else {
+        let Some(popup) = self.app_popup.take() else {
             return;
         };
         let Some(window_rect) = context.input(|input| input.viewport().inner_rect) else {
@@ -7560,6 +7570,8 @@ impl EditorApp {
         let action_selected = action.is_some();
         if close || action_selected {
             self.close_app_popup();
+        } else {
+            self.app_popup = Some(popup);
         }
         // A popup losing focus usually means the user activated another app.
         // Only an in-app menu selection should return keyboard focus to the
@@ -10412,13 +10424,14 @@ impl EditorApp {
     }
 
     fn record_notice_transition(&mut self) {
-        let Some(notice) = self.notice.clone() else {
+        let Some(notice) = self.notice.as_ref() else {
             self.recorded_notice = None;
             return;
         };
-        if self.recorded_notice.as_ref() == Some(&notice) {
+        if self.recorded_notice.as_ref() == Some(notice) {
             return;
         }
+        let notice = notice.clone();
         self.push_status_log(notice.message.clone(), notice.kind);
         self.recorded_notice = Some(notice);
     }
@@ -12401,23 +12414,38 @@ fn workspace_entry_color(path: &Path, directory: bool, symlink: bool, dark_mode:
         return theme::syntax_palette(dark_mode).comment;
     }
     let syntax = theme::syntax_palette(dark_mode);
-    let extension = path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| extension.to_ascii_lowercase());
-    match extension.as_deref() {
-        Some("typ") => syntax.keyword,
-        Some("pdf") | Some("png") | Some("jpg") | Some("jpeg") | Some("gif") | Some("webp")
-        | Some("bmp") | Some("ico") | Some("tif") | Some("tiff") => theme::palette(dark_mode).info,
-        Some("txt") | Some("md") | Some("markdown") | Some("json") | Some("jsonc")
-        | Some("toml") | Some("yaml") | Some("yml") | Some("xml") | Some("html") | Some("htm")
-        | Some("css") | Some("scss") | Some("js") | Some("jsx") | Some("ts") | Some("tsx")
-        | Some("rs") | Some("py") | Some("rb") | Some("go") | Some("java") | Some("c")
-        | Some("h") | Some("cc") | Some("cpp") | Some("hpp") | Some("sh") | Some("bash")
-        | Some("zsh") | Some("fish") | Some("sql") | Some("csv") | Some("tsv") | Some("ini")
-        | Some("cfg") | Some("conf") | Some("log") | Some("tex") | Some("bib") => syntax.plain,
-        _ => theme::syntax_palette(dark_mode).comment,
+    let extension = path.extension().and_then(|extension| extension.to_str());
+    if extension_matches(extension, &["typ"]) {
+        return syntax.keyword;
     }
+    if extension_matches(
+        extension,
+        &[
+            "pdf", "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tif", "tiff",
+        ],
+    ) {
+        return theme::palette(dark_mode).info;
+    }
+    if extension_matches(
+        extension,
+        &[
+            "txt", "md", "markdown", "json", "jsonc", "toml", "yaml", "yml", "xml", "html", "htm",
+            "css", "scss", "js", "jsx", "ts", "tsx", "rs", "py", "rb", "go", "java", "c", "h",
+            "cc", "cpp", "hpp", "sh", "bash", "zsh", "fish", "sql", "csv", "tsv", "ini", "cfg",
+            "conf", "log", "tex", "bib",
+        ],
+    ) {
+        return syntax.plain;
+    }
+    syntax.comment
+}
+
+fn extension_matches(extension: Option<&str>, expected: &[&str]) -> bool {
+    extension.is_some_and(|extension| {
+        expected
+            .iter()
+            .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+    })
 }
 
 const EXPLORER_SECTION_SPECS: [(&str, bool); 6] = [
@@ -12742,12 +12770,12 @@ fn show_project_index_sections(
             filtered,
         },
         |ui| {
-            let entries = index
+            let mut entries = index
                 .outline
                 .iter()
                 .filter(|entry| outline_entry_matches_query(entry, query))
-                .collect::<Vec<_>>();
-            if entries.is_empty() {
+                .peekable();
+            if entries.peek().is_none() {
                 ui.label(
                     RichText::new(if filtered {
                         "No matches"
@@ -12793,12 +12821,12 @@ fn show_project_index_sections(
             filtered,
         },
         |ui| {
-            let paths = index
+            let mut paths = index
                 .subfiles
                 .iter()
                 .filter(|path| explorer_path_matches_query(path, query))
-                .collect::<Vec<_>>();
-            if paths.is_empty() {
+                .peekable();
+            if paths.peek().is_none() {
                 ui.label(
                     RichText::new(if filtered {
                         "No matches"
@@ -12834,12 +12862,12 @@ fn show_project_index_sections(
             filtered,
         },
         |ui| {
-            let symbols = index
+            let mut symbols = index
                 .symbols
                 .iter()
                 .filter(|entry| symbol_entry_matches_query(entry, query))
-                .collect::<Vec<_>>();
-            if symbols.is_empty() {
+                .peekable();
+            if symbols.peek().is_none() {
                 ui.label(
                     RichText::new(if filtered {
                         "No matches"
@@ -12884,12 +12912,12 @@ fn show_project_index_sections(
                 outcome.open_package_manager = true;
             }
             ui.separator();
-            let packages = index
+            let mut packages = index
                 .packages
                 .iter()
                 .filter(|package| explorer_text_matches_query(package, query))
-                .collect::<Vec<_>>();
-            if packages.is_empty() {
+                .peekable();
+            if packages.peek().is_none() {
                 ui.label(
                     RichText::new(if filtered {
                         "No matches"
@@ -12921,12 +12949,12 @@ fn show_project_index_sections(
             filtered,
         },
         |ui| {
-            let references = index
+            let mut references = index
                 .references
                 .iter()
                 .filter(|entry| reference_entry_matches_query(entry, query))
-                .collect::<Vec<_>>();
-            if references.is_empty() {
+                .peekable();
+            if references.peek().is_none() {
                 ui.label(
                     RichText::new(if filtered {
                         "No matches"
@@ -14382,21 +14410,25 @@ fn tail_elide(text: &str, max_chars: usize) -> String {
         return "…".to_owned();
     }
 
-    let tail = text
-        .chars()
+    let tail_start = text
+        .char_indices()
         .rev()
-        .take(max_chars - 1)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect::<String>();
-    format!("…{tail}")
+        .nth(max_chars - 2)
+        .map_or(0, |(index, _)| index);
+    let tail = &text[tail_start..];
+    let mut compact = String::with_capacity('…'.len_utf8() + tail.len());
+    compact.push('…');
+    compact.push_str(tail);
+    compact
 }
 
 fn same_path(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
     match (left.canonicalize(), right.canonicalize()) {
         (Ok(left), Ok(right)) => left == right,
-        _ => left == right,
+        _ => false,
     }
 }
 

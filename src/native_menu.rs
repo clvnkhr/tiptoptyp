@@ -1,6 +1,6 @@
 use std::{
     collections::VecDeque,
-    sync::mpsc::{self, Receiver, Sender, TryIter},
+    sync::mpsc::{self, Receiver, Sender, TryRecvError},
 };
 
 use eframe::egui;
@@ -268,8 +268,8 @@ pub(crate) struct NativeMenuReceiver {
 }
 
 impl NativeMenuReceiver {
-    pub(crate) fn pending(&self) -> TryIter<'_, NativeMenuRequest> {
-        self.receiver.try_iter()
+    pub(crate) fn try_recv(&self) -> Result<NativeMenuRequest, TryRecvError> {
+        self.receiver.try_recv()
     }
 }
 
@@ -754,13 +754,15 @@ mod tests {
             .send(NativeMenuRequest::Command(AppCommand::Split))
             .unwrap();
         assert_eq!(
-            receiver.pending().collect::<Vec<_>>(),
-            [
-                NativeMenuRequest::Command(AppCommand::Settings),
-                NativeMenuRequest::Quit,
-                NativeMenuRequest::Command(AppCommand::Split),
-            ]
+            receiver.try_recv().unwrap(),
+            NativeMenuRequest::Command(AppCommand::Settings)
         );
+        assert_eq!(receiver.try_recv().unwrap(), NativeMenuRequest::Quit);
+        assert_eq!(
+            receiver.try_recv().unwrap(),
+            NativeMenuRequest::Command(AppCommand::Split)
+        );
+        assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
 
         let mut queue = NativeMenuCommandQueue::default();
         queue.push(AppCommand::Undo);

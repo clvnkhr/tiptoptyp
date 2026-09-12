@@ -183,8 +183,7 @@ impl AppShell {
     }
 
     fn dispatch_process_requests(&mut self, context: &egui::Context) {
-        let requests = self.native_menu_commands.pending().collect::<Vec<_>>();
-        for request in requests {
+        while let Ok(request) = self.native_menu_commands.try_recv() {
             match process_request_action(request) {
                 ProcessRequestAction::Editor(command) => self
                     .active_editor_mut()
@@ -194,9 +193,8 @@ impl AppShell {
             }
         }
 
-        let paths = self.open_requests.pending().collect::<Vec<_>>();
         let mut reused_primary = false;
-        for path in paths {
+        while let Ok(path) = self.open_requests.try_recv() {
             if !reused_primary
                 && self.secondary.is_empty()
                 && self.primary.can_reuse_for_external_open()

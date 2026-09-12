@@ -131,7 +131,7 @@ I was using two different windows with two different workspaces. Possibly i was 
 95. [ ] Git integration - allow the most basic git functionality, enough for basic use.
 96. [x] when we are editing a non-typ file, grey out Code Split Preview buttons
 97. [ ] completions should filter as i type more chars.
-98. [ ] font completions should similarly filter, I should be able to type ```typ #set text(font: "``` and then have the full list. current behavior is the completions show when I type ```typ #set text(font:``` but disappear on the space.
+98. [ ] font completions should similarly filter (all filtering should be fuzzy match), I should be able to type ```typ #set text(font: "``` and then have the full list. current behavior is the completions show when I type ```typ #set text(font:``` but disappear on the space.
 99. [ ] font completion and also font selection in the settings
 100. [ ] there should be an uninstall button in the package UI
 101. [x] we should be able to access packages UI from View title bar
@@ -141,6 +141,8 @@ I was using two different windows with two different workspaces. Possibly i was 
 105. [x] when we comment a line out with cmd-/ the '//' should be added at the start of the line, not after the whitespace and at the first non-whitespace char.
 106. [ ] There should be better completions for references. Firstly, the thing on the left should be the code, and after that should follow the other data. Secondly, it should filter as I type. 
 107. [x] find and replace should appear on top of the sticky rows, not push them down
+108. [ ] the image/pdf preview should not have so much text. just the image alone is enough.
+109. [ ] the title-bar options (file, edit, view) do not mirror the title bar ones. make it so that it is a error, type error or other strict testing behavior that these two must always match. use a single source of truth.
 = resolved in the 2026-09-07 pass
 
 Items 1, 2, and 26 remain deferred. This history records completed work and partial

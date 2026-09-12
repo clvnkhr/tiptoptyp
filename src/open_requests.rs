@@ -1,6 +1,6 @@
 use std::{
     path::PathBuf,
-    sync::mpsc::{self, Receiver, Sender, TryIter},
+    sync::mpsc::{self, Receiver, Sender, TryRecvError},
 };
 
 /// File-system paths the operating system asks the running application to open.
@@ -13,8 +13,8 @@ pub(crate) struct OpenRequestReceiver {
 }
 
 impl OpenRequestReceiver {
-    pub(crate) fn pending(&self) -> TryIter<'_, PathBuf> {
-        self.receiver.try_iter()
+    pub(crate) fn try_recv(&self) -> Result<PathBuf, TryRecvError> {
+        self.receiver.try_recv()
     }
 }
 
@@ -128,12 +128,13 @@ mod tests {
         sender.send(PathBuf::from("/project/one.typ")).unwrap();
         sender.send(PathBuf::from("/project/two.pdf")).unwrap();
         assert_eq!(
-            receiver.pending().collect::<Vec<_>>(),
-            [
-                PathBuf::from("/project/one.typ"),
-                PathBuf::from("/project/two.pdf")
-            ]
+            receiver.try_recv().unwrap(),
+            PathBuf::from("/project/one.typ")
         );
-        assert!(receiver.pending().next().is_none());
+        assert_eq!(
+            receiver.try_recv().unwrap(),
+            PathBuf::from("/project/two.pdf")
+        );
+        assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
     }
 }
