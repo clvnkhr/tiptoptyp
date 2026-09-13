@@ -330,7 +330,7 @@ impl AppShell {
             let builder = document_viewport_builder(window.editor.window_title(), activate);
             let mut close_accepted = false;
             let mut focused = false;
-            context.show_viewport_immediate(viewport_id, builder, |ui, _class| {
+            crate::viewport_fonts::show_immediate(context, viewport_id, builder, |ui, _class| {
                 focused = ui
                     .ctx()
                     .input(|input| input.viewport().focused == Some(true));

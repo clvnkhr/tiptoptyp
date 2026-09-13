@@ -53,6 +53,12 @@ impl<T: Send + 'static> LatestJob<T> {
         repaint: Option<egui::Context>,
         work: impl FnOnce() -> Result<T, String> + Send + 'static,
     ) -> Result<(), String> {
+        // Context clones share the active viewport. Remember the originating
+        // window before leaving the UI thread instead of consulting it later.
+        let repaint = repaint.map(|context| {
+            let viewport = context.viewport_id();
+            (context, viewport)
+        });
         // Replacing the receiver first makes a failed spawn terminal too: the
         // caller never remains stuck polling an obsolete request.
         self.receiver = None;
@@ -60,9 +66,9 @@ impl<T: Send + 'static> LatestJob<T> {
         let spawned = thread::Builder::new().name(name.into()).spawn(move || {
             let result = work();
             if sender.send(result).is_ok()
-                && let Some(repaint) = repaint
+                && let Some((context, viewport)) = repaint
             {
-                repaint.request_repaint();
+                context.request_repaint_of(viewport);
             }
         });
         self.accept_spawn(receiver, spawned)
@@ -137,6 +143,55 @@ mod tests {
         job.start("latest-job-success", || Ok(42)).unwrap();
         assert_eq!(poll_until_settled(&mut job), LatestJobPoll::Ready(42));
         assert_eq!(job.poll(), LatestJobPoll::Idle);
+    }
+
+    #[test]
+    fn completion_repaints_its_origin_after_another_window_becomes_current() {
+        let context = egui::Context::default();
+        let origin = egui::ViewportId::from_hash_of("git-in-second-document");
+        let other = egui::ViewportId::from_hash_of("another-document");
+        let mut job = LatestJob::default();
+        let (release, receiver) = mpsc::channel();
+        let mut receiver = Some(receiver);
+        // Settle each viewport before observing completion-specific repaints.
+        for viewport in [origin, origin, origin, other, other, other, origin] {
+            let mut input = egui::RawInput {
+                viewport_id: viewport,
+                ..Default::default()
+            };
+            input.viewports.entry(viewport).or_default();
+            let mut output = context.run_ui(input, |ui| {
+                if viewport == origin
+                    && let Some(receiver) = receiver.take()
+                {
+                    job.start_and_repaint("origin-repaint", ui.ctx(), move || {
+                        receiver.recv().unwrap();
+                        Ok(42)
+                    })
+                    .unwrap();
+                }
+            });
+            output.textures_delta.clear();
+        }
+        let mut input = egui::RawInput {
+            viewport_id: other,
+            ..Default::default()
+        };
+        input.viewports.entry(other).or_default();
+        let mut output = context.run_ui(input, |_| {});
+        output.textures_delta.clear();
+        let (repaint_sender, repaint_receiver) = mpsc::channel();
+        context.set_request_repaint_callback(move |info| {
+            let _ = repaint_sender.send(info.viewport_id);
+        });
+        release.send(()).unwrap();
+        assert_eq!(
+            repaint_receiver
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap(),
+            origin
+        );
+        assert_eq!(poll_until_settled(&mut job), LatestJobPoll::Ready(42));
     }
 
     #[test]

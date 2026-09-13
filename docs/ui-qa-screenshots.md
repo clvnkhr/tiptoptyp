@@ -71,6 +71,12 @@ The accepted scenes and their framebuffer targets are:
 | `overwrite-dialog` | `modal` | Existing-file overwrite confirmation card |
 | `editor-context-menu` | `popup` | Editor right-click menu |
 | `explorer-context-menu` | `popup` | Explorer right-click menu |
+| `font-completion` | `main` | Fuzzy font completion with a lazily loaded font sample |
+| `settings-font-picker` | `settings` | Searchable font picker and the same live font sample used in hover cards |
+| `git-editor` | `main` | Git badges in Explorer and added/modified/deleted gutter markers |
+| `git-chunk` | `git-chunk` | Selected chunk compared with the last commit, in its owning editor’s diff window |
+| `git-window` | `git` | Repository status, aligned actions, and a selected diff using an in-memory fixture |
+| `asset-preview` | `asset-hover` | Image-only asset card |
 | `document-font-selector` | `popup` | Scrollable font selector for a `text(font: …)` argument |
 | `status-log` | `popup` | Recent compiler and document-status history |
 | `rename-dialog` | `rename` | Rename card |

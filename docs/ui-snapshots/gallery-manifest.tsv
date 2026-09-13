@@ -64,6 +64,12 @@ scene	typst-overrides-window	typst-overrides	typst-overrides-typst-overrides-win
 scene	function-tooltip	diagnostic	diagnostic-function-tooltip	targeted	transparent	-
 scene	document-font-selector	popup	popup-document-font-selector	targeted	transparent	-
 scene	status-log	popup	popup-status-log	targeted	transparent	-
+scene	font-completion	main	main-font-completion	targeted	-	-
+scene	settings-font-picker	settings	settings-settings-font-picker	targeted	-	-
+scene	asset-preview	asset-hover	asset-hover-asset-preview	targeted	transparent	-
+scene	git-window	git	git-git-window	targeted	-	-
+scene	git-editor	main	main-git-editor	targeted	-	-
+scene	git-chunk	git-chunk	git-chunk	targeted	-	-
 scene-theme	catppuccin-latte
 scene-theme	catppuccin-mocha
 variant	before-components	catppuccin-latte	main	1	30	catppuccin-latte-inverted-hue-p30

@@ -237,6 +237,58 @@ pub(crate) struct PackageInstallation {
     pub(crate) root: PackageRoot,
 }
 
+/// Remove exactly one installed release, never a root or a linked directory.
+pub(crate) fn uninstall(installation: &PackageInstallation) -> Result<(), String> {
+    let relative = installation
+        .package_path
+        .strip_prefix(&installation.root.path)
+        .map_err(|_| "Package is outside its root")?;
+    let parts = relative
+        .components()
+        .map(|part| match part {
+            std::path::Component::Normal(name) => name.to_str().ok_or("Invalid package path"),
+            _ => Err("Invalid package path"),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if parts.len() != 3 {
+        return Err("Expected one namespace/name/version directory".into());
+    }
+    let root = installation
+        .root
+        .path
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let canonical = installation
+        .package_path
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    if canonical != root.join(relative) || !canonical.starts_with(&root) {
+        return Err("Refusing to uninstall through a symlink".into());
+    }
+    for ancestor in [
+        canonical.clone(),
+        canonical.parent().unwrap().to_path_buf(),
+        canonical.parent().unwrap().parent().unwrap().to_path_buf(),
+    ] {
+        if std::fs::symlink_metadata(ancestor)
+            .map_err(|e| e.to_string())?
+            .file_type()
+            .is_symlink()
+        {
+            return Err("Refusing to uninstall through a symlink".into());
+        }
+    }
+    parse_installed_package(
+        &installation.root,
+        parts[0],
+        parts[1],
+        parts[2],
+        &installation.package_path,
+    )
+    .map_err(|e| format!("Package verification failed: {}", e.message))?;
+    std::fs::remove_dir_all(&installation.package_path).map_err(|e| e.to_string())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct InstalledPackage {
     namespace: String,
@@ -881,6 +933,58 @@ enabled = true
 
     fn version(source: &str) -> PackageVersion {
         source.parse().unwrap()
+    }
+
+    #[test]
+    fn uninstall_removes_one_verified_release_and_preserves_other_versions() {
+        let temp = tempfile::tempdir().unwrap();
+        for version in ["1.0.0", "2.0.0"] {
+            install(
+                temp.path(),
+                "local",
+                "sample",
+                version,
+                &package_manifest("sample", version, "Sample"),
+            );
+        }
+        let root = PackageRoot::data(temp.path());
+        let package_path = temp.path().join("local/sample/1.0.0");
+        let installation = PackageInstallation {
+            manifest_path: package_path.join("typst.toml"),
+            package_path: package_path.clone(),
+            root,
+        };
+        let mut invalid = installation.clone();
+        invalid.package_path = temp.path().join("local/sample");
+        assert!(uninstall(&invalid).is_err());
+        uninstall(&installation).unwrap();
+        assert!(!package_path.exists());
+        assert!(temp.path().join("local/sample/2.0.0/lib.typ").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn uninstall_refuses_linked_releases_and_parent_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        let outside = temp.path().join("outside");
+        let root = temp.path().join("root");
+        install(
+            &outside,
+            "local",
+            "sample",
+            "1.0.0",
+            &package_manifest("sample", "1.0.0", "Sample"),
+        );
+        fs::create_dir_all(&root).unwrap();
+        std::os::unix::fs::symlink(outside.join("local"), root.join("local")).unwrap();
+        let package_path = root.join("local/sample/1.0.0");
+        let installation = PackageInstallation {
+            manifest_path: package_path.join("typst.toml"),
+            package_path,
+            root: PackageRoot::data(root),
+        };
+        assert!(uninstall(&installation).is_err());
+        assert!(outside.join("local/sample/1.0.0/lib.typ").exists());
     }
 
     #[test]

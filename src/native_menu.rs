@@ -7,38 +7,6 @@ use eframe::egui;
 
 use crate::shortcuts::{ShortcutAction, ShortcutBindings, ShortcutChord};
 
-/// Every application action which can be invoked without a dynamic payload.
-/// Native menus, egui menus and keyboard routing all consume `CommandSpec`
-/// entries for this type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum AppCommand {
-    Settings,
-    New,
-    NewWindow,
-    Open,
-    OpenInNewWindow,
-    ChangeWorkspaceRoot,
-    Save,
-    SaveAs,
-    ExportPdf,
-    Undo,
-    Redo,
-    Cut,
-    Copy,
-    Paste,
-    SelectAll,
-    ToggleComment,
-    Find,
-    FindReplace,
-    Format,
-    SyncPreview,
-    Problems,
-    Explorer,
-    Code,
-    Split,
-    Preview,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandMenu {
     Application,
@@ -52,6 +20,7 @@ pub(crate) enum CommandRequirement {
     Always,
     Undo,
     Redo,
+    SavedDocument,
     TypstDocument,
     TypstPreview,
     InteractivePreview,
@@ -61,163 +30,62 @@ pub(crate) enum CommandRequirement {
 pub(crate) struct CommandSpec {
     pub(crate) command: AppCommand,
     pub(crate) title: &'static str,
-    pub(crate) popup_title: &'static str,
     pub(crate) menu: CommandMenu,
-    pub(crate) popup_section: Option<u8>,
+    pub(crate) section: u8,
     pub(crate) requirement: CommandRequirement,
     pub(crate) shortcut_action: ShortcutAction,
-    native_id: Option<isize>,
-    native_section: u8,
+    native_id: isize,
 }
 
-macro_rules! spec {
-    ($command:ident, $title:literal, $popup:literal, $menu:ident, $section:expr, $requirement:ident, $native_id:expr) => {
-        CommandSpec {
-            command: AppCommand::$command,
-            title: $title,
-            popup_title: $popup,
-            menu: CommandMenu::$menu,
-            popup_section: Some($section),
-            requirement: CommandRequirement::$requirement,
-            shortcut_action: ShortcutAction::$command,
-            native_id: $native_id,
-            native_section: $section,
+// A command cannot exist without complete metadata for BOTH renderers. There
+// are no native-only IDs, popup-only rows, or separate labels/section lists.
+macro_rules! commands {
+    ($($command:ident => ($title:literal, $menu:ident, $section:literal, $requirement:ident, $tag:literal)),+ $(,)?) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub(crate) enum AppCommand { $($command),+ }
+        pub(crate) const COMMAND_SPECS: &[CommandSpec] = &[$(CommandSpec {
+            command: AppCommand::$command, title: $title, menu: CommandMenu::$menu,
+            section: $section, requirement: CommandRequirement::$requirement,
+            shortcut_action: ShortcutAction::$command, native_id: $tag,
+        }),+];
+        pub(crate) fn command_spec(command: AppCommand) -> &'static CommandSpec {
+            match command { $(AppCommand::$command => &CommandSpec {
+                command: AppCommand::$command, title: $title, menu: CommandMenu::$menu,
+                section: $section, requirement: CommandRequirement::$requirement,
+                shortcut_action: ShortcutAction::$command, native_id: $tag,
+            }),+ }
         }
     };
 }
-
-pub(crate) const COMMAND_SPECS: &[CommandSpec] = &[
-    spec!(
-        Settings,
-        "Settings…",
-        "Settings…",
-        Application,
-        0,
-        Always,
-        Some(1)
-    ),
-    spec!(New, "New", "New", File, 0, Always, Some(100)),
-    spec!(
-        NewWindow,
-        "New Window",
-        "New Window",
-        File,
-        0,
-        Always,
-        Some(106)
-    ),
-    spec!(Open, "Open…", "Open…", File, 0, Always, Some(101)),
-    spec!(
-        OpenInNewWindow,
-        "Open in New Window…",
-        "Open in New Window…",
-        File,
-        0,
-        Always,
-        Some(107)
-    ),
-    spec!(
-        ChangeWorkspaceRoot,
-        "Change Workspace Root…",
-        "Change Workspace Root…",
-        File,
-        0,
-        Always,
-        Some(102)
-    ),
-    spec!(Save, "Save", "Save", File, 1, Always, Some(103)),
-    spec!(SaveAs, "Save As…", "Save As…", File, 1, Always, Some(104)),
-    spec!(
-        ExportPdf,
-        "Export PDF…",
-        "Export PDF…",
-        File,
-        2,
-        TypstPreview,
-        Some(105)
-    ),
-    spec!(Undo, "Undo", "Undo", Edit, 0, Undo, Some(200)),
-    spec!(Redo, "Redo", "Redo", Edit, 0, Redo, Some(201)),
-    spec!(Cut, "Cut", "Cut", Edit, 1, Always, Some(202)),
-    spec!(Copy, "Copy", "Copy", Edit, 1, Always, Some(203)),
-    spec!(Paste, "Paste", "Paste", Edit, 1, Always, Some(204)),
-    spec!(
-        SelectAll,
-        "Select All",
-        "Select All",
-        Edit,
-        1,
-        Always,
-        Some(205)
-    ),
-    spec!(
-        ToggleComment,
-        "Toggle Comment",
-        "Toggle Comment",
-        Edit,
-        1,
-        Always,
-        None
-    ),
-    spec!(Find, "Find…", "Find…", Edit, 2, Always, Some(206)),
-    spec!(
-        FindReplace,
-        "Find and Replace…",
-        "Find and Replace…",
-        Edit,
-        2,
-        Always,
-        Some(207)
-    ),
-    spec!(
-        Format,
-        "Format Document",
-        "Format Document",
-        Edit,
-        3,
-        TypstDocument,
-        Some(208)
-    ),
-    CommandSpec {
-        popup_section: None,
-        ..spec!(
-            SyncPreview,
-            "Sync Preview",
-            "Sync Preview",
-            Edit,
-            3,
-            InteractivePreview,
-            None
-        )
-    },
-    spec!(
-        Problems,
-        "Problems",
-        "Toggle Problems",
-        View,
-        0,
-        Always,
-        Some(300)
-    ),
-    spec!(
-        Explorer,
-        "Explorer",
-        "Toggle Explorer",
-        View,
-        0,
-        Always,
-        Some(301)
-    ),
-    spec!(Code, "Code", "Code", View, 1, Always, Some(302)),
-    spec!(Split, "Split", "Split", View, 1, Always, Some(303)),
-    spec!(Preview, "Preview", "Preview", View, 1, Always, Some(304)),
-];
-
-pub(crate) fn command_spec(command: AppCommand) -> &'static CommandSpec {
-    COMMAND_SPECS
-        .iter()
-        .find(|spec| spec.command == command)
-        .expect("every AppCommand has one descriptor")
+commands! {
+    Settings => ("Settings…", Application, 0, Always, 1),
+    New => ("New", File, 0, Always, 100),
+    NewWindow => ("New Window", File, 0, Always, 106),
+    Open => ("Open…", File, 0, Always, 101),
+    OpenInNewWindow => ("Open in New Window…", File, 0, Always, 107),
+    ChangeWorkspaceRoot => ("Change Workspace Root…", File, 0, Always, 102),
+    Save => ("Save", File, 1, Always, 103),
+    SaveAs => ("Save As…", File, 1, Always, 104),
+    Rename => ("Rename…", File, 1, SavedDocument, 108),
+    ExportPdf => ("Export PDF…", File, 2, TypstPreview, 105),
+    Undo => ("Undo", Edit, 0, Undo, 200),
+    Redo => ("Redo", Edit, 0, Redo, 201),
+    Cut => ("Cut", Edit, 1, Always, 202),
+    Copy => ("Copy", Edit, 1, Always, 203),
+    Paste => ("Paste", Edit, 1, Always, 204),
+    SelectAll => ("Select All", Edit, 1, Always, 205),
+    ToggleComment => ("Toggle Comment", Edit, 1, Always, 210),
+    Find => ("Find…", Edit, 2, Always, 206),
+    FindReplace => ("Find and Replace…", Edit, 2, Always, 207),
+    Format => ("Format Document", Edit, 3, TypstDocument, 208),
+    SyncPreview => ("Sync Preview", Edit, 3, InteractivePreview, 209),
+    Problems => ("Problems", View, 0, Always, 300),
+    Explorer => ("Explorer", View, 0, Always, 301),
+    Code => ("Code", View, 1, TypstDocument, 302),
+    Split => ("Split", View, 1, TypstDocument, 303),
+    Preview => ("Preview", View, 1, TypstDocument, 304),
+    Packages => ("Packages…", View, 2, Always, 305),
+    Git => ("Git…", View, 2, Always, 306),
 }
 
 pub(crate) fn command_specs(menu: CommandMenu) -> impl Iterator<Item = &'static CommandSpec> {
@@ -289,7 +157,7 @@ fn native_menu_request_from_tag(tag: isize) -> Option<NativeMenuRequest> {
     }
     COMMAND_SPECS
         .iter()
-        .find(|spec| spec.native_id == Some(tag))
+        .find(|spec| spec.native_id == tag)
         .map(|spec| NativeMenuRequest::Command(spec.command))
 }
 
@@ -328,13 +196,11 @@ fn native_menu_item_states(
 ) -> Vec<NativeMenuItemState> {
     COMMAND_SPECS
         .iter()
-        .filter_map(|spec| {
-            Some(NativeMenuItemState {
-                native_id: spec.native_id?,
-                command: spec.command,
-                binding: bindings.binding(spec.shortcut_action),
-                enabled: enabled(spec.command),
-            })
+        .map(|spec| NativeMenuItemState {
+            native_id: spec.native_id,
+            command: spec.command,
+            binding: bindings.binding(spec.shortcut_action),
+            enabled: enabled(spec.command),
         })
         .collect()
 }
@@ -530,8 +396,8 @@ mod macos {
         submenu.setTitle(&title);
         submenu.setAutoenablesItems(false);
         let mut previous_section = None;
-        for spec in command_specs(menu).filter(|spec| spec.native_id.is_some()) {
-            if previous_section.is_some_and(|section| section != spec.native_section) {
+        for spec in command_specs(menu) {
+            if previous_section.is_some_and(|section| section != spec.section) {
                 submenu.addItem(&NSMenuItem::separatorItem(mtm));
             }
             submenu.addItem(&make_item(
@@ -540,7 +406,7 @@ mod macos {
                 state_for_command(states, spec.command),
                 target,
             ));
-            previous_section = Some(spec.native_section);
+            previous_section = Some(spec.section);
         }
         let root = NSMenuItem::new(mtm);
         root.setTitle(&title);
@@ -669,12 +535,9 @@ mod macos {
 
         #[test]
         fn every_native_descriptor_tag_round_trips() {
-            for spec in super::super::COMMAND_SPECS
-                .iter()
-                .filter(|spec| spec.native_id.is_some())
-            {
+            for spec in super::super::COMMAND_SPECS.iter() {
                 assert_eq!(
-                    native_menu_request_from_tag(spec.native_id.unwrap()),
+                    native_menu_request_from_tag(spec.native_id),
                     Some(NativeMenuRequest::Command(spec.command))
                 );
             }
@@ -804,14 +667,14 @@ mod tests {
         assert!(
             COMMAND_SPECS
                 .iter()
-                .all(|spec| spec.native_id != Some(NATIVE_QUIT_ID))
+                .all(|spec| spec.native_id != NATIVE_QUIT_ID)
         );
         assert_eq!(
             native_menu_request_from_tag(NATIVE_QUIT_ID),
             Some(NativeMenuRequest::Quit)
         );
         assert_eq!(
-            native_menu_request_from_tag(command_spec(AppCommand::Save).native_id.unwrap()),
+            native_menu_request_from_tag(command_spec(AppCommand::Save).native_id),
             Some(NativeMenuRequest::Command(AppCommand::Save))
         );
     }
@@ -820,6 +683,7 @@ mod tests {
     fn view_descriptors_advertise_the_expected_number_shortcuts() {
         let bindings = ShortcutBindings::defaults(ShortcutPlatform::Other);
         let shortcuts = command_specs(CommandMenu::View)
+            .filter(|spec| bindings.binding(spec.shortcut_action).is_some())
             .map(|spec| {
                 (
                     spec.command,

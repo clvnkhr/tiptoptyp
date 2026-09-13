@@ -25,6 +25,15 @@ a rasterised recovery viewer.
 - UTF-8-safe literal find/replace with wraparound navigation
 - New, Open, Save, Save As, undo/redo, formatting, auto-save, drag-and-drop,
   dirty-file guards, and atomic writes
+- Drop files onto an Explorer folder to copy them into the project, or onto
+  the code editor to open them. Explorer also supports confirmed file deletion.
+- Fuzzy completion filtering while typing, code-first reference suggestions,
+  and font completion after `text(font: ` or an opening quote
+- Font samples rendered in the selected font in completion and on hover in
+  Settings font pickers; fuzzy font search in Settings and document font menus
+- Installed package removal with a confirmation for the selected version
+- A Git window for status, diffs, staging, unstaging, commits, recent history,
+  fetch, fast-forward pull, and push
 - Pause/resume control for automatic preview updates. Compile writes the
   current canonical PDF beside its saved Typst entry; unsaved documents ask
   for a destination. Export PDF remains available for choosing another path.
@@ -128,6 +137,24 @@ To use only Typst's bundled fonts during development:
 TIPTOPTYP_IGNORE_SYSTEM_FONTS=1 cargo run --release
 ```
 
+Open **View → Git** for repository operations. Git must be on `PATH`;
+remote operations use the repository's configured remotes, upstream branch,
+and credentials. Save editor changes before staging or committing. Pull only
+fast-forwards, so divergent branches require resolution outside this panel.
+**Diff** shows unstaged edits against the staging area; **Staged diff** shows
+changes included in the next commit. Both open a selectable, color-coded viewer
+in the Git window. **Unstage all** clears the staging area and keeps working
+files intact. Staging excludes `.tiptoptyp` temporary files; any already staged
+temporary files remain visible so you can unstage them.
+
+The Explorer shows Git badges (`A` added, `M` modified, `D` deleted, `?`
+untracked, `U` conflicted); hover for staged/unstaged details. Beside the line
+numbers, green marks additions, blue marks modifications, and red marks
+deletions compared with the last commit, including unsaved editor changes.
+Click a marker to open that chunk's diff. Each document window keeps its own
+Git state and selected diff, including when two windows edit the same file.
+Git decorations refresh automatically and after refreshing the Explorer.
+
 ## Package
 
 Install the official cargo-packager CLI, then build a native package:
@@ -174,6 +201,9 @@ and provide notarization credentials.
 | Find | Cmd/Ctrl-F |
 | Find and replace | Cmd-Option-F on macOS, Ctrl-H elsewhere |
 | Format Typst | Option/Alt-Shift-F |
+| Toggle tooltip under mouse | Cmd/Ctrl-Shift-Space |
+| Toggle tooltip at caret | Cmd/Ctrl-Shift-K |
+| Dismiss focused tooltip | Escape |
 | Settings | Cmd/Ctrl-Comma |
 | Compile PDF beside source | Cmd/Ctrl-R |
 | Interface scale | Cmd/Ctrl-Plus or Minus |

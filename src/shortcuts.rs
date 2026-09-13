@@ -21,6 +21,9 @@ pub(crate) enum ShortcutAction {
     ChangeWorkspaceRoot,
     Save,
     SaveAs,
+    Rename,
+    Packages,
+    Git,
     ExportPdf,
     Undo,
     Redo,
@@ -41,7 +44,8 @@ pub(crate) enum ShortcutAction {
     Compile,
     ToggleCompilation,
     Complete,
-    FocusTooltip,
+    PointerTooltip,
+    CaretTooltip,
     UiScaleIn,
     UiScaleOut,
     PreviewZoomIn,
@@ -54,7 +58,7 @@ pub(crate) enum ShortcutAction {
 }
 
 impl ShortcutAction {
-    pub(crate) const ALL: [Self; 38] = [
+    pub(crate) const ALL: [Self; 42] = [
         Self::Settings,
         Self::New,
         Self::NewWindow,
@@ -63,6 +67,9 @@ impl ShortcutAction {
         Self::ChangeWorkspaceRoot,
         Self::Save,
         Self::SaveAs,
+        Self::Rename,
+        Self::Packages,
+        Self::Git,
         Self::ExportPdf,
         Self::Undo,
         Self::Redo,
@@ -83,7 +90,8 @@ impl ShortcutAction {
         Self::Compile,
         Self::ToggleCompilation,
         Self::Complete,
-        Self::FocusTooltip,
+        Self::PointerTooltip,
+        Self::CaretTooltip,
         Self::UiScaleIn,
         Self::UiScaleOut,
         Self::PreviewZoomIn,
@@ -105,6 +113,9 @@ impl ShortcutAction {
             Self::ChangeWorkspaceRoot => "file.change_workspace_root",
             Self::Save => "file.save",
             Self::SaveAs => "file.save_as",
+            Self::Rename => "file.rename",
+            Self::Packages => "view.packages",
+            Self::Git => "view.git",
             Self::ExportPdf => "file.export_pdf",
             Self::Undo => "edit.undo",
             Self::Redo => "edit.redo",
@@ -125,7 +136,8 @@ impl ShortcutAction {
             Self::Compile => "build.compile",
             Self::ToggleCompilation => "build.toggle_automatic_compilation",
             Self::Complete => "editor.complete",
-            Self::FocusTooltip => "editor.focus_tooltip",
+            Self::PointerTooltip => "editor.pointer_tooltip",
+            Self::CaretTooltip => "editor.caret_tooltip",
             Self::UiScaleIn => "window.interface_scale_in",
             Self::UiScaleOut => "window.interface_scale_out",
             Self::PreviewZoomIn => "preview.zoom_in",
@@ -152,6 +164,9 @@ impl ShortcutAction {
             Self::ChangeWorkspaceRoot => "Change workspace root",
             Self::Save => "Save",
             Self::SaveAs => "Save as",
+            Self::Rename => "Rename file",
+            Self::Packages => "Packages",
+            Self::Git => "Git",
             Self::ExportPdf => "Export PDF",
             Self::Undo => "Undo",
             Self::Redo => "Redo",
@@ -172,7 +187,8 @@ impl ShortcutAction {
             Self::Compile => "Compile PDF",
             Self::ToggleCompilation => "Pause or resume automatic preview updates",
             Self::Complete => "Show completions",
-            Self::FocusTooltip => "Focus hover card",
+            Self::PointerTooltip => "Toggle tooltip under mouse",
+            Self::CaretTooltip => "Toggle tooltip at caret",
             Self::UiScaleIn => "Increase interface scale",
             Self::UiScaleOut => "Decrease interface scale",
             Self::PreviewZoomIn => "Zoom preview in",
@@ -195,6 +211,7 @@ impl ShortcutAction {
             | Self::ChangeWorkspaceRoot
             | Self::Save
             | Self::SaveAs
+            | Self::Rename
             | Self::ExportPdf => "File",
             Self::Undo
             | Self::Redo
@@ -212,12 +229,15 @@ impl ShortcutAction {
             | Self::PreviewZoomOut
             | Self::PreviewZoomReset => "Preview",
             Self::Compile | Self::ToggleCompilation => "Build",
-            Self::Problems
+            Self::Packages
+            | Self::Git
+            | Self::Problems
             | Self::Explorer
             | Self::Code
             | Self::Split
             | Self::Preview
-            | Self::FocusTooltip
+            | Self::PointerTooltip
+            | Self::CaretTooltip
             | Self::UiScaleIn
             | Self::UiScaleOut
             | Self::Minimize
@@ -953,6 +973,7 @@ fn default_binding(action: ShortcutAction, platform: ShortcutPlatform) -> Option
         Action::ChangeWorkspaceRoot => ShortcutChord::primary(Key::O).shift(),
         Action::Save => ShortcutChord::primary(Key::S),
         Action::SaveAs => ShortcutChord::primary(Key::S).shift(),
+        Action::Rename | Action::Packages | Action::Git => return None,
         Action::ExportPdf => ShortcutChord::primary(Key::E).shift(),
         Action::Undo => ShortcutChord::primary(Key::Z),
         Action::Redo => ShortcutChord::primary(Key::Z).shift(),
@@ -982,7 +1003,8 @@ fn default_binding(action: ShortcutAction, platform: ShortcutPlatform) -> Option
         Action::Compile => ShortcutChord::primary(Key::R),
         Action::ToggleCompilation => ShortcutChord::primary(Key::R).shift(),
         Action::Complete => ShortcutChord::control(Key::Space),
-        Action::FocusTooltip => ShortcutChord::primary(Key::Space).shift(),
+        Action::PointerTooltip => ShortcutChord::primary(Key::Space).shift(),
+        Action::CaretTooltip => ShortcutChord::primary(Key::K).shift(),
         Action::UiScaleIn => ShortcutChord::primary(Key::Plus),
         Action::UiScaleOut => ShortcutChord::primary(Key::Minus),
         Action::PreviewZoomIn => ShortcutChord::primary(Key::Plus).alt(),
@@ -1033,7 +1055,13 @@ mod tests {
                     action,
                     ShortcutAction::SyncPreview | ShortcutAction::ToggleFullscreen
                 ) && platform == ShortcutPlatform::Other
-                    || action == ShortcutAction::SyncPreview
+                    || matches!(
+                        action,
+                        ShortcutAction::SyncPreview
+                            | ShortcutAction::Rename
+                            | ShortcutAction::Packages
+                            | ShortcutAction::Git
+                    )
                     || bindings.binding(action).is_some()
             }));
         }

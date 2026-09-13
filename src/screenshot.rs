@@ -84,6 +84,12 @@ pub enum UiSnapshotScene {
     EditorContextMenu,
     ExplorerContextMenu,
     DocumentFontSelector,
+    FontCompletion,
+    SettingsFontPicker,
+    AssetPreview,
+    GitWindow,
+    GitEditor,
+    GitChunk,
     StatusLog,
     RenameDialog,
     WorkspaceChooser,
@@ -93,7 +99,7 @@ pub enum UiSnapshotScene {
 }
 
 impl UiSnapshotScene {
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 29] = [
         Self::Main,
         Self::StickyContext,
         Self::FileMenu,
@@ -111,6 +117,12 @@ impl UiSnapshotScene {
         Self::EditorContextMenu,
         Self::ExplorerContextMenu,
         Self::DocumentFontSelector,
+        Self::FontCompletion,
+        Self::SettingsFontPicker,
+        Self::AssetPreview,
+        Self::GitWindow,
+        Self::GitEditor,
+        Self::GitChunk,
         Self::StatusLog,
         Self::RenameDialog,
         Self::WorkspaceChooser,
@@ -138,6 +150,12 @@ impl UiSnapshotScene {
             Self::EditorContextMenu => "editor-context-menu",
             Self::ExplorerContextMenu => "explorer-context-menu",
             Self::DocumentFontSelector => "document-font-selector",
+            Self::FontCompletion => "font-completion",
+            Self::SettingsFontPicker => "settings-font-picker",
+            Self::AssetPreview => "asset-preview",
+            Self::GitWindow => "git-window",
+            Self::GitEditor => "git-editor",
+            Self::GitChunk => "git-chunk",
             Self::StatusLog => "status-log",
             Self::RenameDialog => "rename-dialog",
             Self::WorkspaceChooser => "workspace-chooser",
@@ -151,6 +169,7 @@ impl UiSnapshotScene {
     pub const fn viewport_target(self) -> &'static str {
         match self {
             Self::Main
+            | Self::FontCompletion
             | Self::StickyContext
             | Self::ProblemsPanel
             | Self::FindReplace
@@ -161,7 +180,12 @@ impl UiSnapshotScene {
             | Self::ExplorerContextMenu
             | Self::DocumentFontSelector
             | Self::StatusLog => "popup",
+            Self::AssetPreview => "asset-hover",
+            Self::GitWindow => "git",
+            Self::GitEditor => ROOT_VIEWPORT_NAME,
+            Self::GitChunk => "git-chunk",
             Self::SettingsWindow
+            | Self::SettingsFontPicker
             | Self::SettingsThemePicker
             | Self::SettingsDarkThemePicker
             | Self::SettingsTooltip => "settings",
@@ -201,6 +225,12 @@ impl UiSnapshotScene {
             "editor-context-menu" => Self::EditorContextMenu,
             "explorer-context-menu" => Self::ExplorerContextMenu,
             "document-font-selector" => Self::DocumentFontSelector,
+            "font-completion" => Self::FontCompletion,
+            "settings-font-picker" => Self::SettingsFontPicker,
+            "asset-preview" => Self::AssetPreview,
+            "git-window" => Self::GitWindow,
+            "git-editor" => Self::GitEditor,
+            "git-chunk" => Self::GitChunk,
             "status-log" => Self::StatusLog,
             "rename-dialog" => Self::RenameDialog,
             "workspace-chooser" => Self::WorkspaceChooser,

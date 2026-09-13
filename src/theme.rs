@@ -1045,11 +1045,8 @@ pub struct StatusChipMetrics {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MenuMetrics {
     pub row_height: f32,
-    pub file_size: Vec2,
-    pub edit_size: Vec2,
-    pub workspace_size: Vec2,
-    pub editor_size: Vec2,
-    pub view_size: Vec2,
+    pub workspace_width: f32,
+    pub editor_width: f32,
     pub status_log_size: Vec2,
     pub font_selector_size: Vec2,
 }
@@ -1244,11 +1241,8 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
     status_chip: StatusChipMetrics { vertical_margin: 3 },
     menu: MenuMetrics {
         row_height: 24.0,
-        file_size: Vec2::new(280.0, 240.0),
-        edit_size: Vec2::new(280.0, 320.0),
-        workspace_size: Vec2::new(220.0, 182.0),
-        editor_size: Vec2::new(220.0, 240.0),
-        view_size: Vec2::new(220.0, 190.0),
+        workspace_width: 220.0,
+        editor_width: 280.0,
         status_log_size: Vec2::new(360.0, 250.0),
         font_selector_size: Vec2::new(360.0, 390.0),
     },

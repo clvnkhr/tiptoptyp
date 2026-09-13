@@ -133,10 +133,6 @@ impl AppliedPresentation {
         self.request = request;
     }
 
-    pub(crate) fn invalidate_fonts(&mut self) {
-        self.request.font_catalog_revision = self.request.font_catalog_revision.wrapping_add(1);
-    }
-
     pub(crate) fn record_ui_scale(&mut self, percent: u16) {
         self.request.ui_scale_percent = percent;
     }

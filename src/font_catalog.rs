@@ -120,6 +120,22 @@ struct FontFileFingerprint {
 }
 
 impl FontCatalog {
+    pub(crate) fn single_font_fixture(path: &Path) -> Self {
+        let mut records = Vec::new();
+        append_font_file(&mut records, path, FontOrigin::System);
+        Self {
+            families: records
+                .into_iter()
+                .map(|(name, origin, face)| FontFamily {
+                    name,
+                    origin,
+                    faces: vec![face],
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
     pub(crate) fn snapshot_fixture() -> Self {
         let workspace_files = vec![PathBuf::from("/workspace/fonts/Project Sans.ttf")];
         let families = [

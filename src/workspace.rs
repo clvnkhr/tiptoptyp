@@ -6,6 +6,52 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Import one regular file without replacing an existing workspace entry.
+pub(crate) fn import_file(root: &Path, directory: &Path, source: &Path) -> io::Result<PathBuf> {
+    let root = root.canonicalize()?;
+    let directory = directory.canonicalize()?;
+    if !directory.starts_with(&root) || !directory.is_dir() {
+        return Err(io::Error::other("the destination is outside the workspace"));
+    }
+    if !fs::symlink_metadata(source)?.file_type().is_file() {
+        return Err(io::Error::other("only regular files can be imported"));
+    }
+    let name = source
+        .file_name()
+        .ok_or_else(|| io::Error::other("missing file name"))?;
+    let destination = directory.join(name);
+    let mut input = fs::File::open(source)?;
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&destination)?;
+    let mut copy = || -> io::Result<()> {
+        io::copy(&mut input, &mut output)?;
+        output.set_permissions(input.metadata()?.permissions())?;
+        output.sync_all()
+    };
+    if let Err(error) = copy() {
+        drop(output);
+        let _ = fs::remove_file(&destination);
+        return Err(error);
+    }
+    Ok(destination)
+}
+
+pub(crate) fn delete_file(root: &Path, path: &Path) -> io::Result<()> {
+    let root = root.canonicalize()?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("missing parent"))?
+        .canonicalize()?;
+    if !parent.starts_with(root) || !fs::symlink_metadata(path)?.file_type().is_file() {
+        return Err(io::Error::other(
+            "only regular workspace files can be deleted",
+        ));
+    }
+    fs::remove_file(path)
+}
+
 /// The kind of an entry in the project tree.
 ///
 /// Symlinks are surfaced so the filesystem panel does not silently hide them,
@@ -216,6 +262,22 @@ mod tests {
 
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn importing_a_script_preserves_its_executable_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let source = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let script = source.path().join("build.sh");
+        fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o750)).unwrap();
+        let imported = import_file(project.path(), project.path(), &script).unwrap();
+        assert_eq!(
+            fs::metadata(imported).unwrap().permissions().mode() & 0o777,
+            0o750
+        );
+    }
+
     struct TempProject {
         directory: tempfile::TempDir,
     }
@@ -260,6 +322,46 @@ mod tests {
             .iter()
             .map(|node| node.display_name().into_owned())
             .collect()
+    }
+
+    #[test]
+    fn import_preserves_sources_and_rejects_collisions_and_outside_targets() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        let folder = root.join("chapters");
+        fs::create_dir_all(&folder).unwrap();
+        let source = temp.path().join("sample.typ");
+        fs::write(&source, "hello").unwrap();
+        let imported = import_file(&root, &folder, &source).unwrap();
+        assert_eq!(fs::read_to_string(&imported).unwrap(), "hello");
+        fs::write(&source, "changed").unwrap();
+        assert!(import_file(&root, &folder, &source).is_err());
+        assert_eq!(fs::read_to_string(&imported).unwrap(), "hello");
+        assert!(source.exists());
+        assert!(import_file(&root, temp.path(), &source).is_err());
+        assert!(import_file(&root, &folder, &root).is_err());
+        assert!(delete_file(&root, &source).is_err());
+        assert!(delete_file(&root, &folder).is_err());
+        delete_file(&root, &imported).unwrap();
+        assert!(!imported.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_operations_do_not_follow_symlinks() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        fs::create_dir(&root).unwrap();
+        let source = temp.path().join("private.typ");
+        fs::write(&source, "preserve").unwrap();
+        let link = root.join("link.typ");
+        std::os::unix::fs::symlink(&source, &link).unwrap();
+        assert!(import_file(&root, &root, &link).is_err());
+        assert!(delete_file(&root, &link).is_err());
+        let outside = root.join("outside");
+        std::os::unix::fs::symlink(temp.path(), &outside).unwrap();
+        assert!(import_file(&root, &outside, &source).is_err());
+        assert_eq!(fs::read_to_string(source).unwrap(), "preserve");
     }
 
     #[test]

@@ -174,7 +174,7 @@ impl ChildViewHost {
         let id = scoped_child_viewport_id(context, spec.id_salt);
         let viewport = spec.viewport();
         let native_theme = theme::native_theme(appearance);
-        context.show_viewport_immediate(id, viewport, |ui, _class| {
+        crate::viewport_fonts::show_immediate(context, id, viewport, |ui, _class| {
             captures.begin_viewport(ui.ctx(), spec.capture_target);
             ui.set_style(style.clone());
             ui.ctx()

@@ -113,7 +113,7 @@ Update the checkbox only when the entire task is complete and verified.
 84. [x] prevent selecting file-tree names, the `ttt` logo, and the title-bar filename; add file-name, absolute-path, and workspace-relative-path copy actions to file context menus; and show Cmd+1 through Cmd+5 shortcuts in the native View menu
 85. [x] add a Pause/Resume control for automatic preview updates and make Compile write the effective Typst entry's PDF beside its source, using an output picker only for an unsaved document
 86. [x] fix the native startup deadlock that leaves the application unresponsive before any UI appears
-87. [ ] allow dragging a file into the file explorer to add it into that folder. current file behavior should be scoped to falling on the code editor instead
+87. [x] allow dragging a file into the file explorer to add it into that folder. current file behavior should be scoped to falling on the code editor instead
 88. [x] we should be able to right click on a file and Show in Finder
 89. [x] when we reload from external inputs to the file, we should not need to reload the tinymist server since it was listening. I think just the code panel needs to be updated.
 90. [x] if we open a link in an external window then the greentext in the bottom should log that
@@ -126,23 +126,28 @@ min > max, or either was NaN. min = 9.0, max = 8.0
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 I was using two different windows with two different workspaces. Possibly i was choosing a file. I guess we need to make sure all the stuff between windows are completely separate
 92. [x] the file preview should appear on the right of the cursor and in particular not on top of the file tree so it is easy to browse
-93. [ ] there should be a keyboard shortcut (or two?) to open/close the tooltip under the mouse cursor and under the keyboard cursor
-94. [ ] We need to also be able to delete files from the explorer
-95. [ ] Git integration - allow the most basic git functionality, enough for basic use.
+93. [x] there should be a keyboard shortcut (or two?) to open/close the tooltip under the mouse cursor and under the keyboard cursor
+94. [x] We need to also be able to delete files from the explorer
+95. [x] Git integration - allow the most basic git functionality, enough for basic use.
 96. [x] when we are editing a non-typ file, grey out Code Split Preview buttons
-97. [ ] completions should filter as i type more chars.
-98. [ ] font completions should similarly filter (all filtering should be fuzzy match), I should be able to type ```typ #set text(font: "``` and then have the full list. current behavior is the completions show when I type ```typ #set text(font:``` but disappear on the space.
-99. [ ] font completion and also font selection in the settings
-100. [ ] there should be an uninstall button in the package UI
+97. [x] completions should filter as i type more chars.
+98. [x] font completions should similarly filter (all filtering should be fuzzy match), I should be able to type ```typ #set text(font: "``` and then have the full list. current behavior is the completions show when I type ```typ #set text(font:``` but disappear on the space.
+99. [x] show a preview rendered in the selected font, both in font completion and font selection in Settings (clarified 2026-09-12)
+100. [x] there should be an uninstall button in the package UI
 101. [x] we should be able to access packages UI from View title bar
 102. [x] we should be able to rename from title bar File > Rename
 103. [x] there should be a button to go to the package desc on the website
 104. [x] Currently, we need to wait for the online packages to be fetched before any is shown. The installed packages should immediately appear, followed by the online generated list once they are ready.
 105. [x] when we comment a line out with cmd-/ the '//' should be added at the start of the line, not after the whitespace and at the first non-whitespace char.
-106. [ ] There should be better completions for references. Firstly, the thing on the left should be the code, and after that should follow the other data. Secondly, it should filter as I type. 
+106. [x] There should be better completions for references. Firstly, the thing on the left should be the code, and after that should follow the other data. Secondly, it should filter as I type.
 107. [x] find and replace should appear on top of the sticky rows, not push them down
-108. [ ] the image/pdf preview should not have so much text. just the image alone is enough.
-109. [ ] the title-bar options (file, edit, view) do not mirror the title bar ones. make it so that it is a error, type error or other strict testing behavior that these two must always match. use a single source of truth.
+108. [x] the image/pdf preview should not have so much text. just the image alone is enough.
+109. [x] the title-bar options (file, edit, view) do not mirror the title bar ones. make it so that it is a error, type error or other strict testing behavior that these two must always match. use a single source of truth.
+110. [x] browsing font completion and font-picker previews must not rebuild the application fonts or flash text throughout the UI
+111. [x] polish the Git window with right-aligned buttons, a visible diff viewer, and Unstage all
+112. [x] show Git status in Explorer and clickable change markers beside line numbers, with independent state and diff windows for every document window
+113. [x] audit correctness and maintainability across document workflows, file operations, Git, and background work; fix verified defects and redundant scans
+
 = resolved in the 2026-09-07 pass
 
 Items 1, 2, and 26 remain deferred. This history records completed work and partial
@@ -347,3 +352,152 @@ At that point, only deferred items 1, 2, and 26 remained open.
   variable-axis normalization, popup actions, package-local loading, external
   link notices, comment placement, view-mode availability, and sticky/find
   geometry.
+
+
+= correctness audit (2026-09-12 remaining active backlog)
+
+- Items 87 and 94: Explorer drops copy regular files into the hovered folder
+  without overwriting existing entries; dropping onto the editor opens files.
+  Explorer deletion requires confirmation and handles the current document and
+  designated preview entry. Filesystem regressions cover collisions, source
+  preservation, directory boundaries, and symlinks; UI tests cover drop routing.
+- Item 93: Cmd-Shift-Space toggles the tooltip under the mouse; Cmd-Shift-K
+  opens it at the caret. Both shortcuts are configurable. Focused cards support
+  scrolling and Escape dismissal, with dismissal retained until rearmed or the
+  pointer leaves the source.
+- Item 95: View > Git opens workspace-scoped status, diffs, staging, unstaging,
+  commits, recent history, fetch, fast-forward pull, and push. Operations use
+  files on disk and configured remotes and credentials. Tests exercise temporary
+  repositories and a local remote, including rejecting divergent pulls without
+  discarding local changes.
+- Items 97, 98, and 106: Completions fuzzy-filter as the prefix changes, with
+  Unicode-safe rebasing and filtering before the result limit. Font completion
+  remains available after a space or opening quote. Reference suggestions show
+  insertion code before descriptive metadata and filter on that code. Member
+  completions filter the member name independently of its receiver.
+- Item 99: Completion selections and Settings font-picker hover cards render
+  a sample using the actual font file. Loading happens in the background and
+  replaces a bounded picker slot. Font pickers also support fuzzy search.
+- Item 100: Each installed package version has an Uninstall action, a directory
+  confirmation, release-path validation, and an immediate installed-list refresh.
+  Tests verify that sibling versions and linked directories remain untouched.
+- Item 108: Ready image/PDF hover cards contain only the image. Loading and
+  failure states retain their explanatory messages.
+- Item 109: Mandatory command descriptors generate both native and title-bar
+  File/Edit/View menus. Semantic tests exercise every shared command. Menu
+  geometry tests cover all rows, separators, and changing from a shorter menu
+  to a taller one without retaining the previous scroll clipping.
+- Verification: Formatting, strict Clippy, and diff checks pass. The repository
+  suite passes 583 tests, with 2 environment-dependent tests ignored; all 8
+  packaging tests pass. The complete 68-image gallery was regenerated in one
+  app session and validated. Fresh targeted font, asset, and menu captures under
+  `.tiptoptyp/screenshots/agent-review` were inspected in Latte and Mocha.
+  The final editor-context capture after font-preview scenes reproduced missing
+  glyphs in one disabled label; the stable gallery's corresponding label renders
+  correctly. This remains tracked by deferred item 26, not treated as resolved.
+
+Only deferred items 1, 2, and 26 remain unchecked.
+
+
+= correctness audit (2026-09-12 font-preview flashing)
+
+- Items 99 and 110: The previous preview implementation called egui's
+  `set_fonts` when the highlighted family changed, invalidating the shared
+  font atlas and cached text layouts across the application. Samples now use
+  an isolated, worker-owned font atlas uploaded as a separate texture, with
+  four recently used samples cached per picker. Browsing fonts never changes
+  the application's font definitions. Font files are released after rasterizing.
+- Items 26 and 110: Font-preview flashing was a regression in the new preview
+  implementation. The earlier observation should not have been attributed to
+  deferred item 26 without tracing it. This specific trigger is fixed; item 26
+  remains open for any unrelated intermittent text corruption.
+- Verification: A regression repeatedly switches samples while preserving
+  custom UI/code text-layout identities and asserting that no shared-font
+  texture updates occur. Separate geometry tests cover different actual fonts,
+  1x/2x resolution, and normalized texture coordinates. Formatting, strict Clippy,
+  all 584 repository tests (2 environment-dependent tests ignored), and all 8
+  packaging tests pass. Five fresh native viewport captures were inspected:
+  font completion and Settings samples in Latte/Mocha, followed by the editor
+  context menu. The previously incomplete menu label renders fully.
+
+
+= correctness audit (2026-09-13 Git window)
+
+- Item 111: Git now has section headings, file counts, consistent right-aligned
+  action columns, truncated paths with full-path hints, and a dedicated,
+  selectable diff viewer with colored additions and deletions. Comparisons
+  explain staged versus unstaged changes, including loading, empty, and error
+  states. Finished comparisons scroll into view even in a short window.
+- Git jobs are collected in the Git child viewport as well as the editor.
+  Previously the child depended on the editor repainting to collect results,
+  and an empty diff appeared as a generic operation-success message.
+- Unstage all removes index changes while preserving working files, including
+  files edited again after staging in a repository without its first commit.
+  Stage all excludes app-owned .tiptoptyp artifacts and handles literal paths
+  through a NUL-delimited pathspec file. Already staged artifacts stay visible
+  for unstaging; no existing repository index was changed during this work.
+- Verification: All 11 focused Git tests pass, including real temporary Git
+  repositories, child-only async completion, narrow/wide action alignment,
+  short-window diff reveal, empty/error states, and file preservation. Formatting,
+  strict Clippy, all 591 repository tests (2 environment-dependent tests ignored),
+  and all 8 packaging tests pass. One sidecar-shutdown test failed on the initial
+  full run, passed in isolation, and passed in the final full run. Fresh Git
+  viewport captures were inspected in Latte and Mocha; the 68-image gallery
+  was regenerated in one app session and validated.
+
+
+= correctness audit (2026-09-13 Git editor integration)
+
+- Item 112: Explorer files show Git status badges with staging details on hover.
+  Added, modified, and deleted line runs appear beside the line numbers; context
+  lines are not highlighted. Clicking a marker opens its selected chunk in an
+  independent native diff window. Comparisons include staged and unsaved edits
+  against the last commit, without changing the source file or Git index.
+- Each document window owns its scans and selected chunk. Results carry the
+  workspace, path, and buffer revision, so late results cannot replace another
+  document's hunks. Background jobs repaint their originating viewport. Tests
+  cover two different buffers of the same file alongside another repository,
+  wrapped lines, clipping, deletion boundaries, and actual editor gutter clicks
+  in both populated and empty documents.
+- Item 26: The combined Git/theme capture reproduced missing glyphs. GPU
+  readback confirmed pixels missing from the uploaded font atlas. Immediate
+  viewport rendering now resynchronizes the current atlas after font-cache
+  changes and repeated parent layout passes. Ordinary frames keep incremental
+  uploads, and existing text layouts are preserved. Three regressions cover
+  stale parent uploads, font-cache replacement, and steady-state uploads.
+  This reproducible transition is fixed; the older deferred report remains open
+  for any unrelated cause. No renderer dependency fork or diagnostic code remains.
+- Verification: Formatting and strict Clippy pass. All 607 repository tests
+  pass, with 2 environment-dependent tests ignored; all 8 packaging tests pass.
+  An initial gallery-manifest check overlapped gallery regeneration; the complete
+  suite passed after capture finished. Six fresh release viewport captures of
+  the Git page, editor, and selected chunk were inspected in Latte and Mocha,
+  including the formerly failing transition. The complete 68-image gallery was
+  regenerated in one app session, validated, and representative fresh images
+  inspected. Existing repository index contents were preserved.
+
+
+= correctness audit (2026-09-13 code review)
+
+- Item 113: Native asynchronous file dialogs remember their originating
+  viewport, so completing a dialog after another window becomes current wakes
+  the correct window. Imported files preserve their source permissions,
+  including executable scripts, while retaining collision protection.
+- Both Git diff consumers share deterministic unified-output arguments.
+  Custom diff markers and suppressed blank context lines no longer shift
+  editor change markers. Intent-to-add files now receive an Added badge and
+  use an empty baseline when absent from the last commit.
+- Background Git decorations obtain branch and file status in one status
+  command without fetching history or taking optional index-refresh locks.
+  The Git window also reuses its initial snapshot for a plain refresh instead
+  of immediately repeating the same scan.
+- Switching files or workspaces detaches obsolete read-only scans, allowing
+  the new file to scan immediately. Typing in the same file keeps one worker
+  and debounces the next request. Detached workers can finish their bounded
+  operation, but cannot publish a result or error into the new document.
+- Verification: Six new regression tests cover the fixes, including actual
+  temporary Git repositories, permission preservation, viewport wake routing,
+  and blocked-worker transitions. Formatting and strict Clippy pass; all 613
+  repository tests and all 8 packaging tests pass, with 2 environment-dependent
+  repository tests ignored. These changes have deterministic behavioral
+  coverage; no new visual verification is claimed for this audit.

@@ -61,15 +61,18 @@ pub(crate) enum DialogPoll<T> {
     },
 }
 
-struct EguiFutureWake(egui::Context);
+struct EguiFutureWake {
+    context: egui::Context,
+    viewport: egui::ViewportId,
+}
 
 impl Wake for EguiFutureWake {
     fn wake(self: Arc<Self>) {
-        self.0.request_repaint();
+        self.wake_by_ref();
     }
 
     fn wake_by_ref(self: &Arc<Self>) {
-        self.0.request_repaint();
+        self.context.request_repaint_of(self.viewport);
     }
 }
 
@@ -83,7 +86,10 @@ pub(crate) fn poll_dialog<T>(
     let Some(dialog) = pending.as_mut() else {
         return DialogPoll::Idle;
     };
-    let waker = Waker::from(Arc::new(EguiFutureWake(context.clone())));
+    let waker = Waker::from(Arc::new(EguiFutureWake {
+        context: context.clone(),
+        viewport: context.viewport_id(),
+    }));
     let mut task_context = TaskContext::from_waker(&waker);
     let Poll::Ready(selection) = dialog.future.as_mut().poll(&mut task_context) else {
         context.request_repaint_after(Duration::from_millis(50));
@@ -178,6 +184,14 @@ pub(crate) struct PendingDocumentAction {
 
 #[derive(Debug, Clone)]
 pub(crate) enum AppModal {
+    DeleteFile {
+        message: String,
+        path: PathBuf,
+    },
+    UninstallPackage {
+        message: String,
+        installation: crate::package_catalog::PackageInstallation,
+    },
     Alert {
         title: String,
         message: String,
@@ -299,6 +313,47 @@ mod tests {
         epoch: 3,
         revision: 8,
     };
+
+    #[test]
+    fn asynchronous_dialog_wakes_its_own_window_after_focus_changes() {
+        let context = egui::Context::default();
+        let origin = egui::ViewportId::from_hash_of("dialog-owner");
+        let other = egui::ViewportId::from_hash_of("another-editor");
+        let saved = Arc::new(std::sync::Mutex::new(None::<Waker>));
+        let future_waker = saved.clone();
+        let mut pending = Some(PendingDialog::new(
+            (),
+            std::future::poll_fn(move |context| {
+                *future_waker.lock().unwrap() = Some(context.waker().clone());
+                Poll::Pending
+            }),
+        ));
+        for viewport in [origin, origin, origin, other, other, other, origin, other] {
+            let mut input = egui::RawInput {
+                viewport_id: viewport,
+                ..Default::default()
+            };
+            input.viewports.entry(viewport).or_default();
+            let mut output = context.run_ui(input, |ui| {
+                if viewport == origin {
+                    assert!(matches!(
+                        poll_dialog(&mut pending, ui.ctx()),
+                        DialogPoll::Pending
+                    ));
+                }
+            });
+            output.textures_delta.clear();
+        }
+        let (sender, receiver) = std::sync::mpsc::channel();
+        context.set_request_repaint_callback(move |info| {
+            sender.send(info.viewport_id).unwrap();
+        });
+        saved.lock().unwrap().take().unwrap().wake();
+        assert_eq!(
+            receiver.recv_timeout(Duration::from_secs(1)).unwrap(),
+            origin
+        );
+    }
 
     #[test]
     fn dirty_replacement_becomes_a_keyed_unsaved_prompt() {
