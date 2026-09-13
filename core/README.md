@@ -5,7 +5,8 @@ without a desktop, sidecar binaries, network, or filesystem fixtures.
 
 - `document`: only edit transactions/history commands mutate source. Immutable
   snapshots bind source to a window/document version. A save receipt records the
-  bytes actually written; it cannot make a newer buffer clean.
+  bytes actually written; stale completions cannot regress persisted metadata or
+  release a pending continuation.
 - `workflow` and `closing`: exclusive document-operation phases, consumed save
   continuations, and all-window close approval. Any canceled window or changed
   approved version prevents the batch from closing. The runtime also supplies
@@ -20,8 +21,11 @@ adapters. `tests/architecture_boundaries.rs` checks this rule and protected
 viewport/font calls. Adding a dependency to this crate requires reviewing that
 explicit dependency allowlist. The checks are architectural rules, not a sandbox.
 
-`tests/save_close.rs` drives the real document/workflow boundary through canceled,
-failed, uncertain, stale and successful writes. Add adversarial event sequences
-there when changing save policy; retain real adapter tests in the application.
+`tests/contracts.rs` drives the public state-machine contracts through edit/history,
+save ordering, workflow, multiwindow close, preview, connection, text, geometry,
+and scheduling edge cases. `tests/save_close.rs` drives the real
+document/workflow boundary through canceled, failed, uncertain, stale and
+successful writes. Add adversarial event sequences there when changing save
+policy; retain real adapter tests in the application.
 The `test-support` feature exposes snapshot fixtures for application tests and
 is enabled only through the application's dev dependency.

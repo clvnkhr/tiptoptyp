@@ -24,7 +24,7 @@ the module extraction and this implementation.
   inset: 6pt,
   align: left,
   table.header([ID], [Implemented boundary], [Evidence]),
-  [R1], [Private document source, identity, saved state and history. Edits finalize history and version advancement together, including unwind. Consumers receive one immutable snapshot. Save receipts retain the exact written snapshot and window owner.], [`core/src/document.rs`; generated Unicode edit/history sequences; stale and cross-window save tests; compile-fail field-access test.],
+  [R1], [Private document source, identity, saved state and history. Edits finalize history and version advancement together, including unwind. Consumers receive one immutable snapshot. Save receipts retain the exact written snapshot and window owner; persisted metadata is monotonic when in-place completions arrive out of order.], [`core/src/document.rs`; generated Unicode edit/history sequences; stale, out-of-order and cross-window save tests; compile-fail field-access test.],
   [R2], [Exclusive document workflow phases, consumed save continuations, and version-specific close permits. App-wide close obtains each window’s answer and commits only when all approved document versions still match; cancellation revokes the batch.], [`core/src/workflow.rs`; `core/src/closing.rs`; `core/tests/save_close.rs`; `src/windowing.rs`.],
   [R3], [Workers receive explicit owner viewport targets. Document keys include window identity; asset and thumbnail tokens are distinct types. Asset and compiler request mailboxes retain one pending request. Mutations cannot be superseded; completion survives window closure and is reported by the shell. Process exit waits for active operations. Dead services report a terminal outcome.], [`src/worker.rs`; `src/worker/latest_queue.rs`; `src/worker/exclusive.rs`; owner-repaint, queue saturation, disconnection and closed-owner completion tests.],
   [R4], [Canonical PDF bytes and build identity are stored together. Raster acceptance checks provenance internally and retains stale display content deliberately. Interactive endpoints use typed URLs with process generations; a retained URL does not imply readiness after restart.], [`core/src/preview.rs`; `core/src/connection.rs`; out-of-order raster and same-URL restart tests.],
@@ -92,13 +92,20 @@ for the particular APIs they cover.
 
 == Verification
 
-Formatting and strict Clippy pass. All 643 workspace tests and all 8 xtask
+Formatting and strict Clippy pass. All 654 workspace tests and all 8 xtask
 tests pass, with 2 environment-dependent workspace tests ignored. The full
 68-image gallery was regenerated in one app session and validated. The core suite includes
 headless workflow sequences, a manual-time debounce test, generated Unicode
 cases, and compile-fail restrictions. Adapter tests retain real Git repositories,
 filesystem writes, process fixtures, semantic UI interactions, and font-atlas
 ordering checks.
+
+The public headless contract suite in `core/tests/contracts.rs` drives
+coalesced edit/history replay, out-of-order save completion, exclusive workflow
+cleanup, multiwindow close approval, preview provenance, process-generation
+ownership, Unicode/CRLF edit boundaries, geometry validation, and manual-time
+scheduling without a desktop or effect runtime. Restoring saved content now
+emits the same coalesced change notification as any other buffer mutation.
 
 Fresh viewport captures and native bounds traces are retained under
 `.tiptoptyp/screenshots/refactor-review`. A viewport framebuffer cannot prove

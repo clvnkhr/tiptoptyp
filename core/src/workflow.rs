@@ -31,7 +31,16 @@ impl<A, M, D> Workflow<A, M, D> {
         synchronized: bool,
     ) -> Result<Option<A>, &'static str> {
         let continuation = self.after_save.take();
-        document.record_save(receipt)?;
+        if matches!(
+            document.record_save(receipt)?,
+            crate::document::SaveStatus::Stale
+        ) {
+            // Keep a close/open continuation alive until the authoritative
+            // save completion arrives. An older completion proves only that
+            // older bytes reached the destination.
+            self.after_save = continuation;
+            return Ok(None);
+        }
         Ok(
             if synchronized && document.source() == document.saved_source() {
                 continuation
@@ -171,5 +180,39 @@ mod tests {
         assert_eq!(flow.take_action(), None);
         assert_eq!(flow.take_continuation(), None);
         assert!(!flow.is_busy());
+    }
+
+    #[test]
+    fn stale_save_completion_keeps_close_continuation_until_newer_save() {
+        use crate::document::{DocumentKind, DocumentSession, WindowSessionId};
+
+        let mut document =
+            DocumentSession::<usize>::new(WindowSessionId::new(1), "saved", DocumentKind::Text);
+        document.replace_loaded(
+            "saved".to_owned(),
+            "draft.txt".into(),
+            DocumentKind::Text,
+            Some(1),
+        );
+        let older = document.prepare_save("draft.txt".into(), DocumentKind::Text);
+        document.edit(0, |source| source.push_str(" newer"));
+        let newer = document.prepare_save("draft.txt".into(), DocumentKind::Text);
+        document.record_save(newer.committed(2)).unwrap();
+
+        let mut flow = Workflow::<&str, &str, &str>::default();
+        flow.continue_after_save("close").unwrap();
+        assert_eq!(
+            flow.complete_save(&mut document, older.committed(1), true)
+                .unwrap(),
+            None
+        );
+        assert!(flow.has_continuation());
+        let authoritative = document.prepare_save("draft.txt".into(), DocumentKind::Text);
+        assert_eq!(
+            flow.complete_save(&mut document, authoritative.committed(2), true)
+                .unwrap(),
+            Some("close")
+        );
+        assert!(!flow.has_continuation());
     }
 }

@@ -68,6 +68,14 @@ pub struct SaveReceipt {
     disk_fingerprint: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveStatus {
+    /// The receipt became the document's latest persisted snapshot.
+    Applied,
+    /// A newer receipt for this document epoch was already recorded.
+    Stale,
+}
+
 impl DocumentSnapshot {
     pub fn key(&self) -> DocumentKey {
         self.key
@@ -109,6 +117,7 @@ pub struct DocumentSession<C> {
     path: Option<PathBuf>,
     epoch: u64,
     revision: u64,
+    saved_revision: u64,
     disk_fingerprint: Option<u64>,
     kind: DocumentKind,
     pending_edit: bool,
@@ -128,6 +137,7 @@ impl<C> DocumentSession<C> {
             path: None,
             epoch: 0,
             revision: 0,
+            saved_revision: 0,
             disk_fingerprint: None,
             kind,
             pending_edit: false,
@@ -209,6 +219,7 @@ impl<C> DocumentSession<C> {
     pub fn restore_saved_source(&mut self) {
         if self.source != self.saved_source {
             self.revision = self.revision.wrapping_add(1);
+            self.pending_edit = true;
         }
         self.source.clone_from(&self.saved_source);
         self.source_snapshot = Arc::from(self.source.as_str());
@@ -241,6 +252,7 @@ impl<C> DocumentSession<C> {
         self.path = path;
         self.epoch = self.epoch.wrapping_add(1);
         self.revision = self.revision.wrapping_add(1);
+        self.saved_revision = self.revision;
         self.disk_fingerprint = disk_fingerprint;
         self.kind = kind;
         self.pending_edit = false;
@@ -255,7 +267,7 @@ impl<C> DocumentSession<C> {
         }
     }
 
-    pub fn record_save(&mut self, receipt: SaveReceipt) -> Result<(), &'static str> {
+    pub fn record_save(&mut self, receipt: SaveReceipt) -> Result<SaveStatus, &'static str> {
         let SaveRequest {
             snapshot,
             path,
@@ -264,16 +276,20 @@ impl<C> DocumentSession<C> {
         if snapshot.key.owner != self.owner || snapshot.key.epoch != self.epoch {
             return Err("The file was saved, but its document has since been replaced");
         }
+        if snapshot.key.revision < self.saved_revision {
+            return Ok(SaveStatus::Stale);
+        }
         let path_changed = self.path.as_ref() != Some(&path);
         self.path = Some(path);
-        self.disk_fingerprint = Some(receipt.disk_fingerprint);
         if path_changed {
             self.epoch = self.epoch.wrapping_add(1);
             self.revision = self.revision.wrapping_add(1);
             self.kind = kind;
         }
         self.saved_source = snapshot.source.to_string();
-        Ok(())
+        self.saved_revision = snapshot.key.revision;
+        self.disk_fingerprint = Some(receipt.disk_fingerprint);
+        Ok(SaveStatus::Applied)
     }
 
     pub fn clear_history(&mut self) {
@@ -521,5 +537,49 @@ mod tests {
         assert_eq!(document.epoch, saved.epoch);
         assert_eq!(document.revision, saved.revision.wrapping_add(1));
         assert!(!document.is_dirty());
+    }
+
+    #[test]
+    fn older_in_place_save_completion_cannot_regress_persisted_metadata() {
+        let mut document =
+            DocumentSession::<usize>::new(WindowSessionId::new(1), "saved", DocumentKind::Text);
+        document.replace_loaded(
+            "saved".to_owned(),
+            PathBuf::from("draft.txt"),
+            DocumentKind::Text,
+            Some(1),
+        );
+        let older = document.prepare_save(PathBuf::from("draft.txt"), DocumentKind::Text);
+        document.edit(0usize, |source| source.push_str(" newer"));
+        let newer = document.prepare_save(PathBuf::from("draft.txt"), DocumentKind::Text);
+
+        assert_eq!(
+            document.record_save(newer.committed(2)).unwrap(),
+            SaveStatus::Applied
+        );
+        assert_eq!(
+            document.record_save(older.committed(1)).unwrap(),
+            SaveStatus::Stale
+        );
+
+        assert_eq!(document.saved_source(), "saved newer");
+        assert_eq!(document.disk_fingerprint(), Some(2));
+        assert!(!document.is_dirty());
+    }
+
+    #[test]
+    fn restoring_saved_source_emits_one_change_notification() {
+        let mut document =
+            DocumentSession::<usize>::new(WindowSessionId::new(1), "saved", DocumentKind::Text);
+        document.edit(0usize, |source| source.push_str(" edit"));
+        assert!(document.take_edit().is_some());
+        let revision = document.revision();
+
+        document.restore_saved_source();
+
+        assert_eq!(document.source(), "saved");
+        assert_eq!(document.revision(), revision + 1);
+        assert_eq!(document.take_edit().unwrap().source(), "saved");
+        assert!(document.take_edit().is_none());
     }
 }
