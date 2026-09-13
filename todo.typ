@@ -154,13 +154,13 @@ I was using two different windows with two different workspaces. Possibly i was 
 118. [ ] PDF polish: document search, thumbnails, and reliable position restoration (extends deferred item 1)
 119. [x] extract settings, editor rendering, and window orchestration into focused modules with enforced ownership boundaries
 120. [x] implement refactor.typ R1–R8: sealed document mutations, workflow states, owned tasks, preview provenance, headless core, coordinate types, presentation ownership, and explicit write outcomes
-121. [ ] The image preview int he file explorer appears to the right of the file name position. But this is not exactly right - it should appear to the right of the fine explorer panel. This is different if the name is so long that we have to scroll the panel to see it. As currently it uses the file name length, this is past the panel boundary.
-122. [ ] the currently selected file should not have a bigger font size.
-123. [ ] it shouldnt say pdf is ready in X ms, it should say preview is ready
-124. [ ] on first open, it says pdf is ready in 0 ms, even when it is not true. fix
-125. [ ] when searching with find/find and replace, it should on each keystroke automatically jump in the code panel to the first match. currently it only jumps when we hit enter.
-126. [ ] when searching with find/find and replace, all matches should immediately recieve a highlight. currently it only has a highlight on the current line. thats good, but we also need a different highlight color for the matches.
-127. [ ] popups in a main window stop working if we have another window open e.g. packages or settings window. the popups should either always work or at least work for the currently focused window.
+121. [x] The image preview int he file explorer appears to the right of the file name position. But this is not exactly right - it should appear to the right of the fine explorer panel. This is different if the name is so long that we have to scroll the panel to see it. As currently it uses the file name length, this is past the panel boundary.
+122. [x] the currently selected file should not have a bigger font size.
+123. [x] it shouldnt say pdf is ready in X ms, it should say preview is ready
+124. [x] on first open, it says pdf is ready in 0 ms, even when it is not true. fix
+125. [x] when searching with find/find and replace, it should on each keystroke automatically jump in the code panel to the first match. currently it only jumps when we hit enter.
+126. [x] when searching with find/find and replace, all matches should immediately recieve a highlight. currently it only has a highlight on the current line. thats good, but we also need a different highlight color for the matches.
+127. [x] popups in a main window stop working if we have another window open e.g. packages or settings window. the popups should either always work or at least work for the currently focused window.
 128. [ ] close diff button is superfluous, remove it.
 129. [ ] in fact lets not have a separate git hunk diff window at all. Have the diff show in a popup.
 130. [ ] the git window should instead be a subpanel in the explorer window.
@@ -171,6 +171,15 @@ I was using two different windows with two different workspaces. Possibly i was 
 135. [ ] when cursor is at a bracket/dollar sign/etc we should highlight the matching char.
 136. [ ] when we type one of these bracket chars, we should by default automatically insert the matching char and place the cursor in between. If we backspace, from this, delete both. This should be configurable in settings.
 137. [ ] we should also implement rainbow brackets. Each type of bracket pair (`[]`, `()`, `{}`,, and mixed brackets `(],[},` etc) should use a different cycle of colors. Allow us to choose palletes to cycle through for the brackets in settings.
+138. [ ] i noticed that if a popup appears because i hovered over something, then scroll, the scrolling is not performant, losing frames. Investigate and fix.
+139. [ ] too much space is reserved for the git hunk color marker on the side. It should take at most 1 char width or other similar small measurement.
+
+= resolved in the 2026-09-13 easy backlog pass
+
+- Items 121, 122: Explorer asset hover candidates now end at the visible panel clip, and the active file's stronger face keeps the shared content font size.
+- Items 123, 124: Preview status text uses “Preview ready” consistently and suppresses zero-millisecond timing so startup fixtures cannot claim a completed PDF build.
+- Items 125, 126: Find query edits select the first result immediately, and every result receives a syntax-preserving background highlight with a stronger color for the selected match.
+- Verification: Added explorer geometry, active-font-size, startup timing, and layout-highlight regressions; focused tests pass.
 
 = resolved in the 2026-09-07 pass
 

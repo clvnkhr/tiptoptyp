@@ -1,12 +1,15 @@
 //! Source editor widgets and completion rendering.
 use super::*;
 
+use eframe::egui::text::{ByteIndex, LayoutJob, LayoutSection};
+
 impl EditorApp {
     pub(super) fn show_find_bar(&mut self, ui: &mut egui::Ui) {
         let mut find_next = false;
         let mut find_previous = false;
         let mut replace_one = false;
         let mut replace_all = false;
+        let mut find_query_changed = false;
         let search_revision = self.document.key();
         let search_results = self.search.results(
             self.document.source(),
@@ -33,6 +36,7 @@ impl EditorApp {
             }
             if response.changed() {
                 self.search.clear();
+                find_query_changed = true;
             }
             if response.lost_focus()
                 && let Some(step) = ui.input(|input| {
@@ -109,6 +113,12 @@ impl EditorApp {
                 replace_one |= ui.button("Replace").clicked();
                 replace_all |= ui.button("All").clicked();
             });
+        }
+
+        // A changed query starts at its first result. This keeps the editor in
+        // sync with the field while typing instead of waiting for Enter.
+        if find_query_changed {
+            find_next = true;
         }
 
         if find_previous {
@@ -229,6 +239,28 @@ impl EditorApp {
         let sticky_context_enabled = document_kind.is_typst()
             && (sticky_context_snapshot || self.settings.sticky_context_rows);
         let snapshot_scroll_offset = source_editor_snapshot_scroll_offset(self.snapshot_scene);
+        let (search_highlight_matches, selected_search_match) = if self.find_visible {
+            let document_key = self.document.key();
+            let matches = self
+                .search
+                .results(
+                    self.document.source(),
+                    document_key,
+                    &self.find_query,
+                    self.find_case_sensitive,
+                    self.find_regex,
+                )
+                .iter()
+                .map(|matched| matched.byte_range.clone())
+                .collect::<Vec<_>>();
+            let selected = self
+                .search
+                .selected()
+                .map(|matched| matched.byte_range.clone());
+            (matches, selected)
+        } else {
+            (Vec::new(), None)
+        };
         let completion_edit_triggered = document_kind.is_typst()
             && ui.input(|input| completion_requested_after_events(&input.events));
         let snapshot_before_edit = self.editor_snapshot(ui.ctx());
@@ -295,6 +327,13 @@ impl EditorApp {
                         dark_mode,
                     )
                 };
+                apply_search_highlights(
+                    &mut job,
+                    &search_highlight_matches,
+                    selected_search_match.as_ref(),
+                    search_match_color(ui.ctx(), false),
+                    search_match_color(ui.ctx(), true),
+                );
                 job.wrap.max_width = if line_wrap { wrap_width } else { f32::INFINITY };
                 ui.fonts_mut(|fonts| fonts.layout_job(job))
             };
@@ -964,4 +1003,79 @@ impl EditorApp {
             self.editor_completion = None;
         }
     }
+}
+
+fn search_match_color(context: &egui::Context, selected: bool) -> Color32 {
+    let accent = theme::palette(context).accent;
+    let alpha = if selected { 96 } else { 48 };
+    Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), alpha)
+}
+
+pub(super) fn apply_search_highlights(
+    job: &mut LayoutJob,
+    matches: &[Range<usize>],
+    selected: Option<&Range<usize>>,
+    match_color: Color32,
+    selected_color: Color32,
+) {
+    if matches.is_empty() || job.sections.is_empty() {
+        return;
+    }
+
+    let sections = std::mem::take(&mut job.sections);
+    let mut highlighted = Vec::with_capacity(sections.len() + matches.len());
+    for section in sections {
+        let section_start = section.byte_range.start.0;
+        let section_end = section.byte_range.end.0;
+        let mut cursor = section_start;
+        for matched in matches {
+            if matched.start >= section_end || matched.end <= section_start {
+                continue;
+            }
+            let match_start = matched.start.max(section_start).max(cursor);
+            let match_end = matched.end.min(section_end);
+            if match_start >= match_end {
+                continue;
+            }
+            if cursor < match_start {
+                highlighted.push(LayoutSection {
+                    leading_space: if cursor == section_start {
+                        section.leading_space
+                    } else {
+                        0.0
+                    },
+                    byte_range: ByteIndex(cursor)..ByteIndex(match_start),
+                    format: section.format.clone(),
+                });
+            }
+            let mut format = section.format.clone();
+            format.background = if selected.is_some_and(|current| current == matched) {
+                selected_color
+            } else {
+                match_color
+            };
+            highlighted.push(LayoutSection {
+                leading_space: if cursor == section_start && cursor == match_start {
+                    section.leading_space
+                } else {
+                    0.0
+                },
+                byte_range: ByteIndex(match_start)..ByteIndex(match_end),
+                format,
+            });
+            cursor = match_end;
+        }
+        if cursor < section_end {
+            highlighted.push(LayoutSection {
+                leading_space: if cursor == section_start {
+                    section.leading_space
+                } else {
+                    0.0
+                },
+                byte_range: ByteIndex(cursor)..ByteIndex(section_end),
+                format: section.format,
+            });
+        }
+    }
+    job.sections = highlighted;
 }

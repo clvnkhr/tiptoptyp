@@ -1039,16 +1039,13 @@ impl EditorApp {
     }
 
     pub(super) fn show_app_popup_window(&mut self, context: &egui::Context) {
-        if self.document_workflow.modal().is_some()
-            || self.settings_visible
-            || self.packages_visible
-            || self.git.visible
-            || self.git_editor.chunk.is_some()
-            || self.typst_overrides_visible
-            || self.workspace_chooser_visible
-            || self.rename_dialog.is_some()
-            || self.table_editor.is_some()
-        {
+        if app_popup_blocked_by_root_overlay(
+            self.document_workflow.modal().is_some(),
+            self.typst_overrides_visible,
+            self.workspace_chooser_visible,
+            self.rename_dialog.is_some(),
+            self.table_editor.is_some(),
+        ) {
             self.close_app_popup();
             return;
         }

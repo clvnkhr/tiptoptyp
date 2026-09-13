@@ -3455,6 +3455,99 @@ fn find_enter_navigation_honours_shift() {
 }
 
 #[test]
+fn preview_status_does_not_report_zero_millisecond_startup_timing() {
+    assert_eq!(
+        preview_timing_label(DocumentKind::Typst, Duration::ZERO),
+        None
+    );
+    assert_eq!(
+        preview_timing_label(DocumentKind::Typst, Duration::from_millis(18)),
+        Some("18 ms".to_owned())
+    );
+    assert_eq!(
+        preview_timing_label(DocumentKind::Pdf, Duration::from_millis(18)),
+        None
+    );
+}
+
+#[test]
+fn app_popup_guard_only_blocks_root_owned_overlays() {
+    assert!(!app_popup_blocked_by_root_overlay(
+        false, false, false, false, false
+    ));
+    assert!(app_popup_blocked_by_root_overlay(
+        true, false, false, false, false
+    ));
+    assert!(app_popup_blocked_by_root_overlay(
+        false, true, false, false, false
+    ));
+    assert!(app_popup_blocked_by_root_overlay(
+        false, false, true, false, false
+    ));
+    assert!(app_popup_blocked_by_root_overlay(
+        false, false, false, true, false
+    ));
+    assert!(app_popup_blocked_by_root_overlay(
+        false, false, false, false, true
+    ));
+}
+
+#[test]
+fn explorer_asset_hover_ends_at_the_visible_panel_edge() {
+    let row = Rect::from_min_max(Pos2::new(24.0, 40.0), Pos2::new(420.0, 64.0));
+    let panel = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(300.0, 200.0));
+    let hover = workspace_asset_hover_rect(row, panel);
+
+    assert_eq!(hover.left(), row.left());
+    assert_eq!(hover.right(), panel.right());
+    assert_eq!(hover.top(), row.top());
+    assert_eq!(hover.bottom(), row.bottom());
+}
+
+#[test]
+fn active_explorer_entry_keeps_the_shared_content_font_size() {
+    assert_eq!(theme::strong_ui_font().size, theme::TYPE.content);
+}
+
+#[test]
+fn search_highlights_cover_every_match_and_distinguish_the_selected_one() {
+    let mut job = egui::text::LayoutJob::simple(
+        "alpha beta alpha".to_owned(),
+        theme::editor_font(),
+        Color32::WHITE,
+        f32::INFINITY,
+    );
+    let normal = Color32::from_rgba_unmultiplied(1, 2, 3, 48);
+    let selected = Color32::from_rgba_unmultiplied(1, 2, 3, 96);
+    editor_view::apply_search_highlights(
+        &mut job,
+        &[0..5, 11..16],
+        Some(&(11..16)),
+        normal,
+        selected,
+    );
+    job.debug_sanity_check();
+
+    assert_eq!(job.text, "alpha beta alpha");
+    assert_eq!(
+        job.sections
+            .iter()
+            .filter(|section| section.format.background == normal)
+            .map(|section| section.byte_range.end.0 - section.byte_range.start.0)
+            .sum::<usize>(),
+        5
+    );
+    assert_eq!(
+        job.sections
+            .iter()
+            .filter(|section| section.format.background == selected)
+            .map(|section| section.byte_range.end.0 - section.byte_range.start.0)
+            .sum::<usize>(),
+        5
+    );
+}
+
+#[test]
 fn settings_search_indexes_every_visible_setting_label() {
     for target in SettingsTarget::ALL {
         assert!(

@@ -2387,7 +2387,7 @@ impl EditorApp {
                     self.preview.content.fail_raster(key, error.clone());
                     self.notice = Some(Notice {
                         message: format!(
-                            "PDF is ready, but its raster preview is unavailable: {error}"
+                            "Preview is ready, but its raster preview is unavailable: {error}"
                         ),
                         kind: NoticeKind::Error,
                     });
@@ -3424,7 +3424,7 @@ impl EditorApp {
                 self.status_log = VecDeque::from([
                     StatusLogEntry {
                         timestamp: "09:41:12Z".to_owned(),
-                        detail: "PDF ready in 18 ms".to_owned(),
+                        detail: "Preview ready".to_owned(),
                         kind: NoticeKind::Success,
                     },
                     StatusLogEntry {
@@ -3434,7 +3434,7 @@ impl EditorApp {
                     },
                     StatusLogEntry {
                         timestamp: "09:41:10Z".to_owned(),
-                        detail: "PDF ready in 24 ms".to_owned(),
+                        detail: "Preview ready".to_owned(),
                         kind: NoticeKind::Success,
                     },
                     StatusLogEntry {
@@ -6723,10 +6723,7 @@ impl EditorApp {
             PreviewStatus::Compiling => {
                 ServiceState::Starting("Persistent `typst watch` is compiling".to_owned())
             }
-            PreviewStatus::Ready(elapsed) => ServiceState::Ready(format!(
-                "Canonical PDF ready in {:.0} ms",
-                elapsed.as_secs_f64() * 1000.0
-            )),
+            PreviewStatus::Ready(_) => ServiceState::Ready("Preview ready".to_owned()),
             PreviewStatus::Error => {
                 let detail = self
                     .preview
@@ -8079,10 +8076,7 @@ impl EditorApp {
                         PreviewStatus::Ready(elapsed) => (
                             UiIcon::Check,
                             success_color(ui.ctx()),
-                            self.document
-                                .kind()
-                                .is_typst()
-                                .then(|| format!("{:.0} ms", elapsed.as_secs_f64() * 1000.0)),
+                            preview_timing_label(self.document.kind(), elapsed),
                         ),
                         PreviewStatus::Error => (UiIcon::Warning, error_color(ui.ctx()), None),
                     }
@@ -8171,7 +8165,7 @@ impl EditorApp {
                 (DocumentKind::Image, PreviewStatus::Compiling) => "Decoding image".to_owned(),
                 (DocumentKind::Image, PreviewStatus::Ready(_)) => "Image ready".to_owned(),
                 (DocumentKind::Pdf, PreviewStatus::Compiling) => "Rendering PDF".to_owned(),
-                (DocumentKind::Pdf, PreviewStatus::Ready(_)) => "PDF ready".to_owned(),
+                (DocumentKind::Pdf, PreviewStatus::Ready(_)) => "Preview ready".to_owned(),
                 (_, PreviewStatus::Error) => self
                     .notice
                     .as_ref()
@@ -8181,17 +8175,15 @@ impl EditorApp {
             };
         }
         match self.preview.status {
-            PreviewStatus::Waiting => "PDF build queued".to_owned(),
-            PreviewStatus::Compiling => "Compiling PDF".to_owned(),
-            PreviewStatus::Ready(elapsed) => {
-                format!("PDF ready in {:.0} ms", elapsed.as_secs_f64() * 1000.0)
-            }
+            PreviewStatus::Waiting => "Preview build queued".to_owned(),
+            PreviewStatus::Compiling => "Compiling preview".to_owned(),
+            PreviewStatus::Ready(_) => "Preview ready".to_owned(),
             PreviewStatus::Error => self
                 .preview
                 .raw_diagnostics
                 .lines()
                 .find(|line| !line.trim().is_empty())
-                .unwrap_or("PDF build failed")
+                .unwrap_or("Preview build failed")
                 .to_owned(),
         }
     }
@@ -9691,10 +9683,8 @@ fn add_workspace_nodes(
                             offer_folder_row_drop(ui, row.response.rect, parent);
                         }
                         if let Some(kind) = hover_kind {
-                            let hover_rect = Rect::from_min_max(
-                                row.response.rect.left_top(),
-                                Pos2::new(ui.max_rect().right(), row.response.rect.bottom()),
-                            );
+                            let hover_rect =
+                                workspace_asset_hover_rect(row.response.rect, ui.clip_rect());
                             let hover_response = ui.interact(
                                 hover_rect,
                                 ui.id().with(("asset-row-hover", &hover_path)),
@@ -9843,6 +9833,13 @@ fn workspace_entry_label(text: RichText, is_active: bool) -> egui::Label {
         text
     };
     theme::nonselectable_label(text)
+}
+
+fn workspace_asset_hover_rect(row: Rect, visible_panel: Rect) -> Rect {
+    Rect::from_min_max(
+        row.left_top(),
+        Pos2::new(visible_panel.right().max(row.left()), row.bottom()),
+    )
 }
 
 fn workspace_entry_resolved_color(
@@ -11188,6 +11185,25 @@ fn find_step_for_enter(enter_pressed: bool, shift: bool) -> Option<FindStep> {
     } else {
         FindStep::Next
     })
+}
+
+fn preview_timing_label(kind: DocumentKind, elapsed: Duration) -> Option<String> {
+    (kind.is_typst() && !elapsed.is_zero())
+        .then(|| format!("{:.0} ms", elapsed.as_secs_f64() * 1000.0))
+}
+
+fn app_popup_blocked_by_root_overlay(
+    has_modal: bool,
+    typst_overrides_visible: bool,
+    workspace_chooser_visible: bool,
+    has_rename_dialog: bool,
+    has_table_editor: bool,
+) -> bool {
+    has_modal
+        || typst_overrides_visible
+        || workspace_chooser_visible
+        || has_rename_dialog
+        || has_table_editor
 }
 
 fn current_timestamp() -> String {
