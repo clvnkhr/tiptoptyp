@@ -253,10 +253,23 @@ pub fn project_root_for_path(path: &Path) -> io::Result<PathBuf> {
 /// when Save As or PDF export targets another mounted volume.
 pub struct AtomicFileWriter;
 
+/// An Err from the writer means persist did not succeed. Once the destination
+/// changed, durability uncertainty is a committed outcome, never a retryable
+/// pre-commit failure.
+#[derive(Debug)]
+pub enum WriteDurability {
+    Synchronized,
+    Uncertain(String),
+}
+
 impl AtomicFileWriter {
-    pub fn write(destination: impl AsRef<Path>, contents: &[u8]) -> io::Result<()> {
-        atomic_write_with_staging_root(destination.as_ref(), contents, |destination| {
-            destination_local_staging_root(destination)
+    pub fn write(destination: impl AsRef<Path>, contents: &[u8]) -> io::Result<WriteDurability> {
+        crate::resource_lock::with_resource(destination.as_ref(), || {
+            atomic_write_with_staging_root(
+                destination.as_ref(),
+                contents,
+                destination_local_staging_root,
+            )
         })
     }
 }
@@ -265,7 +278,7 @@ fn atomic_write_with_staging_root(
     destination: &Path,
     contents: &[u8],
     select_staging_root: impl FnOnce(&Path) -> io::Result<PathBuf>,
-) -> io::Result<()> {
+) -> io::Result<WriteDurability> {
     let staging_root = select_staging_root(destination)?;
     let private = PrivateWorkspace::open(staging_root)?;
     let existing_permissions = fs::metadata(destination)
@@ -273,15 +286,25 @@ fn atomic_write_with_staging_root(
         .map(|metadata| metadata.permissions());
     let mut temporary = private.temp_file("write-", ".tmp")?;
     temporary.write_all(contents)?;
-    temporary.as_file().sync_all()?;
     if let Some(permissions) = existing_permissions {
         temporary.as_file().set_permissions(permissions)?;
     }
+    temporary.as_file().sync_all()?;
+    commit_staged_file(temporary, destination, sync_parent)
+}
+
+fn commit_staged_file(
+    temporary: tempfile::NamedTempFile,
+    destination: &Path,
+    sync: impl FnOnce(&Path) -> io::Result<()>,
+) -> io::Result<WriteDurability> {
     temporary
         .persist(destination)
         .map_err(|error| error.error)?;
-    sync_parent(destination)?;
-    Ok(())
+    Ok(match sync(destination) {
+        Ok(()) => WriteDurability::Synchronized,
+        Err(error) => WriteDurability::Uncertain(error.to_string()),
+    })
 }
 
 fn destination_local_staging_root(destination: &Path) -> io::Result<PathBuf> {
@@ -911,6 +934,38 @@ mod tests {
                 0o640
             );
         }
+    }
+
+    #[test]
+    fn failed_directory_sync_reports_committed_bytes_without_a_retryable_error() {
+        let project = tempfile::tempdir().unwrap();
+        let destination = project.path().join("saved.typ");
+        fs::write(&destination, "old").unwrap();
+        let mut temporary = tempfile::NamedTempFile::new_in(project.path()).unwrap();
+        temporary.write_all(b"new").unwrap();
+        let outcome = commit_staged_file(temporary, &destination, |_| {
+            Err(io::Error::other("injected sync failure"))
+        })
+        .unwrap();
+        assert!(matches!(outcome, WriteDurability::Uncertain(error) if error.contains("injected")));
+        assert_eq!(fs::read(&destination).unwrap(), b"new");
+
+        let directory = project.path().join("directory");
+        fs::create_dir(&directory).unwrap();
+        let temporary = tempfile::NamedTempFile::new_in(project.path()).unwrap();
+        let called = std::cell::Cell::new(false);
+        assert!(
+            commit_staged_file(temporary, &directory, |_| {
+                called.set(true);
+                Ok(())
+            })
+            .is_err()
+        );
+        assert!(
+            !called.get(),
+            "post-commit sync cannot run after persist failed"
+        );
+        assert!(directory.is_dir());
     }
 
     #[test]

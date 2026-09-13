@@ -6,8 +6,64 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// Import one regular file without replacing an existing workspace entry.
-pub(crate) fn import_file(root: &Path, directory: &Path, source: &Path) -> io::Result<PathBuf> {
+/// Workspace mutations require a target resolved through its owning root.
+pub(crate) struct WorkspaceRoot(PathBuf);
+pub(crate) struct WorkspaceDirectory {
+    root: PathBuf,
+    path: PathBuf,
+}
+pub(crate) struct WorkspaceFile {
+    root: PathBuf,
+    path: PathBuf,
+}
+impl WorkspaceRoot {
+    pub(crate) fn open(path: &Path) -> io::Result<Self> {
+        let root = path.canonicalize()?;
+        if !root.is_dir() {
+            return Err(io::Error::other("workspace root is not a directory"));
+        }
+        Ok(Self(root))
+    }
+    pub(crate) fn directory(&self, path: &Path) -> io::Result<WorkspaceDirectory> {
+        let path = path.canonicalize()?;
+        if !path.starts_with(&self.0) || !path.is_dir() {
+            return Err(io::Error::other("the destination is outside the workspace"));
+        }
+        Ok(WorkspaceDirectory {
+            root: self.0.clone(),
+            path,
+        })
+    }
+    pub(crate) fn file(&self, path: &Path) -> io::Result<WorkspaceFile> {
+        let parent = path
+            .parent()
+            .ok_or_else(|| io::Error::other("missing parent"))?
+            .canonicalize()?;
+        if !parent.starts_with(&self.0) || !fs::symlink_metadata(path)?.file_type().is_file() {
+            return Err(io::Error::other(
+                "only regular workspace files can be deleted",
+            ));
+        }
+        Ok(WorkspaceFile {
+            root: self.0.clone(),
+            path: path.to_owned(),
+        })
+    }
+}
+impl WorkspaceDirectory {
+    pub(crate) fn import(&self, source: &Path) -> io::Result<PathBuf> {
+        import_file(&self.root, &self.path, source)
+    }
+}
+impl WorkspaceFile {
+    pub(crate) fn delete(self) -> io::Result<()> {
+        delete_file(&self.root, &self.path)
+    }
+}
+
+/// Revalidate at execution; a validated target is not protection against an
+/// external filesystem race between validation and the OS operation itself.
+fn import_file(root: &Path, directory: &Path, source: &Path) -> io::Result<PathBuf> {
     let root = root.canonicalize()?;
     let directory = directory.canonicalize()?;
     if !directory.starts_with(&root) || !directory.is_dir() {
@@ -38,7 +94,7 @@ pub(crate) fn import_file(root: &Path, directory: &Path, source: &Path) -> io::R
     Ok(destination)
 }
 
-pub(crate) fn delete_file(root: &Path, path: &Path) -> io::Result<()> {
+fn delete_file(root: &Path, path: &Path) -> io::Result<()> {
     let root = root.canonicalize()?;
     let parent = path
         .parent()
@@ -261,6 +317,24 @@ mod tests {
     };
 
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn validated_delete_rechecks_a_target_replaced_by_a_symlink() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let external = outside.path().join("external.txt");
+        fs::write(&external, "keep").unwrap();
+        let path = root.path().join("note.txt");
+        fs::write(&path, "initial").unwrap();
+        let workspace = WorkspaceRoot::open(root.path()).unwrap();
+        let target = workspace.file(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&external, &path).unwrap();
+        assert!(target.delete().is_err());
+        assert_eq!(fs::read_to_string(&external).unwrap(), "keep");
+        assert!(workspace.directory(outside.path()).is_err());
+    }
 
     #[cfg(unix)]
     #[test]

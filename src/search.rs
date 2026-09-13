@@ -31,31 +31,7 @@ impl SearchMatch {
     }
 }
 
-/// The editor document generation searched by a [`SearchSession`].
-///
-/// The epoch separates different documents which happen to have the same edit
-/// revision. The revision changes after every edit to that document.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SearchRevision {
-    document_epoch: u64,
-    revision: u64,
-}
-
-impl SearchRevision {
-    pub const fn new(document_epoch: u64, revision: u64) -> Self {
-        Self {
-            document_epoch,
-            revision,
-        }
-    }
-
-    fn after_edit(self) -> Self {
-        Self {
-            revision: self.revision.wrapping_add(1),
-            ..self
-        }
-    }
-}
+use crate::document::DocumentKey;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SearchError {
@@ -120,7 +96,7 @@ struct QueryKey {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SearchKey {
-    document: SearchRevision,
+    document: DocumentKey,
     query: QueryKey,
 }
 
@@ -206,7 +182,7 @@ impl SearchSession {
     pub fn results(
         &mut self,
         text: &str,
-        document: SearchRevision,
+        document: DocumentKey,
         query: &str,
         case_sensitive: bool,
         regex: bool,
@@ -232,7 +208,7 @@ impl SearchSession {
     pub fn next(
         &mut self,
         text: &str,
-        document: SearchRevision,
+        document: DocumentKey,
         query: &str,
         case_sensitive: bool,
         regex: bool,
@@ -249,7 +225,7 @@ impl SearchSession {
     pub fn previous(
         &mut self,
         text: &str,
-        document: SearchRevision,
+        document: DocumentKey,
         query: &str,
         case_sensitive: bool,
         regex: bool,
@@ -269,7 +245,7 @@ impl SearchSession {
     pub fn replace_one(
         &mut self,
         text: &mut String,
-        document: SearchRevision,
+        document: DocumentKey,
         query: &str,
         replacement: &str,
         case_sensitive: bool,
@@ -334,7 +310,7 @@ impl SearchSession {
     pub fn replace_all(
         &mut self,
         text: &mut String,
-        document: SearchRevision,
+        document: DocumentKey,
         query: &str,
         replacement: &str,
         case_sensitive: bool,
@@ -371,7 +347,7 @@ impl SearchSession {
     fn prepare(
         &mut self,
         text: &str,
-        document: SearchRevision,
+        document: DocumentKey,
         query: &str,
         case_sensitive: bool,
         regex: bool,
@@ -587,8 +563,12 @@ fn find_previous_with_options(
 mod tests {
     use super::*;
 
-    fn revision(revision: u64) -> SearchRevision {
-        SearchRevision::new(7, revision)
+    fn revision(revision: u64) -> DocumentKey {
+        DocumentKey::new(
+            tiptoptyp_core::document::WindowSessionId::new(1),
+            7,
+            revision,
+        )
     }
 
     fn byte_ranges(matches: &[SearchMatch]) -> Vec<Range<usize>> {

@@ -12,28 +12,7 @@ use crate::{
     editor_features::StickyContextQuery,
 };
 
-/// Identity of the source metadata derived for one open document revision.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct EditorRevision {
-    pub(crate) document_epoch: u64,
-    pub(crate) revision: u64,
-}
-
-impl EditorRevision {
-    pub(crate) const fn new(document_epoch: u64, revision: u64) -> Self {
-        Self {
-            document_epoch,
-            revision,
-        }
-    }
-
-    pub(crate) const fn after_edit(self) -> Self {
-        Self {
-            document_epoch: self.document_epoch,
-            revision: self.revision.wrapping_add(1),
-        }
-    }
-}
+use crate::document::{DocumentKey, DocumentSnapshot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SourceMetrics {
@@ -67,7 +46,7 @@ pub(crate) struct LineDiagnostic {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DiagnosticsKey {
-    document: EditorRevision,
+    document: DocumentKey,
     generation: u64,
     current_is_preview: bool,
     current_path: Option<PathBuf>,
@@ -77,7 +56,7 @@ struct DiagnosticsKey {
 impl DiagnosticsKey {
     fn matches(
         &self,
-        document: EditorRevision,
+        document: DocumentKey,
         generation: u64,
         current_path: Option<&Path>,
         virtual_path: &Path,
@@ -94,12 +73,12 @@ impl DiagnosticsKey {
 /// Revision-derived text, syntax and diagnostic data consumed by the editor.
 /// Unchanged frames only copy small values or `Arc` handles.
 pub(crate) struct EditorDerivedData {
-    source_key: Option<EditorRevision>,
+    source_key: Option<DocumentKey>,
     source_snapshot: Arc<str>,
     source_metrics: SourceMetrics,
     char_starts: Vec<usize>,
     parsed_source: Source,
-    parsed_key: Option<EditorRevision>,
+    parsed_key: Option<DocumentKey>,
     diagnostics_key: Option<DiagnosticsKey>,
     line_diagnostics: Arc<[LineDiagnostic]>,
     longest_diagnostic_chars: usize,
@@ -134,7 +113,9 @@ impl Default for EditorDerivedData {
 }
 
 impl EditorDerivedData {
-    pub(crate) fn prepare_source(&mut self, key: EditorRevision, source: &str) {
+    pub(crate) fn prepare_source(&mut self, snapshot: &DocumentSnapshot) {
+        let key = snapshot.key();
+        let source = snapshot.source();
         if self.source_key == Some(key) {
             return;
         }
@@ -294,7 +275,7 @@ impl EditorDerivedData {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn prepare_diagnostics(
         &mut self,
-        document: EditorRevision,
+        document: DocumentKey,
         generation: u64,
         current_path: Option<&Path>,
         virtual_path: &Path,
@@ -466,8 +447,12 @@ mod tests {
     use super::*;
     use crate::diagnostics::DiagnosticLocation;
 
-    fn revision(revision: u64) -> EditorRevision {
-        EditorRevision::new(3, revision)
+    fn revision(revision: u64) -> DocumentKey {
+        DocumentKey::new(
+            tiptoptyp_core::document::WindowSessionId::new(1),
+            3,
+            revision,
+        )
     }
 
     fn diagnostic(path: &Path, line: usize, message: &str) -> Diagnostic {
@@ -484,7 +469,7 @@ mod tests {
     fn unchanged_revision_reuses_source_metrics_offsets_and_snapshot() {
         let mut data = EditorDerivedData::default();
         let source = "short\n🦀 longest\n";
-        data.prepare_source(revision(4), source);
+        data.prepare_source(&DocumentSnapshot::fixture(revision(4), source));
         assert_eq!(
             data.source_metrics(),
             SourceMetrics {
@@ -495,12 +480,12 @@ mod tests {
         );
         assert_eq!(data.char_range_to_byte(6..7), 6..10);
         let first_snapshot = data.source_snapshot();
-        data.prepare_source(revision(4), source);
+        data.prepare_source(&DocumentSnapshot::fixture(revision(4), source));
         let second_snapshot = data.source_snapshot();
         assert!(Arc::ptr_eq(&first_snapshot, &second_snapshot));
         assert_eq!(data.rebuild_counts(), (1, 0));
 
-        data.prepare_source(revision(5), "one line");
+        data.prepare_source(&DocumentSnapshot::fixture(revision(5), "one line"));
         assert_eq!(data.source_metrics().line_count, 1);
         assert_eq!(&*first_snapshot, source, "undo snapshot retains old text");
         assert!(!Arc::ptr_eq(&first_snapshot, &data.source_snapshot()));
@@ -511,7 +496,7 @@ mod tests {
     fn parsed_queries_reuse_one_revision_snapshot() {
         let mut data = EditorDerivedData::default();
         let source = "#set text(font: \"Libertinus Serif\")\n#link(\"https://example.com\")[site]";
-        data.prepare_source(revision(1), source);
+        data.prepare_source(&DocumentSnapshot::fixture(revision(1), source));
 
         let font = source[..source.find("font").unwrap()].chars().count();
         let link = source[..source.find("https").unwrap()].chars().count();
@@ -531,7 +516,7 @@ mod tests {
     fn sticky_context_queries_reuse_one_syntax_parse_per_revision() {
         let mut data = EditorDerivedData::default();
         let source = "= Section\n#let render(\n  body,\n) = {\n  body\n}\n";
-        data.prepare_source(revision(1), source);
+        data.prepare_source(&DocumentSnapshot::fixture(revision(1), source));
 
         {
             let query = data.sticky_context_query();
@@ -556,7 +541,7 @@ mod tests {
         }
         assert_eq!(data.syntax_rebuild_count(), 1);
 
-        data.prepare_source(revision(1), source);
+        data.prepare_source(&DocumentSnapshot::fixture(revision(1), source));
         {
             let query = data.sticky_context_query();
             assert_eq!(query.rows(0).len(), 1);
@@ -568,7 +553,10 @@ mod tests {
             "unchanged source revisions must reuse the parsed syntax tree"
         );
 
-        data.prepare_source(revision(2), "= Next section\nbody");
+        data.prepare_source(&DocumentSnapshot::fixture(
+            revision(2),
+            "= Next section\nbody",
+        ));
         assert_eq!(
             data.syntax_rebuild_count(),
             1,
@@ -597,7 +585,7 @@ mod tests {
         std::fs::write(&path, "= Main").unwrap();
         let diagnostics = [diagnostic(&path, 2, "broken")];
         let mut data = EditorDerivedData::default();
-        data.prepare_source(revision(1), "= Main");
+        data.prepare_source(&DocumentSnapshot::fixture(revision(1), "= Main"));
 
         data.prepare_diagnostics(revision(1), 8, Some(&path), &path, true, &diagnostics, &[]);
         data.prepare_diagnostics(revision(1), 8, Some(&path), &path, true, &diagnostics, &[]);
@@ -653,7 +641,7 @@ mod tests {
             .collect::<String>();
         let mut data = EditorDerivedData::default();
         for _ in 0..120 {
-            data.prepare_source(revision(11), &source);
+            data.prepare_source(&DocumentSnapshot::fixture(revision(11), &source));
             assert_eq!(data.source_metrics().line_count, 50_001);
         }
         assert_eq!(data.rebuild_counts(), (1, 0));

@@ -6,29 +6,121 @@
 
 use std::ops::Range;
 
-use crate::tinymist::{LspPosition, LspRange, LspTextEdit};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AppliedTextEdits {
-    pub text: String,
-    pub mapped_offsets: [usize; 2],
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ScalarOffset(usize);
+impl ScalarOffset {
+    pub const fn new(value: usize) -> Self {
+        Self(value)
+    }
+    pub const fn get(self) -> usize {
+        self.0
+    }
 }
 
-pub(crate) fn range_to_char_range(source: &str, range: &LspRange) -> Range<usize> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ByteOffset(usize);
+impl ByteOffset {
+    pub fn checked(source: &str, value: usize) -> Option<Self> {
+        source.is_char_boundary(value).then_some(Self(value))
+    }
+    pub const fn get(self) -> usize {
+        self.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScalarRange(Range<usize>);
+impl ScalarRange {
+    pub fn start(&self) -> ScalarOffset {
+        ScalarOffset(self.0.start)
+    }
+    pub fn end(&self) -> ScalarOffset {
+        ScalarOffset(self.0.end)
+    }
+    /// Conversion at the UI boundary, where egui owns scalar cursor indices.
+    pub fn into_range(self) -> Range<usize> {
+        self.0
+    }
+}
+
+use serde::{Deserialize, Serialize};
+
+macro_rules! column_type {
+    ($name:ident) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+        #[serde(transparent)]
+        pub struct $name(u32);
+        impl $name {
+            pub const fn new(value: u32) -> Self {
+                Self(value)
+            }
+            pub const fn get(self) -> u32 {
+                self.0
+            }
+        }
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                self.0.fmt(f)
+            }
+        }
+    };
+}
+column_type!(LineIndex);
+column_type!(Utf16Column);
+column_type!(ScalarColumn);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LspPosition {
+    /// Zero-based line number.
+    pub line: LineIndex,
+    /// Zero-based UTF-16 code-unit offset, as required by LSP.
+    pub character: Utf16Column,
+}
+impl LspPosition {
+    /// Decode known protocol units; editor offsets require the source index.
+    pub const fn new(line: u32, utf16_column: u32) -> Self {
+        Self {
+            line: LineIndex::new(line),
+            character: Utf16Column::new(utf16_column),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LspRange {
+    pub start: LspPosition,
+    pub end: LspPosition,
+}
+
+/// A standard LSP text edit returned by `textDocument/formatting`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LspTextEdit {
+    pub range: LspRange,
+    pub new_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppliedTextEdits {
+    pub text: String,
+    pub mapped_offsets: [ScalarOffset; 2],
+}
+
+pub fn range_to_scalar_range(source: &str, range: &LspRange) -> ScalarRange {
     let index = SourceIndex::new(source);
     let start = index.permissive_char_offset(&range.start);
     let end = index.permissive_char_offset(&range.end).max(start);
-    start..end
+    ScalarRange(start..end)
 }
 
-pub(crate) fn apply_text_edits(
+pub fn apply_text_edits(
     source: &str,
     edits: &[LspTextEdit],
-    offsets: [usize; 2],
+    offsets: [ScalarOffset; 2],
 ) -> Result<AppliedTextEdits, String> {
     let index = SourceIndex::new(source);
     let resolved = resolve_text_edits(&index, edits)?;
-    let mapped_offsets = offsets.map(|offset| map_char_offset(index.char_len, offset, &resolved));
+    let mapped_offsets = offsets
+        .map(|offset| ScalarOffset::new(map_char_offset(index.char_len, offset.get(), &resolved)));
     Ok(AppliedTextEdits {
         text: apply_resolved_text_edits(source, &resolved),
         mapped_offsets,
@@ -37,10 +129,10 @@ pub(crate) fn apply_text_edits(
 
 /// Converts an editor scalar offset to Tinymist preview's zero-based scalar
 /// line and column. This preview command deliberately differs from LSP UTF-16.
-pub(crate) fn scalar_position_at_char(source: &str, char_index: usize) -> (u32, u32) {
+pub fn scalar_position_at(source: &str, char_index: ScalarOffset) -> (LineIndex, ScalarColumn) {
     let mut line = 0_u32;
     let mut character = 0_u32;
-    for value in source.chars().take(char_index) {
+    for value in source.chars().take(char_index.get()) {
         if value == '\n' {
             line = line.saturating_add(1);
             character = 0;
@@ -48,15 +140,20 @@ pub(crate) fn scalar_position_at_char(source: &str, char_index: usize) -> (u32, 
             character = character.saturating_add(1);
         }
     }
-    (line, character)
+    (LineIndex::new(line), ScalarColumn::new(character))
 }
 
 /// Converts an editor Unicode-scalar offset to a standard zero-based LSP
 /// position. Unlike preview navigation, the column counts UTF-16 code units.
-pub(crate) fn lsp_position_at_char(source: &str, char_index: usize) -> LspPosition {
+///
+/// ```compile_fail
+/// use tiptoptyp_core::text::{ByteOffset, lsp_position_at_scalar};
+/// lsp_position_at_scalar("é", ByteOffset::checked("é", 2).unwrap());
+/// ```
+pub fn lsp_position_at_scalar(source: &str, char_index: ScalarOffset) -> LspPosition {
     let mut line = 0_u32;
     let mut character = 0_u32;
-    for value in source.chars().take(char_index) {
+    for value in source.chars().take(char_index.get()) {
         if value == '\n' {
             line = line.saturating_add(1);
             character = 0;
@@ -64,7 +161,7 @@ pub(crate) fn lsp_position_at_char(source: &str, char_index: usize) -> LspPositi
             character = character.saturating_add(value.len_utf16() as u32);
         }
     }
-    LspPosition { line, character }
+    LspPosition::new(line, character)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -103,18 +200,19 @@ impl<'a> SourceIndex<'a> {
         }
     }
 
-    fn line(&self, line: u32, strip_carriage_return: bool) -> Option<IndexedLine<'a>> {
-        let index = line as usize;
+    fn line(&self, line: LineIndex, strip_carriage_return: bool) -> Option<IndexedLine<'a>> {
+        let index = line.get() as usize;
         let start = *self.lines.get(index)?;
         let mut end_byte = self
             .lines
             .get(index + 1)
             .map_or(self.source.len(), |next| next.byte);
-        if self.source.as_bytes().get(end_byte.wrapping_sub(1)) == Some(&b'\n') {
+        if end_byte > start.byte && self.source.as_bytes().get(end_byte - 1) == Some(&b'\n') {
             end_byte -= 1;
         }
         if strip_carriage_return
-            && self.source.as_bytes().get(end_byte.wrapping_sub(1)) == Some(&b'\r')
+            && end_byte > start.byte
+            && self.source.as_bytes().get(end_byte - 1) == Some(&b'\r')
         {
             end_byte -= 1;
         }
@@ -131,7 +229,7 @@ impl<'a> SourceIndex<'a> {
         let Some(line) = self.line(position.line, false) else {
             return self.char_len;
         };
-        let target_utf16 = position.character as usize;
+        let target_utf16 = position.character.get() as usize;
         let mut utf16 = 0;
         let mut characters = 0;
         for character in line.text.chars() {
@@ -149,13 +247,13 @@ impl<'a> SourceIndex<'a> {
         let Some(line) = self.line(position.line, true) else {
             return Err(format!("line {} is outside the document", position.line));
         };
-        let target = position.character as usize;
+        let target = position.character.get() as usize;
         let mut utf16 = 0;
         let mut characters = 0;
         for (byte, character) in line.text.char_indices() {
             if utf16 == target {
                 return Ok(TextOffset {
-                    byte: line.start.byte + byte,
+                    byte: ByteOffset(line.start.byte + byte),
                     character: line.start.character + characters,
                 });
             }
@@ -171,7 +269,7 @@ impl<'a> SourceIndex<'a> {
         }
         if utf16 == target {
             Ok(TextOffset {
-                byte: line.start.byte + line.text.len(),
+                byte: ByteOffset(line.start.byte + line.text.len()),
                 character: line.start.character + characters,
             })
         } else {
@@ -191,7 +289,7 @@ struct IndexedLine<'a> {
 
 #[derive(Debug, Clone, Copy)]
 struct TextOffset {
-    byte: usize,
+    byte: ByteOffset,
     character: usize,
 }
 
@@ -237,7 +335,7 @@ fn resolve_text_edits<'a>(
 fn apply_resolved_text_edits(source: &str, edits: &[ResolvedTextEdit<'_>]) -> String {
     let removed_bytes = edits
         .iter()
-        .map(|edit| edit.end.byte - edit.start.byte)
+        .map(|edit| edit.end.byte.get() - edit.start.byte.get())
         .sum::<usize>();
     let replacement_bytes = edits
         .iter()
@@ -250,9 +348,9 @@ fn apply_resolved_text_edits(source: &str, edits: &[ResolvedTextEdit<'_>]) -> St
     let mut formatted = String::with_capacity(capacity);
     let mut source_cursor = 0;
     for edit in edits {
-        formatted.push_str(&source[source_cursor..edit.start.byte]);
+        formatted.push_str(&source[source_cursor..edit.start.byte.get()]);
         formatted.push_str(edit.replacement);
-        source_cursor = edit.end.byte;
+        source_cursor = edit.end.byte.get();
     }
     formatted.push_str(&source[source_cursor..]);
     formatted
@@ -284,6 +382,28 @@ fn map_char_offset(source_len: usize, index: usize, edits: &[ResolvedTextEdit<'_
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unicode_positions_round_trip_at_valid_protocol_boundaries() {
+        for source in ["", "a😀文e\u{301}\n", "😀\r\n文\r\n", "\n\n", "😀😀😀"] {
+            let index = super::SourceIndex::new(source);
+            for (scalar, byte) in source
+                .char_indices()
+                .map(|(byte, _)| byte)
+                .chain([source.len()])
+                .enumerate()
+            {
+                // Between CR and LF is not a protocol column in CRLF text.
+                if source[..byte].ends_with('\r') {
+                    continue;
+                }
+                let position =
+                    super::lsp_position_at_scalar(source, super::ScalarOffset::new(scalar));
+                let resolved = index.strict_offset(&position).unwrap();
+                assert_eq!(resolved.character, scalar, "{source:?} at {byte}");
+                assert_eq!(resolved.byte.get(), byte, "{source:?} at {byte}");
+            }
+        }
+    }
     use super::*;
 
     fn position_to_char(source: &str, position: &LspPosition) -> usize {
@@ -293,14 +413,8 @@ mod tests {
     fn edit(line: u32, start: u32, end: u32, new_text: &str) -> LspTextEdit {
         LspTextEdit {
             range: LspRange {
-                start: LspPosition {
-                    line,
-                    character: start,
-                },
-                end: LspPosition {
-                    line,
-                    character: end,
-                },
+                start: LspPosition::new(line, start),
+                end: LspPosition::new(line, end),
             },
             new_text: new_text.to_owned(),
         }
@@ -309,62 +423,42 @@ mod tests {
     #[test]
     fn utf16_positions_map_to_editor_scalar_offsets() {
         let source = "a🦀b\nsecond";
-        assert_eq!(
-            position_to_char(
-                source,
-                &LspPosition {
-                    line: 0,
-                    character: 3,
-                },
-            ),
-            2
-        );
-        assert_eq!(
-            position_to_char(
-                source,
-                &LspPosition {
-                    line: 1,
-                    character: 3,
-                },
-            ),
-            7
-        );
+        assert_eq!(position_to_char(source, &LspPosition::new(0, 3),), 2);
+        assert_eq!(position_to_char(source, &LspPosition::new(1, 3),), 7);
     }
 
     #[test]
     fn editor_offsets_map_to_utf16_hover_positions() {
         let source = "a🦀b\nsecond";
         assert_eq!(
-            lsp_position_at_char(source, 2),
-            LspPosition {
-                line: 0,
-                character: 3,
-            }
+            lsp_position_at_scalar(source, ScalarOffset::new(2)),
+            LspPosition::new(0, 3)
         );
         assert_eq!(
-            lsp_position_at_char(source, 7),
-            LspPosition {
-                line: 1,
-                character: 3,
-            }
+            lsp_position_at_scalar(source, ScalarOffset::new(7)),
+            LspPosition::new(1, 3)
         );
         assert_eq!(
-            lsp_position_at_char(source, usize::MAX),
-            LspPosition {
-                line: 1,
-                character: 6,
-            }
+            lsp_position_at_scalar(source, ScalarOffset::new(usize::MAX)),
+            LspPosition::new(1, 6)
         );
     }
 
     #[test]
     fn formatting_edits_are_utf16_strict_atomic_and_unicode_safe() {
         let source = "a🦀b\nsecond";
-        let applied = apply_text_edits(source, &[edit(0, 1, 3, "crab")], [0, 0]).unwrap();
+        let applied = apply_text_edits(
+            source,
+            &[edit(0, 1, 3, "crab")],
+            ([0, 0]).map(ScalarOffset::new),
+        )
+        .unwrap();
         assert_eq!(applied.text, "acrabb\nsecond");
 
         let splits_surrogate = [edit(0, 2, 3, "")];
-        assert!(apply_text_edits(source, &splits_surrogate, [0, 0]).is_err());
+        assert!(
+            apply_text_edits(source, &splits_surrogate, ([0, 0]).map(ScalarOffset::new)).is_err()
+        );
         assert_eq!(source, "a🦀b\nsecond");
     }
 
@@ -372,17 +466,22 @@ mod tests {
     fn formatting_edits_map_unicode_cursor_and_selection() {
         let source = "a🦀b";
         let edits = [edit(0, 1, 1, " "), edit(0, 3, 4, "bee")];
-        let applied = apply_text_edits(source, &edits, [3, 1]).unwrap();
+        let applied = apply_text_edits(source, &edits, ([3, 1]).map(ScalarOffset::new)).unwrap();
 
         assert_eq!(applied.text, "a 🦀bee");
-        assert_eq!(applied.mapped_offsets, [6, 2]);
+        assert_eq!(applied.mapped_offsets.map(ScalarOffset::get), [6, 2]);
     }
 
     #[test]
     fn cursor_inside_replacement_moves_to_replacement_end() {
-        let applied = apply_text_edits("abcd", &[edit(0, 0, 3, "xy")], [2, 2]).unwrap();
+        let applied = apply_text_edits(
+            "abcd",
+            &[edit(0, 0, 3, "xy")],
+            ([2, 2]).map(ScalarOffset::new),
+        )
+        .unwrap();
         assert_eq!(applied.text, "xyd");
-        assert_eq!(applied.mapped_offsets, [2, 2]);
+        assert_eq!(applied.mapped_offsets.map(ScalarOffset::get), [2, 2]);
     }
 
     #[test]
@@ -394,9 +493,9 @@ mod tests {
             edit(0, 3, 3, "<"),
             edit(0, 3, 3, ">"),
         ];
-        let applied = apply_text_edits("abcdef", &edits, [0, 6]).unwrap();
+        let applied = apply_text_edits("abcdef", &edits, ([0, 6]).map(ScalarOffset::new)).unwrap();
         assert_eq!(applied.text, "ABC<>dEF");
-        assert_eq!(applied.mapped_offsets, [0, 8]);
+        assert_eq!(applied.mapped_offsets.map(ScalarOffset::get), [0, 8]);
     }
 
     #[test]
@@ -404,7 +503,7 @@ mod tests {
         let error = apply_text_edits(
             "abcdef",
             &[edit(0, 1, 4, "one"), edit(0, 3, 5, "two")],
-            [2, 2],
+            ([2, 2]).map(ScalarOffset::new),
         )
         .unwrap_err();
         assert_eq!(error, "formatting edits overlap");
@@ -413,10 +512,21 @@ mod tests {
     #[test]
     fn crlf_end_of_line_positions_exclude_line_terminators() {
         let source = "a🦀\r\nline\r\n";
-        let applied =
-            apply_text_edits(source, &[edit(1, 4, 4, "!"), edit(0, 3, 3, "!")], [2, 7]).unwrap();
+        let applied = apply_text_edits(
+            source,
+            &[edit(1, 4, 4, "!"), edit(0, 3, 3, "!")],
+            ([2, 7]).map(ScalarOffset::new),
+        )
+        .unwrap();
         assert_eq!(applied.text, "a🦀!\r\nline!\r\n");
-        assert!(apply_text_edits(source, &[edit(1, 5, 5, "!")], [0, 0]).is_err());
+        assert!(
+            apply_text_edits(
+                source,
+                &[edit(1, 5, 5, "!")],
+                ([0, 0]).map(ScalarOffset::new)
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -427,16 +537,33 @@ mod tests {
             .rev()
             .map(|line| edit(line as u32, 0, 1, "xy"))
             .collect::<Vec<_>>();
-        let applied = apply_text_edits(&source, &edits, [0, source.chars().count()]).unwrap();
+        let applied = apply_text_edits(
+            &source,
+            &edits,
+            ([0, source.chars().count()]).map(ScalarOffset::new),
+        )
+        .unwrap();
         assert_eq!(applied.text, "xy\n".repeat(LINES));
-        assert_eq!(applied.mapped_offsets, [0, applied.text.chars().count()]);
+        assert_eq!(
+            applied.mapped_offsets.map(ScalarOffset::get),
+            [0, applied.text.chars().count()]
+        );
     }
 
     #[test]
     fn scalar_offsets_map_to_tinymist_preview_positions() {
         let source = "a🦀b\nsecond";
-        assert_eq!(scalar_position_at_char(source, 2), (0, 2));
-        assert_eq!(scalar_position_at_char(source, 7), (1, 3));
-        assert_eq!(scalar_position_at_char(source, usize::MAX), (1, 6));
+        assert_eq!(
+            scalar_position_at(source, ScalarOffset::new(2)),
+            (LineIndex::new(0), ScalarColumn::new(2))
+        );
+        assert_eq!(
+            scalar_position_at(source, ScalarOffset::new(7)),
+            (LineIndex::new(1), ScalarColumn::new(3))
+        );
+        assert_eq!(
+            scalar_position_at(source, ScalarOffset::new(usize::MAX)),
+            (LineIndex::new(1), ScalarColumn::new(6))
+        );
     }
 }

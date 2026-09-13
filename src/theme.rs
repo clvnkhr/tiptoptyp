@@ -5,7 +5,6 @@
 //! by the main and child viewports.
 
 use std::{
-    cell::Cell,
     collections::HashMap,
     io,
     path::{Path, PathBuf},
@@ -27,21 +26,19 @@ struct ImportedPalette {
     colors: SemanticPalette,
 }
 
-thread_local! {
-    static IMPORTED_PALETTE: Cell<Option<ImportedPalette>> = const { Cell::new(None) };
+/// Presentation belongs to an egui context, never to the UI thread.
+pub fn set_imported_palette(context: &egui::Context, imported: Option<(bool, SemanticPalette)>) {
+    context.data_mut(|data| {
+        let id = egui::Id::new("tiptoptyp-resolved-palette");
+        if let Some((dark_mode, colors)) = imported {
+            data.insert_temp(id, ImportedPalette { dark_mode, colors });
+        } else {
+            data.remove::<ImportedPalette>(id);
+        }
+    });
 }
-
-/// Install or clear the current Sublime-derived visual palette.
-///
-/// egui runs application UI on one thread, so thread-local state keeps tests
-/// isolated while allowing the existing small color-token API to remain the
-/// single boundary used by panels, popups, and both syntax highlighters.
-pub fn set_imported_palette(imported: Option<(bool, SemanticPalette)>) {
-    IMPORTED_PALETTE.set(imported.map(|(dark_mode, colors)| ImportedPalette { dark_mode, colors }));
-}
-
-fn imported_palette() -> Option<ImportedPalette> {
-    IMPORTED_PALETTE.get()
+fn imported_palette(context: &egui::Context) -> Option<ImportedPalette> {
+    context.data(|data| data.get_temp(egui::Id::new("tiptoptyp-resolved-palette")))
 }
 
 fn color(color: Rgba) -> Color32 {
@@ -1292,8 +1289,8 @@ pub struct Palette {
     pub attention_max_alpha: u8,
 }
 
-pub fn palette(dark_mode: bool) -> Palette {
-    if let Some(imported) = imported_palette() {
+pub fn palette(context: &egui::Context) -> Palette {
+    if let Some(imported) = imported_palette(context) {
         let colors = imported.colors;
         return Palette {
             accent: color(colors.accent),
@@ -1307,6 +1304,9 @@ pub fn palette(dark_mode: bool) -> Palette {
             attention_max_alpha: if imported.dark_mode { 105 } else { 82 },
         };
     }
+    default_palette(context.theme() == egui::Theme::Dark)
+}
+pub fn default_palette(dark_mode: bool) -> Palette {
     if dark_mode {
         Palette {
             accent: Color32::from_rgb(79, 140, 255),
@@ -1354,12 +1354,15 @@ pub struct SyntaxPalette {
     pub editor_background: Color32,
 }
 
-pub fn syntax_palette(dark_mode: bool) -> SyntaxPalette {
-    if let Some(imported) = imported_palette() {
+pub fn syntax_palette(context: &egui::Context) -> SyntaxPalette {
+    if let Some(imported) = imported_palette(context) {
         return syntax_palette_from_semantic(imported.colors);
     }
+    default_syntax_palette(context.theme() == egui::Theme::Dark)
+}
+pub fn default_syntax_palette(dark_mode: bool) -> SyntaxPalette {
     if dark_mode {
-        let semantic = palette(true);
+        let semantic = default_palette(true);
         SyntaxPalette {
             plain: Color32::from_rgb(214, 219, 230),
             comment: Color32::from_rgb(106, 122, 144),
@@ -1453,7 +1456,7 @@ pub fn configure_styles(context: &egui::Context) {
     context.style_mut_of(egui::Theme::Light, |style| {
         style.visuals = egui::Visuals::light();
     });
-    if let Some(imported) = imported_palette() {
+    if let Some(imported) = imported_palette(context) {
         context.all_styles_mut(|style| apply_imported_visuals(&mut style.visuals, imported));
     }
     context.all_styles_mut(|style| {
@@ -1659,7 +1662,7 @@ pub fn apply_dense_toolbar_spacing(ui: &mut egui::Ui) {
 
 /// Give selected navigation rows the same quiet emphasis as the cursor line.
 pub fn apply_active_row_selection(ui: &mut egui::Ui) {
-    ui.visuals_mut().selection.bg_fill = palette(ui.visuals().dark_mode).active_row;
+    ui.visuals_mut().selection.bg_fill = palette(ui.ctx()).active_row;
     ui.visuals_mut().selection.stroke = egui::Stroke::NONE;
 }
 
@@ -1684,7 +1687,7 @@ pub fn show_logo(ui: &mut egui::Ui) {
                 RichText::new("t")
                     .font(font)
                     .strong()
-                    .color(palette(ui.visuals().dark_mode).accent),
+                    .color(palette(ui.ctx()).accent),
             ));
         });
     });
@@ -1719,14 +1722,6 @@ mod tests {
     use std::path::Path;
 
     use super::*;
-
-    struct ImportedPaletteReset;
-
-    impl Drop for ImportedPaletteReset {
-        fn drop(&mut self) {
-            set_imported_palette(None);
-        }
-    }
 
     #[test]
     fn chrome_and_component_geometry_matches_the_existing_ui() {
@@ -1842,8 +1837,8 @@ mod tests {
 
     #[test]
     fn syntax_palette_preserves_existing_editor_colors_and_type() {
-        let dark = syntax_palette(true);
-        let light = syntax_palette(false);
+        let dark = default_syntax_palette(true);
+        let light = default_syntax_palette(false);
         assert_eq!(dark.plain, Color32::from_rgb(214, 219, 230));
         assert_eq!(light.plain, Color32::from_rgb(52, 58, 70));
         assert_eq!(dark.keyword, Color32::from_rgb(198, 160, 246));
@@ -1906,8 +1901,8 @@ mod tests {
 
     #[test]
     fn shared_dark_syntax_hues_follow_semantic_status_roles() {
-        let semantic = palette(true);
-        let syntax = syntax_palette(true);
+        let semantic = default_palette(true);
+        let syntax = default_syntax_palette(true);
 
         assert_eq!(syntax.link, semantic.info);
         assert_eq!(syntax.string, semantic.success);
@@ -1918,8 +1913,8 @@ mod tests {
 
     #[test]
     fn semantic_palette_preserves_light_and_dark_contrast_values() {
-        let dark = palette(true);
-        let light = palette(false);
+        let dark = default_palette(true);
+        let light = default_palette(false);
         assert_eq!(dark.accent, Color32::from_rgb(79, 140, 255));
         assert_eq!(light.accent, dark.accent);
         assert_eq!(dark.error, Color32::from_rgb(237, 135, 150));
@@ -2087,7 +2082,7 @@ mod tests {
             fallback_face_index: source_font.index,
             ..Default::default()
         };
-        let reads = Cell::new(0_u32);
+        let reads = std::cell::Cell::new(0_u32);
         let context = egui::Context::default();
 
         let configuration = configure_editor_fonts_with_reader(
@@ -2187,7 +2182,6 @@ mod tests {
 
     #[test]
     fn sublime_semantics_flow_through_shared_chrome_and_editor_tokens() {
-        let _reset = ImportedPaletteReset;
         let imported = crate::sublime_theme::import_bytes(
             Path::new("Cohesive.sublime-color-scheme"),
             br##"{
@@ -2205,15 +2199,26 @@ mod tests {
             }"##,
         )
         .unwrap();
-        set_imported_palette(Some((imported.dark_mode, imported.palette)));
+        let context = egui::Context::default();
+        set_imported_palette(&context, Some((imported.dark_mode, imported.palette)));
 
-        let semantic = palette(false);
-        let syntax = syntax_palette(false);
+        let semantic = palette(&context);
+        let syntax = syntax_palette(&context);
         assert_eq!(semantic.accent, Color32::from_rgb(58, 167, 255));
         assert_eq!(syntax.editor_background, Color32::from_rgb(16, 24, 32));
         assert_eq!(syntax.keyword, Color32::from_rgb(210, 156, 255));
 
-        let context = egui::Context::default();
+        // Two contexts on the same thread must never select each other's
+        // imported colors, even when their updates are interleaved.
+        let other = egui::Context::default();
+        let mut alternate = imported.palette;
+        alternate.accent.r ^= 0xff;
+        set_imported_palette(&other, Some((false, alternate)));
+        assert_ne!(palette(&other).accent, semantic.accent);
+        assert_eq!(palette(&context).accent, semantic.accent);
+        set_imported_palette(&other, None);
+        assert_eq!(syntax_palette(&context).keyword, syntax.keyword);
+
         configure_styles(&context);
         assert_eq!(
             context.style_of(egui::Theme::Dark).visuals.panel_fill,

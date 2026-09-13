@@ -7,6 +7,7 @@ description = "A fast, native Typst editor with live PDF preview"
 repository = "https://github.com/calvinkhor/tiptoptyp"
 
 [dependencies]
+tiptoptyp-core = { path = "core" }
 eframe = { version = "0.36.1", default-features = false, features = ["default_fonts", "glow", "persistence", "wayland", "x11"] }
 egui_ltreeview = "0.9.0"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff"] }
@@ -36,7 +37,13 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = ["N
 winit = { version = "=0.30.13", default-features = false, features = ["rwh_06"] }
 
 [dev-dependencies]
+tiptoptyp-core = { path = "core", features = ["test-support"] }
 egui_kittest = "0.36.1"
+
+[workspace]
+members = ["core"]
+default-members = [".", "core"]
+exclude = ["xtask"]
 
 [profile.release]
 lto = "thin"

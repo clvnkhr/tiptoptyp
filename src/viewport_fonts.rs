@@ -1,17 +1,39 @@
 //! Keep immediate child uploads ordered with a parent's repeated layout pass.
 use eframe::egui;
 
-pub(crate) fn show_immediate<T>(
+/// A new native surface must be created after a native appearance change has
+/// reached AppKit. Existing children stay alive and retain their focus/geometry.
+pub(crate) fn appearance_changed(context: &egui::Context) {
+    let frame = context.cumulative_frame_nr_for(egui::ViewportId::ROOT);
+    context.data_mut(|data| data.insert_temp(egui::Id::new("native-appearance-frame"), frame));
+    context.request_repaint();
+}
+fn defer_new_child(changed: Option<u64>, frame: u64, exists: bool) -> bool {
+    !exists && changed == Some(frame)
+}
+pub(crate) fn show_immediate(
     context: &egui::Context,
     id: egui::ViewportId,
     builder: egui::ViewportBuilder,
-    body: impl FnMut(&mut egui::Ui, egui::ViewportClass) -> T,
-) -> T {
-    let result = context.show_viewport_immediate(id, builder, body);
+    body: impl FnMut(&mut egui::Ui, egui::ViewportClass),
+) {
+    let changed =
+        context.data(|data| data.get_temp::<u64>(egui::Id::new("native-appearance-frame")));
+    let exists = context.input(|input| input.raw.viewports.contains_key(&id));
+    if !context.embed_viewports()
+        && defer_new_child(
+            changed,
+            context.cumulative_frame_nr_for(egui::ViewportId::ROOT),
+            exists,
+        )
+    {
+        context.request_repaint();
+        return;
+    }
+    context.show_viewport_immediate(id, builder, body);
     if !context.embed_viewports() {
         after_immediate_viewport(context);
     }
-    result
 }
 
 fn after_immediate_viewport(context: &egui::Context) {
@@ -48,6 +70,14 @@ fn after_immediate_viewport(context: &egui::Context) {
 mod tests {
     use super::*;
     use std::{cell::RefCell, rc::Rc};
+
+    #[test]
+    fn appearance_barrier_defers_only_new_children_for_one_frame() {
+        assert!(defer_new_child(Some(4), 4, false));
+        assert!(!defer_new_child(Some(4), 5, false));
+        assert!(!defer_new_child(Some(4), 4, true));
+        assert!(!defer_new_child(None, 4, false));
+    }
 
     fn apply(image: &mut egui::ColorImage, mut delta: egui::TexturesDelta) {
         if let Some(updates) = delta.set.remove(&egui::TextureId::default()) {

@@ -1,3 +1,4 @@
+use crate::worker::{LatestReceiver, LatestSender, latest_channel};
 use std::{
     collections::VecDeque,
     fs,
@@ -16,7 +17,25 @@ use crate::{
     document::DocumentKind,
     private_workspace::project_root_for_path,
 };
-use eframe::egui;
+
+macro_rules! request_token {
+    ($name:ident) => {
+        #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+        pub(crate) struct $name(u64);
+        impl $name {
+            pub(crate) fn advance(&mut self) {
+                self.0 = self.0.wrapping_add(1).max(1);
+            }
+        }
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                self.0.fmt(f)
+            }
+        }
+    };
+}
+request_token!(AssetToken);
+request_token!(ThumbnailToken);
 
 const THUMBNAIL_CACHE_CAPACITY: usize = 8;
 pub(crate) const ASSET_THUMBNAIL_MAX_DIMENSION: u32 = 720;
@@ -32,13 +51,13 @@ pub enum LoadedAsset {
 
 #[derive(Debug)]
 pub struct AssetResult {
-    pub token: u64,
+    pub token: AssetToken,
     pub output: Result<LoadedAsset, String>,
 }
 
 #[derive(Debug)]
 struct AssetRequest {
-    token: u64,
+    token: AssetToken,
     path: PathBuf,
     kind: DocumentKind,
 }
@@ -47,16 +66,17 @@ struct AssetRequest {
 /// callback. In particular, a long PDF cannot freeze resizing or leave the UI
 /// in a modal-looking state while Poppler is working.
 pub struct AssetLoader {
-    requests: Option<Sender<AssetRequest>>,
+    requests: Option<LatestSender<AssetRequest>>,
     results: Receiver<AssetResult>,
+    disconnected: AtomicBool,
     worker: Option<thread::JoinHandle<()>>,
     shutdown: Arc<AtomicBool>,
     latest_token: Arc<AtomicU64>,
 }
 
 impl AssetLoader {
-    pub fn new(context: egui::Context) -> Self {
-        let (request_tx, request_rx) = mpsc::channel();
+    pub fn new(context: crate::worker::RepaintTarget) -> Self {
+        let (request_tx, request_rx) = latest_channel();
         let (result_tx, result_rx) = mpsc::channel();
         let shutdown = Arc::new(AtomicBool::new(false));
         let latest_token = Arc::new(AtomicU64::new(0));
@@ -73,19 +93,25 @@ impl AssetLoader {
                     worker_latest,
                 );
             })
-            .expect("failed to start asset loader");
+            .ok();
         Self {
-            requests: Some(request_tx),
+            requests: worker.as_ref().map(|_| request_tx),
             results: result_rx,
-            worker: Some(worker),
+            disconnected: AtomicBool::new(false),
+            worker,
             shutdown,
             latest_token,
         }
     }
 
-    pub fn request(&self, token: u64, path: PathBuf, kind: DocumentKind) -> Result<(), String> {
+    pub fn request(
+        &self,
+        token: AssetToken,
+        path: PathBuf,
+        kind: DocumentKind,
+    ) -> Result<(), String> {
         debug_assert!(kind.preview_only());
-        self.latest_token.store(token, Ordering::Release);
+        self.latest_token.store(token.0, Ordering::Release);
         self.requests
             .as_ref()
             .ok_or_else(|| "The image/PDF loader has stopped".to_owned())?
@@ -93,12 +119,19 @@ impl AssetLoader {
             .map_err(|_| "The image/PDF loader stopped unexpectedly".to_owned())
     }
 
-    pub fn cancel_before(&self, token: u64) {
-        self.latest_token.store(token, Ordering::Release);
+    pub fn cancel_before(&self, token: AssetToken) {
+        self.latest_token.store(token.0, Ordering::Release);
     }
 
     pub fn try_recv(&self) -> Option<AssetResult> {
-        self.results.try_recv().ok()
+        Some(
+            crate::worker::poll_service(&self.results, &self.disconnected)?.unwrap_or_else(|()| {
+                AssetResult {
+                    token: AssetToken(self.latest_token.load(Ordering::Acquire)),
+                    output: Err("The image/PDF loader stopped unexpectedly".to_owned()),
+                }
+            }),
+        )
     }
 }
 
@@ -120,7 +153,7 @@ pub(crate) struct AssetThumbnail {
 
 #[derive(Debug)]
 pub(crate) struct AssetThumbnailResult {
-    pub(crate) token: u64,
+    pub(crate) token: ThumbnailToken,
     pub(crate) path: PathBuf,
     pub(crate) kind: DocumentKind,
     pub(crate) output: Result<AssetThumbnail, String>,
@@ -128,7 +161,7 @@ pub(crate) struct AssetThumbnailResult {
 
 #[derive(Debug)]
 struct AssetThumbnailRequest {
-    token: u64,
+    token: ThumbnailToken,
     path: PathBuf,
     kind: DocumentKind,
 }
@@ -137,16 +170,17 @@ struct AssetThumbnailRequest {
 /// document loader. Work is serial and latest-wins so rapidly crossing files
 /// cannot accumulate a queue of image decodes or Poppler children.
 pub(crate) struct AssetThumbnailLoader {
-    requests: Option<Sender<AssetThumbnailRequest>>,
+    requests: Option<LatestSender<AssetThumbnailRequest>>,
     results: Receiver<AssetThumbnailResult>,
+    disconnected: AtomicBool,
     worker: Option<thread::JoinHandle<()>>,
     shutdown: Arc<AtomicBool>,
     latest_token: Arc<AtomicU64>,
 }
 
 impl AssetThumbnailLoader {
-    pub(crate) fn new(context: egui::Context) -> Self {
-        let (request_tx, request_rx) = mpsc::channel();
+    pub(crate) fn new(context: crate::worker::RepaintTarget) -> Self {
+        let (request_tx, request_rx) = latest_channel();
         let (result_tx, result_rx) = mpsc::channel();
         let shutdown = Arc::new(AtomicBool::new(false));
         let latest_token = Arc::new(AtomicU64::new(0));
@@ -164,11 +198,12 @@ impl AssetThumbnailLoader {
                     ASSET_THUMBNAIL_MAX_DIMENSION,
                 );
             })
-            .expect("failed to start asset thumbnail loader");
+            .ok();
         Self {
-            requests: Some(request_tx),
+            requests: worker.as_ref().map(|_| request_tx),
             results: result_rx,
-            worker: Some(worker),
+            disconnected: AtomicBool::new(false),
+            worker,
             shutdown,
             latest_token,
         }
@@ -176,12 +211,12 @@ impl AssetThumbnailLoader {
 
     pub(crate) fn request(
         &self,
-        token: u64,
+        token: ThumbnailToken,
         path: PathBuf,
         kind: DocumentKind,
     ) -> Result<(), String> {
         debug_assert!(kind.preview_only());
-        self.latest_token.store(token, Ordering::Release);
+        self.latest_token.store(token.0, Ordering::Release);
         self.requests
             .as_ref()
             .ok_or_else(|| "The asset thumbnail loader has stopped".to_owned())?
@@ -189,12 +224,14 @@ impl AssetThumbnailLoader {
             .map_err(|_| "The asset thumbnail loader stopped unexpectedly".to_owned())
     }
 
-    pub(crate) fn cancel_before(&self, token: u64) {
-        self.latest_token.store(token, Ordering::Release);
+    pub(crate) fn cancel_before(&self, token: ThumbnailToken) {
+        self.latest_token.store(token.0, Ordering::Release);
     }
 
-    pub(crate) fn try_recv(&self) -> Option<AssetThumbnailResult> {
-        self.results.try_recv().ok()
+    pub(crate) fn try_recv(&self) -> Option<Result<AssetThumbnailResult, String>> {
+        crate::worker::poll_service(&self.results, &self.disconnected).map(|result| {
+            result.map_err(|()| "The thumbnail loader stopped unexpectedly".to_owned())
+        })
     }
 }
 
@@ -251,9 +288,9 @@ impl ThumbnailCache {
 }
 
 fn thumbnail_worker_loop(
-    requests: Receiver<AssetThumbnailRequest>,
+    requests: LatestReceiver<AssetThumbnailRequest>,
     results: Sender<AssetThumbnailResult>,
-    context: egui::Context,
+    context: crate::worker::RepaintTarget,
     shutdown: Arc<AtomicBool>,
     latest_token: Arc<AtomicU64>,
     max_dimension: u32,
@@ -267,7 +304,7 @@ fn thumbnail_worker_loop(
 
         let cancelled = || {
             shutdown.load(Ordering::Acquire)
-                || latest_token.load(Ordering::Acquire) != request.token
+                || latest_token.load(Ordering::Acquire) != request.token.0
         };
         let output = AssetFingerprint::read(&request.path).and_then(|fingerprint| {
             if let Some(thumbnail) = cache.get(&fingerprint) {
@@ -278,7 +315,7 @@ fn thumbnail_worker_loop(
             Ok(thumbnail)
         });
 
-        if latest_token.load(Ordering::Acquire) == request.token
+        if latest_token.load(Ordering::Acquire) == request.token.0
             && results
                 .send(AssetThumbnailResult {
                     token: request.token,
@@ -295,7 +332,7 @@ fn thumbnail_worker_loop(
 
 fn take_latest_thumbnail_queued(
     mut request: AssetThumbnailRequest,
-    requests: &Receiver<AssetThumbnailRequest>,
+    requests: &LatestReceiver<AssetThumbnailRequest>,
 ) -> AssetThumbnailRequest {
     while let Ok(newer) = requests.try_recv() {
         request = newer;
@@ -422,9 +459,9 @@ fn thumbnail_dimensions(width: u32, height: u32, max_dimension: u32) -> (u32, u3
 }
 
 fn worker_loop(
-    requests: Receiver<AssetRequest>,
+    requests: LatestReceiver<AssetRequest>,
     results: Sender<AssetResult>,
-    context: egui::Context,
+    context: crate::worker::RepaintTarget,
     shutdown: Arc<AtomicBool>,
     latest_token: Arc<AtomicU64>,
 ) {
@@ -436,7 +473,7 @@ fn worker_loop(
 
         let cancelled = || {
             shutdown.load(Ordering::Acquire)
-                || latest_token.load(Ordering::Acquire) != request.token
+                || latest_token.load(Ordering::Acquire) != request.token.0
         };
         let output = match request.kind {
             DocumentKind::Image => load_image(&request.path, &cancelled),
@@ -445,7 +482,7 @@ fn worker_loop(
                 Err("Only binary preview assets use the asset loader".to_owned())
             }
         };
-        if latest_token.load(Ordering::Acquire) == request.token
+        if latest_token.load(Ordering::Acquire) == request.token.0
             && results
                 .send(AssetResult {
                     token: request.token,
@@ -460,7 +497,7 @@ fn worker_loop(
 
 fn take_latest_queued(
     mut request: AssetRequest,
-    requests: &Receiver<AssetRequest>,
+    requests: &LatestReceiver<AssetRequest>,
 ) -> AssetRequest {
     while let Ok(newer) = requests.try_recv() {
         request = newer;
@@ -507,7 +544,7 @@ mod tests {
 
     fn request(token: u64) -> AssetRequest {
         AssetRequest {
-            token,
+            token: AssetToken(token),
             path: PathBuf::from(format!("asset-{token}.pdf")),
             kind: DocumentKind::Pdf,
         }
@@ -515,19 +552,19 @@ mod tests {
 
     #[test]
     fn queued_asset_requests_collapse_to_the_newest() {
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = latest_channel();
         sender.send(request(2)).unwrap();
         sender.send(request(3)).unwrap();
 
         let latest = take_latest_queued(request(1), &receiver);
 
-        assert_eq!(latest.token, 3);
+        assert_eq!(latest.token.0, 3);
         assert_eq!(latest.path, PathBuf::from("asset-3.pdf"));
     }
 
     fn thumbnail_request(token: u64) -> AssetThumbnailRequest {
         AssetThumbnailRequest {
-            token,
+            token: ThumbnailToken(token),
             path: PathBuf::from(format!("thumbnail-{token}.png")),
             kind: DocumentKind::Image,
         }
@@ -535,13 +572,13 @@ mod tests {
 
     #[test]
     fn queued_thumbnail_requests_collapse_to_the_newest() {
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = latest_channel();
         sender.send(thumbnail_request(2)).unwrap();
         sender.send(thumbnail_request(3)).unwrap();
 
         let latest = take_latest_thumbnail_queued(thumbnail_request(1), &receiver);
 
-        assert_eq!(latest.token, 3);
+        assert_eq!(latest.token.0, 3);
         assert_eq!(latest.path, PathBuf::from("thumbnail-3.png"));
     }
 

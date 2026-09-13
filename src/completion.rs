@@ -1,10 +1,8 @@
 //! Local filtering and safe rebasing of completion edits while typing.
-use crate::{
-    font_catalog::FontCatalog,
-    lsp_text::{lsp_position_at_char, range_to_char_range},
-    tinymist::{CompletionItem, LspRange, LspTextEdit},
-};
+use crate::{font_catalog::FontCatalog, tinymist::CompletionItem};
 use std::ops::Range;
+use tiptoptyp_core::text::{LspRange, LspTextEdit, ScalarOffset};
+use tiptoptyp_core::text::{lsp_position_at_scalar, range_to_scalar_range};
 use typst_syntax::{LinkedNode, Source, SyntaxKind};
 
 /// Case-insensitive subsequence matching. Earlier and consecutive matches rank first.
@@ -142,8 +140,14 @@ pub(crate) fn font_items(
                     insert_text_is_snippet: false,
                     text_edit: Some(LspTextEdit {
                         range: LspRange {
-                            start: lsp_position_at_char(source, context.range.start),
-                            end: lsp_position_at_char(source, context.range.end),
+                            start: lsp_position_at_scalar(
+                                source,
+                                ScalarOffset::new(context.range.start),
+                            ),
+                            end: lsp_position_at_scalar(
+                                source,
+                                ScalarOffset::new(context.range.end),
+                            ),
                         },
                         new_text: inserted,
                     }),
@@ -194,7 +198,9 @@ fn reference_code(item: &CompletionItem, source: &str, cursor: usize) -> Option<
         .as_ref()
         .map_or(item.insert_text.as_str(), |edit| edit.new_text.as_str());
     let edit_start = item.text_edit.as_ref().map_or(start + 1, |edit| {
-        range_to_char_range(source, &edit.range).start
+        range_to_scalar_range(source, &edit.range)
+            .into_range()
+            .start
     });
     let before: String = source
         .chars()
@@ -315,29 +321,38 @@ pub(crate) fn rebase(
         let mut item = item.clone();
         let mut edits = item.additional_text_edits.clone();
         edits.extend(item.text_edit.clone());
-        if crate::lsp_text::apply_text_edits(old, &edits, [old_cursor, old_cursor]).is_err() {
+        if tiptoptyp_core::text::apply_text_edits(
+            old,
+            &edits,
+            ([old_cursor, old_cursor]).map(ScalarOffset::new),
+        )
+        .is_err()
+        {
             continue;
         }
         if let Some(edit) = &mut item.text_edit {
-            let range = range_to_char_range(old, &edit.range);
+            let range = range_to_scalar_range(old, &edit.range).into_range();
             if range.start > common || range.end < old_cursor {
                 continue;
             }
             edit.range = LspRange {
-                start: lsp_position_at_char(new, range.start),
-                end: lsp_position_at_char(new, cursor + range.end - old_cursor),
+                start: lsp_position_at_scalar(new, ScalarOffset::new(range.start)),
+                end: lsp_position_at_scalar(
+                    new,
+                    ScalarOffset::new(cursor + range.end - old_cursor),
+                ),
             };
         }
         let mut valid = true;
         for edit in &mut item.additional_text_edits {
-            let range = range_to_char_range(old, &edit.range);
+            let range = range_to_scalar_range(old, &edit.range).into_range();
             if range.start < old_cursor && range.end > common {
                 valid = false;
                 break;
             }
             edit.range = LspRange {
-                start: lsp_position_at_char(new, map(range.start)),
-                end: lsp_position_at_char(new, map(range.end)),
+                start: lsp_position_at_scalar(new, ScalarOffset::new(map(range.start))),
+                end: lsp_position_at_scalar(new, ScalarOffset::new(map(range.end))),
             };
         }
         if valid {
@@ -375,8 +390,8 @@ mod tests {
             insert_text_is_snippet: false,
             text_edit: Some(LspTextEdit {
                 range: LspRange {
-                    start: lsp_position_at_char(source, range.start),
-                    end: lsp_position_at_char(source, range.end),
+                    start: lsp_position_at_scalar(source, ScalarOffset::new(range.start)),
+                    end: lsp_position_at_scalar(source, ScalarOffset::new(range.end)),
                 },
                 new_text: insert.into(),
             }),
@@ -401,21 +416,21 @@ mod tests {
         let mut item = item(old, 3..5, "heading");
         item.additional_text_edits.push(LspTextEdit {
             range: LspRange {
-                start: lsp_position_at_char(old, 6),
-                end: lsp_position_at_char(old, 9),
+                start: lsp_position_at_scalar(old, ScalarOffset::new(6)),
+                end: lsp_position_at_scalar(old, ScalarOffset::new(9)),
             },
             new_text: "tail".into(),
         });
         let new = "🦀 #hea\nend";
         let rebased = rebase(&[item.clone()], old, 5, new, 6).unwrap();
         assert_eq!(
-            crate::lsp_text::apply_text_edits(
+            tiptoptyp_core::text::apply_text_edits(
                 new,
                 &[
                     rebased[0].text_edit.clone().unwrap(),
                     rebased[0].additional_text_edits[0].clone()
                 ],
-                [0, 0]
+                ([0, 0]).map(ScalarOffset::new)
             )
             .unwrap()
             .text,

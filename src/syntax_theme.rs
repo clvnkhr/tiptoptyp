@@ -359,7 +359,11 @@ impl ResolvedTypstStyles {
 
 impl Default for ResolvedTypstStyles {
     fn default() -> Self {
-        Self::resolve(theme::syntax_palette(true), None, &Default::default())
+        Self::resolve(
+            theme::default_syntax_palette(true),
+            None,
+            &Default::default(),
+        )
     }
 }
 
@@ -517,7 +521,8 @@ mod tests {
                 strikethrough: Some(true),
             },
         );
-        let styles = ResolvedTypstStyles::resolve(theme::syntax_palette(true), None, &overrides);
+        let styles =
+            ResolvedTypstStyles::resolve(theme::default_syntax_palette(true), None, &overrides);
         let style = styles.style(TypstSyntaxRole::Strong);
         assert_eq!(style.foreground, Color32::from_rgb(1, 2, 3));
         assert_eq!(
@@ -552,7 +557,7 @@ mod tests {
             },
         });
         let styles = ResolvedTypstStyles::resolve(
-            theme::syntax_palette(true),
+            theme::default_syntax_palette(true),
             Some(&imported),
             &Default::default(),
         );

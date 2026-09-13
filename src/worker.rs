@@ -1,9 +1,56 @@
+mod exclusive;
+pub(crate) use exclusive::{
+    ExclusiveJob, OperationSummary, has_active_operations, take_detached_completions,
+};
+mod latest_queue;
+pub(crate) use latest_queue::{LatestReceiver, LatestSender, latest_channel};
 use std::{
     sync::mpsc::{self, Receiver, TryRecvError},
     thread,
 };
 
 use eframe::egui;
+
+/// Drains valid events first, then reports service termination exactly once.
+/// An empty queue and a dead worker must not both look like "still loading".
+pub(crate) fn poll_service<T>(
+    receiver: &Receiver<T>,
+    disconnected: &std::sync::atomic::AtomicBool,
+) -> Option<Result<T, ()>> {
+    use std::sync::atomic::Ordering;
+    match receiver.try_recv() {
+        Ok(event) => Some(Ok(event)),
+        Err(TryRecvError::Empty) => None,
+        Err(TryRecvError::Disconnected) => {
+            (!disconnected.swap(true, Ordering::AcqRel)).then_some(Err(()))
+        }
+    }
+}
+
+/// A worker can wake its owner, but cannot inspect or mutate the active UI.
+#[derive(Clone)]
+pub(crate) struct RepaintTarget {
+    context: egui::Context,
+    viewport: egui::ViewportId,
+}
+impl RepaintTarget {
+    pub(crate) fn new(context: &egui::Context, viewport: egui::ViewportId) -> Self {
+        Self {
+            context: context.clone(),
+            viewport,
+        }
+    }
+    pub(crate) fn current(context: &egui::Context) -> Self {
+        Self::new(context, context.viewport_id())
+    }
+    pub(crate) fn request_repaint(&self) {
+        self.context.request_repaint_of(self.viewport);
+    }
+    #[cfg(test)]
+    pub(crate) fn test() -> Self {
+        Self::current(&egui::Context::default())
+    }
+}
 
 /// Result of polling the most recently requested one-shot job.
 #[derive(Debug, PartialEq, Eq)]
@@ -44,21 +91,17 @@ impl<T: Send + 'static> LatestJob<T> {
         context: &egui::Context,
         work: impl FnOnce() -> Result<T, String> + Send + 'static,
     ) -> Result<(), String> {
-        self.start_with_repaint(name, Some(context.clone()), work)
+        self.start_with_repaint(name, Some(RepaintTarget::current(context)), work)
     }
 
     fn start_with_repaint(
         &mut self,
         name: impl Into<String>,
-        repaint: Option<egui::Context>,
+        repaint: Option<RepaintTarget>,
         work: impl FnOnce() -> Result<T, String> + Send + 'static,
     ) -> Result<(), String> {
         // Context clones share the active viewport. Remember the originating
         // window before leaving the UI thread instead of consulting it later.
-        let repaint = repaint.map(|context| {
-            let viewport = context.viewport_id();
-            (context, viewport)
-        });
         // Replacing the receiver first makes a failed spawn terminal too: the
         // caller never remains stuck polling an obsolete request.
         self.receiver = None;
@@ -66,9 +109,9 @@ impl<T: Send + 'static> LatestJob<T> {
         let spawned = thread::Builder::new().name(name.into()).spawn(move || {
             let result = work();
             if sender.send(result).is_ok()
-                && let Some((context, viewport)) = repaint
+                && let Some(target) = repaint
             {
-                context.request_repaint_of(viewport);
+                target.request_repaint();
             }
         });
         self.accept_spawn(receiver, spawned)
@@ -116,7 +159,8 @@ impl<T: Send + 'static> LatestJob<T> {
         self.receiver.is_some()
     }
 
-    pub(crate) fn cancel(&mut self) {
+    /// Supersede acceptance; this does not promise to interrupt running code.
+    pub(crate) fn supersede(&mut self) {
         self.receiver = None;
     }
 }
@@ -126,6 +170,18 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
+
+    #[test]
+    fn service_disconnection_is_terminal_after_queued_events_are_drained() {
+        let (sender, receiver) = mpsc::channel();
+        let reported = std::sync::atomic::AtomicBool::new(false);
+        assert_eq!(poll_service(&receiver, &reported), None);
+        sender.send("finished").unwrap();
+        drop(sender);
+        assert_eq!(poll_service(&receiver, &reported), Some(Ok("finished")));
+        assert_eq!(poll_service(&receiver, &reported), Some(Err(())));
+        assert_eq!(poll_service(&receiver, &reported), None);
+    }
 
     fn poll_until_settled<T: Send + 'static>(job: &mut LatestJob<T>) -> LatestJobPoll<T> {
         let deadline = Instant::now() + Duration::from_secs(2);

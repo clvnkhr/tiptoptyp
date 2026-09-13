@@ -148,8 +148,8 @@ pub(crate) fn raster_content_freshness(
 pub(crate) struct PreviewController {
     pub(crate) requested_backend: PreviewPreference,
     pub(crate) tinymist_preview_enabled: bool,
-    pub(crate) tinymist_lsp_ready: bool,
-    pub(crate) interactive_url: Option<String>,
+    pub(crate) connection:
+        tiptoptyp_core::connection::Connection<crate::tinymist::Generation, url::Url>,
     pub(crate) tinymist_state: ServiceState,
     pub(crate) webview_state: ServiceState,
     pub(crate) status: PreviewStatus,
@@ -157,11 +157,7 @@ pub(crate) struct PreviewController {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) tinymist_diagnostics: Vec<Diagnostic>,
     pub(crate) diagnostics_generation: u64,
-    pub(crate) artifact_key: Option<ArtifactKey>,
-    pub(crate) pdf: Option<Arc<[u8]>>,
-    pub(crate) raster_key: Option<ArtifactKey>,
-    pub(crate) raster_error: Option<String>,
-    pub(crate) pages: Vec<PreviewTexture>,
+    pub(crate) content: tiptoptyp_core::preview::PreviewContent<PreviewTexture>,
     pub(crate) visible_page: usize,
     pub(crate) zoom: f32,
     pub(crate) fit_width: bool,
@@ -176,8 +172,7 @@ impl PreviewController {
         Self {
             requested_backend,
             tinymist_preview_enabled: false,
-            tinymist_lsp_ready: false,
-            interactive_url: None,
+            connection: Default::default(),
             tinymist_state: ServiceState::Starting("Launching Tinymist LSP".to_owned()),
             webview_state: ServiceState::Starting(
                 "Waiting for Tinymist's preview server".to_owned(),
@@ -187,11 +182,7 @@ impl PreviewController {
             diagnostics: Vec::new(),
             tinymist_diagnostics: Vec::new(),
             diagnostics_generation: 0,
-            artifact_key: None,
-            pdf: None,
-            raster_key: None,
-            raster_error: None,
-            pages: Vec::new(),
+            content: Default::default(),
             visible_page: 0,
             zoom: 1.0,
             fit_width: true,
@@ -213,20 +204,19 @@ impl PreviewController {
     }
 
     pub(crate) fn accept_artifact(&mut self, key: ArtifactKey, pdf: Arc<[u8]>) {
-        self.artifact_key = Some(key);
-        self.pdf = Some(pdf);
-        self.raster_error = None;
+        self.content.accept_artifact(key, pdf);
     }
 
     pub(crate) fn accepts_raster(&self, key: ArtifactKey, document_revision: u64) -> bool {
-        raster_result_matches_artifact(key, document_revision, self.artifact_key)
+        raster_result_matches_artifact(key, document_revision, self.content.artifact_key())
     }
 
     pub(crate) fn replace_raster(&mut self, key: ArtifactKey, pages: Vec<PreviewTexture>) {
-        self.pages = pages;
-        self.visible_page = self.visible_page.min(self.pages.len().saturating_sub(1));
-        self.raster_key = Some(key);
-        self.raster_error = None;
+        if self.content.accept_raster(key, pages) {
+            self.visible_page = self
+                .visible_page
+                .min(self.content.pages().len().saturating_sub(1));
+        }
     }
 
     pub(crate) fn replace_asset(
@@ -235,12 +225,10 @@ impl PreviewController {
         pdf: Option<Arc<[u8]>>,
         pages: Vec<PreviewTexture>,
     ) {
-        self.pages = pages;
-        self.pdf = pdf;
-        self.artifact_key = Some(key);
-        self.raster_key = Some(key);
-        self.raster_error = None;
-        self.visible_page = self.visible_page.min(self.pages.len().saturating_sub(1));
+        self.content.replace_asset(key, pdf, pages);
+        self.visible_page = self
+            .visible_page
+            .min(self.content.pages().len().saturating_sub(1));
         self.status = PreviewStatus::Ready(Duration::ZERO);
     }
 
@@ -252,20 +240,11 @@ impl PreviewController {
         if preserve_designated_preview {
             // Both halves retain the same generation while being rebound to
             // the newly active child document's revision.
-            if let Some(key) = &mut self.artifact_key {
-                key.revision = document_revision;
-            }
-            if let Some(key) = &mut self.raster_key {
-                key.revision = document_revision;
-            }
+            self.content.rebind_revision(document_revision);
             return;
         }
 
-        self.artifact_key = None;
-        self.pdf = None;
-        self.raster_key = None;
-        self.raster_error = None;
-        self.pages.clear();
+        self.content.clear();
         self.visible_page = 0;
         self.raw_diagnostics.clear();
         self.diagnostics.clear();
@@ -278,10 +257,10 @@ impl PreviewController {
         document_revision: u64,
     ) -> Option<RasterContentFreshness> {
         raster_content_freshness(
-            !self.pages.is_empty(),
-            self.raster_key,
+            !self.content.pages().is_empty(),
+            self.content.raster_key(),
             document_revision,
-            self.artifact_key,
+            self.content.artifact_key(),
         )
     }
 
@@ -313,7 +292,7 @@ impl PreviewController {
         platform_supported: bool,
     ) -> bool {
         self.interactive_requested(typst_preview_available, platform_supported)
-            && self.interactive_url.is_some()
+            && self.connection.endpoint().is_some()
             && self.webview_state.is_ready()
     }
 
@@ -323,7 +302,7 @@ impl PreviewController {
         platform_supported: bool,
     ) -> bool {
         self.interactive_requested(typst_preview_available, platform_supported)
-            && self.interactive_url.is_some()
+            && self.connection.endpoint().is_some()
             && !matches!(
                 self.webview_state,
                 ServiceState::Failed(_) | ServiceState::Unsupported(_)
@@ -370,7 +349,7 @@ impl PreviewController {
         preview_fallback_reason_for(
             self.requested_backend,
             self.interactive_active(typst_preview_available, platform_supported),
-            self.interactive_url.is_some(),
+            self.connection.endpoint().is_some(),
             &self.tinymist_state,
             &self.webview_state,
         )
@@ -395,7 +374,7 @@ impl PreviewController {
         interactive_requested: bool,
         screenshot_pending: bool,
     ) -> bool {
-        let interactive_unavailable = (self.interactive_url.is_none()
+        let interactive_unavailable = (self.connection.endpoint().is_none()
             && matches!(
                 self.tinymist_state,
                 ServiceState::Disabled(_)
@@ -552,21 +531,31 @@ mod tests {
     #[test]
     fn same_revision_raster_from_an_older_artifact_is_stale() {
         let mut preview = PreviewController::new(false, PreviewPreference::Native);
-        preview.artifact_key = Some(key(9, 4));
-        preview.raster_key = Some(key(9, 3));
+        preview
+            .content
+            .accept_artifact(key(9, 3), Arc::from(&b"old"[..]));
+        preview.content.accept_raster(key(9, 3), vec![]);
+        preview
+            .content
+            .accept_artifact(key(9, 4), Arc::from(&b"new"[..]));
         assert!(!preview.accepts_raster(key(9, 3), 9));
     }
 
     #[test]
     fn rebinding_a_designated_preview_does_not_promote_an_old_generation() {
         let mut preview = PreviewController::new(false, PreviewPreference::Native);
-        preview.artifact_key = Some(key(4, 12));
-        preview.raster_key = Some(key(4, 11));
+        preview
+            .content
+            .accept_artifact(key(4, 11), Arc::from(&b"old"[..]));
+        preview.content.accept_raster(key(4, 11), vec![]);
+        preview
+            .content
+            .accept_artifact(key(4, 12), Arc::from(&b"new"[..]));
 
         preview.clear_for_document(5, true);
 
-        assert_eq!(preview.artifact_key, Some(key(5, 12)));
-        assert_eq!(preview.raster_key, Some(key(5, 11)));
+        assert_eq!(preview.content.artifact_key(), Some(key(5, 12)));
+        assert_eq!(preview.content.raster_key(), Some(key(5, 11)));
         assert!(!preview.accepts_raster(key(5, 11), 5));
     }
 
@@ -588,7 +577,14 @@ mod tests {
                 .is_some_and(|reason| reason.contains("server stopped"))
         );
 
-        preview.interactive_url = Some("http://127.0.0.1:23625".to_owned());
+        preview.connection.start(crate::tinymist::Generation(1));
+        preview
+            .connection
+            .initialized(crate::tinymist::Generation(1));
+        preview.connection.connect(
+            crate::tinymist::Generation(1),
+            url::Url::parse("http://127.0.0.1:23625").unwrap(),
+        );
         preview.webview_state = ServiceState::Ready("loaded".to_owned());
         assert_eq!(
             preview.effective_backend(true, true),

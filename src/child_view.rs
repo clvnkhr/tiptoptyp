@@ -26,14 +26,14 @@ pub(crate) enum ChildViewBounds {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ChildViewSpec {
-    pub(crate) id_salt: &'static str,
-    pub(crate) title: &'static str,
-    pub(crate) role: ChildViewRole,
-    pub(crate) focus: FocusPolicy,
-    pub(crate) bounds: ChildViewBounds,
-    pub(crate) capture_target: &'static str,
-    pub(crate) active: bool,
-    pub(crate) mouse_passthrough: bool,
+    id_salt: &'static str,
+    title: &'static str,
+    role: ChildViewRole,
+    focus: FocusPolicy,
+    bounds: ChildViewBounds,
+    capture_target: &'static str,
+    active: bool,
+    mouse_passthrough: bool,
 }
 
 impl ChildViewSpec {

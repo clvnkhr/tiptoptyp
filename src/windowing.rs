@@ -60,6 +60,7 @@ fn root_capture_needs_warmup(previous: UiSnapshotScene, next: UiSnapshotScene) -
 /// document viewports in the same process and on the same event loop.
 pub(crate) struct AppShell {
     primary: EditorApp,
+    closing: tiptoptyp_core::closing::CloseCoordinator,
     secondary: Vec<SecondaryWindow>,
     active: ActiveSession,
     next_session_id: u64,
@@ -104,6 +105,7 @@ impl AppShell {
         });
         Self {
             primary,
+            closing: Default::default(),
             secondary: Vec::new(),
             active: ActiveSession::Primary,
             next_session_id: FIRST_SECONDARY_SESSION_ID,
@@ -230,8 +232,13 @@ impl AppShell {
                 .next_session_id
                 .wrapping_add(1)
                 .max(FIRST_SECONDARY_SESSION_ID);
-            let editor =
-                EditorApp::new_secondary(context, request, settings, self.captures.clone());
+            let editor = EditorApp::new_secondary(
+                context,
+                document_viewport_id(id),
+                request,
+                settings,
+                self.captures.clone(),
+            );
             self.secondary.push(SecondaryWindow {
                 id,
                 editor,
@@ -300,22 +307,130 @@ impl AppShell {
         }
     }
 
+    fn document_keys(&self) -> Vec<crate::document::DocumentKey> {
+        std::iter::once(self.primary.document_key())
+            .chain(
+                self.secondary
+                    .iter()
+                    .map(|window| window.editor.document_key()),
+            )
+            .collect()
+    }
+    fn cancel_process_close(&mut self) {
+        self.closing.cancel();
+        self.primary.finish_process_close(false);
+        for window in &mut self.secondary {
+            window.editor.finish_process_close(false);
+        }
+    }
+    fn request_next_close(&mut self, context: &egui::Context) {
+        let Some(key) = self.closing.current() else {
+            return;
+        };
+        let started = if self.primary.document_key().owner == key.owner {
+            self.active = ActiveSession::Primary;
+            context.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
+            self.primary.begin_process_close()
+        } else if let Some(window) = self
+            .secondary
+            .iter_mut()
+            .find(|window| window.editor.document_key().owner == key.owner)
+        {
+            self.active = ActiveSession::Secondary(window.id);
+            window.activate_once = true;
+            window.editor.begin_process_close()
+        } else {
+            false
+        };
+        if !started {
+            self.cancel_process_close();
+            self.primary.show_window_notice(
+                "Closing canceled: finish the active document operation and try again".to_owned(),
+            );
+        }
+        context.request_repaint();
+    }
     fn guard_process_close(&mut self, context: &egui::Context) {
         if !context.input(|input| input.viewport().close_requested()) {
             return;
         }
-        let dirty_secondary = self
-            .secondary
-            .iter()
-            .filter(|window| window.editor.is_dirty_for_close())
-            .count();
-        let guard = process_close_guard(self.primary.is_dirty_for_close(), dirty_secondary);
-        if let ProcessCloseGuard::DirtySecondary(dirty_secondary) = guard {
+        if self.closing.ready(&self.document_keys()) {
+            if crate::worker::has_active_operations() {
+                context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            }
+            return;
+        }
+        if self.closing.is_active() && self.closing.current().is_none() {
+            self.cancel_process_close();
             context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.primary.show_window_notice(format!(
-                "Close or save the {dirty_secondary} modified secondary window{} before closing the main window",
-                if dirty_secondary == 1 { "" } else { "s" }
-            ));
+            self.primary.show_window_notice(
+                "Closing canceled because a document changed after confirmation".to_owned(),
+            );
+            return;
+        }
+        if !self.closing.is_active()
+            && !crate::worker::has_active_operations()
+            && !self.primary.is_dirty_for_close()
+            && !self
+                .secondary
+                .iter()
+                .any(|window| window.editor.is_dirty_for_close())
+        {
+            return;
+        }
+        context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        if self.closing.begin(self.document_keys()) {
+            self.request_next_close(context);
+        }
+    }
+    fn poll_process_close(&mut self, context: &egui::Context) {
+        let Some(requested) = self.closing.current() else {
+            if self.closing.is_active() {
+                self.commit_process_close(context);
+            }
+            return;
+        };
+        let editor = if self.primary.document_key().owner == requested.owner {
+            Some(&self.primary)
+        } else {
+            self.secondary
+                .iter()
+                .find(|window| window.editor.document_key().owner == requested.owner)
+                .map(|window| &window.editor)
+        };
+        let Some(editor) = editor else {
+            self.cancel_process_close();
+            return;
+        };
+        let Some(accepted) = editor.process_close_answer() else {
+            return;
+        };
+        let key = editor.document_key();
+        if !accepted || !self.closing.accept(requested, key) {
+            self.cancel_process_close();
+        } else if self.closing.current().is_some() {
+            self.request_next_close(context);
+        } else {
+            self.commit_process_close(context);
+        }
+    }
+    fn commit_process_close(&mut self, context: &egui::Context) {
+        let keys = self.document_keys();
+        if !self.closing.ready(&keys) || !self.pending_windows.is_empty() {
+            self.cancel_process_close();
+            self.primary.show_window_notice(
+                "Closing canceled because a document changed during confirmation".to_owned(),
+            );
+        } else if self
+            .closing
+            .can_exit(&keys, crate::worker::has_active_operations())
+        {
+            self.primary.finish_process_close(true);
+            context.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
+        } else {
+            self.primary.show_window_notice(
+                "Waiting for the active background operation before closing".to_owned(),
+            );
         }
     }
 
@@ -343,7 +458,7 @@ impl AppShell {
                 newly_active = Some(window.id);
             }
             Self::collect_window_request_from(pending_windows, &mut window.editor);
-            if close_accepted {
+            if close_accepted && !window.editor.process_close_pending() {
                 closed.push(window.id);
             }
         }
@@ -367,6 +482,10 @@ impl eframe::App for AppShell {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let context = ui.ctx().clone();
+        let completions = crate::worker::take_detached_completions();
+        if !completions.is_empty() {
+            self.primary.show_window_notice(completions.join("\n"));
+        }
         self.advance_capture_batch(&context);
         if context.input(|input| input.viewport().focused == Some(true)) {
             self.active = ActiveSession::Primary;
@@ -377,6 +496,7 @@ impl eframe::App for AppShell {
         Self::collect_window_request_from(&mut self.pending_windows, &mut self.primary);
         self.show_secondary_windows(&context, frame);
         self.open_pending_windows(&context);
+        self.poll_process_close(&context);
         #[cfg(target_os = "macos")]
         {
             let editor = self.active_editor();
@@ -449,25 +569,6 @@ fn process_request_action(request: NativeMenuRequest) -> ProcessRequestAction {
     match request {
         NativeMenuRequest::Command(command) => ProcessRequestAction::Editor(command),
         NativeMenuRequest::Quit => ProcessRequestAction::CloseProcess,
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProcessCloseGuard {
-    Allow,
-    PrimaryDocument,
-    DirtySecondary(usize),
-}
-
-fn process_close_guard(primary_dirty: bool, dirty_secondary_windows: usize) -> ProcessCloseGuard {
-    if dirty_secondary_windows > 0 {
-        ProcessCloseGuard::DirtySecondary(dirty_secondary_windows)
-    } else if primary_dirty {
-        // EditorApp owns the document modal and will cancel the same root
-        // close request until Save or Discard completes.
-        ProcessCloseGuard::PrimaryDocument
-    } else {
-        ProcessCloseGuard::Allow
     }
 }
 
@@ -603,23 +704,6 @@ mod tests {
         assert_eq!(document_viewport_id(7), document_viewport_id(7));
         assert_ne!(document_viewport_id(7), document_viewport_id(8));
         assert_ne!(document_viewport_id(7), egui::ViewportId::ROOT);
-    }
-
-    #[test]
-    fn process_close_routes_every_dirty_session_through_a_guard() {
-        assert_eq!(process_close_guard(false, 0), ProcessCloseGuard::Allow);
-        assert_eq!(
-            process_close_guard(true, 0),
-            ProcessCloseGuard::PrimaryDocument
-        );
-        assert_eq!(
-            process_close_guard(false, 1),
-            ProcessCloseGuard::DirtySecondary(1)
-        );
-        assert_eq!(
-            process_close_guard(true, 4),
-            ProcessCloseGuard::DirtySecondary(4)
-        );
     }
 
     #[test]

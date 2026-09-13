@@ -121,7 +121,7 @@ impl Slot {
         if self.requested.as_ref() != Some(request) {
             self.requested = Some(request.clone());
             self.error = None;
-            self.job.cancel();
+            self.job.supersede();
             if let Some(index) = self.samples.iter().position(|(key, _)| key == request) {
                 let cached = self.samples.remove(index).unwrap();
                 self.samples.push_front(cached);

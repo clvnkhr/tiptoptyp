@@ -85,6 +85,13 @@ The accepted scenes and their framebuffer targets are:
 | `find-replace` | `main` | Find and replace controls |
 | `preview-compiling` | `main` | Compiling status and empty preview state |
 
+A capture batch retains its initial document separately from scene-specific
+buffers. Returning from a scene that replaces the document restores that fixture
+and discards incompatible preview artifacts. A light/dark appearance change
+finishes its current root frame before a new native child is created; existing
+child windows keep their geometry and focus. This avoids creating a native GL
+surface during the same appearance transition.
+
 Unknown scene names are rejected rather than silently producing a mislabeled
 image. `TIPTOPTYP_UI_SNAPSHOT_SCENE` is the environment equivalent. OS-native
 file and folder pickers are outside the app framebuffer and therefore cannot be

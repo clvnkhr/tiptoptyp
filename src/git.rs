@@ -3,7 +3,7 @@
 pub(crate) mod editor;
 use crate::{
     theme,
-    worker::{LatestJob, LatestJobPoll},
+    worker::{ExclusiveJob, LatestJobPoll},
 };
 use eframe::egui;
 use std::{
@@ -12,8 +12,7 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,13 +127,19 @@ struct ResultData {
     failed: bool,
     diff: Option<DiffResult>,
 }
+impl crate::worker::OperationSummary for ResultData {
+    fn completion_summary(&self) -> String {
+        format!("{}: {}", self.workspace.display(), self.output)
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct GitPanel {
     pub(crate) visible: bool,
     workspace: PathBuf,
     snapshot: Snapshot,
-    job: LatestJob<ResultData>,
+    job: ExclusiveJob<ResultData>,
+    job_workspace: Option<PathBuf>,
     message: String,
     commit_message: String,
     failed: bool,
@@ -180,6 +185,7 @@ impl GitPanel {
             reveal: true,
         });
         let workspace = self.workspace.clone();
+        self.job_workspace = Some(workspace.clone());
         self.failed = false;
         self.message = "Working…".into();
         if let Err(error) = self.job.start_and_repaint("git", context, move || {
@@ -234,6 +240,9 @@ impl GitPanel {
                 }
             }
             LatestJobPoll::Ready(_) => self.start(context, Operation::Refresh),
+            LatestJobPoll::Failed(_) if self.job_workspace.as_ref() != Some(&self.workspace) => {
+                self.start(context, Operation::Refresh);
+            }
             LatestJobPoll::Failed(error) => {
                 self.failed = true;
                 self.message = error.clone();
@@ -251,7 +260,7 @@ impl GitPanel {
         self.poll(ui.ctx(), &self.workspace.clone());
         let mut action = None;
         let busy = self.job.is_running();
-        let palette = theme::palette(ui.visuals().dark_mode);
+        let palette = theme::palette(ui.ctx());
         egui::ScrollArea::vertical().id_salt("git-page").auto_shrink([false, false]).show(ui, |ui| {
             ui.heading("Git");
             ui.add(egui::Label::new(self.snapshot.root.to_string_lossy()).truncate())
@@ -368,7 +377,7 @@ impl GitPanel {
             );
             return;
         };
-        let palette = theme::palette(ui.visuals().dark_mode);
+        let palette = theme::palette(ui.ctx());
         let mut close = false;
         let response = egui::Frame::group(ui.style())
             .inner_margin(theme::SPACE.content)
@@ -493,7 +502,7 @@ fn right_action_row(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
 }
 
 fn show_colored_diff(ui: &mut egui::Ui, content: &str) {
-    let palette = theme::palette(ui.visuals().dark_mode);
+    let palette = theme::palette(ui.ctx());
     let mut layout = egui::text::LayoutJob::default();
     for line in content.split_inclusive('\n') {
         let color = if line.starts_with('+') {
@@ -526,7 +535,7 @@ fn run_command(root: &Path, args: &[OsString], diff_exit_status: bool) -> Result
     // File-backed output prevents pipe deadlocks and bounds resident output.
     let mut stdout = tempfile::tempfile().map_err(|e| e.to_string())?;
     let mut stderr = tempfile::tempfile().map_err(|e| e.to_string())?;
-    let mut child = Command::new("git")
+    let child = Command::new("git")
         .arg("--no-pager")
         .arg("--literal-pathspecs")
         .args(args)
@@ -540,18 +549,16 @@ fn run_command(root: &Path, args: &[OsString], diff_exit_status: bool) -> Result
         .stderr(stderr.try_clone().map_err(|e| e.to_string())?)
         .spawn()
         .map_err(|e| format!("Could not start Git: {e}"))?;
-    let deadline = Instant::now() + Duration::from_secs(60);
-    let status = loop {
-        match child.try_wait().map_err(|e| e.to_string())? {
-            Some(status) => break status,
-            None if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("Git timed out after 60 seconds".into());
-            }
-            None => thread::sleep(Duration::from_millis(20)),
+    let status = crate::process::wait(child, Duration::from_secs(60), || {
+        if stdout.metadata()?.len() > 4 * 1024 * 1024 || stderr.metadata()?.len() > 4 * 1024 * 1024
+        {
+            return Err(std::io::Error::other(
+                "Git output exceeds 4 MiB; narrow the operation in a terminal",
+            ));
         }
-    };
+        Ok(())
+    })
+    .map_err(|error| format!("Git: {error}"))?;
     let read = |file: &mut fs::File| -> Result<Vec<u8>, String> {
         file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
         let mut bytes = Vec::new();
@@ -687,6 +694,14 @@ fn status_snapshot(workspace: &Path) -> Result<Snapshot, String> {
 }
 
 fn perform(workspace: &Path, operation: Operation) -> Result<ResultData, String> {
+    if matches!(operation, Operation::Refresh | Operation::Diff(..)) {
+        return perform_locked(workspace, operation);
+    }
+    let root = snapshot(workspace)?.root;
+    crate::resource_lock::with_resource(&root, || perform_locked(workspace, operation))
+}
+
+fn perform_locked(workspace: &Path, operation: Operation) -> Result<ResultData, String> {
     let before = snapshot(workspace)?;
     let root = &before.root;
     let committed = matches!(operation, Operation::Commit(_));
@@ -818,6 +833,7 @@ fn unstage_command(root: &Path, path: PathBuf, all: bool) -> Vec<OsString> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{thread, time::Instant};
 
     #[test]
     fn decoration_status_includes_branch_without_history_or_index_refresh() {
@@ -1279,17 +1295,21 @@ mod tests {
         let workspace = panel.workspace.clone();
         panel
             .job
-            .start("git-test-delayed-diff", move || {
-                receiver.recv().unwrap();
-                Ok(ResultData {
-                    workspace,
-                    snapshot: GitPanel::snapshot_fixture().snapshot,
-                    output: "Comparison ready".into(),
-                    committed: false,
-                    failed: false,
-                    diff: Some(DiffResult { selection, content }),
-                })
-            })
+            .start_and_repaint(
+                "git-test-delayed-diff",
+                &egui::Context::default(),
+                move || {
+                    receiver.recv().unwrap();
+                    Ok(ResultData {
+                        workspace,
+                        snapshot: GitPanel::snapshot_fixture().snapshot,
+                        output: "Comparison ready".into(),
+                        committed: false,
+                        failed: false,
+                        diff: Some(DiffResult { selection, content }),
+                    })
+                },
+            )
             .unwrap();
         let mut harness = Harness::builder()
             .with_size(egui::vec2(560.0, 400.0))

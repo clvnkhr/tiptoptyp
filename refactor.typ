@@ -13,7 +13,102 @@
 
 tiptoptyp · Architecture review · 13 September 2026
 
-= Recommendation
+= Implementation record — 13 September 2026
+
+The R1–R8 boundary refactors are implemented. Product features proposed alongside
+this review are recorded separately as todo items 114–118. Items 119–120 cover
+the module extraction and this implementation.
+
+#table(
+  columns: (0.5fr, 4.2fr, 3.3fr),
+  inset: 6pt,
+  align: left,
+  table.header([ID], [Implemented boundary], [Evidence]),
+  [R1], [Private document source, identity, saved state and history. Edits finalize history and version advancement together, including unwind. Consumers receive one immutable snapshot. Save receipts retain the exact written snapshot and window owner.], [`core/src/document.rs`; generated Unicode edit/history sequences; stale and cross-window save tests; compile-fail field-access test.],
+  [R2], [Exclusive document workflow phases, consumed save continuations, and version-specific close permits. App-wide close obtains each window’s answer and commits only when all approved document versions still match; cancellation revokes the batch.], [`core/src/workflow.rs`; `core/src/closing.rs`; `core/tests/save_close.rs`; `src/windowing.rs`.],
+  [R3], [Workers receive explicit owner viewport targets. Document keys include window identity; asset and thumbnail tokens are distinct types. Asset and compiler request mailboxes retain one pending request. Mutations cannot be superseded; completion survives window closure and is reported by the shell. Process exit waits for active operations. Dead services report a terminal outcome.], [`src/worker.rs`; `src/worker/latest_queue.rs`; `src/worker/exclusive.rs`; owner-repaint, queue saturation, disconnection and closed-owner completion tests.],
+  [R4], [Canonical PDF bytes and build identity are stored together. Raster acceptance checks provenance internally and retains stale display content deliberately. Interactive endpoints use typed URLs with process generations; a retained URL does not imply readiness after restart.], [`core/src/preview.rs`; `core/src/connection.rs`; out-of-order raster and same-URL restart tests.],
+  [R5], [New headless `tiptoptyp-core` workspace crate. Document, workflow, close, preview, text, geometry and scheduling rules have no GUI or process dependencies. Time is supplied to debounce decisions. One-shot process waiting centralizes timeout, monitoring and reaping.], [`core/Cargo.toml`; `core/src/scheduling.rs`; `src/process.rs`; headless save/close event sequences; real temporary-repository and child-process tests.],
+  [R6], [Byte offsets, scalar offsets, line indices and UTF-16/scalar columns are distinct types. Native preview placement requires a validated native rectangle produced by the viewport transform.], [`core/src/text.rs`; `core/src/geometry.rs`; Unicode boundary round trips; compile-fail unit mismatches; native bounds trace.],
+  [R7], [Imported palettes belong to the egui context, with explicit palette inputs for non-context consumers. Child-window specifications have private fields. New native children wait until an appearance-change frame finishes. Boundary checks restrict immediate viewport creation and font installation to rendering adapters.], [`src/theme.rs`; `src/child_view.rs`; `tests/architecture_boundaries.rs`; interleaved-context theme and existing atlas regression tests.],
+  [R8], [Workspace import/delete targets are constructed through their owning root and revalidated on execution. Atomic writes distinguish pre-commit failure from committed-but-uncertain durability. Same-resource writes and Git mutations serialize across app windows. A durability warning keeps a pending close open.], [`src/workspace.rs`; `src/private_workspace.rs`; `src/resource_lock.rs`; injected persist/sync failures and changed-symlink target tests.],
+)
+
+== Bugs found while enforcing the boundaries
+
+- The new Unicode round-trip test reproduced a panic when LSP edits addressed
+  the empty final line after a newline. The line reader stripped the preceding
+  line’s terminator and produced a reversed byte range. It now trims terminators
+  only within the requested line.
+- A disconnected long-lived worker could look like an empty result queue,
+  leaving a loading state indefinitely. Disconnection now produces one terminal
+  service result, after already queued events have been drained.
+- PDF link extraction had no time limit. It now uses the shared monitored
+  process wait with a 60-second bound and guaranteed child reaping on failure.
+- A native capture reproduced a Glow texture-creation abort when light/dark
+  appearance changed in the same frame that created a child window. The
+  protected rendering boundary now defers only new children for that frame;
+  existing windows retain their state. Same-theme transitions and direct
+  Settings capture served as controls.
+- Capture scenes that replaced the document could lose the original batch
+  fixture. The batch now owns a separate restore point; returning from a font
+  scene restores source, path, kind and fingerprint, invalidates incompatible
+  preview content, and advances document identity.
+- Post-rename directory-sync failure previously reported an ordinary failed
+  write even though destination bytes had changed. The explicit durability
+  outcome now records the written snapshot and prevents an automatic close.
+
+== Module boundaries and remaining limits
+
+Settings controls, source-editor rendering, and native child views now live in
+`src/app/settings_view.rs`, `src/app/editor_view.rs`, and
+`src/app/native_views.rs`. The app tests live in `src/app/tests.rs` and window
+orchestration remains in `src/windowing.rs`. The main app file is approximately
+14,800 lines, down from approximately 22,800 including tests; it still contains
+substantial runtime and shared UI helpers. This extraction does not claim that
+all application logic belongs in the core.
+
+The core owns decisions and provenance; rendering adapters still own egui
+texture payloads and platform views. Streaming Tinymist/watch processes retain
+their protocol-specific supervision. The one-shot process helper is not used
+as a replacement for a streaming protocol.
+
+Superseding a Git decoration read discards its acceptance channel; an already
+running Git command can finish under its timeout. Asset/PDF decoding checks
+cooperative cancellation, and a decoder may still finish its current indivisible
+step. Bounded compiler/asset mailboxes limit queued requests, not the size of a
+single document. Shared repository status and latency measurement remain item
+117 rather than being hidden in this refactor.
+
+Per-resource locks serialize this app’s writers. They do not provide atomic
+compare-and-swap against another application, nor do validated paths eliminate
+an external symlink race between validation and the OS call. The filesystem
+adapter keeps destination-local staging and permission preservation.
+
+The architectural source checks are deliberately conservative repository rules,
+not a security sandbox or a proof about every possible Rust program. The core
+crate’s dependency boundary and compile-fail tests provide stronger guarantees
+for the particular APIs they cover.
+
+== Verification
+
+Formatting and strict Clippy pass. All 643 workspace tests and all 8 xtask
+tests pass, with 2 environment-dependent workspace tests ignored. The full
+68-image gallery was regenerated in one app session and validated. The core suite includes
+headless workflow sequences, a manual-time debounce test, generated Unicode
+cases, and compile-fail restrictions. Adapter tests retain real Git repositories,
+filesystem writes, process fixtures, semantic UI interactions, and font-atlas
+ordering checks.
+
+Fresh viewport captures and native bounds traces are retained under
+`.tiptoptyp/screenshots/refactor-review`. A viewport framebuffer cannot prove
+composed native child-window placement; that desktop composition is not claimed
+as visually verified. Capture results and final test totals are recorded with
+todo items 119–120 below the task list.
+
+#pagebreak()
+
+= Original review and recommendation
 
 Make invalid operations difficult to express, and put the remaining runtime
 decisions behind a small number of deterministic transitions. The highest-value
@@ -21,10 +116,11 @@ work is to seal document mutation, model save/close workflows explicitly, and
 give asynchronous work an owner and a typed identity. Splitting the large app
 file helps only when it also changes these dependency and ownership boundaries.
 
-This is a proposal, not an implementation or a claim that every risky pattern
-is currently causing a bug. Findings below distinguish observed code structure
-from the failures it permits. Existing checks already prevent many failures;
-the objective is to make those checks compulsory instead of conventional.
+The original review below is retained as the design rationale. Its Observed
+paragraphs and source references describe the pre-refactor baseline, not the
+current APIs. The implementation record above identifies the replacement
+boundaries and their verification. The review did not claim that every risky
+pattern was already causing a bug.
 
 The review covered document and save workflows, editor mutations and derived
 data, multiwindow orchestration, Git and other workers, compiler/preview state,

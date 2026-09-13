@@ -756,7 +756,12 @@ fn append_layout_job(target: &mut LayoutJob, source: &LayoutJob) {
 
 #[cfg(test)]
 fn format_for(tag: Option<Tag>, dark: bool) -> TextFormat {
-    ResolvedTypstStyles::resolve(theme::syntax_palette(dark), None, &Default::default()).format(tag)
+    ResolvedTypstStyles::resolve(
+        theme::default_syntax_palette(dark),
+        None,
+        &Default::default(),
+    )
+    .format(tag)
 }
 
 fn parse_hex_color_string(text: &str) -> Option<Color32> {
@@ -803,7 +808,7 @@ fn parse_hex_color_string(text: &str) -> Option<Color32> {
 }
 
 fn composite_over_editor(color: Color32, dark: bool) -> Color32 {
-    composite_over(color, theme::syntax_palette(dark).editor_background)
+    composite_over(color, theme::default_syntax_palette(dark).editor_background)
 }
 
 fn composite_over(color: Color32, background: Color32) -> Color32 {
@@ -967,13 +972,13 @@ mod tests {
 
         let source = "#let value = 42";
         highlighter.set_styles(ResolvedTypstStyles::resolve(
-            theme::syntax_palette(true),
+            theme::default_syntax_palette(true),
             None,
             &Default::default(),
         ));
         let dark = highlighter.highlight(source, true, &syntect);
         highlighter.set_styles(ResolvedTypstStyles::resolve(
-            theme::syntax_palette(false),
+            theme::default_syntax_palette(false),
             None,
             &Default::default(),
         ));
@@ -999,7 +1004,7 @@ mod tests {
 
         let mut highlighter = SyntaxHighlighter::default();
         highlighter.set_styles(ResolvedTypstStyles::resolve(
-            theme::syntax_palette(true),
+            theme::default_syntax_palette(true),
             None,
             &overrides,
         ));

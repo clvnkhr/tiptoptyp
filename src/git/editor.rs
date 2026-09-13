@@ -30,8 +30,8 @@ pub(crate) enum ChangeKind {
 }
 
 impl ChangeKind {
-    pub(crate) fn color(self, dark: bool) -> egui::Color32 {
-        let palette = theme::palette(dark);
+    pub(crate) fn color(self, context: &egui::Context) -> egui::Color32 {
+        let palette = theme::palette(context);
         match self {
             Self::Added => palette.success,
             Self::Modified => palette.info,
@@ -95,12 +95,12 @@ impl FileStatus {
         format!("{label} · {detail}")
     }
 
-    pub(crate) fn color(self, dark: bool) -> egui::Color32 {
+    pub(crate) fn color(self, context: &egui::Context) -> egui::Color32 {
         match self.letter() {
-            "U" => theme::palette(dark).warning,
-            "A" | "?" => ChangeKind::Added.color(dark),
-            "D" => ChangeKind::Deleted.color(dark),
-            _ => ChangeKind::Modified.color(dark),
+            "U" => theme::palette(context).warning,
+            "A" | "?" => ChangeKind::Added.color(context),
+            "D" => ChangeKind::Deleted.color(context),
+            _ => ChangeKind::Modified.color(context),
         }
     }
 }
@@ -397,7 +397,7 @@ impl GitEditorState {
                 // An obsolete repository scan must not delay decorations in
                 // the newly opened file. Ordinary edits retain the existing
                 // worker so typing cannot spawn a stream of competing scans.
-                self.job.cancel();
+                self.job.supersede();
             }
             if self
                 .current
@@ -564,7 +564,7 @@ pub(crate) fn show_markers(
             let label = change.label();
             response
                 .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
-            let color = change.kind.color(ui.visuals().dark_mode);
+            let color = change.kind.color(ui.ctx());
             if geometry.paint.is_positive() {
                 ui.painter().rect_filled(geometry.paint, 1.0, color);
             }
@@ -600,7 +600,11 @@ mod tests {
         RequestKey {
             workspace: root.into(),
             path: Some(root.join("main.typ")),
-            document: DocumentKey { epoch: 1, revision },
+            document: DocumentKey {
+                owner: tiptoptyp_core::document::WindowSessionId::new(1),
+                epoch: 1,
+                revision,
+            },
         }
     }
 

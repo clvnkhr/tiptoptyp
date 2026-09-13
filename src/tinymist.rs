@@ -13,14 +13,13 @@ use std::{
     process::{Child, ChildStdin, Command, ExitStatus, Stdio},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError},
     },
     thread,
     time::{Duration, Instant},
 };
 
-use eframe::egui;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use url::Url;
@@ -399,27 +398,7 @@ pub fn path_to_file_uri(path: &Path) -> Result<String> {
         .map_err(|()| TinymistError::InvalidFilePath(path.to_owned()))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LspPosition {
-    /// Zero-based line number.
-    pub line: u32,
-    /// Zero-based UTF-16 code-unit offset, as required by LSP.
-    pub character: u32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LspRange {
-    pub start: LspPosition,
-    pub end: LspPosition,
-}
-
-/// A standard LSP text edit returned by `textDocument/formatting`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LspTextEdit {
-    pub range: LspRange,
-    pub new_text: String,
-}
+use tiptoptyp_core::text::{LineIndex, LspPosition, LspRange, LspTextEdit, ScalarColumn};
 
 /// One completion candidate returned by Tinymist.
 ///
@@ -652,6 +631,7 @@ impl ProcessSupervisor {
 pub struct TinymistSidecar {
     commands: Option<Sender<WorkerCommand>>,
     events: Receiver<TinymistEvent>,
+    disconnected: AtomicBool,
     worker: Option<thread::JoinHandle<()>>,
     next_generation: AtomicU64,
     current_generation: Arc<AtomicU64>,
@@ -660,7 +640,7 @@ pub struct TinymistSidecar {
 }
 
 impl TinymistSidecar {
-    pub fn new(context: egui::Context) -> Self {
+    pub fn new(context: crate::worker::RepaintTarget) -> Self {
         let (command_tx, command_rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::channel();
         let current_generation = Arc::new(AtomicU64::new(0));
@@ -680,12 +660,13 @@ impl TinymistSidecar {
                 );
                 let _ = worker_done_tx.send(());
             })
-            .expect("failed to start Tinymist worker");
+            .ok();
 
         Self {
-            commands: Some(command_tx),
+            commands: worker.as_ref().map(|_| command_tx),
             events: event_rx,
-            worker: Some(worker),
+            disconnected: AtomicBool::new(false),
+            worker,
             next_generation: AtomicU64::new(1),
             current_generation,
             process_supervisor,
@@ -840,8 +821,8 @@ impl TinymistSidecar {
         &self,
         generation: Generation,
         path: impl Into<PathBuf>,
-        line: u32,
-        character: u32,
+        line: LineIndex,
+        character: ScalarColumn,
     ) -> Result<()> {
         self.send_for_generation(
             generation,
@@ -869,7 +850,12 @@ impl TinymistSidecar {
     /// Events already queued for an older generation are discarded here too.
     pub fn try_recv(&self) -> Option<TinymistEvent> {
         loop {
-            let event = self.events.try_recv().ok()?;
+            let event = crate::worker::poll_service(&self.events, &self.disconnected)?
+                .unwrap_or_else(|()| TinymistEvent::Stopped {
+                    generation: Generation(self.current_generation.load(Ordering::Acquire)),
+                    reason: "Tinymist worker stopped unexpectedly".to_owned(),
+                    code: None,
+                });
             if self.current_generation() == Some(event.generation()) {
                 if matches!(event, TinymistEvent::Stopped { .. }) {
                     let _ = self.current_generation.compare_exchange(
@@ -983,8 +969,8 @@ enum WorkerCommand {
     ScrollPreview {
         generation: Generation,
         path: PathBuf,
-        line: u32,
-        character: u32,
+        line: LineIndex,
+        character: ScalarColumn,
     },
     Stop {
         generation: Generation,
@@ -1467,7 +1453,7 @@ fn stderr_loop(stderr: impl Read, messages: Sender<Incoming>) {
 fn worker_loop(
     commands: Receiver<WorkerCommand>,
     events: Sender<TinymistEvent>,
-    context: egui::Context,
+    context: crate::worker::RepaintTarget,
     current_generation: Arc<AtomicU64>,
     process_supervisor: Arc<ProcessSupervisor>,
 ) {
@@ -2020,7 +2006,7 @@ fn fail_active_session(
     stage: &'static str,
     error: String,
     events: &Sender<TinymistEvent>,
-    context: &egui::Context,
+    context: &crate::worker::RepaintTarget,
     current_generation: &AtomicU64,
 ) {
     let Some(active) = session.take() else {
@@ -2051,7 +2037,7 @@ fn handle_incoming(
     session: &mut Session,
     incoming: Incoming,
     events: &Sender<TinymistEvent>,
-    context: &egui::Context,
+    context: &crate::worker::RepaintTarget,
     current_generation: &AtomicU64,
 ) -> std::result::Result<(), (&'static str, String)> {
     match incoming {
@@ -2081,7 +2067,7 @@ fn handle_rpc_message(
     session: &mut Session,
     message: Value,
     events: &Sender<TinymistEvent>,
-    context: &egui::Context,
+    context: &crate::worker::RepaintTarget,
     current_generation: &AtomicU64,
 ) -> std::result::Result<(), String> {
     let object = message
@@ -2562,7 +2548,7 @@ fn parse_format_document_result(
     serde_json::from_value(result)
 }
 
-fn scroll_preview_params(path: &Path, line: u32, character: u32) -> Value {
+fn scroll_preview_params(path: &Path, line: LineIndex, character: ScalarColumn) -> Value {
     json!({
         "command": "tinymist.scrollPreview",
         "arguments": [
@@ -2611,7 +2597,7 @@ fn handle_server_request(
     method: &str,
     params: Value,
     events: &Sender<TinymistEvent>,
-    context: &egui::Context,
+    context: &crate::worker::RepaintTarget,
     current_generation: &AtomicU64,
 ) -> std::result::Result<(), String> {
     match method {
@@ -2713,7 +2699,7 @@ fn handle_server_notification(
     method: &str,
     params: Value,
     events: &Sender<TinymistEvent>,
-    context: &egui::Context,
+    context: &crate::worker::RepaintTarget,
     current_generation: &AtomicU64,
 ) {
     match method {
@@ -2813,7 +2799,7 @@ fn parse_diagnostic(raw: &Value) -> Option<TinymistDiagnostic> {
 
 fn emit(
     events: &Sender<TinymistEvent>,
-    context: &egui::Context,
+    context: &crate::worker::RepaintTarget,
     current_generation: &AtomicU64,
     event: TinymistEvent,
 ) {
@@ -2830,7 +2816,7 @@ fn finish_session(
     graceful: bool,
     reason: String,
     events: &Sender<TinymistEvent>,
-    context: &egui::Context,
+    context: &crate::worker::RepaintTarget,
     current_generation: &AtomicU64,
 ) {
     if graceful && session.phase != SessionPhase::Initializing {
@@ -2915,7 +2901,7 @@ fn finish_exited_session(
     status: ExitStatus,
     reason: String,
     events: &Sender<TinymistEvent>,
-    context: &egui::Context,
+    context: &crate::worker::RepaintTarget,
     current_generation: &AtomicU64,
 ) {
     session.stdin.take();
@@ -3210,13 +3196,7 @@ mod tests {
     #[test]
     fn hover_request_uses_standard_utf16_lsp_position() {
         assert_eq!(
-            hover_document_params(
-                "file:///project/main.typ",
-                LspPosition {
-                    line: 3,
-                    character: 7,
-                },
-            ),
+            hover_document_params("file:///project/main.typ", LspPosition::new(3, 7),),
             json!({
                 "textDocument": { "uri": "file:///project/main.typ" },
                 "position": { "line": 3, "character": 7 },
@@ -3235,7 +3215,7 @@ mod tests {
         });
         let (contents, range) = parse_hover_result(&markdown);
         assert_eq!(contents.as_deref(), Some("`text(body)`\n\nAdds content."));
-        assert_eq!(range.unwrap().start.line, 1);
+        assert_eq!(range.unwrap().start.line.get(), 1);
 
         let marked = json!({
             "contents": [
@@ -3254,13 +3234,7 @@ mod tests {
     #[test]
     fn completion_request_uses_standard_utf16_lsp_position() {
         assert_eq!(
-            completion_document_params(
-                "file:///project/main.typ",
-                LspPosition {
-                    line: 4,
-                    character: 11,
-                },
-            ),
+            completion_document_params("file:///project/main.typ", LspPosition::new(4, 11),),
             json!({
                 "textDocument": { "uri": "file:///project/main.typ" },
                 "position": { "line": 4, "character": 11 },
@@ -3307,7 +3281,17 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert!(listed[0].insert_text_is_snippet);
         assert_eq!(listed[0].documentation.as_deref(), Some("A heading."));
-        assert_eq!(listed[0].text_edit.as_ref().unwrap().range.end.character, 8);
+        assert_eq!(
+            listed[0]
+                .text_edit
+                .as_ref()
+                .unwrap()
+                .range
+                .end
+                .character
+                .get(),
+            8
+        );
     }
 
     #[test]
@@ -3407,7 +3391,7 @@ mod tests {
         let backing_path = unsaved.path().to_owned();
         assert!(backing_path.is_file());
 
-        let sidecar = TinymistSidecar::new(egui::Context::default());
+        let sidecar = TinymistSidecar::new(crate::worker::RepaintTarget::test());
         let mut config = TinymistConfig::new(project.path()).with_executable(program.clone());
         config.start_preview = false;
         let generation = sidecar.start_workspace(config).unwrap();
@@ -3519,7 +3503,11 @@ mod tests {
 
     #[test]
     fn preview_scroll_uses_tinymists_default_task_and_source_location_schema() {
-        let params = scroll_preview_params(Path::new("/tmp/chapter.typ"), 7, 11);
+        let params = scroll_preview_params(
+            Path::new("/tmp/chapter.typ"),
+            LineIndex::new(7),
+            ScalarColumn::new(11),
+        );
         assert_eq!(params["command"], "tinymist.scrollPreview");
         assert_eq!(params["arguments"][0], DEFAULT_PREVIEW_TASK_ID);
         assert_eq!(params["arguments"][1]["event"], "panelScrollTo");
@@ -3564,14 +3552,8 @@ mod tests {
             edits,
             vec![LspTextEdit {
                 range: LspRange {
-                    start: LspPosition {
-                        line: 2,
-                        character: 4,
-                    },
-                    end: LspPosition {
-                        line: 2,
-                        character: 6,
-                    },
+                    start: LspPosition::new(2, 4),
+                    end: LspPosition::new(2, 6),
                 },
                 new_text: "🦀 formatted".to_owned(),
             }]
@@ -3586,6 +3568,7 @@ mod tests {
         let sidecar = TinymistSidecar {
             commands: Some(commands),
             events: received_events,
+            disconnected: AtomicBool::new(false),
             worker: None,
             next_generation: AtomicU64::new(8),
             current_generation: Arc::new(AtomicU64::new(7)),
@@ -3642,7 +3625,7 @@ mod tests {
             "data": {"future": true}
         });
         let diagnostic = parse_diagnostic(&raw).unwrap();
-        assert_eq!(diagnostic.range.start.line, 3);
+        assert_eq!(diagnostic.range.start.line.get(), 3);
         assert_eq!(diagnostic.severity, Some(DiagnosticSeverity::Error));
         assert_eq!(diagnostic.code, Some(json!("unknown-variable")));
         assert_eq!(diagnostic.raw["data"]["future"], true);
@@ -3663,7 +3646,7 @@ mod tests {
     fn stale_events_are_not_delivered_or_repainted() {
         let (tx, rx) = mpsc::channel();
         let generation = Arc::new(AtomicU64::new(2));
-        let context = egui::Context::default();
+        let context = crate::worker::RepaintTarget::test();
         emit(
             &tx,
             &context,
@@ -3756,7 +3739,7 @@ mod tests {
         permissions.set_mode(0o755);
         fs::set_permissions(&script, permissions).unwrap();
 
-        let sidecar = TinymistSidecar::new(egui::Context::default());
+        let sidecar = TinymistSidecar::new(crate::worker::RepaintTarget::test());
         let supervisor = Arc::clone(&sidecar.process_supervisor);
         let mut config = TinymistConfig::new(directory.path())
             .with_command(&script, std::iter::empty::<OsString>());
@@ -3836,7 +3819,7 @@ mod tests {
         permissions.set_mode(0o755);
         fs::set_permissions(&script, permissions).unwrap();
 
-        let sidecar = TinymistSidecar::new(egui::Context::default());
+        let sidecar = TinymistSidecar::new(crate::worker::RepaintTarget::test());
         let mut config = TinymistConfig::new(directory.path())
             .with_command(&script, std::iter::empty::<OsString>());
         config.start_preview = false;
@@ -3931,7 +3914,7 @@ mod tests {
     #[test]
     fn unanswered_initialize_request_times_out_and_stops_the_session() {
         let directory = tempfile::tempdir().unwrap();
-        let sidecar = TinymistSidecar::new(egui::Context::default());
+        let sidecar = TinymistSidecar::new(crate::worker::RepaintTarget::test());
         let supervisor = Arc::clone(&sidecar.process_supervisor);
         let mut config = TinymistConfig::new(directory.path())
             // `sleep` keeps every pipe open but never reads the initialize
@@ -4006,7 +3989,7 @@ mod tests {
         permissions.set_mode(0o755);
         fs::set_permissions(&script, permissions).unwrap();
 
-        let sidecar = TinymistSidecar::new(egui::Context::default());
+        let sidecar = TinymistSidecar::new(crate::worker::RepaintTarget::test());
         let mut config = TinymistConfig::new(directory.path())
             .with_command(&script, std::iter::empty::<OsString>());
         config.start_preview = false;
@@ -4128,7 +4111,7 @@ mod tests {
         permissions.set_mode(0o755);
         fs::set_permissions(&script, permissions).unwrap();
 
-        let sidecar = TinymistSidecar::new(egui::Context::default());
+        let sidecar = TinymistSidecar::new(crate::worker::RepaintTarget::test());
         let mut config = TinymistConfig::new(directory.path())
             .with_command(&script, std::iter::empty::<OsString>());
         config.start_preview = false;
@@ -4234,7 +4217,7 @@ mod tests {
         permissions.set_mode(0o755);
         fs::set_permissions(&script, permissions).unwrap();
 
-        let sidecar = TinymistSidecar::new(egui::Context::default());
+        let sidecar = TinymistSidecar::new(crate::worker::RepaintTarget::test());
         let pinned_entry = directory.path().join("pinned-main.typ");
         let config = TinymistConfig::new(directory.path())
             .with_entry_path(&pinned_entry)
@@ -4269,7 +4252,7 @@ mod tests {
 
         assert_eq!(preview_url.as_deref(), Some("http://127.0.0.1:41723"));
         assert_eq!(diagnostic.unwrap().message, "fake warning");
-        assert_eq!(jump.unwrap().start.line, 4);
+        assert_eq!(jump.unwrap().start.line.get(), 4);
 
         // Add another frame so the shell's line-oriented capture observes the
         // preceding response body even though LSP payloads have no delimiter.

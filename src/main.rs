@@ -17,7 +17,6 @@ mod font_preview;
 mod generic_highlight;
 mod git;
 mod highlight;
-mod lsp_text;
 #[allow(unsafe_code)]
 mod native_menu;
 #[allow(unsafe_code)]
@@ -28,7 +27,9 @@ mod package_catalog;
 mod presentation;
 mod preview;
 mod private_workspace;
+mod process;
 mod project_index;
+mod resource_lock;
 mod screenshot;
 mod search;
 mod settings;

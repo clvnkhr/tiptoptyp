@@ -6,11 +6,12 @@ use std::{
     task::{Context as TaskContext, Poll, Wake, Waker},
     time::Duration,
 };
+use tiptoptyp_core::text::LspRange;
 
 use eframe::egui;
 use rfd::FileHandle;
 
-use crate::{document::DocumentKey, tinymist::LspRange};
+use crate::document::DocumentKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NoticeKind {
@@ -222,24 +223,91 @@ pub(crate) enum AppModalChoice {
 /// it from applying to a replacement document or a newer revision.
 #[derive(Default)]
 pub(crate) struct DocumentWorkflow {
-    pub(crate) modal: Option<AppModal>,
+    flow:
+        tiptoptyp_core::workflow::Workflow<PendingDocumentAction, AppModal, PendingDocumentDialog>,
     pub(crate) modal_had_focus: bool,
     pub(crate) modal_suspended: bool,
-    pub(crate) pending_action: Option<PendingDocumentAction>,
-    pub(crate) post_save_action: Option<PendingDocumentAction>,
-    pub(crate) pending_dialog: Option<PendingDocumentDialog>,
     pub(crate) pending_export: Option<PendingExport>,
     pub(crate) pending_export_dialog: Option<PendingDialog<ExportDialogRequest>>,
-    pub(crate) allow_close: bool,
+    close_permit: Option<DocumentKey>,
+    deferred_errors: std::collections::VecDeque<AppModal>,
 }
 
 impl DocumentWorkflow {
+    pub(crate) fn complete_save(
+        &mut self,
+        document: &mut crate::document::DocumentSession,
+        receipt: tiptoptyp_core::document::SaveReceipt,
+        synchronized: bool,
+    ) -> Result<Option<PendingDocumentAction>, &'static str> {
+        self.flow.complete_save(document, receipt, synchronized)
+    }
+    pub(crate) fn allow_close_for(&mut self, key: DocumentKey) {
+        self.close_permit = Some(key);
+    }
+    pub(crate) fn revoke_close(&mut self) {
+        self.close_permit = None;
+    }
+    pub(crate) fn may_close(&self, key: DocumentKey) -> bool {
+        self.close_permit == Some(key)
+    }
+    pub(crate) fn take_modal(&mut self) -> Option<AppModal> {
+        self.flow.take_prompt()
+    }
+    pub(crate) fn modal(&self) -> Option<&AppModal> {
+        self.flow.prompt()
+    }
+    pub(crate) fn set_modal(&mut self, modal: AppModal) {
+        // An operation already owning a native dialog is not replaced by a
+        // second document operation. Its completion remains authoritative.
+        let _ = self.flow.show_prompt(modal);
+    }
+    pub(crate) fn queue_action(&mut self, action: PendingDocumentAction) {
+        let _ = self.flow.queue(action);
+    }
+    pub(crate) fn take_action(&mut self) -> Option<PendingDocumentAction> {
+        self.flow.take_action()
+    }
+    pub(crate) fn continue_after_save(&mut self, action: PendingDocumentAction) {
+        let _ = self.flow.continue_after_save(action);
+    }
+    pub(crate) fn cancel_continuation(&mut self) {
+        self.flow.cancel_continuation();
+    }
+    pub(crate) fn take_continuation(&mut self) -> Option<PendingDocumentAction> {
+        self.flow.take_continuation()
+    }
+    pub(crate) fn has_continuation(&self) -> bool {
+        self.flow.has_continuation()
+    }
+    pub(crate) fn has_dialog(&self) -> bool {
+        self.flow.has_dialog()
+    }
+    pub(crate) fn start_dialog(&mut self, dialog: PendingDocumentDialog) {
+        let _ = self.flow.choose(dialog);
+    }
+    pub(crate) fn finish_dispatch(&mut self) {
+        self.flow.finish_dispatch();
+        if !self.flow.is_busy()
+            && let Some(modal) = self.deferred_errors.pop_front()
+        {
+            self.set_modal(modal);
+        }
+    }
+    pub(crate) fn poll_document_dialog(
+        &mut self,
+        context: &egui::Context,
+    ) -> DialogPoll<DocumentDialogRequest> {
+        let mut dialog = self.flow.take_dialog();
+        let result = poll_dialog(&mut dialog, context);
+        if let Some(dialog) = dialog {
+            self.start_dialog(dialog);
+        }
+        result
+    }
     pub(crate) fn is_busy(&self, rename_active: bool, tool_picker_active: bool) -> bool {
-        self.modal.is_some()
+        self.flow.is_busy()
             || rename_active
-            || self.pending_action.is_some()
-            || self.post_save_action.is_some()
-            || self.pending_dialog.is_some()
             || self.pending_export_dialog.is_some()
             || tool_picker_active
     }
@@ -264,7 +332,7 @@ impl DocumentWorkflow {
         if dirty {
             self.present_unsaved(key, document_name, pending);
         } else {
-            self.pending_action = Some(pending);
+            self.queue_action(pending);
         }
         true
     }
@@ -277,7 +345,7 @@ impl DocumentWorkflow {
     ) {
         pending.key = key;
         pending.allow_discard = false;
-        self.modal = Some(AppModal::Unsaved {
+        self.set_modal(AppModal::Unsaved {
             message: format!(
                 "Save changes to {document_name} before {}?",
                 pending.description
@@ -289,17 +357,21 @@ impl DocumentWorkflow {
     }
 
     pub(crate) fn present_error(&mut self, message: String) {
-        self.modal = Some(AppModal::Alert {
+        self.flow.cancel_continuation();
+        let modal = AppModal::Alert {
             title: "error".to_owned(),
             message,
             kind: NoticeKind::Error,
-        });
+        };
+        if let Err(modal) = self.flow.show_prompt(modal) {
+            self.deferred_errors.push_back(modal);
+        }
         self.modal_had_focus = false;
         self.modal_suspended = false;
     }
 
     pub(crate) fn clear_modal(&mut self) {
-        self.modal = None;
+        self.flow.clear_prompt();
         self.modal_had_focus = false;
         self.modal_suspended = false;
     }
@@ -310,6 +382,7 @@ mod tests {
     use super::*;
 
     const KEY: DocumentKey = DocumentKey {
+        owner: tiptoptyp_core::document::WindowSessionId::new(1),
         epoch: 3,
         revision: 8,
     };
@@ -365,12 +438,12 @@ mod tests {
             DeferredDocumentAction::New,
             "creating a new document",
         ));
-        let Some(AppModal::Unsaved { message, pending }) = workflow.modal else {
+        let Some(AppModal::Unsaved { message, pending }) = workflow.modal().cloned() else {
             panic!("expected unsaved modal");
         };
         assert!(message.contains("chapter.typ"));
         assert_eq!(pending.key, KEY);
-        assert!(workflow.pending_action.is_none());
+        assert!(workflow.take_action().is_none());
     }
 
     #[test]
@@ -390,7 +463,7 @@ mod tests {
             DeferredDocumentAction::New,
             "creating a new document",
         ));
-        assert_eq!(workflow.pending_action.unwrap().key, KEY);
+        assert_eq!(workflow.take_action().unwrap().key, KEY);
     }
 
     #[test]

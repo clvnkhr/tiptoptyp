@@ -3742,12 +3742,20 @@ dependencies = [
  "skrifa",
  "syntect",
  "tempfile",
+ "tiptoptyp-core",
  "toml 0.8.2",
  "typst-syntax",
  "ureq",
  "url",
  "winit",
  "wry",
+]
+
+[[package]]
+name = "tiptoptyp-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

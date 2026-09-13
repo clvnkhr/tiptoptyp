@@ -147,6 +147,13 @@ I was using two different windows with two different workspaces. Possibly i was 
 111. [x] polish the Git window with right-aligned buttons, a visible diff viewer, and Unstage all
 112. [x] show Git status in Explorer and clickable change markers beside line numbers, with independent state and diff windows for every document window
 113. [x] audit correctness and maintainability across document workflows, file operations, Git, and background work; fix verified defects and redundant scans
+114. [ ] crash recovery: restore unsaved buffers and all document windows after an unexpected exit
+115. [ ] Git chunk actions: stage, unstage, and revert individual chunks, with keyboard navigation between changes
+116. [ ] workspace search and replace: preview replacements across files, support regex capture groups, and provide undo
+117. [ ] large-project performance: share repository status between windows and measure indexing, preview, and typing latency (extends deferred item 2)
+118. [ ] PDF polish: document search, thumbnails, and reliable position restoration (extends deferred item 1)
+119. [x] extract settings, editor rendering, and window orchestration into focused modules with enforced ownership boundaries
+120. [x] implement refactor.typ R1–R8: sealed document mutations, workflow states, owned tasks, preview provenance, headless core, coordinate types, presentation ownership, and explicit write outcomes
 
 = resolved in the 2026-09-07 pass
 
@@ -501,3 +508,34 @@ Only deferred items 1, 2, and 26 remain unchecked.
   repository tests and all 8 packaging tests pass, with 2 environment-dependent
   repository tests ignored. These changes have deterministic behavioral
   coverage; no new visual verification is claimed for this audit.
+
+
+= refactoring implementation (2026-09-13)
+
+- Items 114–118 record the next product priorities: crash recovery, Git chunk
+  actions, workspace replacement, shared status/performance work, and PDF polish.
+- Item 119: Settings, editor rendering, and native child views now have focused
+  modules under `src/app/`; tests have their own module. Window orchestration
+  stays in `src/windowing.rs`. `app.rs` is 14,792 lines, down from roughly 22,800
+  including tests. Runtime helpers remain candidates for future extraction.
+- Item 120: Implemented the R1–R8 boundaries in `refactor.typ`, including a
+  headless core crate, sealed edit/snapshot/save APIs, exclusive workflow phases,
+  coordinated multiwindow close, bounded compiler/asset queues, retained mutation
+  completions, an exit barrier for active background operations, preview
+  provenance, typed coordinates, context-owned palettes,
+  scoped workspace targets, and explicit write durability outcomes.
+- The new Unicode tests found and fixed an LSP edit panic at the empty final
+  line after a newline. Worker disconnection is now terminal rather than an
+  indefinite loading state; PDF link extraction has a bounded, reaped process.
+- Native verification reproduced a light/dark-to-new-child rendering abort.
+  The viewport adapter now waits for the appearance-change frame before creating
+  a new child, while retaining existing children. Capture batches also own and
+  restore their original fixture independently of scene-specific document edits.
+- Verification: Formatting, strict Clippy, all 643 workspace tests, and all 8
+  xtask tests pass; 2 environment-dependent workspace tests remain ignored.
+  The complete 68-image gallery was regenerated in one app session and validated.
+  Four fresh font, settings, save-modal, and restored-main viewports were inspected,
+  along with representative gallery images. Native bounds traces are retained
+  under `.tiptoptyp/screenshots/refactor-review/native-geometry.log`; composed
+  native child-window placement was not visually verified. Both Typst documents
+  compile to private review outputs without overwriting existing PDFs.

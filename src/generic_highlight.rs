@@ -175,7 +175,7 @@ fn syntect_color(color: SyntectColor) -> Color32 {
 fn plain_format(dark_mode: bool) -> TextFormat {
     TextFormat {
         font_id: theme::editor_font(),
-        color: theme::syntax_palette(dark_mode).plain,
+        color: theme::default_syntax_palette(dark_mode).plain,
         ..Default::default()
     }
 }

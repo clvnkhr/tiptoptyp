@@ -1,3 +1,4 @@
+use crate::worker::{LatestReceiver, LatestSender, latest_channel};
 use std::{
     ffi::OsStr,
     fs,
@@ -13,7 +14,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use eframe::egui;
 use quick_xml::{
     Decoder, Reader, XmlVersion,
     events::{BytesStart, Event},
@@ -117,20 +117,7 @@ pub struct CompileArtifact {
     pub diagnostics: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ArtifactKey {
-    pub revision: u64,
-    pub generation: u64,
-}
-
-impl ArtifactKey {
-    pub const fn unversioned(revision: u64) -> Self {
-        Self {
-            revision,
-            generation: 0,
-        }
-    }
-}
+pub use tiptoptyp_core::preview::ArtifactKey;
 
 #[derive(Debug)]
 pub enum CompileEvent {
@@ -160,16 +147,17 @@ enum CompilerCommand {
 }
 
 pub struct Compiler {
-    requests: Option<Sender<CompilerCommand>>,
+    requests: Option<LatestSender<CompilerCommand>>,
     results: Receiver<CompileResult>,
+    disconnected: AtomicBool,
     worker: Option<thread::JoinHandle<()>>,
     shutdown: Arc<AtomicBool>,
     latest_revision: Arc<AtomicU64>,
 }
 
 impl Compiler {
-    pub fn new(context: egui::Context) -> Self {
-        let (request_tx, request_rx) = mpsc::channel::<CompilerCommand>();
+    pub fn new(context: crate::worker::RepaintTarget) -> Self {
+        let (request_tx, request_rx) = latest_channel::<CompilerCommand>();
         let (result_tx, result_rx) = mpsc::channel::<CompileResult>();
         let shutdown = Arc::new(AtomicBool::new(false));
         let latest_revision = Arc::new(AtomicU64::new(0));
@@ -187,12 +175,13 @@ impl Compiler {
                     worker_latest_revision,
                 )
             })
-            .expect("failed to start compiler worker");
+            .ok();
 
         Self {
-            requests: Some(request_tx),
+            requests: worker.as_ref().map(|_| request_tx),
             results: result_rx,
-            worker: Some(worker),
+            disconnected: AtomicBool::new(false),
+            worker,
             shutdown,
             latest_revision,
         }
@@ -221,7 +210,17 @@ impl Compiler {
     }
 
     pub fn try_recv(&self) -> Option<CompileResult> {
-        self.results.try_recv().ok()
+        Some(
+            crate::worker::poll_service(&self.results, &self.disconnected)?.unwrap_or_else(|()| {
+                CompileResult {
+                    revision: self.latest_revision.load(Ordering::Acquire),
+                    elapsed: Duration::ZERO,
+                    event: CompileEvent::Failed(
+                        "The preview worker stopped unexpectedly".to_owned(),
+                    ),
+                }
+            }),
+        )
     }
 }
 
@@ -433,9 +432,9 @@ fn finish_reader_with_timeout<T>(reader: thread::JoinHandle<T>, timeout: Duratio
 }
 
 fn worker_loop(
-    requests: Receiver<CompilerCommand>,
+    requests: LatestReceiver<CompilerCommand>,
     results: Sender<CompileResult>,
-    context: egui::Context,
+    context: crate::worker::RepaintTarget,
     shutdown: Arc<AtomicBool>,
     latest_revision: Arc<AtomicU64>,
 ) {
@@ -457,9 +456,7 @@ fn worker_loop(
 
         // Only the latest queued command matters, whether it requests a new
         // editor snapshot or pauses the watcher.
-        let command = requests
-            .recv_timeout(WORKER_POLL_INTERVAL)
-            .map(|first| requests.try_iter().last().unwrap_or(first));
+        let command = requests.recv_timeout(WORKER_POLL_INTERVAL);
         match command {
             Ok(CompilerCommand::Pause) => {
                 session = None;
@@ -560,7 +557,7 @@ fn drain_watch_logs(
     logs: &Receiver<WatchLog>,
     session: &mut Option<WatchSession>,
     results: &Sender<CompileResult>,
-    context: &egui::Context,
+    context: &crate::worker::RepaintTarget,
 ) {
     while let Ok(log) = logs.try_recv() {
         if *TRACE_WATCH {
@@ -641,7 +638,7 @@ fn drain_watch_logs(
 fn finish_settled_completion(
     session: &mut Option<WatchSession>,
     results: &Sender<CompileResult>,
-    context: &egui::Context,
+    context: &crate::worker::RepaintTarget,
     shutdown: &AtomicBool,
     latest_revision: &AtomicU64,
     next_artifact_generation: &mut u64,
@@ -708,7 +705,7 @@ fn publish_compiled_artifact(
     latest_revision: &AtomicU64,
     rasterizer: &Path,
     results: &Sender<CompileResult>,
-    context: &egui::Context,
+    context: &crate::worker::RepaintTarget,
 ) {
     // The watcher owns and may atomically replace `pdf_path` again (for example
     // after a dependency edit). Snapshot exactly once and share those immutable
@@ -973,7 +970,7 @@ fn extract_pdf_links(
     cancelled: &mut impl FnMut() -> bool,
 ) -> Vec<Vec<PreviewLink>> {
     let xml_path = render_dir.join("links.xml");
-    let mut child = match Command::new("pdftohtml")
+    let child = match Command::new("pdftohtml")
         .arg("-xml")
         .arg("-hidden")
         .arg("-i")
@@ -990,21 +987,17 @@ fn extract_pdf_links(
         Err(_) => return Vec::new(),
     };
 
-    let status = loop {
+    let Ok(status) = crate::process::wait(child, Duration::from_secs(60), || {
         if cancelled() {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Vec::new();
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "link extraction cancelled",
+            ))
+        } else {
+            Ok(())
         }
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => thread::sleep(Duration::from_millis(10)),
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Vec::new();
-            }
-        }
+    }) else {
+        return Vec::new();
     };
     if !status.success() {
         return Vec::new();
@@ -1206,7 +1199,11 @@ fn typst_command_error(program: &Path, error: std::io::Error) -> String {
     )
 }
 
-fn send_result(results: &Sender<CompileResult>, context: &egui::Context, result: CompileResult) {
+fn send_result(
+    results: &Sender<CompileResult>,
+    context: &crate::worker::RepaintTarget,
+    result: CompileResult,
+) {
     if results.send(result).is_ok() {
         context.request_repaint();
     }
@@ -1219,6 +1216,7 @@ mod tests {
         PdfRasterMode, WatchContext, WatchLine, classify_watch_line, parse_pdf_links,
         preview_page_number, publish_compiled_artifact, rasterize_pdf_with_program, worker_loop,
     };
+    use crate::worker::latest_channel;
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -1278,7 +1276,7 @@ mod tests {
 
     #[test]
     fn an_idle_compiler_can_be_paused_and_reaped_cleanly() {
-        let compiler = Compiler::new(eframe::egui::Context::default());
+        let compiler = Compiler::new(crate::worker::RepaintTarget::test());
         compiler.pause(7).expect("pause compiler worker");
         drop(compiler);
     }
@@ -1294,7 +1292,7 @@ mod tests {
             vec![None, Some(1), None],
         ] {
             let expected_revision = *commands.last().unwrap();
-            let (request_tx, request_rx) = mpsc::channel();
+            let (request_tx, request_rx) = latest_channel();
             let (result_tx, result_rx) = mpsc::channel();
             for revision in commands {
                 let command = revision.map_or(CompilerCommand::Pause, |revision| {
@@ -1316,7 +1314,7 @@ mod tests {
             worker_loop(
                 request_rx,
                 result_tx,
-                eframe::egui::Context::default(),
+                crate::worker::RepaintTarget::test(),
                 Arc::new(AtomicBool::new(false)),
                 Arc::new(AtomicU64::new(0)),
             );
@@ -1353,7 +1351,7 @@ mod tests {
             &latest_revision,
             &project.path().join("missing-pdftoppm"),
             &result_tx,
-            &eframe::egui::Context::default(),
+            &crate::worker::RepaintTarget::test(),
         );
 
         let results = result_rx.try_iter().collect::<Vec<_>>();
@@ -1412,7 +1410,7 @@ mod tests {
                 &latest_revision,
                 &program,
                 &result_tx,
-                &eframe::egui::Context::default(),
+                &crate::worker::RepaintTarget::test(),
             );
         }
 
@@ -1637,7 +1635,7 @@ mod tests {
     #[ignore = "requires typst, pdftoppm, and real filesystem notifications"]
     fn persistent_watcher_compiles_errors_and_recovers() {
         let root = tempfile::tempdir().unwrap();
-        let compiler = Compiler::new(eframe::egui::Context::default());
+        let compiler = Compiler::new(crate::worker::RepaintTarget::test());
         let typst_executable = std::env::var_os("TIPTOPTYP_TEST_TYPST")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("typst"));
