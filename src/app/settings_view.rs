@@ -123,6 +123,88 @@ impl EditorApp {
         }
     }
 
+    pub(super) fn show_shortcut_editor_window(&mut self, context: &egui::Context) {
+        if !self.shortcut_editor_visible
+            || self.document_workflow.modal().is_some()
+            || self.rename_dialog.is_some()
+        {
+            return;
+        }
+
+        let appearance = context.theme();
+        let style = context.style_of(appearance);
+        let captures = self.captures.clone();
+        let mut close_requested = false;
+        // The editor owns its own native viewport so shortcut capture and
+        // text editing cannot be trapped inside the Settings surface.
+        let spec = ChildViewSpec::persistent(
+            "tiptoptyp-shortcuts",
+            "tiptoptyp Keyboard shortcuts",
+            [620.0, 540.0],
+            [440.0, 300.0],
+            "shortcuts",
+        );
+        ChildViewHost::show(context, &captures, spec, appearance, &style, |ui, input| {
+            close_requested |= input.close_requested;
+            if ui.ctx().input(|input| input.viewport().fullscreen) == Some(true) {
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+            }
+            ui.painter()
+                .rect_filled(ui.max_rect(), 0.0, ui.visuals().panel_fill);
+            let title_rect = Rect::from_min_size(
+                ui.max_rect().min,
+                egui::vec2(ui.max_rect().width(), METRICS.chrome.toolbar_height),
+            );
+            let drag = ui.interact(
+                title_rect,
+                ui.id().with("shortcut-window-drag"),
+                Sense::drag(),
+            );
+            if drag.drag_started() {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+            egui::Panel::top("shortcut-titlebar")
+                .exact_size(METRICS.chrome.toolbar_height)
+                .frame(theme::settings_title_frame(ui.style()))
+                .show(ui, |ui| {
+                    ui.horizontal_centered(|ui| {
+                        #[cfg(target_os = "macos")]
+                        ui.add_space(
+                            METRICS.toolbar.traffic_lights_fallback_width
+                                + METRICS.toolbar.traffic_lights_gap,
+                        );
+                        theme::show_logo(ui);
+                        ui.label(RichText::new("Keyboard shortcuts").strong());
+                        #[cfg(not(target_os = "macos"))]
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if icon_button(ui, UiIcon::Close, "Close Keyboard shortcuts").clicked()
+                            {
+                                close_requested = true;
+                            }
+                        });
+                    });
+                });
+            egui::CentralPanel::default()
+                .frame(theme::settings_content_frame(ui.style()))
+                .show(ui, |ui| {
+                    show_shortcut_editor_contents(
+                        ui,
+                        &mut self.shortcut_query,
+                        &mut self.shortcut_capture,
+                        &mut self.shortcut_notice,
+                        &mut self.pending_settings,
+                        &self.settings,
+                    );
+                });
+        });
+        if close_requested {
+            self.shortcut_editor_visible = false;
+            self.shortcut_capture = None;
+            context.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+    }
+
     pub(super) fn show_typst_overrides_window(&mut self, context: &egui::Context) {
         if !self.typst_overrides_visible
             || self.document_workflow.modal().is_some()
@@ -1110,15 +1192,6 @@ impl EditorApp {
             });
 
         self.settings_scroll_target = settings_scroll_target;
-
-        show_shortcut_editor_window(
-            ui.ctx(),
-            &mut self.shortcut_editor_visible,
-            &mut self.shortcut_query,
-            &mut self.shortcut_capture,
-            &mut self.shortcut_notice,
-            &mut edited,
-        );
 
         if !deterministic_settings {
             self.queue_settings(edited, ui.ctx());

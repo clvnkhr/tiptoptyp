@@ -595,7 +595,7 @@ Only deferred items 1, 2, and 26 remain unchecked.
 - Git editor decorations are refreshed by document, filesystem, and Git
   operation events; an unchanged editor does not schedule periodic scans or
   repaint the interface just to rediscover the same snapshot.
-- Verification: Formatting, strict Clippy, all 585 application tests (2
+- Verification: Formatting, strict Clippy, all 587 application tests (2
   environment-dependent tests ignored), and all 8 xtask tests pass. A release
   capture attempt for `git-window` could not start a native viewport in this
   environment because macOS LaunchServices/HIServices reported an invalid XPC

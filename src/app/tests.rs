@@ -369,11 +369,15 @@ fn completion_trigger_accepts_typing_and_plain_deletion_only() {
 }
 
 #[test]
-fn git_diff_viewports_and_input_are_owned_by_each_document_window() {
+fn child_viewports_and_input_are_owned_by_each_document_window() {
     let context = egui::Context::default();
     let first = egui::ViewportId::ROOT;
     let second = egui::ViewportId::from_hash_of("second-editor");
-    for salt in ["tiptoptyp-git", "tiptoptyp-popup-overlay"] {
+    for salt in [
+        "tiptoptyp-git",
+        "tiptoptyp-popup-overlay",
+        "tiptoptyp-shortcuts",
+    ] {
         let first_child = egui::ViewportId::from_hash_of((first, salt));
         let second_child = egui::ViewportId::from_hash_of((second, salt));
         assert_ne!(first_child, second_child);
@@ -404,7 +408,11 @@ fn git_diff_viewports_and_input_are_owned_by_each_document_window() {
 #[test]
 fn focused_viewport_and_standard_text_edit_commands_are_explicit() {
     let context = egui::Context::default();
-    let child = scoped_child_viewport_id(&context, "tiptoptyp-settings");
+    let child = scoped_child_viewport_id(&context, "tiptoptyp-shortcuts");
+    assert_ne!(
+        child,
+        scoped_child_viewport_id(&context, "tiptoptyp-settings")
+    );
     let mut input = egui::RawInput::default();
     input
         .viewports

@@ -8620,6 +8620,7 @@ impl eframe::App for EditorApp {
         self.show_asset_hover_window(&context);
         self.show_diagnostic_tooltip_window(&context);
         self.show_settings_window(&context, frame);
+        self.show_shortcut_editor_window(&context);
         self.show_typst_overrides_window(&context);
         self.show_workspace_chooser(&context);
         self.show_package_manager_window(&context);
@@ -12084,6 +12085,7 @@ fn focused_input_viewport(context: &egui::Context) -> egui::ViewportId {
         scoped_child_viewport_id(context, "tiptoptyp-workspace-chooser"),
         scoped_child_viewport_id(context, "tiptoptyp-modal-overlay"),
         scoped_child_viewport_id(context, "tiptoptyp-settings"),
+        scoped_child_viewport_id(context, "tiptoptyp-shortcuts"),
         scoped_child_viewport_id(context, "tiptoptyp-typst-overrides"),
         scoped_child_viewport_id(context, "asset-hover-overlay"),
         scoped_child_viewport_id(context, "tiptoptyp-popup-overlay"),
@@ -14679,143 +14681,125 @@ fn settings_target_anchor(
     }
 }
 
-fn show_shortcut_editor_window(
-    context: &egui::Context,
-    visible: &mut bool,
+fn show_shortcut_editor_contents(
+    ui: &mut egui::Ui,
     query: &mut String,
     capture: &mut Option<ShortcutAction>,
     notice: &mut Option<String>,
-    settings: &mut AppSettings,
+    pending_settings: &mut Option<AppSettings>,
+    settings: &AppSettings,
 ) {
-    if !*visible {
-        *capture = None;
-        return;
+    let mut edited = pending_settings.clone().unwrap_or_else(|| settings.clone());
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(query)
+                .hint_text("Search actions or groups")
+                .desired_width(f32::INFINITY),
+        );
+        if ui.button("Reset all").clicked() {
+            edited.shortcut_overrides.reset_all();
+            *notice = Some("Restored all default shortcuts".to_owned());
+        }
+    });
+    if let Some(action) = *capture {
+        ui.colored_label(
+            ui.visuals().selection.stroke.color,
+            format!(
+                "Press the new shortcut for {} · Backspace disables · Esc cancels",
+                action.label()
+            ),
+        );
+    } else if let Some(message) = notice.as_deref() {
+        ui.label(RichText::new(message).weak());
     }
+    ui.separator();
 
-    let mut open = *visible;
-    egui::Window::new("Keyboard shortcuts")
-        .id(viewport_scoped_id(context, "keyboard-shortcut-editor"))
-        .open(&mut open)
-        .collapsible(false)
-        .resizable(true)
-        .default_size([620.0, 540.0])
-        .min_size([440.0, 300.0])
-        .show(context, |ui| {
-            ui.horizontal(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(query)
-                        .hint_text("Search actions or groups")
-                        .desired_width(f32::INFINITY),
-                );
-                if ui.button("Reset all").clicked() {
-                    settings.shortcut_overrides.reset_all();
-                    *notice = Some("Restored all default shortcuts".to_owned());
+    let terms = query
+        .split_whitespace()
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>();
+    let bindings = edited.effective_shortcuts();
+    if !bindings.conflicts().is_empty() {
+        ui.colored_label(
+            ui.visuals().warn_fg_color,
+            format!(
+                "{} saved shortcut conflict{} could not be activated",
+                bindings.conflicts().len(),
+                if bindings.conflicts().len() == 1 {
+                    ""
+                } else {
+                    "s"
                 }
-            });
-            if let Some(action) = *capture {
-                ui.colored_label(
-                    ui.visuals().selection.stroke.color,
-                    format!(
-                        "Press the new shortcut for {} · Backspace disables · Esc cancels",
-                        action.label()
-                    ),
-                );
-            } else if let Some(message) = notice.as_deref() {
-                ui.label(RichText::new(message).weak());
-            }
-            ui.separator();
-
-            let terms = query
-                .split_whitespace()
-                .map(str::to_lowercase)
-                .collect::<Vec<_>>();
-            let bindings = settings.effective_shortcuts();
-            if !bindings.conflicts().is_empty() {
-                ui.colored_label(
-                    ui.visuals().warn_fg_color,
-                    format!(
-                        "{} saved shortcut conflict{} could not be activated",
-                        bindings.conflicts().len(),
-                        if bindings.conflicts().len() == 1 {
-                            ""
-                        } else {
-                            "s"
-                        }
-                    ),
-                );
-            }
-            egui::ScrollArea::vertical()
-                .id_salt("shortcut-editor-scroll")
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    let mut group = None;
-                    let mut shown = 0usize;
-                    for action in ShortcutAction::ALL {
-                        let haystack =
-                            format!("{} {} {}", action.group(), action.label(), action.id())
-                                .to_lowercase();
-                        if !terms.iter().all(|term| haystack.contains(term)) {
-                            continue;
-                        }
-                        if group != Some(action.group()) {
-                            if group.is_some() {
-                                ui.separator();
-                            }
-                            ui.label(RichText::new(action.group()).strong());
-                            group = Some(action.group());
-                        }
-                        shown += 1;
-                        ui.horizontal(|ui| {
-                            let controls_width = 290.0;
-                            let label_width = (ui.available_width() - controls_width).max(100.0);
-                            ui.add_sized(
-                                [label_width, METRICS.menu.row_height],
-                                egui::Label::new(action.label()),
-                            );
-                            ui.add_sized(
-                                [100.0, METRICS.menu.row_height],
-                                egui::Label::new(
-                                    RichText::new(
-                                        bindings
-                                            .display(action)
-                                            .unwrap_or_else(|| "Unassigned".to_owned()),
-                                    )
-                                    .monospace(),
-                                ),
-                            );
-                            if ui
-                                .selectable_label(*capture == Some(action), "Change")
-                                .clicked()
-                            {
-                                *capture = Some(action);
-                                *notice = None;
-                            }
-                            if ui.button("Disable").clicked() {
-                                settings.shortcut_overrides.set(action, None);
-                                *capture = None;
-                                *notice = Some(format!("Disabled {}", action.label()));
-                            }
-                            if ui
-                                .add_enabled(
-                                    settings.shortcut_overrides.get(action).is_some(),
-                                    egui::Button::new("Reset"),
-                                )
-                                .clicked()
-                            {
-                                settings.shortcut_overrides.reset(action);
-                                *notice = Some(format!("Restored {}", action.label()));
-                            }
-                        });
+            ),
+        );
+    }
+    egui::ScrollArea::vertical()
+        .id_salt("shortcut-editor-scroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            let mut group = None;
+            let mut shown = 0usize;
+            for action in ShortcutAction::ALL {
+                let haystack =
+                    format!("{} {} {}", action.group(), action.label(), action.id()).to_lowercase();
+                if !terms.iter().all(|term| haystack.contains(term)) {
+                    continue;
+                }
+                if group != Some(action.group()) {
+                    if group.is_some() {
+                        ui.separator();
                     }
-                    if shown == 0 {
-                        ui.label(RichText::new("No shortcut actions found").weak());
+                    ui.label(RichText::new(action.group()).strong());
+                    group = Some(action.group());
+                }
+                shown += 1;
+                ui.horizontal(|ui| {
+                    let controls_width = 290.0;
+                    let label_width = (ui.available_width() - controls_width).max(100.0);
+                    ui.add_sized(
+                        [label_width, METRICS.menu.row_height],
+                        egui::Label::new(action.label()),
+                    );
+                    ui.add_sized(
+                        [100.0, METRICS.menu.row_height],
+                        egui::Label::new(
+                            RichText::new(
+                                bindings
+                                    .display(action)
+                                    .unwrap_or_else(|| "Unassigned".to_owned()),
+                            )
+                            .monospace(),
+                        ),
+                    );
+                    if ui
+                        .selectable_label(*capture == Some(action), "Change")
+                        .clicked()
+                    {
+                        *capture = Some(action);
+                        *notice = None;
+                    }
+                    if ui.button("Disable").clicked() {
+                        edited.shortcut_overrides.set(action, None);
+                        *capture = None;
+                        *notice = Some(format!("Disabled {}", action.label()));
+                    }
+                    if ui
+                        .add_enabled(
+                            edited.shortcut_overrides.get(action).is_some(),
+                            egui::Button::new("Reset"),
+                        )
+                        .clicked()
+                    {
+                        edited.shortcut_overrides.reset(action);
+                        *notice = Some(format!("Restored {}", action.label()));
                     }
                 });
+            }
+            if shown == 0 {
+                ui.label(RichText::new("No shortcut actions found").weak());
+            }
         });
-    *visible = open;
-    if !open {
-        *capture = None;
-    }
+    *pending_settings = (edited != *settings).then_some(edited);
 }
 
 fn consume_preview_zoom_shortcut(
