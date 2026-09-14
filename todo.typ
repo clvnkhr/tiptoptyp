@@ -671,10 +671,37 @@ Only deferred items 1, 2, and 26 remain unchecked.
 - [x] Item 143: Remove redundant hover tooltips from Contents rows; the visible
   heading and line number already provide the useful navigation context.
 - The gutter uses the measured width of the widest rendered line number. The
-  marker fills a fixed three-point lane from the editor's left edge, while its
+  marker fills a fixed six-point lane from the editor's left edge, while its
   eight-point hit target overlaps the noninteractive number area. Formatting,
   strict Clippy, all 599 application tests (2 environment-dependent tests
   ignored), all integration, core, and
   documentation tests, all 8 xtask tests, and the release build pass. A fresh
   `git-editor` capture could not start because macOS HIServices rejected its XPC
   connection, so no new visual pass is claimed from this environment.
+
+= editor performance (2026-09-14 open Git subpanel)
+
+- [x] Item 144: Keep an open Git subpanel from slowing the code editor. Build
+  controls only for visible changed-file rows, prepare status totals in the Git
+  worker, and retain the selected diff's colored text layout across editor
+  frames. Invalidate that layout when its text, style, fonts, or scale changes.
+- The regression fixture previously built all 10,000 changed-file rows each
+  frame; it now builds at most ten while typing and scrolling. A scrolled
+  row's action still targets its own path. Summary tests cover staged,
+  partially staged, untracked, and private files; a 4,000-line diff reuses its
+  layout until content or rendering inputs change.
+- Verification: formatting, strict Clippy, 600 passing application tests
+  (2 environment-dependent tests ignored), integration, core, documentation,
+  architecture, and all 8 xtask tests pass. The release binary builds.
+
+= Git subpanel cleanup (2026-09-14)
+
+- [x] Item 145: Replace each file's Stage/Unstage and Diff/Staged diff pairs
+  with two buttons that follow its staging state. Keep each column's width
+  stable across state changes, abbreviate to first letters in narrow panels,
+  and retain full accessible names and hover descriptions. Remove the diff
+  chooser instructions and redundant Commit subtitle.
+- Verification: state transitions and fixed column widths pass at narrow and
+  wide panel sizes, along with all required checks and the release build.
+  Inspected a fresh Git viewport capture under `.tiptoptyp/screenshots/agent-review`
+  to confirm the two aligned actions and removal of the redundant text.

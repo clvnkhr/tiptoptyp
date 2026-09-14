@@ -25,7 +25,7 @@ const EDIT_DEBOUNCE: Duration = Duration::from_millis(180);
 ///
 /// Keep this close to one editor character so the decoration does not create
 /// a visibly oversized blank strip when line numbers are enabled.
-pub(crate) const GUTTER_WIDTH: i8 = 3;
+pub(crate) const GUTTER_WIDTH: i8 = 6;
 const GUTTER_HIT_WIDTH: f32 = 8.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -539,7 +539,8 @@ impl GitEditorState {
                     index: 'A',
                     worktree: ' ',
                 },
-            ],
+            ]
+            .into(),
             ..Default::default()
         };
         let mut state = Self {
@@ -570,7 +571,7 @@ pub(crate) fn marker_geometry(
     clip: egui::Rect,
 ) -> Option<MarkerGeometry> {
     let first = rows.get(change.lines.start.min(rows.len().checked_sub(1)?))?;
-    // Paint the complete three-point lane. The wider hit target may overlap
+    // Paint the complete six-point lane. The wider hit target may overlap
     // the noninteractive line number, keeping the marker easy to click without
     // charging that accessibility area to editor layout.
     let gutter_right = gutter_left + f32::from(GUTTER_WIDTH);

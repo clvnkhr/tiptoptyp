@@ -4565,10 +4565,10 @@ fn git_marker_lane_has_constant_width_and_spacing_at_every_digit_count() {
     }
 
     assert_eq!(editor_gutter_width(None, false), 4);
-    assert_eq!(editor_gutter_width(None, true), 7);
-    assert_eq!(editor_gutter_width(Some(f32::NAN), true), 12);
-    assert_eq!(editor_gutter_width(Some(f32::INFINITY), true), 12);
-    assert_eq!(editor_gutter_width(Some(f32::MAX), false), 124);
+    assert_eq!(editor_gutter_width(None, true), 10);
+    assert_eq!(editor_gutter_width(Some(f32::NAN), true), 15);
+    assert_eq!(editor_gutter_width(Some(f32::INFINITY), true), 15);
+    assert_eq!(editor_gutter_width(Some(f32::MAX), false), 121);
     assert_eq!(editor_gutter_width(Some(f32::MAX), true), 127);
 }
 
