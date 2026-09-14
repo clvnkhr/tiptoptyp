@@ -74,3 +74,5 @@ scene-theme	catppuccin-latte
 scene-theme	catppuccin-mocha
 variant	before-components	catppuccin-latte	main	1	30	catppuccin-latte-inverted-hue-p30
 variant	after-components	catppuccin-latte	file-menu	1	30	catppuccin-latte-inverted-hue-p30
+scene	window-color	logo-color	logo-color-window-color	targeted	-	-
+scene	delimiter-match	main	main-delimiter-match	targeted	-	-

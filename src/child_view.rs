@@ -1,4 +1,5 @@
 use eframe::egui::{self, Pos2, Rect, Vec2};
+use std::time::{Duration, Instant};
 
 use crate::{screenshot::CaptureController, theme};
 
@@ -209,6 +210,28 @@ fn decorate_child_viewport(viewport: egui::ViewportBuilder) -> egui::ViewportBui
     #[cfg(target_os = "macos")]
     {
         viewport
+    }
+}
+
+pub(crate) const POPUP_BLUR_GRACE: Duration = Duration::from_millis(120);
+
+pub(crate) fn popup_focus_should_close(
+    had_focus: &mut bool,
+    blur_started: &mut Option<Instant>,
+    focused: Option<bool>,
+    now: Instant,
+) -> bool {
+    match focused {
+        Some(true) => {
+            *had_focus = true;
+            *blur_started = None;
+            false
+        }
+        Some(false) if *had_focus => {
+            let started = *blur_started.get_or_insert(now);
+            now.saturating_duration_since(started) >= POPUP_BLUR_GRACE
+        }
+        Some(false) | None => false,
     }
 }
 

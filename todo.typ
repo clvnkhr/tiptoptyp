@@ -167,8 +167,8 @@ I was using two different windows with two different workspaces. Possibly i was 
 131. [x] the tags and references subpanel should be two separate panels
 132. [x] allow us to choose the order of the explorer panels in Settings. git panel should default to under files
 133. [ ] (deferred) implement tabs
-134. [ ] we should be able to click on the ttt logo in a window and have it open a color picker for the bg of the logo, which will help us visually identify each window.
-135. [ ] when cursor is at a bracket/dollar sign/etc we should highlight the matching char.
+134. [x] we should be able to click on the ttt logo in a window and have it open a color picker for the bg of the logo, which will help us visually identify each window.
+135. [x] when cursor is at a bracket/dollar sign/etc we should highlight the matching char.
 136. [ ] when we type one of these bracket chars, we should by default automatically insert the matching char and place the cursor in between. If we backspace, from this, delete both. This should be configurable in settings.
 137. [ ] we should also implement rainbow brackets. Each type of bracket pair (`[]`, `()`, `{}`,, and mixed brackets `(],[},` etc) should use a different cycle of colors. Allow us to choose palletes to cycle through for the brackets in settings.
 138. [x] i noticed that if a popup appears because i hovered over something, then scroll, the scrolling is not performant, losing frames. Investigate and fix.
@@ -726,3 +726,30 @@ Only deferred items 1, 2, and 26 remain unchecked.
   Explorer layout in Catppuccin Latte and Mocha. The release build passes;
   a fresh `git-editor` capture under `.tiptoptyp/screenshots/agent-review`
   confirms Git below Files and the separate Tags and References headers.
+
+= Window identity and matching delimiters (2026-09-14)
+
+- Item 134: Every `ttt` logo opens a native color picker owned by its window.
+  Changes update the logo immediately, with contrasting text, a fixed button
+  size, and Reset/Done controls. Escape returns focus to the owner; switching
+  windows dismisses the picker without stealing focus. Colors remain local to
+  each document or utility window for the session and never enter shared
+  application settings.
+- Item 135: The caret highlights both ends of a Typst syntax delimiter pair,
+  including nested code/content brackets, math delimiters, dollar signs,
+  quotes, labels, emphasis, and raw fences. Comments, escaped characters, and
+  literal contents cannot create false pairs. Results are cached by document
+  identity, revision, and caret; ordinary typing skips delimiter parsing. The
+  highlights reuse the editor galley and follow individual glyph advances at
+  soft wraps, without rebuilding text layout on cursor movement.
+- Item 132 follow-up: A wide Settings row could push the reorder controls
+  beyond the window edge. Their layout now uses the visible width, with a
+  regression test that precedes them with deliberately oversized content.
+- Verification: all 617 application tests pass (2 environment-dependent tests
+  ignored), together with formatting, strict Clippy, supporting test suites,
+  and all 8 xtask tests. Fresh `window-color` and `delimiter-match` framebuffers
+  in Catppuccin Latte and Mocha were captured under
+  `.tiptoptyp/screenshots/agent-review` and inspected, along with the colored
+  logo in its parent window. The release build passes. Regenerated and validated
+  all 68 gallery PNGs and inspected a fresh Settings capture confirming the
+  reorder controls remain visible.

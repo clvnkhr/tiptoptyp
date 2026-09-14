@@ -2676,6 +2676,30 @@ fn explorer_order_controls_move_panels_and_reset_with_aligned_buttons() {
 }
 
 #[test]
+fn explorer_order_controls_stay_visible_after_an_oversized_settings_row() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(360.0, 500.0))
+        .build_ui_state(
+            |ui, order| {
+                ui.allocate_space(Vec2::new(800.0, 20.0));
+                settings_view::show_explorer_order_controls(ui, order);
+            },
+            ExplorerOrder::default(),
+        );
+    harness.run();
+    for section in ExplorerSection::ALL {
+        let down = harness
+            .get_by_label(&format!("Move {} down", section.title()))
+            .rect();
+        assert!(down.right() <= 360.0, "{down:?}");
+    }
+    harness.get_by_label("Move Files down").click();
+    harness.run_steps(2);
+    assert_eq!(harness.state().sections()[0], ExplorerSection::Git);
+}
+
+#[test]
 fn reordered_explorer_keeps_body_identity_and_collapsed_state() {
     use egui_kittest::{Harness, kittest::Queryable as _};
     #[derive(Default)]
@@ -3873,6 +3897,39 @@ fn search_highlights_cover_every_match_and_distinguish_the_selected_one() {
             .sum::<usize>(),
         5
     );
+}
+
+#[test]
+fn delimiter_highlights_use_character_advances_at_soft_wrap_boundaries() {
+    let context = egui::Context::default();
+    context
+        .run_ui(Default::default(), |ui| {
+            let galley = ui.painter().layout(
+                "éééééééééééééééééééé()```".into(),
+                egui::FontId::monospace(16.0),
+                Color32::WHITE,
+                40.0,
+            );
+            assert!(galley.rows.len() > 1);
+            for character in 0..galley.text().chars().count() {
+                let rectangles = editor_view::delimiter_rects(&galley, character..character + 1);
+                assert_eq!(rectangles.len(), 1);
+                assert!(
+                    rectangles[0].width() > 0.0 && rectangles[0].width() < 20.0,
+                    "{rectangles:?}"
+                );
+                assert!(rectangles[0].height() < 30.0);
+            }
+            let len = galley.text().chars().count();
+            let fences = editor_view::delimiter_rects(&galley, len - 3..len);
+            assert!(!fences.is_empty());
+            assert!(
+                fences
+                    .iter()
+                    .all(|rect| rect.width() <= 40.0 && rect.height() < 30.0)
+            );
+        })
+        .drop_without_applying_deltas();
 }
 
 #[test]

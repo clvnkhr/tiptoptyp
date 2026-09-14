@@ -322,6 +322,7 @@ impl EditorApp {
                 .iter()
                 .map(|_| ui.painter().add(egui::Shape::Noop))
                 .collect::<Vec<_>>();
+            let delimiter_fill_slot = ui.painter().add(egui::Shape::Noop);
             let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, wrap_width: f32| {
                 let mut job = if document_kind.is_typst() {
                     highlighter.highlight(buffer.as_str(), dark_mode, generic_highlighter)
@@ -407,6 +408,27 @@ impl EditorApp {
                 &line_rows,
                 current_line_slot,
             );
+            if document_kind.is_typst()
+                && editor_has_focus
+                && let Some(range) = output.state.cursor.char_range()
+                && range.is_empty()
+                && let Some(pair) = self.editor_data.matching_delimiters(range.primary.index.0)
+            {
+                let accent = theme::palette(ui.ctx()).accent;
+                let fill = Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 48);
+                let mut backgrounds = Vec::new();
+                let painter = ui
+                    .painter()
+                    .with_clip_rect(output.response.rect.intersect(ui.clip_rect()));
+                for endpoint in pair {
+                    for rect in delimiter_rects(&output.galley, endpoint) {
+                        let rect = rect.translate(output.galley_pos.to_vec2());
+                        backgrounds.push(egui::Shape::rect_filled(rect, 2, fill));
+                        painter.rect_stroke(rect, 2, Stroke::new(1.0, accent), StrokeKind::Inside);
+                    }
+                }
+                painter.set(delimiter_fill_slot, egui::Shape::Vec(backgrounds));
+            }
             if let Some(tooltip) =
                 paint_line_diagnostics(ui, &output, &line_diagnostics, &line_rows, background_slots)
                 && !native_tooltip_handoff_blocks(ui.ctx(), tooltip.origin)
@@ -1021,6 +1043,37 @@ fn search_match_color(context: &egui::Context, selected: bool) -> Color32 {
     let accent = theme::palette(context).accent;
     let alpha = if selected { 96 } else { 48 };
     Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), alpha)
+}
+
+/// Use glyph advances rather than a cursor rectangle spanning a soft wrap.
+/// Raw delimiters may contain multiple backticks and can cross visual rows.
+pub(super) fn delimiter_rects(galley: &egui::Galley, characters: Range<usize>) -> Vec<Rect> {
+    let mut rectangles: Vec<Rect> = Vec::new();
+    for character in characters {
+        let mut cursor = CCursor::new(character);
+        cursor.prefer_next_row = true;
+        let position = galley.layout_from_cursor(cursor);
+        let Some(row) = galley.rows.get(position.row) else {
+            continue;
+        };
+        if position.column.0 >= row.glyphs.len() {
+            continue;
+        }
+        let start = row.pos.x + row.x_offset(position.column);
+        let end = row.pos.x + row.x_offset(egui::text::CharIndex(position.column.0 + 1));
+        let rect = Rect::from_min_max(
+            Pos2::new(start, row.min_y()),
+            Pos2::new(end.max(start + 1.0), row.max_y()),
+        );
+        if let Some(previous) = rectangles.last_mut()
+            && previous.top() == rect.top()
+        {
+            *previous = previous.union(rect);
+        } else {
+            rectangles.push(rect);
+        }
+    }
+    rectangles
 }
 
 pub(super) fn apply_search_highlights(

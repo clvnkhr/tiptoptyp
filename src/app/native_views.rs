@@ -89,7 +89,7 @@ impl EditorApp {
                                 METRICS.toolbar.traffic_lights_fallback_width
                                     + METRICS.toolbar.traffic_lights_gap,
                             );
-                            theme::show_logo(ui);
+                            crate::window_logo::show(ui, &captures);
                             ui.label(RichText::new("Typst packages").strong());
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 refresh_requested |= ui

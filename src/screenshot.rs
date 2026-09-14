@@ -69,6 +69,8 @@ impl UiCaptureStep {
 pub enum UiSnapshotScene {
     Main,
     StickyContext,
+    WindowColor,
+    DelimiterMatch,
     FileMenu,
     EditMenu,
     SettingsWindow,
@@ -99,9 +101,11 @@ pub enum UiSnapshotScene {
 }
 
 impl UiSnapshotScene {
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 31] = [
         Self::Main,
         Self::StickyContext,
+        Self::WindowColor,
+        Self::DelimiterMatch,
         Self::FileMenu,
         Self::EditMenu,
         Self::SettingsWindow,
@@ -135,6 +139,8 @@ impl UiSnapshotScene {
         match self {
             Self::Main => "main",
             Self::StickyContext => "sticky-context",
+            Self::WindowColor => "window-color",
+            Self::DelimiterMatch => "delimiter-match",
             Self::FileMenu => "file-menu",
             Self::EditMenu => "edit-menu",
             Self::SettingsWindow => "settings-window",
@@ -171,6 +177,7 @@ impl UiSnapshotScene {
             Self::Main
             | Self::FontCompletion
             | Self::StickyContext
+            | Self::DelimiterMatch
             | Self::ProblemsPanel
             | Self::FindReplace
             | Self::PreviewCompiling => ROOT_VIEWPORT_NAME,
@@ -184,6 +191,7 @@ impl UiSnapshotScene {
             Self::GitWindow => "git",
             Self::GitEditor => ROOT_VIEWPORT_NAME,
             Self::GitChunk => "popup",
+            Self::WindowColor => "logo-color",
             Self::SettingsWindow
             | Self::SettingsFontPicker
             | Self::SettingsThemePicker
@@ -210,6 +218,8 @@ impl UiSnapshotScene {
         let scene = match value {
             "main" => Self::Main,
             "sticky-context" => Self::StickyContext,
+            "window-color" => Self::WindowColor,
+            "delimiter-match" => Self::DelimiterMatch,
             "file-menu" => Self::FileMenu,
             "edit-menu" => Self::EditMenu,
             "settings-window" => Self::SettingsWindow,

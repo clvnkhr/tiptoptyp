@@ -79,6 +79,8 @@ pub(crate) struct EditorDerivedData {
     char_starts: Vec<usize>,
     parsed_source: Source,
     parsed_key: Option<DocumentKey>,
+    delimiter_query: Option<(DocumentKey, usize)>,
+    delimiter_pair: Option<[Range<usize>; 2]>,
     diagnostics_key: Option<DiagnosticsKey>,
     line_diagnostics: Arc<[LineDiagnostic]>,
     longest_diagnostic_chars: usize,
@@ -99,6 +101,8 @@ impl Default for EditorDerivedData {
             char_starts: vec![0],
             parsed_source: Source::detached(String::new()),
             parsed_key: None,
+            delimiter_query: None,
+            delimiter_pair: None,
             diagnostics_key: None,
             line_diagnostics: Arc::from([]),
             longest_diagnostic_chars: 0,
@@ -181,6 +185,39 @@ impl EditorDerivedData {
 
     pub(crate) fn char_range_to_byte(&self, range: Range<usize>) -> Range<usize> {
         self.char_to_byte(range.start)..self.char_to_byte(range.end)
+    }
+
+    pub(crate) fn matching_delimiters(&mut self, caret: usize) -> Option<[Range<usize>; 2]> {
+        let key = self.source_key?;
+        if self.delimiter_query == Some((key, caret)) {
+            return self.delimiter_pair.clone();
+        }
+        // Prefer the character under the caret, then the one immediately before it.
+        let candidates = [Some(caret), caret.checked_sub(1)].map(|character| {
+            let character =
+                character.filter(|character| *character < self.source_metrics.char_count)?;
+            let byte = self.char_to_byte(character);
+            let candidate = self.source_snapshot[byte..].chars().next()?;
+            "()[]{}$\"<>`*_|⟨⟩⌈⌉⌊⌋‖".contains(candidate).then_some(byte)
+        });
+        if candidates.iter().any(Option::is_some) {
+            self.prepare_syntax();
+        }
+        let pair = candidates
+            .into_iter()
+            .flatten()
+            .find_map(|byte| crate::delimiters::pair_at(&self.parsed_source, byte));
+        self.delimiter_pair = pair.map(|pair| {
+            pair.map(|endpoint| {
+                self.char_starts
+                    .partition_point(|byte| *byte < endpoint.start)
+                    ..self
+                        .char_starts
+                        .partition_point(|byte| *byte < endpoint.end)
+            })
+        });
+        self.delimiter_query = Some((key, caret));
+        self.delimiter_pair.clone()
     }
 
     /// Borrow a reusable sticky-context query for the prepared source
@@ -463,6 +500,39 @@ mod tests {
             message: message.to_owned(),
             details: Vec::new(),
         }
+    }
+
+    #[test]
+    fn delimiter_queries_use_character_offsets_and_invalidate_on_document_edits() {
+        let mut data = EditorDerivedData::default();
+        let source = "你好 🦀 #let x = (1, 2)";
+        data.prepare_source(&DocumentSnapshot::fixture(revision(1), source));
+        assert_eq!(data.matching_delimiters(5), None);
+        assert_eq!(
+            data.syntax_rebuilds, 0,
+            "ordinary typing needs no delimiter parse"
+        );
+        let start = source[..source.find('(').unwrap()].chars().count();
+        let end = source.chars().count() - 1;
+        let pair = Some([start..start + 1, end..end + 1]);
+        assert_eq!(data.matching_delimiters(start), pair);
+        assert_eq!(data.matching_delimiters(start + 1), pair);
+        assert_eq!(data.matching_delimiters(end + 1), pair);
+        for _ in 0..100 {
+            assert_eq!(data.matching_delimiters(end + 1), pair);
+        }
+        assert_eq!(data.syntax_rebuilds, 1);
+        data.prepare_source(&DocumentSnapshot::fixture(
+            revision(2),
+            "你好 🦀 #let x = (1, 2",
+        ));
+        assert_eq!(data.matching_delimiters(start), None);
+        assert_eq!(data.syntax_rebuilds, 2);
+        let other_window =
+            DocumentKey::new(tiptoptyp_core::document::WindowSessionId::new(2), 3, 2);
+        data.prepare_source(&DocumentSnapshot::fixture(other_window, source));
+        assert_eq!(data.matching_delimiters(start), pair);
+        assert_eq!(data.matching_delimiters(usize::MAX), None);
     }
 
     #[test]

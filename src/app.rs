@@ -31,7 +31,10 @@ use rfd::AsyncFileDialog;
 use crate::{
     asset::{AssetLoader, AssetThumbnailLoader, AssetThumbnailResult, LoadedAsset},
     builtin_themes,
-    child_view::{ChildViewHost, ChildViewSpec, scoped_child_viewport_id, viewport_scoped_id},
+    child_view::{
+        ChildViewHost, ChildViewSpec, POPUP_BLUR_GRACE, popup_focus_should_close,
+        scoped_child_viewport_id, viewport_scoped_id,
+    },
     compiler::{ArtifactKey, CompileEvent, CompileRequest, Compiler, PreviewPage},
     diagnostics::{
         Diagnostic, DiagnosticLocation, DiagnosticSeverity, DiagnosticSource,
@@ -110,7 +113,6 @@ const EXTERNAL_FILE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const MIN_PREVIEW_ZOOM: f32 = 0.2;
 const MAX_PREVIEW_ZOOM: f32 = 6.0;
 const TOOLTIP_HANDOFF_GRACE: Duration = Duration::from_millis(300);
-const POPUP_BLUR_GRACE: Duration = Duration::from_millis(120);
 const STATUS_LOG_LIMIT: usize = 100;
 const STATUS_LOG_TIMESTAMP_WIDTH: f32 = 74.0;
 const STATUS_LOG_ROW_HEIGHT: f32 = 24.0;
@@ -3389,6 +3391,19 @@ impl EditorApp {
                 self.find_visible = false;
                 self.replace_visible = false;
             }
+            UiSnapshotScene::WindowColor => {
+                self.view_mode = ViewMode::Code;
+            }
+            UiSnapshotScene::DelimiterMatch => {
+                const SOURCE: &str = "= Matching delimiters\n\n#let calculate(value) = {\n  let nested = (value, (2, 3))\n  nested\n}\n\nStrings are separate: #repr(\"[literal]\")\nMath: $ (alpha + beta] $\n";
+                if self.document.source() != SOURCE {
+                    self.document.replace_untitled(SOURCE);
+                    self.prepare_editor_source_data();
+                }
+                self.view_mode = ViewMode::Code;
+                let cursor = SOURCE.find('{').unwrap();
+                self.pending_editor_selection = Some(cursor..cursor);
+            }
             UiSnapshotScene::StickyContext => {
                 self.notice = None;
                 self.view_mode = ViewMode::Code;
@@ -3604,6 +3619,7 @@ impl EditorApp {
     /// scene is painted, while the loaded fixture and rendered preview remain
     /// available across the whole process.
     pub(crate) fn set_capture_step(&mut self, step: &UiCaptureStep, context: &egui::Context) {
+        crate::window_logo::clear_snapshot(context);
         self.git.visible = false;
         self.git_editor = crate::git::editor::GitEditorState::default();
         self.settings_visible = false;
@@ -6065,7 +6081,10 @@ impl EditorApp {
                 theme::apply_dense_toolbar_spacing(ui);
             }
 
-            theme::show_logo(ui);
+            if self.snapshot_scene == Some(UiSnapshotScene::WindowColor) {
+                crate::window_logo::snapshot_fixture(ui.ctx());
+            }
+            crate::window_logo::show(ui, &self.captures);
             let document_name = self.document_name();
             let title = format!("{document_name}{}", if self.is_dirty() { "*" } else { "" });
             // Reserve the dirty marker's slot even while the document is
@@ -14043,26 +14062,6 @@ fn workspace_snapshot_font_files(snapshot: &WorkspaceSnapshot) -> Vec<PathBuf> {
     collect(&snapshot.nodes, &mut files);
     files.sort();
     files
-}
-
-fn popup_focus_should_close(
-    had_focus: &mut bool,
-    blur_started: &mut Option<Instant>,
-    focused: Option<bool>,
-    now: Instant,
-) -> bool {
-    match focused {
-        Some(true) => {
-            *had_focus = true;
-            *blur_started = None;
-            false
-        }
-        Some(false) if *had_focus => {
-            let started = *blur_started.get_or_insert(now);
-            now.saturating_duration_since(started) >= POPUP_BLUR_GRACE
-        }
-        Some(false) | None => false,
-    }
 }
 
 fn app_popup_scroll_id(generation: u64) -> egui::Id {

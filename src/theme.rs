@@ -12,7 +12,7 @@ use std::{
     time::Duration,
 };
 
-use eframe::egui::{self, Align, Color32, FontFamily, FontId, Layout, Rect, RichText, Vec2};
+use eframe::egui::{self, Align, Color32, FontFamily, FontId, Layout, Rect, Vec2};
 use skrifa::{MetadataProvider as _, Tag, attribute::Style as FontStyle};
 
 use crate::{
@@ -1664,27 +1664,6 @@ pub fn apply_active_row_selection(ui: &mut egui::Ui) {
 /// enabled for document-like content such as diagnostics and tooltip bodies.
 pub fn nonselectable_label(text: impl Into<egui::WidgetText>) -> egui::Label {
     egui::Label::new(text).selectable(false)
-}
-
-pub fn show_logo(ui: &mut egui::Ui) {
-    ui.scope(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        ui.horizontal(|ui| {
-            let font = FontId::proportional(TYPE.content);
-            ui.add(nonselectable_label(
-                RichText::new("t").font(font.clone()).strong(),
-            ));
-            ui.add(nonselectable_label(
-                RichText::new("t").font(font.clone()).strong(),
-            ));
-            ui.add(nonselectable_label(
-                RichText::new("t")
-                    .font(font)
-                    .strong()
-                    .color(palette(ui.ctx()).accent),
-            ));
-        });
-    });
 }
 
 pub fn panel_header(

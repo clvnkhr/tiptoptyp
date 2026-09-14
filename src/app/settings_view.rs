@@ -72,7 +72,7 @@ impl EditorApp {
                                 METRICS.toolbar.traffic_lights_fallback_width
                                     + METRICS.toolbar.traffic_lights_gap,
                             );
-                            theme::show_logo(ui);
+                            crate::window_logo::show(ui, &captures);
                             ui.label(RichText::new("Settings").strong());
                             #[cfg(not(target_os = "macos"))]
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -177,7 +177,7 @@ impl EditorApp {
                             METRICS.toolbar.traffic_lights_fallback_width
                                 + METRICS.toolbar.traffic_lights_gap,
                         );
-                        theme::show_logo(ui);
+                        crate::window_logo::show(ui, &captures);
                         ui.label(RichText::new("Keyboard shortcuts").strong());
                         #[cfg(not(target_os = "macos"))]
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -335,7 +335,7 @@ impl EditorApp {
                                 METRICS.toolbar.traffic_lights_fallback_width
                                     + METRICS.toolbar.traffic_lights_gap,
                             );
-                            theme::show_logo(ui);
+                            crate::window_logo::show(ui, &captures);
                             ui.label(RichText::new("Typst overrides").strong());
                             #[cfg(not(target_os = "macos"))]
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1216,53 +1216,62 @@ impl EditorApp {
 }
 
 pub(super) fn show_explorer_order_controls(ui: &mut egui::Ui, order: &mut ExplorerOrder) {
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(SettingsTarget::ExplorerOrder.label()).strong());
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui
-                .add_enabled(
-                    *order != ExplorerOrder::default(),
-                    egui::Button::new("Reset panel order"),
-                )
-                .clicked()
-            {
-                *order = ExplorerOrder::default();
-            }
-        });
-    });
-    for (position, section) in order.sections().into_iter().enumerate() {
-        ui.push_id(section.id(), |ui| {
-            ui.horizontal(|ui| {
-                ui.label(section.title());
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    for (symbol, direction, destination) in [
-                        (
-                            "↓",
-                            "down",
-                            (position + 1 < ExplorerSection::ALL.len()).then_some(position + 1),
-                        ),
-                        ("↑", "up", position.checked_sub(1)),
-                    ] {
-                        let response = ui.add_enabled(
-                            destination.is_some(),
-                            egui::Button::new(symbol).min_size(Vec2::splat(24.0)),
-                        );
-                        let label = format!("Move {} {direction}", section.title());
-                        response.widget_info(|| {
-                            egui::WidgetInfo::labeled(
-                                egui::WidgetType::Button,
-                                response.enabled(),
-                                &label,
-                            )
-                        });
-                        if settings_hover_text(response, label).clicked()
-                            && let Some(destination) = destination
-                        {
-                            order.move_to(section, destination);
-                        }
-                    }
-                });
+    // Earlier Settings rows can have wide intrinsic content. Anchor these
+    // right-aligned controls to the visible window, not that overflow width.
+    let top = ui.next_widget_position();
+    let width = ui
+        .available_width()
+        .min((ui.clip_rect().right() - top.x).max(1.0));
+    let bounds = Rect::from_min_size(top, Vec2::new(width, ui.available_height()));
+    ui.scope_builder(egui::UiBuilder::new().max_rect(bounds), |ui| {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(SettingsTarget::ExplorerOrder.label()).strong());
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .add_enabled(
+                        *order != ExplorerOrder::default(),
+                        egui::Button::new("Reset panel order"),
+                    )
+                    .clicked()
+                {
+                    *order = ExplorerOrder::default();
+                }
             });
         });
-    }
+        for (position, section) in order.sections().into_iter().enumerate() {
+            ui.push_id(section.id(), |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(section.title());
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        for (symbol, direction, destination) in [
+                            (
+                                "↓",
+                                "down",
+                                (position + 1 < ExplorerSection::ALL.len()).then_some(position + 1),
+                            ),
+                            ("↑", "up", position.checked_sub(1)),
+                        ] {
+                            let response = ui.add_enabled(
+                                destination.is_some(),
+                                egui::Button::new(symbol).min_size(Vec2::splat(24.0)),
+                            );
+                            let label = format!("Move {} {direction}", section.title());
+                            response.widget_info(|| {
+                                egui::WidgetInfo::labeled(
+                                    egui::WidgetType::Button,
+                                    response.enabled(),
+                                    &label,
+                                )
+                            });
+                            if settings_hover_text(response, label).clicked()
+                                && let Some(destination) = destination
+                            {
+                                order.move_to(section, destination);
+                            }
+                        }
+                    });
+                });
+            });
+        }
+    });
 }
