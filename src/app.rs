@@ -68,6 +68,7 @@ use crate::{
         AppSettings, ColorThemeChoice, DEFAULT_HOVER_DELAY_MS, DEFAULT_HOVER_FADE_MS,
         DEFAULT_UI_FONT_WEIGHT, DEFAULT_UI_SCALE_PERCENT, DocumentTheme, InterfaceTheme,
         PreviewPreference, SourcePreviewTrigger, ToolMode, ToolPreference,
+        normalize_workspace_root,
     },
     shortcuts::{
         ShortcutAction, ShortcutBindings, ShortcutChord, ShortcutPlatform, consume_shortcut_action,
@@ -853,7 +854,34 @@ struct MarkdownInlineSpan {
 /// reparsing and re-highlighting every code span on every frame.
 #[derive(Clone, Default)]
 struct TooltipCodeCache {
-    jobs: BTreeMap<u64, Option<egui::text::LayoutJob>>,
+    jobs: VecDeque<TooltipCodeCacheEntry>,
+}
+
+#[derive(Clone)]
+struct TooltipCodeCacheEntry {
+    source: String,
+    token: String,
+    dark_mode: bool,
+    editor_font: egui::FontId,
+    colors: [[u8; 4]; 14],
+    job: Option<egui::text::LayoutJob>,
+}
+
+impl TooltipCodeCacheEntry {
+    fn matches(
+        &self,
+        source: &str,
+        token: &str,
+        dark_mode: bool,
+        editor_font: &egui::FontId,
+        colors: &[[u8; 4]; 14],
+    ) -> bool {
+        self.source == source
+            && self.token == token
+            && self.dark_mode == dark_mode
+            && self.editor_font == *editor_font
+            && self.colors == *colors
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -928,6 +956,12 @@ enum WorkspaceMenuAction {
         kind: WorkspaceCopyKind,
     },
     Reveal(PathBuf),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RecentWorkspaceAction {
+    Open(PathBuf),
+    Remove(PathBuf),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1369,6 +1403,7 @@ pub struct EditorApp {
     git_explorer_reveal: bool,
     git_editor: crate::git::editor::GitEditorState,
     workspace_chooser_visible: bool,
+    workspace_history_removals: Vec<PathBuf>,
     workspace: Option<WorkspaceTree>,
     workspace_error: Option<String>,
     file_import: crate::worker::ExclusiveJob<String>,
@@ -1619,6 +1654,7 @@ impl EditorApp {
             git_explorer_reveal: true,
             git_editor: crate::git::editor::GitEditorState::default(),
             workspace_chooser_visible: false,
+            workspace_history_removals: Vec::new(),
             workspace: None,
             workspace_error: None,
             file_import: Default::default(),
@@ -1854,6 +1890,10 @@ impl EditorApp {
 
     pub(crate) fn close_accepted(&self) -> bool {
         self.document_workflow.may_close(self.document.key())
+    }
+
+    pub(crate) fn finish_window_close(&mut self) {
+        self.document_workflow.revoke_close();
     }
 
     pub(crate) fn show_window_notice(&mut self, message: String) {
@@ -3015,7 +3055,7 @@ impl EditorApp {
             return;
         }
         match command {
-            AppCommand::Settings => self.set_settings_visible(true),
+            AppCommand::Settings => self.toggle_settings(),
             AppCommand::New => self.new_document(),
             AppCommand::NewWindow => {
                 self.pending_window_requests
@@ -3150,10 +3190,6 @@ impl EditorApp {
 
     fn set_settings_visible(&mut self, visible: bool) {
         self.settings_visible = visible;
-        if !visible {
-            self.shortcut_editor_visible = false;
-            self.shortcut_capture = None;
-        }
         if visible {
             // A root popup and a child settings window must never compete for
             // native focus. Settings owns transient interaction until closed.
@@ -4021,6 +4057,15 @@ impl EditorApp {
         }
     }
 
+    fn forget_workspace(&mut self, root: &Path) {
+        self.settings.forget_workspace(root);
+        if let Some(settings) = &mut self.pending_settings {
+            settings.forget_workspace(root);
+        }
+        self.workspace_history_removals
+            .push(normalize_workspace_root(root));
+    }
+
     fn open_dialog(&mut self) {
         self.request_document_replacement(
             DeferredDocumentAction::OpenFileDialog,
@@ -4127,7 +4172,7 @@ impl EditorApp {
         let keep_designated_preview = self.should_keep_designated_preview(&path);
         let workspace_root_changed = !path.starts_with(&self.workspace_root);
         let preserve_workspace_snapshot = preserve_workspace_snapshot_for_open(
-            self.workspace.is_some(),
+            self.workspace.as_ref().map(WorkspaceTree::root),
             &self.workspace_root,
             &path,
         );
@@ -4950,6 +4995,15 @@ impl EditorApp {
         self.workspace_error = None;
         self.request_workspace_scan(root);
         self.next_workspace_refresh = Instant::now() + WORKSPACE_REFRESH_INTERVAL;
+        // Outline, symbols, references, dependencies, and packages are all
+        // rooted in the workspace. Clear them synchronously so the Contents
+        // sections cannot show paths from the old root while the replacement
+        // index is being built.
+        self.project_index_job.supersede();
+        self.project_index = ProjectIndex::default();
+        self.schedule_project_index();
+        self.git.request_refresh();
+        self.git_editor.request_refresh();
         self.restart_tinymist();
     }
 
@@ -5054,6 +5108,10 @@ impl EditorApp {
 
     fn refresh_workspace(&mut self) {
         self.git.request_refresh();
+        self.refresh_workspace_tree();
+    }
+
+    fn refresh_workspace_tree(&mut self) {
         if !self.workspace_scan.is_running() {
             let root = self
                 .workspace
@@ -5076,7 +5134,10 @@ impl EditorApp {
         }
         let now = Instant::now();
         if now >= self.next_workspace_refresh {
-            self.refresh_workspace();
+            // The legacy Explorer scan is still periodic. Keep Git out of
+            // that timer: repository refreshes come from concrete file and
+            // Git operations and wake the UI only when their worker finishes.
+            self.refresh_workspace_tree();
         }
         context.request_repaint_after(self.next_workspace_refresh.saturating_duration_since(now));
     }
@@ -7091,9 +7152,6 @@ impl EditorApp {
                 },
                 |ui| self.git.show(ui, &self.workspace_root, git_dirty),
             );
-            if self.git.take_status_changed() {
-                self.git_editor.request_refresh();
-            }
             if resize_delta.abs() > f32::EPSILON {
                 section_resize = Some((1, resize_delta));
             }
@@ -8343,6 +8401,19 @@ impl EditorApp {
         self.pending_settings.take()
     }
 
+    pub(crate) fn take_workspace_history_removals(&mut self) -> Vec<PathBuf> {
+        std::mem::take(&mut self.workspace_history_removals)
+    }
+
+    pub(crate) fn apply_workspace_history_removals(&mut self, roots: &[PathBuf]) {
+        for root in roots {
+            self.settings.forget_workspace(root);
+            if let Some(settings) = &mut self.pending_settings {
+                settings.forget_workspace(root);
+            }
+        }
+    }
+
     pub(crate) fn apply_shared_settings(&mut self, settings: AppSettings, context: &egui::Context) {
         let autosave_changed = settings.auto_save != self.settings.auto_save
             || settings.auto_save_delay_ms != self.settings.auto_save_delay_ms;
@@ -8513,6 +8584,13 @@ impl eframe::App for EditorApp {
         self.tick_project_index(&context);
         self.apply_snapshot_scene();
         if self.snapshot_scene.is_none() {
+            // Advance the Git model independently of the Explorer body's
+            // collapsed state. A collapsed section still needs to collect
+            // completed jobs and propagate fresh file/gutter status.
+            self.git.poll(&context, &self.workspace_root);
+            if self.git.take_status_changed() {
+                self.git_editor.request_refresh();
+            }
             self.git_editor.tick(
                 &context,
                 &self.workspace_root,
@@ -9253,6 +9331,70 @@ struct StickyContextRenderRow<'a> {
     height: f32,
 }
 
+fn sticky_context_push_offset(boundary_top: f32, group_top: f32, group_height: f32) -> f32 {
+    (boundary_top - (group_top + group_height)).min(0.0)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct StickyContextMotionRow {
+    end_line: usize,
+    height: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct StickyContextMotion {
+    offset: f32,
+    clip_top: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct StickyContextMotionLayout {
+    rows: Vec<StickyContextMotion>,
+    visible_bottom: f32,
+}
+
+fn sticky_context_motion_layout(
+    rows: &[StickyContextMotionRow],
+    overlay_top: f32,
+    mut boundary_top: impl FnMut(usize) -> Option<f32>,
+) -> StickyContextMotionLayout {
+    let mut motion = vec![
+        StickyContextMotion {
+            offset: 0.0,
+            clip_top: overlay_top,
+        };
+        rows.len()
+    ];
+    let mut destination_top = overlay_top;
+    let mut visible_bottom = overlay_top;
+    let mut start = 0;
+    while start < rows.len() {
+        let end_line = rows[start].end_line;
+        let mut end = start + 1;
+        while end < rows.len() && rows[end].end_line == end_line {
+            end += 1;
+        }
+        let height = rows[start..end].iter().map(|row| row.height).sum::<f32>();
+        let offset = boundary_top(end_line)
+            .map(|boundary| sticky_context_push_offset(boundary, destination_top, height))
+            .unwrap_or(0.0);
+        motion[start..end].fill(StickyContextMotion {
+            offset,
+            // A context ending on its own moves underneath all preceding
+            // sticky rows. Rows sharing an ending boundary form one cohort,
+            // retain their relative positions, and leave together.
+            clip_top: destination_top,
+        });
+        visible_bottom = visible_bottom.max(destination_top + height + offset);
+        destination_top += height;
+        start = end;
+    }
+    StickyContextMotionLayout {
+        rows: motion,
+        visible_bottom,
+    }
+}
+
 fn sticky_context_row_reached_boundary(
     source_top: f32,
     overlay_top: f32,
@@ -9416,7 +9558,21 @@ fn show_sticky_context_overlay(
     if visible_rows.is_empty() {
         return None;
     }
-    let overlay_height = visible_rows.iter().map(|row| row.height).sum();
+    let motion_rows = visible_rows
+        .iter()
+        .map(|row| StickyContextMotionRow {
+            end_line: row.row.end_line,
+            height: row.height,
+        })
+        .collect::<Vec<_>>();
+    let motion = sticky_context_motion_layout(&motion_rows, geometry.anchor.y, |end_line| {
+        sticky_context_source_row_bounds(snapshot, end_line)
+            .map(|(top, _)| top + snapshot.galley_pos.y)
+    });
+    let overlay_height = motion.visible_bottom - geometry.anchor.y;
+    if overlay_height <= 0.0 {
+        return None;
+    }
 
     let mut jump_target = None;
     egui::Area::new(viewport_scoped_id(context, "sticky-context-overlay"))
@@ -9453,42 +9609,54 @@ fn show_sticky_context_overlay(
             }
 
             let mut destination_top = overlay.top();
-            for visible in visible_rows {
+            for (visible, motion) in visible_rows.into_iter().zip(motion.rows) {
                 let row = visible.row;
                 let row_rect = Rect::from_min_size(
-                    Pos2::new(overlay.left(), destination_top),
+                    Pos2::new(overlay.left(), destination_top + motion.offset),
                     Vec2::new(overlay.width(), visible.height),
                 );
-                let response = ui.interact(
-                    row_rect,
-                    ui.id()
-                        .with(("sticky-context-row", row.line, row.char_index)),
-                    Sense::click(),
-                );
-                if response.hovered() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                }
-
-                let painter = ui.painter().with_clip_rect(row_rect.intersect(viewport));
-                painter.galley(
-                    Pos2::new(snapshot.galley_pos.x, row_rect.top() - visible.source_top),
-                    Arc::clone(&snapshot.galley),
-                    ui.visuals().text_color(),
-                );
-                if line_numbers {
-                    painter.text(
-                        Pos2::new(gutter.line_number_right, row_rect.top()),
-                        egui::Align2::RIGHT_TOP,
-                        row.line.to_string(),
-                        theme::annotation_font(),
-                        ui.visuals().weak_text_color(),
+                let visible_rect = row_rect.intersect(Rect::from_min_max(
+                    Pos2::new(overlay.left(), motion.clip_top),
+                    overlay.right_bottom(),
+                ));
+                if visible_rect.is_positive() {
+                    let response = ui.interact(
+                        visible_rect,
+                        ui.id()
+                            .with(("sticky-context-row", row.line, row.char_index)),
+                        Sense::click(),
                     );
-                }
-                if let Some(target) = sticky_context_jump_target(row, response.clicked()) {
-                    jump_target = Some(target);
+                    if response.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+
+                    let painter = ui
+                        .painter()
+                        .with_clip_rect(visible_rect.intersect(viewport));
+                    painter.galley(
+                        Pos2::new(snapshot.galley_pos.x, row_rect.top() - visible.source_top),
+                        Arc::clone(&snapshot.galley),
+                        ui.visuals().text_color(),
+                    );
+                    if line_numbers {
+                        painter.text(
+                            Pos2::new(gutter.line_number_right, row_rect.top()),
+                            egui::Align2::RIGHT_TOP,
+                            row.line.to_string(),
+                            theme::annotation_font(),
+                            ui.visuals().weak_text_color(),
+                        );
+                    }
+                    if let Some(target) = sticky_context_jump_target(row, response.clicked()) {
+                        jump_target = Some(target);
+                    }
                 }
                 destination_top += visible.height;
             }
+            ui.painter().line_segment(
+                [overlay.left_bottom(), overlay.right_bottom()],
+                ui.visuals().widgets.noninteractive.bg_stroke,
+            );
         });
     jump_target
 }
@@ -12070,13 +12238,9 @@ fn source_editor_id(context: &egui::Context) -> egui::Id {
     viewport_scoped_id(context, "tiptoptyp-source-editor")
 }
 
-fn focused_input_viewport(context: &egui::Context) -> egui::ViewportId {
+fn owned_input_viewports(context: &egui::Context) -> [egui::ViewportId; 13] {
     let current = context.viewport_id();
-    // Only consider this document window and its own overlays. Every
-    // `EditorApp` is rendered once per pass, so scanning all focused viewports
-    // would let the primary editor steal shortcuts typed into a secondary
-    // document before that document's callback runs.
-    let owned = [
+    [
         current,
         scoped_child_viewport_id(context, "tiptoptyp-packages"),
         scoped_child_viewport_id(context, "tiptoptyp-git"),
@@ -12090,7 +12254,29 @@ fn focused_input_viewport(context: &egui::Context) -> egui::ViewportId {
         scoped_child_viewport_id(context, "asset-hover-overlay"),
         scoped_child_viewport_id(context, "tiptoptyp-popup-overlay"),
         scoped_child_viewport_id(context, "diagnostic-tooltip-overlay"),
-    ];
+    ]
+}
+
+pub(crate) fn owns_focused_input_viewport(context: &egui::Context) -> bool {
+    let owned = owned_input_viewports(context);
+    context.input(|input| {
+        owned.into_iter().any(|viewport| {
+            input
+                .raw
+                .viewports
+                .get(&viewport)
+                .is_some_and(|info| info.focused == Some(true))
+        })
+    })
+}
+
+fn focused_input_viewport(context: &egui::Context) -> egui::ViewportId {
+    let current = context.viewport_id();
+    // Only consider this document window and its own overlays. Every
+    // `EditorApp` is rendered once per pass, so scanning all focused viewports
+    // would let the primary editor steal shortcuts typed into a secondary
+    // document before that document's callback runs.
+    let owned = owned_input_viewports(context);
     context.input(|input| {
         owned
             .into_iter()
@@ -12610,6 +12796,41 @@ fn native_hover_text(response: egui::Response, detail: impl Into<String>) -> egu
     hover_text_with_id(response, detail, id)
 }
 
+fn show_recent_workspace_row(
+    ui: &mut egui::Ui,
+    path: &Path,
+    card_width: f32,
+) -> Option<RecentWorkspaceAction> {
+    let path_text = path.display().to_string();
+    let max_chars = approximate_char_capacity(
+        card_width - theme::SPACE.content * 2.0,
+        theme::TYPE.supporting,
+    );
+    let response = ui.add_sized(
+        [ui.available_width(), METRICS.menu.row_height],
+        egui::Button::new(tail_elide(&path_text, max_chars)),
+    );
+    native_hover_text(response.clone(), path_text);
+    let menu_was_open = response.context_menu_opened();
+    let mut remove = false;
+    response.context_menu(|ui| {
+        if ui.button("Remove from Recents").clicked() {
+            remove = true;
+            ui.close();
+        }
+    });
+    if remove {
+        Some(RecentWorkspaceAction::Remove(path.to_path_buf()))
+    } else if response.clicked_by(egui::PointerButton::Primary)
+        && !menu_was_open
+        && !response.context_menu_opened()
+    {
+        Some(RecentWorkspaceAction::Open(path.to_path_buf()))
+    } else {
+        None
+    }
+}
+
 fn settings_hover_text(response: egui::Response, detail: impl Into<String>) -> egui::Response {
     let id = settings_hover_tooltip_id(&response.ctx);
     hover_text_with_id(response, detail, id)
@@ -13046,10 +13267,17 @@ fn cached_tooltip_code_job(
     palette: theme::SyntaxPalette,
 ) -> Option<egui::text::LayoutJob> {
     let cache_id = viewport_scoped_id(context, "tooltip-code-cache");
-    let key = tooltip_code_cache_key(source, token, dark_mode, palette);
+    let editor_font = theme::editor_font();
+    let colors = tooltip_code_cache_colors(palette);
     if let Some(job) = context.data(|data| {
         data.get_temp::<TooltipCodeCache>(cache_id)
-            .and_then(|cache| cache.jobs.get(&key).cloned())
+            .and_then(|cache| {
+                cache
+                    .jobs
+                    .iter()
+                    .find(|entry| entry.matches(source, token, dark_mode, &editor_font, &colors))
+                    .map(|entry| entry.job.clone())
+            })
     }) {
         return job;
     }
@@ -13065,31 +13293,26 @@ fn cached_tooltip_code_job(
         let mut cache = data
             .get_temp::<TooltipCodeCache>(cache_id)
             .unwrap_or_default();
-        // Keep the cache bounded when a user moves across many diagnostics.
+        // Keep exact entries bounded without flushing all recently rendered
+        // tooltips when one more diagnostic appears.
         if cache.jobs.len() >= 32 {
-            cache.jobs.clear();
+            cache.jobs.pop_front();
         }
-        cache.jobs.insert(key, job.clone());
+        cache.jobs.push_back(TooltipCodeCacheEntry {
+            source: source.to_owned(),
+            token: token.to_owned(),
+            dark_mode,
+            editor_font,
+            colors,
+            job: job.clone(),
+        });
         data.insert_temp(cache_id, cache);
     });
     job
 }
 
-fn tooltip_code_cache_key(
-    source: &str,
-    token: &str,
-    dark_mode: bool,
-    palette: theme::SyntaxPalette,
-) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    source.hash(&mut hasher);
-    token.hash(&mut hasher);
-    dark_mode.hash(&mut hasher);
-    // A font selection changes the FontId embedded in every highlighted
-    // section. Include it so a settings change cannot reuse jobs shaped for
-    // the previous editor face.
-    theme::editor_font().hash(&mut hasher);
-    for color in [
+fn tooltip_code_cache_colors(palette: theme::SyntaxPalette) -> [[u8; 4]; 14] {
+    [
         palette.plain,
         palette.comment,
         palette.operator,
@@ -13104,10 +13327,8 @@ fn tooltip_code_cache_key(
         palette.error,
         palette.error_background,
         palette.editor_background,
-    ] {
-        color.to_array().hash(&mut hasher);
-    }
-    hasher.finish()
+    ]
+    .map(|color| color.to_array())
 }
 
 fn tooltip_code_job(
@@ -15001,11 +15222,12 @@ fn discover_project_root(source_dir: &Path) -> PathBuf {
 }
 
 fn preserve_workspace_snapshot_for_open(
-    has_snapshot: bool,
+    snapshot_root: Option<&Path>,
     workspace_root: &Path,
     path: &Path,
 ) -> bool {
-    has_snapshot && path.starts_with(workspace_root)
+    snapshot_root.is_some_and(|snapshot_root| same_path(snapshot_root, workspace_root))
+        && path.starts_with(workspace_root)
 }
 
 #[cfg(test)]

@@ -340,6 +340,7 @@ impl EditorApp {
             self.settings.existing_recent_workspaces()
         };
         let mut selected = None;
+        let mut removed = None;
         let mut choose_folder = false;
         let mut cancel = false;
         let mut dismiss = false;
@@ -387,20 +388,14 @@ impl EditorApp {
                                     .max_height(METRICS.popup.modal_message_max_height)
                                     .show(ui, |ui| {
                                         for path in &recent_workspaces {
-                                            let path_text = path.display().to_string();
-                                            let max_chars = approximate_char_capacity(
-                                                card_width - theme::SPACE.content * 2.0,
-                                                theme::TYPE.supporting,
-                                            );
-                                            let response = ui.add_sized(
-                                                [ui.available_width(), METRICS.menu.row_height],
-                                                egui::Button::new(tail_elide(
-                                                    &path_text, max_chars,
-                                                )),
-                                            );
-                                            native_hover_text(response.clone(), path_text);
-                                            if response.clicked() {
-                                                selected = Some(path.clone());
+                                            match show_recent_workspace_row(ui, path, card_width) {
+                                                Some(RecentWorkspaceAction::Open(path)) => {
+                                                    selected = Some(path);
+                                                }
+                                                Some(RecentWorkspaceAction::Remove(path)) => {
+                                                    removed = Some(path);
+                                                }
+                                                None => {}
                                             }
                                         }
                                     });
@@ -416,7 +411,10 @@ impl EditorApp {
             },
         );
 
-        if let Some(path) = selected {
+        if let Some(path) = removed {
+            self.forget_workspace(&path);
+            context.request_repaint();
+        } else if let Some(path) = selected {
             self.workspace_chooser_visible = false;
             context.send_viewport_cmd(egui::ViewportCommand::Focus);
             self.queue_open_path(path);

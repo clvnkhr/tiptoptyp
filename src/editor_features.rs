@@ -263,6 +263,9 @@ pub(crate) struct StickyContextRow {
     pub(crate) line: usize,
     /// Character position of the first non-whitespace source character.
     pub(crate) char_index: usize,
+    /// One-based source line whose top pushes this context out of the overlay.
+    /// A value past the final source line means the context lasts to EOF.
+    pub(crate) end_line: usize,
     /// Trimmed, otherwise verbatim original source line.
     pub(crate) text: String,
 }
@@ -327,30 +330,52 @@ fn heading_context(
     byte_position: usize,
     lines: &LineMap,
 ) -> Vec<StickyContextRow> {
-    let mut headings: Vec<StickyContextRow> = Vec::new();
+    let all = root
+        .children()
+        .filter_map(|node| {
+            (node.kind() == SyntaxKind::Heading)
+                .then(|| {
+                    node.get()
+                        .cast::<ast::Heading>()
+                        .map(|heading| (node.offset(), heading.depth().get()))
+                })
+                .flatten()
+        })
+        .collect::<Vec<_>>();
+    let mut active = Vec::new();
     // Only root-document headings establish section ancestry. Headings inside
     // content values or function bodies are local content, not document peers.
-    for node in root.children() {
-        if node.kind() != SyntaxKind::Heading || node.offset() > byte_position {
-            continue;
+    for (index, &(offset, level)) in all.iter().enumerate() {
+        if offset > byte_position {
+            break;
         }
-        let Some(heading) = node.get().cast::<ast::Heading>() else {
-            continue;
-        };
-        let level = heading.depth().get();
-        while headings.last().is_some_and(
-            |row| matches!(row.kind, StickyContextKind::Heading { level: old } if old >= level),
-        ) {
-            headings.pop();
+        while active
+            .last()
+            .is_some_and(|&old: &usize| all[old].1 >= level)
+        {
+            active.pop();
         }
-        headings.push(context_row(
-            source,
-            lines,
-            node.offset(),
-            StickyContextKind::Heading { level },
-        ));
+        active.push(index);
     }
-    headings
+    active
+        .into_iter()
+        .map(|index| {
+            let (offset, level) = all[index];
+            let end_line = all[index + 1..]
+                .iter()
+                .find(|(_, next_level)| *next_level <= level)
+                .map_or(lines.starts.len() + 1, |(next, _)| {
+                    lines.line_index_at(*next) + 1
+                });
+            context_row(
+                source,
+                lines,
+                offset,
+                end_line,
+                StickyContextKind::Heading { level },
+            )
+        })
+        .collect()
 }
 
 fn collect_scope_path(
@@ -373,15 +398,32 @@ fn collect_scope_path(
                 ast::LetBindingKind::Normal(_) => StickyContextKind::LetBinding,
             }),
         SyntaxKind::Closure => Some(StickyContextKind::Function),
-        SyntaxKind::CodeBlock | SyntaxKind::ContentBlock => Some(StickyContextKind::Block),
+        SyntaxKind::CodeBlock
+        | SyntaxKind::ContentBlock
+        | SyntaxKind::SetRule
+        | SyntaxKind::ShowRule
+        | SyntaxKind::ModuleImport
+        | SyntaxKind::ModuleInclude
+        | SyntaxKind::Contextual
+        | SyntaxKind::Conditional
+        | SyntaxKind::WhileLoop
+        | SyntaxKind::ForLoop
+        | SyntaxKind::FuncCall
+        | SyntaxKind::Parenthesized
+        | SyntaxKind::Array
+        | SyntaxKind::Dict
+        | SyntaxKind::Raw
+        | SyntaxKind::Equation => Some(StickyContextKind::Block),
         _ => None,
-    };
+    }
+    .filter(|_| node_spans_multiple_lines(node, lines));
     if let Some(kind) = kind {
+        let end_line = lines.line_index_at(node.range().end.saturating_sub(1)) + 2;
         let context = match node.kind() {
             SyntaxKind::LetBinding | SyntaxKind::Closure => {
-                declaration_header_rows(node, source, lines, kind)
+                declaration_header_rows(node, source, lines, end_line, kind)
             }
-            _ => vec![context_row(source, lines, node.offset(), kind)],
+            _ => vec![context_row(source, lines, node.offset(), end_line, kind)],
         };
         push_unique_context_rows(rows, context);
     }
@@ -391,6 +433,10 @@ fn collect_scope_path(
             collect_scope_path(&child, source, byte_position, lines, rows);
         }
     }
+}
+
+fn node_spans_multiple_lines(node: &LinkedNode<'_>, lines: &LineMap) -> bool {
+    lines.line_index_at(node.offset()) < lines.line_index_at(node.range().end.saturating_sub(1))
 }
 
 fn push_unique_context_rows(
@@ -416,6 +462,7 @@ fn declaration_header_rows(
     node: &LinkedNode<'_>,
     source: &str,
     lines: &LineMap,
+    end_line: usize,
     kind: StickyContextKind,
 ) -> Vec<StickyContextRow> {
     let header_end = declaration_body_start(node)
@@ -425,7 +472,7 @@ fn declaration_header_rows(
     let last_line = lines.line_index_at(header_end);
     (first_line..=last_line)
         .filter_map(|line| {
-            let row = context_row_for_line(source, lines, line, kind);
+            let row = context_row_for_line(source, lines, line, end_line, kind);
             (!row.text.is_empty()).then_some(row)
         })
         .collect()
@@ -466,16 +513,18 @@ fn context_row(
     source: &str,
     lines: &LineMap,
     byte_position: usize,
+    end_line: usize,
     kind: StickyContextKind,
 ) -> StickyContextRow {
     let line_index = lines.line_index_at(byte_position);
-    context_row_for_line(source, lines, line_index, kind)
+    context_row_for_line(source, lines, line_index, end_line, kind)
 }
 
 fn context_row_for_line(
     source: &str,
     lines: &LineMap,
     line_index: usize,
+    end_line: usize,
     kind: StickyContextKind,
 ) -> StickyContextRow {
     let range = lines.line_range(source, line_index);
@@ -485,6 +534,7 @@ fn context_row_for_line(
         kind,
         line: line_index + 1,
         char_index: byte_to_char(source, range.start + leading),
+        end_line,
         text: line_source.trim().to_owned(),
     }
 }
@@ -1267,12 +1317,65 @@ mod tests {
     }
 
     #[test]
-    fn sticky_single_line_definition_stays_a_single_row() {
-        let source = "#let answer = 42\nafter";
-        let rows = sticky_context_rows(source, char_at(source, "42"));
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].text, "#let answer = 42");
-        assert_eq!(rows[0].kind, StickyContextKind::LetBinding);
+    fn sticky_rows_exclude_single_line_code_but_keep_headings() {
+        for statement in [
+            "#let answer = 42",
+            "#set text(size: 12pt)",
+            "#show heading: emph",
+        ] {
+            let source = format!("= Section\n{statement}\nafter");
+            let rows = sticky_context_rows(&source, char_at(&source, statement));
+            assert_eq!(
+                rows.iter().map(|row| row.text.as_str()).collect::<Vec<_>>(),
+                ["= Section"],
+                "single-line statement became sticky: {statement}"
+            );
+        }
+    }
+
+    #[test]
+    fn sticky_rows_include_multiline_rules_calls_and_raw_blocks() {
+        for (source, needle, expected) in [
+            (
+                "#set text(\n  size: 12pt,\n)\nafter",
+                "size: 12pt",
+                "#set text(",
+            ),
+            (
+                "#show heading: it => [\n  #emph(it.body)\n]\nafter",
+                "#emph",
+                "#show heading: it => [",
+            ),
+            (
+                "#figure(\n  image(\"plot.png\"),\n)\nafter",
+                "image",
+                "#figure(",
+            ),
+            ("```rust\nfn main() {\n}\n```\nafter", "fn main", "```rust"),
+        ] {
+            let rows = sticky_context_rows(source, char_at(source, needle));
+            assert!(
+                rows.iter().any(|row| row.text == expected),
+                "missing {expected:?} for {source:?}; got {rows:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn sticky_rows_record_the_line_that_pushes_each_context_away() {
+        let source = "= Outer\nintro\n== Inner\nbody\n= Next\nafter";
+        let rows = sticky_context_rows(source, char_at(source, "body"));
+
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.text.as_str(), row.end_line))
+                .collect::<Vec<_>>(),
+            [("= Outer", 5), ("== Inner", 5)]
+        );
+
+        let source = "#let value = (\n  1 + 2\n)\nafter";
+        let rows = sticky_context_rows(source, char_at(source, "1 + 2"));
+        assert!(rows.iter().all(|row| row.end_line == 4), "{rows:?}");
     }
 
     #[test]

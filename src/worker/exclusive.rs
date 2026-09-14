@@ -10,23 +10,17 @@ pub(crate) fn has_active_operations() -> bool {
 }
 struct ActiveOperation {
     shell: RepaintTarget,
-    repaint_shell: bool,
 }
 impl ActiveOperation {
-    fn new(shell: RepaintTarget, repaint_shell: bool) -> Self {
+    fn new(shell: RepaintTarget) -> Self {
         ACTIVE.fetch_add(1, Ordering::AcqRel);
-        Self {
-            shell,
-            repaint_shell,
-        }
+        Self { shell }
     }
 }
 impl Drop for ActiveOperation {
     fn drop(&mut self) {
         ACTIVE.fetch_sub(1, Ordering::AcqRel);
-        if self.repaint_shell {
-            self.shell.request_repaint();
-        }
+        self.shell.request_repaint();
     }
 }
 
@@ -93,28 +87,6 @@ impl<T: OperationSummary + Send + 'static> ExclusiveJob<T> {
         context: &egui::Context,
         work: impl FnOnce() -> Result<T, String> + Send + 'static,
     ) -> Result<(), String> {
-        self.start_with_repaint(name, context, true, work)
-    }
-
-    /// Start background maintenance without waking the owning viewport when
-    /// the result arrives. The next normal frame still polls the result, while
-    /// stable background status checks cannot make unrelated text blink.
-    pub(crate) fn start_silently(
-        &mut self,
-        name: impl Into<String>,
-        context: &egui::Context,
-        work: impl FnOnce() -> Result<T, String> + Send + 'static,
-    ) -> Result<(), String> {
-        self.start_with_repaint(name, context, false, work)
-    }
-
-    fn start_with_repaint(
-        &mut self,
-        name: impl Into<String>,
-        context: &egui::Context,
-        repaint_owner: bool,
-        work: impl FnOnce() -> Result<T, String> + Send + 'static,
-    ) -> Result<(), String> {
         if self.is_running() {
             return Err("An operation is already in progress".to_owned());
         }
@@ -130,7 +102,7 @@ impl<T: OperationSummary + Send + 'static> ExclusiveJob<T> {
         let worker_completion = completion.clone();
         // The lease is created before spawn and is dropped on spawn failure,
         // worker unwind, or completion. Closing a window cannot release it.
-        let active = ActiveOperation::new(shell.clone(), repaint_owner);
+        let active = ActiveOperation::new(shell.clone());
         thread::Builder::new()
             .name(name.clone())
             .spawn(move || {
@@ -141,9 +113,7 @@ impl<T: OperationSummary + Send + 'static> ExclusiveJob<T> {
                 if completion.owner_open {
                     completion.result = Some(result);
                     drop(completion);
-                    if repaint_owner {
-                        owner.request_repaint();
-                    }
+                    owner.request_repaint();
                 } else {
                     retain_completion(&name, result);
                     drop(completion);
@@ -228,24 +198,5 @@ mod tests {
                 .iter()
                 .any(|message| message.contains("exclusive-test-mutation completed"))
         );
-    }
-
-    #[test]
-    fn silent_completion_does_not_repaint_an_open_owner() {
-        let context = egui::Context::default();
-        let (repaint_tx, repaint_rx) = mpsc::channel();
-        context.set_request_repaint_callback(move |info| {
-            let _ = repaint_tx.send(info.viewport_id);
-        });
-        let mut job = ExclusiveJob::default();
-        job.start_silently("exclusive-test-background", &context, || Ok(()))
-            .unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        while job.is_running() && std::time::Instant::now() < deadline {
-            thread::yield_now();
-            let _ = job.poll();
-        }
-        assert!(!job.is_running());
-        assert!(repaint_rx.try_recv().is_err());
     }
 }

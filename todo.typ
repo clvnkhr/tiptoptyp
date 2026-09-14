@@ -600,3 +600,65 @@ Only deferred items 1, 2, and 26 remain unchecked.
   capture attempt for `git-window` could not start a native viewport in this
   environment because macOS LaunchServices/HIServices reported an invalid XPC
   connection and then timed out; no visual pass is claimed from that attempt.
+
+= completed workspace, lifecycle, and sticky context issues (2026-09-14)
+
+- [x] Item 131: Command+, toggles Settings closed when the Settings window is
+  already open.
+- [x] Item 132: On macOS, closing every document window keeps tiptoptyp running
+  as an application that can create or open another window.
+- [x] Item 133: Workspace history is canonicalized and deduplicated before it
+  is saved. The workspace selector always exposes the newest 20 entries and
+  supports removing an entry from its context menu.
+- [x] Item 134: Changing the workspace invalidates and refreshes every
+  workspace-scoped model, including Contents, so no panel can retain paths or
+  index data from the previous workspace.
+- [x] Item 135: Sticky context excludes single-line `#let`, `#set`, and `#show`
+  code while retaining single-line section and subsection headings.
+- [x] Item 136: Sticky context recognizes every multiline code construct,
+  including multiline raw/code strings.
+- [x] Item 137: A sticky row is pushed upward by its ending boundary as the
+  source scrolls, matching VS Code instead of disappearing on one frame.
+
+- Settings uses one toggle path for the native menu and keyboard shortcut.
+  Workspace changes synchronously clear the previous project index before
+  scheduling the file tree, index, Git decorations, compiler, and Tinymist
+  state for the new root.
+- Recent roots are normalized, deduplicated, and capped at 20 both when they
+  enter history and when settings are saved. Removal is propagated to every
+  document window before their histories are merged, preventing a stale window
+  from restoring a removed root. The selector's right-click menu is covered by
+  a semantic interaction test.
+- Interactive macOS launches cancel an ordinary root-window close and hide the
+  root after the document close workflow accepts it. Explicit Quit retains the
+  coordinated multiwindow close path, and activating the Dock icon reveals the
+  retained root window again.
+- Sticky syntax rows now carry an explicit ending line. Multiline rules, calls,
+  blocks, containers, equations, and raw strings participate; single-line code
+  does not. Rows with a common ending line move as one header group.
+- Verification: formatting and strict Clippy pass; all 596 application tests
+  pass with 2 environment-dependent tests ignored, along with all integration,
+  core, documentation, and 8 xtask tests. The release binary builds. A fresh
+  `sticky-context` capture could not start its native viewport because macOS
+  LaunchServices/HIServices returned an invalid XPC connection and the app
+  timed out, so no new visual pass is claimed.
+
+= correctness audit (2026-09-14 first workspace switch)
+
+- [x] Item 140: Opening a remembered document during the first workspace-root
+  switch invalidates the previous root's Explorer snapshot. Snapshot reuse now
+  requires both the loaded document and the cached tree to belong to the active
+  root, so the path header, file tree, Git, Contents, tags, and other indexed
+  sections refresh in the same transition.
+
+= correctness audit (2026-09-14 sticky context motion)
+
+- [x] Item 141: Sticky rows with the same ending boundary slide away as one
+  cohort. A later row ending on its own is clipped beneath the preceding sticky
+  rows instead of painting over them. The overlay background, bottom border,
+  gutter divider, and shadow use the moving visible bottom and leave with the
+  text.
+- Verification: formatting, strict Clippy, all 599 application tests, and all
+  8 xtask tests pass. The release capture attempt could not create a native
+  viewport because macOS LaunchServices/HIServices returned an invalid XPC
+  connection, so no fresh visual pass is claimed.

@@ -144,6 +144,7 @@ impl NativeMenuReceiver {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NativeMenuRequest {
     Command(AppCommand),
+    Reopen,
     Quit,
 }
 
@@ -244,7 +245,7 @@ mod macos {
     use objc2::{
         MainThreadMarker, ffi,
         rc::Retained,
-        runtime::{AnyClass, AnyObject, Imp, Sel},
+        runtime::{AnyClass, AnyObject, Bool, Imp, Sel},
         sel,
     };
     use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSMenu, NSMenuItem};
@@ -262,6 +263,10 @@ mod macos {
 
     fn action_selector() -> Sel {
         sel!(tiptoptypPerformMenuCommand:)
+    }
+
+    fn reopen_selector() -> Sel {
+        sel!(applicationShouldHandleReopen:hasVisibleWindows:)
     }
 
     fn appkit_modifiers(chord: ShortcutChord) -> NSEventModifierFlags {
@@ -287,29 +292,50 @@ mod macos {
             .map_err(|_| "macOS menu command channel was poisoned".to_owned())? = Some(sender);
         let class = AnyClass::get(c"WinitApplicationDelegate")
             .ok_or_else(|| "winit's macOS application delegate is unavailable".to_owned())?;
-        if class.responds_to(action_selector()) {
-            return Ok(());
+        if !class.responds_to(action_selector()) {
+            let implementation =
+                perform_menu_command as unsafe extern "C-unwind" fn(&AnyObject, Sel, &NSMenuItem);
+            // SAFETY: Objective-C erases IMP argument types. This callback and the
+            // encoding below both describe `void self selector object`.
+            let implementation: Imp = unsafe { std::mem::transmute(implementation) };
+            // SAFETY: winit's registered delegate class lives for the process. We
+            // append one uniquely named action selector and leave its lifecycle
+            // methods and ivars untouched.
+            let added = unsafe {
+                ffi::class_addMethod(
+                    class as *const AnyClass as *mut AnyClass,
+                    action_selector(),
+                    implementation,
+                    c"v@:@".as_ptr(),
+                )
+            };
+            if !added.as_bool() {
+                return Err("could not register macOS menu command handling".to_owned());
+            }
         }
-        let implementation =
-            perform_menu_command as unsafe extern "C-unwind" fn(&AnyObject, Sel, &NSMenuItem);
-        // SAFETY: Objective-C erases IMP argument types. This callback and the
-        // encoding below both describe `void self selector object`.
-        let implementation: Imp = unsafe { std::mem::transmute(implementation) };
-        // SAFETY: winit's registered delegate class lives for the process. We
-        // append one uniquely named action selector and leave its lifecycle
-        // methods and ivars untouched.
-        let added = unsafe {
-            ffi::class_addMethod(
-                class as *const AnyClass as *mut AnyClass,
-                action_selector(),
-                implementation,
-                c"v@:@".as_ptr(),
-            )
-        };
-        added
-            .as_bool()
-            .then_some(())
-            .ok_or_else(|| "could not register macOS menu command handling".to_owned())
+        if !class.responds_to(reopen_selector()) {
+            let implementation = application_should_reopen
+                as unsafe extern "C-unwind" fn(&AnyObject, Sel, &AnyObject, Bool) -> Bool;
+            let implementation: Imp = unsafe { std::mem::transmute(implementation) };
+            #[cfg(target_arch = "x86_64")]
+            let encoding = c"c@:@c";
+            #[cfg(not(target_arch = "x86_64"))]
+            let encoding = c"B@:@B";
+            // SAFETY: The callback matches NSApplicationDelegate's documented
+            // BOOL/object/BOOL ABI and the architecture-specific encoding.
+            let added = unsafe {
+                ffi::class_addMethod(
+                    class as *const AnyClass as *mut AnyClass,
+                    reopen_selector(),
+                    implementation,
+                    encoding.as_ptr(),
+                )
+            };
+            if !added.as_bool() {
+                return Err("could not register macOS application reopen handling".to_owned());
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn install_menu(
@@ -527,6 +553,27 @@ mod macos {
                 context.request_repaint();
             }
         }));
+    }
+
+    unsafe extern "C-unwind" fn application_should_reopen(
+        _delegate: &AnyObject,
+        _selector: Sel,
+        _application: &AnyObject,
+        _has_visible_windows: Bool,
+    ) -> Bool {
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            if let Some(sender) = COMMAND_SENDER.lock().ok().and_then(|sender| sender.clone()) {
+                let _ = sender.send(NativeMenuRequest::Reopen);
+            }
+            if let Some(context) = REPAINT_CONTEXT
+                .lock()
+                .ok()
+                .and_then(|context| context.clone())
+            {
+                context.request_repaint();
+            }
+        }));
+        Bool::YES
     }
 
     #[cfg(test)]

@@ -112,14 +112,17 @@ impl EditorApp {
         );
         if close_requested {
             self.settings_visible = false;
-            self.shortcut_editor_visible = false;
-            self.shortcut_capture = None;
             self.staged_ui_font_weight = None;
             self.staged_code_font_weight = None;
-            // macOS does not consistently reactivate the parent after its
-            // child settings window closes. Explicit focus makes the next
-            // toolbar/menu click actionable instead of activation-only.
-            context.send_viewport_cmd(egui::ViewportCommand::Focus);
+            // macOS does not consistently reactivate an owned window after a
+            // child closes. Return focus to the still-open shortcut window or
+            // to the document so the next click is actionable.
+            let target = if self.shortcut_editor_visible {
+                scoped_child_viewport_id(context, "tiptoptyp-shortcuts")
+            } else {
+                context.viewport_id()
+            };
+            context.send_viewport_cmd_to(target, egui::ViewportCommand::Focus);
         }
     }
 
@@ -201,7 +204,12 @@ impl EditorApp {
         if close_requested {
             self.shortcut_editor_visible = false;
             self.shortcut_capture = None;
-            context.send_viewport_cmd(egui::ViewportCommand::Focus);
+            let target = if self.settings_visible {
+                scoped_child_viewport_id(context, "tiptoptyp-settings")
+            } else {
+                context.viewport_id()
+            };
+            context.send_viewport_cmd_to(target, egui::ViewportCommand::Focus);
         }
     }
 
@@ -1060,7 +1068,6 @@ impl EditorApp {
                     .clicked()
                 {
                     self.settings_visible = false;
-                    self.shortcut_editor_visible = false;
                     self.open_package_manager(ui.ctx());
                 }
 

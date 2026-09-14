@@ -15,7 +15,7 @@ use crate::{
 const STORAGE_KEY: &str = "tiptoptyp.settings.v1";
 pub(crate) const DEFAULT_HOVER_DELAY_MS: u64 = 300;
 pub(crate) const DEFAULT_HOVER_FADE_MS: u64 = 90;
-pub(crate) const MAX_RECENT_WORKSPACES: usize = 10;
+pub(crate) const MAX_RECENT_WORKSPACES: usize = 20;
 pub(crate) const SYSTEM_THEME_ID: &str = "system";
 pub(crate) const DEFAULT_UI_SCALE_PERCENT: u16 = 100;
 pub(crate) const DEFAULT_UI_FONT_WEIGHT: u16 = 400;
@@ -358,6 +358,15 @@ impl AppSettings {
         roots
     }
 
+    pub(crate) fn forget_workspace(&mut self, workspace: &Path) {
+        let workspace = normalize_workspace_root(workspace)
+            .to_string_lossy()
+            .into_owned();
+        self.recent_workspaces.retain(|candidate| {
+            normalize_workspace_root(Path::new(candidate)).to_string_lossy() != workspace
+        });
+    }
+
     pub(crate) fn load(storage: Option<&dyn Storage>) -> Self {
         let Some(serialized) = storage.and_then(|storage| storage.get_string(STORAGE_KEY)) else {
             return Self::default();
@@ -381,6 +390,7 @@ impl AppSettings {
                 recent.push(normalized);
             }
         }
+        recent.truncate(MAX_RECENT_WORKSPACES);
         self.recent_workspaces = recent;
 
         self.last_opened_files =
@@ -404,6 +414,7 @@ impl AppSettings {
 
     pub(crate) fn save(&self, storage: &mut dyn Storage) {
         let mut normalized = self.clone();
+        normalized.normalize_workspace_history();
         normalized.shortcut_overrides.normalize();
         if let Ok(serialized) = serde_json::to_string(&normalized) {
             storage.set_string(STORAGE_KEY, serialized);
@@ -767,13 +778,13 @@ mod tests {
     #[test]
     fn recording_recent_workspaces_is_mru_deduplicated_and_bounded() {
         let mut settings = AppSettings::default();
-        for index in 0..12 {
+        for index in 0..25 {
             settings.remember_workspace(Path::new(&format!("/workspace/{index}")));
         }
 
         assert_eq!(settings.recent_workspaces.len(), MAX_RECENT_WORKSPACES);
-        assert_eq!(settings.recent_workspaces[0], "/workspace/11");
-        assert_eq!(settings.recent_workspaces[9], "/workspace/2");
+        assert_eq!(settings.recent_workspaces[0], "/workspace/24");
+        assert_eq!(settings.recent_workspaces[19], "/workspace/5");
 
         settings.remember_workspace(Path::new("/workspace/7"));
         assert_eq!(settings.recent_workspaces.len(), MAX_RECENT_WORKSPACES);
@@ -783,6 +794,40 @@ mod tests {
                 .recent_workspaces
                 .iter()
                 .filter(|path| path.as_str() == "/workspace/7")
+                .count(),
+            1
+        );
+
+        settings.forget_workspace(Path::new("/workspace/7/../7"));
+        assert!(
+            !settings
+                .recent_workspaces
+                .iter()
+                .any(|path| path == "/workspace/7")
+        );
+    }
+
+    #[test]
+    fn saving_normalizes_deduplicates_and_bounds_workspace_history() {
+        let mut settings = AppSettings {
+            recent_workspaces: (0..25).map(|index| format!("/workspace/{index}")).collect(),
+            ..AppSettings::default()
+        };
+        settings
+            .recent_workspaces
+            .insert(1, "/workspace/0/../0".to_owned());
+        let mut storage = MemoryStorage::default();
+
+        settings.save(&mut storage);
+        let restored = AppSettings::load(Some(&storage));
+
+        assert_eq!(restored.recent_workspaces.len(), MAX_RECENT_WORKSPACES);
+        assert_eq!(restored.recent_workspaces[0], "/workspace/0");
+        assert_eq!(
+            restored
+                .recent_workspaces
+                .iter()
+                .filter(|path| path.as_str() == "/workspace/0")
                 .count(),
             1
         );

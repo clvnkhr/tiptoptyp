@@ -1031,14 +1031,18 @@ pub(super) fn apply_search_highlights(
 
     let sections = std::mem::take(&mut job.sections);
     let mut highlighted = Vec::with_capacity(sections.len() + matches.len());
+    let mut first_match = 0;
     for section in sections {
         let section_start = section.byte_range.start.0;
         let section_end = section.byte_range.end.0;
+        while first_match < matches.len() && matches[first_match].end <= section_start {
+            first_match += 1;
+        }
         let mut cursor = section_start;
-        for matched in matches {
-            if matched.start >= section_end || matched.end <= section_start {
-                continue;
-            }
+        for matched in matches[first_match..]
+            .iter()
+            .take_while(|matched| matched.start < section_end)
+        {
             let match_start = matched.start.max(section_start).max(cursor);
             let match_end = matched.end.min(section_end);
             if match_start >= match_end {

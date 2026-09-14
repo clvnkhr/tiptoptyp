@@ -13,6 +13,7 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::OnceLock,
     time::Duration,
 };
 
@@ -145,6 +146,7 @@ pub(crate) struct GitPanel {
     failed: bool,
     diff: Option<DiffView>,
     refresh_requested: bool,
+    pending_operation: Option<Operation>,
     background_refresh: bool,
     status_changed: bool,
 }
@@ -164,6 +166,7 @@ impl Default for GitPanel {
             failed: false,
             diff: None,
             refresh_requested: false,
+            pending_operation: None,
             background_refresh: false,
             status_changed: false,
         }
@@ -200,8 +203,11 @@ impl GitPanel {
             self.commit_message.clear();
             self.message.clear();
             self.diff = None;
+            self.pending_operation = None;
             if !self.job.is_running() {
                 self.start_operation(context, Operation::Refresh, true);
+            } else {
+                self.refresh_requested = true;
             }
         }
     }
@@ -212,6 +218,14 @@ impl GitPanel {
 
     fn start_operation(&mut self, context: &egui::Context, operation: Operation, quiet: bool) {
         if self.job.is_running() {
+            if matches!(&operation, Operation::Refresh) {
+                self.refresh_requested = true;
+            } else if self.background_refresh {
+                // Background status reads leave the controls responsive. Hold
+                // the user's action until the read completes rather than
+                // silently dropping a click during that short interval.
+                self.pending_operation = Some(operation);
+            }
             return;
         }
         if matches!(&operation, Operation::Refresh) {
@@ -248,12 +262,7 @@ impl GitPanel {
         if !self.background_refresh {
             self.message = "Working…".into();
         }
-        let start_job = if self.background_refresh {
-            ExclusiveJob::start_silently
-        } else {
-            ExclusiveJob::start_and_repaint
-        };
-        if let Err(error) = start_job(&mut self.job, "git", context, move || {
+        if let Err(error) = self.job.start_and_repaint("git", context, move || {
             // Return operation errors as data too, so a late failure cannot
             // overwrite another workspace's state.
             let result = perform(&workspace, operation);
@@ -282,14 +291,10 @@ impl GitPanel {
     }
 
     pub(crate) fn poll(&mut self, context: &egui::Context, workspace: &Path) {
-        if !self.visible && self.workspace.as_os_str().is_empty() {
+        if !self.visible && !self.job.is_running() {
             return;
         }
         self.sync_workspace(context, workspace);
-        if self.refresh_requested && !self.job.is_running() {
-            self.refresh_requested = false;
-            self.start_operation(context, Operation::Refresh, true);
-        }
         match self.job.poll() {
             LatestJobPoll::Ready(result) if result.workspace == self.workspace => {
                 let quiet_refresh = self.background_refresh;
@@ -316,9 +321,10 @@ impl GitPanel {
                     self.commit_message.clear();
                 }
             }
-            LatestJobPoll::Ready(_) => self.start_operation(context, Operation::Refresh, true),
+            LatestJobPoll::Ready(_) => self.refresh_requested = true,
             LatestJobPoll::Failed(_) if self.job_workspace.as_ref() != Some(&self.workspace) => {
-                self.start_operation(context, Operation::Refresh, true);
+                self.background_refresh = false;
+                self.refresh_requested = true;
             }
             LatestJobPoll::Failed(error) => {
                 let quiet_refresh = self.background_refresh;
@@ -334,6 +340,14 @@ impl GitPanel {
             }
             LatestJobPoll::Pending | LatestJobPoll::Idle => {}
         }
+        if !self.job.is_running() {
+            if let Some(operation) = self.pending_operation.take() {
+                self.start_operation(context, operation, false);
+            } else if self.refresh_requested {
+                self.refresh_requested = false;
+                self.start_operation(context, Operation::Refresh, true);
+            }
+        }
     }
 
     pub(crate) fn show(&mut self, ui: &mut egui::Ui, workspace: &Path, dirty: bool) {
@@ -344,7 +358,8 @@ impl GitPanel {
         // Maintenance scans stay out of the visible loading state. They must
         // not dim controls or replace the stable status row on every timer
         // tick; explicit operations still use the normal busy state.
-        let busy = self.job.is_running() && !self.background_refresh;
+        let busy =
+            (self.job.is_running() && !self.background_refresh) || self.pending_operation.is_some();
         let palette = theme::palette(ui.ctx());
         egui::ScrollArea::vertical().id_salt("git-page").auto_shrink([false, false]).show(ui, |ui| {
             ui.add_enabled_ui(!busy, |ui| {
@@ -607,6 +622,16 @@ fn run(root: &Path, args: &[OsString]) -> Result<Vec<u8>, String> {
 }
 
 fn git_executable() -> Option<PathBuf> {
+    static EXECUTABLE: OnceLock<PathBuf> = OnceLock::new();
+    if let Some(program) = EXECUTABLE.get() {
+        return Some(program.clone());
+    }
+    let program = discover_git_executable()?;
+    let _ = EXECUTABLE.set(program.clone());
+    Some(program)
+}
+
+fn discover_git_executable() -> Option<PathBuf> {
     if let Some(path) = env::var_os("PATH") {
         for directory in env::split_paths(&path) {
             #[cfg(windows)]
@@ -799,16 +824,16 @@ fn snapshot(workspace: &Path) -> Result<Snapshot, String> {
 fn status_snapshot(workspace: &Path) -> Result<Snapshot, String> {
     // No-renames gives one NUL-delimited record per path, including both sides
     // of a rename, without ambiguous quoting or arrow parsing.
-    if let Err(error) = text_run(workspace, &["rev-parse", "--is-inside-work-tree"]) {
-        if !error.contains("not a git repository") {
-            return Err(error);
+    let root_bytes = match run(workspace, &args(&["rev-parse", "--show-toplevel"])) {
+        Ok(root) => root,
+        Err(error) if error.contains("not a git repository") => {
+            return Ok(Snapshot {
+                root: workspace.to_path_buf(),
+                ..Default::default()
+            });
         }
-        return Ok(Snapshot {
-            root: workspace.to_path_buf(),
-            ..Default::default()
-        });
-    }
-    let root_bytes = run(workspace, &args(&["rev-parse", "--show-toplevel"]))?;
+        Err(error) => return Err(error),
+    };
     let root = path_from_bytes(root_bytes.strip_suffix(b"\n").unwrap_or(&root_bytes))?;
     let status = run(
         &root,
@@ -1090,6 +1115,78 @@ mod tests {
         harness.step();
         finish_ui_job(&mut harness);
         assert_eq!(harness.state().message, "Status refreshed");
+    }
+
+    #[test]
+    fn collapsed_panel_poll_collects_background_status() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        perform(root, Operation::Init).unwrap();
+        fs::write(root.join("main.typ"), "new\n").unwrap();
+        let mut panel = GitPanel {
+            workspace: root.into(),
+            ..Default::default()
+        };
+        let context = egui::Context::default();
+        panel.request_refresh();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            panel.poll(&context, root);
+            if !panel.job.is_running() && !panel.refresh_requested {
+                break;
+            }
+            assert!(Instant::now() < deadline, "Git panel poll timed out");
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(panel.snapshot.initialized);
+        assert_eq!(panel.snapshot.entries[0].path, Path::new("main.typ"));
+    }
+
+    #[test]
+    fn user_action_is_queued_during_a_background_refresh() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let (release, blocked) = std::sync::mpsc::channel();
+        let workspace = root.to_path_buf();
+        let mut panel = GitPanel {
+            workspace: workspace.clone(),
+            background_refresh: true,
+            ..Default::default()
+        };
+        panel
+            .job
+            .start_and_repaint(
+                "blocked-git-refresh",
+                &egui::Context::default(),
+                move || {
+                    blocked.recv().unwrap();
+                    Ok(ResultData {
+                        workspace,
+                        snapshot: Snapshot::default(),
+                        output: "Status refreshed".into(),
+                        committed: false,
+                        failed: false,
+                        diff: None,
+                    })
+                },
+            )
+            .unwrap();
+
+        panel.start(&egui::Context::default(), Operation::Init);
+        assert!(matches!(panel.pending_operation, Some(Operation::Init)));
+        release.send(()).unwrap();
+
+        let context = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            panel.poll(&context, root);
+            if root.join(".git").is_dir() && !panel.job.is_running() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "queued Git action timed out");
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(panel.pending_operation.is_none());
     }
 
     #[test]

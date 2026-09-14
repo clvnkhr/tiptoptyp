@@ -1,7 +1,9 @@
 //! Per-document-window Git decorations. Workers carry the workspace, file and
 //! buffer revision; the selected chunk owns its contents independently.
+#[cfg(test)]
+use super::text_run;
 use super::{
-    Entry, Snapshot, args, diff_args, private_artifact, run, run_command, status_snapshot, text_run,
+    Entry, Snapshot, args, diff_args, private_artifact, run, run_command, status_snapshot,
 };
 use crate::{
     document::DocumentKey,
@@ -140,9 +142,11 @@ pub(crate) struct LineChange {
     /// Zero-based buffer lines. An empty range marks a deletion at a boundary.
     pub(crate) lines: Range<usize>,
     pub(crate) kind: ChangeKind,
-    /// Number of lines represented by this change in the corresponding diff.
-    /// Deletions need this separately because their buffer range is empty.
-    pub(crate) line_count: usize,
+    /// Exact line counts on each side of the diff. Keeping both sides means an
+    /// unequal replacement can report its paired modified lines and its
+    /// remaining additions or deletions without losing information.
+    pub(crate) old_line_count: usize,
+    pub(crate) new_line_count: usize,
 }
 
 impl LineChange {
@@ -160,9 +164,9 @@ impl LineChange {
     }
 }
 
-/// Line totals for the current document's Git diff. A replacement run is
-/// reported as modified using its current-buffer line count; pure additions
-/// and deletions use the corresponding side of the diff.
+/// Line totals for the current document's Git diff. Replacement runs pair old
+/// and new lines as modifications, then retain any excess on either side as
+/// additions or deletions.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct LineChangeCounts {
     pub(crate) added: usize,
@@ -175,9 +179,14 @@ impl LineChangeCounts {
         let mut counts = Self::default();
         for change in hunks.iter().flat_map(|hunk| &hunk.changes) {
             match change.kind {
-                ChangeKind::Added => counts.added += change.line_count,
-                ChangeKind::Modified => counts.modified += change.line_count,
-                ChangeKind::Deleted => counts.deleted += change.line_count,
+                ChangeKind::Added => counts.added += change.new_line_count,
+                ChangeKind::Deleted => counts.deleted += change.old_line_count,
+                ChangeKind::Modified => {
+                    let paired = change.old_line_count.min(change.new_line_count);
+                    counts.modified += paired;
+                    counts.added += change.new_line_count - paired;
+                    counts.deleted += change.old_line_count - paired;
+                }
             }
         }
         counts
@@ -221,7 +230,8 @@ fn parse_hunks(diff: &str) -> Result<Vec<Hunk>, String> {
             hunk.changes.push(LineChange {
                 lines: cursor.saturating_sub(*added)..cursor,
                 kind,
-                line_count: if *added == 0 { *deleted } else { *added },
+                old_line_count: *deleted,
+                new_line_count: *added,
             });
         }
         *added = 0;
@@ -297,23 +307,18 @@ fn buffer_hunks(
     let entry = snapshot.entries.iter().find(|entry| entry.path == relative);
     let new_file =
         entry.is_some_and(|entry| matches!(entry.index, '?' | 'A') || entry.worktree == 'A');
-    let head = text_run(&snapshot.root, &["rev-parse", "--verify", "HEAD"]);
-    let before = if let Ok(head) = head {
-        let mut object = OsString::from(format!("{head}:"));
-        object.push(relative.as_os_str());
-        let mut command = args(&["cat-file", "blob"]);
-        command.push(object);
-        match run(&snapshot.root, &command) {
-            Ok(bytes) => bytes,
-            Err(_) if new_file => Vec::new(),
-            // Ignored and unrelated files have no baseline.
-            Err(_) if entry.is_none() => return Ok(Vec::new()),
-            Err(error) => return Err(error),
-        }
-    } else if new_file {
-        Vec::new()
-    } else {
-        return Ok(Vec::new());
+    let mut object = OsString::from("HEAD:");
+    object.push(relative.as_os_str());
+    let mut command = args(&["cat-file", "blob"]);
+    command.push(object);
+    let before = match run(&snapshot.root, &command) {
+        Ok(bytes) => bytes,
+        // Added files and unborn repositories have no HEAD blob. Their full
+        // current buffer is the change, so a separate HEAD probe is needless.
+        Err(_) if new_file => Vec::new(),
+        // Ignored and unrelated files have no baseline.
+        Err(_) if entry.is_none() => return Ok(Vec::new()),
+        Err(error) => return Err(error),
     };
     compare_buffer(&snapshot.root, &before, buffer)
 }
@@ -411,7 +416,6 @@ impl GitEditorState {
         }
         if !self.job.is_running() && self.refresh_requested && now >= self.scan_deadline {
             let source = source.to_owned();
-            let repaint_on_completion = self.refresh_requested;
             self.refresh_requested = false;
             let work = move || {
                 let snapshot = status_snapshot(&key.workspace)?;
@@ -422,21 +426,13 @@ impl GitEditorState {
                     key,
                 })
             };
-            let result = if repaint_on_completion {
-                self.job.start_and_repaint("git-editor", context, work)
-            } else {
-                self.job.start("git-editor", work)
-            };
+            let result = self.job.start_and_repaint("git-editor", context, work);
             if result.is_err() {
                 self.refresh_requested = true;
             }
         }
-        if self.job.is_running() || self.refresh_requested {
-            context.request_repaint_after(
-                self.scan_deadline
-                    .saturating_duration_since(now)
-                    .max(Duration::from_millis(30)),
-            );
+        if self.refresh_requested && !self.job.is_running() {
+            context.request_repaint_after(self.scan_deadline.saturating_duration_since(now));
         }
     }
 
@@ -523,7 +519,8 @@ impl GitEditorState {
                     changes: vec![LineChange {
                         lines: line..line + usize::from(kind != ChangeKind::Deleted),
                         kind,
-                        line_count: 1,
+                        old_line_count: usize::from(kind != ChangeKind::Added),
+                        new_line_count: usize::from(kind != ChangeKind::Deleted),
                     }],
                 });
             }
@@ -708,7 +705,8 @@ mod tests {
             [LineChange {
                 lines: 2..3,
                 kind: ChangeKind::Modified,
-                line_count: 1,
+                old_line_count: 1,
+                new_line_count: 1,
             }]
         );
         assert!(hunks[0].text.contains("-old\n+new\n"));
@@ -738,7 +736,8 @@ mod tests {
             [LineChange {
                 lines: 0..1,
                 kind: ChangeKind::Added,
-                line_count: 1,
+                old_line_count: 0,
+                new_line_count: 1,
             }]
         );
         assert_eq!(fs::read_to_string(path).unwrap(), "saved\n");
@@ -754,7 +753,8 @@ mod tests {
             [LineChange {
                 lines: 1..4,
                 kind: ChangeKind::Modified,
-                line_count: 3,
+                old_line_count: 2,
+                new_line_count: 3,
             }]
         );
         assert_eq!(
@@ -762,7 +762,8 @@ mod tests {
             [LineChange {
                 lines: 20..21,
                 kind: ChangeKind::Modified,
-                line_count: 1,
+                old_line_count: 1,
+                new_line_count: 1,
             }]
         );
         assert!(hunks[1].text.ends_with("\\ No newline at end of file\n"));
@@ -771,37 +772,48 @@ mod tests {
 
     #[test]
     fn additions_and_deletions_use_buffer_line_boundaries() {
-        for (diff, lines, kind, line_count) in [
-            ("@@ -0,0 +1,2 @@\n+one\n+two\n", 0..2, ChangeKind::Added, 2),
+        for (diff, lines, kind, old_line_count, new_line_count) in [
+            (
+                "@@ -0,0 +1,2 @@\n+one\n+two\n",
+                0..2,
+                ChangeKind::Added,
+                0,
+                2,
+            ),
             (
                 "@@ -1,2 +0,0 @@\n-one\n-two\n",
                 0..0,
                 ChangeKind::Deleted,
                 2,
+                0,
             ),
             (
                 "@@ -8,2 +7,0 @@\n-eight\n-nine\n",
                 7..7,
                 ChangeKind::Deleted,
                 2,
+                0,
             ),
             (
                 "@@ -1,3 +1,2 @@\n-first\n second\n third\n",
                 0..0,
                 ChangeKind::Deleted,
                 1,
+                0,
             ),
             (
                 "@@ -1,2 +1,3 @@\n one\n+two\n three\n",
                 1..2,
                 ChangeKind::Added,
+                0,
                 1,
             ),
         ] {
             assert_eq!(
                 parse_hunks(diff).unwrap()[0].changes,
                 [LineChange {
-                    line_count,
+                    old_line_count,
+                    new_line_count,
                     lines,
                     kind,
                 }]
@@ -820,8 +832,8 @@ mod tests {
         assert_eq!(
             LineChangeCounts::from_hunks(&hunks),
             LineChangeCounts {
-                added: 2,
-                modified: 2,
+                added: 3,
+                modified: 1,
                 deleted: 2,
             }
         );
@@ -846,7 +858,8 @@ mod tests {
             [LineChange {
                 lines: 1..2,
                 kind: ChangeKind::Modified,
-                line_count: 1,
+                old_line_count: 1,
+                new_line_count: 1,
             }]
         );
         assert!(hunks[0].text.contains("-second\n+unsaved 文稿"));
@@ -890,7 +903,8 @@ mod tests {
             [LineChange {
                 lines: 0..2,
                 kind: ChangeKind::Added,
-                line_count: 2,
+                old_line_count: 0,
+                new_line_count: 2,
             }]
         );
         text_run(&root, &["add", "--", "main.typ"]).unwrap();
@@ -1000,6 +1014,42 @@ mod tests {
 
         assert!(!state.job.is_running());
         assert!(!state.refresh_requested);
+    }
+
+    #[test]
+    fn running_editor_scan_waits_for_completion_instead_of_polling_frames() {
+        let root = Path::new("/project");
+        let request = key(root, 1);
+        let (release, blocked) = std::sync::mpsc::channel();
+        let (repaint_tx, repaint_rx) = std::sync::mpsc::channel();
+        let context = egui::Context::default();
+        context.set_request_repaint_callback(move |info| {
+            let _ = repaint_tx.send(info.viewport_id);
+        });
+        let mut state = GitEditorState {
+            current: Some(request.clone()),
+            repository: Some(root.into()),
+            refresh_requested: false,
+            ..Default::default()
+        };
+        state
+            .job
+            .start("blocked-editor-scan", move || {
+                blocked.recv().unwrap();
+                Err("finished".into())
+            })
+            .unwrap();
+
+        state.tick(
+            &context,
+            root,
+            request.path.as_deref(),
+            request.document,
+            "unchanged",
+        );
+
+        assert!(repaint_rx.try_recv().is_err());
+        release.send(()).unwrap();
     }
 
     #[test]
@@ -1155,7 +1205,8 @@ mod tests {
             &LineChange {
                 lines: 1..2,
                 kind: ChangeKind::Modified,
-                line_count: 1,
+                old_line_count: 1,
+                new_line_count: 1,
             },
             &rows,
             0.0,
@@ -1170,7 +1221,8 @@ mod tests {
                     &LineChange {
                         lines: boundary..boundary,
                         kind: ChangeKind::Deleted,
-                        line_count: 1,
+                        old_line_count: 1,
+                        new_line_count: 0,
                     },
                     &rows,
                     0.0,
@@ -1185,7 +1237,8 @@ mod tests {
                 &LineChange {
                     lines: boundary..boundary,
                     kind: ChangeKind::Deleted,
-                    line_count: 1,
+                    old_line_count: 1,
+                    new_line_count: 0,
                 },
                 &rows,
                 0.0,
@@ -1211,12 +1264,14 @@ mod tests {
             LineChange {
                 lines: 0..1,
                 kind: ChangeKind::Modified,
-                line_count: 1,
+                old_line_count: 1,
+                new_line_count: 1,
             },
             LineChange {
                 lines: 1..1,
                 kind: ChangeKind::Deleted,
-                line_count: 1,
+                old_line_count: 1,
+                new_line_count: 0,
             },
         ] {
             let geometry = marker_geometry(&change, &rows, gutter_left, clip).unwrap();

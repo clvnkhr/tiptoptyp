@@ -391,6 +391,7 @@ fn child_viewports_and_input_are_owned_by_each_document_window() {
             context
                 .run_ui(input, |ui| {
                     assert_eq!(focused_input_viewport(ui.ctx()), expected);
+                    assert_eq!(owns_focused_input_viewport(ui.ctx()), owner == second);
                     assert_eq!(
                         scoped_child_viewport_id(ui.ctx(), salt),
                         if owner == first {
@@ -1417,19 +1418,32 @@ fn project_root_uses_nearest_marker() {
 fn opening_a_file_only_invalidates_the_tree_when_the_workspace_changes() {
     let root = Path::new("/project");
     assert!(preserve_workspace_snapshot_for_open(
-        true,
+        Some(root),
         root,
         Path::new("/project/chapters/intro.typ")
     ));
     assert!(!preserve_workspace_snapshot_for_open(
-        true,
+        Some(root),
         root,
         Path::new("/another-project/main.typ")
     ));
     assert!(!preserve_workspace_snapshot_for_open(
-        false,
+        None,
         root,
         Path::new("/project/main.typ")
+    ));
+}
+
+#[test]
+fn first_workspace_switch_rejects_the_previous_roots_snapshot() {
+    let previous_root = Path::new("/workspaces/mytypst");
+    let selected_root = Path::new("/workspaces/log-illposed-ns");
+    let remembered_document = selected_root.join("main-notation-aligned.typ");
+
+    assert!(!preserve_workspace_snapshot_for_open(
+        Some(previous_root),
+        selected_root,
+        &remembered_document,
     ));
 }
 
@@ -1526,6 +1540,30 @@ fn file_context_menu_exposes_each_copy_contract() {
         workspace_context_menu_size(false, &egui::Style::default()).y
             + (METRICS.menu.row_height + theme::SPACE.small) * 2.0
     );
+}
+
+#[test]
+fn recent_workspace_context_menu_exposes_removal_without_selecting_the_row() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+
+    let path = PathBuf::from("/project/recent");
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(360.0, 180.0))
+        .build_ui_state(
+            move |ui, action| {
+                if let Some(next) = show_recent_workspace_row(ui, &path, 340.0) {
+                    *action = Some(next);
+                }
+            },
+            None::<RecentWorkspaceAction>,
+        );
+    harness.run();
+    harness
+        .get_by_label_contains("/project/recent")
+        .click_secondary();
+    harness.step();
+    assert_eq!(harness.state(), &None);
+    assert!(harness.query_by_label("Remove from Recents").is_some());
 }
 
 #[test]
@@ -1757,6 +1795,35 @@ fn tooltip_code_jobs_are_cached_while_a_popup_scrolls() {
     let cache_id = viewport_scoped_id(&context, "tooltip-code-cache");
     let cache = context.data(|data| data.get_temp::<TooltipCodeCache>(cache_id));
     assert_eq!(cache.as_ref().map(|cache| cache.jobs.len()), Some(1));
+
+    for index in 0..33 {
+        let source = format!("let value = {index}");
+        let _ = cached_tooltip_code_job(
+            &context,
+            &highlighter,
+            &mut typst_highlighter,
+            &source,
+            "typ",
+            true,
+            palette,
+        );
+    }
+    let cache = context
+        .data(|data| data.get_temp::<TooltipCodeCache>(cache_id))
+        .unwrap();
+    assert_eq!(cache.jobs.len(), 32);
+    assert!(
+        cache
+            .jobs
+            .iter()
+            .all(|entry| entry.source != "let value = 0")
+    );
+    assert!(
+        cache
+            .jobs
+            .iter()
+            .any(|entry| entry.source == "let value = 32")
+    );
 }
 
 #[test]
@@ -2555,7 +2622,8 @@ fn gutter_marker_receives_clicks_beside_the_actual_text_editor() {
             LineChange {
                 lines: 1..2,
                 kind: ChangeKind::Modified,
-                line_count: 1,
+                old_line_count: 1,
+                new_line_count: 1,
             },
             "Git change: modified lines 2–2",
         ),
@@ -2564,7 +2632,8 @@ fn gutter_marker_receives_clicks_beside_the_actual_text_editor() {
             LineChange {
                 lines: 0..0,
                 kind: ChangeKind::Deleted,
-                line_count: 1,
+                old_line_count: 1,
+                new_line_count: 0,
             },
             "Git change: deleted lines at line 1",
         ),
@@ -4219,6 +4288,7 @@ fn sticky_context_click_targets_the_rows_exact_source_character() {
         kind: StickyContextKind::Function,
         line: 12,
         char_index: 137,
+        end_line: 20,
         text: "#let render(body) = {".to_owned(),
     };
     assert_eq!(sticky_context_jump_target(&row, false), None);
@@ -4261,6 +4331,78 @@ fn sticky_context_activates_at_the_scroll_boundary_not_the_caret() {
             .collect::<Vec<_>>(),
         ["= Section"]
     );
+}
+
+#[test]
+fn sticky_context_is_pushed_out_continuously_at_its_ending_boundary() {
+    assert_eq!(sticky_context_push_offset(64.0, 20.0, 40.0), 0.0);
+    assert_eq!(sticky_context_push_offset(55.0, 20.0, 40.0), -5.0);
+    assert_eq!(sticky_context_push_offset(40.0, 20.0, 40.0), -20.0);
+    assert_eq!(sticky_context_push_offset(20.0, 20.0, 40.0), -40.0);
+}
+
+#[test]
+fn later_sticky_context_slides_under_the_rows_that_remain() {
+    let rows = [
+        StickyContextMotionRow {
+            end_line: 10,
+            height: 20.0,
+        },
+        StickyContextMotionRow {
+            end_line: 5,
+            height: 20.0,
+        },
+    ];
+    let layout = sticky_context_motion_layout(&rows, 0.0, |line| match line {
+        10 => Some(100.0),
+        5 => Some(30.0),
+        _ => None,
+    });
+
+    assert_eq!(
+        layout.rows,
+        [
+            StickyContextMotion {
+                offset: 0.0,
+                clip_top: 0.0,
+            },
+            StickyContextMotion {
+                offset: -10.0,
+                clip_top: 20.0,
+            },
+        ]
+    );
+    assert_eq!(layout.visible_bottom, 30.0);
+}
+
+#[test]
+fn sticky_contexts_with_one_ending_boundary_slide_away_as_a_cohort() {
+    let rows = [
+        StickyContextMotionRow {
+            end_line: 5,
+            height: 20.0,
+        },
+        StickyContextMotionRow {
+            end_line: 5,
+            height: 20.0,
+        },
+    ];
+    let layout = sticky_context_motion_layout(&rows, 0.0, |_| Some(30.0));
+
+    assert_eq!(
+        layout.rows,
+        [
+            StickyContextMotion {
+                offset: -10.0,
+                clip_top: 0.0,
+            },
+            StickyContextMotion {
+                offset: -10.0,
+                clip_top: 0.0,
+            },
+        ]
+    );
+    assert_eq!(layout.visible_bottom, 30.0);
 }
 
 #[test]

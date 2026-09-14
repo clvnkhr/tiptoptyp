@@ -71,6 +71,8 @@ pub(crate) struct AppShell {
     capture_batch: Option<CaptureBatch>,
     shared_settings: AppSettings,
     launch_mode: LaunchMode,
+    primary_visible: bool,
+    quit_requested: bool,
 }
 
 impl AppShell {
@@ -116,6 +118,8 @@ impl AppShell {
             capture_batch,
             shared_settings,
             launch_mode,
+            primary_visible: true,
+            quit_requested: false,
         }
     }
 
@@ -187,11 +191,19 @@ impl AppShell {
     fn dispatch_process_requests(&mut self, context: &egui::Context) {
         while let Ok(request) = self.native_menu_commands.try_recv() {
             match process_request_action(request) {
-                ProcessRequestAction::Editor(command) => self
-                    .active_editor_mut()
-                    .enqueue_native_menu_command(command),
-                ProcessRequestAction::CloseProcess => context
-                    .send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close),
+                ProcessRequestAction::Editor(command) => {
+                    if self.active == ActiveSession::Primary && command_reveals_primary(command) {
+                        self.show_primary(context);
+                    }
+                    self.active_editor_mut()
+                        .enqueue_native_menu_command(command);
+                }
+                ProcessRequestAction::ReopenPrimary => self.show_primary(context),
+                ProcessRequestAction::CloseProcess => {
+                    self.quit_requested = true;
+                    context
+                        .send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
+                }
             }
         }
 
@@ -202,6 +214,7 @@ impl AppShell {
                 && self.primary.can_reuse_for_external_open()
             {
                 self.primary.open_external_path(path);
+                self.show_primary(context);
                 reused_primary = true;
             } else {
                 let settings = self.active_editor_mut().settings_snapshot();
@@ -288,7 +301,29 @@ impl AppShell {
         merge_session_histories(settings, inactive_settings.iter(), active_settings);
     }
 
+    fn synchronize_workspace_history_removals(&mut self) {
+        let mut removals = self.primary.take_workspace_history_removals();
+        for window in &mut self.secondary {
+            removals.extend(window.editor.take_workspace_history_removals());
+        }
+        removals.sort();
+        removals.dedup();
+        if removals.is_empty() {
+            return;
+        }
+        for root in &removals {
+            self.shared_settings.forget_workspace(root);
+        }
+        self.primary.apply_workspace_history_removals(&removals);
+        for window in &mut self.secondary {
+            window.editor.apply_workspace_history_removals(&removals);
+        }
+    }
+
     fn synchronize_settings(&mut self, context: &egui::Context) {
+        // A removal is an explicit global action. Apply it to every session
+        // before MRU merging so a stale sibling list cannot resurrect it.
+        self.synchronize_workspace_history_removals();
         // Snapshot this before draining pending updates: the active window is
         // authoritative for per-workspace document history even when another
         // window happened to submit the shared preference change.
@@ -318,6 +353,7 @@ impl AppShell {
     }
     fn cancel_process_close(&mut self) {
         self.closing.cancel();
+        self.quit_requested = false;
         self.primary.finish_process_close(false);
         for window in &mut self.secondary {
             window.editor.finish_process_close(false);
@@ -354,6 +390,14 @@ impl AppShell {
         if !context.input(|input| input.viewport().close_requested()) {
             return;
         }
+        if keeps_running_after_root_close(
+            cfg!(target_os = "macos"),
+            self.launch_mode,
+            self.quit_requested,
+        ) {
+            context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            return;
+        }
         if self.closing.ready(&self.document_keys()) {
             if crate::worker::has_active_operations() {
                 context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -382,6 +426,42 @@ impl AppShell {
         if self.closing.begin(self.document_keys()) {
             self.request_next_close(context);
         }
+    }
+
+    fn finish_primary_window_close(&mut self, context: &egui::Context, close_requested: bool) {
+        if !close_requested
+            || !keeps_running_after_root_close(
+                cfg!(target_os = "macos"),
+                self.launch_mode,
+                self.quit_requested,
+            )
+            || self.primary.process_close_pending()
+            || (self.primary.is_dirty_for_close() && !self.primary.close_accepted())
+        {
+            return;
+        }
+        context.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::CancelClose);
+        context.send_viewport_cmd_to(
+            egui::ViewportId::ROOT,
+            egui::ViewportCommand::Visible(false),
+        );
+        self.primary.finish_window_close();
+        self.primary_visible = false;
+        if self.active == ActiveSession::Primary
+            && let Some(window) = self.secondary.last()
+        {
+            self.active = ActiveSession::Secondary(window.id);
+        }
+    }
+
+    fn show_primary(&mut self, context: &egui::Context) {
+        if self.primary_visible {
+            return;
+        }
+        context.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Visible(true));
+        context.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
+        self.primary_visible = true;
+        self.active = ActiveSession::Primary;
     }
     fn poll_process_close(&mut self, context: &egui::Context) {
         let Some(requested) = self.closing.current() else {
@@ -446,11 +526,9 @@ impl AppShell {
             let mut close_accepted = false;
             let mut focused = false;
             crate::viewport_fonts::show_immediate(context, viewport_id, builder, |ui, _class| {
-                focused = ui
-                    .ctx()
-                    .input(|input| input.viewport().focused == Some(true));
                 let close_requested = ui.ctx().input(|input| input.viewport().close_requested());
                 window.editor.ui_in_window(ui, frame);
+                focused = crate::app::owns_focused_input_viewport(ui.ctx());
                 close_accepted = window.editor.close_accepted()
                     || (close_requested && !window.editor.is_dirty_for_close());
             });
@@ -487,13 +565,15 @@ impl eframe::App for AppShell {
             self.primary.show_window_notice(completions.join("\n"));
         }
         self.advance_capture_batch(&context);
-        if context.input(|input| input.viewport().focused == Some(true)) {
-            self.active = ActiveSession::Primary;
-        }
         self.dispatch_process_requests(&context);
         self.guard_process_close(&context);
+        let primary_close_requested = context.input(|input| input.viewport().close_requested());
         self.primary.ui_in_window(ui, frame);
+        if crate::app::owns_focused_input_viewport(&context) {
+            self.active = ActiveSession::Primary;
+        }
         Self::collect_window_request_from(&mut self.pending_windows, &mut self.primary);
+        self.finish_primary_window_close(&context, primary_close_requested);
         self.show_secondary_windows(&context, frame);
         self.open_pending_windows(&context);
         self.poll_process_close(&context);
@@ -511,6 +591,7 @@ impl eframe::App for AppShell {
         if !self.launch_mode.persists_settings() {
             return;
         }
+        self.synchronize_workspace_history_removals();
         let mut settings = self.shared_settings.clone();
         let active_settings = self.active_editor().settings_snapshot();
         self.merge_all_session_history(&mut settings, &active_settings);
@@ -562,14 +643,31 @@ fn document_viewport_builder(title: String, activate: bool) -> egui::ViewportBui
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProcessRequestAction {
     Editor(AppCommand),
+    ReopenPrimary,
     CloseProcess,
 }
 
 fn process_request_action(request: NativeMenuRequest) -> ProcessRequestAction {
     match request {
         NativeMenuRequest::Command(command) => ProcessRequestAction::Editor(command),
+        NativeMenuRequest::Reopen => ProcessRequestAction::ReopenPrimary,
         NativeMenuRequest::Quit => ProcessRequestAction::CloseProcess,
     }
+}
+
+const fn keeps_running_after_root_close(
+    macos: bool,
+    launch_mode: LaunchMode,
+    quit_requested: bool,
+) -> bool {
+    macos && launch_mode.persists_settings() && !quit_requested
+}
+
+const fn command_reveals_primary(command: AppCommand) -> bool {
+    !matches!(
+        command,
+        AppCommand::Settings | AppCommand::NewWindow | AppCommand::OpenInNewWindow
+    )
 }
 
 fn merge_session_histories<'a>(
@@ -716,6 +814,43 @@ mod tests {
             process_request_action(NativeMenuRequest::Command(AppCommand::Save)),
             ProcessRequestAction::Editor(AppCommand::Save)
         );
+        assert_eq!(
+            process_request_action(NativeMenuRequest::Reopen),
+            ProcessRequestAction::ReopenPrimary
+        );
+    }
+
+    #[test]
+    fn macos_window_close_keeps_the_interactive_process_alive_until_quit() {
+        assert!(keeps_running_after_root_close(
+            true,
+            LaunchMode::Interactive,
+            false
+        ));
+        assert!(!keeps_running_after_root_close(
+            true,
+            LaunchMode::Interactive,
+            true
+        ));
+        assert!(!keeps_running_after_root_close(
+            true,
+            LaunchMode::DeterministicCapture,
+            false
+        ));
+        assert!(!keeps_running_after_root_close(
+            false,
+            LaunchMode::Interactive,
+            false
+        ));
+    }
+
+    #[test]
+    fn hidden_primary_is_revealed_only_for_commands_that_need_a_document_window() {
+        assert!(command_reveals_primary(AppCommand::New));
+        assert!(command_reveals_primary(AppCommand::Open));
+        assert!(!command_reveals_primary(AppCommand::Settings));
+        assert!(!command_reveals_primary(AppCommand::NewWindow));
+        assert!(!command_reveals_primary(AppCommand::OpenInNewWindow));
     }
 
     #[test]
