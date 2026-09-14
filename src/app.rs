@@ -5052,7 +5052,6 @@ impl EditorApp {
     }
 
     fn refresh_workspace(&mut self) {
-        self.git_editor.refresh();
         self.git.request_refresh();
         if !self.workspace_scan.is_running() {
             let root = self

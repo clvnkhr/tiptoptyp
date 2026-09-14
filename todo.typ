@@ -591,6 +591,9 @@ Only deferred items 1, 2, and 26 remain unchecked.
   starts with the repository path rather than a redundant large `Git` heading.
 - Workspace/file refreshes queue a Git status scan automatically, including
   updates after saves, external reloads, and the periodic filesystem check.
+- Periodic Git maintenance scans are silent when the repository snapshot is
+  unchanged; they do not replace the status text or put controls into a
+  visible loading state on every timer tick.
 - Verification: Formatting, strict Clippy, all 582 application tests (2
   environment-dependent tests ignored), and all 8 xtask tests pass. A release
   capture attempt for `git-window` could not start a native viewport in this

@@ -95,7 +95,7 @@ struct DiffView {
     reveal: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 struct Snapshot {
     root: PathBuf,
     branch: String,
@@ -145,6 +145,7 @@ pub(crate) struct GitPanel {
     failed: bool,
     diff: Option<DiffView>,
     refresh_requested: bool,
+    background_refresh: bool,
 }
 
 impl Default for GitPanel {
@@ -162,6 +163,7 @@ impl Default for GitPanel {
             failed: false,
             diff: None,
             refresh_requested: false,
+            background_refresh: false,
         }
     }
 }
@@ -190,12 +192,16 @@ impl GitPanel {
             self.message.clear();
             self.diff = None;
             if !self.job.is_running() {
-                self.start(context, Operation::Refresh);
+                self.start_operation(context, Operation::Refresh, true);
             }
         }
     }
 
     fn start(&mut self, context: &egui::Context, operation: Operation) {
+        self.start_operation(context, operation, false);
+    }
+
+    fn start_operation(&mut self, context: &egui::Context, operation: Operation, quiet: bool) {
         if self.job.is_running() {
             return;
         }
@@ -226,11 +232,19 @@ impl GitPanel {
             content: None,
             reveal: true,
         });
+        self.background_refresh = quiet && matches!(&operation, Operation::Refresh);
         let workspace = self.workspace.clone();
         self.job_workspace = Some(workspace.clone());
         self.failed = false;
-        self.message = "Working…".into();
-        if let Err(error) = self.job.start_and_repaint("git", context, move || {
+        if !self.background_refresh {
+            self.message = "Working…".into();
+        }
+        let start_job = if self.background_refresh {
+            ExclusiveJob::start_silently
+        } else {
+            ExclusiveJob::start_and_repaint
+        };
+        if let Err(error) = start_job(&mut self.job, "git", context, move || {
             // Return operation errors as data too, so a late failure cannot
             // overwrite another workspace's state.
             let result = perform(&workspace, operation);
@@ -250,6 +264,7 @@ impl GitPanel {
             })
         }) {
             self.failed = true;
+            self.background_refresh = false;
             self.message = error.clone();
             if let Some(diff) = &mut self.diff {
                 diff.content = Some(Err(error));
@@ -264,10 +279,14 @@ impl GitPanel {
         self.sync_workspace(context, workspace);
         if self.refresh_requested && !self.job.is_running() {
             self.refresh_requested = false;
-            self.start(context, Operation::Refresh);
+            self.start_operation(context, Operation::Refresh, true);
         }
         match self.job.poll() {
             LatestJobPoll::Ready(result) if result.workspace == self.workspace => {
+                let quiet_refresh = self.background_refresh;
+                let was_failed = self.failed;
+                let snapshot_changed = self.snapshot != result.snapshot;
+                self.background_refresh = false;
                 self.failed = result.failed;
                 if !self.failed {
                     self.snapshot = result.snapshot;
@@ -280,18 +299,25 @@ impl GitPanel {
                     // The completed diff can be taller than the loading card.
                     view.reveal = true;
                 }
-                self.message = result.output;
+                if !quiet_refresh || snapshot_changed || was_failed != self.failed {
+                    self.message = result.output;
+                }
                 if result.committed {
                     self.commit_message.clear();
                 }
             }
-            LatestJobPoll::Ready(_) => self.start(context, Operation::Refresh),
+            LatestJobPoll::Ready(_) => self.start_operation(context, Operation::Refresh, true),
             LatestJobPoll::Failed(_) if self.job_workspace.as_ref() != Some(&self.workspace) => {
-                self.start(context, Operation::Refresh);
+                self.start_operation(context, Operation::Refresh, true);
             }
             LatestJobPoll::Failed(error) => {
+                let quiet_refresh = self.background_refresh;
+                let error_changed = !self.failed || self.message != error;
+                self.background_refresh = false;
                 self.failed = true;
-                self.message = error.clone();
+                if !quiet_refresh || error_changed {
+                    self.message = error.clone();
+                }
                 if let Some(diff) = &mut self.diff {
                     diff.content = Some(Err(error));
                 }
@@ -305,7 +331,10 @@ impl GitPanel {
         // here too: the main editor need not redraw while this window is active.
         self.poll(ui.ctx(), workspace);
         let mut action = None;
-        let busy = self.job.is_running();
+        // Maintenance scans stay out of the visible loading state. They must
+        // not dim controls or replace the stable status row on every timer
+        // tick; explicit operations still use the normal busy state.
+        let busy = self.job.is_running() && !self.background_refresh;
         let palette = theme::palette(ui.ctx());
         egui::ScrollArea::vertical().id_salt("git-page").auto_shrink([false, false]).show(ui, |ui| {
             ui.add(egui::Label::new(self.snapshot.root.to_string_lossy()).truncate())
@@ -1025,6 +1054,33 @@ mod tests {
                 .map(|entry| entry.worktree),
             Some('M')
         );
+    }
+
+    #[test]
+    fn background_refresh_keeps_a_stable_status_message_when_nothing_changed() {
+        use egui_kittest::Harness;
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        perform(root, Operation::Init).unwrap();
+        configure_identity(root);
+        fs::write(root.join("main.typ"), "initial\n").unwrap();
+        perform(root, Operation::StageAll).unwrap();
+        perform(root, Operation::Commit("Initial".into())).unwrap();
+
+        let mut panel = GitPanel {
+            workspace: root.into(),
+            snapshot: snapshot(root).unwrap(),
+            message: "Status refreshed".into(),
+            ..Default::default()
+        };
+        panel.request_refresh();
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(860.0, 500.0))
+            .build_ui_state(|ui, panel| panel.show(ui, root, false), panel);
+        harness.step();
+        finish_ui_job(&mut harness);
+        assert_eq!(harness.state().message, "Status refreshed");
     }
 
     #[test]

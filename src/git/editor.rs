@@ -347,6 +347,7 @@ pub(crate) struct GitEditorState {
     pub(crate) hunks: Vec<Hunk>,
     pub(crate) chunk: Option<ChunkDiff>,
     next_scan: Instant,
+    refresh_requested: bool,
 }
 
 impl Default for GitEditorState {
@@ -359,6 +360,7 @@ impl Default for GitEditorState {
             hunks: Vec::new(),
             chunk: None,
             next_scan: Instant::now(),
+            refresh_requested: true,
         }
     }
 }
@@ -372,10 +374,6 @@ impl GitEditorState {
         self.repository.as_ref().is_some_and(|root| {
             path.is_some_and(|path| path.starts_with(root) && !private_artifact(path))
         })
-    }
-
-    pub(crate) fn refresh(&mut self) {
-        self.next_scan = Instant::now();
     }
 
     pub(crate) fn tick(
@@ -406,7 +404,9 @@ impl GitEditorState {
         }
         if !self.job.is_running() && now >= self.next_scan {
             let source = source.to_owned();
-            let _ = self.job.start_and_repaint("git-editor", context, move || {
+            let repaint_on_completion = self.refresh_requested;
+            self.refresh_requested = false;
+            let work = move || {
                 let snapshot = status_snapshot(&key.workspace)?;
                 Ok(ScanResult {
                     repository: snapshot.initialized.then(|| snapshot.root.clone()),
@@ -414,7 +414,12 @@ impl GitEditorState {
                     hunks: buffer_hunks(&snapshot, key.path.as_deref(), &source),
                     key,
                 })
-            });
+            };
+            let _ = if repaint_on_completion {
+                self.job.start_and_repaint("git-editor", context, work)
+            } else {
+                self.job.start("git-editor", work)
+            };
             self.next_scan = now + REFRESH_INTERVAL;
         }
         context.request_repaint_after(
@@ -426,6 +431,7 @@ impl GitEditorState {
 
     fn prepare_request(&mut self, key: &RequestKey, now: Instant) {
         if self.current.as_ref() != Some(key) {
+            self.refresh_requested = true;
             let same_file = self
                 .current
                 .as_ref()
