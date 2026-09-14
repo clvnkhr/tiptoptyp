@@ -4546,10 +4546,30 @@ fn text_edit_wrap_keeps_the_exact_unicode_source_mapping() {
 }
 
 #[test]
-fn line_number_gutter_is_off_or_scales_with_digits() {
-    assert_eq!(line_number_gutter_width(1, false), 4);
-    assert!(line_number_gutter_width(100, true) > line_number_gutter_width(9, true));
-    assert!(line_number_gutter_width(usize::MAX, true) <= 120);
+fn git_marker_lane_has_constant_width_and_spacing_at_every_digit_count() {
+    let editor_left = 12.0;
+    let git_width = f32::from(crate::git::editor::GUTTER_WIDTH);
+
+    for rendered_number_width in [7.0, 14.0, 21.0, 28.0, 42.0, 84.0] {
+        let number_gutter = editor_gutter_width(Some(rendered_number_width), false);
+        let combined_gutter = editor_gutter_width(Some(rendered_number_width), true);
+        let galley_x = editor_left + f32::from(combined_gutter);
+        let number_slot_left =
+            editor_gutter_geometry(galley_x).line_number_right - rendered_number_width;
+
+        assert!((number_slot_left - (editor_left + git_width)).abs() < 1.0);
+        assert_eq!(
+            combined_gutter - number_gutter,
+            crate::git::editor::GUTTER_WIDTH
+        );
+    }
+
+    assert_eq!(editor_gutter_width(None, false), 4);
+    assert_eq!(editor_gutter_width(None, true), 7);
+    assert_eq!(editor_gutter_width(Some(f32::NAN), true), 12);
+    assert_eq!(editor_gutter_width(Some(f32::INFINITY), true), 12);
+    assert_eq!(editor_gutter_width(Some(f32::MAX), false), 124);
+    assert_eq!(editor_gutter_width(Some(f32::MAX), true), 127);
 }
 
 #[test]

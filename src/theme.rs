@@ -981,9 +981,6 @@ pub struct EditorMetrics {
     pub diagnostic_marker_width: f32,
     pub diagnostic_marker_radius: f32,
     pub gutter_disabled_width: i8,
-    pub gutter_digit_width: u32,
-    pub gutter_base_width: u32,
-    pub gutter_max_width: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1191,9 +1188,6 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
         diagnostic_marker_width: 3.0,
         diagnostic_marker_radius: 1.5,
         gutter_disabled_width: 4,
-        gutter_digit_width: 9,
-        gutter_base_width: 18,
-        gutter_max_width: 120,
     },
     preview: PreviewMetrics {
         page_margin: 28.0,
@@ -1745,7 +1739,6 @@ mod tests {
         assert_eq!(METRICS.preview.dark_transform_rgb_percent, [92, 94, 100]);
         assert_eq!(METRICS.preview.header_pages_min_width, 185.0);
         assert_eq!(SPACE.tight, 2.0);
-        assert_eq!(METRICS.editor.gutter_max_width, 120);
     }
 
     #[test]

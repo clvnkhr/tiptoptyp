@@ -662,3 +662,19 @@ Only deferred items 1, 2, and 26 remain unchecked.
   8 xtask tests pass. The release capture attempt could not create a native
   viewport because macOS LaunchServices/HIServices returned an invalid XPC
   connection, so no fresh visual pass is claimed.
+
+= correctness audit (2026-09-14 compact Git marker spacing)
+
+- [x] Item 142: Keep the Git hunk marker immediately beside the line-number
+  column. Its lane must add one fixed width regardless of the document's line
+  count instead of leaving a larger gap as line numbers gain digits.
+- [x] Item 143: Remove redundant hover tooltips from Contents rows; the visible
+  heading and line number already provide the useful navigation context.
+- The gutter uses the measured width of the widest rendered line number. The
+  marker fills a fixed three-point lane from the editor's left edge, while its
+  eight-point hit target overlaps the noninteractive number area. Formatting,
+  strict Clippy, all 599 application tests (2 environment-dependent tests
+  ignored), all integration, core, and
+  documentation tests, all 8 xtask tests, and the release build pass. A fresh
+  `git-editor` capture could not start because macOS HIServices rejected its XPC
+  connection, so no new visual pass is claimed from this environment.

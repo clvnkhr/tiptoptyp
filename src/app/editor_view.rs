@@ -223,12 +223,17 @@ impl EditorApp {
         let line_wrap = sticky_context_snapshot || self.settings.line_wrap;
         let line_numbers = sticky_context_snapshot || self.settings.line_numbers;
         let git_gutter = self.git_editor.has_gutter(self.document.path().as_deref());
-        let gutter_width = line_number_gutter_width(line_count, line_numbers)
-            + if git_gutter {
-                crate::git::editor::GUTTER_WIDTH
-            } else {
-                0
-            };
+        let line_number_width = line_numbers.then(|| {
+            ui.painter()
+                .layout_no_wrap(
+                    line_count.to_string(),
+                    theme::annotation_font(),
+                    ui.visuals().weak_text_color(),
+                )
+                .size()
+                .x
+        });
+        let gutter_width = editor_gutter_width(line_number_width, git_gutter);
         let dark_mode = ui.visuals().dark_mode;
         let document_kind = self.document.kind();
         let highlight_path = self.document.path().clone();

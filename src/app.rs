@@ -9797,13 +9797,24 @@ fn logical_line_count(source: &str) -> usize {
     source.bytes().filter(|byte| *byte == b'\n').count() + 1
 }
 
-fn line_number_gutter_width(line_count: usize, enabled: bool) -> i8 {
-    if !enabled {
-        return METRICS.editor.gutter_disabled_width;
-    }
-    let digits = line_count.max(1).ilog10() + 1;
-    ((digits * METRICS.editor.gutter_digit_width + METRICS.editor.gutter_base_width)
-        .min(METRICS.editor.gutter_max_width)) as i8
+fn editor_gutter_width(line_number_width: Option<f32>, git_gutter: bool) -> i8 {
+    let git_width = if git_gutter {
+        crate::git::editor::GUTTER_WIDTH
+    } else {
+        0
+    };
+    let maximum_number_width = i8::MAX - crate::git::editor::GUTTER_WIDTH;
+    let number_width = line_number_width.map_or(METRICS.editor.gutter_disabled_width, |width| {
+        let width = if width.is_finite() {
+            width.max(0.0)
+        } else {
+            0.0
+        };
+        (width + METRICS.editor.line_number_right_gap)
+            .ceil()
+            .min(f32::from(maximum_number_width)) as i8
+    });
+    number_width + git_width
 }
 
 fn logical_line_row_ranges(rows: &[egui::epaint::text::PlacedRow]) -> Vec<Range<usize>> {
@@ -10560,14 +10571,9 @@ fn show_project_index_sections(
                     .saturating_sub(1)
                     .min(METRICS.explorer.outline_max_depth) as f32
                     * METRICS.explorer.outline_indent;
-                let location = format!(
-                    "{}:{}",
-                    project_relative_path(root, &entry.path),
-                    entry.line
-                );
                 let response =
                     explorer_index_row(ui, &entry.title, Some(&entry.line.to_string()), indent);
-                if native_hover_text(response, location).clicked() {
+                if response.clicked() {
                     outcome.target = Some((entry.path.clone(), entry.line));
                 }
             }

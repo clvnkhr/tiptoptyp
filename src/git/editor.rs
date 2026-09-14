@@ -25,7 +25,8 @@ const EDIT_DEBOUNCE: Duration = Duration::from_millis(180);
 ///
 /// Keep this close to one editor character so the decoration does not create
 /// a visibly oversized blank strip when line numbers are enabled.
-pub(crate) const GUTTER_WIDTH: i8 = 8;
+pub(crate) const GUTTER_WIDTH: i8 = 3;
+const GUTTER_HIT_WIDTH: f32 = 8.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ChangeKind {
@@ -569,10 +570,11 @@ pub(crate) fn marker_geometry(
     clip: egui::Rect,
 ) -> Option<MarkerGeometry> {
     let first = rows.get(change.lines.start.min(rows.len().checked_sub(1)?))?;
-    // The marker owns a compact eight-point lane. Keep both the painted shape
-    // and its hit target inside that lane so reducing the reserved margin
-    // cannot make the marker overlap source text.
-    let x = gutter_left + 2.0;
+    // Paint the complete three-point lane. The wider hit target may overlap
+    // the noninteractive line number, keeping the marker easy to click without
+    // charging that accessibility area to editor layout.
+    let gutter_right = gutter_left + f32::from(GUTTER_WIDTH);
+    let hit_right = gutter_left + GUTTER_HIT_WIDTH;
     let (paint, hit) = if change.lines.is_empty() {
         let y = if change.lines.start >= rows.len() {
             first.bottom()
@@ -580,19 +582,25 @@ pub(crate) fn marker_geometry(
             first.top()
         };
         (
-            egui::Rect::from_center_size(egui::pos2(gutter_left + 4.0, y), egui::vec2(6.0, 3.0)),
-            egui::Rect::from_center_size(egui::pos2(gutter_left + 4.0, y), egui::vec2(8.0, 12.0)),
+            egui::Rect::from_center_size(
+                egui::pos2(gutter_left + f32::from(GUTTER_WIDTH) / 2.0, y),
+                egui::vec2(f32::from(GUTTER_WIDTH), 3.0),
+            ),
+            egui::Rect::from_center_size(
+                egui::pos2(gutter_left + GUTTER_HIT_WIDTH / 2.0, y),
+                egui::vec2(GUTTER_HIT_WIDTH, 12.0),
+            ),
         )
     } else {
         let last = rows.get(change.lines.end.saturating_sub(1).min(rows.len() - 1))?;
         (
             egui::Rect::from_min_max(
-                egui::pos2(x, first.top()),
-                egui::pos2(x + 3.0, last.bottom()),
+                egui::pos2(gutter_left, first.top()),
+                egui::pos2(gutter_right, last.bottom()),
             ),
             egui::Rect::from_min_max(
                 egui::pos2(gutter_left, first.top()),
-                egui::pos2(gutter_left + 8.0, last.bottom()),
+                egui::pos2(hit_right, last.bottom()),
             ),
         )
     };
@@ -1251,14 +1259,15 @@ mod tests {
     }
 
     #[test]
-    fn marker_geometry_stays_within_the_compact_git_gutter() {
+    fn marker_paint_fills_the_compact_lane_without_shrinking_its_hit_target() {
         let rows = [egui::Rect::from_min_max(
             egui::pos2(40.0, 0.0),
             egui::pos2(400.0, 20.0),
         )];
         let clip = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(500.0, 100.0));
         let gutter_left = 100.0;
-        let gutter_right = gutter_left + GUTTER_WIDTH as f32;
+        let gutter_right = gutter_left + f32::from(GUTTER_WIDTH);
+        let hit_right = gutter_left + GUTTER_HIT_WIDTH;
 
         for change in [
             LineChange {
@@ -1275,10 +1284,10 @@ mod tests {
             },
         ] {
             let geometry = marker_geometry(&change, &rows, gutter_left, clip).unwrap();
-            assert!(geometry.paint.min.x >= gutter_left);
-            assert!(geometry.paint.max.x <= gutter_right);
-            assert!(geometry.hit.min.x >= gutter_left);
-            assert!(geometry.hit.max.x <= gutter_right);
+            assert_eq!(geometry.paint.min.x, gutter_left);
+            assert_eq!(geometry.paint.max.x, gutter_right);
+            assert_eq!(geometry.hit.min.x, gutter_left);
+            assert_eq!(geometry.hit.max.x, hit_right);
         }
     }
 
