@@ -588,13 +588,14 @@ Only deferred items 1, 2, and 26 remain unchecked.
   after editing or switching files, while each window keeps its own selection.
 - The Git Explorer section is visible by default in normal document windows;
   View > Git still toggles it when more file-tree space is needed. Its body
-  starts with the repository path rather than a redundant large `Git` heading.
+  starts with repository actions; the workspace path remains in the parent
+  window header rather than being repeated inside the panel.
 - Workspace/file refreshes queue a Git status scan automatically, including
   updates after saves, external reloads, and the periodic filesystem check.
-- Periodic Git maintenance scans are silent when the repository snapshot is
-  unchanged; they do not replace the status text or put controls into a
-  visible loading state on every timer tick.
-- Verification: Formatting, strict Clippy, all 582 application tests (2
+- Git editor decorations are refreshed by document, filesystem, and Git
+  operation events; an unchanged editor does not schedule periodic scans or
+  repaint the interface just to rediscover the same snapshot.
+- Verification: Formatting, strict Clippy, all 585 application tests (2
   environment-dependent tests ignored), and all 8 xtask tests pass. A release
   capture attempt for `git-window` could not start a native viewport in this
   environment because macOS LaunchServices/HIServices reported an invalid XPC

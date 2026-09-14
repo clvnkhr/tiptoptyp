@@ -146,6 +146,7 @@ pub(crate) struct GitPanel {
     diff: Option<DiffView>,
     refresh_requested: bool,
     background_refresh: bool,
+    status_changed: bool,
 }
 
 impl Default for GitPanel {
@@ -164,6 +165,7 @@ impl Default for GitPanel {
             diff: None,
             refresh_requested: false,
             background_refresh: false,
+            status_changed: false,
         }
     }
 }
@@ -174,6 +176,13 @@ impl GitPanel {
     /// behind an in-flight stage, commit, or diff operation.
     pub(crate) fn request_refresh(&mut self) {
         self.refresh_requested = true;
+    }
+
+    /// Report a completed Git operation that changed the repository snapshot.
+    /// The document editor consumes this signal to refresh its gutter without
+    /// polling for commits or staging changes.
+    pub(crate) fn take_status_changed(&mut self) -> bool {
+        std::mem::take(&mut self.status_changed)
     }
 
     pub(crate) fn open(&mut self, context: &egui::Context, workspace: &Path) {
@@ -286,6 +295,7 @@ impl GitPanel {
                 let quiet_refresh = self.background_refresh;
                 let was_failed = self.failed;
                 let snapshot_changed = self.snapshot != result.snapshot;
+                self.status_changed |= snapshot_changed;
                 self.background_refresh = false;
                 self.failed = result.failed;
                 if !self.failed {
@@ -337,9 +347,6 @@ impl GitPanel {
         let busy = self.job.is_running() && !self.background_refresh;
         let palette = theme::palette(ui.ctx());
         egui::ScrollArea::vertical().id_salt("git-page").auto_shrink([false, false]).show(ui, |ui| {
-            ui.add(egui::Label::new(self.snapshot.root.to_string_lossy()).truncate())
-                .on_hover_text(self.snapshot.root.display().to_string());
-            ui.add_space(theme::SPACE.content);
             ui.add_enabled_ui(!busy, |ui| {
                 right_action_row(ui, |ui| {
                     if self.snapshot.initialized {
@@ -1039,6 +1046,8 @@ mod tests {
         harness.step();
         finish_ui_job(&mut harness);
         assert!(harness.state().snapshot.entries.is_empty());
+        assert!(harness.state_mut().take_status_changed());
+        assert!(!harness.state_mut().take_status_changed());
 
         fs::write(root.join("main.typ"), "changed\n").unwrap();
         harness.state_mut().request_refresh();
@@ -1054,6 +1063,7 @@ mod tests {
                 .map(|entry| entry.worktree),
             Some('M')
         );
+        assert!(harness.state_mut().take_status_changed());
     }
 
     #[test]

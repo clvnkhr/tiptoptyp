@@ -4179,6 +4179,7 @@ impl EditorApp {
             self.preview.status = PreviewStatus::Ready(Duration::ZERO);
         }
         self.git.request_refresh();
+        self.git_editor.request_refresh();
         true
     }
 
@@ -7090,6 +7091,9 @@ impl EditorApp {
                 },
                 |ui| self.git.show(ui, &self.workspace_root, git_dirty),
             );
+            if self.git.take_status_changed() {
+                self.git_editor.request_refresh();
+            }
             if resize_delta.abs() > f32::EPSILON {
                 section_resize = Some((1, resize_delta));
             }
