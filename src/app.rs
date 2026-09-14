@@ -43,6 +43,7 @@ use crate::{
         EditableTable, PreviewAssetKind, SourceEdit, StickyContextQuery, StickyContextRow,
         editable_table_at, literal_asset_target_at,
     },
+    explorer::{ExplorerOrder, ExplorerSection},
     font_catalog::{FontCatalog, FontFamily, ignored_workspace_directory, is_font_path},
     generic_highlight::GenericSyntaxHighlighter,
     highlight::SyntaxHighlighter,
@@ -1148,6 +1149,7 @@ enum SettingsTarget {
     AutoSave,
     AutoSaveDelay,
     KeyboardShortcuts,
+    ExplorerOrder,
     InterfaceScale,
     TitleBarMenus,
     UiFont,
@@ -1168,7 +1170,7 @@ enum SettingsTarget {
 }
 
 impl SettingsTarget {
-    const ALL: [Self; 30] = [
+    const ALL: [Self; 31] = [
         Self::Appearance,
         Self::TypstSyntax,
         Self::LightTheme,
@@ -1182,6 +1184,7 @@ impl SettingsTarget {
         Self::AutoSave,
         Self::AutoSaveDelay,
         Self::KeyboardShortcuts,
+        Self::ExplorerOrder,
         Self::InterfaceScale,
         Self::TitleBarMenus,
         Self::UiFont,
@@ -1216,6 +1219,7 @@ impl SettingsTarget {
             Self::AutoSave => "Auto-save",
             Self::AutoSaveDelay => "Auto-save delay",
             Self::KeyboardShortcuts => "Keyboard shortcuts…",
+            Self::ExplorerOrder => "Explorer panel order",
             Self::InterfaceScale => "Interface scale",
             Self::TitleBarMenus => "Show title-bar menus",
             Self::UiFont => "UI font",
@@ -1251,6 +1255,7 @@ impl SettingsTarget {
             | Self::AutoSave
             | Self::AutoSaveDelay
             | Self::KeyboardShortcuts
+            | Self::ExplorerOrder
             | Self::InterfaceScale
             | Self::TitleBarMenus
             | Self::UiFont
@@ -1286,6 +1291,9 @@ impl SettingsTarget {
             Self::AutoSave => "editor autosave automatic save",
             Self::AutoSaveDelay => "editor autosave automatic save milliseconds timing",
             Self::KeyboardShortcuts => "editor keys bindings configurable commands",
+            Self::ExplorerOrder => {
+                "explorer panels reorder files git contents subfiles symbols packages tags references"
+            }
             Self::InterfaceScale => "editor ui zoom percent size",
             Self::TitleBarMenus => "editor titlebar file edit view chrome",
             Self::UiFont => "editor interface family system choose",
@@ -1519,6 +1527,7 @@ impl EditorApp {
         if snapshot_scene.is_some() {
             settings.ui_font_weight = DEFAULT_UI_FONT_WEIGHT;
             settings.code_font_weight = DEFAULT_UI_FONT_WEIGHT;
+            settings.explorer_order = ExplorerOrder::default();
         }
         let invalid_initial_path = initial_path
             .as_ref()
@@ -6995,11 +7004,11 @@ impl EditorApp {
         let mut section_defaults = if filter_active {
             explorer_section_query_matches(snapshot, project_index, &explorer_query)
         } else {
-            std::array::from_fn(|index| EXPLORER_SECTION_SPECS[index].1)
+            std::array::from_fn(|index| ExplorerSection::ALL[index].default_open())
         };
         let git_in_explorer =
             self.git.visible && self.snapshot_scene != Some(UiSnapshotScene::GitWindow);
-        section_defaults[1] = git_in_explorer;
+        section_defaults[ExplorerSection::Git.index()] = git_in_explorer;
         if !git_in_explorer {
             // Keep the hidden section genuinely collapsed. Merely removing
             // it from the height budget still lets a persisted open state
@@ -7018,7 +7027,7 @@ impl EditorApp {
         if !git_in_explorer {
             // A persisted open state must not reserve space for a hidden Git
             // section after the panel has been closed.
-            open_sections[1] = false;
+            open_sections[ExplorerSection::Git.index()] = false;
         }
         let open_section_count = open_sections.iter().filter(|is_open| **is_open).count();
         let section_frame_height = theme::explorer_section_frame(ui.style())
@@ -7036,153 +7045,136 @@ impl EditorApp {
                 .unwrap_or_default()
         });
         let section_body_heights = section_layout.body_heights(open_sections, section_body_budget);
-        let mut section_resize = None;
-        let resize_delta = explorer_section_resizable(
+        let order = self.settings.explorer_order;
+        let mut open_package_manager = false;
+        let mut index_target = None;
+        let git_dirty = self.document.is_dirty();
+        let section_resize = show_explorer_sections(
             ui,
-            ExplorerSectionRenderSpec {
-                id_salt: "workspace-files",
-                title: "Files",
-                default_open: section_defaults[0],
-                body_height: section_body_heights[0],
-                show_resize_handle: next_open_explorer_section(open_sections, 0).is_some(),
+            ExplorerSectionsSpec {
+                order,
+                defaults: section_defaults,
+                heights: section_body_heights,
+                open: open_sections,
                 filtered: filter_active,
+                git_visible: git_in_explorer,
             },
-            |ui| {
-                if let Some(snapshot) = &snapshot {
-                    // A scan generation describes fresh filesystem data, not a
-                    // new UI. Keeping it out of the identity preserves opened
-                    // folders, selection, and the surrounding ScrollArea's
-                    // offset when a file open triggers a background rescan.
-                    let tree_id = workspace_tree_state_id(ui, &snapshot.root, filter_active);
-                    let mut tree_state = TreeViewState::load(ui, tree_id).unwrap_or_default();
-                    if filter_active {
-                        open_matching_workspace_ancestors(
-                            &mut tree_state,
-                            &snapshot.nodes,
-                            &explorer_query,
-                        );
-                    }
-                    if let Some(active) = &active {
-                        // Keep the document shown in the editor selected so the
-                        // entire explorer row gets the same kind of tint as the
-                        // editor's active line.
-                        tree_state.set_one_selected(active.clone());
-                    }
-                    let tree = TreeView::new(tree_id)
-                        .allow_multi_selection(false)
-                        .fallback_context_menu(|ui, selected: &Vec<PathBuf>| {
-                            let Some(path) = selected.first().cloned() else {
-                                ui.close();
-                                return;
-                            };
-                            let is_file = path
-                                .strip_prefix(&snapshot.root)
-                                .ok()
-                                .and_then(|relative| snapshot.find(relative))
-                                .is_some_and(WorkspaceNode::is_file);
-                            let anchor = ui
-                                .ctx()
-                                .pointer_latest_pos()
-                                .unwrap_or_else(|| ui.min_rect().left_top());
-                            popup_request = Some(AppPopup::Workspace {
-                                anchor,
-                                path,
-                                is_file,
-                            });
-                            ui.close();
-                        });
-                    let (_, actions) = ui
-                        .scope(|ui| {
-                            theme::apply_active_row_selection(ui);
-                            tree.show_state(ui, &mut tree_state, |builder| {
-                                add_workspace_nodes(
-                                    builder,
-                                    &snapshot.nodes,
-                                    active.as_deref(),
-                                    preview.as_deref(),
-                                    &context,
-                                    &explorer_query,
-                                    &self.git_editor.statuses,
-                                );
-                            })
-                        })
-                        .inner;
-                    tree_state.store(ui, tree_id);
-                    for action in actions {
-                        if let TreeAction::Activate(activate) = action {
-                            open_path = activate.selected.into_iter().find(|path| {
-                                path.strip_prefix(&snapshot.root)
+            |ui, section| match section {
+                ExplorerSection::Files => {
+                    if let Some(snapshot) = &snapshot {
+                        // A scan generation describes fresh filesystem data, not a
+                        // new UI. Keeping it out of the identity preserves opened
+                        // folders, selection, and the surrounding ScrollArea's
+                        // offset when a file open triggers a background rescan.
+                        let tree_id = workspace_tree_state_id(ui, &snapshot.root, filter_active);
+                        let mut tree_state = TreeViewState::load(ui, tree_id).unwrap_or_default();
+                        if filter_active {
+                            open_matching_workspace_ancestors(
+                                &mut tree_state,
+                                &snapshot.nodes,
+                                &explorer_query,
+                            );
+                        }
+                        if let Some(active) = &active {
+                            // Keep the document shown in the editor selected so the
+                            // entire explorer row gets the same kind of tint as the
+                            // editor's active line.
+                            tree_state.set_one_selected(active.clone());
+                        }
+                        let tree = TreeView::new(tree_id)
+                            .allow_multi_selection(false)
+                            .fallback_context_menu(|ui, selected: &Vec<PathBuf>| {
+                                let Some(path) = selected.first().cloned() else {
+                                    ui.close();
+                                    return;
+                                };
+                                let is_file = path
+                                    .strip_prefix(&snapshot.root)
                                     .ok()
                                     .and_then(|relative| snapshot.find(relative))
-                                    .is_some_and(WorkspaceNode::is_file)
+                                    .is_some_and(WorkspaceNode::is_file);
+                                let anchor = ui
+                                    .ctx()
+                                    .pointer_latest_pos()
+                                    .unwrap_or_else(|| ui.min_rect().left_top());
+                                popup_request = Some(AppPopup::Workspace {
+                                    anchor,
+                                    path,
+                                    is_file,
+                                });
+                                ui.close();
                             });
+                        let (_, actions) = ui
+                            .scope(|ui| {
+                                theme::apply_active_row_selection(ui);
+                                tree.show_state(ui, &mut tree_state, |builder| {
+                                    add_workspace_nodes(
+                                        builder,
+                                        &snapshot.nodes,
+                                        active.as_deref(),
+                                        preview.as_deref(),
+                                        &context,
+                                        &explorer_query,
+                                        &self.git_editor.statuses,
+                                    );
+                                })
+                            })
+                            .inner;
+                        tree_state.store(ui, tree_id);
+                        for action in actions {
+                            if let TreeAction::Activate(activate) = action {
+                                open_path = activate.selected.into_iter().find(|path| {
+                                    path.strip_prefix(&snapshot.root)
+                                        .ok()
+                                        .and_then(|relative| snapshot.find(relative))
+                                        .is_some_and(WorkspaceNode::is_file)
+                                });
+                            }
                         }
+                        if filter_active
+                            && !snapshot
+                                .nodes
+                                .iter()
+                                .any(|node| workspace_node_matches_query(node, &explorer_query))
+                        {
+                            ui.label(RichText::new("No matching files").weak());
+                        }
+                    } else {
+                        ui.label(RichText::new("No project folder").weak());
                     }
-                    if filter_active
-                        && !snapshot
-                            .nodes
-                            .iter()
-                            .any(|node| workspace_node_matches_query(node, &explorer_query))
-                    {
-                        ui.label(RichText::new("No matching files").weak());
+                    if let Some(error) = &self.workspace_error {
+                        ui.colored_label(error_color(ui.ctx()), error);
                     }
-                } else {
-                    ui.label(RichText::new("No project folder").weak());
                 }
-                if let Some(error) = &self.workspace_error {
-                    ui.colored_label(error_color(ui.ctx()), error);
+                ExplorerSection::Git => self.git.show(ui, &self.workspace_root, git_dirty),
+                _ => {
+                    let outcome = show_project_index_section(
+                        ui,
+                        section,
+                        project_root,
+                        project_index,
+                        &explorer_query,
+                    );
+                    open_package_manager |= outcome.open_package_manager;
+                    if outcome.target.is_some() {
+                        index_target = outcome.target;
+                    }
                 }
             },
         );
-        if resize_delta.abs() > f32::EPSILON {
-            section_resize = Some((0, resize_delta));
-        }
-
-        let git_dirty = self.document.is_dirty();
-        if git_in_explorer {
-            let resize_delta = explorer_section_resizable(
-                ui,
-                ExplorerSectionRenderSpec {
-                    id_salt: "workspace-git",
-                    title: "Git",
-                    default_open: section_defaults[1],
-                    body_height: section_body_heights[1],
-                    show_resize_handle: next_open_explorer_section(open_sections, 1).is_some(),
-                    filtered: filter_active,
-                },
-                |ui| self.git.show(ui, &self.workspace_root, git_dirty),
-            );
-            if resize_delta.abs() > f32::EPSILON {
-                section_resize = Some((1, resize_delta));
-            }
-        }
-
-        let ExplorerProjectSectionsOutcome {
-            resize_request,
-            open_package_manager,
-            target: index_target,
-        } = show_project_index_sections(
-            ui,
-            ExplorerProjectSectionsSpec {
-                root: project_root,
-                index: project_index,
-                query: &explorer_query,
-                filtered: filter_active,
-                section_defaults,
-                open_sections,
-                body_heights: section_body_heights,
-            },
-        );
-        if resize_request.is_some() {
-            section_resize = resize_request;
-        }
 
         if open_package_manager {
             self.open_package_manager(ui.ctx());
         }
 
         if let Some((section, delta)) = section_resize
-            && section_layout.resize_after(open_sections, section_body_budget, section, delta)
+            && section_layout.resize_after(
+                open_sections,
+                section_body_budget,
+                order,
+                section,
+                delta,
+            )
         {
             ui.ctx()
                 .data_mut(|data| data.insert_temp(section_layout_id, section_layout));
@@ -10096,7 +10088,7 @@ fn explorer_section_query_matches(
     snapshot: Option<&WorkspaceSnapshot>,
     index: &ProjectIndex,
     normalized_query: &str,
-) -> [bool; EXPLORER_SECTION_SPECS.len()] {
+) -> [bool; ExplorerSection::ALL.len()] {
     let mut matches = [
         snapshot.is_some_and(|snapshot| {
             snapshot
@@ -10121,6 +10113,10 @@ fn explorer_section_query_matches(
             .packages
             .iter()
             .any(|package| explorer_text_matches_query(package, normalized_query)),
+        index
+            .tags
+            .iter()
+            .any(|entry| reference_entry_matches_query(entry, normalized_query)),
         index
             .references
             .iter()
@@ -10209,28 +10205,18 @@ fn extension_matches(extension: Option<&str>, expected: &[&str]) -> bool {
     })
 }
 
-const EXPLORER_SECTION_SPECS: [(&str, bool); 7] = [
-    ("workspace-files", true),
-    ("workspace-git", false),
-    ("workspace-contents", true),
-    ("workspace-subfiles", false),
-    ("workspace-symbols", false),
-    ("workspace-packages", false),
-    ("workspace-references", false),
-];
-
 const EXPLORER_SECTION_MIN_BODY_HEIGHT: f32 = 44.0;
 const EXPLORER_SECTION_RESIZE_HANDLE_HEIGHT: f32 = 5.0;
 
 #[derive(Clone, Debug, PartialEq)]
 struct ExplorerSectionLayout {
-    weights: [f32; EXPLORER_SECTION_SPECS.len()],
+    weights: [f32; ExplorerSection::ALL.len()],
 }
 
 impl Default for ExplorerSectionLayout {
     fn default() -> Self {
         Self {
-            weights: [1.0; EXPLORER_SECTION_SPECS.len()],
+            weights: [1.0; ExplorerSection::ALL.len()],
         }
     }
 }
@@ -10238,10 +10224,10 @@ impl Default for ExplorerSectionLayout {
 impl ExplorerSectionLayout {
     fn body_heights(
         &self,
-        open: [bool; EXPLORER_SECTION_SPECS.len()],
+        open: [bool; ExplorerSection::ALL.len()],
         available: f32,
-    ) -> [f32; EXPLORER_SECTION_SPECS.len()] {
-        let mut heights = [0.0; EXPLORER_SECTION_SPECS.len()];
+    ) -> [f32; ExplorerSection::ALL.len()] {
+        let mut heights = [0.0; ExplorerSection::ALL.len()];
         let open_count = open.iter().filter(|is_open| **is_open).count();
         if open_count == 0 {
             return heights;
@@ -10280,17 +10266,20 @@ impl ExplorerSectionLayout {
 
     fn resize_after(
         &mut self,
-        open: [bool; EXPLORER_SECTION_SPECS.len()],
+        open: [bool; ExplorerSection::ALL.len()],
         available: f32,
-        upper_index: usize,
+        order: ExplorerOrder,
+        upper: ExplorerSection,
         requested_delta: f32,
     ) -> bool {
         if !requested_delta.is_finite() || requested_delta.abs() <= f32::EPSILON {
             return false;
         }
-        let Some(lower_index) = next_open_explorer_section(open, upper_index) else {
+        let Some(lower) = order.next_open(open, upper) else {
             return false;
         };
+        let upper_index = upper.index();
+        let lower_index = lower.index();
         let mut heights = self.body_heights(open, available);
         let open_count = open.iter().filter(|is_open| **is_open).count();
         let minimum =
@@ -10316,23 +10305,13 @@ impl ExplorerSectionLayout {
     }
 }
 
-fn next_open_explorer_section(
-    open: [bool; EXPLORER_SECTION_SPECS.len()],
-    after: usize,
-) -> Option<usize> {
-    open.iter()
-        .enumerate()
-        .skip(after.saturating_add(1))
-        .find_map(|(index, is_open)| (*is_open).then_some(index))
-}
-
 fn explorer_section_open_states(
     ui: &egui::Ui,
     filtered: bool,
-    defaults: [bool; EXPLORER_SECTION_SPECS.len()],
-) -> [bool; EXPLORER_SECTION_SPECS.len()] {
+    defaults: [bool; ExplorerSection::ALL.len()],
+) -> [bool; ExplorerSection::ALL.len()] {
     std::array::from_fn(|index| {
-        let (id_salt, _) = EXPLORER_SECTION_SPECS[index];
+        let id_salt = ExplorerSection::ALL[index].id();
         if filtered {
             return defaults[index];
         }
@@ -10375,7 +10354,7 @@ fn workspace_tree_state_id(ui: &egui::Ui, root: &Path, filtered: bool) -> egui::
 
 #[cfg(test)]
 fn explorer_section_body_height(ui: &egui::Ui) -> f32 {
-    let defaults = std::array::from_fn(|index| EXPLORER_SECTION_SPECS[index].1);
+    let defaults = std::array::from_fn(|index| ExplorerSection::ALL[index].default_open());
     let open_sections = explorer_section_open_states(ui, false, defaults)
         .into_iter()
         .filter(|is_open| *is_open)
@@ -10395,7 +10374,7 @@ fn available_explorer_section_body_height(
     if open_sections == 0 {
         return 0.0;
     }
-    let section_count = EXPLORER_SECTION_SPECS.len() as f32;
+    let section_count = ExplorerSection::ALL.len() as f32;
     let reserved_headers = section_count * (METRICS.explorer.section_header_height + frame_height);
     let reserved_gaps = (section_count - 1.0).max(0.0) * METRICS.explorer.section_gap;
     ((available_height - reserved_headers - reserved_gaps) / open_sections as f32).max(0.0)
@@ -10422,6 +10401,45 @@ fn explorer_section(
         },
         add_body,
     );
+}
+
+struct ExplorerSectionsSpec {
+    order: ExplorerOrder,
+    defaults: [bool; 8],
+    heights: [f32; 8],
+    open: [bool; 8],
+    filtered: bool,
+    git_visible: bool,
+}
+
+fn show_explorer_sections(
+    ui: &mut egui::Ui,
+    spec: ExplorerSectionsSpec,
+    mut add_body: impl FnMut(&mut egui::Ui, ExplorerSection),
+) -> Option<(ExplorerSection, f32)> {
+    let mut resize = None;
+    for section in spec.order.sections() {
+        if section == ExplorerSection::Git && !spec.git_visible {
+            continue;
+        }
+        let index = section.index();
+        let delta = explorer_section_resizable(
+            ui,
+            ExplorerSectionRenderSpec {
+                id_salt: section.id(),
+                title: section.title(),
+                default_open: spec.defaults[index],
+                body_height: spec.heights[index],
+                show_resize_handle: spec.order.next_open(spec.open, section).is_some(),
+                filtered: spec.filtered,
+            },
+            |ui| add_body(ui, section),
+        );
+        if delta.abs() > f32::EPSILON {
+            resize = Some((section, delta));
+        }
+    }
+    resize
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -10506,48 +10524,23 @@ fn explorer_section_resizable(
     resize_delta
 }
 
-struct ExplorerProjectSectionsSpec<'a> {
-    root: &'a Path,
-    index: &'a ProjectIndex,
-    query: &'a str,
-    filtered: bool,
-    section_defaults: [bool; EXPLORER_SECTION_SPECS.len()],
-    open_sections: [bool; EXPLORER_SECTION_SPECS.len()],
-    body_heights: [f32; EXPLORER_SECTION_SPECS.len()],
-}
-
 #[derive(Default)]
-struct ExplorerProjectSectionsOutcome {
-    resize_request: Option<(usize, f32)>,
+struct ExplorerProjectSectionOutcome {
     open_package_manager: bool,
     target: Option<(PathBuf, usize)>,
 }
 
-fn show_project_index_sections(
+fn show_project_index_section(
     ui: &mut egui::Ui,
-    spec: ExplorerProjectSectionsSpec<'_>,
-) -> ExplorerProjectSectionsOutcome {
-    let ExplorerProjectSectionsSpec {
-        root,
-        index,
-        query,
-        filtered,
-        section_defaults,
-        open_sections,
-        body_heights,
-    } = spec;
-    let mut outcome = ExplorerProjectSectionsOutcome::default();
-    let resize_delta = explorer_section_resizable(
-        ui,
-        ExplorerSectionRenderSpec {
-            id_salt: "workspace-contents",
-            title: "Contents",
-            default_open: section_defaults[2],
-            body_height: body_heights[2],
-            show_resize_handle: next_open_explorer_section(open_sections, 2).is_some(),
-            filtered,
-        },
-        |ui| {
+    section: ExplorerSection,
+    root: &Path,
+    index: &ProjectIndex,
+    query: &str,
+) -> ExplorerProjectSectionOutcome {
+    let mut outcome = ExplorerProjectSectionOutcome::default();
+    let filtered = !query.is_empty();
+    match section {
+        ExplorerSection::Contents => {
             let mut entries = index
                 .outline
                 .iter()
@@ -10563,7 +10556,7 @@ fn show_project_index_sections(
                     .size(theme::TYPE.supporting)
                     .weak(),
                 );
-                return;
+                return outcome;
             }
             for entry in entries {
                 let indent = entry
@@ -10577,23 +10570,8 @@ fn show_project_index_sections(
                     outcome.target = Some((entry.path.clone(), entry.line));
                 }
             }
-        },
-    );
-    if resize_delta.abs() > f32::EPSILON {
-        outcome.resize_request = Some((2, resize_delta));
-    }
-
-    let resize_delta = explorer_section_resizable(
-        ui,
-        ExplorerSectionRenderSpec {
-            id_salt: "workspace-subfiles",
-            title: "Subfiles",
-            default_open: section_defaults[3],
-            body_height: body_heights[3],
-            show_resize_handle: next_open_explorer_section(open_sections, 3).is_some(),
-            filtered,
-        },
-        |ui| {
+        }
+        ExplorerSection::Subfiles => {
             let mut paths = index
                 .subfiles
                 .iter()
@@ -10609,7 +10587,7 @@ fn show_project_index_sections(
                     .size(theme::TYPE.supporting)
                     .weak(),
                 );
-                return;
+                return outcome;
             }
             for path in paths {
                 let label = project_relative_path(root, path);
@@ -10618,23 +10596,8 @@ fn show_project_index_sections(
                     outcome.target = Some((path.clone(), 1));
                 }
             }
-        },
-    );
-    if resize_delta.abs() > f32::EPSILON {
-        outcome.resize_request = Some((3, resize_delta));
-    }
-
-    let resize_delta = explorer_section_resizable(
-        ui,
-        ExplorerSectionRenderSpec {
-            id_salt: "workspace-symbols",
-            title: "Symbols",
-            default_open: section_defaults[4],
-            body_height: body_heights[4],
-            show_resize_handle: next_open_explorer_section(open_sections, 4).is_some(),
-            filtered,
-        },
-        |ui| {
+        }
+        ExplorerSection::Symbols => {
             let mut symbols = index
                 .symbols
                 .iter()
@@ -10650,7 +10613,7 @@ fn show_project_index_sections(
                     .size(theme::TYPE.supporting)
                     .weak(),
                 );
-                return;
+                return outcome;
             }
             for symbol in symbols {
                 let kind = symbol.kind.label();
@@ -10664,23 +10627,8 @@ fn show_project_index_sections(
                     outcome.target = Some((symbol.path.clone(), symbol.line));
                 }
             }
-        },
-    );
-    if resize_delta.abs() > f32::EPSILON {
-        outcome.resize_request = Some((4, resize_delta));
-    }
-
-    let resize_delta = explorer_section_resizable(
-        ui,
-        ExplorerSectionRenderSpec {
-            id_salt: "workspace-packages",
-            title: "Packages",
-            default_open: section_defaults[5],
-            body_height: body_heights[5],
-            show_resize_handle: next_open_explorer_section(open_sections, 5).is_some(),
-            filtered,
-        },
-        |ui| {
+        }
+        ExplorerSection::Packages => {
             if ui.button("Browse packages…").clicked() {
                 outcome.open_package_manager = true;
             }
@@ -10705,25 +10653,14 @@ fn show_project_index_sections(
                     explorer_index_row(ui, package, None, 0.0);
                 }
             }
-        },
-    );
-    if resize_delta.abs() > f32::EPSILON {
-        outcome.resize_request = Some((5, resize_delta));
-    }
-
-    let resize_delta = explorer_section_resizable(
-        ui,
-        ExplorerSectionRenderSpec {
-            id_salt: "workspace-references",
-            title: "Tags and references",
-            default_open: section_defaults[6],
-            body_height: body_heights[6],
-            show_resize_handle: next_open_explorer_section(open_sections, 6).is_some(),
-            filtered,
-        },
-        |ui| {
-            let mut references = index
-                .references
+        }
+        ExplorerSection::Tags | ExplorerSection::References => {
+            let entries = if section == ExplorerSection::Tags {
+                &index.tags
+            } else {
+                &index.references
+            };
+            let mut references = entries
                 .iter()
                 .filter(|entry| reference_entry_matches_query(entry, query))
                 .peekable();
@@ -10731,13 +10668,15 @@ fn show_project_index_sections(
                 ui.label(
                     RichText::new(if filtered {
                         "No matches"
+                    } else if section == ExplorerSection::Tags {
+                        "No tags"
                     } else {
-                        "No tags or references"
+                        "No references"
                     })
                     .size(theme::TYPE.supporting)
                     .weak(),
                 );
-                return;
+                return outcome;
             }
             for reference in references {
                 let location = format!(
@@ -10755,10 +10694,8 @@ fn show_project_index_sections(
                     outcome.target = Some((reference.path.clone(), reference.line));
                 }
             }
-        },
-    );
-    if resize_delta.abs() > f32::EPSILON {
-        outcome.resize_request = Some((6, resize_delta));
+        }
+        ExplorerSection::Files | ExplorerSection::Git => unreachable!("not a project index panel"),
     }
     outcome
 }
@@ -10778,6 +10715,9 @@ fn explorer_index_row(
 ) -> egui::Response {
     let size = Vec2::new(ui.available_width().max(1.0), METRICS.explorer.row_height);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
     let visuals = ui.style().interact(&response);
     if response.hovered() || response.has_focus() {
         ui.painter()

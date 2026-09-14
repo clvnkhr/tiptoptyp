@@ -164,8 +164,8 @@ I was using two different windows with two different workspaces. Possibly i was 
 128. [x] close diff button is superfluous, remove it.
 129. [x] in fact lets not have a separate git hunk diff window at all. Have the diff show in a popup.
 130. [x] the git window should instead be a subpanel in the explorer window.
-131. [ ] the tags and references subpanel should be two separate panels
-132. [ ] allow us to choose the order of the explorer panels in Settings. git panel should default to under files
+131. [x] the tags and references subpanel should be two separate panels
+132. [x] allow us to choose the order of the explorer panels in Settings. git panel should default to under files
 133. [ ] (deferred) implement tabs
 134. [ ] we should be able to click on the ttt logo in a window and have it open a color picker for the bg of the logo, which will help us visually identify each window.
 135. [ ] when cursor is at a bracket/dollar sign/etc we should highlight the matching char.
@@ -705,3 +705,24 @@ Only deferred items 1, 2, and 26 remain unchecked.
   wide panel sizes, along with all required checks and the release build.
   Inspected a fresh Git viewport capture under `.tiptoptyp/screenshots/agent-review`
   to confirm the two aligned actions and removal of the redundant text.
+
+= Explorer organization (2026-09-14)
+
+- Item 131: Tags (`<label>`) and references (`@label`) have separate, independently
+  collapsible panels. The syntax index separates them before rendering, with
+  independent search results and navigation to each occurrence's file and line.
+- Item 132: Settings → Explorer panel order provides up/down controls for every
+  panel and a reset action. Order is saved with shared application preferences
+  and applies to every document window. Git defaults directly below Files.
+  A validated order contains every panel exactly once. Section identities retain
+  their collapse and scroll state, and resize weights stay with each panel;
+  dividers resize the next open panel in the displayed order.
+- Verification: semantic tests cover reordering, reset, button alignment,
+  collapse and body identity, independent tag/reference search and navigation,
+  and resizing after a reorder. Persistence and invalid-order tests pass.
+  All 608 application tests pass (2 environment-dependent tests ignored), along
+  with formatting, strict Clippy, supporting suites, and all 8 xtask tests.
+  Regenerated and validated all 68 gallery images, and inspected the updated
+  Explorer layout in Catppuccin Latte and Mocha. The release build passes;
+  a fresh `git-editor` capture under `.tiptoptyp/screenshots/agent-review`
+  confirms Git below Files and the separate Tags and References headers.

@@ -989,6 +989,15 @@ impl EditorApp {
 
                 ui.add_space(theme::SPACE.small);
                 ui.separator();
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::ExplorerOrder,
+                    &mut settings_scroll_target,
+                );
+                show_explorer_order_controls(ui, &mut edited.explorer_order);
+
+                ui.add_space(theme::SPACE.small);
+                ui.separator();
                 settings_heading(ui, SettingsSection::Tools);
                 ui.label(
                     RichText::new(
@@ -1203,5 +1212,57 @@ impl EditorApp {
         if !deterministic_settings {
             self.queue_settings(edited, ui.ctx());
         }
+    }
+}
+
+pub(super) fn show_explorer_order_controls(ui: &mut egui::Ui, order: &mut ExplorerOrder) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(SettingsTarget::ExplorerOrder.label()).strong());
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if ui
+                .add_enabled(
+                    *order != ExplorerOrder::default(),
+                    egui::Button::new("Reset panel order"),
+                )
+                .clicked()
+            {
+                *order = ExplorerOrder::default();
+            }
+        });
+    });
+    for (position, section) in order.sections().into_iter().enumerate() {
+        ui.push_id(section.id(), |ui| {
+            ui.horizontal(|ui| {
+                ui.label(section.title());
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    for (symbol, direction, destination) in [
+                        (
+                            "↓",
+                            "down",
+                            (position + 1 < ExplorerSection::ALL.len()).then_some(position + 1),
+                        ),
+                        ("↑", "up", position.checked_sub(1)),
+                    ] {
+                        let response = ui.add_enabled(
+                            destination.is_some(),
+                            egui::Button::new(symbol).min_size(Vec2::splat(24.0)),
+                        );
+                        let label = format!("Move {} {direction}", section.title());
+                        response.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::WidgetType::Button,
+                                response.enabled(),
+                                &label,
+                            )
+                        });
+                        if settings_hover_text(response, label).clicked()
+                            && let Some(destination) = destination
+                        {
+                            order.move_to(section, destination);
+                        }
+                    }
+                });
+            });
+        });
     }
 }

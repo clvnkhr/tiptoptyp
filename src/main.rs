@@ -12,6 +12,7 @@ mod diagnostics;
 mod document;
 mod editor_data;
 mod editor_features;
+mod explorer;
 mod font_catalog;
 mod font_preview;
 mod generic_highlight;

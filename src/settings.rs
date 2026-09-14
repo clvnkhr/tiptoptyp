@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     builtin_themes,
+    explorer::ExplorerOrder,
     shortcuts::{ShortcutBindings, ShortcutOverrides},
     syntax_theme::TypstOverrideThemes,
 };
@@ -224,6 +225,8 @@ pub(crate) struct AppSettings {
     pub(crate) line_numbers: bool,
     #[serde(default = "default_true")]
     pub(crate) sticky_context_rows: bool,
+    #[serde(default)]
+    pub(crate) explorer_order: ExplorerOrder,
     pub(crate) source_preview_trigger: SourcePreviewTrigger,
     pub(crate) auto_save: bool,
     pub(crate) auto_save_delay_ms: u64,
@@ -281,6 +284,7 @@ impl Default for AppSettings {
             line_wrap: true,
             line_numbers: true,
             sticky_context_rows: true,
+            explorer_order: ExplorerOrder::default(),
             source_preview_trigger: SourcePreviewTrigger::DoubleClick,
             auto_save: true,
             auto_save_delay_ms: 750,
@@ -610,6 +614,11 @@ mod tests {
             line_wrap: false,
             line_numbers: false,
             sticky_context_rows: false,
+            explorer_order: {
+                let mut order = ExplorerOrder::default();
+                order.move_to(crate::explorer::ExplorerSection::Tags, 0);
+                order
+            },
             source_preview_trigger: SourcePreviewTrigger::ModifierClick,
             auto_save: false,
             auto_save_delay_ms: 1_500,

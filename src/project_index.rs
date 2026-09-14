@@ -66,6 +66,7 @@ pub struct ProjectIndex {
     pub subfiles: Vec<PathBuf>,
     pub symbols: Vec<SymbolEntry>,
     pub packages: Vec<String>,
+    pub tags: Vec<ReferenceEntry>,
     pub references: Vec<ReferenceEntry>,
     /// Import/include expressions which require Typst evaluation. The indexer
     /// deliberately reports rather than follows them.
@@ -256,7 +257,12 @@ impl<F: FnMut(&str)> ProjectVisitor<'_, F> {
     }
 
     fn reference(&mut self, node: &LinkedNode<'_>) {
-        self.index.references.push(ReferenceEntry {
+        let entries = if node.kind() == SyntaxKind::Label {
+            &mut self.index.tags
+        } else {
+            &mut self.index.references
+        };
+        entries.push(ReferenceEntry {
             path: self.path.to_owned(),
             line: self.lines.line_at(node.offset()),
             label: self.source[node.range()].to_owned(),
@@ -388,14 +394,17 @@ See @chapter and @figure. #link(<appendix>)[Appendix]
                 .iter()
                 .map(|reference| reference.label.as_str())
                 .collect::<Vec<_>>(),
-            ["<chapter>", "@chapter", "@figure", "<appendix>"]
+            ["@chapter", "@figure"]
         );
-        assert!(
+        assert_eq!(
             index
-                .references
+                .tags
                 .iter()
-                .all(|reference| reference.line == 1 || reference.line == 2)
+                .map(|entry| (entry.label.as_str(), entry.line))
+                .collect::<Vec<_>>(),
+            [("<chapter>", 1), ("<appendix>", 2)]
         );
+        assert!(index.references.iter().all(|reference| reference.line == 2));
     }
 
     #[test]
@@ -430,7 +439,27 @@ See @chapter and @figure. #link(<appendix>)[Appendix]
                 .iter()
                 .map(|r| (r.label.as_str(), r.line))
                 .collect::<Vec<_>>(),
-            vec![("<real>", 5), ("@real", 6)]
+            vec![("@real", 6)]
+        );
+    }
+
+    #[test]
+    fn tag_index_ignores_strings_comments_and_raw_blocks() {
+        let mut index = ProjectIndex::default();
+        visit_source(
+            Path::new("main.typ"),
+            "// <comment>\n`<raw>`\n#let s = \"<string>\"\n= Chapter <real>\nSee @real.",
+            &mut index,
+            &mut BTreeSet::new(),
+            |_| {},
+        );
+        assert_eq!(
+            index
+                .tags
+                .iter()
+                .map(|entry| (entry.label.as_str(), entry.line))
+                .collect::<Vec<_>>(),
+            [("<real>", 4)]
         );
     }
 

@@ -2434,11 +2434,11 @@ fn wide_explorer_header_and_body_cannot_grow_the_resized_panel() {
 fn explorer_sections_split_the_body_budget_without_hiding_headers() {
     let available = 500.0;
     let frame_height = 2.0;
-    for open_sections in 1..=EXPLORER_SECTION_SPECS.len() {
+    for open_sections in 1..=ExplorerSection::ALL.len() {
         let body = available_explorer_section_body_height(available, open_sections, frame_height);
-        let headers = EXPLORER_SECTION_SPECS.len() as f32
+        let headers = ExplorerSection::ALL.len() as f32
             * (METRICS.explorer.section_header_height + frame_height);
-        let gaps = (EXPLORER_SECTION_SPECS.len() - 1) as f32 * METRICS.explorer.section_gap;
+        let gaps = (ExplorerSection::ALL.len() - 1) as f32 * METRICS.explorer.section_gap;
         assert!((headers + gaps + body * open_sections as f32 - available).abs() < 0.01);
     }
     assert_eq!(
@@ -2453,14 +2453,20 @@ fn explorer_sections_split_the_body_budget_without_hiding_headers() {
 
 #[test]
 fn explorer_section_resize_moves_only_the_adjacent_open_split() {
-    let open = [true, false, true, true, false, false, false];
+    let open = [true, false, true, true, false, false, false, false];
     let mut layout = ExplorerSectionLayout::default();
     let before = layout.body_heights(open, 300.0);
     assert!((before[0] - 100.0).abs() < 0.01);
     assert!((before[2] - 100.0).abs() < 0.01);
     assert!((before[3] - 100.0).abs() < 0.01);
 
-    assert!(layout.resize_after(open, 300.0, 0, 30.0));
+    assert!(layout.resize_after(
+        open,
+        300.0,
+        ExplorerOrder::default(),
+        ExplorerSection::Files,
+        30.0
+    ));
     let after = layout.body_heights(open, 300.0);
     assert!((after[0] - 130.0).abs() < 0.01, "{after:?}");
     assert!((after[2] - 70.0).abs() < 0.01, "{after:?}");
@@ -2524,10 +2530,15 @@ fn explorer_search_covers_every_project_index_section() {
             kind: crate::project_index::SymbolKind::Definition,
         }],
         packages: vec!["@preview/cetz:0.4.2".to_owned()],
+        tags: vec![crate::project_index::ReferenceEntry {
+            path: root.join("paper.typ"),
+            line: 19,
+            label: "<tag:overview>".to_owned(),
+        }],
         references: vec![crate::project_index::ReferenceEntry {
             path: root.join("paper.typ"),
             line: 20,
-            label: "fig:overview".to_owned(),
+            label: "@fig:overview".to_owned(),
         }],
         ..ProjectIndex::default()
     };
@@ -2537,7 +2548,8 @@ fn explorer_search_covers_every_project_index_section() {
         ("appendix", 3),
         ("ACCENT-COLOR", 4),
         ("cetz", 5),
-        ("fig:overview", 6),
+        ("fig:overview", 7),
+        ("tag:overview", 6),
     ] {
         let query = normalize_explorer_query(query);
         let matches = explorer_section_query_matches(Some(&snapshot), &index, &query);
@@ -2546,23 +2558,35 @@ fn explorer_search_covers_every_project_index_section() {
 
     assert_eq!(
         explorer_section_query_matches(Some(&snapshot), &index, "does-not-exist"),
-        [true, false, false, false, false, false, false],
+        [true, false, false, false, false, false, false, false],
         "an empty result keeps the Files surface open for its empty-state message"
     );
 }
 
 #[test]
 fn explorer_section_resize_clamps_to_a_usable_minimum() {
-    let open = [true, true, false, false, false, false, false];
+    let open = [true, true, false, false, false, false, false, false];
     let mut layout = ExplorerSectionLayout::default();
-    assert!(layout.resize_after(open, 200.0, 0, 1_000.0));
+    assert!(layout.resize_after(
+        open,
+        200.0,
+        ExplorerOrder::default(),
+        ExplorerSection::Files,
+        1_000.0
+    ));
     let heights = layout.body_heights(open, 200.0);
     assert!((heights[0] - 156.0).abs() < 0.01, "{heights:?}");
     assert!((heights[1] - EXPLORER_SECTION_MIN_BODY_HEIGHT).abs() < 0.01);
 
     let tiny = layout.body_heights(open, 40.0);
-    assert_eq!(tiny, [20.0, 20.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
-    assert!(!layout.resize_after(open, 40.0, 0, 5.0));
+    assert_eq!(tiny, [20.0, 20.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+    assert!(!layout.resize_after(
+        open,
+        40.0,
+        ExplorerOrder::default(),
+        ExplorerSection::Files,
+        5.0
+    ));
 }
 
 #[test]
@@ -2610,6 +2634,172 @@ fn explorer_file_rows_expose_git_status_badges() {
         assert!(badge.left() > file.right() && badge.right() <= 280.0);
     }
     harness.get_by_label("clean.typ");
+}
+
+#[test]
+fn explorer_order_controls_move_panels_and_reset_with_aligned_buttons() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(340.0, 400.0))
+        .build_ui_state(
+            |ui, order| {
+                install_hover_runtime_config(ui.ctx(), Duration::ZERO, Duration::ZERO);
+                settings_view::show_explorer_order_controls(ui, order);
+            },
+            ExplorerOrder::default(),
+        );
+    harness.run();
+    let right = harness.get_by_label("Move Files down").rect().right();
+    for section in ExplorerSection::ALL {
+        let down = harness
+            .get_by_label(&format!("Move {} down", section.title()))
+            .rect();
+        let up = harness
+            .get_by_label(&format!("Move {} up", section.title()))
+            .rect();
+        assert_eq!(down.right(), right);
+        assert!(up.right() < down.left());
+    }
+    harness.get_by_label("Move Files down").click();
+    harness.run();
+    assert_eq!(
+        harness.state().sections()[..2],
+        [ExplorerSection::Git, ExplorerSection::Files]
+    );
+    assert!(harness.get_by_label("Git").rect().top() < harness.get_by_label("Files").rect().top());
+    harness.get_by_label("Move References up").click();
+    harness.run();
+    assert_eq!(harness.state().sections()[6], ExplorerSection::References);
+    harness.get_by_label("Reset panel order").click();
+    harness.run();
+    assert_eq!(*harness.state(), ExplorerOrder::default());
+}
+
+#[test]
+fn reordered_explorer_keeps_body_identity_and_collapsed_state() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    #[derive(Default)]
+    struct State {
+        order: ExplorerOrder,
+        body_ids: [Option<egui::Id>; 8],
+    }
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(360.0, 800.0))
+        .build_ui_state(
+            |ui, state: &mut State| {
+                if ui.button("Reorder").clicked() {
+                    state.order.move_to(ExplorerSection::References, 0);
+                    state.order.move_to(ExplorerSection::Files, 7);
+                }
+                state.body_ids.fill(None);
+                let defaults = [true; 8];
+                let open = explorer_section_open_states(ui, false, defaults);
+                show_explorer_sections(
+                    ui,
+                    ExplorerSectionsSpec {
+                        order: state.order,
+                        defaults,
+                        open,
+                        heights: [44.0; 8],
+                        filtered: false,
+                        git_visible: true,
+                    },
+                    |ui, section| {
+                        state.body_ids[section.index()] = Some(ui.id());
+                        ui.label(format!("{} body", section.title()));
+                    },
+                );
+            },
+            State::default(),
+        );
+    harness.run();
+    let identities = harness.state().body_ids;
+    assert!(identities.iter().all(Option::is_some));
+    harness.get_by_label("Tags").click();
+    harness.run();
+    assert!(harness.query_by_label("Tags body").is_none());
+    harness.get_by_label("Reorder").click();
+    harness.run();
+    assert!(harness.query_by_label("Tags body").is_none());
+    assert!(
+        harness.get_by_label("References").rect().top() < harness.get_by_label("Git").rect().top()
+    );
+    assert!(harness.get_by_label("Files").rect().top() > harness.get_by_label("Tags").rect().top());
+    for section in ExplorerSection::ALL {
+        if section != ExplorerSection::Tags {
+            assert_eq!(
+                harness.state().body_ids[section.index()],
+                identities[section.index()],
+                "{section:?} lost body identity"
+            );
+        }
+    }
+}
+
+#[test]
+fn tag_and_reference_panels_have_independent_search_and_navigation() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let root = Path::new("/workspace");
+    let main = root.join("main.typ");
+    let index = analyze_project(
+        root,
+        &main,
+        &BTreeMap::from([(
+            main.clone(),
+            "= Chapter <chapter>\nSee @chapter.\n".to_owned(),
+        )]),
+    );
+    for (section, label, other, line) in [
+        (ExplorerSection::Tags, "<chapter>", "@chapter", 1),
+        (ExplorerSection::References, "@chapter", "<chapter>", 2),
+    ] {
+        let matches = explorer_section_query_matches(None, &index, label);
+        assert!(matches[section.index()]);
+        let other_section = if section == ExplorerSection::Tags {
+            ExplorerSection::References
+        } else {
+            ExplorerSection::Tags
+        };
+        assert!(!matches[other_section.index()]);
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(360.0, 200.0))
+            .build_ui_state(
+                |ui, target| {
+                    install_hover_runtime_config(ui.ctx(), Duration::ZERO, Duration::ZERO);
+                    let outcome = show_project_index_section(ui, section, root, &index, "");
+                    if outcome.target.is_some() {
+                        *target = outcome.target;
+                    }
+                },
+                None::<(PathBuf, usize)>,
+            );
+        harness.run();
+        assert!(harness.query_by_label(other).is_none());
+        harness.get_by_label(label).click();
+        harness.run();
+        assert_eq!(*harness.state(), Some((main.clone(), line)));
+    }
+}
+
+#[test]
+fn reordered_explorer_resizes_the_visible_neighbor_and_preserves_other_heights() {
+    let mut order = ExplorerOrder::default();
+    order.move_to(ExplorerSection::References, 0);
+    order.move_to(ExplorerSection::Contents, 1);
+    let mut open = [false; 8];
+    for section in [
+        ExplorerSection::References,
+        ExplorerSection::Files,
+        ExplorerSection::Tags,
+    ] {
+        open[section.index()] = true;
+    }
+    let mut layout = ExplorerSectionLayout::default();
+    assert!(layout.resize_after(open, 300.0, order, ExplorerSection::References, 30.0));
+    let heights = layout.body_heights(open, 300.0);
+    assert!((heights[ExplorerSection::References.index()] - 130.0).abs() < 0.01);
+    assert!((heights[ExplorerSection::Files.index()] - 70.0).abs() < 0.01);
+    assert!((heights[ExplorerSection::Tags.index()] - 100.0).abs() < 0.01);
 }
 
 #[test]
@@ -2755,16 +2945,15 @@ fn explorer_section_frames_fit_the_available_height() {
                 ui.spacing_mut().item_spacing.y = METRICS.explorer.section_gap;
                 let top = ui.available_rect_before_wrap().top();
                 let body_height = explorer_section_body_height(ui);
-                for ((id_salt, default_open), title) in EXPLORER_SECTION_SPECS.into_iter().zip([
-                    "Files",
-                    "Git",
-                    "Contents",
-                    "Subfiles",
-                    "Symbols",
-                    "Packages",
-                    "Tags and references",
-                ]) {
-                    explorer_section(ui, id_salt, title, default_open, body_height, |_| {});
+                for section in ExplorerSection::ALL {
+                    explorer_section(
+                        ui,
+                        section.id(),
+                        section.title(),
+                        section.default_open(),
+                        body_height,
+                        |_| {},
+                    );
                 }
                 used_height = ui.min_rect().bottom() - top;
             },
