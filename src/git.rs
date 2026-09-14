@@ -362,7 +362,6 @@ impl GitPanel {
                     } else if ui.button("Initialize repository").clicked() {
                         action = Some(Operation::Init);
                     }
-                    if ui.button("Refresh").clicked() { action = Some(Operation::Refresh); }
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         ui.add(egui::Label::new(egui::RichText::new(&self.snapshot.branch).strong()).truncate());
                     });
@@ -1386,6 +1385,7 @@ mod tests {
                 );
             harness.run();
             assert!(harness.query_by_label("Git").is_none());
+            assert!(harness.query_by_label("Refresh").is_none());
             let mut columns = Vec::new();
             for label in ["Diff", "Staged diff", "Stage", "Unstage"] {
                 let rects = harness
