@@ -20,7 +20,11 @@ use std::{
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 const EDIT_DEBOUNCE: Duration = Duration::from_millis(180);
-pub(crate) const GUTTER_WIDTH: i8 = 12;
+/// Reserved space for the Git change marker beside the line-number gutter.
+///
+/// Keep this close to one editor character so the decoration does not create
+/// a visibly oversized blank strip when line numbers are enabled.
+pub(crate) const GUTTER_WIDTH: i8 = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ChangeKind {
@@ -137,6 +141,9 @@ pub(crate) struct LineChange {
     /// Zero-based buffer lines. An empty range marks a deletion at a boundary.
     pub(crate) lines: Range<usize>,
     pub(crate) kind: ChangeKind,
+    /// Number of lines represented by this change in the corresponding diff.
+    /// Deletions need this separately because their buffer range is empty.
+    pub(crate) line_count: usize,
 }
 
 impl LineChange {
@@ -151,6 +158,30 @@ impl LineChange {
                 self.lines.end
             )
         }
+    }
+}
+
+/// Line totals for the current document's Git diff. A replacement run is
+/// reported as modified using its current-buffer line count; pure additions
+/// and deletions use the corresponding side of the diff.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct LineChangeCounts {
+    pub(crate) added: usize,
+    pub(crate) modified: usize,
+    pub(crate) deleted: usize,
+}
+
+impl LineChangeCounts {
+    pub(crate) fn from_hunks(hunks: &[Hunk]) -> Self {
+        let mut counts = Self::default();
+        for change in hunks.iter().flat_map(|hunk| &hunk.changes) {
+            match change.kind {
+                ChangeKind::Added => counts.added += change.line_count,
+                ChangeKind::Modified => counts.modified += change.line_count,
+                ChangeKind::Deleted => counts.deleted += change.line_count,
+            }
+        }
+        counts
     }
 }
 
@@ -181,15 +212,17 @@ fn parse_hunks(diff: &str) -> Result<Vec<Hunk>, String> {
         if (*added > 0 || *deleted > 0)
             && let Some(hunk) = hunks.last_mut()
         {
+            let kind = if *added == 0 {
+                ChangeKind::Deleted
+            } else if *deleted == 0 {
+                ChangeKind::Added
+            } else {
+                ChangeKind::Modified
+            };
             hunk.changes.push(LineChange {
                 lines: cursor.saturating_sub(*added)..cursor,
-                kind: if *added == 0 {
-                    ChangeKind::Deleted
-                } else if *deleted == 0 {
-                    ChangeKind::Added
-                } else {
-                    ChangeKind::Modified
-                },
+                kind,
+                line_count: if *added == 0 { *deleted } else { *added },
             });
         }
         *added = 0;
@@ -331,6 +364,10 @@ impl Default for GitEditorState {
 }
 
 impl GitEditorState {
+    pub(crate) fn line_change_counts(&self) -> LineChangeCounts {
+        LineChangeCounts::from_hunks(&self.hunks)
+    }
+
     pub(crate) fn has_gutter(&self, path: Option<&Path>) -> bool {
         self.repository.as_ref().is_some_and(|root| {
             path.is_some_and(|path| path.starts_with(root) && !private_artifact(path))
@@ -408,6 +445,10 @@ impl GitEditorState {
                 self.repository = None;
             }
             self.hunks.clear();
+            // A selected chunk is tied to the exact buffer revision that
+            // produced it. Keep stale text from surviving a file switch or a
+            // subsequent edit while the replacement scan is pending.
+            self.chunk = None;
             self.next_scan = now
                 + if same_file {
                     EDIT_DEBOUNCE
@@ -465,6 +506,7 @@ impl GitEditorState {
                     changes: vec![LineChange {
                         lines: line..line + usize::from(kind != ChangeKind::Deleted),
                         kind,
+                        line_count: 1,
                     }],
                 });
             }
@@ -513,7 +555,10 @@ pub(crate) fn marker_geometry(
     clip: egui::Rect,
 ) -> Option<MarkerGeometry> {
     let first = rows.get(change.lines.start.min(rows.len().checked_sub(1)?))?;
-    let x = gutter_left + 3.0;
+    // The marker owns a compact eight-point lane. Keep both the painted shape
+    // and its hit target inside that lane so reducing the reserved margin
+    // cannot make the marker overlap source text.
+    let x = gutter_left + 2.0;
     let (paint, hit) = if change.lines.is_empty() {
         let y = if change.lines.start >= rows.len() {
             first.bottom()
@@ -521,19 +566,19 @@ pub(crate) fn marker_geometry(
             first.top()
         };
         (
-            egui::Rect::from_center_size(egui::pos2(x + 2.0, y), egui::vec2(8.0, 3.0)),
-            egui::Rect::from_center_size(egui::pos2(x + 2.0, y), egui::vec2(10.0, 12.0)),
+            egui::Rect::from_center_size(egui::pos2(gutter_left + 4.0, y), egui::vec2(6.0, 3.0)),
+            egui::Rect::from_center_size(egui::pos2(gutter_left + 4.0, y), egui::vec2(8.0, 12.0)),
         )
     } else {
         let last = rows.get(change.lines.end.saturating_sub(1).min(rows.len() - 1))?;
         (
             egui::Rect::from_min_max(
                 egui::pos2(x, first.top()),
-                egui::pos2(x + 4.0, last.bottom()),
+                egui::pos2(x + 3.0, last.bottom()),
             ),
             egui::Rect::from_min_max(
-                egui::pos2(x - 2.0, first.top()),
-                egui::pos2(x + 8.0, last.bottom()),
+                egui::pos2(gutter_left, first.top()),
+                egui::pos2(gutter_left + 8.0, last.bottom()),
             ),
         )
     };
@@ -645,7 +690,8 @@ mod tests {
             hunks[0].changes,
             [LineChange {
                 lines: 2..3,
-                kind: ChangeKind::Modified
+                kind: ChangeKind::Modified,
+                line_count: 1,
             }]
         );
         assert!(hunks[0].text.contains("-old\n+new\n"));
@@ -674,7 +720,8 @@ mod tests {
             hunks[0].changes,
             [LineChange {
                 lines: 0..1,
-                kind: ChangeKind::Added
+                kind: ChangeKind::Added,
+                line_count: 1,
             }]
         );
         assert_eq!(fs::read_to_string(path).unwrap(), "saved\n");
@@ -689,14 +736,16 @@ mod tests {
             hunks[0].changes,
             [LineChange {
                 lines: 1..4,
-                kind: ChangeKind::Modified
+                kind: ChangeKind::Modified,
+                line_count: 3,
             }]
         );
         assert_eq!(
             hunks[1].changes,
             [LineChange {
                 lines: 20..21,
-                kind: ChangeKind::Modified
+                kind: ChangeKind::Modified,
+                line_count: 1,
             }]
         );
         assert!(hunks[1].text.ends_with("\\ No newline at end of file\n"));
@@ -705,31 +754,60 @@ mod tests {
 
     #[test]
     fn additions_and_deletions_use_buffer_line_boundaries() {
-        for (diff, lines, kind) in [
-            ("@@ -0,0 +1,2 @@\n+one\n+two\n", 0..2, ChangeKind::Added),
-            ("@@ -1,2 +0,0 @@\n-one\n-two\n", 0..0, ChangeKind::Deleted),
+        for (diff, lines, kind, line_count) in [
+            ("@@ -0,0 +1,2 @@\n+one\n+two\n", 0..2, ChangeKind::Added, 2),
+            (
+                "@@ -1,2 +0,0 @@\n-one\n-two\n",
+                0..0,
+                ChangeKind::Deleted,
+                2,
+            ),
             (
                 "@@ -8,2 +7,0 @@\n-eight\n-nine\n",
                 7..7,
                 ChangeKind::Deleted,
+                2,
             ),
             (
                 "@@ -1,3 +1,2 @@\n-first\n second\n third\n",
                 0..0,
                 ChangeKind::Deleted,
+                1,
             ),
             (
                 "@@ -1,2 +1,3 @@\n one\n+two\n three\n",
                 1..2,
                 ChangeKind::Added,
+                1,
             ),
         ] {
             assert_eq!(
                 parse_hunks(diff).unwrap()[0].changes,
-                [LineChange { lines, kind }]
+                [LineChange {
+                    line_count,
+                    lines,
+                    kind,
+                }]
             );
         }
         assert!(parse_hunks("@@ malformed @@\n+x\n").is_err());
+    }
+
+    #[test]
+    fn line_change_counts_include_deleted_lines_at_empty_boundaries() {
+        let hunks = parse_hunks(
+            "@@ -1,4 +1,5 @@\n context\n-old\n+new\n+newer\n context\n@@ -8,2 +9,0 @@\n-gone\n-also gone\n@@ -12,0 +11,2 @@\n+one\n+two\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            LineChangeCounts::from_hunks(&hunks),
+            LineChangeCounts {
+                added: 2,
+                modified: 2,
+                deleted: 2,
+            }
+        );
     }
 
     #[test]
@@ -750,7 +828,8 @@ mod tests {
             hunks[0].changes,
             [LineChange {
                 lines: 1..2,
-                kind: ChangeKind::Modified
+                kind: ChangeKind::Modified,
+                line_count: 1,
             }]
         );
         assert!(hunks[0].text.contains("-second\n+unsaved 文稿"));
@@ -793,7 +872,8 @@ mod tests {
             hunks[0].changes,
             [LineChange {
                 lines: 0..2,
-                kind: ChangeKind::Added
+                kind: ChangeKind::Added,
+                line_count: 2,
             }]
         );
         text_run(&root, &["add", "--", "main.typ"]).unwrap();
@@ -923,6 +1003,26 @@ mod tests {
     }
 
     #[test]
+    fn changing_the_document_revision_drops_a_selected_chunk() {
+        let root = Path::new("/project");
+        let mut state = GitEditorState {
+            current: Some(key(root, 1)),
+            chunk: Some(ChunkDiff {
+                path: root.join("main.typ"),
+                hunk: Hunk {
+                    text: "-old\n+new\n".into(),
+                    changes: Vec::new(),
+                },
+            }),
+            ..Default::default()
+        };
+
+        state.prepare_request(&key(root, 2), Instant::now());
+
+        assert!(state.chunk.is_none());
+    }
+
+    #[test]
     fn windows_keep_independent_buffers_statuses_and_selected_chunks() {
         let a = tempfile::tempdir().unwrap();
         let b = tempfile::tempdir().unwrap();
@@ -1014,6 +1114,7 @@ mod tests {
             &LineChange {
                 lines: 1..2,
                 kind: ChangeKind::Modified,
+                line_count: 1,
             },
             &rows,
             0.0,
@@ -1027,7 +1128,8 @@ mod tests {
                 marker_geometry(
                     &LineChange {
                         lines: boundary..boundary,
-                        kind: ChangeKind::Deleted
+                        kind: ChangeKind::Deleted,
+                        line_count: 1,
                     },
                     &rows,
                     0.0,
@@ -1042,6 +1144,7 @@ mod tests {
                 &LineChange {
                     lines: boundary..boundary,
                     kind: ChangeKind::Deleted,
+                    line_count: 1,
                 },
                 &rows,
                 0.0,
@@ -1050,6 +1153,36 @@ mod tests {
             .unwrap();
             assert!(full.contains_rect(marker.hit));
             assert!(marker.hit.height() >= 6.0);
+        }
+    }
+
+    #[test]
+    fn marker_geometry_stays_within_the_compact_git_gutter() {
+        let rows = [egui::Rect::from_min_max(
+            egui::pos2(40.0, 0.0),
+            egui::pos2(400.0, 20.0),
+        )];
+        let clip = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(500.0, 100.0));
+        let gutter_left = 100.0;
+        let gutter_right = gutter_left + GUTTER_WIDTH as f32;
+
+        for change in [
+            LineChange {
+                lines: 0..1,
+                kind: ChangeKind::Modified,
+                line_count: 1,
+            },
+            LineChange {
+                lines: 1..1,
+                kind: ChangeKind::Deleted,
+                line_count: 1,
+            },
+        ] {
+            let geometry = marker_geometry(&change, &rows, gutter_left, clip).unwrap();
+            assert!(geometry.paint.min.x >= gutter_left);
+            assert!(geometry.paint.max.x <= gutter_right);
+            assert!(geometry.hit.min.x >= gutter_left);
+            assert!(geometry.hit.max.x <= gutter_right);
         }
     }
 

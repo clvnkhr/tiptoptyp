@@ -373,7 +373,7 @@ fn git_diff_viewports_and_input_are_owned_by_each_document_window() {
     let context = egui::Context::default();
     let first = egui::ViewportId::ROOT;
     let second = egui::ViewportId::from_hash_of("second-editor");
-    for salt in ["tiptoptyp-git", "tiptoptyp-git-chunk"] {
+    for salt in ["tiptoptyp-git", "tiptoptyp-popup-overlay"] {
         let first_child = egui::ViewportId::from_hash_of((first, salt));
         let second_child = egui::ViewportId::from_hash_of((second, salt));
         assert_ne!(first_child, second_child);
@@ -1729,6 +1729,29 @@ fn tooltip_markdown_link_dispatches_its_normalized_target() {
 }
 
 #[test]
+fn tooltip_code_jobs_are_cached_while_a_popup_scrolls() {
+    let context = egui::Context::default();
+    let highlighter = GenericSyntaxHighlighter::default();
+    let mut typst_highlighter = SyntaxHighlighter::default();
+    let palette = theme::default_syntax_palette(true);
+    for _ in 0..2 {
+        let _ = cached_tooltip_code_job(
+            &context,
+            &highlighter,
+            &mut typst_highlighter,
+            "let value = 1",
+            "typc",
+            true,
+            palette,
+        );
+    }
+
+    let cache_id = viewport_scoped_id(&context, "tooltip-code-cache");
+    let cache = context.data(|data| data.get_temp::<TooltipCodeCache>(cache_id));
+    assert_eq!(cache.as_ref().map(|cache| cache.jobs.len()), Some(1));
+}
+
+#[test]
 fn editor_context_menu_exposes_the_link_under_the_pointer() {
     use egui_kittest::{Harness, kittest::Queryable as _};
 
@@ -2355,7 +2378,7 @@ fn explorer_sections_split_the_body_budget_without_hiding_headers() {
 
 #[test]
 fn explorer_section_resize_moves_only_the_adjacent_open_split() {
-    let open = [true, false, true, true, false, false];
+    let open = [true, false, true, true, false, false, false];
     let mut layout = ExplorerSectionLayout::default();
     let before = layout.body_heights(open, 300.0);
     assert!((before[0] - 100.0).abs() < 0.01);
@@ -2435,11 +2458,11 @@ fn explorer_search_covers_every_project_index_section() {
     };
 
     for (query, section) in [
-        ("introduction", 1),
-        ("appendix", 2),
-        ("ACCENT-COLOR", 3),
-        ("cetz", 4),
-        ("fig:overview", 5),
+        ("introduction", 2),
+        ("appendix", 3),
+        ("ACCENT-COLOR", 4),
+        ("cetz", 5),
+        ("fig:overview", 6),
     ] {
         let query = normalize_explorer_query(query);
         let matches = explorer_section_query_matches(Some(&snapshot), &index, &query);
@@ -2448,14 +2471,14 @@ fn explorer_search_covers_every_project_index_section() {
 
     assert_eq!(
         explorer_section_query_matches(Some(&snapshot), &index, "does-not-exist"),
-        [true, false, false, false, false, false],
+        [true, false, false, false, false, false, false],
         "an empty result keeps the Files surface open for its empty-state message"
     );
 }
 
 #[test]
 fn explorer_section_resize_clamps_to_a_usable_minimum() {
-    let open = [true, true, false, false, false, false];
+    let open = [true, true, false, false, false, false, false];
     let mut layout = ExplorerSectionLayout::default();
     assert!(layout.resize_after(open, 200.0, 0, 1_000.0));
     let heights = layout.body_heights(open, 200.0);
@@ -2463,7 +2486,7 @@ fn explorer_section_resize_clamps_to_a_usable_minimum() {
     assert!((heights[1] - EXPLORER_SECTION_MIN_BODY_HEIGHT).abs() < 0.01);
 
     let tiny = layout.body_heights(open, 40.0);
-    assert_eq!(tiny, [20.0, 20.0, 0.0, 0.0, 0.0, 0.0]);
+    assert_eq!(tiny, [20.0, 20.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
     assert!(!layout.resize_after(open, 40.0, 0, 5.0));
 }
 
@@ -2524,6 +2547,7 @@ fn gutter_marker_receives_clicks_beside_the_actual_text_editor() {
             LineChange {
                 lines: 1..2,
                 kind: ChangeKind::Modified,
+                line_count: 1,
             },
             "Git change: modified lines 2–2",
         ),
@@ -2532,6 +2556,7 @@ fn gutter_marker_receives_clicks_beside_the_actual_text_editor() {
             LineChange {
                 lines: 0..0,
                 kind: ChangeKind::Deleted,
+                line_count: 1,
             },
             "Git change: deleted lines at line 1",
         ),
@@ -2655,6 +2680,7 @@ fn explorer_section_frames_fit_the_available_height() {
                 let body_height = explorer_section_body_height(ui);
                 for ((id_salt, default_open), title) in EXPLORER_SECTION_SPECS.into_iter().zip([
                     "Files",
+                    "Git",
                     "Contents",
                     "Subfiles",
                     "Symbols",
@@ -3468,6 +3494,42 @@ fn preview_status_does_not_report_zero_millisecond_startup_timing() {
         preview_timing_label(DocumentKind::Pdf, Duration::from_millis(18)),
         None
     );
+}
+
+#[test]
+fn opening_git_from_a_normal_window_reveals_the_explorer() {
+    assert!(git_command_opens_explorer(false, None));
+    assert!(!git_command_opens_explorer(true, None));
+    assert!(!git_command_opens_explorer(
+        false,
+        Some(UiSnapshotScene::GitWindow)
+    ));
+}
+
+#[test]
+fn hidden_git_section_clears_a_persisted_open_state() {
+    let context = egui::Context::default();
+    context
+        .run_ui(Default::default(), |ui| {
+            let id = explorer_section_state_id(ui, "workspace-git", false);
+            let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
+                ui.ctx(),
+                id,
+                false,
+            );
+            state.set_open(true);
+            state.store(ui.ctx());
+            set_explorer_section_open(ui, "workspace-git", false);
+            assert!(
+                !egui::collapsing_header::CollapsingState::load_with_default_open(
+                    ui.ctx(),
+                    id,
+                    false
+                )
+                .is_open()
+            );
+        })
+        .drop_without_applying_deltas();
 }
 
 #[test]
@@ -4747,6 +4809,17 @@ fn bottom_status_collects_every_non_preview_fallback() {
     assert!(details[0].starts_with("Appearance:"));
     assert_eq!(details[1], "Typst: bundled Typst is missing; using PATH");
     assert_eq!(details[2], "Tinymist: Tinymist is unavailable");
+}
+
+#[test]
+fn git_line_change_summary_keeps_all_change_categories_visible() {
+    let summary = EditorApp::git_line_change_summary(crate::git::editor::LineChangeCounts {
+        added: 12,
+        modified: 3,
+        deleted: 7,
+    });
+
+    assert_eq!(summary, "Git: +12 added · ~3 modified · −7 deleted");
 }
 
 #[test]

@@ -7,6 +7,7 @@ use crate::{
 };
 use eframe::egui;
 use std::{
+    env,
     ffi::OsString,
     fs,
     io::{Read, Seek, SeekFrom, Write},
@@ -133,7 +134,6 @@ impl crate::worker::OperationSummary for ResultData {
     }
 }
 
-#[derive(Default)]
 pub(crate) struct GitPanel {
     pub(crate) visible: bool,
     workspace: PathBuf,
@@ -144,9 +144,36 @@ pub(crate) struct GitPanel {
     commit_message: String,
     failed: bool,
     diff: Option<DiffView>,
+    refresh_requested: bool,
+}
+
+impl Default for GitPanel {
+    fn default() -> Self {
+        Self {
+            // Git is a first-class Explorer section. View > Git can still
+            // hide it when users want more room for the file tree.
+            visible: true,
+            workspace: PathBuf::new(),
+            snapshot: Snapshot::default(),
+            job: ExclusiveJob::default(),
+            job_workspace: None,
+            message: String::new(),
+            commit_message: String::new(),
+            failed: false,
+            diff: None,
+            refresh_requested: false,
+        }
+    }
 }
 
 impl GitPanel {
+    /// Queue a status scan for the next panel frame. The request is retained
+    /// while a Git operation is running, so filesystem updates cannot be lost
+    /// behind an in-flight stage, commit, or diff operation.
+    pub(crate) fn request_refresh(&mut self) {
+        self.refresh_requested = true;
+    }
+
     pub(crate) fn open(&mut self, context: &egui::Context, workspace: &Path) {
         self.visible = true;
         self.sync_workspace(context, workspace);
@@ -170,6 +197,21 @@ impl GitPanel {
 
     fn start(&mut self, context: &egui::Context, operation: Operation) {
         if self.job.is_running() {
+            return;
+        }
+        if matches!(&operation, Operation::Refresh) {
+            self.refresh_requested = false;
+        }
+        if let Operation::Diff(path, kind) = &operation
+            && self
+                .diff
+                .as_ref()
+                .is_some_and(|diff| diff.selection.path == *path && diff.selection.kind == *kind)
+        {
+            // The row action doubles as the toggle. This keeps the diff page
+            // focused on the comparison itself without a redundant close
+            // button in its header.
+            self.diff = None;
             return;
         }
         let selection = match &operation {
@@ -220,6 +262,10 @@ impl GitPanel {
             return;
         }
         self.sync_workspace(context, workspace);
+        if self.refresh_requested && !self.job.is_running() {
+            self.refresh_requested = false;
+            self.start(context, Operation::Refresh);
+        }
         match self.job.poll() {
             LatestJobPoll::Ready(result) if result.workspace == self.workspace => {
                 self.failed = result.failed;
@@ -254,15 +300,14 @@ impl GitPanel {
         }
     }
 
-    pub(crate) fn show(&mut self, ui: &mut egui::Ui, dirty: bool) {
+    pub(crate) fn show(&mut self, ui: &mut egui::Ui, workspace: &Path, dirty: bool) {
         // Worker completions repaint their originating viewport. Collect them
         // here too: the main editor need not redraw while this window is active.
-        self.poll(ui.ctx(), &self.workspace.clone());
+        self.poll(ui.ctx(), workspace);
         let mut action = None;
         let busy = self.job.is_running();
         let palette = theme::palette(ui.ctx());
         egui::ScrollArea::vertical().id_salt("git-page").auto_shrink([false, false]).show(ui, |ui| {
-            ui.heading("Git");
             ui.add(egui::Label::new(self.snapshot.root.to_string_lossy()).truncate())
                 .on_hover_text(self.snapshot.root.display().to_string());
             ui.add_space(theme::SPACE.content);
@@ -378,12 +423,10 @@ impl GitPanel {
             return;
         };
         let palette = theme::palette(ui.ctx());
-        let mut close = false;
         let response = egui::Frame::group(ui.style())
             .inner_margin(theme::SPACE.content)
             .show(ui, |ui| {
                 right_action_row(ui, |ui| {
-                    close = ui.button("Close diff").clicked();
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         ui.strong(diff.selection.kind.title());
                     });
@@ -429,9 +472,6 @@ impl GitPanel {
         if diff.reveal {
             response.scroll_to_me(Some(egui::Align::Center));
             diff.reveal = false;
-        }
-        if close {
-            self.diff = None;
         }
     }
 
@@ -531,11 +571,76 @@ fn run(root: &Path, args: &[OsString]) -> Result<Vec<u8>, String> {
     run_command(root, args, false)
 }
 
+fn git_executable() -> Option<PathBuf> {
+    if let Some(path) = env::var_os("PATH") {
+        for directory in env::split_paths(&path) {
+            #[cfg(windows)]
+            {
+                let extensions =
+                    env::var_os("PATHEXT").unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".into());
+                for extension in extensions.to_string_lossy().split(';') {
+                    let candidate = directory.join(format!("git{extension}"));
+                    if is_executable(&candidate) {
+                        return Some(candidate);
+                    }
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                let candidate = directory.join("git");
+                if is_executable(&candidate) {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+
+    // GUI applications on macOS do not always inherit the shell's PATH.
+    // Check the system and common Homebrew locations after PATH so a Git
+    // installation remains usable when the app was launched from Finder.
+    #[cfg(target_os = "macos")]
+    for candidate in [
+        "/usr/bin/git",
+        "/opt/homebrew/bin/git",
+        "/usr/local/bin/git",
+    ] {
+        let candidate = PathBuf::from(candidate);
+        if is_executable(&candidate) {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
+
+fn is_executable(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
 fn run_command(root: &Path, args: &[OsString], diff_exit_status: bool) -> Result<Vec<u8>, String> {
     // File-backed output prevents pipe deadlocks and bounds resident output.
+    if !root.is_dir() {
+        return Err(format!("Git workspace is unavailable: {}", root.display()));
+    }
+    let program = git_executable()
+        .ok_or_else(|| "Could not start Git: no Git executable was found".to_owned())?;
     let mut stdout = tempfile::tempfile().map_err(|e| e.to_string())?;
     let mut stderr = tempfile::tempfile().map_err(|e| e.to_string())?;
-    let child = Command::new("git")
+    let child = Command::new(program)
         .arg("--no-pager")
         .arg("--literal-pathspecs")
         .args(args)
@@ -548,7 +653,13 @@ fn run_command(root: &Path, args: &[OsString], diff_exit_status: bool) -> Result
         .stdout(stdout.try_clone().map_err(|e| e.to_string())?)
         .stderr(stderr.try_clone().map_err(|e| e.to_string())?)
         .spawn()
-        .map_err(|e| format!("Could not start Git: {e}"))?;
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound && !root.is_dir() {
+                format!("Git workspace is unavailable: {}", root.display())
+            } else {
+                format!("Could not start Git: {error}")
+            }
+        })?;
     let status = crate::process::wait(child, Duration::from_secs(60), || {
         if stdout.metadata()?.len() > 4 * 1024 * 1024 || stderr.metadata()?.len() > 4 * 1024 * 1024
         {
@@ -858,10 +969,62 @@ mod tests {
         assert!(snapshot(root).unwrap().history.contains("Initial"));
     }
 
+    #[test]
+    fn missing_workspace_reports_a_specific_git_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let missing = temp.path().join("deleted-workspace");
+        let error = run_command(&missing, &args(&["status"]), false).unwrap_err();
+        assert!(
+            error.starts_with("Git workspace is unavailable:"),
+            "unexpected error: {error}"
+        );
+    }
+
     fn configure_identity(root: &Path) {
         text_run(root, &["config", "user.name", "Test"]).unwrap();
         text_run(root, &["config", "user.email", "test@example.invalid"]).unwrap();
         text_run(root, &["config", "commit.gpgsign", "false"]).unwrap();
+    }
+
+    #[test]
+    fn panel_is_visible_by_default_and_refresh_requests_pick_up_file_changes() {
+        use egui_kittest::Harness;
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        perform(root, Operation::Init).unwrap();
+        configure_identity(root);
+        fs::write(root.join("main.typ"), "initial\n").unwrap();
+        perform(root, Operation::StageAll).unwrap();
+        perform(root, Operation::Commit("Initial".into())).unwrap();
+
+        let mut panel = GitPanel {
+            snapshot: snapshot(root).unwrap(),
+            ..Default::default()
+        };
+        assert!(panel.visible);
+        panel.request_refresh();
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(860.0, 500.0))
+            .build_ui_state(|ui, panel| panel.show(ui, root, false), panel);
+        harness.step();
+        finish_ui_job(&mut harness);
+        assert!(harness.state().snapshot.entries.is_empty());
+
+        fs::write(root.join("main.typ"), "changed\n").unwrap();
+        harness.state_mut().request_refresh();
+        harness.step();
+        finish_ui_job(&mut harness);
+        assert_eq!(
+            harness
+                .state()
+                .snapshot
+                .entries
+                .iter()
+                .find(|entry| entry.path == Path::new("main.typ"))
+                .map(|entry| entry.worktree),
+            Some('M')
+        );
     }
 
     #[test]
@@ -1152,10 +1315,11 @@ mod tests {
             let mut harness = Harness::builder()
                 .with_size(egui::vec2(width, 900.0))
                 .build_ui_state(
-                    |ui, panel| panel.show(ui, false),
+                    |ui, panel| panel.show(ui, Path::new("/Projects/research-paper"), false),
                     GitPanel::snapshot_fixture(),
                 );
             harness.run();
+            assert!(harness.query_by_label("Git").is_none());
             let mut columns = Vec::new();
             for label in ["Diff", "Staged diff", "Stage", "Unstage"] {
                 let rects = harness
@@ -1230,7 +1394,7 @@ mod tests {
         // This harness only renders the child panel; no root-window poll runs.
         let mut harness = Harness::builder()
             .with_size(egui::vec2(860.0, 900.0))
-            .build_ui_state(|ui, panel| panel.show(ui, false), panel);
+            .build_ui_state(|ui, panel| panel.show(ui, root, false), panel);
         harness.run();
         harness.get_by_label("Diff").click();
         harness.step();
@@ -1261,13 +1425,16 @@ mod tests {
     }
 
     #[test]
-    fn diff_view_has_explicit_empty_loading_and_error_states_and_can_close() {
+    fn diff_view_has_explicit_empty_loading_and_error_states() {
         use egui_kittest::{Harness, kittest::Queryable as _};
         let mut panel = GitPanel::snapshot_fixture();
         panel.diff.as_mut().unwrap().content = None;
         let mut harness = Harness::builder()
             .with_size(egui::vec2(860.0, 900.0))
-            .build_ui_state(|ui, panel| panel.show(ui, false), panel);
+            .build_ui_state(
+                |ui, panel| panel.show(ui, Path::new("/Projects/research-paper"), false),
+                panel,
+            );
         harness.run_steps(2);
         harness.get_by_label("Loading diff…");
         for kind in [DiffKind::WorkingTree, DiffKind::Staged] {
@@ -1280,9 +1447,16 @@ mod tests {
         harness.state_mut().diff.as_mut().unwrap().content = Some(Err("Comparison failed".into()));
         harness.run();
         harness.get_by_label("Comparison failed");
-        harness.get_by_label("Close diff").click();
-        harness.run();
-        assert!(harness.state().diff.is_none());
+    }
+
+    #[test]
+    fn selecting_the_same_diff_action_toggles_the_view_closed() {
+        let mut panel = GitPanel::snapshot_fixture();
+        panel.start(
+            &egui::Context::default(),
+            Operation::Diff("main.typ".into(), DiffKind::WorkingTree),
+        );
+        assert!(panel.diff.is_none());
     }
 
     #[test]
@@ -1313,17 +1487,18 @@ mod tests {
             .unwrap();
         let mut harness = Harness::builder()
             .with_size(egui::vec2(560.0, 400.0))
-            .build_ui_state(|ui, panel| panel.show(ui, false), panel);
+            .build_ui_state(
+                |ui, panel| panel.show(ui, Path::new("/Projects/research-paper"), false),
+                panel,
+            );
         harness.run_steps(2);
         sender.send(()).unwrap();
         finish_ui_job(&mut harness);
         let heading = harness.get_by_label("Unstaged changes").rect();
-        let close = harness.get_by_label("Close diff").rect();
         assert!(
             heading.top() >= 0.0 && heading.bottom() <= 400.0,
             "{heading:?}"
         );
-        assert!(close.top() >= 0.0 && close.bottom() <= 400.0, "{close:?}");
         let changes = harness.get_by_label_contains("+The revised model").rect();
         assert!(
             changes.top() >= heading.bottom() && changes.top() < 400.0,

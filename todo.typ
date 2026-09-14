@@ -161,9 +161,9 @@ I was using two different windows with two different workspaces. Possibly i was 
 125. [x] when searching with find/find and replace, it should on each keystroke automatically jump in the code panel to the first match. currently it only jumps when we hit enter.
 126. [x] when searching with find/find and replace, all matches should immediately recieve a highlight. currently it only has a highlight on the current line. thats good, but we also need a different highlight color for the matches.
 127. [x] popups in a main window stop working if we have another window open e.g. packages or settings window. the popups should either always work or at least work for the currently focused window.
-128. [ ] close diff button is superfluous, remove it.
-129. [ ] in fact lets not have a separate git hunk diff window at all. Have the diff show in a popup.
-130. [ ] the git window should instead be a subpanel in the explorer window.
+128. [x] close diff button is superfluous, remove it.
+129. [x] in fact lets not have a separate git hunk diff window at all. Have the diff show in a popup.
+130. [x] the git window should instead be a subpanel in the explorer window.
 131. [ ] the tags and references subpanel should be two separate panels
 132. [ ] allow us to choose the order of the explorer panels in Settings. git panel should default to under files
 133. [ ] (deferred) implement tabs
@@ -171,15 +171,20 @@ I was using two different windows with two different workspaces. Possibly i was 
 135. [ ] when cursor is at a bracket/dollar sign/etc we should highlight the matching char.
 136. [ ] when we type one of these bracket chars, we should by default automatically insert the matching char and place the cursor in between. If we backspace, from this, delete both. This should be configurable in settings.
 137. [ ] we should also implement rainbow brackets. Each type of bracket pair (`[]`, `()`, `{}`,, and mixed brackets `(],[},` etc) should use a different cycle of colors. Allow us to choose palletes to cycle through for the brackets in settings.
-138. [ ] i noticed that if a popup appears because i hovered over something, then scroll, the scrolling is not performant, losing frames. Investigate and fix.
-139. [ ] too much space is reserved for the git hunk color marker on the side. It should take at most 1 char width or other similar small measurement.
+138. [x] i noticed that if a popup appears because i hovered over something, then scroll, the scrolling is not performant, losing frames. Investigate and fix.
+139. [x] too much space is reserved for the git hunk color marker on the side. It should take at most 1 char width or other similar small measurement.
 
 = resolved in the 2026-09-13 easy backlog pass
 
 - Items 121, 122: Explorer asset hover candidates now end at the visible panel clip, and the active file's stronger face keeps the shared content font size.
 - Items 123, 124: Preview status text uses “Preview ready” consistently and suppresses zero-millisecond timing so startup fixtures cannot claim a completed PDF build.
 - Items 125, 126: Find query edits select the first result immediately, and every result receives a syntax-preserving background highlight with a stronger color for the selected match.
-- Verification: Added explorer geometry, active-font-size, startup timing, and layout-highlight regressions; focused tests pass.
+- Item 127: Main-window popups no longer close just because a settings, package, Git, or chunk child window is visible; only overlays owned by the root editor can block them.
+- Items 128, 129: File diffs toggle closed from the same row action, and hunk diffs now render in the owning editor's popup with Escape or dismissal closing the chunk; the separate Git chunk child viewport is gone.
+- Item 130: Normal document windows render the Git panel as an Explorer subpanel; the separate Git child remains only for the deterministic Git window scene. View > Git also opens Explorer when it was closed, and a one-shot reveal overrides a stale collapsed section state.
+- Item 138: Tooltip code blocks cache their highlighted `LayoutJob`s per document viewport and theme, avoiding repeated syntax work while scrolling a hover popup.
+- Item 139: Git hunk markers now reserve an eight-point lane, with painted and clickable geometry constrained to that lane.
+- Verification: Added explorer geometry, active-font-size, startup timing, layout-highlight, popup gating, diff-toggle, popup-routing, tooltip-cache, and compact-gutter regressions; focused tests pass.
 
 = resolved in the 2026-09-07 pass
 
@@ -483,15 +488,22 @@ Only deferred items 1, 2, and 26 remain unchecked.
 
 - Item 112: Explorer files show Git status badges with staging details on hover.
   Added, modified, and deleted line runs appear beside the line numbers; context
-  lines are not highlighted. Clicking a marker opens its selected chunk in an
-  independent native diff window. Comparisons include staged and unsaved edits
-  against the last commit, without changing the source file or Git index.
+  lines are not highlighted. Clicking a marker opens its selected chunk in a
+  popup owned by that document window. Comparisons include staged and unsaved
+  edits against the last commit, without changing the source file or Git index.
 - Each document window owns its scans and selected chunk. Results carry the
   workspace, path, and buffer revision, so late results cannot replace another
   document's hunks. Background jobs repaint their originating viewport. Tests
   cover two different buffers of the same file alongside another repository,
   wrapped lines, clipping, deletion boundaries, and actual editor gutter clicks
   in both populated and empty documents.
+- Regression correction: changing the document revision now closes the selected
+  chunk before a new Git scan, so a popup cannot display stale content after a
+  file switch or edit. View > Git also reveals a previously closed Explorer.
+- The document status row now reports Git line totals as `+ added`,
+  `~ modified`, and `− deleted` from the current buffer diff. Deleted runs
+  retain their old-line count even though their editor range is an empty
+  boundary, and the summary has a descriptive hover tooltip.
 - Item 26: The combined Git/theme capture reproduced missing glyphs. GPU
   readback confirmed pixels missing from the uploaded font atlas. Immediate
   viewport rendering now resynchronizes the current atlas after font-cache
@@ -565,3 +577,22 @@ Only deferred items 1, 2, and 26 remain unchecked.
   under `.tiptoptyp/screenshots/refactor-review/native-geometry.log`; composed
   native child-window placement was not visually verified. Both Typst documents
   compile to private review outputs without overwriting existing PDFs.
+
+= correctness audit (2026-09-13 Git and document-state regressions)
+
+- Item 130: View > Git now opens the Explorer panel when it was closed, and
+  explicitly reveals the Git section once even if a persisted collapsing state
+  had left it hidden.
+- Item 112: Selected Git chunks are discarded whenever the owning document
+  revision or path changes. A stale chunk popup therefore cannot remain visible
+  after editing or switching files, while each window keeps its own selection.
+- The Git Explorer section is visible by default in normal document windows;
+  View > Git still toggles it when more file-tree space is needed. Its body
+  starts with the repository path rather than a redundant large `Git` heading.
+- Workspace/file refreshes queue a Git status scan automatically, including
+  updates after saves, external reloads, and the periodic filesystem check.
+- Verification: Formatting, strict Clippy, all 582 application tests (2
+  environment-dependent tests ignored), and all 8 xtask tests pass. A release
+  capture attempt for `git-window` could not start a native viewport in this
+  environment because macOS LaunchServices/HIServices reported an invalid XPC
+  connection and then timed out; no visual pass is claimed from that attempt.

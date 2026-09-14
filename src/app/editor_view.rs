@@ -764,6 +764,13 @@ impl EditorApp {
             && let Some(path) = &self.document.path()
         {
             self.git_editor.open_chunk(index, path);
+            if let Some(chunk) = self.git_editor.chunk.clone() {
+                let anchor = ui
+                    .ctx()
+                    .pointer_latest_pos()
+                    .unwrap_or_else(|| ui.max_rect().left_top());
+                self.open_app_popup(AppPopup::GitChunk { anchor, chunk });
+            }
             ui.ctx().request_repaint();
         }
 

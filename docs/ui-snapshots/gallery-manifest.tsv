@@ -69,7 +69,7 @@ scene	settings-font-picker	settings	settings-settings-font-picker	targeted	-	-
 scene	asset-preview	asset-hover	asset-hover-asset-preview	targeted	transparent	-
 scene	git-window	git	git-git-window	targeted	-	-
 scene	git-editor	main	main-git-editor	targeted	-	-
-scene	git-chunk	git-chunk	git-chunk	targeted	-	-
+scene	git-chunk	popup	popup-git-chunk	targeted	-	-
 scene-theme	catppuccin-latte
 scene-theme	catppuccin-mocha
 variant	before-components	catppuccin-latte	main	1	30	catppuccin-latte-inverted-hue-p30

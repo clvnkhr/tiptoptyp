@@ -183,7 +183,7 @@ impl UiSnapshotScene {
             Self::AssetPreview => "asset-hover",
             Self::GitWindow => "git",
             Self::GitEditor => ROOT_VIEWPORT_NAME,
-            Self::GitChunk => "git-chunk",
+            Self::GitChunk => "popup",
             Self::SettingsWindow
             | Self::SettingsFontPicker
             | Self::SettingsThemePicker

@@ -848,6 +848,14 @@ struct MarkdownInlineSpan {
     link: Option<String>,
 }
 
+/// Syntax highlighting a tooltip is independent of scrolling, so retain the
+/// completed jobs in the owning viewport. This keeps wheel events from
+/// reparsing and re-highlighting every code span on every frame.
+#[derive(Clone, Default)]
+struct TooltipCodeCache {
+    jobs: BTreeMap<u64, Option<egui::text::LayoutJob>>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct TooltipGeometry {
     identity: u64,
@@ -1019,6 +1027,10 @@ enum AppPopup {
     FontSelector {
         anchor: Pos2,
         target: FontArgumentTarget,
+    },
+    GitChunk {
+        anchor: Pos2,
+        chunk: crate::git::editor::ChunkDiff,
     },
     StatusLog {
         anchor: Pos2,
@@ -1351,6 +1363,10 @@ pub struct EditorApp {
     tinymist_tool: ToolResolution,
     workspace_root: PathBuf,
     git: crate::git::GitPanel,
+    // The default Git section should be visible even if an older session
+    // persisted it as collapsed. Opening Git from the command menu uses the
+    // same one-shot reveal, preserving subsequent user choice.
+    git_explorer_reveal: bool,
     git_editor: crate::git::editor::GitEditorState,
     workspace_chooser_visible: bool,
     workspace: Option<WorkspaceTree>,
@@ -1600,6 +1616,7 @@ impl EditorApp {
             tinymist_tool,
             workspace_root,
             git: crate::git::GitPanel::default(),
+            git_explorer_reveal: true,
             git_editor: crate::git::editor::GitEditorState::default(),
             workspace_chooser_visible: false,
             workspace: None,
@@ -3023,7 +3040,24 @@ impl EditorApp {
                 }
             }
             AppCommand::Packages => self.open_package_manager(context),
-            AppCommand::Git => self.git.open(context, &self.workspace_root),
+            AppCommand::Git => {
+                let opens_explorer =
+                    git_command_opens_explorer(self.git.visible, self.snapshot_scene);
+                if self.git.visible && self.snapshot_scene.is_none() {
+                    self.git.visible = false;
+                    self.git_explorer_reveal = false;
+                } else {
+                    self.git.open(context, &self.workspace_root);
+                    if opens_explorer {
+                        // Git is an Explorer subpanel in normal windows. Make
+                        // the owning panel visible as part of the command so
+                        // invoking View > Git cannot produce an invisible
+                        // state when Explorer was previously closed.
+                        self.filesystem_phase = ExplorerPanelPhase::Open;
+                        self.git_explorer_reveal = true;
+                    }
+                }
+            }
             AppCommand::ExportPdf => self.export_pdf(frame),
             AppCommand::Undo => self.undo_editor(context, false),
             AppCommand::Redo => self.undo_editor(context, true),
@@ -3123,9 +3157,7 @@ impl EditorApp {
         if visible {
             // A root popup and a child settings window must never compete for
             // native focus. Settings owns transient interaction until closed.
-            self.app_popup = None;
-            self.app_popup_had_focus = false;
-            self.app_popup_blur_started = None;
+            self.close_app_popup();
         }
     }
 
@@ -3141,9 +3173,13 @@ impl EditorApp {
     }
 
     fn close_app_popup(&mut self) {
+        let closes_git_chunk = matches!(self.app_popup, Some(AppPopup::GitChunk { .. }));
         self.app_popup = None;
         self.app_popup_had_focus = false;
         self.app_popup_blur_started = None;
+        if closes_git_chunk {
+            self.git_editor.chunk = None;
+        }
     }
 
     fn open_find(&mut self, replace: bool) {
@@ -3250,6 +3286,14 @@ impl EditorApp {
                     SOURCE,
                     scene == UiSnapshotScene::GitChunk,
                 );
+                if scene == UiSnapshotScene::GitChunk
+                    && let Some(chunk) = self.git_editor.chunk.clone()
+                {
+                    self.app_popup = Some(AppPopup::GitChunk {
+                        anchor: toolbar_anchor,
+                        chunk,
+                    });
+                }
                 self.workspace = Some(WorkspaceTree::from_snapshot(WorkspaceSnapshot {
                     root: self.workspace_root.clone(),
                     nodes: [path, self.workspace_root.join("references.bib")]
@@ -4134,6 +4178,7 @@ impl EditorApp {
         } else {
             self.preview.status = PreviewStatus::Ready(Duration::ZERO);
         }
+        self.git.request_refresh();
         true
     }
 
@@ -5008,6 +5053,7 @@ impl EditorApp {
 
     fn refresh_workspace(&mut self) {
         self.git_editor.refresh();
+        self.git.request_refresh();
         if !self.workspace_scan.is_running() {
             let root = self
                 .workspace
@@ -6885,12 +6931,34 @@ impl EditorApp {
         let context = ui.ctx().clone();
         let explorer_query = normalize_explorer_query(&self.explorer_query);
         let filter_active = !explorer_query.is_empty();
-        let section_defaults = if filter_active {
+        let mut section_defaults = if filter_active {
             explorer_section_query_matches(snapshot, project_index, &explorer_query)
         } else {
             std::array::from_fn(|index| EXPLORER_SECTION_SPECS[index].1)
         };
-        let open_sections = explorer_section_open_states(ui, filter_active, section_defaults);
+        let git_in_explorer =
+            self.git.visible && self.snapshot_scene != Some(UiSnapshotScene::GitWindow);
+        section_defaults[1] = git_in_explorer;
+        if !git_in_explorer {
+            // Keep the hidden section genuinely collapsed. Merely removing
+            // it from the height budget still lets a persisted open state
+            // render an empty body and consume a frame of layout.
+            set_explorer_section_open(ui, "workspace-git", false);
+        }
+        if git_in_explorer && self.git_explorer_reveal {
+            // `CollapsingState` survives across frames, so a Git panel that
+            // was previously closed can otherwise remain visually hidden when
+            // the user opens Git from the command menu. Reveal it once, then
+            // let the user control the section normally.
+            set_explorer_section_open(ui, "workspace-git", true);
+            self.git_explorer_reveal = false;
+        }
+        let mut open_sections = explorer_section_open_states(ui, filter_active, section_defaults);
+        if !git_in_explorer {
+            // A persisted open state must not reserve space for a hidden Git
+            // section after the panel has been closed.
+            open_sections[1] = false;
+        }
         let open_section_count = open_sections.iter().filter(|is_open| **is_open).count();
         let section_frame_height = theme::explorer_section_frame(ui.style())
             .total_margin()
@@ -7007,6 +7075,25 @@ impl EditorApp {
         );
         if resize_delta.abs() > f32::EPSILON {
             section_resize = Some((0, resize_delta));
+        }
+
+        let git_dirty = self.document.is_dirty();
+        if git_in_explorer {
+            let resize_delta = explorer_section_resizable(
+                ui,
+                ExplorerSectionRenderSpec {
+                    id_salt: "workspace-git",
+                    title: "Git",
+                    default_open: section_defaults[1],
+                    body_height: section_body_heights[1],
+                    show_resize_handle: next_open_explorer_section(open_sections, 1).is_some(),
+                    filtered: filter_active,
+                },
+                |ui| self.git.show(ui, &self.workspace_root, git_dirty),
+            );
+            if resize_delta.abs() > f32::EPSILON {
+                section_resize = Some((1, resize_delta));
+            }
         }
 
         let ExplorerProjectSectionsOutcome {
@@ -8028,6 +8115,28 @@ impl EditorApp {
         Some(line_column_at_char(self.document.source(), char_index))
     }
 
+    fn git_line_change_counts(&self) -> Option<crate::git::editor::LineChangeCounts> {
+        let path = self
+            .document
+            .path()
+            .as_deref()
+            .filter(|_| self.document.kind().is_editable());
+        self.git_editor
+            .has_gutter(path)
+            .then(|| self.git_editor.line_change_counts())
+    }
+
+    fn git_child_window_visible(&self) -> bool {
+        self.snapshot_scene == Some(UiSnapshotScene::GitWindow) && self.git.visible
+    }
+
+    fn git_line_change_summary(counts: crate::git::editor::LineChangeCounts) -> String {
+        format!(
+            "Git: +{} added · ~{} modified · −{} deleted",
+            counts.added, counts.modified, counts.deleted
+        )
+    }
+
     fn show_status_bar(&mut self, ui: &mut egui::Ui) {
         self.prepare_editor_source_data();
         let source_metrics = self.editor_data.source_metrics();
@@ -8150,6 +8259,17 @@ impl EditorApp {
                         .halign(Align::RIGHT),
                     ),
                     &notice.message,
+                );
+            }
+            if let Some(counts) = self.git_line_change_counts() {
+                ui.separator();
+                let summary = Self::git_line_change_summary(counts);
+                native_hover_text(
+                    ui.label(RichText::new(summary.clone()).size(theme::TYPE.supporting)),
+                    format!(
+                        "Git changes in this document\n{} added, {} modified, {} deleted",
+                        counts.added, counts.modified, counts.deleted
+                    ),
                 );
             }
         });
@@ -8400,6 +8520,11 @@ impl eframe::App for EditorApp {
                 self.document.key(),
                 self.document.source(),
             );
+            if matches!(self.app_popup, Some(AppPopup::GitChunk { .. }))
+                && self.git_editor.chunk.is_none()
+            {
+                self.close_app_popup();
+            }
         }
         self.record_status_transition();
         self.record_notice_transition();
@@ -8496,7 +8621,6 @@ impl eframe::App for EditorApp {
         self.show_workspace_chooser(&context);
         self.show_package_manager_window(&context);
         self.show_git_window(&context);
-        self.show_git_chunk_window(&context);
         // Every transaction is observed, including edits introduced by new
         // commands which do not explicitly request immediate service updates.
         self.mark_edited();
@@ -9797,6 +9921,7 @@ fn explorer_section_query_matches(
                 .iter()
                 .any(|node| workspace_node_matches_query(node, normalized_query))
         }),
+        false, // Git actions are not searchable, but keep the section slot stable.
         index
             .outline
             .iter()
@@ -9820,7 +9945,7 @@ fn explorer_section_query_matches(
     ];
     if !matches.into_iter().any(|matched| matched) {
         // Keep one result surface visible so an empty search has a clear
-        // outcome instead of presenting six closed section headers.
+        // outcome instead of presenting closed section headers.
         matches[0] = true;
     }
     matches
@@ -9901,8 +10026,9 @@ fn extension_matches(extension: Option<&str>, expected: &[&str]) -> bool {
     })
 }
 
-const EXPLORER_SECTION_SPECS: [(&str, bool); 6] = [
+const EXPLORER_SECTION_SPECS: [(&str, bool); 7] = [
     ("workspace-files", true),
+    ("workspace-git", false),
     ("workspace-contents", true),
     ("workspace-subfiles", false),
     ("workspace-symbols", false),
@@ -10034,6 +10160,22 @@ fn explorer_section_open_states(
         )
         .is_open()
     })
+}
+
+fn git_command_opens_explorer(git_visible: bool, snapshot_scene: Option<UiSnapshotScene>) -> bool {
+    !git_visible && snapshot_scene.is_none()
+}
+
+fn set_explorer_section_open(ui: &egui::Ui, id_salt: &'static str, open: bool) {
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
+        ui.ctx(),
+        explorer_section_state_id(ui, id_salt, false),
+        open,
+    );
+    if state.is_open() != open {
+        state.set_open(open);
+        state.store(ui.ctx());
+    }
 }
 
 fn explorer_section_layout_id(ui: &egui::Ui) -> egui::Id {
@@ -10217,9 +10359,9 @@ fn show_project_index_sections(
         ExplorerSectionRenderSpec {
             id_salt: "workspace-contents",
             title: "Contents",
-            default_open: section_defaults[1],
-            body_height: body_heights[1],
-            show_resize_handle: next_open_explorer_section(open_sections, 1).is_some(),
+            default_open: section_defaults[2],
+            body_height: body_heights[2],
+            show_resize_handle: next_open_explorer_section(open_sections, 2).is_some(),
             filtered,
         },
         |ui| {
@@ -10260,7 +10402,7 @@ fn show_project_index_sections(
         },
     );
     if resize_delta.abs() > f32::EPSILON {
-        outcome.resize_request = Some((1, resize_delta));
+        outcome.resize_request = Some((2, resize_delta));
     }
 
     let resize_delta = explorer_section_resizable(
@@ -10268,9 +10410,9 @@ fn show_project_index_sections(
         ExplorerSectionRenderSpec {
             id_salt: "workspace-subfiles",
             title: "Subfiles",
-            default_open: section_defaults[2],
-            body_height: body_heights[2],
-            show_resize_handle: next_open_explorer_section(open_sections, 2).is_some(),
+            default_open: section_defaults[3],
+            body_height: body_heights[3],
+            show_resize_handle: next_open_explorer_section(open_sections, 3).is_some(),
             filtered,
         },
         |ui| {
@@ -10301,7 +10443,7 @@ fn show_project_index_sections(
         },
     );
     if resize_delta.abs() > f32::EPSILON {
-        outcome.resize_request = Some((2, resize_delta));
+        outcome.resize_request = Some((3, resize_delta));
     }
 
     let resize_delta = explorer_section_resizable(
@@ -10309,9 +10451,9 @@ fn show_project_index_sections(
         ExplorerSectionRenderSpec {
             id_salt: "workspace-symbols",
             title: "Symbols",
-            default_open: section_defaults[3],
-            body_height: body_heights[3],
-            show_resize_handle: next_open_explorer_section(open_sections, 3).is_some(),
+            default_open: section_defaults[4],
+            body_height: body_heights[4],
+            show_resize_handle: next_open_explorer_section(open_sections, 4).is_some(),
             filtered,
         },
         |ui| {
@@ -10347,7 +10489,7 @@ fn show_project_index_sections(
         },
     );
     if resize_delta.abs() > f32::EPSILON {
-        outcome.resize_request = Some((3, resize_delta));
+        outcome.resize_request = Some((4, resize_delta));
     }
 
     let resize_delta = explorer_section_resizable(
@@ -10355,9 +10497,9 @@ fn show_project_index_sections(
         ExplorerSectionRenderSpec {
             id_salt: "workspace-packages",
             title: "Packages",
-            default_open: section_defaults[4],
-            body_height: body_heights[4],
-            show_resize_handle: next_open_explorer_section(open_sections, 4).is_some(),
+            default_open: section_defaults[5],
+            body_height: body_heights[5],
+            show_resize_handle: next_open_explorer_section(open_sections, 5).is_some(),
             filtered,
         },
         |ui| {
@@ -10388,7 +10530,7 @@ fn show_project_index_sections(
         },
     );
     if resize_delta.abs() > f32::EPSILON {
-        outcome.resize_request = Some((4, resize_delta));
+        outcome.resize_request = Some((5, resize_delta));
     }
 
     let resize_delta = explorer_section_resizable(
@@ -10396,9 +10538,9 @@ fn show_project_index_sections(
         ExplorerSectionRenderSpec {
             id_salt: "workspace-references",
             title: "Tags and references",
-            default_open: section_defaults[5],
-            body_height: body_heights[5],
-            show_resize_handle: next_open_explorer_section(open_sections, 5).is_some(),
+            default_open: section_defaults[6],
+            body_height: body_heights[6],
+            show_resize_handle: next_open_explorer_section(open_sections, 6).is_some(),
             filtered,
         },
         |ui| {
@@ -10438,7 +10580,7 @@ fn show_project_index_sections(
         },
     );
     if resize_delta.abs() > f32::EPSILON {
-        outcome.resize_request = Some((5, resize_delta));
+        outcome.resize_request = Some((6, resize_delta));
     }
     outcome
 }
@@ -11934,7 +12076,6 @@ fn focused_input_viewport(context: &egui::Context) -> egui::ViewportId {
         current,
         scoped_child_viewport_id(context, "tiptoptyp-packages"),
         scoped_child_viewport_id(context, "tiptoptyp-git"),
-        scoped_child_viewport_id(context, "tiptoptyp-git-chunk"),
         scoped_child_viewport_id(context, "tiptoptyp-table-editor-overlay"),
         scoped_child_viewport_id(context, "tiptoptyp-rename-overlay"),
         scoped_child_viewport_id(context, "tiptoptyp-workspace-chooser"),
@@ -12869,7 +13010,8 @@ fn show_markdown_code_block(
 ) {
     let dark_mode = ui.visuals().dark_mode;
     let token = token.trim().to_ascii_lowercase();
-    let job = tooltip_code_job(
+    let job = cached_tooltip_code_job(
+        ui.ctx(),
         highlighter,
         typst_highlighter,
         source,
@@ -12887,6 +13029,80 @@ fn show_markdown_code_block(
                 .wrap(),
         );
     }
+}
+
+fn cached_tooltip_code_job(
+    context: &egui::Context,
+    highlighter: &GenericSyntaxHighlighter,
+    typst_highlighter: &mut SyntaxHighlighter,
+    source: &str,
+    token: &str,
+    dark_mode: bool,
+    palette: theme::SyntaxPalette,
+) -> Option<egui::text::LayoutJob> {
+    let cache_id = viewport_scoped_id(context, "tooltip-code-cache");
+    let key = tooltip_code_cache_key(source, token, dark_mode, palette);
+    if let Some(job) = context.data(|data| {
+        data.get_temp::<TooltipCodeCache>(cache_id)
+            .and_then(|cache| cache.jobs.get(&key).cloned())
+    }) {
+        return job;
+    }
+    let job = tooltip_code_job(
+        highlighter,
+        typst_highlighter,
+        source,
+        token,
+        dark_mode,
+        palette,
+    );
+    context.data_mut(|data| {
+        let mut cache = data
+            .get_temp::<TooltipCodeCache>(cache_id)
+            .unwrap_or_default();
+        // Keep the cache bounded when a user moves across many diagnostics.
+        if cache.jobs.len() >= 32 {
+            cache.jobs.clear();
+        }
+        cache.jobs.insert(key, job.clone());
+        data.insert_temp(cache_id, cache);
+    });
+    job
+}
+
+fn tooltip_code_cache_key(
+    source: &str,
+    token: &str,
+    dark_mode: bool,
+    palette: theme::SyntaxPalette,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    source.hash(&mut hasher);
+    token.hash(&mut hasher);
+    dark_mode.hash(&mut hasher);
+    // A font selection changes the FontId embedded in every highlighted
+    // section. Include it so a settings change cannot reuse jobs shaped for
+    // the previous editor face.
+    theme::editor_font().hash(&mut hasher);
+    for color in [
+        palette.plain,
+        palette.comment,
+        palette.operator,
+        palette.number,
+        palette.emphasis,
+        palette.link,
+        palette.string,
+        palette.label,
+        palette.heading,
+        palette.keyword,
+        palette.interpolated,
+        palette.error,
+        palette.error_background,
+        palette.editor_background,
+    ] {
+        color.to_array().hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 fn tooltip_code_job(
@@ -12923,7 +13139,8 @@ fn show_markdown_inline(
     let dark_mode = ui.visuals().dark_mode;
     for span in markdown_inline_spans(text) {
         if span.code {
-            let job = tooltip_code_job(
+            let job = cached_tooltip_code_job(
+                ui.ctx(),
                 highlighter,
                 typst_highlighter,
                 &span.text,
