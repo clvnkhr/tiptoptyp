@@ -191,7 +191,8 @@ I was using two different windows with two different workspaces. Possibly i was 
 155. [x] Fix missing semantic hovers caused by context-free token targeting: honor math operator boundaries without splitting valid code identifiers, handle the right half of a final glyph, and reuse cached syntax/target queries. Cover multiple names and contexts, not symbol-specific exceptions.
 156. [x] Fix remaining Settings interaction latency: separate native Settings repainting from the editor, preserve preference/action synchronization and font/theme updates, stop animating previews that are waiting for window focus, and verify independent scrolling/idle behavior with regression tests and comparable optimized profiles.
 157. [ ]  implement collapsing multiline code with a compact dropdown arrow at the line number. we need to collapse all the same things as the sticky rows feature
-158. [ ] Audit the code for multi-window issues, including how to get out of the no window state, code that assumes a single main window etc
+158. [ ] collapsing multiline and sticky rows need to work for md and tex codeblocks/strings as well (cmarker, mitex)
+159. [ ] Audit the code for multi-window issues, including how to get out of the no window state, code that assumes a single main window etc
 = resolved in the 2026-09-13 easy backlog pass
 
 - Items 121, 122: Explorer asset hover candidates now end at the visible panel clip, and the active file's stronger face keeps the shared content font size.
