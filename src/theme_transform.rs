@@ -1,7 +1,7 @@
 //! Deterministic, UI-independent color transforms for complete themes.
 //!
 //! A transform always complements the encoded sRGB channels first (when
-//! requested), then rotates hue in HSL space. Keeping this order in one type
+//! requested), then rotates hue and adjusts tone. Keeping this order in one type
 //! prevents the application chrome and syntax theme from applying settings in
 //! subtly different ways.
 //!
@@ -12,15 +12,68 @@
 
 #[cfg(test)]
 use eframe::egui::Color32;
+use serde::{Deserialize, Serialize};
 use syntect::highlighting::{Color as SyntectColor, Theme as SyntectTheme};
 
 use crate::sublime_theme::{ImportedTheme, Rgba, SemanticPalette, is_dark_background};
+
+/// Percent adjustments shared by UI and syntax colors. Luminosity adjusts
+/// midtones while preserving black/white; brightness adds a channel offset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThemeColorAdjustments {
+    pub luminosity: i16,
+    pub brightness: i16,
+    pub contrast: u16,
+    pub saturation: u16,
+}
+
+impl Default for ThemeColorAdjustments {
+    fn default() -> Self {
+        Self::IDENTITY
+    }
+}
+
+impl ThemeColorAdjustments {
+    pub const IDENTITY: Self = Self {
+        luminosity: 0,
+        brightness: 0,
+        contrast: 100,
+        saturation: 100,
+    };
+
+    pub fn normalized(self) -> Self {
+        Self {
+            luminosity: self.luminosity.clamp(-100, 100),
+            brightness: self.brightness.clamp(-50, 50),
+            contrast: self.contrast.clamp(50, 150),
+            saturation: self.saturation.min(200),
+        }
+    }
+
+    fn apply(self, color: Rgba) -> Rgba {
+        let settings = self.normalized();
+        if settings == Self::IDENTITY {
+            return color;
+        }
+        let channels = [color.r, color.g, color.b].map(|value| f32::from(value) / 255.0);
+        let grey = channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+        let gamma = 2.0_f32.powf(-f32::from(settings.luminosity) / 100.0);
+        let [r, g, b] = channels.map(|value| {
+            let saturated = grey + (value - grey) * f32::from(settings.saturation) / 100.0;
+            let lightened = saturated.clamp(0.0, 1.0).powf(gamma);
+            let contrasted = (lightened - 0.5) * f32::from(settings.contrast) / 100.0 + 0.5;
+            unit_to_channel(contrasted + f32::from(settings.brightness) / 100.0)
+        });
+        Rgba::from_rgba(r, g, b, color.a)
+    }
+}
 
 /// User-configurable operations applied uniformly to every theme color.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ThemeTransform {
     pub invert: bool,
     pub hue_shift_degrees: f32,
+    pub colors: ThemeColorAdjustments,
 }
 
 impl Default for ThemeTransform {
@@ -33,13 +86,20 @@ impl ThemeTransform {
     pub const IDENTITY: Self = Self {
         invert: false,
         hue_shift_degrees: 0.0,
+        colors: ThemeColorAdjustments::IDENTITY,
     };
 
     pub const fn new(invert: bool, hue_shift_degrees: f32) -> Self {
         Self {
             invert,
             hue_shift_degrees,
+            colors: ThemeColorAdjustments::IDENTITY,
         }
+    }
+
+    pub const fn with_colors(mut self, colors: ThemeColorAdjustments) -> Self {
+        self.colors = colors;
+        self
     }
 
     /// The hue rotation normalized to the half-open range `[0, 360)`.
@@ -56,7 +116,9 @@ impl ThemeTransform {
 
     #[cfg(test)]
     pub fn is_identity(self) -> bool {
-        !self.invert && self.normalized_hue_shift() == 0.0
+        !self.invert
+            && self.normalized_hue_shift() == 0.0
+            && self.colors.normalized() == ThemeColorAdjustments::IDENTITY
     }
 
     /// Transform an unpremultiplied sRGB color while preserving alpha.
@@ -66,7 +128,8 @@ impl ThemeTransform {
         } else {
             color
         };
-        rotate_hue(color, self.normalized_hue_shift())
+        self.colors
+            .apply(rotate_hue(color, self.normalized_hue_shift()))
     }
 
     /// Transform an egui color without changing its alpha channel.
@@ -234,6 +297,98 @@ mod tests {
 
     use super::*;
     use crate::sublime_theme::ThemeFormat;
+
+    #[test]
+    fn tone_controls_have_distinct_neutral_and_bounded_effects() {
+        let grey = Rgba::from_rgba(64, 64, 64, 91);
+        let apply = |colors| {
+            ThemeTransform::IDENTITY
+                .with_colors(colors)
+                .apply_rgba(grey)
+        };
+        assert_eq!(apply(ThemeColorAdjustments::default()), grey);
+        let lighter = apply(ThemeColorAdjustments {
+            luminosity: 100,
+            ..Default::default()
+        });
+        assert_eq!(lighter, Rgba::from_rgba(128, 128, 128, 91));
+        assert_eq!(
+            apply(ThemeColorAdjustments {
+                brightness: 20,
+                ..Default::default()
+            }),
+            Rgba::from_rgba(115, 115, 115, 91)
+        );
+        assert!(
+            apply(ThemeColorAdjustments {
+                contrast: 150,
+                ..Default::default()
+            })
+            .r < grey.r
+        );
+        assert!(
+            apply(ThemeColorAdjustments {
+                contrast: 50,
+                ..Default::default()
+            })
+            .r > grey.r
+        );
+        for value in [0, 255] {
+            let endpoint = Rgba::from_rgba(value, value, value, 19);
+            assert_eq!(
+                ThemeColorAdjustments {
+                    luminosity: 100,
+                    ..Default::default()
+                }
+                .apply(endpoint),
+                endpoint
+            );
+        }
+        let muted = ThemeColorAdjustments {
+            saturation: 0,
+            ..Default::default()
+        }
+        .apply(Rgba::from_rgba(255, 100, 40, 0));
+        assert_eq!(muted.r, muted.g);
+        assert_eq!(muted.g, muted.b);
+        assert_eq!(muted.a, 0);
+        let corrupt = ThemeColorAdjustments {
+            luminosity: i16::MAX,
+            brightness: i16::MIN,
+            contrast: u16::MAX,
+            saturation: u16::MAX,
+        };
+        assert_eq!(corrupt.apply(grey), corrupt.normalized().apply(grey));
+    }
+
+    #[test]
+    fn color_adjustments_transform_chrome_and_syntax_once_preserving_alpha() {
+        let mut theme = crate::sublime_theme::ImportedTheme {
+            name: None,
+            author: None,
+            format: ThemeFormat::Builtin,
+            dark_mode: false,
+            palette: repeated_palette(Rgba::from_rgba(125, 174, 231, 73)),
+            syntect_theme: SyntectTheme::default(),
+        };
+        let source = theme.palette.background;
+        theme.syntect_theme.settings.background = Some(source.into());
+        let transform = ThemeTransform::new(true, 47.0).with_colors(ThemeColorAdjustments {
+            luminosity: -35,
+            brightness: 10,
+            contrast: 85,
+            saturation: 170,
+        });
+        transform.apply_imported_theme(&mut theme);
+        let expected = transform.apply_rgba(source);
+        assert_ne!(expected, source);
+        assert_eq!(expected.a, source.a);
+        assert_eq!(theme.palette, repeated_palette(expected));
+        assert_eq!(
+            theme.syntect_theme.settings.background,
+            Some(expected.into())
+        );
+    }
 
     fn repeated_palette(color: Rgba) -> SemanticPalette {
         SemanticPalette {

@@ -3378,10 +3378,8 @@ mod tests {
                 let resolved = resolve_tool(ToolKind::Tinymist, &ToolPreference::default());
                 resolved.is_available().then_some(resolved.program)
             });
-        let Some(program) = program else {
-            eprintln!("skipping real Tinymist formatting test: no executable is available");
-            return;
-        };
+        let program = program
+            .expect("real Tinymist test requires an executable; set TIPTOPTYP_TEST_TINYMIST");
 
         let project = tempfile::tempdir().unwrap();
         let source = "#let answer=40+2\n#answer\n";

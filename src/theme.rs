@@ -583,7 +583,7 @@ fn configure_editor_fonts_with_reader<F>(
 where
     F: FnMut(&Path) -> io::Result<Vec<u8>>,
 {
-    let mut definitions = egui::FontDefinitions::default();
+    let mut definitions = crate::unicode_fonts::definitions();
     let mut proportional_fallback = definitions
         .families
         .get(&FontFamily::Proportional)
@@ -671,7 +671,7 @@ where
 
     // Keep Latin editor/UI metrics stable while adding a platform-provided
     // CJK fallback. These paths are optional: missing fonts simply leave
-    // egui's bundled fallback chain in place, and no font bytes are shipped.
+    // the bundled fallback chain in place; no CJK font bytes are shipped.
     let cjk_candidates: &[(&str, &str)] = if cfg!(target_os = "macos") {
         &[
             (
@@ -1107,7 +1107,7 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
         toolbar_height: 30.0,
         status_height: 24.0,
         panel_header_height: 28.0,
-        settings_width: 620.0,
+        settings_width: 500.0,
         settings_height: 560.0,
         settings_min_size: Vec2::new(360.0, 260.0),
         typst_overrides_width: 920.0,
@@ -1703,7 +1703,7 @@ mod tests {
         assert_eq!(METRICS.chrome.main_min_size, Vec2::new(220.0, 160.0));
         assert_eq!(METRICS.chrome.status_height, 24.0);
         assert_eq!(METRICS.chrome.panel_header_height, 28.0);
-        assert_eq!(METRICS.chrome.settings_width, 620.0);
+        assert_eq!(METRICS.chrome.settings_width, 500.0);
         assert_eq!(METRICS.chrome.settings_min_size, Vec2::new(360.0, 260.0));
         assert_eq!(METRICS.spacing.global_item, Vec2::new(6.0, 4.0));
         assert_eq!(METRICS.spacing.global_button_padding, Vec2::new(7.0, 3.0));
@@ -1999,6 +1999,84 @@ mod tests {
 
         let (data, _) = weighted_font_data(bytes, 650).expect("configure variable font");
         assert_eq!(data.tweak.coords.as_ref(), &[(Tag::new(b"wght"), 650.0)]);
+    }
+
+    #[test]
+    fn unicode_fallbacks_reach_every_weight_and_custom_font_without_replacing_cached_text() {
+        let definitions = egui::FontDefinitions::default();
+        let primary = &definitions.font_data[&definitions.families[&FontFamily::Monospace][0]];
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("sparse-primary.ttf");
+        std::fs::write(&path, primary.font.as_ref()).unwrap();
+        for custom in [false, true] {
+            for monospace_ui in [false, true] {
+                let context = egui::Context::default();
+                let request = if custom {
+                    FontRequest {
+                        fallback_path: Some(&path),
+                        fallback_face_index: primary.index,
+                        ..Default::default()
+                    }
+                } else {
+                    FontRequest::default()
+                };
+                let configuration =
+                    configure_editor_fonts(&context, request, request, monospace_ui, 500, 450);
+                let mut families = vec![
+                    FontFamily::Proportional,
+                    FontFamily::Monospace,
+                    strong_ui_font().family,
+                ];
+                if configuration.weighted_ui_loaded {
+                    families.push(FontFamily::Name(WEIGHTED_UI_FAMILY.into()));
+                }
+                families.extend(
+                    EDITOR_FONT_WEIGHTS
+                        .map(|weight| FontFamily::Name(editor_weight_family(weight).into())),
+                );
+                context
+                    .run_ui(Default::default(), |ui| {
+                        ui.fonts_mut(|fonts| {
+                            let font = editor_font();
+                            let cached = fonts.layout_no_wrap(
+                                "Keep editor layout cached".into(),
+                                font.clone(),
+                                Color32::WHITE,
+                            );
+                            for family in &families {
+                                let font = FontId::new(editor_font().size, family.clone());
+                                let missing = fonts.layout_no_wrap(
+                                    "\u{0378}".into(),
+                                    font.clone(),
+                                    Color32::WHITE,
+                                );
+                                for (_, symbol) in crate::unicode_fonts::SYMBOL_EXAMPLES {
+                                    let label = fonts.layout_no_wrap(
+                                        symbol.into(),
+                                        font.clone(),
+                                        Color32::WHITE,
+                                    );
+                                    assert_ne!(
+                                        label.rows[0].glyphs[0].uv_rect,
+                                        missing.rows[0].glyphs[0].uv_rect,
+                                        "{family:?} lacks {symbol}"
+                                    );
+                                }
+                            }
+                            let after = fonts.layout_no_wrap(
+                                "Keep editor layout cached".into(),
+                                font,
+                                Color32::WHITE,
+                            );
+                            assert!(
+                                Arc::ptr_eq(&cached, &after),
+                                "fallback glyphs must not replace the font atlas/cache"
+                            );
+                        });
+                    })
+                    .drop_without_applying_deltas();
+            }
+        }
     }
 
     #[test]

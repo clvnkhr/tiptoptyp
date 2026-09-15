@@ -169,10 +169,24 @@ I was using two different windows with two different workspaces. Possibly i was 
 133. [ ] (deferred) implement tabs
 134. [x] we should be able to click on the ttt logo in a window and have it open a color picker for the bg of the logo, which will help us visually identify each window.
 135. [x] when cursor is at a bracket/dollar sign/etc we should highlight the matching char.
-136. [ ] when we type one of these bracket chars, we should by default automatically insert the matching char and place the cursor in between. If we backspace, from this, delete both. This should be configurable in settings.
-137. [ ] we should also implement rainbow brackets. Each type of bracket pair (`[]`, `()`, `{}`,, and mixed brackets `(],[},` etc) should use a different cycle of colors. Allow us to choose palletes to cycle through for the brackets in settings.
+136. [x] when we type one of these bracket chars, we should by default automatically insert the matching char and place the cursor in between. If we backspace, from this, delete both. This should be configurable in settings.
+137. [x] we should also implement rainbow brackets. Each type of bracket pair (`[]`, `()`, `{}`,, and mixed brackets `(],[},` etc) should use a different cycle of colors. Allow us to choose palletes to cycle through for the brackets in settings.
 138. [x] i noticed that if a popup appears because i hovered over something, then scroll, the scrolling is not performant, losing frames. Investigate and fix.
 139. [x] too much space is reserved for the git hunk color marker on the side. It should take at most 1 char width or other similar small measurement.
+140. [ ] Supply missing Unicode glyphs in symbol completions, including Hebrew letters, mathematical operators, and alchemical symbols, without resetting fonts during interaction.
+141. [x] If the Tinymist server times out or fails, restart it automatically and use the raster fallback only after five consecutive failures.
+142. [x] Compress the Settings window for variable-width layouts, including compact bracket-family labels such as `()` instead of `Parentheses ()`.
+143. [x] Keep the auto-save delay label and slider together when wrapping; wrap complete toolchain status chips onto the next line when space runs out.
+144. [x] Remove the “both themes · invert, then hue” text and allow any light or dark theme in either appearance slot, listing matching themes before opposite-mode themes.
+145. [x] Add persisted theme color adjustments for luminosity, brightness, contrast, and saturation, with reset controls and consistent application to UI and syntax colors.
+146. [x] Make Settings tooltips fit their content, keep useful explanations and hidden details, and remove hints that only repeat the visible control or status.
+147. [x] Combine inversion and hue shift with the other color adjustments in one responsive section with a single reset for every adjustment.
+148. [x] Make Tinymist recovery a clock-driven state machine: wait before retrying, fall back on the fifth consecutive failure, include preview-start failures, and test full recovery/event sequences.
+149. [x] Establish focused ownership for preview recovery, Explorer, Settings UI, and tooltip behavior instead of letting every view mutate unrelated EditorApp state.
+150. [x] Isolate screenshot fixtures behind a QA entry point and remove screenshot-only product UI; capture the same components and layouts used by normal windows.
+151. [x] Report malformed saved settings distinctly from missing settings, retain the rejected data for diagnosis, and test the recovery path.
+152. [x] Add automatic formatting, strict Clippy, application/core, and xtask checks, plus a separate real-tool integration job on a supported platform.
+153. [x] Investigate and reduce Settings-open CPU usage: eliminate redundant native-window updates/repaints and unchanged preference actions, preserve theme changes and reopen behavior, and verify with regression tests and before/after profiling.
 
 = resolved in the 2026-09-13 easy backlog pass
 
@@ -185,6 +199,11 @@ I was using two different windows with two different workspaces. Possibly i was 
 - Item 138: Tooltip code blocks cache their highlighted `LayoutJob`s per document viewport and theme, avoiding repeated syntax work while scrolling a hover popup.
 - Item 139: Git hunk markers now reserve an eight-point lane, with painted and clickable geometry constrained to that lane.
 - Verification: Added explorer geometry, active-font-size, startup timing, layout-highlight, popup gating, diff-toggle, popup-routing, tooltip-cache, and compact-gutter regressions; focused tests pass.
+
+= resolved in the 2026-09-15 pass
+
+- Item 141: Tinymist timeouts and fatal server failures now restart the sidecar automatically, retaining the interactive preview during retries; the raster fallback is selected only after five consecutive failures. Recovery resets the failure count once the server is ready.
+- Verification: Tinymist retry-budget regression, focused Tinymist tests, full Rust tests, clippy, formatting, and xtask tests pass.
 
 = resolved in the 2026-09-07 pass
 
@@ -753,3 +772,177 @@ Only deferred items 1, 2, and 26 remain unchecked.
   logo in its parent window. The release build passes. Regenerated and validated
   all 68 gallery PNGs and inspected a fresh Settings capture confirming the
   reorder controls remain visible.
+
+= Automatic pairing and rainbow brackets (2026-09-14)
+
+- Item 136: Auto-close delimiters defaults on and can be disabled in Settings.
+  Typing an opener inserts its closer with the caret between them; Backspace
+  removes an empty pair, and typing the existing closer moves over it. Typst
+  syntax distinguishes quotes, dollars, labels, raw fences, and emphasis from
+  operators and literal text. Brackets also pair in prose. Comments, escapes,
+  strings, raw payloads, pasted batches, and IME composition remain literal.
+  Native TextEdit operations retain event order, Unicode cursor positions,
+  selections, and atomic document undo/redo. The pairing rules are stateless,
+  so undo or switching documents cannot leave stale generated-pair positions.
+- Item 137: Rainbow brackets default on, with independent nesting cycles for
+  parentheses, square brackets, braces, and mixed math pairs. Settings offers
+  Spectrum, Forest, Sunset, and Orchid palettes for each family, with live
+  light/dark color samples and an independent enable switch. Preferences save
+  and propagate to every document window. Colors preserve syntax decorations
+  and exact byte positions, and are cached with the syntax layout rather than
+  recalculated when the caret moves. Typing over a closer does not invalidate
+  completions or schedule document work.
+- Verification: all 628 application tests pass (2 environment-dependent tests
+  ignored), together with all 31 core unit tests, supporting suites, strict
+  Clippy, formatting, and all 8 xtask tests. Regression coverage includes
+  Unicode and same-frame event order, nested/symmetric delimiters, literal
+  exclusions, paste/IME handling, disabled pairing, character limits, undo/redo,
+  window isolation, no-op closer movement, independent color cycles, exact
+  syntax-layout mapping, palette cache invalidation, persistence, and semantic
+  Settings controls. The release build passes. Regenerated and validated all
+  68 gallery PNGs. Fresh `rainbow-brackets` and `bracket-settings` captures in
+  Catppuccin Latte and Mocha were inspected under
+  `.tiptoptyp/screenshots/agent-review`, including all four nesting cycles,
+  literal exclusions, palette samples, and fixed Settings scroll positions.
+
+= Settings window compression (2026-09-15)
+
+- Item 142: Reduced the default Settings window width from 620 px to 500 px,
+  reduced font selector widths, and kept the 360 px minimum so controls wrap
+  cleanly in narrower windows. Bracket-family labels now use `()`, `[]`, `{}`,
+  and `mixed` to avoid unnecessary horizontal space.
+- Verification: focused Settings, rainbow-label, geometry, formatting, and
+  strict Clippy checks pass. The deterministic Settings screenshot could not
+  be completed because macOS LaunchServices/Services was unavailable in the
+  test environment.
+
+= Settings wrapping and color adjustments (2026-09-15)
+
+- Item 143: The auto-save delay label, slider, and numeric value share one
+  non-wrapping control. Each toolchain status chip also stays intact, moving
+  to the next line when it cannot fit. The layout measures the full group
+  before placing it, including the chip's frame margins.
+- Item 144: Removed the extra transform explanation. Both theme pickers now
+  offer every built-in theme, with matching light/dark themes listed first
+  and the other set below a separator. Imported themes stay in the chosen
+  slot, and opposite-mode choices survive saving and reloading preferences.
+- Item 145: Appearance includes Luminosity, Brightness, Contrast, and
+  Saturation controls and Reset colors. Luminosity adjusts midtones while
+  retaining black and white; brightness shifts all channels, contrast changes
+  their separation, and saturation adjusts color intensity. Adjustments apply
+  to both appearance slots after inversion and hue rotation, preserve alpha,
+  and update UI and syntax colors together from the original theme. They save
+  with preferences and propagate across windows without reloading fonts.
+- Verification: all 640 application tests pass (2 environment-dependent tests
+  ignored), together with supporting suites, formatting, strict Clippy, and
+  all 8 xtask tests. Semantic tests cover wrapping at 320–700 points,
+  opposite-mode selection and ordering, and editing/resetting color controls;
+  persistence, bounded transforms, and UI/syntax consistency are also covered.
+  Regenerated and validated all 68 gallery PNGs. Inspected eight fresh Settings
+  viewport captures under `.tiptoptyp/screenshots/agent-review` in Catppuccin
+  Latte and Mocha: the default-width window, 360-point editor and status
+  layouts, and both theme pickers. The delay control and status chips remain
+  intact, and the color controls fit in two compact rows at the default width.
+
+= Compact Settings hints and unified color controls (2026-09-15)
+
+- Item 146: Settings hints use measured, wrapped plain text with compact
+  padding, no minimum card size, and scrolling only for long content. Cards
+  resize when the hovered control changes and stay inside the current window.
+  Removed search-section hints, repeated preview-jump explanations, basic
+  brightness/contrast definitions, and status hints that repeat the chip.
+  Tool paths only show a local hint when elided or clipped. Retained useful
+  details such as diagnostics, imported theme paths, reorder arrow actions,
+  and the distinct meaning of luminosity and zero saturation.
+- Item 147: Invert colors, Hue shift, Luminosity, Brightness, Contrast, and
+  Saturation share one Color adjustments section. Reset colors restores all
+  six controls together. Labels and sliders remain grouped when wrapping;
+  preferences, transform order, and screenshot override isolation are unchanged.
+- Verification: regression tests cover compact card sizing,
+  long-to-short content changes, window-edge placement, redundant hint
+  suppression, grouped controls, and resetting inversion/hue independently.
+  All 644 application tests pass (2 environment-dependent tests ignored),
+  together with supporting suites, formatting, strict Clippy, and all 8 xtask
+  tests. Regenerated and validated all 68 gallery PNGs. Inspected six fresh
+  Settings captures under `.tiptoptyp/screenshots/agent-review` in Catppuccin
+  Latte and Mocha: the default 500-point window, 360-point color controls,
+  and the compact luminosity hint. The tooltip fits its single sentence,
+  with no reserved empty space, and each slider stays with its label.
+
+= Maintainability and recovery follow-up (2026-09-15)
+
+- Item 148: Recovery now uses a headless, generation-owned state machine with
+  caller-supplied time. Failures one through four schedule a one-second retry;
+  failure five selects fallback. Preview-start failures count even when the
+  LSP is still alive. Duplicate shutdown events do not consume retries, stale
+  readiness cannot recover a failed attempt, and success resets the budget.
+- Item 149: Explorer visibility/width/query state has a dedicated owner.
+  Settings rendering borrows presentation data and emits explicit application
+  actions; it cannot reach document or worker state. Tooltip rendering, timing,
+  geometry, and viewport caches are isolated from EditorApp. PreviewController
+  owns failure classification and recovery presentation. Narrow architecture
+  checks protect the new boundaries; further application extraction is still
+  possible and is not hidden by moving methods between files.
+- Item 150: QaSession owns fixture buffers, temporary fonts, and scene/batch
+  setup. Removed the screenshot-only Git child window and its viewport; the
+  replacement `git-panel` scene captures the actual Explorer subpanel in `main`.
+  No old scene-name alias remains. The fixture restores a visible Explorer width
+  after child-window captures. Git polling runs in the app update loop, not the
+  renderer, so rendering supplied state cannot replace it with a live scan.
+  The real-panel capture exposed a narrow-width overlap; change counts now sit
+  above staging actions, with regression assertions for their separation.
+- Item 151: Missing settings use defaults normally; malformed settings now
+  produce a startup notice and a status-log entry. Before replacing them,
+  saving preserves the exact rejected input under
+  `tiptoptyp.settings.rejected`; later ordinary saves keep that record.
+- Item 152: Added read-only GitHub Actions checks for Linux, macOS, and Windows,
+  plus a separate macOS job for pinned Typst/Tinymist and Poppler integration
+  tests. Explicit real-tool runs fail if Tinymist is missing instead of silently
+  reporting a skipped test as successful.
+- Verification: formatting, strict Clippy, the full application/core/supporting
+  suites, and all 8 xtask tests pass. The application suite has 648 passing tests
+  and 2 normally ignored real-tool tests; both real-tool tests also pass when
+  explicitly run with the pinned Typst/Tinymist binaries and installed Poppler.
+  State, protocol-event, Settings action, settings-recovery, and layout
+  regressions cover the changed behavior. Regenerated the complete 68-image
+  gallery in one app session and validated every PNG. Inspected fresh Settings,
+  compact tooltip, and real Explorer Git framebuffer captures under
+  `.tiptoptyp/screenshots/agent-review` in Catppuccin Latte and Mocha, including
+  Git on initial launch and after returning from Settings. The Git status and
+  staging rows are separated and the Explorer width is restored. These captures
+  do not claim native-child desktop composition coverage. The hosted CI matrix
+  has not run yet; it will run after the workflow is pushed.
+- Boundary rationale: `docs/architecture/0005-focused-ui-and-recovery.md`.
+
+= Settings idle performance (2026-09-15)
+
+- Item 153: The shared child-window host sent `SetTheme` on every frame.
+  egui schedules a repaint for every viewport command, even when the value is
+  unchanged. Immediate child viewports also redraw their parent, so leaving
+  Settings open continuously repainted both windows and exercised the native
+  OpenGL surfaces. Native appearance is now synchronized only on creation,
+  theme changes, and reopening a closed viewport. Embedded windows do not send
+  native theme commands to their parent.
+- Settings now emits a preference update only when the edited values differ
+  from the current or already-pending values. Idle renders no longer allocate
+  and dispatch an unchanged update; changing back to a live value still cancels
+  the corresponding pending edit.
+- Measurement: release builds, the same Catppuccin Latte `settings-window`
+  scene and `docs/ui-snapshots/theme-fixture.typ`, no interaction, six seconds
+  of warmup followed by a four-second macOS `sample` run at 1 ms intervals.
+  The final `ps` CPU reading fell from 57.5% to 0.3%; CPU time accumulated
+  between the surrounding readings fell from 2.85 s to 0.14 s. The latter
+  interval includes sample processing. These are local measurements, not a
+  cross-machine performance guarantee. The after sample places 3277 of 3420
+  main-thread samples in the event wait; the before sample instead places
+  3042 of 3152 in the run-loop observer driving rendering.
+- Verification: regression tests first reproduced the idle repaint loop and
+  redundant preference actions, then passed with the fixes. Coverage includes
+  native theme changes, close/reopen, idle pending preferences, and cancelling a
+  pending edit. Formatting, strict Clippy, all 649 non-ignored application tests,
+  supporting/core suites, and all 8 xtask tests pass (2 real-tool tests remain
+  intentionally ignored in the standard suite). Inspected the fresh before
+  and after Settings viewport PNGs under
+  `.tiptoptyp/screenshots/settings-performance-before` and
+  `.tiptoptyp/screenshots/settings-performance-after`; layout and appearance
+  are unchanged. No native geometry or maintained screenshot contract changed.

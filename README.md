@@ -32,7 +32,7 @@ a rasterised recovery viewer.
 - Font samples rendered in the selected font in completion and on hover in
   Settings font pickers; fuzzy font search in Settings and document font menus
 - Installed package removal with a confirmation for the selected version
-- A Git window for status, diffs, staging, unstaging, commits, recent history,
+- An Explorer Git panel for status, diffs, staging, unstaging, commits, recent history,
   fetch, fast-forward pull, and push
 - Pause/resume control for automatic preview updates. Compile writes the
   current canonical PDF beside its saved Typst entry; unsaved documents ask
@@ -93,7 +93,9 @@ cargo run --release
 On macOS, install Poppler for the PDF recovery viewer with
 `brew install poppler`. Without Tinymist, or if its embedded viewer fails, the
 application uses the rasterised viewer and marks the automatic choice as a
-fallback. Linux currently uses this route because the Wry child-view
+fallback. Tinymist server and preview-start failures first receive up to four
+retries, one second apart; the fifth consecutive failure selects the fallback.
+Linux currently uses this route because the Wry child-view
 integration is limited to macOS and Windows in this MVP.
 
 ## Run
@@ -143,7 +145,7 @@ and credentials. Save editor changes before staging or committing. Pull only
 fast-forwards, so divergent branches require resolution outside this panel.
 **Diff** shows unstaged edits against the staging area; **Staged diff** shows
 changes included in the next commit. Both open a selectable, color-coded viewer
-in the Git window. **Unstage all** clears the staging area and keeps working
+from the Git panel. **Unstage all** clears the staging area and keeps working
 files intact. Staging excludes `.tiptoptyp` temporary files; any already staged
 temporary files remain visible so you can unstage them.
 

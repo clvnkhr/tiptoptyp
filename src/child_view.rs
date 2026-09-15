@@ -174,12 +174,12 @@ impl ChildViewHost {
         ));
         let id = scoped_child_viewport_id(context, spec.id_salt);
         let viewport = spec.viewport();
-        let native_theme = theme::native_theme(appearance);
-        crate::viewport_fonts::show_immediate(context, id, viewport, |ui, _class| {
+        crate::viewport_fonts::show_immediate(context, id, viewport, |ui, class| {
             captures.begin_viewport(ui.ctx(), spec.capture_target);
             ui.set_style(style.clone());
-            ui.ctx()
-                .send_viewport_cmd(egui::ViewportCommand::SetTheme(native_theme));
+            if class != egui::ViewportClass::EmbeddedWindow {
+                sync_native_theme(ui.ctx(), appearance);
+            }
             let input = ui.ctx().input(|input| ChildViewInput {
                 focused: input.viewport().focused,
                 close_requested: input.viewport().close_requested(),
@@ -188,6 +188,23 @@ impl ChildViewHost {
             body(ui, input);
             captures.end_glow_viewport(ui, spec.capture_target);
         });
+    }
+}
+
+fn sync_native_theme(context: &egui::Context, appearance: egui::Theme) {
+    let id = viewport_scoped_id(context, "native-child-theme");
+    let changed = context.data_mut(|data| {
+        let previous = data.get_temp::<egui::Theme>(id);
+        data.insert_temp(id, appearance);
+        previous != Some(appearance)
+    });
+    // Commands request another repaint even when the OS value is unchanged.
+    // The frame counter restarts when egui recreates a closed viewport; its
+    // context data can outlive that window, so a reopened child must sync again.
+    if changed || context.cumulative_frame_nr() == 0 {
+        context.send_viewport_cmd(egui::ViewportCommand::SetTheme(theme::native_theme(
+            appearance,
+        )));
     }
 }
 
@@ -238,6 +255,103 @@ pub(crate) fn popup_focus_should_close(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{cell::RefCell, rc::Rc};
+
+    #[test]
+    fn persistent_child_settles_and_reapplies_native_theme_after_change_or_reopen() {
+        let context = egui::Context::default();
+        context.set_embed_viewports(false);
+        let captures = CaptureController::disabled_for_tests();
+        let outputs = Rc::new(RefCell::new(Vec::new()));
+        let child_outputs = outputs.clone();
+        egui::Context::set_immediate_viewport_renderer(move |context, mut child| {
+            let mut input = egui::RawInput {
+                viewport_id: child.ids.this,
+                ..Default::default()
+            };
+            input.viewports.insert(
+                child.ids.this,
+                egui::ViewportInfo {
+                    parent: Some(child.ids.parent),
+                    ..Default::default()
+                },
+            );
+            let mut output = context.run_ui(input, |ui| (child.viewport_ui_cb)(ui));
+            let viewport = &output.viewport_output[&child.ids.this];
+            child_outputs
+                .borrow_mut()
+                .push((viewport.commands.clone(), viewport.repaint_delay));
+            output.textures_delta.clear();
+        });
+        let render = |appearance: Option<egui::Theme>| {
+            let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                ui.label("Editor");
+                if let Some(appearance) = appearance {
+                    ChildViewHost::show(
+                        ui.ctx(),
+                        &captures,
+                        ChildViewSpec::persistent(
+                            "settings",
+                            "Settings",
+                            [500.0, 560.0],
+                            [360.0, 300.0],
+                            "settings",
+                        ),
+                        appearance,
+                        &ui.ctx().style_of(appearance),
+                        |ui, _| {
+                            ui.label("Idle Settings");
+                        },
+                    );
+                }
+            });
+            // Commands from immediate children are delivered with the parent output.
+            let child_id = scoped_child_viewport_id(&context, "settings");
+            if let Some(child) = output.viewport_output.get(&child_id)
+                && let Some((commands, _)) = outputs.borrow_mut().last_mut()
+            {
+                commands.extend(child.commands.clone());
+            }
+            output.textures_delta.clear();
+        };
+        for _ in 0..6 {
+            render(Some(egui::Theme::Dark));
+        }
+        let (commands, delay) = outputs.borrow().last().unwrap().clone();
+        assert!(
+            !commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::SetTheme(_))),
+            "idle frame sent {commands:?}"
+        );
+        assert_eq!(delay, Duration::MAX, "idle child scheduled another repaint");
+        outputs.borrow_mut().clear();
+        render(Some(egui::Theme::Light));
+        assert!(
+            outputs
+                .borrow()
+                .iter()
+                .any(|(commands, _)| commands.iter().any(|command| matches!(
+                    command,
+                    egui::ViewportCommand::SetTheme(egui::SystemTheme::Light)
+                )))
+        );
+        for _ in 0..3 {
+            render(None);
+        }
+        outputs.borrow_mut().clear();
+        render(Some(egui::Theme::Light));
+        assert!(
+            outputs
+                .borrow()
+                .iter()
+                .any(|(commands, _)| commands.iter().any(|command| matches!(
+                    command,
+                    egui::ViewportCommand::SetTheme(egui::SystemTheme::Light)
+                ))),
+            "recreated child needs its native appearance restored"
+        );
+    }
 
     #[test]
     fn modal_spec_tracks_its_owner_viewport_exactly() {

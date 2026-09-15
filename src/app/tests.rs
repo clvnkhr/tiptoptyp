@@ -1,4 +1,7 @@
 use super::*;
+use crate::asset::AssetThumbnailResult;
+use crate::explorer::ExplorerPanelPhase;
+use crate::settings::InterfaceTheme;
 
 fn completion_item(insert_text: &str) -> CompletionItem {
     CompletionItem {
@@ -373,11 +376,7 @@ fn child_viewports_and_input_are_owned_by_each_document_window() {
     let context = egui::Context::default();
     let first = egui::ViewportId::ROOT;
     let second = egui::ViewportId::from_hash_of("second-editor");
-    for salt in [
-        "tiptoptyp-git",
-        "tiptoptyp-popup-overlay",
-        "tiptoptyp-shortcuts",
-    ] {
+    for salt in ["tiptoptyp-popup-overlay", "tiptoptyp-shortcuts"] {
         let first_child = egui::ViewportId::from_hash_of((first, salt));
         let second_child = egui::ViewportId::from_hash_of((second, salt));
         assert_ne!(first_child, second_child);
@@ -2431,6 +2430,15 @@ fn wide_explorer_header_and_body_cannot_grow_the_resized_panel() {
 }
 
 #[test]
+fn explorer_reopen_restores_the_last_open_width() {
+    let previous = Rect::from_min_size(Pos2::new(0.0, 24.0), Vec2::new(18.0, 300.0));
+    assert_eq!(
+        explorer_width_restored_rect(previous, 236.0),
+        Rect::from_min_size(Pos2::new(0.0, 24.0), Vec2::new(236.0, 300.0))
+    );
+}
+
+#[test]
 fn explorer_sections_split_the_body_budget_without_hiding_headers() {
     let available = 500.0;
     let frame_height = 2.0;
@@ -2644,7 +2652,7 @@ fn explorer_order_controls_move_panels_and_reset_with_aligned_buttons() {
         .build_ui_state(
             |ui, order| {
                 install_hover_runtime_config(ui.ctx(), Duration::ZERO, Duration::ZERO);
-                settings_view::show_explorer_order_controls(ui, order);
+                settings_panel::show_explorer_order_controls(ui, order);
             },
             ExplorerOrder::default(),
         );
@@ -2683,7 +2691,7 @@ fn explorer_order_controls_stay_visible_after_an_oversized_settings_row() {
         .build_ui_state(
             |ui, order| {
                 ui.allocate_space(Vec2::new(800.0, 20.0));
-                settings_view::show_explorer_order_controls(ui, order);
+                settings_panel::show_explorer_order_controls(ui, order);
             },
             ExplorerOrder::default(),
         );
@@ -3788,12 +3796,8 @@ fn preview_status_does_not_report_zero_millisecond_startup_timing() {
 
 #[test]
 fn opening_git_from_a_normal_window_reveals_the_explorer() {
-    assert!(git_command_opens_explorer(false, None));
-    assert!(!git_command_opens_explorer(true, None));
-    assert!(!git_command_opens_explorer(
-        false,
-        Some(UiSnapshotScene::GitWindow)
-    ));
+    assert!(git_command_opens_explorer(false));
+    assert!(!git_command_opens_explorer(true));
 }
 
 #[test]
@@ -5069,7 +5073,7 @@ fn every_secondary_window_can_embed_after_its_native_parent_is_focused() {
 }
 
 #[test]
-fn sublime_slot_mode_is_validated_before_color_transforms() {
+fn sublime_theme_accepts_either_slot_before_color_transforms() {
     let temp = tempfile::tempdir().expect("create temporary theme directory");
     let path = temp.path().join("Dark.sublime-color-scheme");
     fs::write(
@@ -5088,21 +5092,18 @@ fn sublime_slot_mode_is_validated_before_color_transforms() {
         source: ThemeSourceRequest::Sublime(path.clone()),
         invert: true,
         hue_shift_degrees: 30,
+        colors: Default::default(),
         fallback_dark: false,
     };
-    let error = load_active_theme(&mismatched).expect_err("dark file is not a light choice");
-    assert!(error.contains("dark Sublime theme"));
-    assert!(error.contains("light slot"));
+    let opposite = load_active_theme(&mismatched).expect("light slot accepts a dark file");
 
     let matching = ActiveThemeRequest {
         fallback_dark: true,
         ..mismatched
     };
     let transformed = load_active_theme(&matching).expect("dark slot accepts the dark file");
-    assert!(
-        !transformed.dark_mode,
-        "inversion runs only after validation"
-    );
+    assert!(!transformed.dark_mode, "inversion runs after loading");
+    assert_eq!(opposite.palette, transformed.palette);
 }
 
 #[test]
@@ -5111,6 +5112,12 @@ fn active_theme_transform_is_ordered_and_non_cumulative() {
         source: ThemeSourceRequest::Builtin("catppuccin-latte".to_owned()),
         invert: true,
         hue_shift_degrees: 30,
+        colors: crate::theme_transform::ThemeColorAdjustments {
+            luminosity: 15,
+            brightness: -5,
+            contrast: 110,
+            saturation: 90,
+        },
         fallback_dark: false,
     };
     let original = builtin_themes::find("catppuccin-latte").unwrap();
@@ -5130,6 +5137,7 @@ fn unknown_themes_report_an_error_and_use_the_paired_fallback() {
         source: ThemeSourceRequest::Builtin("does-not-exist".to_owned()),
         invert: false,
         hue_shift_degrees: 0,
+        colors: Default::default(),
         fallback_dark: true,
     };
     let (fallback, error) = load_active_theme_or_fallback(&request);
@@ -5284,4 +5292,48 @@ fn capture_scene_replacement_does_not_replace_the_batch_fixture() {
     assert!(!document.is_dirty());
     assert_ne!(document.key(), before);
     assert_eq!(document.key().owner, before.owner);
+}
+
+#[test]
+fn bracket_settings_controls_change_each_palette_and_can_be_disabled() {
+    use crate::rainbow::{BracketFamily, BracketPalette, RainbowBrackets};
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(420.0, 360.0))
+        .build_ui_state(
+            settings_panel::show_bracket_controls,
+            RainbowBrackets::default(),
+        );
+    harness.run();
+    for family in BracketFamily::ALL {
+        let picker = harness.get_by_role_and_label(egui::accesskit::Role::ComboBox, family.label());
+        assert!(picker.rect().right() <= 420.0);
+    }
+    harness
+        .get_by_role_and_label(
+            egui::accesskit::Role::ComboBox,
+            BracketFamily::Round.label(),
+        )
+        .click();
+    harness.run();
+    harness
+        .get_by_role_and_label(egui::accesskit::Role::Button, "Orchid")
+        .click();
+    harness.run();
+    assert_eq!(
+        harness.state().palettes,
+        [
+            BracketPalette::Orchid,
+            BracketPalette::Forest,
+            BracketPalette::Sunset,
+            BracketPalette::Orchid
+        ]
+    );
+    harness.get_by_label("Rainbow brackets").click();
+    harness.run();
+    assert!(!harness.state().enabled);
+    harness.get_by_label("Rainbow brackets").click();
+    harness.run();
+    assert!(harness.state().enabled);
+    assert_eq!(harness.state().palettes[0], BracketPalette::Orchid);
 }

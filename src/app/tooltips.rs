@@ -1,0 +1,1564 @@
+//! Tooltip geometry, timing, interaction, rendering, and viewport-owned caches.
+//! Callers provide anchors/content; this module has no application-state access.
+use super::{
+    ASSET_HOVER_CARD_MAX_IMAGE, ASSET_HOVER_ERROR_SIZE, ASSET_HOVER_LOADING_SIZE,
+    RecentWorkspaceAction, approximate_char_capacity, format_rect, normalize_browser_link_target,
+    tail_elide,
+};
+use crate::{
+    asset::AssetThumbnailResult,
+    child_view::{ChildViewHost, ChildViewSpec, viewport_scoped_id},
+    diagnostics::DiagnosticSeverity,
+    document::DocumentKind,
+    generic_highlight::GenericSyntaxHighlighter,
+    highlight::SyntaxHighlighter,
+    screenshot::CaptureController,
+    settings::{DEFAULT_HOVER_DELAY_MS, DEFAULT_HOVER_FADE_MS},
+    syntax_theme::ResolvedTypstStyles,
+    theme::{self, METRICS},
+};
+use eframe::egui::{self, Pos2, Rect, RichText, Sense, Stroke, Vec2};
+use std::{
+    collections::{VecDeque, hash_map::DefaultHasher},
+    hash::{Hash, Hasher},
+    path::{Path, PathBuf},
+    sync::{OnceLock, mpsc},
+    time::Duration,
+};
+const TOOLTIP_HANDOFF_GRACE: Duration = Duration::from_millis(300);
+#[derive(Debug, Clone)]
+pub(super) struct HoverTooltipOverlay {
+    pub(super) origin: Rect,
+    pub(super) anchor: Pos2,
+    pub(super) detail: String,
+    pub(super) opacity: f32,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct AssetHoverCandidate {
+    pub(super) origin: Rect,
+    pub(super) anchor: Pos2,
+    pub(super) placement: TooltipPlacement,
+    pub(super) path: PathBuf,
+    pub(super) kind: DocumentKind,
+    pub(super) opacity: f32,
+}
+
+#[derive(Clone)]
+pub(super) enum AssetHoverContent {
+    Loading,
+    Ready {
+        texture: egui::TextureHandle,
+        source_size: [usize; 2],
+    },
+    Error(String),
+}
+
+#[derive(Clone)]
+pub(super) struct AssetHoverState {
+    pub(super) origin: Rect,
+    pub(super) anchor: Pos2,
+    pub(super) placement: TooltipPlacement,
+    pub(super) path: PathBuf,
+    pub(super) kind: DocumentKind,
+    pub(super) opacity: f32,
+    pub(super) token: crate::asset::ThumbnailToken,
+    pub(super) content: AssetHoverContent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TooltipPlacement {
+    Below,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct TooltipFadeState {
+    pub(super) opacity: f32,
+    pub(super) updated_at: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct MarkdownInlineSpan {
+    pub(super) text: String,
+    pub(super) code: bool,
+    pub(super) bold: bool,
+    pub(super) italics: bool,
+    pub(super) link: Option<String>,
+}
+
+/// Syntax highlighting a tooltip is independent of scrolling, so retain the
+/// completed jobs in the owning viewport. This keeps wheel events from
+/// reparsing and re-highlighting every code span on every frame.
+#[derive(Clone, Default)]
+pub(super) struct TooltipCodeCache {
+    pub(super) jobs: VecDeque<TooltipCodeCacheEntry>,
+}
+
+#[derive(Clone)]
+pub(super) struct TooltipCodeCacheEntry {
+    pub(super) source: String,
+    pub(super) token: String,
+    pub(super) dark_mode: bool,
+    pub(super) editor_font: egui::FontId,
+    pub(super) colors: [[u8; 4]; 14],
+    pub(super) job: Option<egui::text::LayoutJob>,
+}
+
+impl TooltipCodeCacheEntry {
+    pub(super) fn matches(
+        &self,
+        source: &str,
+        token: &str,
+        dark_mode: bool,
+        editor_font: &egui::FontId,
+        colors: &[[u8; 4]; 14],
+    ) -> bool {
+        self.source == source
+            && self.token == token
+            && self.dark_mode == dark_mode
+            && self.editor_font == *editor_font
+            && self.colors == *colors
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct TooltipGeometry {
+    pub(super) identity: u64,
+    pub(super) origin: Rect,
+    pub(super) card: Rect,
+    pub(super) fade: TooltipFadeState,
+    pub(super) pointer_inside_viewport: bool,
+    pub(super) handoff_until: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct TooltipInteractionState {
+    pub(super) identity: u64,
+    pub(super) focused: bool,
+    pub(super) had_focus: bool,
+    pub(super) focus_requested: bool,
+    pub(super) dismissed: bool,
+}
+
+impl TooltipInteractionState {
+    pub(super) const fn new(identity: u64) -> Self {
+        Self {
+            identity,
+            focused: false,
+            had_focus: false,
+            focus_requested: false,
+            dismissed: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct HoverRuntimeConfig {
+    pub(super) delay: Duration,
+    pub(super) fade: Duration,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct HoverTimingState {
+    pub(super) widget: egui::Id,
+    pub(super) started: f64,
+    pub(super) last_seen: f64,
+}
+
+pub(super) fn native_hover_tooltip_id(context: &egui::Context) -> egui::Id {
+    viewport_scoped_id(context, "tiptoptyp-native-hover-tooltip")
+}
+
+pub(super) fn asset_hover_candidate_id(context: &egui::Context) -> egui::Id {
+    viewport_scoped_id(context, "tiptoptyp-asset-hover-candidate")
+}
+
+pub(super) fn current_asset_hover_candidate(
+    context: &egui::Context,
+) -> Option<AssetHoverCandidate> {
+    // Derive the viewport-scoped ID before entering the data lock. Calling
+    // `viewport_id()` from inside `Context::data` would re-enter the same lock
+    // and deadlock the first UI frame.
+    let id = asset_hover_candidate_id(context);
+    context.data(|data| data.get_temp::<AssetHoverCandidate>(id))
+}
+
+pub(super) fn clear_asset_hover_candidate(context: &egui::Context) {
+    let id = asset_hover_candidate_id(context);
+    context.data_mut(|data| data.remove::<AssetHoverCandidate>(id));
+}
+
+pub(super) fn clear_native_hover_overlay(context: &egui::Context) {
+    let id = native_hover_tooltip_id(context);
+    context.data_mut(|data| data.remove::<HoverTooltipOverlay>(id));
+}
+
+pub(super) fn asset_hover_timing_id(context: &egui::Context) -> egui::Id {
+    native_hover_tooltip_id(context).with("asset-hover-timing")
+}
+
+pub(super) fn tooltip_geometry_id(context: &egui::Context) -> egui::Id {
+    native_hover_tooltip_id(context).with("geometry")
+}
+
+pub(super) fn tooltip_interaction_id(context: &egui::Context) -> egui::Id {
+    native_hover_tooltip_id(context).with("interaction")
+}
+
+pub(super) fn offer_asset_hover(
+    response: &egui::Response,
+    origin: Rect,
+    path: PathBuf,
+    kind: DocumentKind,
+    placement: TooltipPlacement,
+) {
+    if native_tooltip_handoff_blocks(&response.ctx, origin) {
+        return;
+    }
+    let Some(opacity) = hover_opacity(response, asset_hover_timing_id(&response.ctx)) else {
+        return;
+    };
+    let anchor = match placement {
+        TooltipPlacement::Below => {
+            origin.left_bottom() + egui::vec2(0.0, METRICS.editor.tooltip_gap)
+        }
+        TooltipPlacement::Right => {
+            origin.right_center() + egui::vec2(METRICS.editor.tooltip_gap, 0.0)
+        }
+    };
+    let candidate = AssetHoverCandidate {
+        origin,
+        anchor,
+        placement,
+        path,
+        kind,
+        opacity,
+    };
+    let id = asset_hover_candidate_id(&response.ctx);
+    response
+        .ctx
+        .data_mut(|data| data.insert_temp(id, candidate));
+}
+
+pub(super) fn asset_thumbnail_result_matches(
+    hover: Option<&AssetHoverState>,
+    result: &AssetThumbnailResult,
+) -> bool {
+    hover.is_some_and(|hover| {
+        hover.token == result.token && hover.path == result.path && hover.kind == result.kind
+    })
+}
+
+pub(super) fn asset_tooltip_identity(origin: Rect, path: &Path) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    path.hash(&mut hasher);
+    for coordinate in [origin.min.x, origin.min.y, origin.max.x, origin.max.y] {
+        coordinate.to_bits().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+pub(super) fn fit_asset_preview_size(source: [usize; 2], bounds: Vec2) -> Vec2 {
+    let source = Vec2::new(source[0].max(1) as f32, source[1].max(1) as f32);
+    let bounds = Vec2::new(bounds.x.max(1.0), bounds.y.max(1.0));
+    let scale = (bounds.x / source.x).min(bounds.y / source.y).min(1.0);
+    (source * scale).max(Vec2::splat(1.0))
+}
+
+pub(super) fn asset_hover_card_size(
+    content: &AssetHoverContent,
+    viewport_size: Vec2,
+    frame_margin: Vec2,
+    edge: f32,
+) -> Vec2 {
+    let desired = match content {
+        AssetHoverContent::Loading => ASSET_HOVER_LOADING_SIZE,
+        AssetHoverContent::Error(_) => ASSET_HOVER_ERROR_SIZE,
+        AssetHoverContent::Ready { source_size, .. } => {
+            let image = fit_asset_preview_size(*source_size, ASSET_HOVER_CARD_MAX_IMAGE);
+            Vec2::new(image.x + frame_margin.x, image.y + frame_margin.y)
+        }
+    };
+    let available = (viewport_size - Vec2::splat(edge.max(0.0) * 2.0)).max(Vec2::splat(1.0));
+    desired.min(available).max(Vec2::splat(1.0))
+}
+
+pub(super) fn show_asset_hover_contents(
+    ui: &mut egui::Ui,
+    path: &Path,
+    _kind: DocumentKind,
+    content: &AssetHoverContent,
+    content_size: Vec2,
+) {
+    ui.set_min_size(content_size);
+    ui.set_max_size(content_size);
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    match content {
+        AssetHoverContent::Loading => {
+            ui.vertical_centered(|ui| {
+                ui.add_space((content_size.y - 44.0).max(0.0) * 0.5);
+                ui.spinner();
+                ui.label(format!("Loading preview for {file_name}…"));
+            });
+        }
+        AssetHoverContent::Error(error) => {
+            ui.add_sized(
+                [content_size.x, METRICS.popup.tooltip_title_height],
+                egui::Label::new(RichText::new(file_name).strong())
+                    .selectable(true)
+                    .truncate(),
+            );
+            ui.separator();
+            ui.add(egui::Label::new(error).selectable(true).wrap());
+        }
+        AssetHoverContent::Ready {
+            texture,
+            source_size,
+        } => {
+            let image_size = fit_asset_preview_size(*source_size, content_size);
+            ui.vertical_centered(|ui| {
+                ui.add(
+                    egui::Image::new(texture)
+                        .fit_to_exact_size(image_size)
+                        .alt_text(format!("Preview of {file_name}")),
+                );
+            });
+        }
+    }
+}
+
+pub(super) fn native_tooltip_handoff_active(context: &egui::Context, emit_trace: bool) -> bool {
+    let geometry_id = tooltip_geometry_id(context);
+    let interaction_id = tooltip_interaction_id(context);
+    let pointer = context
+        .pointer_hover_pos()
+        .or_else(|| context.pointer_latest_pos());
+    let now = context.input(|input| input.time);
+    let (active, geometry, interaction) = context.data_mut(|data| {
+        let mut geometry = data.get_temp::<TooltipGeometry>(geometry_id);
+        if let Some(current) = geometry {
+            let current = refresh_tooltip_root_geometry(current, pointer, now);
+            geometry = Some(current);
+            data.insert_temp(geometry_id, current);
+        }
+        let interaction = tooltip_interaction_for_geometry(
+            geometry,
+            data.get_temp::<TooltipInteractionState>(interaction_id),
+        );
+        let active = tooltip_handoff_is_active(pointer, now, geometry, interaction);
+        (active, geometry, interaction)
+    });
+    if emit_trace {
+        trace_native_tooltip_handoff(pointer, now, geometry, interaction, active);
+    }
+    if let Some(geometry) = geometry
+        && geometry.handoff_until > now
+        && !geometry.pointer_inside_viewport
+        && !interaction.is_some_and(|state| state.focused || state.focus_requested)
+        && !pointer
+            .is_some_and(|pointer| tooltip_region_contains(pointer, geometry.origin, geometry.card))
+    {
+        // A pointer leaving the route may not generate another repaint. Make
+        // the grace deadline self-expiring so the tooltip cannot linger
+        // forever when there is no competing animation to drive the frame.
+        context.request_repaint_after(Duration::from_secs_f64(
+            (geometry.handoff_until - now).max(0.001),
+        ));
+    }
+    active
+}
+
+pub(super) fn native_tooltip_handoff_blocks(
+    context: &egui::Context,
+    candidate_origin: Rect,
+) -> bool {
+    let dismissed_id = viewport_scoped_id(context, "dismissed-tooltip-origin");
+    if context.data(|data| {
+        data.get_temp::<Rect>(dismissed_id)
+            .is_some_and(|origin| origin.intersects(candidate_origin))
+    }) {
+        return true;
+    }
+    let active = native_tooltip_handoff_active(context, false);
+    let geometry_id = tooltip_geometry_id(context);
+    let active_origin = context.data(|data| {
+        data.get_temp::<TooltipGeometry>(geometry_id)
+            .map(|geometry| geometry.origin)
+    });
+    tooltip_handoff_blocks(active, active_origin, candidate_origin)
+}
+
+pub(super) fn tooltip_handoff_blocks(
+    active: bool,
+    active_origin: Option<Rect>,
+    candidate_origin: Rect,
+) -> bool {
+    // Focus state can briefly outlive its geometry while native viewports are
+    // being recreated. Without a concrete source rectangle there is no route
+    // to protect, so that stale state must not suppress every future tooltip.
+    active && active_origin.is_some_and(|origin| origin != candidate_origin)
+}
+
+pub(super) fn tooltip_handoff_is_active(
+    pointer: Option<Pos2>,
+    now: f64,
+    geometry: Option<TooltipGeometry>,
+    interaction: Option<TooltipInteractionState>,
+) -> bool {
+    let interaction = tooltip_interaction_for_geometry(geometry, interaction);
+    if interaction.is_some_and(|state| state.dismissed) {
+        return false;
+    }
+    if interaction.is_some_and(|state| state.focused || state.focus_requested) {
+        return true;
+    }
+    geometry.is_some_and(|geometry| {
+        geometry.handoff_until > now
+            || geometry.pointer_inside_viewport
+            || pointer.is_some_and(|pointer| {
+                tooltip_region_contains(pointer, geometry.origin, geometry.card)
+            })
+    })
+}
+
+pub(super) fn tooltip_interaction_for_geometry(
+    geometry: Option<TooltipGeometry>,
+    interaction: Option<TooltipInteractionState>,
+) -> Option<TooltipInteractionState> {
+    interaction.filter(|state| geometry.is_none_or(|geometry| geometry.identity == state.identity))
+}
+
+pub(super) fn refresh_tooltip_root_geometry(
+    mut geometry: TooltipGeometry,
+    pointer: Option<Pos2>,
+    now: f64,
+) -> TooltipGeometry {
+    // Pointer ownership transfers between native viewports. Once the cursor
+    // enters the child, the root reports no pointer; only the child may clear
+    // `pointer_inside_viewport`. The root owns route/deadline updates only.
+    if pointer
+        .is_some_and(|pointer| tooltip_region_contains(pointer, geometry.origin, geometry.card))
+    {
+        geometry.handoff_until = tooltip_handoff_deadline(now);
+    }
+    geometry
+}
+
+pub(super) fn refresh_tooltip_child_geometry(
+    mut geometry: TooltipGeometry,
+    identity: u64,
+    pointer_inside_viewport: bool,
+) -> Option<TooltipGeometry> {
+    // A native child can deliver its final pointer event after a competing
+    // source has selected a new tooltip. Do not let that stale child mutate
+    // either the replacement tooltip's geometry or its interaction state.
+    if geometry.identity != identity {
+        return None;
+    }
+    geometry.pointer_inside_viewport = pointer_inside_viewport;
+    Some(geometry)
+}
+
+pub(super) fn tooltip_handoff_deadline(now: f64) -> f64 {
+    now + TOOLTIP_HANDOFF_GRACE.as_secs_f64()
+}
+
+pub(super) fn tooltip_viewport_should_render(
+    deterministic_scene: bool,
+    root_focused: bool,
+    handoff_active: bool,
+    identity: u64,
+    geometry: Option<TooltipGeometry>,
+    interaction: Option<TooltipInteractionState>,
+) -> bool {
+    deterministic_scene
+        || root_focused
+        || handoff_active
+        || geometry.is_some_and(|geometry| {
+            geometry.identity == identity && geometry.pointer_inside_viewport
+        })
+        || interaction.is_some_and(|state| {
+            state.identity == identity && (state.focused || state.focus_requested)
+        })
+}
+
+pub(super) fn trace_native_tooltip_handoff(
+    pointer: Option<Pos2>,
+    now: f64,
+    geometry: Option<TooltipGeometry>,
+    interaction: Option<TooltipInteractionState>,
+    active: bool,
+) {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    if !*ENABLED.get_or_init(|| std::env::var_os("TIPTOPTYP_UI_TRACE").is_some()) {
+        return;
+    }
+    let pointer = pointer.map_or_else(|| "none".to_owned(), format_pos);
+    let geometry = geometry.map_or_else(
+        || "none".to_owned(),
+        |geometry| {
+            format!(
+                "origin={} card={} viewport_inside={} until={:.3}",
+                format_rect(geometry.origin),
+                format_rect(geometry.card),
+                geometry.pointer_inside_viewport,
+                geometry.handoff_until,
+            )
+        },
+    );
+    let interaction = interaction.map_or_else(
+        || "none".to_owned(),
+        |interaction| {
+            format!(
+                "focused={} requested={} dismissed={}",
+                interaction.focused, interaction.focus_requested, interaction.dismissed,
+            )
+        },
+    );
+    eprintln!(
+        "ui.tooltip.handoff now={now:.3} pointer={pointer} {geometry} {interaction} active={active}"
+    );
+}
+
+pub(super) fn format_pos(pos: Pos2) -> String {
+    format!("({:.1},{:.1})", pos.x, pos.y)
+}
+
+pub(super) fn settings_hover_tooltip_id(context: &egui::Context) -> egui::Id {
+    viewport_scoped_id(context, "tiptoptyp-settings-hover-tooltip")
+}
+
+pub(super) fn typst_overrides_hover_tooltip_id(context: &egui::Context) -> egui::Id {
+    viewport_scoped_id(context, "tiptoptyp-typst-overrides-hover-tooltip")
+}
+
+pub(super) fn hover_runtime_config_id(context: &egui::Context) -> egui::Id {
+    viewport_scoped_id(context, "tiptoptyp-hover-runtime-config")
+}
+
+/// Install the per-viewport hover timing without re-entering egui's context
+/// lock. `viewport_id()` itself reads context state, so the ID must be derived
+/// before `data_mut` takes the write lock. This runs during every first frame.
+pub(super) fn install_hover_runtime_config(
+    context: &egui::Context,
+    delay: Duration,
+    fade: Duration,
+) {
+    let id = hover_runtime_config_id(context);
+    let config = HoverRuntimeConfig { delay, fade };
+    context.data_mut(|data| data.insert_temp(id, config));
+}
+
+pub(super) fn hover_runtime_config(context: &egui::Context) -> HoverRuntimeConfig {
+    let id = hover_runtime_config_id(context);
+    context.data(|data| {
+        data.get_temp::<HoverRuntimeConfig>(id)
+            .unwrap_or(HoverRuntimeConfig {
+                delay: Duration::from_millis(DEFAULT_HOVER_DELAY_MS),
+                fade: Duration::from_millis(DEFAULT_HOVER_FADE_MS),
+            })
+    })
+}
+
+pub(super) fn diagnostic_hover_timing_id(context: &egui::Context) -> egui::Id {
+    viewport_scoped_id(context, "tiptoptyp-diagnostic-hover-timing")
+}
+
+pub(super) fn native_hover_text(
+    response: egui::Response,
+    detail: impl Into<String>,
+) -> egui::Response {
+    let id = native_hover_tooltip_id(&response.ctx);
+    hover_text_with_id(response, detail, id)
+}
+
+pub(super) fn show_recent_workspace_row(
+    ui: &mut egui::Ui,
+    path: &Path,
+    card_width: f32,
+) -> Option<RecentWorkspaceAction> {
+    let path_text = path.display().to_string();
+    let max_chars = approximate_char_capacity(
+        card_width - theme::SPACE.content * 2.0,
+        theme::TYPE.supporting,
+    );
+    let response = ui.add_sized(
+        [ui.available_width(), METRICS.menu.row_height],
+        egui::Button::new(tail_elide(&path_text, max_chars)),
+    );
+    native_hover_text(response.clone(), path_text);
+    let menu_was_open = response.context_menu_opened();
+    let mut remove = false;
+    response.context_menu(|ui| {
+        if ui.button("Remove from Recents").clicked() {
+            remove = true;
+            ui.close();
+        }
+    });
+    if remove {
+        Some(RecentWorkspaceAction::Remove(path.to_path_buf()))
+    } else if response.clicked_by(egui::PointerButton::Primary)
+        && !menu_was_open
+        && !response.context_menu_opened()
+    {
+        Some(RecentWorkspaceAction::Open(path.to_path_buf()))
+    } else {
+        None
+    }
+}
+
+pub(super) fn settings_hover_text(
+    response: egui::Response,
+    detail: impl Into<String>,
+) -> egui::Response {
+    let id = settings_hover_tooltip_id(&response.ctx);
+    hover_text_with_id(response, detail, id)
+}
+
+pub(super) fn typst_overrides_hover_text(
+    response: egui::Response,
+    detail: impl Into<String>,
+) -> egui::Response {
+    let id = typst_overrides_hover_tooltip_id(&response.ctx);
+    hover_text_with_id(response, detail, id)
+}
+
+pub(super) fn hover_text_with_id(
+    response: egui::Response,
+    detail: impl Into<String>,
+    id: egui::Id,
+) -> egui::Response {
+    if let Some(opacity) = hover_opacity(&response, id.with("timing")) {
+        let tooltip = HoverTooltipOverlay {
+            origin: response.rect,
+            anchor: response.rect.left_bottom() + egui::vec2(0.0, theme::SPACE.small),
+            detail: detail.into(),
+            opacity,
+        };
+        // Keep the currently visible native tooltip while the pointer crosses
+        // another hoverable control on its way to that tooltip. Settings and
+        // overrides use separate local cards and should retain their normal
+        // independent behavior.
+        let is_native_tooltip = id == native_hover_tooltip_id(&response.ctx);
+        if !is_native_tooltip || !native_tooltip_handoff_blocks(&response.ctx, tooltip.origin) {
+            response.ctx.data_mut(|data| data.insert_temp(id, tooltip));
+        }
+    }
+    response
+}
+
+pub(super) fn hover_opacity(response: &egui::Response, timing_id: egui::Id) -> Option<f32> {
+    if !response.hovered() {
+        return None;
+    }
+    let force_id = viewport_scoped_id(&response.ctx, "force-pointer-tooltip");
+    if response
+        .ctx
+        .data(|data| data.get_temp::<bool>(force_id).unwrap_or(false))
+    {
+        return Some(1.0);
+    }
+    let now = response.ctx.input(|input| input.time);
+    let config = hover_runtime_config(&response.ctx);
+    let mut state = response.ctx.data(|data| {
+        data.get_temp::<HoverTimingState>(timing_id)
+            .unwrap_or(HoverTimingState {
+                widget: response.id,
+                started: now,
+                last_seen: now,
+            })
+    });
+    // A missed frame means the pointer left this widget; begin a fresh wait
+    // instead of flashing a previously armed tooltip back immediately.
+    if state.widget != response.id
+        || Duration::from_secs_f64((now - state.last_seen).max(0.0))
+            > METRICS.motion.hover_reset_gap
+    {
+        state = HoverTimingState {
+            widget: response.id,
+            started: now,
+            last_seen: now,
+        };
+    } else {
+        state.last_seen = now;
+    }
+    response
+        .ctx
+        .data_mut(|data| data.insert_temp(timing_id, state));
+
+    let elapsed = Duration::from_secs_f64((now - state.started).max(0.0));
+    if elapsed < config.delay {
+        response
+            .ctx
+            .request_repaint_after((config.delay - elapsed).min(METRICS.motion.hover_poll));
+        return None;
+    }
+    let fade_elapsed = elapsed.saturating_sub(config.delay);
+    let opacity = if config.fade.is_zero() {
+        1.0
+    } else {
+        (fade_elapsed.as_secs_f32() / config.fade.as_secs_f32()).clamp(0.0, 1.0)
+    };
+    if opacity < 1.0 {
+        response
+            .ctx
+            .request_repaint_after(METRICS.motion.animation_frame);
+    }
+    Some(opacity)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn show_native_tooltip_card(
+    context: &egui::Context,
+    viewport_salt: &'static str,
+    anchor: Pos2,
+    origin: Rect,
+    detail: &str,
+    severity: Option<DiagnosticSeverity>,
+    placement: TooltipPlacement,
+    opacity: f32,
+    captures: &CaptureController,
+    link_sender: &mpsc::Sender<String>,
+) {
+    let Some(window_rect) = context.input(|input| input.viewport().inner_rect) else {
+        return;
+    };
+    let theme = context.theme();
+    let style = context.style_of(theme);
+    let tooltip_frame = theme::tooltip_card_frame(&style);
+    let frame_margin = tooltip_frame.total_margin().sum();
+    let body_font = egui::TextStyle::Body.resolve(&style);
+    let desired_card_width = if severity.is_some() {
+        METRICS.popup.tooltip_width
+    } else {
+        let natural_width = context.fonts_mut(|fonts| {
+            fonts
+                .layout(
+                    detail.to_owned(),
+                    body_font.clone(),
+                    style.visuals.text_color(),
+                    f32::INFINITY,
+                )
+                .size()
+                .x
+        });
+        (natural_width + METRICS.popup.tooltip_text_padding).clamp(
+            METRICS.popup.tooltip_min_width,
+            METRICS.popup.tooltip_max_width,
+        )
+    };
+    let available_width = (window_rect.width() - METRICS.popup.viewport_edge * 2.0).max(1.0);
+    let width = (desired_card_width + frame_margin.x).min(available_width);
+    let card_width = (width - frame_margin.x).max(1.0);
+    let body_height = context.fonts_mut(|fonts| {
+        fonts
+            .layout(
+                detail.to_owned(),
+                body_font,
+                style.visuals.text_color(),
+                (card_width - METRICS.popup.tooltip_text_padding).max(1.0),
+            )
+            .size()
+            .y
+    });
+    let available_height = (window_rect.height() - METRICS.popup.viewport_edge * 2.0).max(1.0);
+    let height = (METRICS.popup.tooltip_title_height + body_height + frame_margin.y)
+        .clamp(
+            METRICS.popup.tooltip_min_height,
+            METRICS.popup.tooltip_max_height,
+        )
+        .min(available_height);
+    let root_local_card = place_native_tooltip_card(
+        Rect::from_min_size(Pos2::ZERO, window_rect.size()),
+        origin,
+        anchor,
+        Vec2::new(width, height),
+        placement,
+        METRICS.popup.viewport_edge,
+    );
+    let position = window_rect.min + root_local_card.min.to_vec2();
+    let interaction_id = tooltip_interaction_id(context);
+    let identity = tooltip_identity(origin, detail);
+    let interaction = context.data(|data| {
+        data.get_temp::<TooltipInteractionState>(interaction_id)
+            .filter(|state| state.identity == identity)
+            .unwrap_or(TooltipInteractionState::new(identity))
+    });
+    if interaction.dismissed {
+        return;
+    }
+    let geometry_id = tooltip_geometry_id(context);
+    let now = context.input(|input| input.time);
+    let previous = context.data(|data| {
+        data.get_temp::<TooltipGeometry>(geometry_id)
+            .filter(|geometry| geometry.identity == identity)
+    });
+    let fade = continue_tooltip_fade(
+        opacity,
+        previous.map(|geometry| geometry.fade),
+        now,
+        hover_runtime_config(context).fade,
+    );
+    if fade.opacity < 1.0 {
+        context.request_repaint_after(METRICS.motion.animation_frame);
+    }
+    context.data_mut(|data| {
+        data.insert_temp(
+            geometry_id,
+            TooltipGeometry {
+                identity,
+                origin,
+                card: root_local_card,
+                fade,
+                // The child viewport exclusively owns this bit. The root has
+                // no pointer while the cursor is over a native child and must
+                // preserve the child's last observation across paint passes.
+                pointer_inside_viewport: previous
+                    .is_some_and(|geometry| geometry.pointer_inside_viewport),
+                handoff_until: previous.map_or_else(
+                    || tooltip_handoff_deadline(now),
+                    |geometry| geometry.handoff_until,
+                ),
+            },
+        );
+    });
+    let capture_viewport = captures.has_pending_for("diagnostic");
+    let activate_viewport = capture_viewport || interaction.focus_requested || interaction.focused;
+
+    // Keep the popup non-activating in production, while still letting it
+    // receive pointer movement and wheel events for scrolling. A queued QA
+    // capture temporarily activates its isolated viewport so macOS supplies
+    // the repeated paint passes needed by the settling countdown.
+    let spec = ChildViewSpec::tooltip(
+        viewport_salt,
+        "tiptoptyp",
+        position,
+        Vec2::new(width, height),
+        activate_viewport,
+        "diagnostic",
+    );
+    ChildViewHost::show(context, captures, spec, theme, &style, |ui, input| {
+        let popup_focused = if capture_viewport {
+            None
+        } else {
+            input.focused
+        };
+        let dismiss_requested = input.escape_pressed;
+        ui.set_opacity(fade.opacity);
+        let frame = if interaction.focused {
+            tooltip_frame.stroke(Stroke::new(
+                1.0,
+                style.visuals.widgets.active.bg_stroke.color,
+            ))
+        } else {
+            tooltip_frame
+        };
+        let frame_response = frame.show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                // Let short tooltips keep their natural height. Filling
+                // the fixed native viewport makes the frame's content
+                // rect reach the viewport edge, clipping its lower
+                // rounded corners.
+                .auto_shrink([false, true])
+                .max_height(METRICS.popup.tooltip_max_height)
+                .show(ui, |ui| show_markdown(ui, detail, link_sender));
+        });
+        let card_rect = frame_response.response.rect;
+        let pointer_inside_viewport = ui.rect_contains_pointer(ui.max_rect());
+        let pointer_inside_card = ui.rect_contains_pointer(card_rect);
+        let popup_interacted = pointer_inside_card && ui.input(|input| input.pointer.any_pressed());
+        let interaction = update_tooltip_interaction_state(
+            interaction,
+            identity,
+            popup_interacted,
+            popup_focused,
+        );
+        let interaction = if dismiss_requested {
+            TooltipInteractionState {
+                focused: false,
+                focus_requested: false,
+                dismissed: true,
+                ..interaction
+            }
+        } else {
+            interaction
+        };
+        context.data_mut(|data| {
+            if let Some(geometry) = data.get_temp::<TooltipGeometry>(geometry_id)
+                && let Some(geometry) =
+                    refresh_tooltip_child_geometry(geometry, identity, pointer_inside_viewport)
+            {
+                // Lifetime follows the complete child viewport, including
+                // transparent padding. Click/focus hit-testing above stays
+                // restricted to the visibly painted card.
+                data.insert_temp(geometry_id, geometry);
+                data.insert_temp(interaction_id, interaction);
+            }
+        });
+        if popup_interacted {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+    });
+}
+
+pub(super) fn show_local_tooltip_card(
+    context: &egui::Context,
+    anchor: Pos2,
+    detail: &str,
+    opacity: f32,
+) -> Rect {
+    let style = context.style_of(context.theme());
+    // Settings hints are plain text, not document-sized markdown cards. Measure
+    // the wrapped text first so even a reused Area can shrink from a long path
+    // to a one-line hint without retaining its previous width or scroll height.
+    let bounds = context.content_rect().shrink(theme::SPACE.small);
+    let frame =
+        theme::popup_card_frame(&style).inner_margin(egui::Margin::same(theme::SPACE.small as i8));
+    let margin = frame.total_margin().sum();
+    let max_width = METRICS
+        .popup
+        .tooltip_width
+        .min((bounds.width() - margin.x).max(1.0));
+    let galley = context.fonts_mut(|fonts| {
+        fonts.layout(
+            detail.to_owned(),
+            egui::TextStyle::Body.resolve(&style),
+            style.visuals.text_color(),
+            max_width,
+        )
+    });
+    let max_height = METRICS
+        .popup
+        .tooltip_max_height
+        .min((bounds.height() - margin.y).max(1.0));
+    let size = Vec2::new(galley.size().x.ceil(), galley.size().y.min(max_height)) + margin;
+    let card = place_local_tooltip_card(anchor, size, bounds);
+    egui::Area::new(viewport_scoped_id(context, "settings-tooltip-card"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(card.min)
+        .default_size(card.size())
+        .constrain_to(bounds)
+        // We placed this frame using its current text size, not the Area's
+        // cached size from a potentially different hint on the previous frame.
+        .constrain(false)
+        .show(context, |ui| {
+            ui.set_opacity(opacity);
+            frame
+                .show(ui, |ui| {
+                    ui.set_width(galley.size().x.ceil());
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([true, true])
+                        .max_height(max_height)
+                        .show(ui, |ui| ui.add(egui::Label::new(galley).selectable(true)));
+                })
+                .response
+                .rect
+        })
+        .inner
+}
+
+pub(super) fn place_local_tooltip_card(anchor: Pos2, size: Vec2, bounds: Rect) -> Rect {
+    let size = size.min(bounds.size());
+    Rect::from_min_size(
+        Pos2::new(
+            anchor.x.clamp(bounds.left(), bounds.right() - size.x),
+            anchor.y.clamp(bounds.top(), bounds.bottom() - size.y),
+        ),
+        size,
+    )
+}
+
+pub(super) fn frame_content_size(viewport_size: Vec2, frame_margin: Vec2) -> Vec2 {
+    Vec2::new(
+        (viewport_size.x - frame_margin.x).max(1.0),
+        (viewport_size.y - frame_margin.y).max(1.0),
+    )
+}
+
+pub(super) fn show_markdown(ui: &mut egui::Ui, markdown: &str, link_sender: &mpsc::Sender<String>) {
+    let mut fenced = false;
+    let mut fence_token = String::new();
+    let mut fence_lines = Vec::new();
+    let highlighter = GenericSyntaxHighlighter::default();
+    let mut typst_highlighter = SyntaxHighlighter::default();
+    for line in markdown.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            if fenced {
+                show_markdown_code_block(
+                    ui,
+                    &highlighter,
+                    &mut typst_highlighter,
+                    &fence_lines.join("\n"),
+                    &fence_token,
+                );
+                fence_lines.clear();
+                fence_token.clear();
+            } else {
+                fence_token = trimmed.trim_start_matches('`').trim().to_owned();
+            }
+            fenced = !fenced;
+            continue;
+        }
+        if fenced {
+            fence_lines.push(line.to_owned());
+            continue;
+        }
+        if trimmed.is_empty() {
+            ui.add_space(theme::SPACE.small);
+            continue;
+        }
+
+        let (prefix, content, heading) = if let Some(content) = trimmed.strip_prefix("### ") {
+            ("", content, 1.05)
+        } else if let Some(content) = trimmed.strip_prefix("## ") {
+            ("", content, 1.1)
+        } else if let Some(content) = trimmed.strip_prefix("# ") {
+            ("", content, 1.15)
+        } else if let Some(content) = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "))
+        {
+            ("• ", content, 1.0)
+        } else {
+            ("", trimmed, 1.0)
+        };
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            if !prefix.is_empty() {
+                ui.add(egui::Label::new(prefix).selectable(true));
+            }
+            show_markdown_inline(
+                ui,
+                content,
+                heading,
+                &highlighter,
+                &mut typst_highlighter,
+                link_sender,
+            );
+        });
+    }
+    if fenced {
+        show_markdown_code_block(
+            ui,
+            &highlighter,
+            &mut typst_highlighter,
+            &fence_lines.join("\n"),
+            &fence_token,
+        );
+    }
+}
+
+pub(super) fn show_markdown_code_block(
+    ui: &mut egui::Ui,
+    highlighter: &GenericSyntaxHighlighter,
+    typst_highlighter: &mut SyntaxHighlighter,
+    source: &str,
+    token: &str,
+) {
+    let dark_mode = ui.visuals().dark_mode;
+    let token = token.trim().to_ascii_lowercase();
+    let job = cached_tooltip_code_job(
+        ui.ctx(),
+        highlighter,
+        typst_highlighter,
+        source,
+        &token,
+        dark_mode,
+        theme::syntax_palette(ui.ctx()),
+    );
+    if let Some(job) = job {
+        ui.add(egui::Label::new(job).selectable(true).wrap());
+    } else {
+        let color = theme::syntax_palette(ui.ctx()).plain;
+        ui.add(
+            egui::Label::new(RichText::new(source).monospace().color(color))
+                .selectable(true)
+                .wrap(),
+        );
+    }
+}
+
+pub(super) fn cached_tooltip_code_job(
+    context: &egui::Context,
+    highlighter: &GenericSyntaxHighlighter,
+    typst_highlighter: &mut SyntaxHighlighter,
+    source: &str,
+    token: &str,
+    dark_mode: bool,
+    palette: theme::SyntaxPalette,
+) -> Option<egui::text::LayoutJob> {
+    let cache_id = viewport_scoped_id(context, "tooltip-code-cache");
+    let editor_font = theme::editor_font();
+    let colors = tooltip_code_cache_colors(palette);
+    if let Some(job) = context.data(|data| {
+        data.get_temp::<TooltipCodeCache>(cache_id)
+            .and_then(|cache| {
+                cache
+                    .jobs
+                    .iter()
+                    .find(|entry| entry.matches(source, token, dark_mode, &editor_font, &colors))
+                    .map(|entry| entry.job.clone())
+            })
+    }) {
+        return job;
+    }
+    let job = tooltip_code_job(
+        highlighter,
+        typst_highlighter,
+        source,
+        token,
+        dark_mode,
+        palette,
+    );
+    context.data_mut(|data| {
+        let mut cache = data
+            .get_temp::<TooltipCodeCache>(cache_id)
+            .unwrap_or_default();
+        // Keep exact entries bounded without flushing all recently rendered
+        // tooltips when one more diagnostic appears.
+        if cache.jobs.len() >= 32 {
+            cache.jobs.pop_front();
+        }
+        cache.jobs.push_back(TooltipCodeCacheEntry {
+            source: source.to_owned(),
+            token: token.to_owned(),
+            dark_mode,
+            editor_font,
+            colors,
+            job: job.clone(),
+        });
+        data.insert_temp(cache_id, cache);
+    });
+    job
+}
+
+pub(super) fn tooltip_code_cache_colors(palette: theme::SyntaxPalette) -> [[u8; 4]; 14] {
+    [
+        palette.plain,
+        palette.comment,
+        palette.operator,
+        palette.number,
+        palette.emphasis,
+        palette.link,
+        palette.string,
+        palette.label,
+        palette.heading,
+        palette.keyword,
+        palette.interpolated,
+        palette.error,
+        palette.error_background,
+        palette.editor_background,
+    ]
+    .map(|color| color.to_array())
+}
+
+pub(super) fn tooltip_code_job(
+    highlighter: &GenericSyntaxHighlighter,
+    typst_highlighter: &mut SyntaxHighlighter,
+    source: &str,
+    token: &str,
+    dark_mode: bool,
+    palette: theme::SyntaxPalette,
+) -> Option<egui::text::LayoutJob> {
+    if matches!(token, "typ" | "typst" | "typc") {
+        typst_highlighter.set_styles(ResolvedTypstStyles::resolve(
+            palette,
+            None,
+            &Default::default(),
+        ));
+        return Some(if token == "typc" {
+            typst_highlighter.highlight_code(source, dark_mode, highlighter)
+        } else {
+            typst_highlighter.highlight(source, dark_mode, highlighter)
+        });
+    }
+    highlighter.highlight_token(source, token, dark_mode)
+}
+
+pub(super) fn show_markdown_inline(
+    ui: &mut egui::Ui,
+    text: &str,
+    scale: f32,
+    highlighter: &GenericSyntaxHighlighter,
+    typst_highlighter: &mut SyntaxHighlighter,
+    link_sender: &mpsc::Sender<String>,
+) {
+    let dark_mode = ui.visuals().dark_mode;
+    for span in markdown_inline_spans(text) {
+        if span.code {
+            let job = cached_tooltip_code_job(
+                ui.ctx(),
+                highlighter,
+                typst_highlighter,
+                &span.text,
+                "typc",
+                dark_mode,
+                theme::syntax_palette(ui.ctx()),
+            );
+            if let Some(job) = job {
+                ui.add(egui::Label::new(job).selectable(true).wrap());
+                continue;
+            }
+        }
+        let mut rich = RichText::new(span.text);
+        if span.bold {
+            rich = rich.strong();
+        }
+        if span.italics {
+            rich = rich.italics();
+        }
+        if scale != 1.0 {
+            rich = rich.size(theme::TYPE.content * scale);
+        }
+        if let Some(target) = span.link {
+            let response = ui
+                .add(
+                    egui::Label::new(rich.color(ui.visuals().hyperlink_color).underline())
+                        .selectable(true)
+                        .sense(Sense::click_and_drag())
+                        .wrap(),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            if response.clicked() && link_sender.send(target).is_ok() {
+                ui.ctx().request_repaint();
+            }
+        } else {
+            ui.add(egui::Label::new(rich).selectable(true).wrap());
+        }
+    }
+}
+
+pub(super) fn markdown_inline_spans(text: &str) -> Vec<MarkdownInlineSpan> {
+    let mut spans = Vec::new();
+    let mut current = String::new();
+    let mut code = false;
+    let mut bold = false;
+    let mut italics = false;
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut index = 0;
+    while index < chars.len() {
+        if code {
+            if chars[index] == '`' {
+                if !current.is_empty() {
+                    push_markdown_span(&mut spans, &mut current, true, bold, italics, None);
+                }
+                code = false;
+            } else {
+                current.push(chars[index]);
+            }
+            index += 1;
+            continue;
+        }
+        if chars[index] == '['
+            && let Some((label, target, next_index)) = markdown_link_at(&chars, index)
+        {
+            push_markdown_span(&mut spans, &mut current, false, bold, italics, None);
+            let link = normalize_browser_link_target(&target);
+            spans.push(MarkdownInlineSpan {
+                text: label,
+                code: false,
+                bold,
+                italics,
+                link,
+            });
+            index = next_index;
+            continue;
+        }
+        let (kind, marker, marker_len) = if chars[index] == '`' {
+            (Some(0), '`', 1)
+        } else if chars[index] == '*' && chars.get(index + 1) == Some(&'*') {
+            (Some(1), '*', 2)
+        } else if chars[index] == '_' && chars.get(index + 1) == Some(&'_') {
+            (Some(1), '_', 2)
+        } else if chars[index] == '*' {
+            (Some(2), '*', 1)
+        } else if chars[index] == '_' {
+            (Some(2), '_', 1)
+        } else {
+            (None, '\0', 0)
+        };
+        let active = match kind {
+            Some(1) => bold,
+            Some(2) => italics,
+            _ => false,
+        };
+        if let Some(kind) = kind
+            && (active || marker_is_closed(&chars, index + marker_len, marker, marker_len))
+        {
+            push_markdown_span(&mut spans, &mut current, code, bold, italics, None);
+            match kind {
+                0 => code = !code,
+                1 => bold = !bold,
+                _ => italics = !italics,
+            }
+            index += marker_len;
+        } else {
+            current.extend(chars[index..index + marker_len.max(1)].iter().copied());
+            index += marker_len.max(1);
+        }
+    }
+    push_markdown_span(&mut spans, &mut current, code, bold, italics, None);
+    spans
+}
+
+pub(super) fn push_markdown_span(
+    spans: &mut Vec<MarkdownInlineSpan>,
+    current: &mut String,
+    code: bool,
+    bold: bool,
+    italics: bool,
+    link: Option<String>,
+) {
+    if !current.is_empty() {
+        spans.push(MarkdownInlineSpan {
+            text: std::mem::take(current),
+            code,
+            bold,
+            italics,
+            link,
+        });
+    }
+}
+
+pub(super) fn markdown_link_at(chars: &[char], start: usize) -> Option<(String, String, usize)> {
+    let label_end = find_unescaped_char(chars, start + 1, ']')?;
+    if chars.get(label_end + 1) != Some(&'(') {
+        return None;
+    }
+    let mut depth = 1_usize;
+    let mut index = label_end + 2;
+    while index < chars.len() {
+        if chars[index] == '\\' {
+            index = (index + 2).min(chars.len());
+            continue;
+        }
+        match chars[index] {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    let label = unescape_markdown(&chars[start + 1..label_end]);
+                    let target = unescape_markdown(&chars[label_end + 2..index]);
+                    if target.trim().is_empty() {
+                        return None;
+                    }
+                    return Some((label, target.trim().to_owned(), index + 1));
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    None
+}
+
+pub(super) fn find_unescaped_char(chars: &[char], start: usize, needle: char) -> Option<usize> {
+    let mut index = start;
+    while index < chars.len() {
+        if chars[index] == '\\' {
+            index = (index + 2).min(chars.len());
+            continue;
+        }
+        if chars[index] == needle {
+            return Some(index);
+        }
+        index += 1;
+    }
+    None
+}
+
+pub(super) fn unescape_markdown(chars: &[char]) -> String {
+    let mut output = String::with_capacity(chars.len());
+    let mut index = 0;
+    while index < chars.len() {
+        if chars[index] == '\\'
+            && let Some(character) = chars.get(index + 1)
+        {
+            output.push(*character);
+            index += 2;
+        } else {
+            output.push(chars[index]);
+            index += 1;
+        }
+    }
+    output
+}
+
+pub(super) fn marker_is_closed(chars: &[char], start: usize, marker: char, length: usize) -> bool {
+    chars.get(start..).is_some_and(|rest| {
+        rest.windows(length)
+            .any(|window| window.iter().all(|character| *character == marker))
+    })
+}
+
+pub(super) fn tooltip_region_contains(pointer: Pos2, origin: Rect, card: Rect) -> bool {
+    if origin.contains(pointer) || card.contains(pointer) {
+        return true;
+    }
+
+    // Use the straight corridor between the facing edges. The old triangular
+    // bridge aimed at the card's center, which excluded perfectly natural
+    // paths to the card's top or bottom edge and made the popup vanish during
+    // the handoff.
+    if card.left() >= origin.right() {
+        let gap = card.left() - origin.right();
+        if gap <= f32::EPSILON || pointer.x < origin.right() || pointer.x > card.left() {
+            return false;
+        }
+        let t = ((pointer.x - origin.right()) / gap).clamp(0.0, 1.0);
+        let top = egui::lerp(origin.top()..=card.top(), t);
+        let bottom = egui::lerp(origin.bottom()..=card.bottom(), t);
+        pointer.y >= top && pointer.y <= bottom
+    } else if card.right() <= origin.left() {
+        let gap = origin.left() - card.right();
+        if gap <= f32::EPSILON || pointer.x < card.right() || pointer.x > origin.left() {
+            return false;
+        }
+        let t = ((origin.left() - pointer.x) / gap).clamp(0.0, 1.0);
+        let top = egui::lerp(card.top()..=origin.top(), t);
+        let bottom = egui::lerp(card.bottom()..=origin.bottom(), t);
+        pointer.y >= top && pointer.y <= bottom
+    } else if card.top() >= origin.bottom() {
+        let gap = card.top() - origin.bottom();
+        if gap <= f32::EPSILON || pointer.y < origin.bottom() || pointer.y > card.top() {
+            return false;
+        }
+        let t = ((pointer.y - origin.bottom()) / gap).clamp(0.0, 1.0);
+        let left = egui::lerp(origin.left()..=card.left(), t);
+        let right = egui::lerp(origin.right()..=card.right(), t);
+        pointer.x >= left && pointer.x <= right
+    } else if card.bottom() <= origin.top() {
+        let gap = origin.top() - card.bottom();
+        if gap <= f32::EPSILON || pointer.y < card.bottom() || pointer.y > origin.top() {
+            return false;
+        }
+        let t = ((origin.top() - pointer.y) / gap).clamp(0.0, 1.0);
+        let left = egui::lerp(card.left()..=origin.left(), t);
+        let right = egui::lerp(card.right()..=origin.right(), t);
+        pointer.x >= left && pointer.x <= right
+    } else {
+        false
+    }
+}
+
+pub(super) fn tooltip_identity(origin: Rect, detail: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    detail.hash(&mut hasher);
+    for coordinate in [origin.min.x, origin.min.y, origin.max.x, origin.max.y] {
+        coordinate.to_bits().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+pub(super) fn place_native_tooltip_card(
+    viewport: Rect,
+    origin: Rect,
+    anchor: Pos2,
+    size: Vec2,
+    placement: TooltipPlacement,
+    edge: f32,
+) -> Rect {
+    let edge = edge.max(0.0);
+    let min_x = (viewport.left() + edge).min(viewport.center().x);
+    let min_y = (viewport.top() + edge).min(viewport.center().y);
+    let max_x = (viewport.right() - edge - size.x).max(min_x);
+    let max_y = (viewport.bottom() - edge - size.y).max(min_y);
+
+    let (x, y) = match placement {
+        TooltipPlacement::Below => {
+            let gap = (anchor.y - origin.bottom()).max(0.0);
+            let below = anchor.y;
+            let above = origin.top() - gap - size.y;
+            let y = if (min_y..=max_y).contains(&below) {
+                below
+            } else if (min_y..=max_y).contains(&above) {
+                above
+            } else {
+                let room_below = (viewport.bottom() - edge - origin.bottom() - gap).max(0.0);
+                let room_above = (origin.top() - gap - viewport.top() - edge).max(0.0);
+                if room_above > room_below {
+                    above.clamp(min_y, max_y)
+                } else {
+                    below.clamp(min_y, max_y)
+                }
+            };
+            (anchor.x.clamp(min_x, max_x), y)
+        }
+        TooltipPlacement::Right => {
+            let gap = (anchor.x - origin.right()).max(0.0);
+            let right = anchor.x;
+            let left = origin.left() - gap - size.x;
+            let x = if (min_x..=max_x).contains(&right) {
+                right
+            } else if (min_x..=max_x).contains(&left) {
+                left
+            } else {
+                let room_right = (viewport.right() - edge - origin.right() - gap).max(0.0);
+                let room_left = (origin.left() - gap - viewport.left() - edge).max(0.0);
+                if room_left > room_right {
+                    left.clamp(min_x, max_x)
+                } else {
+                    right.clamp(min_x, max_x)
+                }
+            };
+            (x, anchor.y.clamp(min_y, max_y))
+        }
+    };
+    Rect::from_min_size(Pos2::new(x, y), size)
+}
+
+pub(super) fn continue_tooltip_fade(
+    sampled_opacity: f32,
+    previous: Option<TooltipFadeState>,
+    now: f64,
+    duration: Duration,
+) -> TooltipFadeState {
+    let sampled_opacity = sampled_opacity.clamp(0.0, 1.0);
+    let updated_at = previous.map_or(now, |previous| previous.updated_at.max(now));
+    let opacity = if duration.is_zero() {
+        1.0
+    } else if let Some(previous) = previous {
+        let elapsed = (now - previous.updated_at).max(0.0) as f32;
+        let continued = previous.opacity + elapsed / duration.as_secs_f32();
+        sampled_opacity.max(continued).clamp(0.0, 1.0)
+    } else {
+        sampled_opacity
+    };
+    TooltipFadeState {
+        opacity,
+        updated_at,
+    }
+}
+
+pub(super) fn update_tooltip_interaction_state(
+    mut state: TooltipInteractionState,
+    identity: u64,
+    popup_interacted: bool,
+    popup_focused: Option<bool>,
+) -> TooltipInteractionState {
+    if state.identity != identity {
+        state = TooltipInteractionState::new(identity);
+    }
+    if popup_interacted {
+        state.focus_requested = true;
+    }
+    match popup_focused {
+        Some(true) => {
+            state.focused = true;
+            state.had_focus = true;
+            state.dismissed = false;
+        }
+        Some(false) if state.had_focus => {
+            state.focused = false;
+            state.focus_requested = false;
+            state.dismissed = true;
+        }
+        _ => {}
+    }
+    state
+}

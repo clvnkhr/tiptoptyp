@@ -71,9 +71,14 @@ pub enum UiSnapshotScene {
     StickyContext,
     WindowColor,
     DelimiterMatch,
+    RainbowBrackets,
+    BracketSettings,
     FileMenu,
     EditMenu,
     SettingsWindow,
+    SettingsColors,
+    SettingsEditor,
+    SettingsStatus,
     SettingsThemePicker,
     SettingsDarkThemePicker,
     SettingsTooltip,
@@ -87,9 +92,10 @@ pub enum UiSnapshotScene {
     ExplorerContextMenu,
     DocumentFontSelector,
     FontCompletion,
+    UnicodeCompletion,
     SettingsFontPicker,
     AssetPreview,
-    GitWindow,
+    GitPanel,
     GitEditor,
     GitChunk,
     StatusLog,
@@ -101,14 +107,19 @@ pub enum UiSnapshotScene {
 }
 
 impl UiSnapshotScene {
-    pub const ALL: [Self; 31] = [
+    pub const ALL: [Self; 37] = [
         Self::Main,
         Self::StickyContext,
         Self::WindowColor,
         Self::DelimiterMatch,
+        Self::RainbowBrackets,
+        Self::BracketSettings,
         Self::FileMenu,
         Self::EditMenu,
         Self::SettingsWindow,
+        Self::SettingsColors,
+        Self::SettingsEditor,
+        Self::SettingsStatus,
         Self::SettingsThemePicker,
         Self::SettingsDarkThemePicker,
         Self::SettingsTooltip,
@@ -122,9 +133,10 @@ impl UiSnapshotScene {
         Self::ExplorerContextMenu,
         Self::DocumentFontSelector,
         Self::FontCompletion,
+        Self::UnicodeCompletion,
         Self::SettingsFontPicker,
         Self::AssetPreview,
-        Self::GitWindow,
+        Self::GitPanel,
         Self::GitEditor,
         Self::GitChunk,
         Self::StatusLog,
@@ -141,9 +153,14 @@ impl UiSnapshotScene {
             Self::StickyContext => "sticky-context",
             Self::WindowColor => "window-color",
             Self::DelimiterMatch => "delimiter-match",
+            Self::RainbowBrackets => "rainbow-brackets",
+            Self::BracketSettings => "bracket-settings",
             Self::FileMenu => "file-menu",
             Self::EditMenu => "edit-menu",
             Self::SettingsWindow => "settings-window",
+            Self::SettingsColors => "settings-colors",
+            Self::SettingsEditor => "settings-editor",
+            Self::SettingsStatus => "settings-status",
             Self::SettingsThemePicker => "settings-theme-picker",
             Self::SettingsDarkThemePicker => "settings-dark-theme-picker",
             Self::SettingsTooltip => "settings-tooltip",
@@ -157,9 +174,10 @@ impl UiSnapshotScene {
             Self::ExplorerContextMenu => "explorer-context-menu",
             Self::DocumentFontSelector => "document-font-selector",
             Self::FontCompletion => "font-completion",
+            Self::UnicodeCompletion => "unicode-completion",
             Self::SettingsFontPicker => "settings-font-picker",
             Self::AssetPreview => "asset-preview",
-            Self::GitWindow => "git-window",
+            Self::GitPanel => "git-panel",
             Self::GitEditor => "git-editor",
             Self::GitChunk => "git-chunk",
             Self::StatusLog => "status-log",
@@ -176,8 +194,10 @@ impl UiSnapshotScene {
         match self {
             Self::Main
             | Self::FontCompletion
+            | Self::UnicodeCompletion
             | Self::StickyContext
             | Self::DelimiterMatch
+            | Self::RainbowBrackets
             | Self::ProblemsPanel
             | Self::FindReplace
             | Self::PreviewCompiling => ROOT_VIEWPORT_NAME,
@@ -188,11 +208,15 @@ impl UiSnapshotScene {
             | Self::DocumentFontSelector
             | Self::StatusLog => "popup",
             Self::AssetPreview => "asset-hover",
-            Self::GitWindow => "git",
+            Self::GitPanel => ROOT_VIEWPORT_NAME,
             Self::GitEditor => ROOT_VIEWPORT_NAME,
             Self::GitChunk => "popup",
             Self::WindowColor => "logo-color",
             Self::SettingsWindow
+            | Self::SettingsColors
+            | Self::SettingsEditor
+            | Self::SettingsStatus
+            | Self::BracketSettings
             | Self::SettingsFontPicker
             | Self::SettingsThemePicker
             | Self::SettingsDarkThemePicker
@@ -220,9 +244,14 @@ impl UiSnapshotScene {
             "sticky-context" => Self::StickyContext,
             "window-color" => Self::WindowColor,
             "delimiter-match" => Self::DelimiterMatch,
+            "rainbow-brackets" => Self::RainbowBrackets,
+            "bracket-settings" => Self::BracketSettings,
             "file-menu" => Self::FileMenu,
             "edit-menu" => Self::EditMenu,
             "settings-window" => Self::SettingsWindow,
+            "settings-colors" => Self::SettingsColors,
+            "settings-editor" => Self::SettingsEditor,
+            "settings-status" => Self::SettingsStatus,
             "settings-theme-picker" => Self::SettingsThemePicker,
             "settings-dark-theme-picker" => Self::SettingsDarkThemePicker,
             "settings-tooltip" => Self::SettingsTooltip,
@@ -236,9 +265,10 @@ impl UiSnapshotScene {
             "explorer-context-menu" => Self::ExplorerContextMenu,
             "document-font-selector" => Self::DocumentFontSelector,
             "font-completion" => Self::FontCompletion,
+            "unicode-completion" => Self::UnicodeCompletion,
             "settings-font-picker" => Self::SettingsFontPicker,
             "asset-preview" => Self::AssetPreview,
-            "git-window" => Self::GitWindow,
+            "git-panel" => Self::GitPanel,
             "git-editor" => Self::GitEditor,
             "git-chunk" => Self::GitChunk,
             "status-log" => Self::StatusLog,
@@ -457,6 +487,13 @@ pub struct CaptureController {
 }
 
 impl CaptureController {
+    #[cfg(test)]
+    pub(crate) fn disabled_for_tests() -> Self {
+        let mut config = CaptureConfig::for_working_directory(Path::new("."));
+        config.enabled = false;
+        Self::new(config)
+    }
+
     pub fn new(config: CaptureConfig) -> Self {
         let manual_shortcut = config.shortcut;
         let controller = Self {

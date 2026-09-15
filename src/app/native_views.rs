@@ -2,47 +2,6 @@
 use super::*;
 
 impl EditorApp {
-    pub(super) fn show_git_window(&mut self, context: &egui::Context) {
-        // Normal document windows render Git in the Explorer. Keep this
-        // child viewport only for the dedicated deterministic Git scene.
-        if self.snapshot_scene != Some(UiSnapshotScene::GitWindow)
-            || !self.git.visible
-            || self.document_workflow.modal().is_some()
-        {
-            return;
-        }
-        let active_theme = context.theme();
-        let style = context.style_of(active_theme);
-        let mut close = false;
-        ChildViewHost::show(
-            context,
-            &self.captures,
-            ChildViewSpec::persistent(
-                "tiptoptyp-git",
-                "tiptoptyp Git",
-                [860.0, 680.0],
-                [560.0, 400.0],
-                "git",
-            ),
-            active_theme,
-            &style,
-            |ui, input| {
-                close |= input.close_requested;
-                egui::CentralPanel::default()
-                    .frame(theme::settings_content_frame(ui.style()))
-                    .show(ui, |ui| {
-                        ui.add_space(METRICS.chrome.toolbar_height);
-                        self.git
-                            .show(ui, &self.workspace_root, self.document.is_dirty());
-                    });
-            },
-        );
-        if close {
-            self.git.visible = false;
-            context.send_viewport_cmd(egui::ViewportCommand::Focus);
-        }
-    }
-
     pub(super) fn show_package_manager_window(&mut self, context: &egui::Context) {
         if !self.packages_visible
             || self.document_workflow.modal().is_some()
@@ -732,7 +691,6 @@ impl EditorApp {
         let handoff_active = native_tooltip_handoff_active(context, false);
         let blocked_by_overlay = self.settings_visible
             || self.packages_visible
-            || self.git_child_window_visible()
             || self.git_editor.chunk.is_some()
             || self.rename_dialog.is_some()
             || self.table_editor.is_some()
@@ -975,7 +933,6 @@ impl EditorApp {
         if !root_ready
             || self.settings_visible
             || self.packages_visible
-            || self.git_child_window_visible()
             || self.git_editor.chunk.is_some()
             || self.rename_dialog.is_some()
             || self.app_popup.is_some()

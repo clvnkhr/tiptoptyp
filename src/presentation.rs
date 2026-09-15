@@ -11,7 +11,7 @@ use crate::{
     },
     sublime_theme::{self, ImportedTheme, ThemeFormat},
     syntax_theme::TypstOverrideThemes,
-    theme_transform::ThemeTransform,
+    theme_transform::{ThemeColorAdjustments, ThemeTransform},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -25,12 +25,13 @@ pub(crate) struct ActiveThemeRequest {
     pub(crate) source: ThemeSourceRequest,
     pub(crate) invert: bool,
     pub(crate) hue_shift_degrees: i16,
+    pub(crate) colors: ThemeColorAdjustments,
     pub(crate) fallback_dark: bool,
 }
 
 impl ActiveThemeRequest {
     pub(crate) fn transform(&self) -> ThemeTransform {
-        ThemeTransform::new(self.invert, f32::from(self.hue_shift_degrees))
+        ThemeTransform::new(self.invert, f32::from(self.hue_shift_degrees)).with_colors(self.colors)
     }
 }
 
@@ -154,6 +155,7 @@ pub(crate) fn active_theme_request(
             source: ThemeSourceRequest::Builtin(id.to_owned()),
             invert: profile.invert,
             hue_shift_degrees: profile.hue_shift_degrees,
+            colors: ThemeColorAdjustments::IDENTITY,
             fallback_dark: system_dark,
         };
     }
@@ -170,6 +172,7 @@ pub(crate) fn active_theme_request(
         source,
         invert: settings.theme_invert,
         hue_shift_degrees: settings.theme_hue_shift_degrees,
+        colors: settings.theme_colors,
         fallback_dark,
     }
 }
@@ -191,6 +194,7 @@ pub(crate) fn theme_request_for_appearance(
         source,
         invert: settings.theme_invert,
         hue_shift_degrees: settings.theme_hue_shift_degrees,
+        colors: settings.theme_colors,
         fallback_dark: dark,
     }
 }
@@ -224,20 +228,7 @@ pub(crate) fn load_active_theme(request: &ActiveThemeRequest) -> Result<Imported
             }
         }
         ThemeSourceRequest::Sublime(path) => {
-            let imported = sublime_theme::import_path(path).map_err(|error| error.to_string())?;
-            if imported.dark_mode != request.fallback_dark {
-                let inferred = if imported.dark_mode { "dark" } else { "light" };
-                let assigned = if request.fallback_dark {
-                    "dark"
-                } else {
-                    "light"
-                };
-                return Err(format!(
-                    "{} is a {inferred} Sublime theme but is assigned to the {assigned} slot",
-                    path.display()
-                ));
-            }
-            imported
+            sublime_theme::import_path(path).map_err(|error| error.to_string())?
         }
     };
     request.transform().apply_imported_theme(&mut imported);
@@ -256,6 +247,7 @@ pub(crate) fn load_active_theme_or_fallback(
                 ),
                 invert: request.invert,
                 hue_shift_degrees: request.hue_shift_degrees,
+                colors: request.colors,
                 fallback_dark: request.fallback_dark,
             };
             let theme = load_active_theme(&fallback)
@@ -272,6 +264,35 @@ fn paired_tiptop_theme_id(dark_mode: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn color_adjustments_invalidate_the_theme_without_reloading_fonts() {
+        let mut settings = AppSettings::default();
+        let first = ResolvedPresentationRequest::resolve(
+            &settings,
+            active_theme_request(&settings, None, None),
+            1,
+        );
+        let applied = AppliedPresentation::new(first);
+        settings.theme_colors.brightness = 15;
+        let next = ResolvedPresentationRequest::resolve(
+            &settings,
+            active_theme_request(&settings, None, None),
+            1,
+        );
+        assert!(applied.changes(&next).theme);
+        assert!(!applied.changes(&next).fonts);
+        assert_eq!(
+            theme_request_for_appearance(&settings, false).colors,
+            settings.theme_colors
+        );
+        assert_eq!(
+            theme_request_for_appearance(&settings, true).colors,
+            settings.theme_colors
+        );
+        let capture = active_theme_request(&settings, None, Some(&CaptureThemeProfile::default()));
+        assert_eq!(capture.colors, ThemeColorAdjustments::IDENTITY);
+    }
 
     #[test]
     fn changes_are_semantic_subrequests() {

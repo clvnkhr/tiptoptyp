@@ -146,6 +146,8 @@ pub(crate) fn raster_content_freshness(
 /// `ArtifactKey`, so a previous dependency build with the same editor revision
 /// cannot become current again.
 pub(crate) struct PreviewController {
+    pub(crate) recovery:
+        tiptoptyp_core::recovery::Recovery<crate::tinymist::Generation, std::time::Instant>,
     pub(crate) requested_backend: PreviewPreference,
     pub(crate) tinymist_preview_enabled: bool,
     pub(crate) connection:
@@ -168,8 +170,54 @@ pub(crate) struct PreviewController {
 }
 
 impl PreviewController {
+    /// Translate protocol failures into one recovery transition. Formatting,
+    /// navigation, and hover errors do not restart an otherwise healthy server.
+    pub(crate) fn receive_tinymist_failure(
+        &mut self,
+        event: &crate::tinymist::TinymistEvent,
+        now: std::time::Instant,
+    ) -> Option<tiptoptyp_core::recovery::Failure<std::time::Instant>> {
+        use crate::tinymist::TinymistEvent;
+        use tiptoptyp_core::recovery::Failure;
+        let detail = match event {
+            TinymistEvent::Error {
+                stage,
+                message,
+                fatal,
+                ..
+            } if *fatal || *stage == "preview" => format!("{stage}: {message}"),
+            TinymistEvent::Stopped { reason, .. } => reason.clone(),
+            _ => return None,
+        };
+        let outcome = self.recovery.failed(event.generation(), now);
+        match outcome {
+            Failure::Ignored => {}
+            Failure::Waiting { failures, .. } => {
+                self.connection.suspend(true);
+                self.tinymist_state = ServiceState::Starting(format!(
+                    "Attempt {failures}/5 failed: {detail}. Retrying in 1 second"
+                ));
+                if self.tinymist_preview_enabled
+                    && !(self.connection.endpoint().is_some() && self.webview_state.is_ready())
+                {
+                    self.webview_state =
+                        ServiceState::Starting("Waiting to restart Tinymist".to_owned());
+                }
+            }
+            Failure::Exhausted => {
+                self.connection.stop();
+                self.tinymist_state =
+                    ServiceState::Failed(format!("Five consecutive failures: {detail}"));
+                self.webview_state =
+                    ServiceState::Failed("Tinymist retry limit reached".to_owned());
+            }
+        }
+        Some(outcome)
+    }
+
     pub(crate) fn new(dark: bool, requested_backend: PreviewPreference) -> Self {
         Self {
+            recovery: Default::default(),
             requested_backend,
             tinymist_preview_enabled: false,
             connection: Default::default(),
@@ -480,6 +528,101 @@ pub fn dark_preview_rgba(rgba: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn protocol_failures_wait_and_only_the_fifth_selects_fallback() {
+        use crate::tinymist::{Generation, TinymistEvent};
+        use tiptoptyp_core::recovery::{Failure, RETRY_DELAY};
+        let mut preview = PreviewController::new(false, PreviewPreference::Interactive);
+        preview.tinymist_preview_enabled = true;
+        let mut now = std::time::Instant::now();
+        for attempt in 1..=5 {
+            let generation = Generation(attempt);
+            preview.recovery.started(generation);
+            preview.connection.start(generation);
+            let failure = TinymistEvent::Error {
+                generation,
+                stage: if attempt % 2 == 0 {
+                    "initialize"
+                } else {
+                    "preview"
+                },
+                message: "test failure".to_owned(),
+                fatal: attempt % 2 == 0,
+            };
+            let result = preview.receive_tinymist_failure(&failure, now).unwrap();
+            assert_eq!(
+                preview.receive_tinymist_failure(
+                    &TinymistEvent::Stopped {
+                        generation,
+                        code: None,
+                        reason: "same failed process exited".to_owned(),
+                    },
+                    now
+                ),
+                Some(Failure::Ignored)
+            );
+            if attempt < 5 {
+                assert!(matches!(result, Failure::Waiting { .. }));
+                assert!(preview.interactive_transitioning(true, true));
+                assert!(!preview.recovery.take_retry(now));
+                now += RETRY_DELAY;
+                assert!(preview.recovery.take_retry(now));
+                assert!(!preview.recovery.take_retry(now));
+            } else {
+                assert_eq!(result, Failure::Exhausted);
+                assert!(!preview.interactive_transitioning(true, true));
+                assert!(!preview.interactive_active(true, true));
+                assert!(matches!(preview.tinymist_state, ServiceState::Failed(_)));
+            }
+        }
+    }
+
+    #[test]
+    fn retry_keeps_existing_display_but_rejects_readiness_and_unrelated_errors() {
+        use crate::tinymist::{Generation, TinymistEvent};
+        use tiptoptyp_core::recovery::Failure;
+        let mut preview = PreviewController::new(false, PreviewPreference::Interactive);
+        let generation = Generation(1);
+        let now = std::time::Instant::now();
+        preview.tinymist_preview_enabled = true;
+        preview.recovery.started(generation);
+        preview.connection.start(generation);
+        preview.connection.initialized(generation);
+        preview.connection.connect(
+            generation,
+            url::Url::parse("http://127.0.0.1:1234").unwrap(),
+        );
+        preview.webview_state = ServiceState::Ready("display".into());
+        for stage in ["formatting", "navigation", "hover"] {
+            assert_eq!(
+                preview.receive_tinymist_failure(
+                    &TinymistEvent::Error {
+                        generation,
+                        stage,
+                        message: "optional feature failed".into(),
+                        fatal: false,
+                    },
+                    now
+                ),
+                None
+            );
+        }
+        assert!(matches!(
+            preview.receive_tinymist_failure(
+                &TinymistEvent::Stopped {
+                    generation,
+                    code: None,
+                    reason: "process exited".into(),
+                },
+                now
+            ),
+            Some(Failure::Waiting { failures: 1, .. })
+        ));
+        assert!(!preview.connection.is_ready());
+        assert!(preview.interactive_active(true, true));
+        assert!(!preview.recovery.recovered(generation));
+    }
 
     fn key(revision: u64, generation: u64) -> ArtifactKey {
         ArtifactKey {

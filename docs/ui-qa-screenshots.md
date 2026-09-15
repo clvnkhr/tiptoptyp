@@ -57,14 +57,19 @@ The accepted scenes and their framebuffer targets are:
 | --- | --- | --- |
 | `main` | `main` | Main split editor and preview |
 | `window-color` | `logo-color` | Per-window logo background picker |
+| `rainbow-brackets` | `main` | Independent bracket-family color cycles, nesting, and literal exclusions |
+| `bracket-settings` | `settings` | Automatic pairing and per-family rainbow palette controls |
 | `delimiter-match` | `main` | Matching delimiters at the caret without relaying out the source |
 | `sticky-context` | `main` | Scrolled source editor with stacked headings and a multiline function header pinned independently of the caret |
 | `file-menu` | `popup` | File menu |
 | `edit-menu` | `popup` | Edit menu and shortcut alignment |
 | `settings-window` | `settings` | Settings child window |
+| `settings-colors` | `settings` | 360-point Settings window with the unified color adjustments and reset |
+| `settings-editor` | `settings` | 360-point Settings window scrolled to auto-save delay, with the label and slider kept together |
+| `settings-status` | `settings` | 360-point Settings window scrolled to wrapping toolchain status chips |
 | `settings-theme-picker` | `settings` | Open light-theme picker |
 | `settings-dark-theme-picker` | `settings` | Open dark-theme picker |
-| `settings-tooltip` | `settings` | Settings-local hover card |
+| `settings-tooltip` | `settings` | Content-sized Settings-local luminosity hint |
 | `typst-overrides-window` | `typst-overrides` | Independent light/dark Typst syntax overrides and live samples |
 | `diagnostic-tooltip` | `diagnostic` | Diagnostic hover card |
 | `function-tooltip` | `diagnostic` | Tinymist function-hover card |
@@ -73,11 +78,12 @@ The accepted scenes and their framebuffer targets are:
 | `overwrite-dialog` | `modal` | Existing-file overwrite confirmation card |
 | `editor-context-menu` | `popup` | Editor right-click menu |
 | `explorer-context-menu` | `popup` | Explorer right-click menu |
+| `unicode-completion` | `main` | Hebrew, mathematical, and alchemical glyphs in symbol completions |
 | `font-completion` | `main` | Fuzzy font completion with a lazily loaded font sample |
 | `settings-font-picker` | `settings` | Searchable font picker and the same live font sample used in hover cards |
 | `git-editor` | `main` | Default-open Git section, badges, line totals, and gutter markers |
 | `git-chunk` | `popup` | Selected chunk compared with the last commit, in the owning editor’s popup |
-| `git-window` | `git` | Repository status, aligned actions, and a selected diff using an in-memory fixture |
+| `git-panel` | `main` | Repository status in the real Explorer Git subpanel using an in-memory fixture |
 | `asset-preview` | `asset-hover` | Image-only asset card |
 | `document-font-selector` | `popup` | Scrollable font selector for a `text(font: …)` argument |
 | `status-log` | `popup` | Recent compiler and document-status history |

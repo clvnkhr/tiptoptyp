@@ -475,14 +475,13 @@ impl GitPanel {
         }
     }
 
-    pub(crate) fn show(&mut self, ui: &mut egui::Ui, workspace: &Path, dirty: bool) {
+    pub(crate) fn show(&mut self, ui: &mut egui::Ui, dirty: bool) {
         #[cfg(test)]
         {
             self.rendered_change_rows = 0;
         }
-        // Worker completions repaint their originating viewport. Collect them
-        // here too: the main editor need not redraw while this window is active.
-        self.poll(ui.ctx(), workspace);
+        // The app update loop polls independently of whether this body is open.
+        // Rendering supplied state must not start a repository scan.
         let mut action = None;
         // Maintenance scans stay out of the visible loading state. They must
         // not dim controls or replace the stable status row on every timer
@@ -519,6 +518,10 @@ impl GitPanel {
             if self.snapshot.initialized {
                 let staged = self.snapshot.entries.staged;
                 ui.add_enabled_ui(!busy, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.strong("Changes");
+                        ui.weak(format!("{} files · {staged} staged", self.snapshot.entries.len()));
+                    });
                     right_action_row(ui, |ui| {
                         if ui.add_enabled(staged > 0, egui::Button::new("Unstage all"))
                             .on_hover_text("Remove all changes from the staging area. Keep all working files and edits.").clicked() {
@@ -528,10 +531,6 @@ impl GitPanel {
                             .on_hover_text("Stage all working changes, excluding .tiptoptyp temporary files.").clicked() {
                             action = Some(Operation::StageAll);
                         }
-                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            ui.strong("Changes");
-                            ui.weak(format!("{} files · {staged} staged", self.snapshot.entries.len()));
-                        });
                     });
                     ui.add_space(theme::SPACE.small);
                     egui::ScrollArea::vertical().id_salt("git-changes").max_height(192.0).auto_shrink([false, true]).show_rows(ui, change_row_height(ui), self.snapshot.entries.len(), |ui, rows| {
@@ -1225,7 +1224,7 @@ mod tests {
                     egui::Panel::left("git-test-panel")
                         .exact_size(560.0)
                         .show(ui, |ui| {
-                            panel.show(ui, Path::new("/Projects/research-paper"), false);
+                            panel.show(ui, false);
                         });
                     egui::CentralPanel::default().show(ui, |ui| {
                         let label = ui.label("Source editor");
@@ -1427,7 +1426,13 @@ mod tests {
         panel.request_refresh();
         let mut harness = Harness::builder()
             .with_size(egui::vec2(860.0, 500.0))
-            .build_ui_state(|ui, panel| panel.show(ui, root, false), panel);
+            .build_ui_state(
+                |ui, panel| {
+                    panel.poll(ui.ctx(), root);
+                    panel.show(ui, false);
+                },
+                panel,
+            );
         harness.step();
         finish_ui_job(&mut harness);
         assert!(harness.state().snapshot.entries.is_empty());
@@ -1472,7 +1477,13 @@ mod tests {
         panel.request_refresh();
         let mut harness = Harness::builder()
             .with_size(egui::vec2(860.0, 500.0))
-            .build_ui_state(|ui, panel| panel.show(ui, root, false), panel);
+            .build_ui_state(
+                |ui, panel| {
+                    panel.poll(ui.ctx(), root);
+                    panel.show(ui, false);
+                },
+                panel,
+            );
         harness.step();
         finish_ui_job(&mut harness);
         assert_eq!(harness.state().message, "Status refreshed");
@@ -1838,7 +1849,7 @@ mod tests {
             let mut harness = Harness::builder()
                 .with_size(egui::vec2(width, 900.0))
                 .build_ui_state(
-                    |ui, panel| panel.show(ui, Path::new("/Projects/research-paper"), false),
+                    |ui, panel| panel.show(ui, false),
                     GitPanel::snapshot_fixture(),
                 );
             harness.run();
@@ -1846,6 +1857,13 @@ mod tests {
             assert!(harness.query_by_label("Refresh").is_none());
             assert!(harness.query_by_label("Commit").is_none());
             assert!(harness.query_by_label_contains("Choose Diff").is_none());
+            let summary = harness.get_by_label("4 files · 2 staged").rect();
+            let staging = harness.get_by_label("Stage all").rect();
+            assert!(
+                summary.bottom() <= staging.top(),
+                "{summary:?} vs {staging:?}"
+            );
+            assert!(summary.left() >= 0.0 && summary.right() <= width);
             let mut columns = Vec::new();
             for labels in [["Diff", "Staged diff"], ["Stage", "Unstage"]] {
                 let rects = harness
@@ -1904,7 +1922,7 @@ mod tests {
     }
 
     #[test]
-    fn diff_buttons_collect_worker_results_in_the_git_window_and_unstage_all_works() {
+    fn diff_buttons_collect_polled_worker_results_and_unstage_all_works() {
         use egui_kittest::{Harness, kittest::Queryable as _};
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
@@ -1922,10 +1940,16 @@ mod tests {
             snapshot: snapshot(root).unwrap(),
             ..Default::default()
         };
-        // This harness only renders the child panel; no root-window poll runs.
+        // Match the app: poll the model before rendering its body.
         let mut harness = Harness::builder()
             .with_size(egui::vec2(860.0, 900.0))
-            .build_ui_state(|ui, panel| panel.show(ui, root, false), panel);
+            .build_ui_state(
+                |ui, panel| {
+                    panel.poll(ui.ctx(), root);
+                    panel.show(ui, false);
+                },
+                panel,
+            );
         harness.run();
         let unstage_rect = harness.get_by_label("Unstage").rect();
         let staged_diff_rect = harness.get_by_label("Staged diff").rect();
@@ -1984,10 +2008,7 @@ mod tests {
         panel.diff.as_mut().unwrap().content = None;
         let mut harness = Harness::builder()
             .with_size(egui::vec2(860.0, 900.0))
-            .build_ui_state(
-                |ui, panel| panel.show(ui, Path::new("/Projects/research-paper"), false),
-                panel,
-            );
+            .build_ui_state(|ui, panel| panel.show(ui, false), panel);
         harness.run_steps(2);
         harness.get_by_label("Loading diff…");
         for kind in [DiffKind::WorkingTree, DiffKind::Staged] {
@@ -2048,7 +2069,10 @@ mod tests {
         let mut harness = Harness::builder()
             .with_size(egui::vec2(560.0, 400.0))
             .build_ui_state(
-                |ui, panel| panel.show(ui, Path::new("/Projects/research-paper"), false),
+                |ui, panel| {
+                    panel.poll(ui.ctx(), Path::new("/Projects/research-paper"));
+                    panel.show(ui, false);
+                },
                 panel,
             );
         harness.run_steps(2);

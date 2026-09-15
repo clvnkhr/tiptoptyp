@@ -269,6 +269,10 @@ impl EditorApp {
         let completion_edit_triggered = document_kind.is_typst()
             && ui.input(|input| completion_requested_after_events(&input.events));
         let snapshot_before_edit = self.editor_snapshot(ui.ctx());
+        self.highlighter
+            .set_rainbow_brackets(self.settings.rainbow_brackets);
+        let auto_pair_enabled = self.settings.auto_pair_delimiters && document_kind.is_typst();
+        let auto_pair_syntax = &mut self.auto_pair_syntax;
         let highlighter = &mut self.highlighter;
         let generic_highlighter = &mut self.generic_highlighter;
         let pending_selection = self.pending_editor_selection.take();
@@ -343,8 +347,17 @@ impl EditorApp {
                 job.wrap.max_width = if line_wrap { wrap_width } else { f32::INFINITY };
                 ui.fonts_mut(|fonts| fonts.layout_job(job))
             };
+            let document_before_edit = self.document.key();
             let mut output = self.document.edit(snapshot_before_edit.cursor, |source| {
-                let editor = egui::TextEdit::multiline(source)
+                let mut buffer = ui.input(|input| {
+                    crate::auto_pairs::PairingBuffer::new(
+                        source,
+                        auto_pair_syntax,
+                        auto_pair_enabled,
+                        &input.events,
+                    )
+                });
+                let editor = egui::TextEdit::multiline(&mut buffer)
                     .id(source_editor_id(ui.ctx()))
                     .code_editor()
                     .desired_width(editor_width)
@@ -356,7 +369,9 @@ impl EditorApp {
                     .layouter(&mut layouter);
                 editor.show(ui)
             });
-            changed = output.response.changed();
+            // A closer can move the caret without modifying the document.
+            // Do not invalidate completions or schedule work for that movement.
+            changed = self.document.key() != document_before_edit;
             if changed {
                 self.editor_data.prepare_source(&self.document.snapshot());
             }

@@ -168,6 +168,21 @@ fn verify_package(target: &str) -> Result<(), String> {
         &resources.join("licenses/typst-NOTICE"),
         TYPST_NOTICE_SHA256,
     )?;
+    for (directory, name) in [
+        ("notosanssymbols", "NotoSansSymbols"),
+        ("notosansmath", "NotoSansMath"),
+        ("notosanssymbols2", "NotoSansSymbols2"),
+        ("notosanshebrew", "NotoSansHebrew"),
+    ] {
+        verify_hash(
+            &resources.join(format!("licenses/{name}-OFL.txt")),
+            &sha256(&root.join("assets/fonts").join(directory).join("OFL.txt"))?,
+        )?;
+    }
+    verify_hash(
+        &resources.join("font-provenance.md"),
+        &sha256(&root.join("assets/fonts/README.md"))?,
+    )?;
 
     #[cfg(target_os = "macos")]
     run_status(

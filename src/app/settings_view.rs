@@ -1,4 +1,5 @@
 //! Settings and appearance controls.
+use super::settings_panel::LUMINOSITY_HINT;
 use super::*;
 
 impl EditorApp {
@@ -22,12 +23,22 @@ impl EditorApp {
         let style = context.style_of(active_theme);
         let mut close_requested = false;
         let captures = self.captures.clone();
-        let web_link_sender = self.web_link_sender.clone();
         let spec = ChildViewSpec::persistent(
             "tiptoptyp-settings",
             "tiptoptyp Settings",
             [
-                METRICS.chrome.settings_width,
+                if matches!(
+                    self.snapshot_scene,
+                    Some(
+                        UiSnapshotScene::SettingsColors
+                            | UiSnapshotScene::SettingsEditor
+                            | UiSnapshotScene::SettingsStatus
+                    )
+                ) {
+                    METRICS.chrome.settings_min_size.x
+                } else {
+                    METRICS.chrome.settings_width
+                },
                 METRICS.chrome.settings_height,
             ],
             METRICS.chrome.settings_min_size,
@@ -92,9 +103,8 @@ impl EditorApp {
                             theme::SPACE.content * 2.0,
                             METRICS.chrome.toolbar_height + theme::SPACE.content * 2.0,
                         ),
-                        "Built-in and imported themes share the same semantic colors.",
+                        LUMINOSITY_HINT,
                         1.0,
-                        &web_link_sender,
                     );
                 } else if let Some(tooltip) = ui
                     .ctx()
@@ -105,15 +115,14 @@ impl EditorApp {
                         tooltip.anchor,
                         &tooltip.detail,
                         tooltip.opacity,
-                        &web_link_sender,
                     );
                 }
             },
         );
         if close_requested {
             self.settings_visible = false;
-            self.staged_ui_font_weight = None;
-            self.staged_code_font_weight = None;
+            self.settings_ui.staged_ui_font_weight = None;
+            self.settings_ui.staged_code_font_weight = None;
             // macOS does not consistently reactivate an owned window after a
             // child closes. Return focus to the still-open shortcut window or
             // to the document so the next click is actionable.
@@ -275,7 +284,6 @@ impl EditorApp {
         let syntax_palette = theme::syntax_palette_from_semantic(preview_theme.palette);
         let original_overrides = edited.typst_overrides.clone();
         let captures = self.captures.clone();
-        let web_link_sender = self.web_link_sender.clone();
         let mut close_requested = false;
 
         let viewport = child_viewport_builder(
@@ -404,7 +412,6 @@ impl EditorApp {
                         tooltip.anchor,
                         &tooltip.detail,
                         tooltip.opacity,
-                        &web_link_sender,
                     );
                 }
                 captures.end_glow_viewport(ui, "typst-overrides");
@@ -421,857 +428,54 @@ impl EditorApp {
     }
 
     pub(super) fn show_settings(&mut self, ui: &mut egui::Ui, frame: &eframe::Frame) {
-        if self.snapshot_scene == Some(UiSnapshotScene::SettingsFontPicker) {
-            ui.heading("Font selection");
-            ui.horizontal(|ui| {
-                let id = ui.make_persistent_id(egui::IdSalt::new("ui-font-family"));
-                egui::Popup::open_id(ui.ctx(), id.with("popup"));
-                show_font_family_picker(
-                    ui,
-                    "ui-font-family",
-                    &self.font_catalog,
-                    None,
-                    None,
-                    "System UI",
-                    true,
-                );
-                ui.vertical(|ui| {
-                    if let Some(family) = self.font_catalog.families().first() {
-                        ui.label(&family.name);
-                        if !crate::font_preview::show(ui, "ui-font-family", family) {
-                            self.captures.defer_target("settings");
-                        }
-                    }
-                });
-            });
-            return;
-        }
-        ui.set_min_width(ui.available_width());
-
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Search settings").strong());
-            ui.add(
-                egui::TextEdit::singleline(&mut self.settings_query)
-                    .hint_text("Theme, fonts, shortcuts, preview, tools…")
-                    .desired_width(f32::INFINITY),
-            );
-        });
-        if !self.settings_query.trim().is_empty() {
-            let matches = settings_search_results(&self.settings_query);
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("Matches").weak());
-                if matches.is_empty() {
-                    ui.label(RichText::new("No settings found").weak());
-                }
-                for target in matches {
-                    let response = ui.button(target.label());
-                    let response = settings_hover_text(response, target.section().title());
-                    if response.clicked() {
-                        self.settings_scroll_target = Some(target);
-                    }
-                }
-            });
-            ui.separator();
-        }
-
-        let deterministic_settings = matches!(
-            self.snapshot_scene,
-            Some(
-                UiSnapshotScene::SettingsWindow
-                    | UiSnapshotScene::SettingsThemePicker
-                    | UiSnapshotScene::SettingsDarkThemePicker
-                    | UiSnapshotScene::SettingsTooltip
-            )
-        );
-        let mut edited = if deterministic_settings {
-            AppSettings::default()
-        } else {
-            self.pending_settings
-                .clone()
-                .unwrap_or_else(|| self.settings.clone())
+        use super::settings_panel::{SettingsAction, SettingsPanel, SettingsStatus};
+        let status = SettingsStatus {
+            backend_label: self.preview_backend_label(),
+            fallback_reason: self.preview_fallback_reason(),
+            requested_backend: self.preview.requested_backend,
+            interactive_active: self.interactive_preview_active(),
+            tinymist: self.preview.tinymist_state.clone(),
+            webview: self.preview.webview_state.clone(),
+            compiler: self.compiler_service_state(),
+            rasterizer: self.rasterizer_service_state(),
         };
-        let settings_scroll = egui::ScrollArea::vertical()
-            .id_salt("settings-scroll")
-            .auto_shrink([false, false]);
-        let settings_scroll = if deterministic_settings {
-            // Deterministic scenes describe the complete Settings contract from
-            // its first row, independently of persisted egui scroll memory.
-            settings_scroll.vertical_scroll_offset(0.0)
-        } else {
-            settings_scroll
-        };
-        let mut settings_scroll_target = self.settings_scroll_target.take();
-        settings_scroll.show(ui, |ui| {
-                settings_heading(ui, SettingsSection::Appearance);
-                let system_theme = ui.ctx().system_theme();
-                let effective_theme = ui.ctx().theme();
-                let theme_overridden = self.theme_override.is_some();
-                let theme_picker_enabled = !theme_overridden
-                    || matches!(
-                        self.snapshot_scene,
-                        Some(
-                            UiSnapshotScene::SettingsThemePicker
-                                | UiSnapshotScene::SettingsDarkThemePicker
-                        )
-                    );
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::Appearance,
-                    &mut settings_scroll_target,
-                );
-                ui.horizontal_wrapped(|ui| {
-                    theme::apply_compact_control_spacing(ui);
-                    ui.add_sized(
-                        [
-                            METRICS.settings.appearance_label_width,
-                            METRICS.icon.button_size.y,
-                        ],
-                        egui::Label::new(
-                            RichText::new(SettingsTarget::Appearance.label()).strong(),
-                        ),
-                    );
-                    ui.add_enabled_ui(theme_picker_enabled, |ui| {
-                        for appearance in InterfaceTheme::ALL {
-                            ui.selectable_value(
-                                &mut edited.interface_theme,
-                                appearance,
-                                appearance.label(),
-                            );
-                        }
-                    });
-                    if theme_overridden {
-                        ui.label(
-                            RichText::new("QA override")
-                                .size(theme::TYPE.supporting)
-                                .weak(),
-                        );
-                    }
-                    ui.separator();
-                    settings_inline_value(ui, "Active", theme_label(Some(effective_theme)));
-                });
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::TypstSyntax,
-                    &mut settings_scroll_target,
-                );
-                ui.horizontal_wrapped(|ui| {
-                    theme::apply_compact_control_spacing(ui);
-                    ui.label(RichText::new(SettingsTarget::TypstSyntax.label()).strong());
-                    if ui.button("Overrides…").clicked() {
-                        self.typst_overrides_dark = effective_theme == egui::Theme::Dark;
-                        self.typst_overrides_visible = true;
-                    }
-                    ui.label(
-                        RichText::new("Colours and decorations inherit from the selected theme")
-                            .weak(),
-                    );
-                });
-
-                for (appearance, target, picker_id) in [
-                    (
-                        egui::Theme::Light,
-                        SettingsTarget::LightTheme,
-                        "light-color-theme",
-                    ),
-                    (
-                        egui::Theme::Dark,
-                        SettingsTarget::DarkTheme,
-                        "dark-color-theme",
-                    ),
-                ] {
-                    settings_target_anchor(ui, target, &mut settings_scroll_target);
-                    let selected_name = color_theme_choice_label(edited.color_theme(appearance));
-                    let imported_path = match edited.color_theme(appearance) {
-                        ColorThemeChoice::Sublime(path) => Some(path.clone()),
-                        ColorThemeChoice::Builtin(_) => None,
-                    };
-                    ui.horizontal_wrapped(|ui| {
-                        theme::apply_compact_control_spacing(ui);
-                        ui.add_sized(
-                            [
-                                METRICS.settings.appearance_label_width,
-                                METRICS.icon.button_size.y,
-                            ],
-                            egui::Label::new(RichText::new(target.label()).strong()),
-                        );
-                        ui.add_enabled_ui(theme_picker_enabled, |ui| {
-                            let open_picker = matches!(
-                                (appearance, self.snapshot_scene),
-                                (
-                                    egui::Theme::Light,
-                                    Some(UiSnapshotScene::SettingsThemePicker)
-                                ) | (
-                                    egui::Theme::Dark,
-                                    Some(UiSnapshotScene::SettingsDarkThemePicker)
-                                )
-                            );
-                            if open_picker {
-                                // `ComboBox` stores an already-hashed `IdSalt`, so use
-                                // the same representation rather than hashing the raw
-                                // string along a different ID path.
-                                let id = ui.make_persistent_id(egui::IdSalt::new((
-                                    picker_id,
-                                    self.snapshot_scene,
-                                )));
-                                egui::Popup::open_id(ui.ctx(), id.with("popup"));
-                            }
-                            let choice = edited.color_theme_mut(appearance);
-                            let picker = egui::ComboBox::from_id_salt((
-                                picker_id,
-                                self.snapshot_scene,
-                            ))
-                                .width(220.0)
-                                .height(METRICS.settings.theme_picker_max_height)
-                                .selected_text(selected_name)
-                                .show_ui(ui, |ui| {
-                                    for builtin in builtin_themes::for_mode(
-                                        appearance == egui::Theme::Dark,
-                                    ) {
-                                        let selected = matches!(
-                                            choice,
-                                            ColorThemeChoice::Builtin(id) if id == builtin.id
-                                        );
-                                        if ui
-                                            .selectable_label(selected, builtin.name)
-                                            .clicked()
-                                        {
-                                            *choice = ColorThemeChoice::builtin(builtin.id);
-                                        }
-                                    }
-                                })
-                                .response;
-                            if let Some(path) = &imported_path {
-                                settings_hover_text(picker, path.clone());
-                            }
-                            if ui.button("Import…").clicked() {
-                                self.choose_tool_binary(
-                                    ToolPickerTarget::SublimeTheme {
-                                        dark_mode: appearance == egui::Theme::Dark,
-                                    },
-                                    frame,
-                                    ui.ctx(),
-                                );
-                            }
-                        });
-                    });
+        let project_root = self.project_root();
+        let mut actions = Vec::new();
+        SettingsPanel {
+            state: &mut self.settings_ui,
+            settings: &self.settings,
+            pending_settings: self.pending_settings.as_ref(),
+            theme_override: self.theme_override.as_ref(),
+            snapshot_scene: self.snapshot_scene,
+            font_catalog: &self.font_catalog,
+            font_catalog_scanning: self.font_catalog_scan.is_running(),
+            font_configuration: &self.font_configuration,
+            typst_tool: &self.typst_tool,
+            tinymist_tool: &self.tinymist_tool,
+            status,
+            project_root: &project_root,
+            captures: &self.captures,
+            actions: &mut actions,
+        }
+        .show(ui);
+        for action in actions {
+            match action {
+                SettingsAction::ChooseTool(target) => {
+                    self.choose_tool_binary(target, frame, ui.ctx())
                 }
-
-                let (mut displayed_invert, mut displayed_hue_shift) = self
-                    .theme_override
-                    .as_ref()
-                    .map_or((edited.theme_invert, edited.theme_hue_shift_degrees), |profile| {
-                        (profile.invert, profile.hue_shift_degrees)
-                    });
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::InvertColors,
-                    &mut settings_scroll_target,
-                );
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::HueShift,
-                    &mut settings_scroll_target,
-                );
-                ui.horizontal_wrapped(|ui| {
-                    theme::apply_compact_control_spacing(ui);
-                    ui.label(RichText::new("Transform").strong());
-                    ui.add_enabled_ui(!theme_overridden, |ui| {
-                        ui.checkbox(
-                            &mut displayed_invert,
-                            SettingsTarget::InvertColors.label(),
-                        );
-                        ui.separator();
-                        ui.label(SettingsTarget::HueShift.label());
-                        ui.add_sized(
-                            [190.0, METRICS.icon.button_size.y],
-                            egui::Slider::new(&mut displayed_hue_shift, -180..=180).suffix("°"),
-                        );
-                        if ui
-                            .add_enabled(
-                                displayed_invert || displayed_hue_shift != 0,
-                                egui::Button::new("Reset"),
-                            )
-                            .clicked()
-                        {
-                            displayed_invert = false;
-                            displayed_hue_shift = 0;
-                        }
-                    });
-                    ui.label(
-                        RichText::new("both themes · invert, then hue")
-                            .size(theme::TYPE.supporting)
-                            .weak(),
-                    );
-                });
-                if !theme_overridden {
-                    edited.theme_invert = displayed_invert;
-                    edited.theme_hue_shift_degrees = displayed_hue_shift;
+                SettingsAction::ShowOverrides { dark } => {
+                    self.typst_overrides_dark = dark;
+                    self.typst_overrides_visible = true;
                 }
-                if !deterministic_settings
-                    && edited.interface_theme == InterfaceTheme::System
-                    && system_theme.is_none()
-                {
-                    fallback_notice(
-                        ui,
-                        "Theme fallback",
-                        "System appearance is unavailable; using the configured dark theme",
-                    );
-                }
-
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::PageTheme,
-                    &mut settings_scroll_target,
-                );
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(SettingsTarget::PageTheme.label()).strong());
-                    for theme in DocumentTheme::ALL {
-                        ui.selectable_value(&mut edited.document_theme, theme, theme.label());
-                    }
-                    ui.separator();
-                    settings_inline_value(
-                        ui,
-                        "Effective",
-                        theme_label(Some(edited.document_theme.resolve(effective_theme))),
-                    );
-                });
-
-                ui.add_space(theme::SPACE.small);
-                ui.separator();
-                settings_heading(ui, SettingsSection::Editor);
-                for target in [
-                    SettingsTarget::WrapLines,
-                    SettingsTarget::LineNumbers,
-                    SettingsTarget::StickyContextRows,
-                    SettingsTarget::AutoSave,
-                    SettingsTarget::AutoSaveDelay,
-                ] {
-                    settings_target_anchor(ui, target, &mut settings_scroll_target);
-                }
-                ui.horizontal_wrapped(|ui| {
-                    ui.checkbox(&mut edited.line_wrap, SettingsTarget::WrapLines.label());
-                    ui.checkbox(
-                        &mut edited.line_numbers,
-                        SettingsTarget::LineNumbers.label(),
-                    );
-                    ui.checkbox(
-                        &mut edited.sticky_context_rows,
-                        SettingsTarget::StickyContextRows.label(),
-                    );
-                    ui.checkbox(&mut edited.auto_save, SettingsTarget::AutoSave.label());
-                    ui.add_enabled_ui(edited.auto_save, |ui| {
-                        ui.label(SettingsTarget::AutoSaveDelay.label());
-                        ui.add(
-                            egui::Slider::new(&mut edited.auto_save_delay_ms, 250..=5_000)
-                                .suffix(" ms")
-                                .logarithmic(true),
-                        );
-                    });
-                });
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::KeyboardShortcuts,
-                    &mut settings_scroll_target,
-                );
-                ui.horizontal_wrapped(|ui| {
-                    theme::apply_compact_control_spacing(ui);
-                    ui.label(RichText::new("Keyboard").strong());
-                    if ui
-                        .button(SettingsTarget::KeyboardShortcuts.label())
-                        .clicked()
-                    {
-                        self.shortcut_editor_visible = true;
-                    }
-                    ui.label(
-                        RichText::new("All application, editor, build, preview, and window bindings")
-                            .size(theme::TYPE.supporting)
-                        .weak(),
-                    );
-                });
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::InterfaceScale,
-                    &mut settings_scroll_target,
-                );
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::TitleBarMenus,
-                    &mut settings_scroll_target,
-                );
-                ui.horizontal_wrapped(|ui| {
-                    theme::apply_compact_control_spacing(ui);
-                    ui.label(RichText::new(SettingsTarget::InterfaceScale.label()).strong());
-                    ui.add(
-                        egui::Slider::new(&mut edited.ui_scale_percent, 75..=150)
-                            .suffix("%")
-                            .clamping(egui::SliderClamping::Always),
-                    );
-                    ui.separator();
-                    ui.checkbox(
-                        &mut edited.titlebar_menus,
-                        SettingsTarget::TitleBarMenus.label(),
-                    );
-                });
-                settings_target_anchor(ui, SettingsTarget::UiFont, &mut settings_scroll_target);
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::UiFontWeight,
-                    &mut settings_scroll_target,
-                );
-                ui.horizontal_wrapped(|ui| {
-                    theme::apply_compact_control_spacing(ui);
-                    ui.label(RichText::new(SettingsTarget::UiFont.label()).strong());
-                    if let Some(selection) = show_font_family_picker(
-                        ui,
-                        "ui-font-family",
-                        &self.font_catalog,
-                        edited.ui_font_path.as_deref(),
-                        edited.ui_font_family.as_deref(),
-                        if edited.ui_font_monospace {
-                            "Editor font"
-                        } else {
-                            "System UI"
-                        },
-                        true,
-                    ) {
-                        match selection {
-                            FontPickerSelection::Default => {
-                                edited.ui_font_path = None;
-                                edited.ui_font_family = None;
-                                edited.ui_font_face_index = 0;
-                                edited.ui_font_monospace = false;
-                            }
-                            FontPickerSelection::Editor => {
-                                edited.ui_font_path = None;
-                                edited.ui_font_family = None;
-                                edited.ui_font_face_index = 0;
-                                edited.ui_font_monospace = true;
-                            }
-                            FontPickerSelection::Family {
-                                name,
-                                path,
-                                face_index,
-                            } => {
-                                edited.ui_font_path = Some(path);
-                                edited.ui_font_family = Some(name);
-                                edited.ui_font_face_index = face_index;
-                                edited.ui_font_monospace = false;
-                            }
-                        }
-                    }
-                    if ui.button("Choose…").clicked() {
-                        self.choose_tool_binary(ToolPickerTarget::UiFont, frame, ui.ctx());
-                    }
-                    ui.separator();
-                    show_font_weight_control(
-                        ui,
-                        "ui-font-weight",
-                        &mut edited.ui_font_weight,
-                        &mut self.staged_ui_font_weight,
-                        self.font_configuration.ui_weight_support.as_ref(),
-                    );
-                });
-                settings_target_anchor(ui, SettingsTarget::CodeFont, &mut settings_scroll_target);
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::CodeFontWeight,
-                    &mut settings_scroll_target,
-                );
-                ui.horizontal_wrapped(|ui| {
-                    theme::apply_compact_control_spacing(ui);
-                    ui.label(RichText::new(SettingsTarget::CodeFont.label()).strong());
-                    if let Some(selection) = show_font_family_picker(
-                        ui,
-                        "code-font-family",
-                        &self.font_catalog,
-                        edited.code_font_path.as_deref(),
-                        edited.code_font_family.as_deref(),
-                        "System monospace",
-                        false,
-                    ) {
-                        match selection {
-                            FontPickerSelection::Default | FontPickerSelection::Editor => {
-                                edited.code_font_path = None;
-                                edited.code_font_family = None;
-                                edited.code_font_face_index = 0;
-                            }
-                            FontPickerSelection::Family {
-                                name,
-                                path,
-                                face_index,
-                            } => {
-                                edited.code_font_path = Some(path);
-                                edited.code_font_family = Some(name);
-                                edited.code_font_face_index = face_index;
-                            }
-                        }
-                    }
-                    if ui.button("Choose…").clicked() {
-                        self.choose_tool_binary(ToolPickerTarget::CodeFont, frame, ui.ctx());
-                    }
-                    ui.separator();
-                    show_font_weight_control(
-                        ui,
-                        "code-font-weight",
-                        &mut edited.code_font_weight,
-                        &mut self.staged_code_font_weight,
-                        self.font_configuration.code_weight_support.as_ref(),
-                    );
-                    if self.font_catalog_scan.is_running() {
-                        ui.label(RichText::new("Scanning fonts…").weak());
-                    } else if !self.font_catalog.workspace_directories().is_empty() {
-                        ui.label(
-                            RichText::new(format!(
-                                "{} workspace font folder{}",
-                                self.font_catalog.workspace_directories().len(),
-                                if self.font_catalog.workspace_directories().len() == 1 {
-                                    ""
-                                } else {
-                                    "s"
-                                }
-                            ))
-                            .weak(),
-                        );
-                    }
-                });
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::PreviewJump,
-                    &mut settings_scroll_target,
-                );
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::HoverDelay,
-                    &mut settings_scroll_target,
-                );
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::HoverFade,
-                    &mut settings_scroll_target,
-                );
-                ui.horizontal_wrapped(|ui| {
-                    theme::apply_compact_control_spacing(ui);
-                    ui.label(RichText::new(SettingsTarget::PreviewJump.label()).strong());
-                    let trigger = egui::ComboBox::from_id_salt("source-preview-trigger")
-                        .width(METRICS.settings.source_preview_trigger_width)
-                        .selected_text(edited.source_preview_trigger.label())
-                        .show_ui(ui, |ui| {
-                            for trigger in SourcePreviewTrigger::ALL {
-                                settings_hover_text(
-                                    ui.selectable_value(
-                                        &mut edited.source_preview_trigger,
-                                        trigger,
-                                        trigger.label(),
-                                    ),
-                                    trigger.description(),
-                                );
-                            }
-                        })
-                        .response;
-                    settings_hover_text(trigger, edited.source_preview_trigger.description());
-                    ui.separator();
-                    ui.label(RichText::new("Hovers").strong());
-                    ui.label(SettingsTarget::HoverDelay.label());
-                    ui.add(
-                        egui::DragValue::new(&mut edited.hover_delay_ms)
-                            .range(0..=2_000)
-                            .speed(10)
-                            .suffix(" ms"),
-                    );
-                    ui.label(SettingsTarget::HoverFade.label());
-                    ui.add(
-                        egui::DragValue::new(&mut edited.hover_fade_ms)
-                            .range(0..=500)
-                            .speed(5)
-                            .suffix(" ms"),
-                    );
-                });
-
-                ui.add_space(theme::SPACE.small);
-                ui.separator();
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::ExplorerOrder,
-                    &mut settings_scroll_target,
-                );
-                show_explorer_order_controls(ui, &mut edited.explorer_order);
-
-                ui.add_space(theme::SPACE.small);
-                ui.separator();
-                settings_heading(ui, SettingsSection::Tools);
-                ui.label(
-                    RichText::new(
-                        "Packaged builds use pinned sidecars. A custom path overrides one tool without changing the other.",
-                    )
-                    .size(theme::TYPE.supporting)
-                    .color(ui.visuals().weak_text_color()),
-                );
-                let staged_typst = if edited.typst == self.settings.typst {
-                    self.typst_tool.clone()
-                } else {
-                    resolve_tool(ToolKind::Typst, &edited.typst)
-                };
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::TypstCompiler,
-                    &mut settings_scroll_target,
-                );
-                if tool_preference_editor(
-                    ui,
-                    SettingsTarget::TypstCompiler.label(),
-                    &mut edited.typst,
-                    &staged_typst,
-                    deterministic_settings,
-                ) {
-                    self.choose_tool_binary(ToolPickerTarget::Typst, frame, ui.ctx());
-                }
-                if !deterministic_settings
-                    && let Some(reason) = &staged_typst.fallback_reason
-                {
-                    fallback_notice(ui, "Binary fallback active", reason);
-                }
-                ui.add_space(METRICS.settings.tool_gap);
-                let staged_tinymist = if edited.tinymist == self.settings.tinymist {
-                    self.tinymist_tool.clone()
-                } else {
-                    resolve_tool(ToolKind::Tinymist, &edited.tinymist)
-                };
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::TinymistLanguageServer,
-                    &mut settings_scroll_target,
-                );
-                if tool_preference_editor(
-                    ui,
-                    SettingsTarget::TinymistLanguageServer.label(),
-                    &mut edited.tinymist,
-                    &staged_tinymist,
-                    deterministic_settings,
-                ) {
-                    self.choose_tool_binary(ToolPickerTarget::Tinymist, frame, ui.ctx());
-                }
-                if !deterministic_settings
-                    && let Some(reason) = &staged_tinymist.fallback_reason
-                {
-                    fallback_notice(ui, "Binary fallback active", reason);
-                }
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::RefreshBinaryStatus,
-                    &mut settings_scroll_target,
-                );
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::BrowseTypstPackages,
-                    &mut settings_scroll_target,
-                );
-                if ui
-                    .button(SettingsTarget::RefreshBinaryStatus.label())
-                    .clicked()
-                {
-                    self.tool_refresh_requested = true;
-                    ui.ctx().request_repaint();
-                }
-                if ui
-                    .button(SettingsTarget::BrowseTypstPackages.label())
-                    .clicked()
-                {
+                SettingsAction::ShowShortcuts => self.shortcut_editor_visible = true,
+                SettingsAction::RefreshTools => self.tool_refresh_requested = true,
+                SettingsAction::ShowPackages => {
                     self.settings_visible = false;
                     self.open_package_manager(ui.ctx());
                 }
-
-                ui.add_space(theme::SPACE.small);
-                ui.separator();
-                settings_heading(ui, SettingsSection::Preview);
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::PreviewBackend,
-                    &mut settings_scroll_target,
-                );
-                ui.horizontal_wrapped(|ui| {
-                    for preference in PreviewPreference::ALL {
-                        ui.selectable_value(
-                            &mut edited.preview_preference,
-                            preference,
-                            preference.label(),
-                        );
-                    }
-                    ui.separator();
-                    settings_inline_value(
-                        ui,
-                        "Effective",
-                        if deterministic_settings {
-                            "Interactive"
-                        } else {
-                            self.preview_backend_label()
-                        },
-                    );
-                });
-                if !deterministic_settings
-                    && let Some(reason) = self.preview_fallback_reason()
-                {
-                    fallback_notice(ui, "Preview fallback active", &reason);
-                }
-                if !deterministic_settings
-                    && self.preview.requested_backend == PreviewPreference::Interactive
-                    && !self.interactive_preview_active()
-                    && ui.button("Retry Tinymist").clicked()
-                {
-                    self.restart_tinymist();
-                }
-
-                ui.add_space(theme::SPACE.small);
-                ui.separator();
-                settings_heading(ui, SettingsSection::Status);
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::ToolchainStatus,
-                    &mut settings_scroll_target,
-                );
-                ui.horizontal_wrapped(|ui| {
-                    let syntax_color = success_color(ui.ctx());
-                    if deterministic_settings {
-                        show_status_chip(ui, "Typst", "Bundled", "Packaged compiler", syntax_color);
-                        show_status_chip(
-                            ui,
-                            "Tinymist",
-                            "Bundled",
-                            "Packaged language server",
-                            syntax_color,
-                        );
-                        for name in ["LSP", "Vector", "Watcher", "PDF"] {
-                            show_status_chip(ui, name, "Ready", "Ready", syntax_color);
-                        }
-                    } else {
-                        show_tool_status_chip(ui, "Typst", &self.typst_tool);
-                        show_tool_status_chip(ui, "Tinymist", &self.tinymist_tool);
-                        show_service_status_chip(ui, "LSP", &self.preview.tinymist_state);
-                        show_service_status_chip(ui, "Vector", &self.preview.webview_state);
-                        show_service_status_chip(ui, "Watcher", &self.compiler_service_state());
-                        show_service_status_chip(ui, "PDF", &self.rasterizer_service_state());
-                    }
-                    show_status_chip(
-                        ui,
-                        "Syntax",
-                        "Ready",
-                        "typst-syntax (official parser)",
-                        syntax_color,
-                    );
-                });
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::ProjectRoot,
-                    &mut settings_scroll_target,
-                );
-                settings_value_row(
-                    ui,
-                    SettingsTarget::ProjectRoot.label(),
-                    &if deterministic_settings {
-                        "Theme gallery workspace".to_owned()
-                    } else {
-                        self.project_root().display().to_string()
-                    },
-                );
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::UiScreenshots,
-                    &mut settings_scroll_target,
-                );
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(SettingsTarget::UiScreenshots.label()).strong());
-                    if ui.button("Main").clicked() {
-                        self.captures.queue("main", "main");
-                    }
-                    if ui.button("Settings").clicked() {
-                        self.captures.queue("settings", "settings");
-                    }
-                    if ui.button("Both").clicked() {
-                        self.captures.queue("main", "main");
-                        self.captures.queue("settings", "settings");
-                    }
-                    let screenshot_shortcut = edited
-                        .effective_shortcuts()
-                        .display(ShortcutAction::CaptureUi)
-                        .unwrap_or_else(|| "Unassigned".to_owned());
-                    settings_hover_text(
-                        ui.label(
-                            RichText::new(screenshot_shortcut)
-                                .size(theme::TYPE.supporting)
-                                .weak(),
-                        ),
-                        format!(
-                            "App-window-only PNGs are saved under {}",
-                            self.captures.output_directory().display()
-                        ),
-                    );
-                });
-            });
-
-        self.settings_scroll_target = settings_scroll_target;
-
-        if !deterministic_settings {
-            self.queue_settings(edited, ui.ctx());
+                SettingsAction::RetryTinymist => self.restart_tinymist(),
+                SettingsAction::Update(edited) => self.queue_settings(*edited, ui.ctx()),
+            }
         }
     }
-}
-
-pub(super) fn show_explorer_order_controls(ui: &mut egui::Ui, order: &mut ExplorerOrder) {
-    // Earlier Settings rows can have wide intrinsic content. Anchor these
-    // right-aligned controls to the visible window, not that overflow width.
-    let top = ui.next_widget_position();
-    let width = ui
-        .available_width()
-        .min((ui.clip_rect().right() - top.x).max(1.0));
-    let bounds = Rect::from_min_size(top, Vec2::new(width, ui.available_height()));
-    ui.scope_builder(egui::UiBuilder::new().max_rect(bounds), |ui| {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(SettingsTarget::ExplorerOrder.label()).strong());
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .add_enabled(
-                        *order != ExplorerOrder::default(),
-                        egui::Button::new("Reset panel order"),
-                    )
-                    .clicked()
-                {
-                    *order = ExplorerOrder::default();
-                }
-            });
-        });
-        for (position, section) in order.sections().into_iter().enumerate() {
-            ui.push_id(section.id(), |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(section.title());
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        for (symbol, direction, destination) in [
-                            (
-                                "↓",
-                                "down",
-                                (position + 1 < ExplorerSection::ALL.len()).then_some(position + 1),
-                            ),
-                            ("↑", "up", position.checked_sub(1)),
-                        ] {
-                            let response = ui.add_enabled(
-                                destination.is_some(),
-                                egui::Button::new(symbol).min_size(Vec2::splat(24.0)),
-                            );
-                            let label = format!("Move {} {direction}", section.title());
-                            response.widget_info(|| {
-                                egui::WidgetInfo::labeled(
-                                    egui::WidgetType::Button,
-                                    response.enabled(),
-                                    &label,
-                                )
-                            });
-                            if settings_hover_text(response, label).clicked()
-                                && let Some(destination) = destination
-                            {
-                                order.move_to(section, destination);
-                            }
-                        }
-                    });
-                });
-            });
-        }
-    });
 }

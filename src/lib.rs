@@ -24,6 +24,6 @@ pub mod themes {
 
     /// Deterministic transformations over complete themes.
     pub mod transform {
-        pub use crate::theme_transform::ThemeTransform;
+        pub use crate::theme_transform::{ThemeColorAdjustments, ThemeTransform};
     }
 }

@@ -75,7 +75,7 @@ fn rasterize(request: &Request) -> Result<RasterizedSample, String> {
     skrifa::FontRef::from_index(&bytes, request.index).map_err(|e| e.to_string())?;
     let mut data = egui::FontData::from_owned(bytes);
     data.index = request.index;
-    let mut definitions = egui::FontDefinitions::default();
+    let mut definitions = crate::unicode_fonts::definitions();
     definitions
         .font_data
         .insert("sample".into(), Arc::new(data));

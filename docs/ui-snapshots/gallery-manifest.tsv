@@ -51,6 +51,9 @@ scene	edit-menu	popup	popup-edit-menu	component	transparent	-
 scene	editor-context-menu	popup	popup-editor-context-menu	component	transparent	-
 scene	explorer-context-menu	popup	popup-explorer-context-menu	component	transparent	-
 scene	settings-window	settings	settings-settings-window	component	-	settings-state
+scene	settings-editor	settings	settings-settings-editor	targeted	-	-
+scene	settings-colors	settings	settings-settings-colors	targeted	-	-
+scene	settings-status	settings	settings-settings-status	targeted	-	-
 scene	settings-theme-picker	settings	settings-settings-theme-picker	component	-	settings-state
 scene	settings-dark-theme-picker	settings	settings-settings-dark-theme-picker	component	-	settings-state
 scene	settings-tooltip	settings	settings-settings-tooltip	component	-	settings-state
@@ -67,7 +70,7 @@ scene	status-log	popup	popup-status-log	targeted	transparent	-
 scene	font-completion	main	main-font-completion	targeted	-	-
 scene	settings-font-picker	settings	settings-settings-font-picker	targeted	-	-
 scene	asset-preview	asset-hover	asset-hover-asset-preview	targeted	transparent	-
-scene	git-window	git	git-git-window	targeted	-	-
+scene	git-panel	main	main-git-panel	targeted	-	-
 scene	git-editor	main	main-git-editor	targeted	-	-
 scene	git-chunk	popup	popup-git-chunk	targeted	-	-
 scene-theme	catppuccin-latte
@@ -76,3 +79,6 @@ variant	before-components	catppuccin-latte	main	1	30	catppuccin-latte-inverted-h
 variant	after-components	catppuccin-latte	file-menu	1	30	catppuccin-latte-inverted-hue-p30
 scene	window-color	logo-color	logo-color-window-color	targeted	-	-
 scene	delimiter-match	main	main-delimiter-match	targeted	-	-
+scene	rainbow-brackets	main	main-rainbow-brackets	targeted	-	-
+scene	bracket-settings	settings	settings-bracket-settings	targeted	-	-
+scene	unicode-completion	main	main-unicode-completion	targeted	-	-

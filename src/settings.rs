@@ -14,6 +14,23 @@ use crate::{
 };
 
 const STORAGE_KEY: &str = "tiptoptyp.settings.v1";
+const REJECTED_STORAGE_KEY: &str = "tiptoptyp.settings.rejected";
+
+#[derive(Debug)]
+pub(crate) struct SettingsLoadError {
+    message: String,
+    rejected: String,
+}
+
+impl std::fmt::Display for SettingsLoadError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "Saved settings could not be read: {}. Using defaults; the rejected settings will be retained in {REJECTED_STORAGE_KEY} when preferences are saved",
+            self.message
+        )
+    }
+}
 pub(crate) const DEFAULT_HOVER_DELAY_MS: u64 = 300;
 pub(crate) const DEFAULT_HOVER_FADE_MS: u64 = 90;
 pub(crate) const MAX_RECENT_WORKSPACES: usize = 20;
@@ -146,19 +163,6 @@ impl SourcePreviewTrigger {
             Self::Disabled => "Disabled",
         }
     }
-
-    pub(crate) fn description(self) -> &'static str {
-        match self {
-            Self::DoubleClick => {
-                "Double-click source text to reveal it in the interactive preview."
-            }
-            #[cfg(target_os = "macos")]
-            Self::ModifierClick => "Command-click source text to reveal it in the preview.",
-            #[cfg(not(target_os = "macos"))]
-            Self::ModifierClick => "Control-click source text to reveal it in the preview.",
-            Self::Disabled => "Source-to-preview mouse navigation is disabled.",
-        }
-    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -219,12 +223,18 @@ pub(crate) struct AppSettings {
     pub(crate) theme_invert: bool,
     /// Whole-theme hue rotation, in degrees, applied after optional inversion.
     pub(crate) theme_hue_shift_degrees: i16,
+    #[serde(default)]
+    pub(crate) theme_colors: crate::theme_transform::ThemeColorAdjustments,
     pub(crate) document_theme: DocumentTheme,
     pub(crate) preview_preference: PreviewPreference,
     pub(crate) line_wrap: bool,
     pub(crate) line_numbers: bool,
     #[serde(default = "default_true")]
     pub(crate) sticky_context_rows: bool,
+    #[serde(default = "default_true")]
+    pub(crate) auto_pair_delimiters: bool,
+    #[serde(default)]
+    pub(crate) rainbow_brackets: crate::rainbow::RainbowBrackets,
     #[serde(default)]
     pub(crate) explorer_order: ExplorerOrder,
     pub(crate) source_preview_trigger: SourcePreviewTrigger,
@@ -279,11 +289,14 @@ impl Default for AppSettings {
             dark_theme: ColorThemeChoice::builtin("tiptop-dark"),
             theme_invert: false,
             theme_hue_shift_degrees: 0,
+            theme_colors: Default::default(),
             document_theme: DocumentTheme::FollowInterface,
             preview_preference: PreviewPreference::Interactive,
             line_wrap: true,
             line_numbers: true,
             sticky_context_rows: true,
+            auto_pair_delimiters: true,
+            rainbow_brackets: crate::rainbow::RainbowBrackets::default(),
             explorer_order: ExplorerOrder::default(),
             source_preview_trigger: SourcePreviewTrigger::DoubleClick,
             auto_save: true,
@@ -371,17 +384,22 @@ impl AppSettings {
         });
     }
 
-    pub(crate) fn load(storage: Option<&dyn Storage>) -> Self {
+    pub(crate) fn load(storage: Option<&dyn Storage>) -> Result<Self, SettingsLoadError> {
         let Some(serialized) = storage.and_then(|storage| storage.get_string(STORAGE_KEY)) else {
-            return Self::default();
+            return Ok(Self::default());
         };
-        let mut settings: Self = serde_json::from_str(&serialized).unwrap_or_default();
+        let mut settings: Self =
+            serde_json::from_str(&serialized).map_err(|error| SettingsLoadError {
+                message: error.to_string(),
+                rejected: serialized,
+            })?;
         settings.ui_font_weight = settings.ui_font_weight.clamp(1, 1_000);
         settings.code_font_weight = settings.code_font_weight.clamp(1, 1_000);
         settings.normalize_builtin_theme_slots();
+        settings.theme_colors = settings.theme_colors.normalized();
         settings.normalize_workspace_history();
         settings.shortcut_overrides.normalize();
-        settings
+        Ok(settings)
     }
 
     fn normalize_workspace_history(&mut self) {
@@ -405,9 +423,7 @@ impl AppSettings {
     fn normalize_builtin_theme_slots(&mut self) {
         for (choice, dark_mode) in [(&mut self.light_theme, false), (&mut self.dark_theme, true)] {
             let valid = match choice {
-                ColorThemeChoice::Builtin(id) => {
-                    builtin_themes::find(id).is_some_and(|theme| theme.dark_mode == dark_mode)
-                }
+                ColorThemeChoice::Builtin(id) => builtin_themes::find(id).is_some(),
                 ColorThemeChoice::Sublime(_) => true,
             };
             if !valid {
@@ -418,9 +434,15 @@ impl AppSettings {
 
     pub(crate) fn save(&self, storage: &mut dyn Storage) {
         let mut normalized = self.clone();
+        normalized.theme_colors = normalized.theme_colors.normalized();
         normalized.normalize_workspace_history();
         normalized.shortcut_overrides.normalize();
         if let Ok(serialized) = serde_json::to_string(&normalized) {
+            // Preserve rejected input before replacing it, including saves
+            // routed through the multi-window shell rather than EditorApp.
+            if let Err(error) = Self::load(Some(storage)) {
+                storage.set_string(REJECTED_STORAGE_KEY, error.rejected);
+            }
             storage.set_string(STORAGE_KEY, serialized);
         }
     }
@@ -609,11 +631,22 @@ mod tests {
             dark_theme: ColorThemeChoice::sublime("/themes/Example.sublime-color-scheme"),
             theme_invert: true,
             theme_hue_shift_degrees: -45,
+            theme_colors: crate::theme_transform::ThemeColorAdjustments {
+                luminosity: 20,
+                brightness: -10,
+                contrast: 115,
+                saturation: 80,
+            },
             document_theme: DocumentTheme::Dark,
             preview_preference: PreviewPreference::Native,
             line_wrap: false,
             line_numbers: false,
             sticky_context_rows: false,
+            auto_pair_delimiters: false,
+            rainbow_brackets: crate::rainbow::RainbowBrackets {
+                enabled: false,
+                palettes: [crate::rainbow::BracketPalette::Orchid; 4],
+            },
             explorer_order: {
                 let mut order = ExplorerOrder::default();
                 order.move_to(crate::explorer::ExplorerSection::Tags, 0);
@@ -657,10 +690,10 @@ mod tests {
         };
         let mut storage = MemoryStorage::default();
         expected.save(&mut storage);
-        assert_eq!(AppSettings::load(Some(&storage)), expected);
+        assert_eq!(AppSettings::load(Some(&storage)).unwrap(), expected);
 
         storage.set_string(STORAGE_KEY, r#"{"interface_theme":"Dark"}"#.to_owned());
-        assert_eq!(AppSettings::load(Some(&storage)), AppSettings::default());
+        assert!(AppSettings::load(Some(&storage)).is_err());
     }
 
     #[test]
@@ -676,7 +709,7 @@ mod tests {
             serde_json::to_string(&settings).expect("settings serialize"),
         );
 
-        let settings = AppSettings::load(Some(&storage));
+        let settings = AppSettings::load(Some(&storage)).unwrap();
         assert_eq!(settings.ui_font_weight, 1);
         assert_eq!(settings.code_font_weight, 1_000);
     }
@@ -694,7 +727,7 @@ mod tests {
         let mut storage = MemoryStorage::default();
         settings.save(&mut storage);
 
-        let restored = AppSettings::load(Some(&storage));
+        let restored = AppSettings::load(Some(&storage)).unwrap();
         assert_eq!(restored, settings);
         let shortcuts = restored.effective_shortcuts();
         assert_eq!(
@@ -719,7 +752,7 @@ mod tests {
         let mut storage = MemoryStorage::default();
         storage.set_string(STORAGE_KEY, serde_json::to_string(&value).unwrap());
 
-        let settings = AppSettings::load(Some(&storage));
+        let settings = AppSettings::load(Some(&storage)).unwrap();
         let shortcuts = settings.effective_shortcuts();
         assert_eq!(
             shortcuts
@@ -749,19 +782,19 @@ mod tests {
     fn theme_slots_round_trip_without_reinterpretation() {
         let mut settings = AppSettings {
             interface_theme: InterfaceTheme::System,
-            light_theme: ColorThemeChoice::builtin("paper-light"),
-            dark_theme: ColorThemeChoice::builtin("catppuccin-mocha"),
+            light_theme: ColorThemeChoice::builtin("catppuccin-mocha"),
+            dark_theme: ColorThemeChoice::builtin("paper-light"),
             ..AppSettings::default()
         };
         let mut storage = MemoryStorage::default();
         settings.save(&mut storage);
         settings.interface_theme = InterfaceTheme::System;
 
-        assert_eq!(AppSettings::load(Some(&storage)), settings);
+        assert_eq!(AppSettings::load(Some(&storage)).unwrap(), settings);
     }
 
     #[test]
-    fn corrupt_or_cross_mode_builtin_slots_use_their_matching_defaults() {
+    fn only_unknown_builtin_slots_use_their_matching_defaults() {
         let mut storage = MemoryStorage::default();
         let settings = AppSettings {
             light_theme: ColorThemeChoice::builtin("catppuccin-mocha"),
@@ -773,15 +806,36 @@ mod tests {
             serde_json::to_string(&settings).expect("settings serialize"),
         );
 
-        let settings = AppSettings::load(Some(&storage));
+        let settings = AppSettings::load(Some(&storage)).unwrap();
         assert_eq!(
             settings.light_theme,
-            ColorThemeChoice::builtin("tiptop-light")
+            ColorThemeChoice::builtin("catppuccin-mocha")
         );
         assert_eq!(
             settings.dark_theme,
             ColorThemeChoice::builtin("tiptop-dark")
         );
+    }
+
+    #[test]
+    fn color_adjustments_are_normalized_without_discarding_other_preferences() {
+        let mut storage = MemoryStorage::default();
+        let settings = AppSettings {
+            auto_save: false,
+            theme_colors: crate::theme_transform::ThemeColorAdjustments {
+                luminosity: -500,
+                brightness: 300,
+                contrast: 0,
+                saturation: 999,
+            },
+            ..Default::default()
+        };
+        storage.set_string(STORAGE_KEY, serde_json::to_string(&settings).unwrap());
+        let restored = AppSettings::load(Some(&storage)).unwrap();
+        assert_eq!(restored.theme_colors, settings.theme_colors.normalized());
+        assert!(!restored.auto_save);
+        settings.save(&mut storage);
+        assert_eq!(AppSettings::load(Some(&storage)).unwrap(), restored);
     }
 
     #[test]
@@ -828,7 +882,7 @@ mod tests {
         let mut storage = MemoryStorage::default();
 
         settings.save(&mut storage);
-        let restored = AppSettings::load(Some(&storage));
+        let restored = AppSettings::load(Some(&storage)).unwrap();
 
         assert_eq!(restored.recent_workspaces.len(), MAX_RECENT_WORKSPACES);
         assert_eq!(restored.recent_workspaces[0], "/workspace/0");
@@ -884,9 +938,37 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_persisted_settings_fail_closed_to_defaults() {
+    fn missing_settings_are_normal_but_corrupt_input_is_reported_and_preserved() {
         let mut storage = MemoryStorage::default();
-        storage.set_string(STORAGE_KEY, "not json".to_owned());
-        assert_eq!(AppSettings::load(Some(&storage)), AppSettings::default());
+        assert_eq!(AppSettings::load(None).unwrap(), AppSettings::default());
+        assert_eq!(
+            AppSettings::load(Some(&storage)).unwrap(),
+            AppSettings::default()
+        );
+        for rejected in ["not json", r#"{"interface_theme":"unknown"}"#] {
+            storage.set_string(STORAGE_KEY, rejected.to_owned());
+            let error = AppSettings::load(Some(&storage)).unwrap_err();
+            assert_eq!(error.rejected, rejected);
+            assert!(
+                error
+                    .to_string()
+                    .contains("Saved settings could not be read")
+            );
+            assert_eq!(storage.get_string(STORAGE_KEY).as_deref(), Some(rejected));
+            AppSettings::default().save(&mut storage);
+            assert_eq!(
+                storage.get_string(REJECTED_STORAGE_KEY).as_deref(),
+                Some(rejected)
+            );
+            assert_eq!(
+                AppSettings::load(Some(&storage)).unwrap(),
+                AppSettings::default()
+            );
+            AppSettings::default().save(&mut storage);
+            assert_eq!(
+                storage.get_string(REJECTED_STORAGE_KEY).as_deref(),
+                Some(rejected)
+            );
+        }
     }
 }

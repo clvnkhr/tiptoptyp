@@ -85,3 +85,52 @@ fn viewport_creation_and_font_installation_stay_in_rendering_adapters() {
         }
     }
 }
+
+#[test]
+fn focused_ui_modules_cannot_take_the_whole_application_or_run_its_services() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/app");
+    for name in ["settings_panel.rs", "tooltips.rs"] {
+        let source = fs::read_to_string(root.join(name)).unwrap();
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        let compact: String = production.chars().filter(|c| !c.is_whitespace()).collect();
+        for forbidden in [
+            "usesuper::*",
+            "implEditorApp",
+            "&mutEditorApp",
+            "&EditorApp",
+            "resolve_tool(",
+            ".restart_tinymist(",
+            ".document.",
+        ] {
+            assert!(
+                !compact.contains(forbidden),
+                "{name} crosses ownership boundary: {forbidden}"
+            );
+        }
+    }
+}
+
+#[test]
+fn screenshot_fixtures_have_one_owner_and_git_has_no_capture_only_window() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let app = fs::read_to_string(root.join("app.rs")).unwrap();
+    for forbidden in [
+        "struct SceneDocument",
+        "snapshot_font_file:",
+        "fn apply_snapshot_scene",
+        "git_child_window_visible",
+        "tiptoptyp-git\"",
+    ] {
+        assert!(
+            !app.contains(forbidden),
+            "application regained QA-only state: {forbidden}"
+        );
+    }
+    let views = fs::read_to_string(root.join("app/native_views.rs")).unwrap();
+    assert!(!views.contains("show_git_window"));
+    assert!(
+        fs::read_to_string(root.join("app/qa.rs"))
+            .unwrap()
+            .contains("struct QaSession")
+    );
+}

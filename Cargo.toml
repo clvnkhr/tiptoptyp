@@ -67,6 +67,11 @@ before-packaging-command = "cargo run --manifest-path xtask/Cargo.toml -- packag
 external-binaries = ["toolchain/bin/typst", "toolchain/bin/tinymist"]
 resources = [
     { src = "toolchain/licenses", target = "licenses" },
+    { src = "assets/fonts/notosanssymbols/OFL.txt", target = "licenses/NotoSansSymbols-OFL.txt" },
+    { src = "assets/fonts/notosansmath/OFL.txt", target = "licenses/NotoSansMath-OFL.txt" },
+    { src = "assets/fonts/notosanssymbols2/OFL.txt", target = "licenses/NotoSansSymbols2-OFL.txt" },
+    { src = "assets/fonts/notosanshebrew/OFL.txt", target = "licenses/NotoSansHebrew-OFL.txt" },
+    { src = "assets/fonts/README.md", target = "font-provenance.md" },
     { src = "toolchain/provenance", target = "toolchain-provenance" },
 ]
 file-associations = [

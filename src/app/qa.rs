@@ -1,0 +1,720 @@
+//! Privileged QA adapter: the only owner of fixture buffers and scene setup.
+//! Normal rendering consumes the same application state and components.
+use super::*;
+
+#[derive(Default)]
+pub(super) struct QaSession {
+    document: Option<SceneDocument>,
+    font_file: Option<tempfile::NamedTempFile>,
+    git_fixture_prepared: bool,
+}
+
+/// A capture batch owns its fixture independently of each scene's editor state.
+pub(super) struct SceneDocument {
+    source: String,
+    path: Option<PathBuf>,
+    kind: DocumentKind,
+    fingerprint: Option<u64>,
+}
+impl SceneDocument {
+    pub(super) fn capture(document: &DocumentSession) -> Self {
+        Self {
+            source: document.source().clone(),
+            path: document.path().clone(),
+            kind: document.kind(),
+            fingerprint: document.disk_fingerprint(),
+        }
+    }
+    pub(super) fn restore(&self, document: &mut DocumentSession) -> bool {
+        if document.source() == &self.source
+            && document.saved_source() == &self.source
+            && document.path() == &self.path
+            && document.kind() == self.kind
+            && document.disk_fingerprint() == self.fingerprint
+        {
+            return false;
+        }
+        if let Some(path) = &self.path {
+            document.replace_loaded(
+                self.source.clone(),
+                path.clone(),
+                self.kind,
+                self.fingerprint,
+            );
+        } else {
+            document.replace_untitled(self.source.clone());
+        }
+        true
+    }
+}
+
+pub(super) const STICKY_CONTEXT_SNAPSHOT_SOURCE: &str = r##"#set page(paper: "a4", margin: 2.2cm)
+#set text(size: 11pt)
+#set heading(numbering: "1.")
+#let accent = rgb("#4f8cff")
+
+= Running todo list
+== Active subsection
+#let review(
+  task,
+  state,
+) = 2
+
+#let review_checks = (
+    "Review the task",
+    "Keep the declaration header visible",
+    "Compare every sticky-row boundary",
+    "Preserve the source indentation",
+    "Preserve the syntax colors",
+    "Preserve the editor gutter",
+    "Keep the caret at the beginning",
+    "Scroll through the function body",
+    "Check the first stacked row",
+    "Check the second stacked row",
+    "Check the third stacked row",
+    "Check the remaining signature rows",
+    "Confirm the lower floating shadow",
+    "Continue below the pinned context",
+)
+
+#review("the workspace", "progress")
+
+- Review the workspace layout
+- Confirm the document entry point
+- Check the active preview backend
+- Read the compiler diagnostics
+- Verify the selected color theme
+- Inspect the source editor gutter
+- Confirm syntax highlighting
+- Check wrapped source lines
+- Review the current section
+- Update the first task
+- Update the second task
+- Update the third task
+- Re-run the focused tests
+- Inspect the test output
+- Check the status bar
+- Confirm the saved document path
+- Review the package catalog
+- Inspect installed package versions
+- Search the settings controls
+- Check the configured shortcuts
+- Exercise completion results
+- Review the table editor
+- Add a table row
+- Remove a table column
+- Inspect the Explorer outline
+- Check the active file styling
+- Browse the package directory
+- Open the Problems panel
+- Select a diagnostic
+- Jump to its source line
+- Inspect the diagnostic tooltip
+- Move through the tooltip bridge
+- Verify the tooltip dismissal edge
+- Check the asset preview
+- Inspect the application icon
+- Review external-link handling
+- Save the current document
+- Save the document under a new name
+- Compile the current PDF
+- Pause automatic preview updates
+- Resume automatic preview updates
+- Check the newest preview generation
+- Open the File menu
+- Open the Edit menu
+- Review menu shortcut labels
+- Check the native Quit workflow
+- Reopen the workspace chooser
+- Verify the sticky section reminder
+- Scroll farther through the section
+- Confirm the heading remains pinned
+- Confirm the caret remains at the start
+- Compare the gutter alignment
+- Compare the source baseline
+- Compare the syntax colors
+- Check the lower floating shadow
+- Review the light theme
+- Review the dark theme
+- Capture the deterministic scene
+- Validate the capture filename
+- Finish the visual review
+- Recheck the pinned source row
+- Confirm the final gutter baseline
+- Inspect the floating edge
+- Compare the editor background
+- Verify the heading token colors
+- Check the source text weight
+- Confirm the sticky row width
+- Review the bottom shadow
+- Keep the caret above the viewport
+- Complete the sticky-context audit
+"##;
+
+pub(super) const fn source_editor_snapshot_scroll_offset(
+    scene: Option<UiSnapshotScene>,
+) -> Option<f32> {
+    match scene {
+        Some(UiSnapshotScene::StickyContext) => Some(STICKY_CONTEXT_SNAPSHOT_SCROLL_OFFSET),
+        _ => None,
+    }
+}
+
+pub(super) fn prepare_sticky_context_snapshot_document(document: &mut DocumentSession) -> bool {
+    if document.source() == STICKY_CONTEXT_SNAPSHOT_SOURCE {
+        return false;
+    }
+    document.edit(CCursorRange::one(CCursor::new(0)), |source| {
+        *source = STICKY_CONTEXT_SNAPSHOT_SOURCE.to_owned()
+    });
+    // `show_editor` consumes this flag by clearing TextEdit's undo state and
+    // putting its caret at character zero. The forced ScrollArea offset does
+    // not move that caret, which makes this scene exercise scroll-derived
+    // sticky context rather than the old cursor-derived behavior.
+    document.reset_editor_history = true;
+    true
+}
+
+impl QaSession {
+    pub(super) fn prepare(&mut self, app: &mut EditorApp, context: &egui::Context) {
+        let Some(scene) = app.snapshot_scene else {
+            return;
+        };
+        if self.document.is_none() {
+            self.document = Some(SceneDocument::capture(&app.document));
+        }
+        if matches!(
+            scene,
+            UiSnapshotScene::Main | UiSnapshotScene::ProblemsPanel | UiSnapshotScene::FindReplace
+        ) && app.preview.content.pages().is_empty()
+        {
+            app.captures.defer_target("main");
+        }
+        if let Some(status) =
+            settled_snapshot_preview_status(scene, !app.preview.content.pages().is_empty())
+        {
+            app.preview.status = status;
+        }
+        if matches!(
+            scene,
+            UiSnapshotScene::FontCompletion | UiSnapshotScene::SettingsFontPicker
+        ) {
+            if self.font_file.is_none() {
+                let definitions = egui::FontDefinitions::default();
+                let key = &definitions.families[&egui::FontFamily::Monospace][0];
+                let mut file = tempfile::NamedTempFile::new().expect("QA font fixture");
+                std::io::Write::write_all(&mut file, definitions.font_data[key].font.as_ref())
+                    .expect("write QA font fixture");
+                self.font_file = Some(file);
+            }
+            app.font_catalog =
+                FontCatalog::single_font_fixture(self.font_file.as_ref().unwrap().path());
+        }
+        let toolbar_anchor = Pos2::new(theme::SPACE.content, METRICS.chrome.toolbar_height);
+        match scene {
+            UiSnapshotScene::GitEditor | UiSnapshotScene::GitChunk => {
+                const SOURCE: &str = "= Research notes\n\nThe revised model reaches 96% accuracy.\n\n== Method\nWe evaluate the model on three datasets.\n\nThe additional experiment confirms the result.\n\n== Results\nThe complete comparison follows below.\n\nThe remaining measurements agree.\n\n== Discussion\nThese observations support the revised approach.\n";
+                let path = app
+                    .document
+                    .path()
+                    .clone()
+                    .unwrap_or_else(|| app.workspace_root.join("main.typ"));
+                if app.document.source() != SOURCE {
+                    app.document.replace_loaded(
+                        SOURCE.into(),
+                        path.clone(),
+                        DocumentKind::Typst,
+                        app.document.disk_fingerprint(),
+                    );
+                    app.prepare_editor_source_data();
+                }
+                app.notice = None;
+                app.preview.status = PreviewStatus::Ready(Duration::ZERO);
+                app.explorer.open();
+                app.view_mode = ViewMode::Code;
+                app.git_editor = crate::git::editor::GitEditorState::snapshot_fixture(
+                    &app.workspace_root,
+                    &path,
+                    SOURCE,
+                    scene == UiSnapshotScene::GitChunk,
+                );
+                if scene == UiSnapshotScene::GitChunk
+                    && let Some(chunk) = app.git_editor.chunk.clone()
+                {
+                    app.app_popup = Some(AppPopup::GitChunk {
+                        anchor: toolbar_anchor,
+                        chunk,
+                    });
+                }
+                app.workspace = Some(WorkspaceTree::from_snapshot(WorkspaceSnapshot {
+                    root: app.workspace_root.clone(),
+                    nodes: [path, app.workspace_root.join("references.bib")]
+                        .into_iter()
+                        .map(|path| WorkspaceNode {
+                            name: path.file_name().unwrap().to_owned(),
+                            relative_path: path
+                                .strip_prefix(&app.workspace_root)
+                                .unwrap_or(&path)
+                                .into(),
+                            path,
+                            kind: crate::workspace::WorkspaceNodeKind::File,
+                            children: Vec::new(),
+                        })
+                        .collect(),
+                }));
+            }
+            UiSnapshotScene::GitPanel => {
+                if !self.git_fixture_prepared {
+                    app.git = crate::git::GitPanel::snapshot_fixture();
+                    self.git_fixture_prepared = true;
+                }
+                prepare_git_panel_capture(context, &mut app.explorer);
+                app.view_mode = ViewMode::Code;
+                app.git_explorer_reveal = true;
+            }
+            UiSnapshotScene::AssetPreview => {}
+            UiSnapshotScene::SettingsFontPicker => {
+                app.settings_visible = true;
+            }
+            UiSnapshotScene::UnicodeCompletion => {
+                const SOURCE: &str = "= Unicode symbols\n\n$ sym. $\n\nב ד ∖ ≀ 🜨\n";
+                if app.document.source() != SOURCE {
+                    app.document.replace_untitled(SOURCE);
+                    app.prepare_editor_source_data();
+                }
+                app.view_mode = ViewMode::Code;
+                app.explorer.hide();
+                let cursor = SOURCE.find("sym.").unwrap() + 4;
+                app.pending_editor_selection = Some(cursor..cursor);
+                let items = crate::unicode_fonts::SYMBOL_EXAMPLES
+                    .into_iter()
+                    .map(|(name, symbol)| CompletionItem {
+                        label: name.into(),
+                        detail: Some(format!("{symbol}, unicode: `\\u{{{:04x}}}`", symbol as u32)),
+                        documentation: None,
+                        filter_text: None,
+                        sort_text: None,
+                        insert_text: name.into(),
+                        insert_text_is_snippet: false,
+                        text_edit: None,
+                        additional_text_edits: Vec::new(),
+                    })
+                    .collect::<Vec<_>>();
+                app.editor_completion = Some(EditorCompletionState {
+                    generation: Generation(0),
+                    uri: String::new(),
+                    version: revision_as_i32(app.document.revision()),
+                    request_token: 0,
+                    cursor,
+                    anchor: Rect::NOTHING,
+                    explicit: true,
+                    is_incomplete: false,
+                    selected: 4,
+                    all_items: items.clone(),
+                    items,
+                    source: SOURCE.into(),
+                    local: true,
+                });
+            }
+            UiSnapshotScene::FontCompletion => {
+                let source = "#set text(font: \"\")\n= Font completion";
+                if app.document.source() != source {
+                    app.document.replace_untitled(source);
+                    app.prepare_editor_source_data();
+                }
+                app.view_mode = ViewMode::Code;
+                app.pending_editor_selection = Some(17..17);
+                app.request_editor_completion(
+                    17,
+                    Rect::from_min_size(Pos2::new(300.0, 180.0), Vec2::splat(1.0)),
+                    true,
+                );
+            }
+            UiSnapshotScene::Main => {
+                app.notice = None;
+                app.preview.raw_diagnostics.clear();
+                app.preview.diagnostics.clear();
+                app.preview.tinymist_diagnostics.clear();
+                app.mark_diagnostics_changed();
+                app.problems_visible = false;
+                app.find_visible = false;
+                app.replace_visible = false;
+            }
+            UiSnapshotScene::WindowColor => {
+                app.view_mode = ViewMode::Code;
+            }
+            UiSnapshotScene::BracketSettings => {
+                app.settings_visible = true;
+                app.settings_ui.scroll_target = Some(SettingsTarget::AutoPairDelimiters);
+            }
+            UiSnapshotScene::SettingsColors
+            | UiSnapshotScene::SettingsEditor
+            | UiSnapshotScene::SettingsStatus => {
+                app.settings_visible = true;
+                app.settings_ui.scroll_target = Some(match scene {
+                    UiSnapshotScene::SettingsColors => SettingsTarget::ThemeColors,
+                    UiSnapshotScene::SettingsEditor => SettingsTarget::AutoSaveDelay,
+                    _ => SettingsTarget::ToolchainStatus,
+                });
+            }
+            UiSnapshotScene::RainbowBrackets => {
+                const SOURCE: &str = "= Rainbow brackets\n\n#let round = (1, (2, (3, (4, (5)))))\n\n#let square = [one #text[two #text[three #text[four #text[five]]]]]\n\n#let curly = { let x = { let y = { 3 }; y }; x }\n\n#let mixed = (1, { [content] }, (2, 3))\n\nMath intervals: $ (0, (1, (2, 3]]] $\n\n// Comments keep their syntax colors: ([{}])\n#let literal = \"[plain string]\"\nRaw text: `([{}])`\n";
+                if app.document.source() != SOURCE {
+                    app.document.replace_untitled(SOURCE);
+                    app.prepare_editor_source_data();
+                }
+                app.settings.rainbow_brackets = crate::rainbow::RainbowBrackets::default();
+                app.explorer.hide();
+                app.view_mode = ViewMode::Code;
+            }
+            UiSnapshotScene::DelimiterMatch => {
+                const SOURCE: &str = "= Matching delimiters\n\n#let calculate(value) = {\n  let nested = (value, (2, 3))\n  nested\n}\n\nStrings are separate: #repr(\"[literal]\")\nMath: $ (alpha + beta] $\n";
+                if app.document.source() != SOURCE {
+                    app.document.replace_untitled(SOURCE);
+                    app.prepare_editor_source_data();
+                }
+                app.view_mode = ViewMode::Code;
+                let cursor = SOURCE.find('{').unwrap();
+                app.pending_editor_selection = Some(cursor..cursor);
+            }
+            UiSnapshotScene::StickyContext => {
+                app.notice = None;
+                app.view_mode = ViewMode::Code;
+                app.problems_visible = false;
+                app.find_visible = false;
+                app.replace_visible = false;
+                if prepare_sticky_context_snapshot_document(&mut app.document) {
+                    app.prepare_editor_source_data();
+                }
+            }
+            UiSnapshotScene::FileMenu => {
+                app.app_popup = Some(AppPopup::File {
+                    anchor: toolbar_anchor + egui::vec2(150.0, 0.0),
+                });
+            }
+            UiSnapshotScene::EditMenu => {
+                app.app_popup = Some(AppPopup::Edit {
+                    anchor: toolbar_anchor + egui::vec2(195.0, 0.0),
+                });
+            }
+            UiSnapshotScene::SettingsWindow
+            | UiSnapshotScene::SettingsThemePicker
+            | UiSnapshotScene::SettingsDarkThemePicker
+            | UiSnapshotScene::SettingsTooltip => app.settings_visible = true,
+            UiSnapshotScene::TypstOverridesWindow => {
+                app.settings_visible = false;
+                app.typst_overrides_visible = true;
+                app.typst_overrides_dark = app
+                    .imported_theme
+                    .as_ref()
+                    .is_none_or(|theme| theme.dark_mode);
+            }
+            // These scenes are injected after the editor paints, because the
+            // editor intentionally replaces hover overlays every frame.
+            UiSnapshotScene::DiagnosticTooltip | UiSnapshotScene::FunctionTooltip => {}
+            UiSnapshotScene::SaveDialog => {
+                if app.document_workflow.modal().is_none() {
+                    app.document_workflow.set_modal(AppModal::Unsaved {
+                        message: format!(
+                            "Save changes to {} before opening another file?",
+                            app.document_name()
+                        ),
+                        pending: PendingDocumentAction {
+                            action: DeferredDocumentAction::CloseWindow,
+                            key: app.document.key(),
+                            allow_discard: true,
+                            description: "closing the document".to_owned(),
+                        },
+                    });
+                }
+            }
+            UiSnapshotScene::AlertDialog => {
+                if app.document_workflow.modal().is_none() {
+                    app.document_workflow.set_modal(AppModal::Alert {
+                        title: "error".to_owned(),
+                        message:
+                            "The document could not be saved. Check the destination and try again."
+                                .to_owned(),
+                        kind: NoticeKind::Error,
+                    });
+                }
+            }
+            UiSnapshotScene::OverwriteDialog => {
+                if app.document_workflow.modal().is_none() {
+                    app.document_workflow.set_modal(AppModal::Overwrite {
+                        message: "This file changed on disk after it was opened. Overwrite it with the editor contents?"
+                            .to_owned(),
+                        path: app.document.path()
+                            .clone()
+                            .unwrap_or_else(|| app.workspace_root.join("document.typ")),
+                        key: app.document.key(),
+                        expected_disk_fingerprint: Some(1),
+                        observed_disk_fingerprint: Some(2),
+                    });
+                }
+            }
+            UiSnapshotScene::EditorContextMenu => {
+                app.app_popup = Some(AppPopup::Editor {
+                    anchor: Pos2::new(430.0, 250.0),
+                    link: None,
+                    table: None,
+                });
+            }
+            UiSnapshotScene::DocumentFontSelector => {
+                app.document
+                    .edit(CCursorRange::one(CCursor::new(0)), |source| {
+                        *source =
+                            "#set text(font: \"Libertinus Serif\")\n= Font selector".to_owned()
+                    });
+                app.prepare_editor_source_data();
+                let font_char = app.document.source()
+                    [..app.document.source().find("font").unwrap()]
+                    .chars()
+                    .count();
+                let target = app
+                    .editor_data
+                    .font_argument_at(font_char)
+                    .expect("snapshot font argument is valid");
+                app.font_catalog = FontCatalog::snapshot_fixture();
+                app.app_popup = Some(AppPopup::FontSelector {
+                    anchor: Pos2::new(430.0, 250.0),
+                    target,
+                });
+            }
+            UiSnapshotScene::ExplorerContextMenu => {
+                let path = app
+                    .document
+                    .path()
+                    .clone()
+                    .unwrap_or_else(|| app.workspace_root.join("document.typ"));
+                app.app_popup = Some(AppPopup::Workspace {
+                    anchor: Pos2::new(180.0, 180.0),
+                    path,
+                    is_file: true,
+                });
+            }
+            UiSnapshotScene::StatusLog => {
+                app.preview.status = PreviewStatus::Ready(Duration::from_millis(18));
+                app.recorded_status = Some(app.preview.status);
+                app.notice = None;
+                app.recorded_notice = None;
+                app.status_log = VecDeque::from([
+                    StatusLogEntry {
+                        timestamp: "09:41:12Z".to_owned(),
+                        detail: "Preview ready".to_owned(),
+                        kind: NoticeKind::Success,
+                    },
+                    StatusLogEntry {
+                        timestamp: "09:41:11Z".to_owned(),
+                        detail: "Compiling document".to_owned(),
+                        kind: NoticeKind::Info,
+                    },
+                    StatusLogEntry {
+                        timestamp: "09:41:10Z".to_owned(),
+                        detail: "Preview ready".to_owned(),
+                        kind: NoticeKind::Success,
+                    },
+                    StatusLogEntry {
+                        timestamp: "09:41:09Z".to_owned(),
+                        detail: "Waiting for changes".to_owned(),
+                        kind: NoticeKind::Info,
+                    },
+                ]);
+                app.app_popup = Some(AppPopup::StatusLog {
+                    anchor: Pos2::new(theme::SPACE.content, 500.0),
+                });
+            }
+            UiSnapshotScene::RenameDialog => {
+                if app.rename_dialog.is_none() {
+                    let path = app
+                        .document
+                        .path()
+                        .clone()
+                        .unwrap_or_else(|| app.workspace_root.join("document.typ"));
+                    let name = path.file_name().map_or_else(
+                        || "document.typ".to_owned(),
+                        |name| name.to_string_lossy().into_owned(),
+                    );
+                    app.rename_dialog = Some(RenameDialog {
+                        path,
+                        name,
+                        focus: false,
+                    });
+                }
+            }
+            UiSnapshotScene::WorkspaceChooser => app.workspace_chooser_visible = true,
+            UiSnapshotScene::ProblemsPanel => {
+                app.problems_visible = true;
+                app.preview.diagnostics = vec![
+                    Diagnostic {
+                        severity: DiagnosticSeverity::Error,
+                        source: DiagnosticSource::Main,
+                        location: Some(DiagnosticLocation {
+                            line: 9,
+                            column: 29,
+                        }),
+                        message: "the character `#` is not valid in code".to_owned(),
+                        details: vec![
+                            "Hint: you are already in code mode".to_owned(),
+                            "Hint: try removing the `#`".to_owned(),
+                        ],
+                    },
+                    Diagnostic {
+                        severity: DiagnosticSeverity::Warning,
+                        source: DiagnosticSource::Main,
+                        location: Some(DiagnosticLocation {
+                            line: 14,
+                            column: 1,
+                        }),
+                        message: "unknown font family; using a fallback".to_owned(),
+                        details: Vec::new(),
+                    },
+                ];
+                app.preview.tinymist_diagnostics.clear();
+                app.preview.raw_diagnostics.clear();
+                app.mark_diagnostics_changed();
+            }
+            UiSnapshotScene::FindReplace => {
+                app.notice = None;
+                app.find_visible = true;
+                app.replace_visible = true;
+                app.find_query = "Typst".to_owned();
+                app.replacement = "tiptoptyp".to_owned();
+            }
+            UiSnapshotScene::PreviewCompiling => {
+                app.preview.status = PreviewStatus::Compiling;
+            }
+        }
+    }
+
+    /// Move a deterministic capture session to its next isolated UI state.
+    /// Transient windows from the previous scene are closed before the new
+    /// scene is painted, while the loaded fixture and rendered preview remain
+    /// available across the whole process.
+    pub(super) fn set_step(
+        &mut self,
+        app: &mut EditorApp,
+        step: &UiCaptureStep,
+        context: &egui::Context,
+    ) {
+        crate::window_logo::clear_snapshot(context);
+        self.git_fixture_prepared = false;
+        app.git.visible = false;
+        app.git_editor = crate::git::editor::GitEditorState::default();
+        app.settings_visible = false;
+        app.shortcut_editor_visible = false;
+        app.packages_visible = false;
+        app.typst_overrides_visible = false;
+        app.workspace_chooser_visible = false;
+        app.problems_visible = false;
+        app.find_visible = false;
+        app.replace_visible = false;
+        app.view_mode = ViewMode::Split;
+        app.search.clear();
+        app.focus_find = false;
+        app.pending_editor_selection = None;
+        app.diagnostic_tooltip = None;
+        app.close_app_popup();
+        app.document_workflow.clear_modal();
+        app.rename_dialog = None;
+        app.rename_overlay_had_focus = false;
+        app.rename_overlay_suspended = false;
+        app.settings_ui.staged_ui_font_weight = None;
+        app.settings_ui.staged_code_font_weight = None;
+        app.notice = None;
+        app.preview.raw_diagnostics.clear();
+        app.preview.diagnostics.clear();
+        app.preview.tinymist_diagnostics.clear();
+        app.mark_diagnostics_changed();
+        app.status_log.clear();
+        app.recorded_status = None;
+        app.recorded_notice = None;
+        app.preview.status = PreviewStatus::Ready(Duration::ZERO);
+        if let Some(fixture) = &self.document {
+            if fixture.restore(&mut app.document) {
+                app.preview.content.clear();
+            }
+        } else {
+            app.document.restore_saved_source();
+        }
+        app.theme_override = Some(step.theme.clone());
+        app.snapshot_scene = Some(step.scene);
+        if step.scene == UiSnapshotScene::StickyContext {
+            app.document.reset_editor_history = true;
+        }
+
+        if matches!(
+            step.scene,
+            UiSnapshotScene::Main | UiSnapshotScene::ProblemsPanel | UiSnapshotScene::FindReplace
+        ) && app.preview.content.pages().is_empty()
+        {
+            app.schedule_compile_now();
+        }
+        context.request_repaint();
+    }
+}
+
+/// Child-window captures can leave a collapsed root-panel size in egui memory.
+/// Seed the real resizable Explorer with a deterministic, visible fixture width.
+fn prepare_git_panel_capture(context: &egui::Context, explorer: &mut ExplorerPanelState) {
+    explorer.open();
+    let id = egui::Id::new("filesystem");
+    let rect = egui::PanelState::load(context, id)
+        .map_or(context.content_rect(), |state| state.outer_rect);
+    let outer_rect = explorer_width_restored_rect(rect, METRICS.chrome.explorer_default_width);
+    context.data_mut(|data| data.insert_persisted(id, egui::PanelState { outer_rect }));
+    explorer.remember_width(METRICS.chrome.explorer_default_width);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::{Harness, kittest::Queryable as _};
+
+    #[test]
+    fn git_capture_restores_collapsed_explorer_and_renders_real_repository_controls() {
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(900.0, 700.0))
+            .build_ui_state(
+                |ui, state: &mut (ExplorerPanelState, crate::git::GitPanel)| {
+                    // Simulate root geometry left by a preceding child-window scene.
+                    ui.ctx().data_mut(|data| {
+                        data.insert_persisted(
+                            egui::Id::new("filesystem"),
+                            egui::PanelState {
+                                outer_rect: Rect::from_min_size(Pos2::ZERO, Vec2::new(12.0, 700.0)),
+                            },
+                        )
+                    });
+                    prepare_git_panel_capture(ui.ctx(), &mut state.0);
+                    egui::Panel::left("filesystem")
+                        .frame(theme::content_panel_frame(ui.style()))
+                        .default_size(METRICS.chrome.explorer_default_width)
+                        .min_size(METRICS.chrome.explorer_min_width)
+                        .show(ui, |ui| {
+                            let mut content = clipped_panel_content_ui(ui, "git-capture-test");
+                            state.1.show(&mut content, false);
+                        });
+                },
+                (
+                    ExplorerPanelState::default(),
+                    crate::git::GitPanel::snapshot_fixture(),
+                ),
+            );
+        harness.run();
+        let width = egui::PanelState::load(&harness.ctx, egui::Id::new("filesystem"))
+            .unwrap()
+            .size()
+            .x;
+        assert!(
+            (width - METRICS.chrome.explorer_default_width).abs() < 1.0,
+            "{width}"
+        );
+        assert!(harness.get_by_label("Fetch").rect().right() <= width);
+        assert!(harness.get_by_label("Stage all").rect().left() >= 0.0);
+        assert!(
+            harness.get_by_label("4 files · 2 staged").rect().bottom()
+                <= harness.get_by_label("Stage all").rect().top()
+        );
+    }
+}

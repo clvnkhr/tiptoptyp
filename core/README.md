@@ -15,6 +15,9 @@ without a desktop, sidecar binaries, network, or filesystem fixtures.
   readiness. Old display content can survive a restart without becoming current.
 - `text` and `geometry`: distinguish byte, scalar, UTF-16 and native coordinates.
 - `scheduling`: callers supply time; tests advance `Duration` values directly.
+- `recovery`: generation-owned failure admission, one-second delayed retries,
+  and fallback on the fifth failed attempt; duplicate events and stale readiness
+  cannot change the budget or bypass the deadline.
 
 Keep GUI, filesystem, thread scheduling and process operations in application
 adapters. `tests/architecture_boundaries.rs` checks this rule and protected

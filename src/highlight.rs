@@ -24,6 +24,9 @@ pub struct SyntaxHighlighter {
     cached_syntect_revision: u64,
     cached_code_mode: bool,
     styles: ResolvedTypstStyles,
+    rainbow: Option<crate::rainbow::RainbowBrackets>,
+    #[cfg(test)]
+    cache_builds: usize,
 }
 
 impl Default for SyntaxHighlighter {
@@ -36,11 +39,21 @@ impl Default for SyntaxHighlighter {
             cached_syntect_revision: 0,
             cached_code_mode: false,
             styles: ResolvedTypstStyles::default(),
+            rainbow: None,
+            #[cfg(test)]
+            cache_builds: 0,
         }
     }
 }
 
 impl SyntaxHighlighter {
+    pub(crate) fn set_rainbow_brackets(&mut self, settings: crate::rainbow::RainbowBrackets) {
+        if self.rainbow != Some(settings) {
+            self.rainbow = Some(settings);
+            self.has_cache = false;
+        }
+    }
+
     pub(crate) fn set_styles(&mut self, styles: ResolvedTypstStyles) {
         if self.styles != styles {
             self.styles = styles;
@@ -102,6 +115,10 @@ impl SyntaxHighlighter {
             self.parsed_source.replace(&parse_source);
         }
 
+        #[cfg(test)]
+        {
+            self.cache_builds += 1;
+        }
         let mut job = LayoutJob::default();
         let root = LinkedNode::new(self.parsed_source.root());
         append_node(
@@ -113,6 +130,9 @@ impl SyntaxHighlighter {
             &self.styles,
             syntect,
         );
+        if let Some(rainbow) = self.rainbow {
+            crate::rainbow::apply(&mut job, root, rainbow, dark_mode);
+        }
         if code_mode {
             trim_layout_job(&mut job, 2, 1);
         }
@@ -882,6 +902,56 @@ mod tests {
             next_byte = section.byte_range.end.0;
         }
         assert_eq!(next_byte, source.len());
+    }
+
+    #[test]
+    fn rainbow_colors_preserve_mapping_and_only_rebuild_on_text_or_palette_changes() {
+        use crate::rainbow::{BracketPalette, RainbowBrackets};
+        let source = "#let α = (1, (2, (3, (4, (5)))))\n#let x = { [body] }\n$ (a + b] $\n#let str = \"[literal]\"";
+        let mut highlighter = SyntaxHighlighter::default();
+        let syntect = GenericSyntaxHighlighter::default();
+        let baseline = highlighter.highlight(source, false, &syntect);
+        let mut settings = RainbowBrackets::default();
+        highlighter.set_rainbow_brackets(settings);
+        let job = highlighter.highlight(source, false, &syntect);
+        assert_exact_mapping(&job, source);
+        let colors = settings.palettes[0].colors(false);
+        let opens: Vec<_> = source
+            .match_indices('(')
+            .take(5)
+            .map(|(byte, _)| format_at(&job, byte).color)
+            .collect();
+        assert_eq!(
+            opens,
+            vec![colors[0], colors[1], colors[2], colors[3], colors[0]]
+        );
+        for (byte, _) in source.char_indices() {
+            let mut actual = format_at(&job, byte).clone();
+            actual.color = format_at(&baseline, byte).color;
+            assert_eq!(actual, *format_at(&baseline, byte));
+        }
+        let literal = source.find("[literal]").unwrap();
+        assert_eq!(format_at(&job, literal), format_at(&baseline, literal));
+        let builds = highlighter.cache_builds;
+        highlighter.set_rainbow_brackets(settings);
+        assert_eq!(highlighter.highlight(source, false, &syntect), job);
+        assert_eq!(highlighter.cache_builds, builds);
+        settings.palettes[0] = BracketPalette::Orchid;
+        highlighter.set_rainbow_brackets(settings);
+        let changed = highlighter.highlight(source, false, &syntect);
+        assert_eq!(highlighter.cache_builds, builds + 1);
+        assert_eq!(
+            format_at(&changed, source.find('(').unwrap()).color,
+            BracketPalette::Orchid.colors(false)[0]
+        );
+        let dark = highlighter.highlight(source, true, &syntect);
+        assert_eq!(
+            format_at(&dark, source.find('(').unwrap()).color,
+            BracketPalette::Orchid.colors(true)[0]
+        );
+        settings.enabled = false;
+        highlighter.set_rainbow_brackets(settings);
+        assert_eq!(highlighter.highlight(source, false, &syntect), baseline);
     }
 
     #[test]
