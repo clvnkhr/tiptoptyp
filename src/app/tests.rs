@@ -3,6 +3,28 @@ use crate::asset::AssetThumbnailResult;
 use crate::explorer::ExplorerPanelPhase;
 use crate::settings::InterfaceTheme;
 
+#[test]
+fn preview_focus_wait_is_static_but_active_transition_animates() {
+    let context = egui::Context::default();
+    let paint = |waiting| {
+        context.run_ui(egui::RawInput::default(), |ui| {
+            show_preview_transition(ui, waiting)
+        })
+    };
+    for _ in 0..10 {
+        paint(true).drop_without_applying_deltas();
+    }
+    assert!(
+        !context.has_requested_repaint(),
+        "waiting for window focus must not animate indefinitely"
+    );
+    paint(false).drop_without_applying_deltas();
+    assert!(
+        context.has_requested_repaint(),
+        "real loading keeps its progress indicator"
+    );
+}
+
 fn completion_item(insert_text: &str) -> CompletionItem {
     CompletionItem {
         label: insert_text.to_owned(),

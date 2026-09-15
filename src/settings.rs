@@ -327,6 +327,57 @@ const fn default_true() -> bool {
 }
 
 impl AppSettings {
+    /// Apply only the fields changed in an independently rendered Settings
+    /// window. Preserve newer document history and edits from sibling windows.
+    pub(crate) fn apply_edits(&mut self, base: &Self, edited: Self) {
+        macro_rules! merge {
+            ($($field:ident),+ $(,)?) => {
+                // Exhaustive destructuring makes adding a setting without
+                // considering deferred edits a compile error.
+                let Self { $($field),+ } = edited;
+                $(if $field != base.$field { self.$field = $field; })+
+            };
+        }
+        merge!(
+            interface_theme,
+            light_theme,
+            dark_theme,
+            theme_invert,
+            theme_hue_shift_degrees,
+            theme_colors,
+            document_theme,
+            preview_preference,
+            line_wrap,
+            line_numbers,
+            sticky_context_rows,
+            auto_pair_delimiters,
+            rainbow_brackets,
+            explorer_order,
+            source_preview_trigger,
+            auto_save,
+            auto_save_delay_ms,
+            hover_delay_ms,
+            ui_scale_percent,
+            ui_font_monospace,
+            ui_font_path,
+            ui_font_family,
+            ui_font_face_index,
+            ui_font_weight,
+            code_font_path,
+            code_font_family,
+            code_font_face_index,
+            code_font_weight,
+            titlebar_menus,
+            shortcut_overrides,
+            typst_overrides,
+            recent_workspaces,
+            last_opened_files,
+            preview_files,
+            typst,
+            tinymist,
+        );
+    }
+
     pub(crate) fn color_theme(&self, appearance: egui::Theme) -> &ColorThemeChoice {
         match appearance {
             egui::Theme::Light => &self.light_theme,

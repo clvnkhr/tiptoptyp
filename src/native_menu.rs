@@ -550,7 +550,7 @@ mod macos {
                 .ok()
                 .and_then(|context| context.clone())
             {
-                context.request_repaint();
+                context.request_repaint_of(eframe::egui::ViewportId::ROOT);
             }
         }));
     }
@@ -570,7 +570,7 @@ mod macos {
                 .ok()
                 .and_then(|context| context.clone())
             {
-                context.request_repaint();
+                context.request_repaint_of(eframe::egui::ViewportId::ROOT);
             }
         }));
         Bool::YES

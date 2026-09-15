@@ -74,6 +74,16 @@ impl Session {
             complete: measured == recorder.duration,
             measured_seconds: measured.as_secs_f64(),
             dropped_scopes: stats.dropped_scopes,
+            root_repaint_requests: stats
+                .repaint_requests
+                .iter()
+                .map(|(&(file, line), &requests)| RepaintReport {
+                    file,
+                    line,
+                    requests,
+                })
+                .collect(),
+            dropped_repaint_locations: stats.dropped_repaint_locations,
             scopes: stats
                 .scopes
                 .iter()
@@ -132,6 +142,19 @@ pub(crate) fn tick(context: &egui::Context, ready: impl FnOnce() -> bool) {
     let Some(recorder) = RECORDER.get() else {
         return;
     };
+    let now = Instant::now();
+    if recorder.admits(now, now) {
+        // Record call sites, not free-form reasons (which may include user
+        // text). Bounded aggregation only; write once at session completion.
+        let causes = context.repaint_causes();
+        let mut stats = recorder
+            .stats
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        for cause in causes {
+            stats.observe_repaint(cause.file, cause.line);
+        }
+    }
     if recorder.window.get().is_some() || !ready() {
         return;
     }
@@ -205,10 +228,22 @@ impl Drop for Span {
 
 #[derive(Default)]
 struct Statistics {
+    repaint_requests: BTreeMap<(&'static str, u32), u64>,
+    dropped_repaint_locations: u64,
     scopes: BTreeMap<&'static str, Distribution>,
     dropped_scopes: u64,
 }
 impl Statistics {
+    fn observe_repaint(&mut self, file: &'static str, line: u32) {
+        if self.repaint_requests.len() >= MAX_SCOPES
+            && !self.repaint_requests.contains_key(&(file, line))
+        {
+            self.dropped_repaint_locations = self.dropped_repaint_locations.saturating_add(1);
+            return;
+        }
+        let count = self.repaint_requests.entry((file, line)).or_default();
+        *count = count.saturating_add(1);
+    }
     fn observe(&mut self, name: &'static str, elapsed: Duration) {
         if self.scopes.len() == MAX_SCOPES && !self.scopes.contains_key(name) {
             self.dropped_scopes += 1;
@@ -268,11 +303,20 @@ impl Distribution {
 
 #[derive(Serialize)]
 struct Report {
+    root_repaint_requests: Vec<RepaintReport>,
+    dropped_repaint_locations: u64,
     schema_version: u8,
     complete: bool,
     measured_seconds: f64,
     dropped_scopes: u64,
     scopes: Vec<ScopeReport>,
+}
+
+#[derive(Serialize)]
+struct RepaintReport {
+    file: &'static str,
+    line: u32,
+    requests: u64,
 }
 #[derive(Serialize)]
 struct ScopeReport {
@@ -288,6 +332,17 @@ struct ScopeReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn repaint_call_site_storage_is_bounded_and_known_sites_keep_counting() {
+        let mut stats = Statistics::default();
+        for line in 0..100 {
+            stats.observe_repaint("source.rs", line);
+        }
+        stats.observe_repaint("source.rs", 0);
+        assert_eq!(stats.repaint_requests.len(), MAX_SCOPES);
+        assert_eq!(stats.repaint_requests[&("source.rs", 0)], 2);
+        assert_eq!(stats.dropped_repaint_locations, 36);
+    }
     #[test]
     fn measurement_excludes_startup_warmup_and_boundary_crossing_work() {
         let origin = Instant::now();

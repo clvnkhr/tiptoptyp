@@ -189,7 +189,9 @@ I was using two different windows with two different workspaces. Possibly i was 
 153. [x] Investigate and reduce Settings-open CPU usage: eliminate redundant native-window updates/repaints and unchanged preference actions, preserve theme changes and reopen behavior, and verify with regression tests and before/after profiling.
 154. [x] Make shared hover popups cheap: dismiss on owner scrolling and pointer movement away, preserve movement into and scrolling inside the popup, delay unnecessary server requests, separate native repainting, avoid repeated parsing/cache copies, and remove fading. Compare full-document rendering with a short preview; reveal full content automatically on pointer entry or keyboard focus, without Read more buttons. Verify performance and interaction regressions.
 155. [x] Fix missing semantic hovers caused by context-free token targeting: honor math operator boundaries without splitting valid code identifiers, handle the right half of a final glyph, and reuse cached syntax/target queries. Cover multiple names and contexts, not symbol-specific exceptions.
-
+156. [x] Fix remaining Settings interaction latency: separate native Settings repainting from the editor, preserve preference/action synchronization and font/theme updates, stop animating previews that are waiting for window focus, and verify independent scrolling/idle behavior with regression tests and comparable optimized profiles.
+157. [ ]  implement collapsing multiline code with a compact dropdown arrow at the line number. we need to collapse all the same things as the sticky rows feature
+158. [ ] Audit the code for multi-window issues, including how to get out of the no window state, code that assumes a single main window etc
 = resolved in the 2026-09-13 easy backlog pass
 
 - Items 121, 122: Explorer asset hover candidates now end at the visible panel clip, and the active file's stronger face keeps the shared content font size.
@@ -1093,3 +1095,53 @@ Only deferred items 1, 2, and 26 remain unchecked.
   the new real-server test was run explicitly and passed. No popup layout,
   rendering, fade, or scroll-dismissal rules changed, so no new screenshot or
   unrelated native performance benchmark was needed for this targeting fix.
+
+= Settings repaint isolation (2026-09-15)
+
+- Item 156: Settings still used an immediate native viewport, coupling every
+  child interaction to editor rendering and nested OpenGL surface switches and
+  swaps. It now uses the shared deferred child host with owned presentation/UI
+  state, not a shared lock around `EditorApp`. Search, scrolling, picker
+  navigation, hints, and font-preview completion stay local. Changed preferences,
+  app actions, close, focus ownership, and global shortcuts notify the owner.
+- Input changes explicitly invalidate the child, while unrelated editor frames
+  do not. Font catalogs are copied only on revision/reopen/QA-scene changes,
+  not pointer frames. Rapid preference edits coalesce, and a field-wise merge
+  preserves concurrent preferences and document history. Native text-edit menu
+  commands are delivered inside the next child pass, not injected into stale
+  input; text keys and global shortcuts are consumed/forwarded once. Native menu
+  callbacks explicitly wake the root command dispatcher.
+- The first deferred-window profile exposed another problem: native preview
+  creation intentionally waits for document-window focus, but the waiting
+  message kept its spinner running indefinitely behind Settings. It produced
+  624 editor passes in six seconds. That focus-wait state is now static, with
+  explicit activation guidance. Real loading still animates and the safeguard
+  against stealing focus is unchanged. The profiler now retains at most 64
+  root repaint-request file/line counters to distinguish spinners from normal
+  delayed polling. Free-form reasons and per-frame disk writes are excluded.
+- Measurement: macOS 14.6.1, Apple silicon, optimized `profiling` build with
+  frame pointers, isolated small document, Catppuccin Latte, 500 by 560 point
+  Settings at 2x, six seconds warmup and six seconds idle sampling at 1 ms.
+  Baseline `.tiptoptyp/profiles/1789494126293-23204-settings-0` and final
+  `.tiptoptyp/profiles/1789500659316-34754-settings-0` retain metadata, hashes,
+  summaries, and CPU samples. Editor-pass mean fell from 6.804 ms to 0.574 ms
+  (149.70 to 14.34 ms total); Settings paints fell from 22 to 4. Per-paint
+  Settings rendering remains approximately 1.3–1.5 ms: the main improvement is
+  eliminating coupled work, not making every widget dramatically cheaper.
+  Supplementary process CPU time advanced 0.17 s before versus 0.07 s after
+  between sampler-bracketing readings, which include sample processing. These
+  are local idle/inclusive-wall-time measurements, not a scroll-FPS guarantee.
+- Verification: 668 ordinary and 674 profiling-feature application tests pass
+  (three opt-in tests ignored), plus all supporting/core/integration suites,
+  13 xtask tests, formatting, and both strict Clippy configurations. New tests
+  protect independent parent/child wheel frames, static focus waiting, native
+  search editing, one-shot shortcuts, close/reopen, cache invalidation, bounded
+  repaint metadata, edit coalescing and concurrent-change preservation.
+- Inspected five fresh final framebuffers under
+  `.tiptoptyp/screenshots/settings-performance-review`, beginning with
+  `1789500841350-0001-settings-settings-window.png` and ending with
+  `1789500841804-0005-settings-settings-font-picker.png`: light/dark Settings,
+  narrow colors/status, and a loaded font sample. An earlier batch timed out
+  at the font scene; scene-aware catalog invalidation fixed it and the complete
+  rerun succeeded. No native bounds or maintained gallery layout changed;
+  these are individual viewport checks, not composed desktop verification.

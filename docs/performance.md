@@ -79,7 +79,8 @@ Each run retains:
   are explicitly labelled; metadata describes the current tree, not a guarantee
   of the reused binary's provenance.
 - `summary.json`: bounded, inclusive **wall-time** summaries for instrumented
-  UI, theme, highlighting, search, compile-result handling and worker scopes.
+  UI, theme, highlighting, search, compile-result handling and worker scopes,
+  plus bounded root repaint-request call-site counts.
 - `cpu.sample.txt` on macOS, or `perf.data` when explicitly selecting Linux perf.
 - `cpu-before.txt` / `cpu-after.txt`: supplementary `ps` readings on Unix, or an
   explicit unavailable message. These bracket sampling and its analysis, not an
@@ -109,6 +110,33 @@ aggregation and writes once on exit. This adds measurement overhead when enabled
 compare like builds and corroborate hot paths with a native sampler. In ordinary
 builds spans/ticks compile to no-ops; a profiling build without
 `TIPTOPTYP_PROFILE_DIR` does not start a session or take timing samples.
+
+`root_repaint_requests` counts the source file/line locations reported by egui
+on measured root passes. It includes delayed requests, not just requests for an
+immediate frame; it does not identify every OS-triggered paint. At most 64 call
+sites are retained, with excess occurrences counted in
+`dropped_repaint_locations`. Free-form repaint reasons are not recorded because
+they can contain application text. This helped distinguish an indefinite
+preview spinner from normal workspace/file polling while Settings was open.
+
+Settings uses an independently repainted native viewport. Scroll, search, hints,
+and font-preview completion stay local; preference edits, app commands, native
+close and focus ownership notify the editor. Parent snapshots invalidate Settings
+only on actual presentation changes, and font catalogs are copied only when
+their revision changes or the window reopens. Rapid preference edits coalesce
+and merge only changed fields, preserving newer history and sibling preferences.
+The native preview's wait for document-window activation is static: it must not
+animate forever behind Settings. Real loading retains its progress indicator.
+
+```sh
+cargo test settings_window
+cargo test preview_focus_wait
+```
+
+These tests exercise independent child/parent passes and wheel input, semantic
+search/edit controls, preference delivery, and the non-animating wait state.
+Native idle samples measure eliminated coupled work; they are not end-to-end
+scroll-FPS benchmarks.
 
 ### Native CPU and memory investigation
 

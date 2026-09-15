@@ -42,6 +42,7 @@ pub(super) enum SettingsAction {
     Update(Box<AppSettings>),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct SettingsStatus {
     pub(super) backend_label: &'static str,
     pub(super) fallback_reason: Option<String>,

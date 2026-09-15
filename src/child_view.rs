@@ -154,8 +154,9 @@ pub(crate) struct ChildViewInput {
 pub(crate) struct ChildViewHost;
 
 impl ChildViewHost {
-    /// Hover windows repaint independently. An immediate viewport would force
-    /// an editor paint (and a second GL buffer swap) for every popup event.
+    /// Independent child painting avoids an editor paint and a nested GL
+    /// buffer swap for every child event. The caller owns input invalidation
+    /// and returns application actions separately from viewport-local state.
     pub(crate) fn show_deferred(
         context: &egui::Context,
         captures: &CaptureController,

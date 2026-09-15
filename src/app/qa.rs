@@ -345,13 +345,14 @@ impl QaSession {
             }
             UiSnapshotScene::BracketSettings => {
                 app.settings_visible = true;
-                app.settings_ui.scroll_target = Some(SettingsTarget::AutoPairDelimiters);
+                app.settings_window.lock().unwrap().ui.scroll_target =
+                    Some(SettingsTarget::AutoPairDelimiters);
             }
             UiSnapshotScene::SettingsColors
             | UiSnapshotScene::SettingsEditor
             | UiSnapshotScene::SettingsStatus => {
                 app.settings_visible = true;
-                app.settings_ui.scroll_target = Some(match scene {
+                app.settings_window.lock().unwrap().ui.scroll_target = Some(match scene {
                     UiSnapshotScene::SettingsColors => SettingsTarget::ThemeColors,
                     UiSnapshotScene::SettingsEditor => SettingsTarget::AutoSaveDelay,
                     _ => SettingsTarget::ToolchainStatus,
@@ -619,8 +620,12 @@ impl QaSession {
         app.rename_dialog = None;
         app.rename_overlay_had_focus = false;
         app.rename_overlay_suspended = false;
-        app.settings_ui.staged_ui_font_weight = None;
-        app.settings_ui.staged_code_font_weight = None;
+        app.settings_window.lock().unwrap().ui.staged_ui_font_weight = None;
+        app.settings_window
+            .lock()
+            .unwrap()
+            .ui
+            .staged_code_font_weight = None;
         app.notice = None;
         app.preview.raw_diagnostics.clear();
         app.preview.diagnostics.clear();

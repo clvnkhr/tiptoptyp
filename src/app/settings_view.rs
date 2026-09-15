@@ -1,16 +1,44 @@
 //! Settings and appearance controls.
-use super::settings_panel::LUMINOSITY_HINT;
 use super::*;
 
 impl EditorApp {
     pub(super) fn show_settings_window(&mut self, context: &egui::Context, frame: &eframe::Frame) {
+        use super::{settings_panel::SettingsStatus, settings_window::SettingsWindowInput};
+        let close = if self.settings_window.lock().unwrap().has_actions() {
+            let original = self.settings_snapshot();
+            let mut edited = original.clone();
+            let (actions, close) = self
+                .settings_window
+                .lock()
+                .unwrap()
+                .take_actions(&mut edited);
+            if edited != original {
+                self.queue_settings(edited, context);
+            }
+            self.apply_settings_actions(actions, context, frame);
+            close
+        } else {
+            false
+        };
+        if close {
+            self.settings_visible = false;
+            // Restore focus after native close without waking the owner for
+            // ordinary child pointer/scroll frames.
+            let target = if self.shortcut_editor_visible {
+                scoped_child_viewport_id(context, "tiptoptyp-shortcuts")
+            } else {
+                context.viewport_id()
+            };
+            context.send_viewport_cmd_to(target, egui::ViewportCommand::Focus);
+        }
         if !self.settings_visible
             || self.document_workflow.modal().is_some()
             || self.rename_dialog.is_some()
         {
+            self.settings_window.lock().unwrap().suspend();
             return;
         }
-        let active_theme = self
+        let appearance = self
             .imported_theme
             .as_ref()
             .map_or(context.theme(), |theme| {
@@ -20,119 +48,36 @@ impl EditorApp {
                     egui::Theme::Light
                 }
             });
-        let style = context.style_of(active_theme);
-        let mut close_requested = false;
-        let captures = self.captures.clone();
-        let spec = ChildViewSpec::persistent(
-            "tiptoptyp-settings",
-            "tiptoptyp Settings",
-            [
-                if matches!(
-                    self.snapshot_scene,
-                    Some(
-                        UiSnapshotScene::SettingsColors
-                            | UiSnapshotScene::SettingsEditor
-                            | UiSnapshotScene::SettingsStatus
-                    )
-                ) {
-                    METRICS.chrome.settings_min_size.x
-                } else {
-                    METRICS.chrome.settings_width
-                },
-                METRICS.chrome.settings_height,
-            ],
-            METRICS.chrome.settings_min_size,
-            "settings",
-        );
-        ChildViewHost::show(
-            context,
-            &captures,
-            spec,
-            active_theme,
-            &style,
-            |ui, input| {
-                let settings_tooltip_id = settings_hover_tooltip_id(ui.ctx());
-                ui.ctx()
-                    .data_mut(|data| data.remove::<HoverTooltipOverlay>(settings_tooltip_id));
-                close_requested |= input.close_requested;
-                if ui.ctx().input(|input| input.viewport().fullscreen) == Some(true) {
-                    ui.ctx()
-                        .send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
-                }
-                ui.painter()
-                    .rect_filled(ui.max_rect(), 0.0, ui.visuals().panel_fill);
-                let title_rect = Rect::from_min_size(
-                    ui.max_rect().min,
-                    egui::vec2(ui.max_rect().width(), METRICS.chrome.toolbar_height),
-                );
-                let drag = ui.interact(
-                    title_rect,
-                    ui.id().with("settings-window-drag"),
-                    Sense::drag(),
-                );
-                if drag.drag_started() {
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                }
-                egui::Panel::top("settings-titlebar")
-                    .exact_size(METRICS.chrome.toolbar_height)
-                    .frame(theme::settings_title_frame(ui.style()))
-                    .show(ui, |ui| {
-                        ui.horizontal_centered(|ui| {
-                            #[cfg(target_os = "macos")]
-                            ui.add_space(
-                                METRICS.toolbar.traffic_lights_fallback_width
-                                    + METRICS.toolbar.traffic_lights_gap,
-                            );
-                            crate::window_logo::show(ui, &captures);
-                            ui.label(RichText::new("Settings").strong());
-                            #[cfg(not(target_os = "macos"))]
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if icon_button(ui, UiIcon::Close, "Close Settings").clicked() {
-                                    close_requested = true;
-                                }
-                            });
-                        });
-                    });
-                egui::CentralPanel::default()
-                    .frame(theme::settings_content_frame(ui.style()))
-                    .show(ui, |ui| self.show_settings(ui, frame));
-                if self.snapshot_scene == Some(UiSnapshotScene::SettingsTooltip) {
-                    show_local_tooltip_card(
-                        ui.ctx(),
-                        Pos2::new(
-                            theme::SPACE.content * 2.0,
-                            METRICS.chrome.toolbar_height + theme::SPACE.content * 2.0,
-                        ),
-                        LUMINOSITY_HINT,
-                        1.0,
-                    );
-                } else if let Some(tooltip) = ui
-                    .ctx()
-                    .data(|data| data.get_temp::<HoverTooltipOverlay>(settings_tooltip_id))
-                {
-                    show_local_tooltip_card(
-                        ui.ctx(),
-                        tooltip.anchor,
-                        &tooltip.detail,
-                        tooltip.opacity,
-                    );
-                }
+        let input = SettingsWindowInput {
+            settings: self.settings_snapshot(),
+            theme_override: self.theme_override.clone(),
+            snapshot_scene: self.snapshot_scene,
+            font_catalog_revision: self.font_catalog_revision,
+            font_catalog_scanning: self.font_catalog_scan.is_running(),
+            font_configuration: self.font_configuration.clone(),
+            typst_tool: self.typst_tool.clone(),
+            tinymist_tool: self.tinymist_tool.clone(),
+            status: SettingsStatus {
+                backend_label: self.preview_backend_label(),
+                fallback_reason: self.preview_fallback_reason(),
+                requested_backend: self.preview.requested_backend,
+                interactive_active: self.interactive_preview_active(),
+                tinymist: self.preview.tinymist_state.clone(),
+                webview: self.preview.webview_state.clone(),
+                compiler: self.compiler_service_state(),
+                rasterizer: self.rasterizer_service_state(),
             },
+            project_root: self.project_root(),
+            appearance,
+            style: context.style_of(appearance),
+        };
+        SettingsWindow::show(
+            &self.settings_window,
+            context,
+            &self.captures,
+            input,
+            &self.font_catalog,
         );
-        if close_requested {
-            self.settings_visible = false;
-            self.settings_ui.staged_ui_font_weight = None;
-            self.settings_ui.staged_code_font_weight = None;
-            // macOS does not consistently reactivate an owned window after a
-            // child closes. Return focus to the still-open shortcut window or
-            // to the document so the next click is actionable.
-            let target = if self.shortcut_editor_visible {
-                scoped_child_viewport_id(context, "tiptoptyp-shortcuts")
-            } else {
-                context.viewport_id()
-            };
-            context.send_viewport_cmd_to(target, egui::ViewportCommand::Focus);
-        }
     }
 
     pub(super) fn show_shortcut_editor_window(&mut self, context: &egui::Context) {
@@ -427,41 +372,17 @@ impl EditorApp {
         }
     }
 
-    pub(super) fn show_settings(&mut self, ui: &mut egui::Ui, frame: &eframe::Frame) {
-        use super::settings_panel::{SettingsAction, SettingsPanel, SettingsStatus};
-        let status = SettingsStatus {
-            backend_label: self.preview_backend_label(),
-            fallback_reason: self.preview_fallback_reason(),
-            requested_backend: self.preview.requested_backend,
-            interactive_active: self.interactive_preview_active(),
-            tinymist: self.preview.tinymist_state.clone(),
-            webview: self.preview.webview_state.clone(),
-            compiler: self.compiler_service_state(),
-            rasterizer: self.rasterizer_service_state(),
-        };
-        let project_root = self.project_root();
-        let mut actions = Vec::new();
-        SettingsPanel {
-            state: &mut self.settings_ui,
-            settings: &self.settings,
-            pending_settings: self.pending_settings.as_ref(),
-            theme_override: self.theme_override.as_ref(),
-            snapshot_scene: self.snapshot_scene,
-            font_catalog: &self.font_catalog,
-            font_catalog_scanning: self.font_catalog_scan.is_running(),
-            font_configuration: &self.font_configuration,
-            typst_tool: &self.typst_tool,
-            tinymist_tool: &self.tinymist_tool,
-            status,
-            project_root: &project_root,
-            captures: &self.captures,
-            actions: &mut actions,
-        }
-        .show(ui);
+    fn apply_settings_actions(
+        &mut self,
+        actions: Vec<super::settings_panel::SettingsAction>,
+        context: &egui::Context,
+        frame: &eframe::Frame,
+    ) {
+        use super::settings_panel::SettingsAction;
         for action in actions {
             match action {
                 SettingsAction::ChooseTool(target) => {
-                    self.choose_tool_binary(target, frame, ui.ctx())
+                    self.choose_tool_binary(target, frame, context)
                 }
                 SettingsAction::ShowOverrides { dark } => {
                     self.typst_overrides_dark = dark;
@@ -471,10 +392,10 @@ impl EditorApp {
                 SettingsAction::RefreshTools => self.tool_refresh_requested = true,
                 SettingsAction::ShowPackages => {
                     self.settings_visible = false;
-                    self.open_package_manager(ui.ctx());
+                    self.open_package_manager(context);
                 }
                 SettingsAction::RetryTinymist => self.restart_tinymist(),
-                SettingsAction::Update(edited) => self.queue_settings(*edited, ui.ctx()),
+                SettingsAction::Update(edited) => self.queue_settings(*edited, context),
             }
         }
     }

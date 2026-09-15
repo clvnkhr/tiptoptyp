@@ -2,8 +2,9 @@ mod editor_view;
 mod native_views;
 mod settings_panel;
 mod settings_view;
+mod settings_window;
 mod tooltips;
-use settings_panel::SettingsUiState;
+use settings_window::SettingsWindow;
 use tooltips::*;
 mod qa;
 use qa::{QaSession, source_editor_snapshot_scroll_offset};
@@ -1062,7 +1063,7 @@ pub struct EditorApp {
     explorer: ExplorerPanelState,
     problems_visible: bool,
     settings_visible: bool,
-    settings_ui: SettingsUiState,
+    settings_window: Arc<std::sync::Mutex<SettingsWindow>>,
     shortcut_editor_visible: bool,
     shortcut_query: String,
     shortcut_capture: Option<ShortcutAction>,
@@ -1334,7 +1335,7 @@ impl EditorApp {
             explorer: ExplorerPanelState::default(),
             problems_visible: false,
             settings_visible: false,
-            settings_ui: SettingsUiState::default(),
+            settings_window: Arc::default(),
             shortcut_editor_visible: false,
             shortcut_query: String::new(),
             shortcut_capture: None,
@@ -2438,6 +2439,11 @@ impl EditorApp {
     }
 
     fn handle_shortcuts(&mut self, context: &egui::Context, frame: &eframe::Frame) {
+        let settings_keys = self.settings_window.lock().unwrap().take_owner_keys();
+        if !settings_keys.is_empty() {
+            let viewport = scoped_child_viewport_id(context, "tiptoptyp-settings");
+            context.input_mut_for(viewport, |input| input.events.extend(settings_keys));
+        }
         let shortcut_viewport = focused_input_viewport(context);
         if self.handle_shortcut_capture(context, shortcut_viewport) {
             return;
@@ -2850,6 +2856,18 @@ impl EditorApp {
         context: &egui::Context,
         viewport: egui::ViewportId,
     ) -> bool {
+        if viewport == scoped_child_viewport_id(context, "tiptoptyp-settings")
+            && self
+                .settings_window
+                .lock()
+                .unwrap()
+                .queue_edit_command(command)
+        {
+            // Input injected into the previous child pass would be discarded
+            // before its next independent paint. Deliver inside that callback.
+            context.request_repaint_of(viewport);
+            return true;
+        }
         let focused = context.memory(|memory| memory.focused());
         if focused == Some(source_editor_id(context)) || !context.egui_wants_keyboard_input() {
             return false;
@@ -7065,14 +7083,23 @@ impl EditorApp {
                 ui.painter().rect_filled(rect, 0.0, preview_background(ui));
             } else if self.interactive_preview_transitioning() {
                 self.hide_webview();
-                show_preview_transition(ui);
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                let waiting_for_focus = self.webview.is_none()
+                    && !may_create_window_webview(
+                        self.window_host,
+                        cfg!(target_os = "macos"),
+                        ui.ctx().input(|input| input.viewport().focused),
+                    );
+                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+                let waiting_for_focus = false;
+                show_preview_transition(ui, waiting_for_focus);
             } else {
                 self.hide_webview();
                 self.show_native_preview(ui);
             }
         } else if self.interactive_preview_transitioning() {
             self.hide_webview();
-            show_preview_transition(ui);
+            show_preview_transition(ui, false);
         } else {
             self.hide_webview();
             self.show_native_preview(ui);
@@ -10478,7 +10505,7 @@ fn scale_rect_from_egui_to_native(rect: Rect, viewport: Rect, scale: f32) -> Opt
     )?)
 }
 
-fn show_preview_transition(ui: &mut egui::Ui) {
+fn show_preview_transition(ui: &mut egui::Ui, waiting_for_focus: bool) {
     let rect = ui.available_rect_before_wrap();
     ui.allocate_rect(rect, Sense::hover());
     ui.painter().rect_filled(rect, 0.0, preview_background(ui));
@@ -10491,11 +10518,22 @@ fn show_preview_transition(ui: &mut egui::Ui) {
                 (rect.height() * METRICS.preview.transition_vertical_fraction)
                     .max(METRICS.preview.transition_min_top_space),
             );
-            ui.spinner();
+            if waiting_for_focus {
+                // Native preview construction intentionally waits for focus.
+                // Animating this indefinite wait repaints the editor at display
+                // refresh rate while the user interacts with Settings.
+                ui.allocate_space(Vec2::splat(ui.spacing().interact_size.y));
+            } else {
+                ui.spinner();
+            }
             ui.label(
-                RichText::new("Updating preview…")
-                    .size(theme::TYPE.supporting)
-                    .weak(),
+                RichText::new(if waiting_for_focus {
+                    "Activate the document window to resume preview"
+                } else {
+                    "Updating preview…"
+                })
+                .size(theme::TYPE.supporting)
+                .weak(),
             );
         },
     );
