@@ -7,6 +7,7 @@ pub(super) struct QaSession {
     document: Option<SceneDocument>,
     font_file: Option<tempfile::NamedTempFile>,
     git_fixture_prepared: bool,
+    folding_prepared: bool,
 }
 
 /// A capture batch owns its fixture independently of each scene's editor state.
@@ -388,6 +389,46 @@ impl QaSession {
                     app.prepare_editor_source_data();
                 }
             }
+            UiSnapshotScene::Folding => {
+                if !self.folding_prepared {
+                    const SOURCE: &str = "#let cmarker = (render: x => x)\n#let mitext(x) = x\n\n= Folding · Unicode αβ\n\n#let compact(x) = {\n  let y = x + 1\n  y * y\n}\n\n#let expanded(x) = {\n  x + 1\n}\n\n#(cmarker.render)(`\n# Markdown section\nThis body is folded.\n## Nested heading\nNested content.\n# Visible sibling\nVisible Markdown text.\n`)\n\n#mitext(`\n\\section{TeX section}\n\\begin{align}\nx &= y + z \\\\\n\\end{align}\n\\section{Visible sibling}\nVisible TeX text.\n`)\n\n= Final section\nThe original source positions are preserved.\n";
+                    app.document
+                        .edit(CCursorRange::one(CCursor::new(0)), |source| {
+                            *source = SOURCE.to_owned()
+                        });
+                    app.document.reset_editor_history = true;
+                    app.prepare_editor_source_data();
+                    let regions = app.editor_data.context_regions();
+                    app.folding.prepare(
+                        app.document.key(),
+                        app.editor_data.source_snapshot(),
+                        &regions,
+                    );
+                    for needle in [
+                        "#let compact",
+                        "# Markdown section",
+                        "\\section{TeX section}",
+                    ] {
+                        let line = SOURCE[..SOURCE.find(needle).unwrap()]
+                            .bytes()
+                            .filter(|b| *b == b'\n')
+                            .count();
+                        app.folding.toggle(line);
+                    }
+                    if let Some(path) = app.document.path() {
+                        app.git_editor = crate::git::editor::GitEditorState::snapshot_fixture(
+                            &app.workspace_root,
+                            path,
+                            SOURCE,
+                            false,
+                        );
+                    }
+                    self.folding_prepared = true;
+                }
+                app.view_mode = ViewMode::Code;
+                app.problems_visible = false;
+                app.notice = None;
+            }
             UiSnapshotScene::FileMenu => {
                 app.app_popup = Some(AppPopup::File {
                     anchor: toolbar_anchor + egui::vec2(150.0, 0.0),
@@ -644,6 +685,7 @@ impl QaSession {
         }
         app.theme_override = Some(step.theme.clone());
         app.snapshot_scene = Some(step.scene);
+        self.folding_prepared = false;
         if step.scene == UiSnapshotScene::StickyContext {
             app.document.reset_editor_history = true;
         }

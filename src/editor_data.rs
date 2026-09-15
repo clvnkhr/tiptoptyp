@@ -9,7 +9,7 @@ use typst_syntax::{LinkedNode, Source, SyntaxKind, ast};
 
 use crate::{
     diagnostics::{Diagnostic, DiagnosticSeverity, DiagnosticSource},
-    editor_features::StickyContextQuery,
+    editor_features::{ContextRegion, StickyContextQuery, context_regions},
 };
 
 use crate::document::{DocumentKey, DocumentSnapshot};
@@ -79,6 +79,8 @@ pub(crate) struct EditorDerivedData {
     char_starts: Vec<usize>,
     parsed_source: Source,
     parsed_key: Option<DocumentKey>,
+    regions_key: Option<DocumentKey>,
+    regions: Arc<[ContextRegion]>,
     delimiter_query: Option<(DocumentKey, usize)>,
     delimiter_pair: Option<[Range<usize>; 2]>,
     hover_query: Option<(DocumentKey, usize)>,
@@ -105,6 +107,8 @@ impl Default for EditorDerivedData {
             char_starts: vec![0],
             parsed_source: Source::detached(String::new()),
             parsed_key: None,
+            regions_key: None,
+            regions: Arc::from([]),
             delimiter_query: None,
             delimiter_pair: None,
             hover_query: None,
@@ -259,16 +263,24 @@ impl EditorDerivedData {
         self.delimiter_pair.clone()
     }
 
-    /// Borrow a reusable sticky-context query for the prepared source
-    /// revision. Syntax parsing remains revision-cached; only the query's
-    /// compact line index is built here.
-    pub(crate) fn sticky_context_query(&mut self) -> StickyContextQuery<'_> {
+    pub(crate) fn context_regions(&mut self) -> Arc<[ContextRegion]> {
+        self.prepare_regions();
+        Arc::clone(&self.regions)
+    }
+
+    fn prepare_regions(&mut self) {
+        if self.regions_key == self.source_key {
+            return;
+        }
         self.prepare_syntax();
-        StickyContextQuery::new(
-            &self.parsed_source,
-            &self.source_snapshot,
-            &self.char_starts,
-        )
+        self.regions = context_regions(&self.parsed_source, &self.source_snapshot).into();
+        self.regions_key = self.source_key;
+    }
+
+    /// Scrolling and folding share one structural index per source revision.
+    pub(crate) fn sticky_context_query(&mut self) -> StickyContextQuery<'_> {
+        self.prepare_regions();
+        StickyContextQuery::new(&self.regions, &self.char_starts)
     }
 
     pub(crate) fn font_argument_at(&mut self, char_index: usize) -> Option<FontArgumentTarget> {
@@ -709,6 +721,10 @@ mod tests {
             assert!(query.rows(source.chars().count() + 1).is_empty());
         }
         assert_eq!(data.syntax_rebuild_count(), 1);
+        let regions = data.context_regions();
+        for _ in 0..100 {
+            assert!(Arc::ptr_eq(&regions, &data.context_regions()));
+        }
 
         data.prepare_source(&DocumentSnapshot::fixture(revision(1), source));
         {

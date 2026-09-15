@@ -1058,6 +1058,7 @@ pub struct EditorApp {
     compilation_paused: bool,
     preview: PreviewController,
     editor_data: EditorDerivedData,
+    folding: crate::folding::Folding,
 
     view_mode: ViewMode,
     explorer: ExplorerPanelState,
@@ -1331,6 +1332,7 @@ impl EditorApp {
             compilation_paused: false,
             preview: PreviewController::new(preview_dark, settings.preview_preference),
             editor_data: EditorDerivedData::default(),
+            folding: crate::folding::Folding::default(),
             view_mode: ViewMode::Split,
             explorer: ExplorerPanelState::default(),
             problems_visible: false,
@@ -8647,7 +8649,9 @@ struct EditorGutterGeometry {
 
 fn editor_gutter_geometry(galley_x: f32) -> EditorGutterGeometry {
     EditorGutterGeometry {
-        line_number_right: galley_x - METRICS.editor.line_number_right_gap,
+        // Redistribute the existing nine-point padding: eight before the
+        // number for folding, one after. Do not widen the editor margin.
+        line_number_right: galley_x - METRICS.editor.line_number_right_gap + 8.0,
         separator_x: galley_x - METRICS.editor.line_number_separator_gap,
     }
 }
@@ -9045,6 +9049,9 @@ fn paint_line_diagnostics(
         let Some(rows) = line_rows.get(diagnostic.line.saturating_sub(1)) else {
             continue;
         };
+        if output.galley.rows[rows.start].size.y == 0.0 {
+            continue;
+        }
         let color = diagnostic_color(diagnostic.severity, ui.ctx());
         let mut background = Vec::new();
         let mut hover_rect = Rect::NOTHING;
@@ -9122,6 +9129,9 @@ fn paint_line_numbers(
             continue;
         };
         let row_rect = row.rect().translate(output.galley_pos.to_vec2());
+        if row.size.y == 0.0 || !ui.clip_rect().intersects(row_rect) {
+            continue;
+        }
         painter.text(
             Pos2::new(gutter.line_number_right, row_rect.top()),
             egui::Align2::RIGHT_TOP,
@@ -9130,6 +9140,124 @@ fn paint_line_numbers(
             color,
         );
     }
+}
+
+fn paint_fold_controls(
+    ui: &mut egui::Ui,
+    output: &egui::text_edit::TextEditOutput,
+    line_rows: &[Range<usize>],
+    folding: &crate::folding::Folding,
+    git_gutter: bool,
+) -> Option<crate::folding::FoldRegion> {
+    let left = output.response.rect.left()
+        + if git_gutter {
+            f32::from(crate::git::editor::GUTTER_WIDTH)
+        } else {
+            0.0
+        };
+    for region in &folding.regions {
+        let Some(rows) = line_rows.get(region.line) else {
+            continue;
+        };
+        let row = &output.galley.rows[rows.start];
+        let rect = row.rect().translate(output.galley_pos.to_vec2());
+        if row.size.y == 0.0 || !ui.clip_rect().intersects(rect) {
+            continue;
+        }
+        let hit = Rect::from_min_max(
+            Pos2::new(left, rect.top()),
+            Pos2::new(output.galley_pos.x - 1.0, rect.bottom()),
+        );
+        let collapsed = folding.is_collapsed(region.line);
+        let response = ui.interact(
+            hit,
+            output.response.id.with(("fold", region.line)),
+            Sense::click(),
+        );
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Button,
+                true,
+                format!(
+                    "{} line {}",
+                    if collapsed { "Expand" } else { "Collapse" },
+                    region.line + 1
+                ),
+            )
+        });
+        let center = Pos2::new(left + 4.0, rect.center().y);
+        let points = if collapsed {
+            vec![
+                center + Vec2::new(-3.0, -5.0),
+                center + Vec2::new(3.0, 0.0),
+                center + Vec2::new(-3.0, 5.0),
+            ]
+        } else {
+            vec![
+                center + Vec2::new(-4.0, -3.0),
+                center + Vec2::new(0.0, 3.0),
+                center + Vec2::new(4.0, -3.0),
+            ]
+        };
+        ui.painter().add(egui::Shape::convex_polygon(
+            points,
+            ui.visuals().text_color(),
+            Stroke::NONE,
+        ));
+        if response.clicked() {
+            return Some(region.clone());
+        }
+    }
+    None
+}
+
+fn paint_fold_markers(
+    ui: &mut egui::Ui,
+    output: &egui::text_edit::TextEditOutput,
+    line_rows: &[Range<usize>],
+    folding: &crate::folding::Folding,
+    marker: &Arc<egui::Galley>,
+    marker_width: f32,
+) -> Option<crate::folding::FoldRegion> {
+    for region in folding
+        .regions
+        .iter()
+        .filter(|r| folding.is_collapsed(r.line))
+    {
+        let Some(rows) = line_rows.get(region.line) else {
+            continue;
+        };
+        let row = &output.galley.rows[rows.end - 1];
+        let rect = row.rect().translate(output.galley_pos.to_vec2());
+        if row.size.y == 0.0 || !ui.clip_rect().intersects(rect) {
+            continue;
+        }
+        let hit = Rect::from_min_max(
+            Pos2::new(rect.right() - marker_width, rect.top()),
+            rect.right_bottom(),
+        );
+        let response = ui.interact(
+            hit,
+            output.response.id.with(("fold-marker", region.line)),
+            Sense::click(),
+        );
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Button,
+                true,
+                format!("Expand folded line {}", region.line + 1),
+            )
+        });
+        ui.painter().galley(
+            hit.left_top() + Vec2::new(4.0, 0.0),
+            Arc::clone(marker),
+            ui.visuals().text_color(),
+        );
+        if response.clicked() {
+            return Some(region.clone());
+        }
+    }
+    None
 }
 
 #[cfg(test)]

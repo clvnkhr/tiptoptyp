@@ -4399,8 +4399,8 @@ fn sticky_context_uses_the_editor_gutter_and_a_bottom_only_shadow() {
     assert_eq!(
         editor_gutter_geometry(galley_x),
         EditorGutterGeometry {
-            line_number_right: galley_x - METRICS.editor.line_number_right_gap,
-            separator_x: galley_x - METRICS.editor.line_number_separator_gap,
+            line_number_right: galley_x - METRICS.editor.line_number_right_gap + 8.0,
+            separator_x: galley_x - 0.25,
         }
     );
 
@@ -4908,7 +4908,7 @@ fn git_marker_lane_has_constant_width_and_spacing_at_every_digit_count() {
         let number_slot_left =
             editor_gutter_geometry(galley_x).line_number_right - rendered_number_width;
 
-        assert!((number_slot_left - (editor_left + git_width)).abs() < 1.0);
+        assert!((number_slot_left - (editor_left + git_width + 8.0)).abs() < 1.0);
         assert_eq!(
             combined_gutter - number_gutter,
             crate::git::editor::GUTTER_WIDTH
@@ -4921,6 +4921,102 @@ fn git_marker_lane_has_constant_width_and_spacing_at_every_digit_count() {
     assert_eq!(editor_gutter_width(Some(f32::INFINITY), true), 15);
     assert_eq!(editor_gutter_width(Some(f32::MAX), false), 121);
     assert_eq!(editor_gutter_width(Some(f32::MAX), true), 127);
+}
+
+#[test]
+fn folding_gutter_toggles_from_number_and_arrow_without_overlapping_git() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let source = "#let f(x) = {\n  αβ\n}\nVisible after fold".to_owned();
+    let mut folding = crate::folding::Folding::default();
+    folding.prepare(
+        DocumentKey::new(tiptoptyp_core::document::WindowSessionId::new(1), 0, 0),
+        Arc::from(source.as_str()),
+        &crate::editor_features::context_regions(
+            &typst_syntax::Source::detached(source.clone()),
+            &source,
+        ),
+    );
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(500.0, 300.0))
+        .build_ui_state(
+            |ui, (source, folding): &mut (String, crate::folding::Folding)| {
+                let marker = ui.painter().layout_no_wrap(
+                    "...".into(),
+                    egui::FontId::monospace(14.0),
+                    Color32::WHITE,
+                );
+                let marker_width = marker.size().x + 8.0;
+                folding.set_marker_width(marker_width);
+                let mut layout = |ui: &egui::Ui, text: &dyn egui::TextBuffer, width: f32| {
+                    folding.layout(ui.painter().layout(
+                        text.as_str().into(),
+                        egui::FontId::monospace(14.0),
+                        Color32::WHITE,
+                        width,
+                    ))
+                };
+                let mut output = egui::TextEdit::multiline(source)
+                    .code_editor()
+                    .frame(egui::Frame::new().inner_margin(egui::Margin {
+                        left: editor_gutter_width(Some(7.0), true),
+                        right: 4,
+                        top: 2,
+                        bottom: 2,
+                    }))
+                    .layouter(&mut layout)
+                    .show(ui);
+                let rows = logical_line_row_ranges(&output.galley.rows);
+                paint_line_numbers(ui, &output, &rows);
+                let gutter_clicked = paint_fold_controls(ui, &output, &rows, folding, true);
+                let marker_clicked =
+                    paint_fold_markers(ui, &output, &rows, folding, &marker, marker_width);
+                if let Some(region) = gutter_clicked.or(marker_clicked) {
+                    output.response.request_focus();
+                    folding.toggle(region.line);
+                    output
+                        .state
+                        .cursor
+                        .set_char_range(Some(CCursorRange::one(CCursor::new(region.header))));
+                    output.state.clone().store(ui.ctx(), output.response.id);
+                    ui.ctx().request_repaint();
+                }
+            },
+            (source.clone(), folding),
+        );
+    harness.run();
+    harness.get_by_label("Collapse line 1").click();
+    harness.run();
+    assert!(harness.state().1.is_collapsed(0));
+    assert_eq!(harness.state().0, source);
+    let arrow = harness.get_by_label("Expand line 1").rect().left_center() + Vec2::new(2.5, 0.0);
+    harness.event(egui::Event::PointerMoved(arrow));
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: arrow,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+    }
+    harness.run();
+    assert!(!harness.state().1.is_collapsed(0));
+    assert_eq!(harness.state().0, source);
+    harness.get_by_label("Collapse line 1").click();
+    harness.run();
+    harness.get_by_label("Expand folded line 1").click();
+    harness.run();
+    assert!(!harness.state().1.is_collapsed(0));
+    harness.get_by_label("Collapse line 1").click();
+    harness.run();
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    harness.run();
+    harness.event(egui::Event::Copy);
+    harness.step();
+    assert!(
+        harness.output().platform_output.commands.iter().any(
+            |command| matches!(command, egui::OutputCommand::CopyText(text) if text == &source)
+        )
+    );
 }
 
 #[test]

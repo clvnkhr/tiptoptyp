@@ -69,6 +69,7 @@ impl UiCaptureStep {
 pub enum UiSnapshotScene {
     Main,
     StickyContext,
+    Folding,
     WindowColor,
     DelimiterMatch,
     RainbowBrackets,
@@ -107,9 +108,10 @@ pub enum UiSnapshotScene {
 }
 
 impl UiSnapshotScene {
-    pub const ALL: [Self; 37] = [
+    pub const ALL: [Self; 38] = [
         Self::Main,
         Self::StickyContext,
+        Self::Folding,
         Self::WindowColor,
         Self::DelimiterMatch,
         Self::RainbowBrackets,
@@ -151,6 +153,7 @@ impl UiSnapshotScene {
         match self {
             Self::Main => "main",
             Self::StickyContext => "sticky-context",
+            Self::Folding => "folding",
             Self::WindowColor => "window-color",
             Self::DelimiterMatch => "delimiter-match",
             Self::RainbowBrackets => "rainbow-brackets",
@@ -196,6 +199,7 @@ impl UiSnapshotScene {
             | Self::FontCompletion
             | Self::UnicodeCompletion
             | Self::StickyContext
+            | Self::Folding
             | Self::DelimiterMatch
             | Self::RainbowBrackets
             | Self::ProblemsPanel
@@ -242,6 +246,7 @@ impl UiSnapshotScene {
         let scene = match value {
             "main" => Self::Main,
             "sticky-context" => Self::StickyContext,
+            "folding" => Self::Folding,
             "window-color" => Self::WindowColor,
             "delimiter-match" => Self::DelimiterMatch,
             "rainbow-brackets" => Self::RainbowBrackets,

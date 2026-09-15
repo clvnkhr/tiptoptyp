@@ -282,29 +282,31 @@ pub(crate) fn sticky_context_rows(source: &str, char_position: usize) -> Vec<Sti
             .char_indices()
             .map(|(byte, character)| byte + character.len_utf8()),
     );
-    StickyContextQuery::new(&parsed, source, &char_starts).rows(char_position)
+    let regions = context_regions(&parsed, source);
+    StickyContextQuery::new(&regions, &char_starts).rows(char_position)
 }
 
-/// A reusable sticky-context view over one already parsed source revision.
-///
-/// Constructing the query builds the line index once. Individual probes only
-/// index the prepared character offsets and walk the existing syntax tree, so
-/// cumulative sticky-stack resolution does not clone or reparse the document.
+/// Revision-derived regions shared by folding and sticky context. Byte ranges
+/// retain syntax boundaries; rows retain physical source lines and scalar offsets.
+#[derive(Debug, Clone)]
+pub(crate) struct ContextRegion {
+    pub(crate) range: std::ops::Range<usize>,
+    pub(crate) rows: Vec<StickyContextRow>,
+}
+
+/// A reusable sticky-context view over one revision-cached structural index.
+/// Queries map prepared character offsets into regions without rebuilding a
+/// line map, cloning source text, or walking/parsing the syntax tree again.
 pub(crate) struct StickyContextQuery<'a> {
-    parsed: &'a Source,
-    source: &'a str,
+    regions: &'a [ContextRegion],
     char_starts: &'a [usize],
-    lines: LineMap,
 }
 
 impl<'a> StickyContextQuery<'a> {
-    pub(crate) fn new(parsed: &'a Source, source: &'a str, char_starts: &'a [usize]) -> Self {
-        debug_assert_eq!(parsed.text(), source);
+    pub(crate) fn new(regions: &'a [ContextRegion], char_starts: &'a [usize]) -> Self {
         Self {
-            parsed,
-            source,
+            regions,
             char_starts,
-            lines: LineMap::new(source),
         }
     }
 
@@ -314,22 +316,19 @@ impl<'a> StickyContextQuery<'a> {
         let Some(byte_position) = self.char_starts.get(char_position).copied() else {
             return Vec::new();
         };
-        let root = LinkedNode::new(self.parsed.root());
-
-        let mut rows = heading_context(&root, self.source, byte_position, &self.lines);
-        let mut scopes = Vec::new();
-        collect_scope_path(&root, self.source, byte_position, &self.lines, &mut scopes);
-        push_unique_context_rows(&mut rows, scopes);
+        let mut rows = Vec::new();
+        for region in self.regions {
+            if region.range.contains(&byte_position) {
+                push_unique_context_rows(&mut rows, region.rows.iter().cloned());
+            }
+        }
         rows
     }
 }
 
-fn heading_context(
-    root: &LinkedNode<'_>,
-    source: &str,
-    byte_position: usize,
-    lines: &LineMap,
-) -> Vec<StickyContextRow> {
+pub(crate) fn context_regions(parsed: &Source, source: &str) -> Vec<ContextRegion> {
+    let root = LinkedNode::new(parsed.root());
+    let lines = LineMap::new(source);
     let all = root
         .children()
         .filter_map(|node| {
@@ -342,53 +341,49 @@ fn heading_context(
                 .flatten()
         })
         .collect::<Vec<_>>();
-    let mut active = Vec::new();
+    let mut regions: Vec<ContextRegion> = Vec::new();
+    let mut active: Vec<(usize, usize)> = Vec::new();
     // Only root-document headings establish section ancestry. Headings inside
     // content values or function bodies are local content, not document peers.
     for (index, &(offset, level)) in all.iter().enumerate() {
-        if offset > byte_position {
-            break;
-        }
         while active
             .last()
-            .is_some_and(|&old: &usize| all[old].1 >= level)
+            .is_some_and(|&(_, old_level)| old_level >= level)
         {
-            active.pop();
+            let (old, _) = active.pop().unwrap();
+            regions[old].range.end = offset;
+            regions[old].rows[0].end_line = lines.line_index_at(offset) + 1;
         }
-        active.push(index);
-    }
-    active
-        .into_iter()
-        .map(|index| {
-            let (offset, level) = all[index];
-            let end_line = all[index + 1..]
-                .iter()
-                .find(|(_, next_level)| *next_level <= level)
-                .map_or(lines.starts.len() + 1, |(next, _)| {
-                    lines.line_index_at(*next) + 1
-                });
-            context_row(
+        active.push((index, level));
+        regions.push(ContextRegion {
+            range: offset..source.len() + 1,
+            rows: vec![context_row(
                 source,
-                lines,
+                &lines,
                 offset,
-                end_line,
+                lines.starts.len() + 1,
                 StickyContextKind::Heading { level },
-            )
-        })
-        .collect()
+            )],
+        });
+    }
+    collect_scope_regions(&root, source, &lines, &mut regions);
+    regions.retain(|region| !region.rows.is_empty());
+    regions.sort_by_key(|r| {
+        (
+            r.rows[0].line,
+            std::cmp::Reverse(r.rows[0].end_line),
+            r.range.start,
+        )
+    });
+    regions
 }
 
-fn collect_scope_path(
+fn collect_scope_regions(
     node: &LinkedNode<'_>,
     source: &str,
-    byte_position: usize,
     lines: &LineMap,
-    rows: &mut Vec<StickyContextRow>,
+    regions: &mut Vec<ContextRegion>,
 ) {
-    if !contains_byte(node.range(), byte_position) {
-        return;
-    }
-
     let kind = match node.kind() {
         SyntaxKind::LetBinding => node
             .get()
@@ -425,12 +420,88 @@ fn collect_scope_path(
             }
             _ => vec![context_row(source, lines, node.offset(), end_line, kind)],
         };
-        push_unique_context_rows(rows, context);
+        regions.push(ContextRegion {
+            range: node.range(),
+            rows: context,
+        });
     }
 
+    if node.kind() == SyntaxKind::FuncCall
+        && let Some(literal) = crate::highlight::embedded_literal(node, source)
+    {
+        append_embedded_regions(
+            source,
+            lines,
+            literal.payload_range,
+            literal.language,
+            literal.quoted,
+            regions,
+        );
+    } else if node.kind() == SyntaxKind::Raw {
+        let language = node
+            .children()
+            .find(|child| child.kind() == SyntaxKind::RawLang)
+            .and_then(|child| match child.leaf_text().as_str() {
+                "md" | "markdown" => Some(crate::highlight::EmbeddedLanguage::Markdown),
+                "tex" | "latex" => Some(crate::highlight::EmbeddedLanguage::TexText),
+                _ => None,
+            });
+        if let Some(language) = language
+            && let Some(payload) = crate::highlight::literal_payload_range(node)
+        {
+            append_embedded_regions(source, lines, payload, language, false, regions);
+        }
+    }
     for child in node.children() {
-        if contains_byte(child.range(), byte_position) {
-            collect_scope_path(&child, source, byte_position, lines, rows);
+        collect_scope_regions(&child, source, lines, regions);
+    }
+}
+
+fn append_embedded_regions(
+    source: &str,
+    lines: &LineMap,
+    payload: std::ops::Range<usize>,
+    language: crate::highlight::EmbeddedLanguage,
+    quoted: bool,
+    regions: &mut Vec<ContextRegion>,
+) {
+    if quoted {
+        let range = payload.start.saturating_sub(1)..(payload.end + 1).min(source.len());
+        let end_line = lines.line_index_at(range.end.saturating_sub(1)) + 2;
+        let row = context_row(
+            source,
+            lines,
+            range.start,
+            end_line,
+            StickyContextKind::Block,
+        );
+        if row.line + 1 < end_line {
+            regions.push(ContextRegion {
+                range,
+                rows: vec![row],
+            });
+        }
+    }
+    for region in
+        crate::embedded_structure::literal_regions(&source[payload.clone()], language, quoted)
+    {
+        let range = payload.start + region.range.start..payload.start + region.range.end;
+        let end_line = if region.heading_level.is_some() && range.end < payload.end {
+            lines.line_index_at(range.end) + 1
+        } else {
+            lines.line_index_at(range.end.saturating_sub(1)) + 2
+        };
+        let kind = region
+            .heading_level
+            .map_or(StickyContextKind::Block, |level| {
+                StickyContextKind::Heading { level }
+            });
+        let row = context_row(source, lines, range.start, end_line, kind);
+        if row.line + 1 < end_line {
+            regions.push(ContextRegion {
+                range,
+                rows: vec![row],
+            });
         }
     }
 }
@@ -533,7 +604,7 @@ fn context_row_for_line(
     StickyContextRow {
         kind,
         line: line_index + 1,
-        char_index: byte_to_char(source, range.start + leading),
+        char_index: lines.char_starts[line_index] + line_source[..leading].chars().count(),
         end_line,
         text: line_source.trim().to_owned(),
     }
@@ -960,13 +1031,23 @@ fn byte_range_to_char(source: &str, range: std::ops::Range<usize>) -> std::ops::
 
 struct LineMap {
     starts: Vec<usize>,
+    char_starts: Vec<usize>,
 }
 
 impl LineMap {
     fn new(source: &str) -> Self {
         let mut starts = vec![0];
-        starts.extend(source.match_indices('\n').map(|(byte, _)| byte + 1));
-        Self { starts }
+        let mut char_starts = vec![0];
+        for (character, (byte, ch)) in source.char_indices().enumerate() {
+            if ch == '\n' {
+                starts.push(byte + 1);
+                char_starts.push(character + 1);
+            }
+        }
+        Self {
+            starts,
+            char_starts,
+        }
     }
 
     fn line_index_at(&self, byte: usize) -> usize {
@@ -989,6 +1070,44 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    #[test]
+    fn embedded_markdown_and_tex_share_folding_and_sticky_source_positions() {
+        for source in [
+            "#cmarker.render(`\n# Parent\nbody\n## Child\nαβ\n# Next\ntail\n`)",
+            "#cmarker.render(markdown: \"\n# Parent\nbody\n## Child\nαβ\n# Next\ntail\n\")",
+            "```md\n# Parent\nbody\n## Child\nαβ\n# Next\ntail\n```",
+            "#mitext(`\n\\section{Parent}\nbody\n\\subsection{Child}\nαβ\n\\section{Next}\ntail\n`)",
+            "#mitext(input: \"\n\\\\section{Parent}\nbody\n\\\\subsection{Child}\nαβ\n\\\\section{Next}\ntail\n\")",
+            "```tex\n\\section{Parent}\nbody\n\\subsection{Child}\nαβ\n\\section{Next}\ntail\n```",
+        ] {
+            let rows = sticky_context_rows(source, char_at(source, "αβ"));
+            assert!(
+                rows.iter().any(|r| r.text.contains("Parent")),
+                "{source}: {rows:?}"
+            );
+            assert!(
+                rows.iter().any(|r| r.text.contains("Child")),
+                "{source}: {rows:?}"
+            );
+            assert!(!rows.iter().any(|r| r.text.contains("Next")));
+            let next_line = source[..source.find("Next").unwrap()].lines().count();
+            for row in rows
+                .iter()
+                .filter(|r| r.text.contains("Parent") || r.text.contains("Child"))
+            {
+                assert_eq!(row.end_line, next_line, "{source}");
+                assert_eq!(source.chars().nth(row.char_index), row.text.chars().next());
+            }
+        }
+    }
+
+    #[test]
+    fn escaped_newlines_do_not_create_phantom_physical_rows() {
+        let source = r##"#cmarker.render("# Parent\nbody\n## Child\ntext")"##;
+        let regions = context_regions(&Source::detached(source), source);
+        assert!(regions.is_empty());
+    }
 
     fn char_at(source: &str, needle: &str) -> usize {
         byte_to_char(source, source.find(needle).expect("test needle must exist"))

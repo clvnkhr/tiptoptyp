@@ -61,6 +61,7 @@ The accepted scenes and their framebuffer targets are:
 | `bracket-settings` | `settings` | Automatic pairing and per-family rainbow palette controls |
 | `delimiter-match` | `main` | Matching delimiters at the caret without relaying out the source |
 | `sticky-context` | `main` | Scrolled source editor with stacked headings and a multiline function header pinned independently of the caret |
+| `folding` | `main` | Collapsed Typst, Markdown and TeX regions alongside expanded siblings and Git markers, using the unchanged gutter width |
 | `file-menu` | `popup` | File menu |
 | `edit-menu` | `popup` | Edit menu and shortcut alignment |
 | `settings-window` | `settings` | Settings child window |

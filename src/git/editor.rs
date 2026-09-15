@@ -26,7 +26,7 @@ const EDIT_DEBOUNCE: Duration = Duration::from_millis(180);
 /// Keep this close to one editor character so the decoration does not create
 /// a visibly oversized blank strip when line numbers are enabled.
 pub(crate) const GUTTER_WIDTH: i8 = 6;
-const GUTTER_HIT_WIDTH: f32 = 8.0;
+const GUTTER_HIT_WIDTH: f32 = GUTTER_WIDTH as f32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ChangeKind {
@@ -571,12 +571,14 @@ pub(crate) fn marker_geometry(
     clip: egui::Rect,
 ) -> Option<MarkerGeometry> {
     let first = rows.get(change.lines.start.min(rows.len().checked_sub(1)?))?;
-    // Paint the complete six-point lane. The wider hit target may overlap
-    // the noninteractive line number, keeping the marker easy to click without
-    // charging that accessibility area to editor layout.
+    // Keep the hit target inside the Git lane: the adjacent space now owns
+    // fold controls and clickable line numbers.
     let gutter_right = gutter_left + f32::from(GUTTER_WIDTH);
     let hit_right = gutter_left + GUTTER_HIT_WIDTH;
     let (paint, hit) = if change.lines.is_empty() {
+        if first.height() == 0.0 {
+            return None;
+        }
         let y = if change.lines.start >= rows.len() {
             first.bottom()
         } else {

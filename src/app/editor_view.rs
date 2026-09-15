@@ -221,8 +221,10 @@ impl EditorApp {
             )
             .max(METRICS.editor.unwrapped_minimum_width);
         let sticky_context_snapshot = self.snapshot_scene == Some(UiSnapshotScene::StickyContext);
-        let line_wrap = sticky_context_snapshot || self.settings.line_wrap;
-        let line_numbers = sticky_context_snapshot || self.settings.line_numbers;
+        let folding_snapshot = self.snapshot_scene == Some(UiSnapshotScene::Folding);
+        let line_wrap = sticky_context_snapshot || folding_snapshot || self.settings.line_wrap;
+        let line_numbers =
+            sticky_context_snapshot || folding_snapshot || self.settings.line_numbers;
         let git_gutter = self.git_editor.has_gutter(self.document.path().as_deref());
         let line_number_width = line_numbers.then(|| {
             ui.painter()
@@ -237,6 +239,26 @@ impl EditorApp {
         let gutter_width = editor_gutter_width(line_number_width, git_gutter);
         let dark_mode = ui.visuals().dark_mode;
         let document_kind = self.document.kind();
+        let contexts = if document_kind.is_typst() {
+            self.editor_data.context_regions()
+        } else {
+            Arc::from([])
+        };
+        self.folding.prepare(
+            self.document.key(),
+            self.editor_data.source_snapshot(),
+            &contexts,
+        );
+        if !line_numbers {
+            self.folding.expand_all();
+        }
+        let fold_marker = ui.painter().layout_no_wrap(
+            "...".into(),
+            theme::editor_font(),
+            ui.visuals().weak_text_color(),
+        );
+        let fold_marker_width = fold_marker.size().x + 8.0;
+        self.folding.set_marker_width(fold_marker_width);
         let highlight_path = self.document.path().clone();
         let asset_source_path = self.document.path().clone();
         let asset_workspace_root = self.workspace_root.clone();
@@ -270,11 +292,16 @@ impl EditorApp {
         let completion_edit_triggered = document_kind.is_typst()
             && ui.input(|input| completion_requested_after_events(&input.events));
         let snapshot_before_edit = self.editor_snapshot(ui.ctx());
+        if let Some(selection) = &self.pending_editor_selection {
+            self.folding.reveal(selection.start);
+            self.folding.reveal(selection.end);
+        }
         self.highlighter
             .set_rainbow_brackets(self.settings.rainbow_brackets);
         let auto_pair_enabled = self.settings.auto_pair_delimiters && document_kind.is_typst();
         let auto_pair_syntax = &mut self.auto_pair_syntax;
         let highlighter = &mut self.highlighter;
+        let folding = &mut self.folding;
         let generic_highlighter = &mut self.generic_highlighter;
         let pending_selection = self.pending_editor_selection.take();
         let attention = self.editor_attention.and_then(|attention| {
@@ -289,6 +316,7 @@ impl EditorApp {
             self.editor_attention = None;
         }
         let mut changed = false;
+        let mut folds_changed = false;
         let mut preview_jump_char = None;
         let mut git_chunk_clicked = None;
         let mut clicked_web_link = None;
@@ -345,8 +373,12 @@ impl EditorApp {
                     search_match_color(ui.ctx(), false),
                     search_match_color(ui.ctx(), true),
                 );
-                job.wrap.max_width = if line_wrap { wrap_width } else { f32::INFINITY };
-                ui.fonts_mut(|fonts| fonts.layout_job(job))
+                job.wrap.max_width = if line_wrap {
+                    folding.text_wrap_width(wrap_width)
+                } else {
+                    f32::INFINITY
+                };
+                folding.layout(ui.fonts_mut(|fonts| fonts.layout_job(job)))
             };
             let document_before_edit = self.document.key();
             let mut output = self.document.edit(snapshot_before_edit.cursor, |source| {
@@ -376,12 +408,50 @@ impl EditorApp {
             if changed {
                 self.editor_data.prepare_source(&self.document.snapshot());
             }
+            if !changed && let Some(mut range) = output.state.cursor.char_range() {
+                let vertical = ui.input(|input| {
+                    if input.modifiers.alt || input.modifiers.command || input.modifiers.ctrl {
+                        return None;
+                    }
+                    match (
+                        input.key_pressed(egui::Key::ArrowUp),
+                        input.key_pressed(egui::Key::ArrowDown),
+                    ) {
+                        (true, false) => Some(false),
+                        (false, true) => Some(true),
+                        _ => None,
+                    }
+                });
+                if let Some(down) = vertical
+                    && let Some(cursor) =
+                        crate::folding::skip_hidden_row(&output.galley, range.primary, down)
+                {
+                    range.primary = cursor;
+                    if !ui.input(|input| input.modifiers.shift) {
+                        range.secondary = cursor;
+                    }
+                    output.state.cursor.set_char_range(Some(range));
+                    output.state.clone().store(ui.ctx(), output.response.id);
+                    ui.scroll_to_rect(
+                        output
+                            .galley
+                            .pos_from_cursor(cursor)
+                            .translate(output.galley_pos.to_vec2()),
+                        None,
+                    );
+                    ui.ctx().request_repaint();
+                }
+            }
             let mut current_char = output
                 .state
                 .cursor
                 .char_range()
                 .map(|range| range.primary.index.0);
             let line_rows = logical_line_row_ranges(&output.galley.rows);
+            if current_char.is_some_and(|cursor| folding.reveal(cursor)) {
+                folds_changed = true;
+                ui.ctx().request_repaint();
+            }
 
             if let Some(range) = pending_selection {
                 let len = self.document.source().chars().count();
@@ -459,6 +529,31 @@ impl EditorApp {
             }
             if line_numbers {
                 paint_line_numbers(ui, &output, &line_rows);
+                let gutter_clicked =
+                    paint_fold_controls(ui, &output, &line_rows, folding, git_gutter);
+                let marker_clicked = paint_fold_markers(
+                    ui,
+                    &output,
+                    &line_rows,
+                    folding,
+                    &fold_marker,
+                    fold_marker_width,
+                );
+                if let Some(region) = gutter_clicked.or(marker_clicked) {
+                    output.response.request_focus();
+                    folding.toggle(region.line);
+                    if folding.is_collapsed(region.line) {
+                        output
+                            .state
+                            .cursor
+                            .set_char_range(Some(CCursorRange::one(CCursor::new(region.header))));
+                        output.state.clone().store(ui.ctx(), output.response.id);
+                    }
+                    folds_changed = true;
+                    // A discarded pass would replay this click and toggle
+                    // back. Apply the new geometry on the next input frame.
+                    ui.ctx().request_repaint();
+                }
             }
             if !changed && git_gutter {
                 let logical_rows = line_rows
@@ -745,7 +840,7 @@ impl EditorApp {
         let (editor_rect, corner_radius, border, sticky_context) = scroll_output.inner;
         // Covers scrollbar drags and keyboard/programmatic scrolling too,
         // which need not deliver a wheel event to the parent viewport.
-        if source_scroll_changed(ui.ctx(), scroll_output.state.offset) {
+        if source_scroll_changed(ui.ctx(), scroll_output.state.offset) || folds_changed {
             self.dismiss_hover_on_scroll(ui.ctx());
             hovered_semantic_token = None;
         }
@@ -1075,7 +1170,7 @@ pub(super) fn delimiter_rects(galley: &egui::Galley, characters: Range<usize>) -
         let Some(row) = galley.rows.get(position.row) else {
             continue;
         };
-        if position.column.0 >= row.glyphs.len() {
+        if row.size.y == 0.0 || position.column.0 >= row.glyphs.len() {
             continue;
         }
         let start = row.pos.x + row.x_offset(position.column);

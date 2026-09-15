@@ -1183,7 +1183,7 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
         annotation_gap: 8.0,
         tooltip_gap: 6.0,
         line_number_right_gap: 9.0,
-        line_number_separator_gap: 5.0,
+        line_number_separator_gap: 0.25,
         line_number_separator_width: 1.0,
         diagnostic_marker_width: 3.0,
         diagnostic_marker_radius: 1.5,

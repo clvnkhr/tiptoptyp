@@ -235,7 +235,7 @@ fn append_node(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum EmbeddedLanguage {
+pub(crate) enum EmbeddedLanguage {
     TexMath,
     TexText,
     Markdown,
@@ -264,10 +264,11 @@ impl EmbeddedLanguage {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct EmbeddedLiteral {
+pub(crate) struct EmbeddedLiteral {
     node_range: std::ops::Range<usize>,
-    payload_range: std::ops::Range<usize>,
-    language: EmbeddedLanguage,
+    pub(crate) payload_range: std::ops::Range<usize>,
+    pub(crate) language: EmbeddedLanguage,
+    pub(crate) quoted: bool,
 }
 
 fn embedded_language(callee: &str) -> Option<EmbeddedLanguage> {
@@ -292,7 +293,7 @@ fn embedded_language(callee: &str) -> Option<EmbeddedLanguage> {
     }
 }
 
-fn embedded_literal(node: &LinkedNode<'_>, source: &str) -> Option<EmbeddedLiteral> {
+pub(crate) fn embedded_literal(node: &LinkedNode<'_>, source: &str) -> Option<EmbeddedLiteral> {
     let mut children = node.children();
     let callee = children.find(|child| !child.kind().is_trivia())?;
     let language = embedded_language(source.get(callee.range())?)?;
@@ -304,6 +305,7 @@ fn embedded_literal(node: &LinkedNode<'_>, source: &str) -> Option<EmbeddedLiter
         node_range,
         payload_range,
         language,
+        quoted: literal.kind() == SyntaxKind::Str,
     })
 }
 
@@ -338,7 +340,7 @@ fn first_embedded_argument<'a>(
     None
 }
 
-fn literal_payload_range(literal: &LinkedNode<'_>) -> Option<std::ops::Range<usize>> {
+pub(crate) fn literal_payload_range(literal: &LinkedNode<'_>) -> Option<std::ops::Range<usize>> {
     match literal.kind() {
         SyntaxKind::Str => {
             let range = literal.range();

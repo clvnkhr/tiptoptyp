@@ -43,6 +43,7 @@ theme	dracula-alucard	dracula-alucard
 theme	dracula	dracula
 scene	main	main	main	theme-matrix	-	-
 scene	sticky-context	main	main-sticky-context	targeted	-	-
+scene	folding	main	main-folding	targeted	-	-
 scene	problems-panel	main	main-problems-panel	component	-	-
 scene	find-replace	main	main-find-replace	component	-	-
 scene	preview-compiling	main	main-preview-compiling	component	-	-
