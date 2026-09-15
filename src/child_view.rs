@@ -154,6 +154,36 @@ pub(crate) struct ChildViewInput {
 pub(crate) struct ChildViewHost;
 
 impl ChildViewHost {
+    /// Hover windows repaint independently. An immediate viewport would force
+    /// an editor paint (and a second GL buffer swap) for every popup event.
+    pub(crate) fn show_deferred(
+        context: &egui::Context,
+        captures: &CaptureController,
+        spec: ChildViewSpec,
+        appearance: egui::Theme,
+        style: &std::sync::Arc<egui::Style>,
+        body: impl Fn(&mut egui::Ui, ChildViewInput) + Send + Sync + 'static,
+    ) {
+        let captures = captures.clone();
+        let style = style.clone();
+        let id = scoped_child_viewport_id(context, spec.id_salt);
+        crate::viewport_fonts::show_deferred(context, id, spec.viewport(), move |ui, class| {
+            let _span = crate::performance::span(spec.capture_target);
+            captures.begin_viewport(ui.ctx(), spec.capture_target);
+            ui.set_style(style.clone());
+            if class != egui::ViewportClass::EmbeddedWindow {
+                sync_native_theme(ui.ctx(), appearance);
+            }
+            let input = ui.ctx().input(|input| ChildViewInput {
+                focused: input.viewport().focused,
+                close_requested: input.viewport().close_requested(),
+                escape_pressed: input.key_pressed(egui::Key::Escape),
+            });
+            body(ui, input);
+            captures.end_glow_viewport(ui, spec.capture_target);
+        });
+    }
+
     /// Applies the host-owned viewport, style, native theme and capture
     /// lifecycle, leaving the body responsible only for view-specific UI and
     /// actions.
@@ -175,6 +205,7 @@ impl ChildViewHost {
         let id = scoped_child_viewport_id(context, spec.id_salt);
         let viewport = spec.viewport();
         crate::viewport_fonts::show_immediate(context, id, viewport, |ui, class| {
+            let _span = crate::performance::span(spec.capture_target);
             captures.begin_viewport(ui.ctx(), spec.capture_target);
             ui.set_style(style.clone());
             if class != egui::ViewportClass::EmbeddedWindow {
@@ -256,6 +287,72 @@ pub(crate) fn popup_focus_should_close(
 mod tests {
     use super::*;
     use std::{cell::RefCell, rc::Rc};
+
+    #[test]
+    fn deferred_tooltip_does_not_paint_during_parent_frames() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let context = egui::Context::default();
+        context.set_embed_viewports(false);
+        let paints = Arc::new(AtomicUsize::new(0));
+        let captures = CaptureController::disabled_for_tests();
+        let child = scoped_child_viewport_id(&context, "test-tooltip");
+        let register = || {
+            context.run_ui(egui::RawInput::default(), |ui| {
+                let paints = paints.clone();
+                ChildViewHost::show_deferred(
+                    ui.ctx(),
+                    &captures,
+                    ChildViewSpec::tooltip(
+                        "test-tooltip",
+                        "Tooltip",
+                        Pos2::ZERO,
+                        Vec2::new(200.0, 100.0),
+                        false,
+                        "diagnostic",
+                    ),
+                    egui::Theme::Dark,
+                    &ui.ctx().style_of(egui::Theme::Dark),
+                    move |ui, _| {
+                        paints.fetch_add(1, Ordering::Relaxed);
+                        ui.label("Independent popup");
+                    },
+                );
+            })
+        };
+        let mut output = register();
+        assert_eq!(paints.load(Ordering::Relaxed), 0);
+        let viewport = &output.viewport_output[&child];
+        assert!(viewport.class == egui::ViewportClass::Deferred);
+        let callback = viewport.viewport_ui_cb.clone().unwrap();
+        output.textures_delta.clear();
+        let mut input = egui::RawInput {
+            viewport_id: child,
+            ..Default::default()
+        };
+        input.viewports.insert(
+            child,
+            egui::ViewportInfo {
+                parent: Some(egui::ViewportId::ROOT),
+                ..Default::default()
+            },
+        );
+        context
+            .run_ui(input, |ui| callback(ui))
+            .drop_without_applying_deltas();
+        assert!(paints.load(Ordering::Relaxed) > 0);
+        let count = paints.load(Ordering::Relaxed);
+        for _ in 0..10 {
+            register().drop_without_applying_deltas();
+        }
+        assert_eq!(
+            paints.load(Ordering::Relaxed),
+            count,
+            "editor frames must not render the child"
+        );
+    }
 
     #[test]
     fn persistent_child_settles_and_reapplies_native_theme_after_change_or_reopen() {

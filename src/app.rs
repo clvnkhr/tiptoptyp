@@ -11,7 +11,6 @@ use qa::{QaSession, source_editor_snapshot_scroll_offset};
 use qa::{STICKY_CONTEXT_SNAPSHOT_SOURCE, SceneDocument, prepare_sticky_context_snapshot_document};
 
 use std::{
-    borrow::Cow,
     collections::{BTreeMap, VecDeque, hash_map::DefaultHasher},
     fs,
     hash::{Hash, Hasher},
@@ -490,7 +489,7 @@ struct EditorHoverState {
     uri: String,
     version: i32,
     requested: bool,
-    detail: Option<String>,
+    detail: Option<Arc<str>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -600,7 +599,6 @@ struct DiagnosticTooltipOverlay {
     anchor: Pos2,
     severity: DiagnosticSeverity,
     detail: String,
-    opacity: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -835,7 +833,6 @@ enum SettingsTarget {
     CodeFontWeight,
     PreviewJump,
     HoverDelay,
-    HoverFade,
     TypstCompiler,
     TinymistLanguageServer,
     RefreshBinaryStatus,
@@ -847,7 +844,7 @@ enum SettingsTarget {
 }
 
 impl SettingsTarget {
-    const ALL: [Self; 34] = [
+    const ALL: [Self; 33] = [
         Self::Appearance,
         Self::TypstSyntax,
         Self::LightTheme,
@@ -873,7 +870,6 @@ impl SettingsTarget {
         Self::CodeFontWeight,
         Self::PreviewJump,
         Self::HoverDelay,
-        Self::HoverFade,
         Self::TypstCompiler,
         Self::TinymistLanguageServer,
         Self::RefreshBinaryStatus,
@@ -911,7 +907,6 @@ impl SettingsTarget {
             Self::CodeFontWeight => "Code font weight",
             Self::PreviewJump => "Preview jump",
             Self::HoverDelay => "Hover delay",
-            Self::HoverFade => "Hover fade",
             Self::TypstCompiler => "Typst compiler",
             Self::TinymistLanguageServer => "Tinymist language server",
             Self::RefreshBinaryStatus => "Refresh binary status",
@@ -949,8 +944,7 @@ impl SettingsTarget {
             | Self::CodeFont
             | Self::CodeFontWeight
             | Self::PreviewJump
-            | Self::HoverDelay
-            | Self::HoverFade => SettingsSection::Editor,
+            | Self::HoverDelay => SettingsSection::Editor,
             Self::TypstCompiler
             | Self::TinymistLanguageServer
             | Self::RefreshBinaryStatus
@@ -997,7 +991,6 @@ impl SettingsTarget {
             Self::CodeFontWeight => "editor source monospace bold variable",
             Self::PreviewJump => "editor source sync click double modifier",
             Self::HoverDelay => "editor tooltip wait milliseconds timing",
-            Self::HoverFade => "editor tooltip opacity animation milliseconds timing",
             Self::TypstCompiler => "tools binary custom bundled path",
             Self::TinymistLanguageServer => "tools binary lsp custom bundled path",
             Self::RefreshBinaryStatus => "tools rescan reload",
@@ -2122,6 +2115,7 @@ impl EditorApp {
     }
 
     fn receive_compile_results(&mut self, context: &egui::Context) {
+        let _span = crate::performance::span("compile.receive");
         while let Some(result) = self.compiler.try_recv() {
             if !self.preview_processing_enabled()
                 || !self.may_run_compilation()
@@ -3114,6 +3108,7 @@ impl EditorApp {
     }
 
     fn reload_active_theme(&mut self, context: &egui::Context, request: &ActiveThemeRequest) {
+        let _span = crate::performance::span("theme.reload");
         let (active, error) = load_active_theme_or_fallback(request);
         if (context.theme() == egui::Theme::Dark) != active.dark_mode {
             crate::viewport_fonts::appearance_changed(context);
@@ -4909,7 +4904,7 @@ impl EditorApp {
                         && hover.version == version
                         && hover.uri == uri
                     {
-                        hover.detail = contents;
+                        hover.detail = contents.map(Arc::from);
                     }
                 }
                 TinymistEvent::Completed {
@@ -6241,6 +6236,7 @@ impl EditorApp {
     }
 
     fn show_workspace(&mut self, ui: &mut egui::Ui) {
+        let _span = crate::performance::span("ui.explorer");
         offer_file_drop_target(
             ui,
             ui.max_rect(),
@@ -6557,6 +6553,21 @@ impl EditorApp {
         }
     }
 
+    fn dismiss_hover_on_scroll(&mut self, context: &egui::Context) {
+        self.tooltip_request = None;
+        self.editor_hover = None;
+        self.diagnostic_tooltip = None;
+        self.clear_asset_hover();
+        clear_native_hover_overlay(context);
+        clear_asset_hover_candidate(context);
+        let geometry_id = tooltip_geometry_id(context);
+        let interaction_id = tooltip_interaction_id(context);
+        context.data_mut(|data| {
+            data.remove::<TooltipGeometry>(geometry_id);
+            data.remove::<TooltipInteractionState>(interaction_id);
+        });
+    }
+
     fn dismiss_keyboard_tooltip(&mut self, context: &egui::Context) {
         self.tooltip_request = None;
         self.editor_hover = None;
@@ -6656,12 +6667,14 @@ impl EditorApp {
             )
         };
 
-        let should_request = self.preview.connection.is_ready()
-            && self.tinymist_current_open
-            && self
-                .editor_hover
+        let should_request = hover_request_ready(
+            opacity.is_some(),
+            self.preview.connection.is_ready(),
+            self.tinymist_current_open,
+            self.editor_hover
                 .as_ref()
-                .is_some_and(|hover| !hover.requested);
+                .is_none_or(|hover| hover.requested),
+        );
         if should_request {
             let position =
                 lsp_position_at_scalar(self.document.source(), ScalarOffset::new(range.start));
@@ -7797,6 +7810,7 @@ impl eframe::App for EditorApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let _span = crate::performance::span("ui.editor.pass");
         let context = ui.ctx().clone();
         // Capture the exact platform parent before opening any popup viewport
         // or consuming native menu commands. Each EditorApp retains its own
@@ -7825,7 +7839,6 @@ impl eframe::App for EditorApp {
         install_hover_runtime_config(
             &context,
             Duration::from_millis(self.settings.hover_delay_ms),
-            Duration::from_millis(self.settings.hover_fade_ms),
         );
         self.captures.set_manual_shortcut_override(
             self.settings
@@ -7871,7 +7884,11 @@ impl eframe::App for EditorApp {
                 data.remove::<Rect>(dismissed_id);
             }
         });
-        let tooltip_retained = native_tooltip_handoff_active(&context, true);
+        let scroll_dismissed = update_hover_scroll(&context);
+        if scroll_dismissed {
+            self.dismiss_hover_on_scroll(&context);
+        }
+        let tooltip_retained = !scroll_dismissed && native_tooltip_handoff_active(&context, true);
         clear_asset_hover_candidate(&context);
         if !tooltip_retained {
             self.diagnostic_tooltip = None;
@@ -8227,51 +8244,6 @@ fn line_column_at_char(source: &str, char_index: usize) -> (usize, usize) {
         }
     }
     (line, column)
-}
-
-fn typst_hover_token_range(source: &str, char_index: usize) -> Option<Range<usize>> {
-    let is_identifier =
-        |character: char| character == '_' || character == '-' || character.is_alphanumeric();
-    let (mut index, (mut cursor_byte, mut character)) = source
-        .char_indices()
-        .nth(char_index)
-        .map(|selected| (char_index, selected))
-        .or_else(|| {
-            source
-                .char_indices()
-                .next_back()
-                .map(|selected| (source.chars().count().saturating_sub(1), selected))
-        })?;
-    if !is_identifier(character) {
-        let previous = source[..cursor_byte].char_indices().next_back();
-        if matches!(character, '(' | ')' | '.')
-            && let Some((previous_byte, previous_character)) = previous
-            && is_identifier(previous_character)
-        {
-            index = index.saturating_sub(1);
-            cursor_byte = previous_byte;
-            character = previous_character;
-        } else {
-            return None;
-        }
-    }
-    let mut start = index;
-    for (_, previous_character) in source[..cursor_byte].char_indices().rev() {
-        if !is_identifier(previous_character) {
-            break;
-        }
-        start = start.saturating_sub(1);
-    }
-    let mut end = index + 1;
-    let mut suffix = &source[cursor_byte + character.len_utf8()..];
-    while let Some((offset, next_character)) = suffix.char_indices().next() {
-        if !is_identifier(next_character) {
-            break;
-        }
-        end += 1;
-        suffix = &suffix[offset + next_character.len_utf8()..];
-    }
-    (start < end).then_some(start..end)
 }
 
 fn completion_requested_after_events(events: &[egui::Event]) -> bool {
@@ -9082,7 +9054,7 @@ fn paint_line_diagnostics(
             output.response.id.with(("diagnostic", diagnostic.line)),
             Sense::hover(),
         );
-        if let Some(opacity) = hover_opacity(&response, diagnostic_hover_timing_id(&response.ctx))
+        if hover_opacity(&response, diagnostic_hover_timing_id(&response.ctx)).is_some()
             && hovered_diagnostic.is_none()
         {
             hovered_diagnostic = Some(DiagnosticTooltipOverlay {
@@ -9093,7 +9065,6 @@ fn paint_line_diagnostics(
                 ),
                 severity: diagnostic.severity,
                 detail: diagnostic.detail.clone(),
-                opacity,
             });
         }
     }

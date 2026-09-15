@@ -559,6 +559,8 @@ impl eframe::App for AppShell {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let _span = crate::performance::span("ui.shell.pass");
+        crate::performance::tick(ui.ctx(), || !self.captures.has_pending());
         let context = ui.ctx().clone();
         let completions = crate::worker::take_detached_completions();
         if !completions.is_empty() {

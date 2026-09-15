@@ -92,6 +92,7 @@ impl SyntaxHighlighter {
         syntect: &GenericSyntaxHighlighter,
         code_mode: bool,
     ) -> LayoutJob {
+        let _span = crate::performance::span("highlight.total");
         let parse_source = if code_mode {
             format!("#{{{source}}}")
         } else {
@@ -107,6 +108,8 @@ impl SyntaxHighlighter {
         {
             return self.cached_job.clone();
         }
+
+        let _rebuild = crate::performance::span("highlight.rebuild");
 
         if source_changed {
             // `replace` computes the common prefix/suffix and reparses only the

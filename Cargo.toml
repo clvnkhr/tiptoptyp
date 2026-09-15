@@ -6,6 +6,9 @@ rust-version = "1.95"
 description = "A fast, native Typst editor with live PDF preview"
 repository = "https://github.com/calvinkhor/tiptoptyp"
 
+[features]
+profiling = []
+
 [dependencies]
 tiptoptyp-core = { path = "core" }
 eframe = { version = "0.36.1", default-features = false, features = ["default_fonts", "glow", "persistence", "wayland", "x11"] }
@@ -49,6 +52,13 @@ exclude = ["xtask"]
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# Keep production optimizations, but retain names and source locations for samplers.
+[profile.profiling]
+inherits = "release"
+debug = "limited"
+split-debuginfo = "packed"
+strip = "none"
 
 [package.metadata.packager]
 product-name = "tiptoptyp"

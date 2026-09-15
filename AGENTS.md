@@ -88,6 +88,34 @@ the missing GUI capability instead of implying that visual QA passed.
 - Preserve unrelated working-tree changes and never replace user edits with
   fixture or screenshot output.
 
+## Performance working agreement
+
+Performance is an ongoing requirement, not a one-off cleanup. See
+`docs/performance.md` for profiling commands and interpretation.
+
+- Consider idle repaint frequency, per-frame allocation/work, cache invalidation,
+  main-thread blocking, background-job duplication, and scaling with document or
+  workspace size when changing relevant code. State when a change has no material
+  performance impact rather than running unrelated benchmarks.
+- For performance-sensitive changes, record a baseline and an after measurement
+  using the same optimized build profile, fixture, viewport/theme, warmup, and
+  workload. Preserve the run metadata. Separate idle, active interaction, cold
+  startup, and cache-hit/miss measurements; do not compare unlike runs.
+- Prefer deterministic regression tests for algorithmic invariants (bounded
+  work, cache reuse, no idle repaints, one worker per request) over flaky wall-time
+  thresholds. Add a focused regression for each performance bug.
+- Keep profiling opt-in and bounded. Never add per-frame disk I/O, unbounded event
+  buffers, artificial repaint loops, or document contents to performance logs.
+  Use native CPU samples for hot stacks; inclusive wall-time spans are not CPU
+  time and must not be summed across nested scopes.
+- Check the profiling feature with `cargo clippy --all-targets --features profiling
+  -- -D warnings` and `cargo test --features profiling --no-fail-fast` when changing
+  instrumentation. Run `cargo fmt --manifest-path xtask/Cargo.toml -- --check`
+  when changing the profiling runner.
+- Report the measurement, environment, and remaining limitations. A faster local
+  run does not establish a cross-platform performance guarantee. GUI profiling
+  needs a desktop and is not replaced by headless CI timing assertions.
+
 ## Required checks before handoff
 
 ```sh

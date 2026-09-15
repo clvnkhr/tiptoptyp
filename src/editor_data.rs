@@ -81,6 +81,8 @@ pub(crate) struct EditorDerivedData {
     parsed_key: Option<DocumentKey>,
     delimiter_query: Option<(DocumentKey, usize)>,
     delimiter_pair: Option<[Range<usize>; 2]>,
+    hover_query: Option<(DocumentKey, usize)>,
+    hover_range: Option<Range<usize>>,
     diagnostics_key: Option<DiagnosticsKey>,
     line_diagnostics: Arc<[LineDiagnostic]>,
     longest_diagnostic_chars: usize,
@@ -90,6 +92,8 @@ pub(crate) struct EditorDerivedData {
     diagnostic_rebuilds: usize,
     #[cfg(test)]
     syntax_rebuilds: usize,
+    #[cfg(test)]
+    hover_queries: usize,
 }
 
 impl Default for EditorDerivedData {
@@ -103,6 +107,8 @@ impl Default for EditorDerivedData {
             parsed_key: None,
             delimiter_query: None,
             delimiter_pair: None,
+            hover_query: None,
+            hover_range: None,
             diagnostics_key: None,
             line_diagnostics: Arc::from([]),
             longest_diagnostic_chars: 0,
@@ -112,6 +118,8 @@ impl Default for EditorDerivedData {
             diagnostic_rebuilds: 0,
             #[cfg(test)]
             syntax_rebuilds: 0,
+            #[cfg(test)]
+            hover_queries: 0,
         }
     }
 }
@@ -185,6 +193,37 @@ impl EditorDerivedData {
 
     pub(crate) fn char_range_to_byte(&self, range: Range<usize>) -> Range<usize> {
         self.char_to_byte(range.start)..self.char_to_byte(range.end)
+    }
+
+    /// Hover at an editor insertion position, using the actual syntax leaf.
+    /// In math `_`/`-` separate expressions; in code they can belong to an
+    /// identifier. A context-free word scan sends requests for the wrong leaf.
+    pub(crate) fn hover_token_range(&mut self, character: usize) -> Option<Range<usize>> {
+        let key = self.source_key?;
+        if self.hover_query == Some((key, character)) {
+            return self.hover_range.clone();
+        }
+        self.prepare_syntax();
+        let range = self.char_starts.get(character).and_then(|&cursor| {
+            let root = LinkedNode::new(self.parsed_source.root());
+            [typst_syntax::Side::After, typst_syntax::Side::Before]
+                .into_iter()
+                .find_map(|side| {
+                    let leaf = root.leaf_at(cursor, side)?;
+                    let range = hover_leaf_range(&leaf, cursor)?;
+                    Some(
+                        self.char_starts.partition_point(|byte| *byte < range.start)
+                            ..self.char_starts.partition_point(|byte| *byte < range.end),
+                    )
+                })
+        });
+        self.hover_query = Some((key, character));
+        self.hover_range = range.clone();
+        #[cfg(test)]
+        {
+            self.hover_queries += 1;
+        }
+        range
     }
 
     pub(crate) fn matching_delimiters(&mut self, caret: usize) -> Option<[Range<usize>; 2]> {
@@ -479,6 +518,44 @@ fn severity_rank(severity: DiagnosticSeverity) -> u8 {
     }
 }
 
+/// Keep word-level hovers in strings/markup, but never cross a syntax leaf.
+/// The previous leaf is considered at insertion boundaries because egui maps
+/// the right half of a final glyph to the position *after* that glyph. The UI
+/// still checks the resulting token rectangle against the actual pointer.
+fn hover_leaf_range(leaf: &LinkedNode<'_>, cursor: usize) -> Option<Range<usize>> {
+    let range = leaf.range();
+    if matches!(leaf.kind(), SyntaxKind::Ident | SyntaxKind::MathIdent) {
+        return Some(range);
+    }
+    let text = leaf.leaf_text();
+    let local = cursor.checked_sub(range.start)?;
+    let (byte, character) = if local == text.len() {
+        text.char_indices().next_back()?
+    } else {
+        (local, text.get(local..)?.chars().next()?)
+    };
+    let is_word = |c: char| c.is_alphanumeric() || matches!(c, '_' | '-');
+    if !is_word(character) {
+        return None;
+    }
+    let start = text[..byte]
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| is_word(*c))
+        .last()
+        .map_or(byte, |(byte, _)| byte);
+    let end = byte
+        + text[byte..]
+            .char_indices()
+            .find(|(_, c)| !is_word(*c))
+            .map_or(text.len() - byte, |(byte, _)| byte);
+    // Standalone math attachment/operator leaves are not identifiers.
+    text[start..end]
+        .chars()
+        .any(char::is_alphanumeric)
+        .then_some(range.start + start..range.start + end)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -580,6 +657,28 @@ mod tests {
         );
         assert_eq!(data.rebuild_counts(), (1, 0));
         assert_eq!(data.syntax_rebuild_count(), 1);
+    }
+
+    #[test]
+    fn hover_queries_reuse_syntax_and_stationary_targets_but_invalidate_on_edits() {
+        let mut data = EditorDerivedData::default();
+        data.prepare_source(&DocumentSnapshot::fixture(revision(1), "$ H_sigma $"));
+        for _ in 0..100 {
+            assert_eq!(data.hover_token_range(5), Some(4..9));
+        }
+        assert_eq!(data.syntax_rebuilds, 1);
+        assert_eq!(data.hover_queries, 1);
+        assert_eq!(data.hover_token_range(6), Some(4..9));
+        assert_eq!(data.syntax_rebuilds, 1);
+        assert_eq!(data.hover_queries, 2);
+
+        data.prepare_source(&DocumentSnapshot::fixture(revision(2), "$ H^alpha $"));
+        assert_eq!(data.hover_token_range(5), Some(4..9));
+        assert_eq!(data.syntax_rebuilds, 2);
+        data.prepare_source(&DocumentSnapshot::fixture(revision(3), "#let H_alpha = 1"));
+        assert_eq!(data.hover_token_range(5), Some(5..12));
+        assert_eq!(data.syntax_rebuilds, 3);
+        assert_eq!(data.hover_token_range(usize::MAX), None);
     }
 
     #[test]

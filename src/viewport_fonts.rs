@@ -11,6 +11,29 @@ pub(crate) fn appearance_changed(context: &egui::Context) {
 fn defer_new_child(changed: Option<u64>, frame: u64, exists: bool) -> bool {
     !exists && changed == Some(frame)
 }
+pub(crate) fn show_deferred(
+    context: &egui::Context,
+    id: egui::ViewportId,
+    builder: egui::ViewportBuilder,
+    body: impl Fn(&mut egui::Ui, egui::ViewportClass) + Send + Sync + 'static,
+) {
+    let changed =
+        context.data(|data| data.get_temp::<u64>(egui::Id::new("native-appearance-frame")));
+    let exists = context.input(|input| input.raw.viewports.contains_key(&id));
+    if !context.embed_viewports()
+        && defer_new_child(
+            changed,
+            context.cumulative_frame_nr_for(egui::ViewportId::ROOT),
+            exists,
+        )
+    {
+        context.request_repaint();
+        return;
+    }
+    // Deferred painting has no nested parent/child texture-delta ordering to
+    // repair, so it needs neither an atlas copy nor an extra upload here.
+    context.show_viewport_deferred(id, builder, body);
+}
 pub(crate) fn show_immediate(
     context: &egui::Context,
     id: egui::ViewportId,

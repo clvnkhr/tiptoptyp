@@ -352,6 +352,7 @@ impl SearchSession {
         case_sensitive: bool,
         regex: bool,
     ) {
+        let _span = crate::performance::span("search.total");
         let same_key = self.key.as_ref().is_some_and(|key| {
             key.document == document
                 && key.query.query == query
@@ -361,6 +362,7 @@ impl SearchSession {
         if same_key {
             return;
         }
+        let _rebuild = crate::performance::span("search.rebuild");
         let same_query = self.compiled_key.as_ref().is_some_and(|key| {
             key.query == query && key.case_sensitive == case_sensitive && key.regex == regex
         });

@@ -9,3 +9,7 @@ serde = { version = "1.0", features = ["derive"] }
 
 [features]
 test-support = []
+
+[[bench]]
+name = "document"
+harness = false

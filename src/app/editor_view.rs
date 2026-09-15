@@ -192,6 +192,7 @@ impl EditorApp {
     }
 
     pub(super) fn show_editor(&mut self, ui: &mut egui::Ui) {
+        let _span = crate::performance::span("ui.source");
         offer_file_drop_target(ui, ui.max_rect(), FileDropTarget::Editor);
         ui.set_min_width(ui.available_width());
         if self.document.reset_editor_history {
@@ -501,7 +502,6 @@ impl EditorApp {
                         anchor: rect.left_bottom(),
                         detail: diagnostic.detail.clone(),
                         severity: diagnostic.severity,
-                        opacity: 1.0,
                     });
                 }
             }
@@ -587,9 +587,7 @@ impl EditorApp {
                         }
                         hovered_asset_literal = true;
                     }
-                } else if let Some(range) =
-                    typst_hover_token_range(self.document.source(), char_index)
-                {
+                } else if let Some(range) = self.editor_data.hover_token_range(char_index) {
                     let start = output
                         .galley
                         .pos_from_cursor(CCursor::new(range.start))
@@ -745,6 +743,12 @@ impl EditorApp {
         });
 
         let (editor_rect, corner_radius, border, sticky_context) = scroll_output.inner;
+        // Covers scrollbar drags and keyboard/programmatic scrolling too,
+        // which need not deliver a wheel event to the parent viewport.
+        if source_scroll_changed(ui.ctx(), scroll_output.state.offset) {
+            self.dismiss_hover_on_scroll(ui.ctx());
+            hovered_semantic_token = None;
+        }
         let surface_rect = editor_surface_rect(editor_rect, scroll_output.inner_rect);
         ui.painter().set(
             editor_base_slot,

@@ -107,6 +107,7 @@ impl<T: Send + 'static> LatestJob<T> {
         self.receiver = None;
         let (sender, receiver) = mpsc::channel();
         let spawned = thread::Builder::new().name(name.into()).spawn(move || {
+            let _span = crate::performance::span("worker.job");
             let result = work();
             if sender.send(result).is_ok()
                 && let Some(target) = repaint

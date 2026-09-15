@@ -41,6 +41,11 @@ jobs:
         run: cargo +1.95.0 test --locked --no-fail-fast
       - name: Packaging tests
         run: cargo +1.95.0 test --locked --manifest-path xtask/Cargo.toml
+      - name: Profiling infrastructure checks
+        run: |
+          cargo +1.95.0 fmt --manifest-path xtask/Cargo.toml -- --check
+          cargo +1.95.0 clippy --locked --all-targets --features profiling -- -D warnings
+          cargo +1.95.0 test --locked --features profiling --no-fail-fast
 
   real-tools:
     name: Real Typst and Tinymist (macOS)

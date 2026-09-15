@@ -1,6 +1,8 @@
 #![deny(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod profile;
+
 use std::{
     env,
     ffi::{OsStr, OsString},
@@ -71,6 +73,9 @@ fn main() {
 fn run() -> Result<(), String> {
     let mut arguments = env::args().skip(1);
     let command = arguments.next().unwrap_or_else(|| "help".to_owned());
+    if command == "profile" {
+        return profile::run(arguments.collect());
+    }
     let mut target = None;
     while let Some(argument) = arguments.next() {
         if argument == "--target" {
@@ -105,7 +110,7 @@ fn run() -> Result<(), String> {
         }
         "help" | "--help" | "-h" => {
             println!(
-                "tiptoptyp packaging tasks\n\n  fetch-sidecars [--target TRIPLE]\n  package-build [--target TRIPLE]\n  verify-package [--target TRIPLE]\n\n{PACKAGE_TARGET_ENV} supplies the target to cargo-packager's hook."
+                "tiptoptyp tasks\n\n  profile --help\n  fetch-sidecars [--target TRIPLE]\n  package-build [--target TRIPLE]\n  verify-package [--target TRIPLE]\n\n{PACKAGE_TARGET_ENV} supplies the target to cargo-packager's hook."
             );
             Ok(())
         }

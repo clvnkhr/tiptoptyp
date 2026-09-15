@@ -780,7 +780,6 @@ fn completion_rejects_invalid_and_overlapping_server_edits() {
 fn first_frame_hover_state_installs_without_reentering_the_context_lock() {
     let context = egui::Context::default();
     let delay = Duration::from_millis(275);
-    let fade = Duration::from_millis(45);
 
     context
         .run_ui(egui::RawInput::default(), |ui| {
@@ -788,7 +787,7 @@ fn first_frame_hover_state_installs_without_reentering_the_context_lock() {
             // the native window from ever painting. epaint detects a
             // nested context lock as a deadlock, so completing this call
             // is the regression assertion.
-            install_hover_runtime_config(ui.ctx(), delay, fade);
+            install_hover_runtime_config(ui.ctx(), delay);
             clear_asset_hover_candidate(ui.ctx());
             clear_native_hover_overlay(ui.ctx());
             assert!(current_asset_hover_candidate(ui.ctx()).is_none());
@@ -800,7 +799,6 @@ fn first_frame_hover_state_installs_without_reentering_the_context_lock() {
         .data(|data| data.get_temp::<HoverRuntimeConfig>(id))
         .expect("the first frame should publish hover timing state");
     assert_eq!(installed.delay, delay);
-    assert_eq!(installed.fade, fade);
 }
 
 #[test]
@@ -1138,11 +1136,129 @@ fn cursor_coordinates_are_one_based_and_unicode_scalar_aware() {
 #[test]
 fn semantic_hover_tracks_identifiers_and_nearby_call_parentheses() {
     let source = "#text(fill: blue)[hello]";
-    assert_eq!(typst_hover_token_range(source, 2), Some(1..5));
-    assert_eq!(typst_hover_token_range(source, 5), Some(1..5));
-    assert_eq!(typst_hover_token_range(source, 8), Some(6..10));
-    assert_eq!(typst_hover_token_range(source, 0), None);
-    assert_eq!(typst_hover_token_range("", 0), None);
+    let mut data = hover_test_data(source);
+    assert_eq!(data.hover_token_range(2), Some(1..5));
+    assert_eq!(data.hover_token_range(5), Some(1..5));
+    assert_eq!(data.hover_token_range(8), Some(6..10));
+    assert_eq!(data.hover_token_range(0), None);
+    assert_eq!(hover_test_data("").hover_token_range(0), None);
+}
+
+fn hover_test_data(source: &str) -> crate::editor_data::EditorDerivedData {
+    let mut data = crate::editor_data::EditorDerivedData::default();
+    data.prepare_source(&crate::document::DocumentSnapshot::fixture(
+        DocumentKey::new(tiptoptyp_core::document::WindowSessionId::new(1), 1, 1),
+        source,
+    ));
+    data
+}
+
+#[test]
+fn semantic_hover_respects_math_operator_boundaries_not_symbol_names() {
+    for (source, target) in [
+        ("$ v^L in C^oo([epsilon,t_*];H_sigma^k) $", "sigma"),
+        ("$ v^L in C^oo([epsilon,t_*];epsilon^k) $", "epsilon"),
+        ("$ A_beta + delta-theta + x_gamma.alt $", "beta"),
+        ("$ A_beta + delta-theta + x_gamma.alt $", "theta"),
+        ("$ A_beta + delta-theta + x_gamma.alt $", "gamma"),
+        ("$ A_beta + delta-theta + x_gamma.alt $", "alt"),
+        ("$ A_gamma + sigma-epsilon $", "epsilon"),
+        ("$ A_gamma + sigma-epsilon $", "sigma"),
+        ("$ alpha^beta_(gamma/delta) $", "alpha"),
+        ("$ alpha^beta_(gamma/delta) $", "beta"),
+        ("$ alpha^beta_(gamma/delta) $", "gamma"),
+        ("$ alpha^beta_(gamma/delta) $", "delta"),
+        ("🦀 café $ H_sigma^k $", "sigma"),
+        ("#let code_name-long = 1", "code_name-long"),
+        ("#sym.arrow.r", "arrow"),
+        ("#sym.alpha.r", "r"),
+    ] {
+        let byte = source.find(target).unwrap();
+        let start = source[..byte].chars().count();
+        let mut data = hover_test_data(source);
+        // Include the insertion position after the final glyph, where egui
+        // places a pointer on that glyph's right half, whatever follows it.
+        for cursor in start..=start + target.chars().count() {
+            assert_eq!(
+                data.hover_token_range(cursor),
+                Some(start..start + target.chars().count()),
+                "source={source:?} cursor={cursor}"
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a real Tinymist executable; set TIPTOPTYP_TEST_TINYMIST to override discovery"]
+fn real_tinymist_hover_targets_respect_math_syntax_boundaries() {
+    fn wait_for(
+        sidecar: &TinymistSidecar,
+        accept: impl Fn(&TinymistEvent) -> bool,
+    ) -> TinymistEvent {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            while let Some(event) = sidecar.try_recv() {
+                assert!(
+                    !matches!(&event, TinymistEvent::Error { fatal: true, .. }),
+                    "Tinymist failed: {event:?}"
+                );
+                if accept(&event) {
+                    return event;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Timed out waiting for Tinymist hover probe"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    let program = std::env::var_os("TIPTOPTYP_TEST_TINYMIST")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| resolve_tool(ToolKind::Tinymist, &ToolPreference::default()).program);
+    let project = tempfile::tempdir().unwrap();
+    let source = "$ v^L in C^oo([epsilon,t_*];H_sigma^k) $\n$ v^L in C^oo([epsilon,t_*];epsilon^k) $\n$ A_beta + delta-theta $";
+    let backing =
+        UnsavedTextDocument::create(project.path(), project.path(), "Hover.typ", source).unwrap();
+    let sidecar = TinymistSidecar::new(crate::worker::RepaintTarget::test());
+    let mut config = TinymistConfig::new(project.path()).with_executable(program);
+    config.start_preview = false;
+    let generation = sidecar.start_workspace(config).unwrap();
+    wait_for(&sidecar, |event| {
+        matches!(event, TinymistEvent::Initialized { .. })
+    });
+    let document = backing.text_document(1, source);
+    let uri = document.uri.clone();
+    sidecar.did_open(generation, document).unwrap();
+    let mut data = hover_test_data(source);
+    let mut token = 0;
+    for name in ["epsilon", "sigma", "beta", "theta"] {
+        for (byte, _) in source.match_indices(name) {
+            token += 1;
+            let start = source[..byte].chars().count();
+            let range = data.hover_token_range(start + 1).unwrap();
+            let position = lsp_position_at_scalar(source, ScalarOffset::new(range.start));
+            sidecar
+                .hover_document(generation, uri.clone(), 1, position, token)
+                .unwrap();
+            let event = wait_for(
+                &sidecar,
+                |event| matches!(event, TinymistEvent::Hovered { request_token, .. } if *request_token == token),
+            );
+            let TinymistEvent::Hovered { contents, .. } = event else {
+                unreachable!()
+            };
+            assert!(
+                contents.is_some_and(|text| !text.trim().is_empty()),
+                "No hover at {name} byte {byte}"
+            );
+        }
+    }
+    sidecar.did_close(generation, uri).unwrap();
+    sidecar.stop_workspace(generation).unwrap();
+    wait_for(&sidecar, |event| {
+        matches!(event, TinymistEvent::Stopped { .. })
+    });
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -2651,7 +2767,7 @@ fn explorer_order_controls_move_panels_and_reset_with_aligned_buttons() {
         .with_size(Vec2::new(340.0, 400.0))
         .build_ui_state(
             |ui, order| {
-                install_hover_runtime_config(ui.ctx(), Duration::ZERO, Duration::ZERO);
+                install_hover_runtime_config(ui.ctx(), Duration::ZERO);
                 settings_panel::show_explorer_order_controls(ui, order);
             },
             ExplorerOrder::default(),
@@ -2797,7 +2913,7 @@ fn tag_and_reference_panels_have_independent_search_and_navigation() {
             .with_size(Vec2::new(360.0, 200.0))
             .build_ui_state(
                 |ui, target| {
-                    install_hover_runtime_config(ui.ctx(), Duration::ZERO, Duration::ZERO);
+                    install_hover_runtime_config(ui.ctx(), Duration::ZERO);
                     let outcome = show_project_index_section(ui, section, root, &index, "");
                     if outcome.target.is_some() {
                         *target = outcome.target;
@@ -3105,27 +3221,6 @@ fn tooltip_right_flips_left_at_the_viewport_edge() {
 }
 
 #[test]
-fn retained_native_tooltip_finishes_its_fade_without_new_hover_samples() {
-    let duration = Duration::from_millis(90);
-    let initial = TooltipFadeState {
-        opacity: 0.05,
-        updated_at: 1.0,
-    };
-    let halfway = continue_tooltip_fade(0.05, Some(initial), 1.045, duration);
-    assert!((halfway.opacity - 0.55).abs() < 0.001);
-
-    let finished = continue_tooltip_fade(0.05, Some(halfway), 1.100, duration);
-    assert_eq!(finished.opacity, 1.0);
-    let time_reversed = continue_tooltip_fade(0.0, Some(finished), 0.5, duration);
-    assert_eq!(time_reversed.opacity, 1.0);
-    assert_eq!(time_reversed.updated_at, finished.updated_at);
-    assert_eq!(
-        continue_tooltip_fade(0.0, None, 1.0, Duration::ZERO).opacity,
-        1.0
-    );
-}
-
-#[test]
 fn asset_preview_sizes_are_bounded_and_never_upscaled() {
     let landscape = fit_asset_preview_size([800, 400], Vec2::new(420.0, 300.0));
     assert!((landscape.x - 420.0).abs() < 0.01);
@@ -3238,7 +3333,7 @@ fn asset_hover_error_card_keeps_file_and_failure_visible() {
 #[test]
 fn hovered_asset_row_publishes_a_preview_candidate_after_its_delay() {
     let context = egui::Context::default();
-    install_hover_runtime_config(&context, Duration::ZERO, Duration::ZERO);
+    install_hover_runtime_config(&context, Duration::ZERO);
     let row_rect = std::cell::Cell::new(Rect::NOTHING);
     let draw = |input| {
         context
@@ -3294,10 +3389,6 @@ fn tooltip_handoff_blocks_competing_hover_targets_until_focus_changes() {
         identity: 1,
         origin: Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(10.0, 10.0)),
         card: Rect::from_min_max(Pos2::new(30.0, 0.0), Pos2::new(80.0, 30.0)),
-        fade: TooltipFadeState {
-            opacity: 1.0,
-            updated_at: 0.0,
-        },
         pointer_inside_viewport: false,
         handoff_until: 0.0,
     };
@@ -3351,10 +3442,6 @@ fn tooltip_handoff_keeps_competing_targets_blocked_across_the_child_viewport() {
         // The handoff envelope includes the transparent native viewport;
         // its painted card can be smaller after content-aware shrinking.
         card: Rect::from_min_max(Pos2::new(10.0, 50.0), Pos2::new(220.0, 140.0)),
-        fade: TooltipFadeState {
-            opacity: 1.0,
-            updated_at: 0.0,
-        },
         pointer_inside_viewport: false,
         handoff_until: 0.0,
     };
@@ -3374,10 +3461,6 @@ fn tooltip_handoff_grace_survives_a_transient_pointer_gap() {
         identity: 3,
         origin: Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(10.0, 10.0)),
         card: Rect::from_min_max(Pos2::new(30.0, 0.0), Pos2::new(80.0, 30.0)),
-        fade: TooltipFadeState {
-            opacity: 1.0,
-            updated_at: 0.0,
-        },
         pointer_inside_viewport: false,
         handoff_until: 1.3,
     };
@@ -3402,10 +3485,6 @@ fn tooltip_child_pointer_ownership_survives_missing_root_pointer_events() {
         identity: 4,
         origin: Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(10.0, 10.0)),
         card: Rect::from_min_max(Pos2::new(30.0, 0.0), Pos2::new(80.0, 30.0)),
-        fade: TooltipFadeState {
-            opacity: 1.0,
-            updated_at: 0.0,
-        },
         pointer_inside_viewport: true,
         handoff_until: 0.5,
     };

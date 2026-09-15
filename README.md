@@ -268,6 +268,22 @@ TIPTOPTYP_IGNORE_SYSTEM_FONTS=1 \
 Tinymist's process contract is covered by a fake LSP subprocess test, so the
 normal test suite does not require a locally installed Tinymist binary.
 
+### Performance
+
+```sh
+cargo xtask profile --scenario settings
+cargo xtask profile --scenario large --sampler none
+cargo bench -p tiptoptyp-core --bench document
+```
+
+The profiler builds an optimized, symbolized executable with frame pointers,
+uses isolated fixtures, and saves CPU samples, bounded subsystem timings, and
+run metadata under `.tiptoptyp/profiles`. Native sampling defaults to macOS
+`sample`; Linux can select `--sampler perf`. See
+[`docs/performance.md`](docs/performance.md) for setup, workloads, comparison
+rules, and limitations. Performance review is part of the ongoing working
+agreement in `AGENTS.md`.
+
 ## Current boundary
 
 The editor still uses `egui::TextEdit<String>` and lays out the whole buffer.

@@ -12,7 +12,7 @@ unused number. Resolved and audit notes must cite the relevant item numbers.
 Update the checkbox only when the entire task is complete and verified.
 
 1. [ ] (Deferred) there should be a proper pdf preview option that is just a proper pdf viewer. maybe a webview?
-2. [ ] (Deferred) perf
+2. [x] Establish repeatable profiling builds, isolated representative workloads, CPU samples and bounded subsystem timings, plus an ongoing performance-review policy. (Resumed from deferred perf; individual optimizations remain ongoing work.)
 
 3. [x] typst overrides should be in appearances subsection
 4. [x] the color indicator in typst overrides should always be the current color, not faded out if its 'theme/override'. In fact there should not be a 'theme/override' button, since if we want to return to the theme we can just hit the reset button
@@ -150,7 +150,7 @@ I was using two different windows with two different workspaces. Possibly i was 
 114. [ ] crash recovery: restore unsaved buffers and all document windows after an unexpected exit
 115. [ ] Git chunk actions: stage, unstage, and revert individual chunks, with keyboard navigation between changes
 116. [ ] workspace search and replace: preview replacements across files, support regex capture groups, and provide undo
-117. [ ] large-project performance: share repository status between windows and measure indexing, preview, and typing latency (extends deferred item 2)
+117. [ ] large-project performance: share repository status between windows and measure indexing, preview, and typing latency (ongoing optimization, using the profiling foundation in item 2)
 118. [ ] PDF polish: document search, thumbnails, and reliable position restoration (extends deferred item 1)
 119. [x] extract settings, editor rendering, and window orchestration into focused modules with enforced ownership boundaries
 120. [x] implement refactor.typ R1–R8: sealed document mutations, workflow states, owned tasks, preview provenance, headless core, coordinate types, presentation ownership, and explicit write outcomes
@@ -187,6 +187,8 @@ I was using two different windows with two different workspaces. Possibly i was 
 151. [x] Report malformed saved settings distinctly from missing settings, retain the rejected data for diagnosis, and test the recovery path.
 152. [x] Add automatic formatting, strict Clippy, application/core, and xtask checks, plus a separate real-tool integration job on a supported platform.
 153. [x] Investigate and reduce Settings-open CPU usage: eliminate redundant native-window updates/repaints and unchanged preference actions, preserve theme changes and reopen behavior, and verify with regression tests and before/after profiling.
+154. [x] Make shared hover popups cheap: dismiss on owner scrolling and pointer movement away, preserve movement into and scrolling inside the popup, delay unnecessary server requests, separate native repainting, avoid repeated parsing/cache copies, and remove fading. Compare full-document rendering with a short preview; reveal full content automatically on pointer entry or keyboard focus, without Read more buttons. Verify performance and interaction regressions.
+155. [x] Fix missing semantic hovers caused by context-free token targeting: honor math operator boundaries without splitting valid code identifiers, handle the right half of a final glyph, and reuse cached syntax/target queries. Cover multiple names and contexts, not symbol-specific exceptions.
 
 = resolved in the 2026-09-13 easy backlog pass
 
@@ -946,3 +948,148 @@ Only deferred items 1, 2, and 26 remain unchecked.
   `.tiptoptyp/screenshots/settings-performance-before` and
   `.tiptoptyp/screenshots/settings-performance-after`; layout and appearance
   are unchanged. No native geometry or maintained screenshot contract changed.
+
+= Profiling foundation (2026-09-15)
+
+- Item 2: Added an optimized, symbolized `profiling` build and
+  `cargo xtask profile`. The runner preserves frame pointers and supports
+  Settings, main editor, Find/Replace, font-picker, and large-source workloads.
+  macOS uses native CPU samples by default; Linux can opt into perf; all
+  platforms can select wall-time summaries without a CPU sampler.
+- Runs own disposable source copies, a project-discovery boundary, a Git
+  discovery ceiling, and fresh app-state storage. They neither inherit the
+  surrounding checkout's repository work nor read or overwrite ordinary app
+  preferences. Warmup starts after the initial viewport capture. Unique output
+  directories retain logs, source/binary/tool hashes, revision/build metadata,
+  summaries, samples, and the viewport PNG. Watchdogs handle startup, sampler,
+  and exit failures without terminating an existing user app.
+- Timing scopes cover shell/editor/Settings/Explorer UI, highlighting and search
+  calls versus rebuilds, theme loading, compile-result handling, and worker jobs.
+  Aggregation is bounded and opt-in, with no per-frame file writes. Percentiles
+  are labelled histogram upper bounds; inclusive wall time is not CPU time.
+  Normal builds compile out the hooks, including the capture-state query.
+- Added `cargo bench -p tiptoptyp-core --bench document` for shared snapshots,
+  no-op edits and edit/undo at roughly 16 KiB, 256 KiB and 1 MiB. One local
+  optimized smoke run measured snapshots at about 6 ns across all three sizes,
+  no-op edits from 0.58 to 34.9 microseconds, and edit/undo cycles from 0.97 to
+  120.8 microseconds. These expose scaling for later investigation, not portable
+  thresholds or end-to-end UI latency guarantees.
+- `docs/performance.md` documents commands, interpretation, platform limits,
+  reproducible comparisons, and fixture overhead. `AGENTS.md` now requires
+  ongoing performance review, comparable before/after evidence for sensitive
+  changes, and deterministic regression tests for performance bugs. CI checks
+  both feature configurations without flaky timing thresholds. Item 117 remains
+  open for individual large-project optimizations; item 2 establishes the tools
+  and working practice, not a claim that every hot path is already optimized.
+- Verification: formatting, strict Clippy, normal and profiling-feature full
+  test suites, all 13 xtask tests, and the headless benchmark pass. There are
+  650 passing application tests normally and 655 with profiling enabled; both
+  retain the same 2 intentionally ignored real-tool tests. Coverage includes
+  bounded summaries, measurement boundaries, malformed timing options, fresh
+  app state, fixture/project isolation, unique artifacts, watchdog cleanup,
+  dormant-hook overhead, and a close timer that requires no intervening UI frame.
+- Native smoke tests on macOS arm64 completed all five scenarios with complete
+  four-second reports and no dropped scopes. The Settings run used six seconds
+  of warmup and produced native CPU stacks with Rust symbols and source lines;
+  the remaining scenarios used two seconds of warmup and no sampler. Inspected
+  each fresh viewport PNG under its run's
+  `workspace/.tiptoptyp/screenshots`; the intended scenes and isolated files
+  are present. This is viewport evidence, not native desktop composition proof.
+  The final Settings artifacts are in
+  `.tiptoptyp/profiles/1789482145995-89752-settings-0`; the other final runs are
+  `1789482990253-90879-main-0`, `1789483000868-91180-large-0`,
+  `1789483011263-91473-find-0`, and `1789483021699-90878-fonts-0` in the same
+  profiles directory. Native profiling has not been verified on Linux/Windows,
+  and the hosted CI matrix has not run yet.
+- An earlier native run exposed an unreliable UI-scheduled exit in an idle
+  window. A one-shot sleeping timer now wakes the native event loop and queues
+  close independently; its regression test and subsequent native runs pass.
+  The failed run was retained, and its owned process group was confirmed empty
+  after watchdog cleanup. No existing user app was terminated.
+
+= resolved in the 2026-09-15 hover performance pass
+
+- Item 154: Wheel/trackpad input dismisses the owning viewport's hover. Source
+  offset changes also cover scrollbar and keyboard scrolling. Hovers remain
+  disarmed under a stationary pointer after scrolling, so newly exposed tokens
+  cannot immediately reopen them. Moving away from the source-to-card route or
+  leaving the popup dismisses it; movement toward/into the card, native pointer
+  handoff, keyboard focus, and scrolling inside the card remain supported.
+- Shared text and asset hover windows now use deferred native viewports.
+  Popup scrolling/painting no longer forces an editor paint and nested OpenGL
+  buffer swap. Parent notifications are limited to pointer ownership/focus/
+  dismissal changes and link actions; stale child callbacks cannot replace
+  another hover's state. Deferred surfaces retain the appearance-change barrier
+  without the immediate-view font-atlas repair/upload.
+- Server hover requests wait until the hover delay expires (keyboard requests
+  remain immediate). Removed hover fading and its obsolete Settings control/key.
+  Hover payloads and highlighted jobs are shared; cache lookups no longer clone
+  the entire job collection. Parsed Markdown and measured block heights are
+  retained, and offscreen blocks skip highlighting/widget construction during
+  scrolling. Width, style, font, and content changes invalidate geometry.
+- Long responses initially render at most 600 Unicode characters. Entering or
+  keyboard-focusing the popup automatically reveals the entire response, without
+  a Read more button, pagination, or viewport resize. This defers display work,
+  not the server's response transfer. A first full layout still scales with
+  document size; no claim is made that arbitrarily large hovers load for free.
+- Added a native `hover` profiling scenario and a repeatable optimized headless
+  probe, documented in `docs/performance.md`. Three final probe runs used the
+  same 121-byte function hover and synthetic 17,470-byte/100-section Markdown.
+  Median warm redraw means: short full 0.010 ms; long preview 0.029 ms; long full
+  without offscreen culling 2.468 ms; long full with culling 0.085 ms (about 29x
+  less CPU-side UI work). The full document's first layout was 8.6–9.8 ms across
+  these runs. This probe excludes GPU/native swaps, server latency, and actual
+  input-to-frame latency; timing numbers are evidence, not CI thresholds.
+- Native optimized comparison: six-second warmup and six-second sample windows
+  with the same isolated function-tooltip scene. Baseline artifacts:
+  `.tiptoptyp/profiles/1789483491719-94517-hover-0`; final artifacts:
+  `.tiptoptyp/profiles/1789487076673-12617-hover-0`. Mean editor pass fell from
+  10.01 ms to 0.411 ms, and the nested tooltip buffer-swap stack disappeared.
+  Final popup content needed no repaint during the measurement window. Parent
+  pass counts differed (57 versus 264), so this is not a whole-app FPS or idle
+  CPU speedup claim. Earlier/intermediate samples remain alongside these runs.
+- Verification: default/profiling strict Clippy and full tests, both formatting
+  checks, and 13 xtask tests passed. There are 660 passing application tests
+  normally and 665 with profiling enabled, plus the existing two ignored tests
+  and passing support/core/integration suites. New regressions cover request
+  gating, scroll suppression, movement direction, automatic expansion without
+  controls, shared caches, culling geometry/invalidation, and independent child
+  rendering/notifications.
+- Regenerated and validated all 68 maintained gallery PNGs in one session;
+  inspected gallery contact sheets and fresh function/asset viewport captures.
+  Additional fresh captures under `.tiptoptyp/screenshots/agent-review` are
+  `1789486715589-0001-diagnostic-function-tooltip.png` and
+  `1789486715854-0002-asset-hover-asset-preview.png`. The native geometry trace
+  included `ui.preview.bounds` with available/egui bounds
+  `(881.6,30.0)-(1672.0,957.1)`, native `(793.4,27.0)-(1504.8,861.4)`, zoom 0.900,
+  egui scale 1.800 and native scale 2.000. Viewport screenshots do not establish
+  composed desktop/WebKit geometry; that composition was not visually verified.
+
+= resolved in the 2026-09-15 semantic hover targeting pass
+
+- Item 155: Reproduced the general targeting failure before changing production
+  code: the character-only word scanner merged a math base, subscript operator,
+  and attached identifier, then requested hover at the base rather than at the
+  hovered identifier. Hyphenated math expressions had the same problem.
+  Replaced that scanner with revision-cached Typst syntax-leaf targeting in
+  `EditorDerivedData`. Valid code identifiers retain underscores/hyphens;
+  math operators separate their operands. There are no symbol-name exceptions.
+- Adjacent-leaf fallback handles egui's insertion position after a final glyph,
+  including before spaces, superscripts, subscripts, fractions, and delimiters.
+  The existing pointer-versus-token rectangle check still limits hit testing.
+  Plain-text/string word hovers remain bounded to their syntax leaf. Unicode
+  scalar-to-byte mappings use the existing source index, and unchanged document/
+  cursor queries reuse their result without reparsing or scanning the prefix.
+- Regression coverage exercises the reported expressions, renamed symbols,
+  mixed attachment/operator/field-access cases, valid code names, Unicode
+  prefixes, every character position plus the trailing boundary, and cache
+  invalidation after edits. A new opt-in real-Tinymist test also passed: all six
+  requested positions across both reported lines and a renamed math expression
+  returned nonempty hover content. Run it with
+  `cargo test real_tinymist_hover_targets -- --ignored --nocapture`.
+- Verification: formatting, normal/profiling strict Clippy and full suites,
+  and all 13 xtask tests passed. Application suites: 662 normal and 667
+  profiling-feature passes, with three opt-in tests excluded from default runs;
+  the new real-server test was run explicitly and passed. No popup layout,
+  rendering, fade, or scroll-dismissal rules changed, so no new screenshot or
+  unrelated native performance benchmark was needed for this targeting fix.

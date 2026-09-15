@@ -749,15 +749,6 @@ impl EditorApp {
             data.get_temp::<TooltipGeometry>(geometry_id)
                 .filter(|geometry| geometry.identity == identity)
         });
-        let fade = continue_tooltip_fade(
-            hover.opacity,
-            previous.map(|geometry| geometry.fade),
-            now,
-            hover_runtime_config(context).fade,
-        );
-        if fade.opacity < 1.0 {
-            context.request_repaint_after(METRICS.motion.animation_frame);
-        }
         context.data_mut(|data| {
             data.insert_temp(
                 geometry_id,
@@ -765,7 +756,6 @@ impl EditorApp {
                     identity,
                     origin: hover.origin,
                     card: root_local_card,
-                    fade,
                     pointer_inside_viewport: previous
                         .is_some_and(|geometry| geometry.pointer_inside_viewport),
                     handoff_until: previous.map_or_else(
@@ -785,60 +775,78 @@ impl EditorApp {
             "asset-hover",
         );
         let content_size = frame_content_size(size, frame_margin);
-        ChildViewHost::show(context, &self.captures, spec, theme, &style, |ui, input| {
-            let dismiss_requested = input.escape_pressed;
-            ui.set_opacity(fade.opacity);
-            let frame = if interaction.focused {
-                tooltip_frame.stroke(Stroke::new(
-                    1.0,
-                    style.visuals.widgets.active.bg_stroke.color,
-                ))
-            } else {
-                tooltip_frame
-            };
-            let frame_response = frame.show(ui, |ui| {
-                show_asset_hover_contents(
-                    ui,
-                    &hover.path,
-                    hover.kind,
-                    &hover.content,
-                    content_size,
+        let revision = match &hover.content {
+            AssetHoverContent::Loading => 0,
+            AssetHoverContent::Ready { .. } => 1,
+            AssetHoverContent::Error(_) => 2,
+        };
+        repaint_tooltip_on_change(context, "asset-hover-overlay", identity, revision);
+        let hover = hover.clone();
+        let parent = context.viewport_id();
+        let context = context.clone();
+        ChildViewHost::show_deferred(
+            &context.clone(),
+            &self.captures,
+            spec,
+            theme,
+            &style.clone(),
+            move |ui, input| {
+                let interaction = context
+                    .data(|data| data.get_temp::<TooltipInteractionState>(interaction_id))
+                    .filter(|state| state.identity == identity)
+                    .unwrap_or(TooltipInteractionState::new(identity));
+                let dismiss_requested = input.escape_pressed;
+                let frame = if interaction.focused {
+                    tooltip_frame.stroke(Stroke::new(
+                        1.0,
+                        style.visuals.widgets.active.bg_stroke.color,
+                    ))
+                } else {
+                    tooltip_frame
+                };
+                let frame_response = frame.show(ui, |ui| {
+                    show_asset_hover_contents(
+                        ui,
+                        &hover.path,
+                        hover.kind,
+                        &hover.content,
+                        content_size,
+                    );
+                });
+                let card_rect = frame_response.response.rect;
+                let pointer_inside_viewport = ui.rect_contains_pointer(ui.max_rect());
+                let pointer_inside_card = ui.rect_contains_pointer(card_rect);
+                let popup_interacted =
+                    pointer_inside_card && ui.input(|input| input.pointer.any_pressed());
+                let interaction = update_tooltip_interaction_state(
+                    interaction,
+                    identity,
+                    popup_interacted,
+                    input.focused,
                 );
-            });
-            let card_rect = frame_response.response.rect;
-            let pointer_inside_viewport = ui.rect_contains_pointer(ui.max_rect());
-            let pointer_inside_card = ui.rect_contains_pointer(card_rect);
-            let popup_interacted =
-                pointer_inside_card && ui.input(|input| input.pointer.any_pressed());
-            let interaction = update_tooltip_interaction_state(
-                interaction,
-                identity,
-                popup_interacted,
-                input.focused,
-            );
-            let interaction = if dismiss_requested {
-                TooltipInteractionState {
-                    focused: false,
-                    focus_requested: false,
-                    dismissed: true,
-                    ..interaction
+                let interaction = if dismiss_requested {
+                    TooltipInteractionState {
+                        focused: false,
+                        focus_requested: false,
+                        dismissed: true,
+                        ..interaction
+                    }
+                } else {
+                    interaction
+                };
+                publish_tooltip_interaction(
+                    &context,
+                    parent,
+                    geometry_id,
+                    interaction_id,
+                    interaction,
+                    pointer_inside_viewport,
+                );
+                if popup_interacted {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
                 }
-            } else {
-                interaction
-            };
-            context.data_mut(|data| {
-                if let Some(geometry) = data.get_temp::<TooltipGeometry>(geometry_id)
-                    && let Some(geometry) =
-                        refresh_tooltip_child_geometry(geometry, identity, pointer_inside_viewport)
-                {
-                    data.insert_temp(geometry_id, geometry);
-                    data.insert_temp(interaction_id, interaction);
-                }
-            });
-            if popup_interacted {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
-            }
-        });
+            },
+        );
     }
 
     pub(super) fn show_diagnostic_tooltip_window(&mut self, context: &egui::Context) {
@@ -846,7 +854,7 @@ impl EditorApp {
             return;
         }
         let native_tooltip_id = native_hover_tooltip_id(context);
-        let (origin, anchor, detail, severity, placement, opacity) = if self.snapshot_scene
+        let (origin, anchor, detail, severity, placement) = if self.snapshot_scene
             == Some(UiSnapshotScene::DiagnosticTooltip)
         {
             (
@@ -855,12 +863,11 @@ impl EditorApp {
                     Vec2::splat(1.0),
                 ),
                 Pos2::new(420.0, METRICS.chrome.toolbar_height + 86.0),
-                Cow::Borrowed(
+                Arc::<str>::from(
                     "The character `#` is not valid in code\nHint: you are already in code mode\nHint: try removing the `#`",
                 ),
                 Some(DiagnosticSeverity::Error),
                 TooltipPlacement::Right,
-                1.0,
             )
         } else if self.snapshot_scene == Some(UiSnapshotScene::FunctionTooltip) {
             (
@@ -869,21 +876,19 @@ impl EditorApp {
                     Vec2::splat(1.0),
                 ),
                 Pos2::new(420.0, METRICS.chrome.toolbar_height + 86.0),
-                Cow::Borrowed(
+                Arc::<str>::from(
                     "```typc\ntext(body, size: length = 1em, fill: color = black)\n```\nDisplays content as text with the selected size and fill.",
                 ),
                 None,
                 TooltipPlacement::Below,
-                1.0,
             )
         } else if let Some(tooltip) = self.diagnostic_tooltip.as_ref() {
             (
                 tooltip.origin,
                 tooltip.anchor,
-                Cow::Borrowed(tooltip.detail.as_str()),
+                Arc::from(tooltip.detail.as_str()),
                 Some(tooltip.severity),
                 TooltipPlacement::Right,
-                tooltip.opacity,
             )
         } else if let Some(tooltip) =
             context.data(|data| data.get_temp::<HoverTooltipOverlay>(native_tooltip_id))
@@ -891,17 +896,16 @@ impl EditorApp {
             (
                 tooltip.origin,
                 tooltip.anchor,
-                Cow::Owned(tooltip.detail),
+                tooltip.detail,
                 None,
                 TooltipPlacement::Below,
-                tooltip.opacity,
             )
         } else {
             return;
         };
         let interaction_id = tooltip_interaction_id(context);
         let geometry_id = tooltip_geometry_id(context);
-        let identity = tooltip_identity(origin, &detail);
+        let identity = cached_tooltip_identity(context, origin, &detail);
         let interaction =
             context.data(|data| data.get_temp::<TooltipInteractionState>(interaction_id));
         if interaction.is_some_and(|state| state.identity == identity && state.dismissed) {
@@ -945,10 +949,9 @@ impl EditorApp {
             "diagnostic-tooltip-overlay",
             anchor,
             origin,
-            &detail,
+            detail,
             severity,
             placement,
-            opacity,
             &self.captures,
             &self.web_link_sender,
         );

@@ -32,7 +32,6 @@ impl std::fmt::Display for SettingsLoadError {
     }
 }
 pub(crate) const DEFAULT_HOVER_DELAY_MS: u64 = 300;
-pub(crate) const DEFAULT_HOVER_FADE_MS: u64 = 90;
 pub(crate) const MAX_RECENT_WORKSPACES: usize = 20;
 pub(crate) const SYSTEM_THEME_ID: &str = "system";
 pub(crate) const DEFAULT_UI_SCALE_PERCENT: u16 = 100;
@@ -241,7 +240,6 @@ pub(crate) struct AppSettings {
     pub(crate) auto_save: bool,
     pub(crate) auto_save_delay_ms: u64,
     pub(crate) hover_delay_ms: u64,
-    pub(crate) hover_fade_ms: u64,
     /// Scale applied to the application chrome and editor UI.
     pub(crate) ui_scale_percent: u16,
     /// Use the editor's monospace family for interface text as well.
@@ -302,7 +300,6 @@ impl Default for AppSettings {
             auto_save: true,
             auto_save_delay_ms: 750,
             hover_delay_ms: DEFAULT_HOVER_DELAY_MS,
-            hover_fade_ms: DEFAULT_HOVER_FADE_MS,
             ui_scale_percent: DEFAULT_UI_SCALE_PERCENT,
             ui_font_monospace: false,
             ui_font_path: None,
@@ -550,7 +547,6 @@ mod tests {
         assert!(settings.auto_save);
         assert_eq!(settings.auto_save_delay_ms, 750);
         assert_eq!(settings.hover_delay_ms, DEFAULT_HOVER_DELAY_MS);
-        assert_eq!(settings.hover_fade_ms, DEFAULT_HOVER_FADE_MS);
         assert_eq!(settings.typst_overrides, TypstOverrideThemes::default());
         assert!(settings.shortcut_overrides.is_empty());
         assert!(settings.effective_shortcuts().conflicts().is_empty());
@@ -656,7 +652,6 @@ mod tests {
             auto_save: false,
             auto_save_delay_ms: 1_500,
             hover_delay_ms: 450,
-            hover_fade_ms: 120,
             ui_scale_percent: 115,
             ui_font_monospace: true,
             ui_font_path: Some("/fonts/Example.ttf".to_owned()),

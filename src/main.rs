@@ -27,6 +27,7 @@ mod native_window;
 #[allow(unsafe_code)]
 mod open_requests;
 mod package_catalog;
+mod performance;
 mod presentation;
 mod preview;
 mod private_workspace;
@@ -59,6 +60,16 @@ use tiptoptyp::themes::{
 use windowing::AppShell;
 
 fn main() -> eframe::Result {
+    let profile = performance::Session::from_env()
+        .map_err(|error| eframe::Error::AppCreation(std::io::Error::other(error).into()))?;
+    let result = run(profile.persistence_path());
+    let recorded = profile
+        .finish()
+        .map_err(|error| eframe::Error::AppCreation(std::io::Error::other(error).into()));
+    result.and(recorded)
+}
+
+fn run(profile_storage: Option<std::path::PathBuf>) -> eframe::Result {
     let launch = LaunchOptions::from_process().map_err(invalid_launch_configuration)?;
     if let Some(profile) = &launch.theme_profile
         && profile.name != settings::SYSTEM_THEME_ID
@@ -92,7 +103,10 @@ fn main() -> eframe::Result {
         capture_config.startup_captures.push(scene.capture_spec());
     }
     let captures = CaptureController::new(capture_config);
-    let options = native_options(deterministic_snapshot);
+    let options = eframe::NativeOptions {
+        persistence_path: profile_storage,
+        ..native_options(deterministic_snapshot)
+    };
 
     let (open_request_sender, open_requests) = open_requests::channel();
     let (native_menu_sender, native_menu_commands) = native_menu::channel();

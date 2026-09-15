@@ -7,13 +7,13 @@ use super::{
 };
 use crate::{
     asset::AssetThumbnailResult,
-    child_view::{ChildViewHost, ChildViewSpec, viewport_scoped_id},
+    child_view::{ChildViewHost, ChildViewSpec, scoped_child_viewport_id, viewport_scoped_id},
     diagnostics::DiagnosticSeverity,
     document::DocumentKind,
     generic_highlight::GenericSyntaxHighlighter,
     highlight::SyntaxHighlighter,
     screenshot::CaptureController,
-    settings::{DEFAULT_HOVER_DELAY_MS, DEFAULT_HOVER_FADE_MS},
+    settings::DEFAULT_HOVER_DELAY_MS,
     syntax_theme::ResolvedTypstStyles,
     theme::{self, METRICS},
 };
@@ -22,7 +22,7 @@ use std::{
     collections::{VecDeque, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
     path::{Path, PathBuf},
-    sync::{OnceLock, mpsc},
+    sync::{Arc, Mutex, OnceLock, mpsc},
     time::Duration,
 };
 const TOOLTIP_HANDOFF_GRACE: Duration = Duration::from_millis(300);
@@ -30,7 +30,7 @@ const TOOLTIP_HANDOFF_GRACE: Duration = Duration::from_millis(300);
 pub(super) struct HoverTooltipOverlay {
     pub(super) origin: Rect,
     pub(super) anchor: Pos2,
-    pub(super) detail: String,
+    pub(super) detail: Arc<str>,
     pub(super) opacity: f32,
 }
 
@@ -72,12 +72,6 @@ pub(super) enum TooltipPlacement {
     Right,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(super) struct TooltipFadeState {
-    pub(super) opacity: f32,
-    pub(super) updated_at: f64,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct MarkdownInlineSpan {
     pub(super) text: String,
@@ -102,7 +96,7 @@ pub(super) struct TooltipCodeCacheEntry {
     pub(super) dark_mode: bool,
     pub(super) editor_font: egui::FontId,
     pub(super) colors: [[u8; 4]; 14],
-    pub(super) job: Option<egui::text::LayoutJob>,
+    pub(super) job: Option<Arc<egui::text::LayoutJob>>,
 }
 
 impl TooltipCodeCacheEntry {
@@ -127,7 +121,6 @@ pub(super) struct TooltipGeometry {
     pub(super) identity: u64,
     pub(super) origin: Rect,
     pub(super) card: Rect,
-    pub(super) fade: TooltipFadeState,
     pub(super) pointer_inside_viewport: bool,
     pub(super) handoff_until: f64,
 }
@@ -156,7 +149,6 @@ impl TooltipInteractionState {
 #[derive(Debug, Clone, Copy)]
 pub(super) struct HoverRuntimeConfig {
     pub(super) delay: Duration,
-    pub(super) fade: Duration,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -338,8 +330,25 @@ pub(super) fn native_tooltip_handoff_active(context: &egui::Context, emit_trace:
         .pointer_hover_pos()
         .or_else(|| context.pointer_latest_pos());
     let now = context.input(|input| input.time);
+    let motion_id = viewport_scoped_id(context, "tooltip-pointer-motion");
     let (active, geometry, interaction) = context.data_mut(|data| {
         let mut geometry = data.get_temp::<TooltipGeometry>(geometry_id);
+        if let Some(current) = geometry {
+            let previous = data
+                .get_temp::<(u64, Pos2)>(motion_id)
+                .filter(|(identity, _)| *identity == current.identity)
+                .map(|(_, position)| position);
+            if !current.pointer_inside_viewport
+                && tooltip_pointer_moved_away(previous, pointer, current.origin, current.card)
+            {
+                let mut dismissed = TooltipInteractionState::new(current.identity);
+                dismissed.dismissed = true;
+                data.insert_temp(interaction_id, dismissed);
+            }
+            if let Some(pointer) = pointer {
+                data.insert_temp(motion_id, (current.identity, pointer));
+            }
+        }
         if let Some(current) = geometry {
             let current = refresh_tooltip_root_geometry(current, pointer, now);
             geometry = Some(current);
@@ -376,6 +385,9 @@ pub(super) fn native_tooltip_handoff_blocks(
     context: &egui::Context,
     candidate_origin: Rect,
 ) -> bool {
+    if update_hover_scroll(context) {
+        return true;
+    }
     let dismissed_id = viewport_scoped_id(context, "dismissed-tooltip-origin");
     if context.data(|data| {
         data.get_temp::<Rect>(dismissed_id)
@@ -543,13 +555,9 @@ pub(super) fn hover_runtime_config_id(context: &egui::Context) -> egui::Id {
 /// Install the per-viewport hover timing without re-entering egui's context
 /// lock. `viewport_id()` itself reads context state, so the ID must be derived
 /// before `data_mut` takes the write lock. This runs during every first frame.
-pub(super) fn install_hover_runtime_config(
-    context: &egui::Context,
-    delay: Duration,
-    fade: Duration,
-) {
+pub(super) fn install_hover_runtime_config(context: &egui::Context, delay: Duration) {
     let id = hover_runtime_config_id(context);
-    let config = HoverRuntimeConfig { delay, fade };
+    let config = HoverRuntimeConfig { delay };
     context.data_mut(|data| data.insert_temp(id, config));
 }
 
@@ -559,7 +567,6 @@ pub(super) fn hover_runtime_config(context: &egui::Context) -> HoverRuntimeConfi
         data.get_temp::<HoverRuntimeConfig>(id)
             .unwrap_or(HoverRuntimeConfig {
                 delay: Duration::from_millis(DEFAULT_HOVER_DELAY_MS),
-                fade: Duration::from_millis(DEFAULT_HOVER_FADE_MS),
             })
     })
 }
@@ -636,7 +643,7 @@ pub(super) fn hover_text_with_id(
         let tooltip = HoverTooltipOverlay {
             origin: response.rect,
             anchor: response.rect.left_bottom() + egui::vec2(0.0, theme::SPACE.small),
-            detail: detail.into(),
+            detail: Arc::from(detail.into()),
             opacity,
         };
         // Keep the currently visible native tooltip while the pointer crosses
@@ -652,7 +659,10 @@ pub(super) fn hover_text_with_id(
 }
 
 pub(super) fn hover_opacity(response: &egui::Response, timing_id: egui::Id) -> Option<f32> {
-    if !response.hovered() {
+    if !response.hovered() || update_hover_scroll(&response.ctx) {
+        response
+            .ctx
+            .data_mut(|data| data.remove::<HoverTimingState>(timing_id));
         return None;
     }
     let force_id = viewport_scoped_id(&response.ctx, "force-pointer-tooltip");
@@ -697,18 +707,177 @@ pub(super) fn hover_opacity(response: &egui::Response, timing_id: egui::Id) -> O
             .request_repaint_after((config.delay - elapsed).min(METRICS.motion.hover_poll));
         return None;
     }
-    let fade_elapsed = elapsed.saturating_sub(config.delay);
-    let opacity = if config.fade.is_zero() {
-        1.0
-    } else {
-        (fade_elapsed.as_secs_f32() / config.fade.as_secs_f32()).clamp(0.0, 1.0)
+    Some(1.0)
+}
+
+/// Scroll input belongs to a viewport. In particular, scrolling a native
+/// tooltip must not dismiss it or wake the source editor. Keep hovers disarmed
+/// under a stationary pointer after scrolling (including trackpad momentum).
+pub(super) fn update_hover_scroll(context: &egui::Context) -> bool {
+    let id = viewport_scoped_id(context, "hover-scroll-suppression");
+    let (scrolling, pointer) = context.input(|input| (
+        input.raw.events.iter().any(|event| matches!(event, egui::Event::MouseWheel { delta, .. } if *delta != Vec2::ZERO)) || input.smooth_scroll_delta != Vec2::ZERO,
+        input.pointer.latest_pos(),
+    ));
+    context.data_mut(|data| {
+        let previous = data.get_temp::<Option<Pos2>>(id);
+        if scrolling {
+            data.insert_temp(id, pointer);
+            true
+        } else if previous.is_some_and(|position| position == pointer) {
+            true
+        } else {
+            data.remove::<Option<Pos2>>(id);
+            false
+        }
+    })
+}
+
+pub(super) fn source_scroll_changed(context: &egui::Context, offset: Vec2) -> bool {
+    let id = viewport_scoped_id(context, "source-hover-scroll-offset");
+    let suppression_id = viewport_scoped_id(context, "hover-scroll-suppression");
+    let pointer = context.pointer_latest_pos();
+    context.data_mut(|data| {
+        let changed = data
+            .get_temp::<Vec2>(id)
+            .is_some_and(|previous| previous != offset);
+        data.insert_temp(id, offset);
+        if changed {
+            data.insert_temp(suppression_id, pointer);
+        }
+        changed
+    })
+}
+
+pub(super) fn tooltip_pointer_moved_away(
+    previous: Option<Pos2>,
+    pointer: Option<Pos2>,
+    origin: Rect,
+    card: Rect,
+) -> bool {
+    let (Some(previous), Some(pointer)) = (previous, pointer) else {
+        return false;
     };
-    if opacity < 1.0 {
-        response
-            .ctx
-            .request_repaint_after(METRICS.motion.animation_frame);
+    !origin.contains(pointer)
+        && !card.contains(pointer)
+        && card.distance_to_pos(pointer) > card.distance_to_pos(previous) + 1.0
+}
+
+pub(super) fn hover_request_ready(
+    visible: bool,
+    connected: bool,
+    open: bool,
+    requested: bool,
+) -> bool {
+    visible && connected && open && !requested
+}
+
+/// Notify the parent only about ownership/actions, never ordinary popup
+/// scrolling. The callback may outlive an old target, so reject stale writes.
+pub(super) fn publish_tooltip_interaction(
+    context: &egui::Context,
+    parent: egui::ViewportId,
+    geometry_id: egui::Id,
+    interaction_id: egui::Id,
+    mut interaction: TooltipInteractionState,
+    pointer_inside_viewport: bool,
+) {
+    let changed = context.data_mut(|data| {
+        let Some(geometry) = data.get_temp::<TooltipGeometry>(geometry_id) else {
+            return false;
+        };
+        let Some(updated) =
+            refresh_tooltip_child_geometry(geometry, interaction.identity, pointer_inside_viewport)
+        else {
+            return false;
+        };
+        if geometry.pointer_inside_viewport && !pointer_inside_viewport {
+            interaction.dismissed = true;
+            interaction.focused = false;
+            interaction.focus_requested = false;
+        }
+        let changed = geometry.pointer_inside_viewport != pointer_inside_viewport
+            || data.get_temp::<TooltipInteractionState>(interaction_id) != Some(interaction);
+        data.insert_temp(geometry_id, updated);
+        data.insert_temp(interaction_id, interaction);
+        changed
+    });
+    if changed {
+        context.request_repaint_of(parent);
     }
-    Some(opacity)
+}
+
+/// Registration alone does not invalidate a deferred viewport. Invalidate
+/// only on changed content/style, not on each parent paint.
+pub(super) fn repaint_tooltip_on_change(
+    context: &egui::Context,
+    salt: &'static str,
+    identity: u64,
+    content_revision: u64,
+) {
+    let id = viewport_scoped_id(context, salt);
+    let style = context.style_of(context.theme());
+    let changed = context.data_mut(|data| {
+        let key = (identity, content_revision, style);
+        let changed = data
+            .get_temp::<(u64, u64, Arc<egui::Style>)>(id)
+            .is_none_or(|old| old.0 != key.0 || old.1 != key.1 || !Arc::ptr_eq(&old.2, &key.2));
+        data.insert_temp(id, key);
+        changed
+    });
+    if changed {
+        context.request_repaint_of(scoped_child_viewport_id(context, salt));
+    }
+}
+
+const TOOLTIP_PREVIEW_CHARS: usize = 600;
+
+/// Byte boundaries are found only in the preview, never by counting
+/// or parsing the entire server response during initial hover layout.
+pub(super) fn tooltip_preview_end(text: &str) -> usize {
+    let tail = text;
+    let end = tail
+        .char_indices()
+        .nth(TOOLTIP_PREVIEW_CHARS)
+        .map_or(tail.len(), |(i, _)| i);
+    if end == tail.len() {
+        return text.len();
+    }
+    // Prefer complete markdown lines, unless that would make a tiny page.
+    tail[..end]
+        .rfind('\n')
+        .filter(|i| *i > end / 2)
+        .map_or(end, |i| i + 1)
+}
+
+pub(super) fn show_tooltip_document(
+    ui: &mut egui::Ui,
+    detail: &str,
+    identity: u64,
+    focused: bool,
+    link_sender: &mpsc::Sender<String>,
+) {
+    let id = ui.id().with("tooltip-engaged");
+    let engaged = focused
+        || ui.rect_contains_pointer(ui.max_rect())
+        || ui.ctx().data(|data| data.get_temp::<(u64, bool)>(id)) == Some((identity, true));
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(id, (identity, engaged)));
+    // Entering/focusing the popup reveals the complete response automatically.
+    // Keep the same viewport/scroll identity and size: no controls and no jump
+    // underneath the pointer. Brief incidental hovers only prepare a preview.
+    let visible = if engaged {
+        detail
+    } else {
+        &detail[..tooltip_preview_end(detail)]
+    };
+    egui::ScrollArea::vertical()
+        .id_salt("tooltip-document")
+        .auto_shrink([false, true])
+        .max_height((ui.available_height() - theme::SPACE.small).max(1.0))
+        .show(ui, |ui| {
+            show_markdown(ui, visible, link_sender);
+        });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -717,10 +886,9 @@ pub(super) fn show_native_tooltip_card(
     viewport_salt: &'static str,
     anchor: Pos2,
     origin: Rect,
-    detail: &str,
+    detail: Arc<str>,
     severity: Option<DiagnosticSeverity>,
     placement: TooltipPlacement,
-    opacity: f32,
     captures: &CaptureController,
     link_sender: &mpsc::Sender<String>,
 ) {
@@ -732,13 +900,15 @@ pub(super) fn show_native_tooltip_card(
     let tooltip_frame = theme::tooltip_card_frame(&style);
     let frame_margin = tooltip_frame.total_margin().sum();
     let body_font = egui::TextStyle::Body.resolve(&style);
+    let preview_end = tooltip_preview_end(&detail);
+    let preview = &detail[..preview_end];
     let desired_card_width = if severity.is_some() {
         METRICS.popup.tooltip_width
     } else {
         let natural_width = context.fonts_mut(|fonts| {
             fonts
                 .layout(
-                    detail.to_owned(),
+                    preview.to_owned(),
                     body_font.clone(),
                     style.visuals.text_color(),
                     f32::INFINITY,
@@ -757,7 +927,7 @@ pub(super) fn show_native_tooltip_card(
     let body_height = context.fonts_mut(|fonts| {
         fonts
             .layout(
-                detail.to_owned(),
+                preview.to_owned(),
                 body_font,
                 style.visuals.text_color(),
                 (card_width - METRICS.popup.tooltip_text_padding).max(1.0),
@@ -782,7 +952,7 @@ pub(super) fn show_native_tooltip_card(
     );
     let position = window_rect.min + root_local_card.min.to_vec2();
     let interaction_id = tooltip_interaction_id(context);
-    let identity = tooltip_identity(origin, detail);
+    let identity = cached_tooltip_identity(context, origin, &detail);
     let interaction = context.data(|data| {
         data.get_temp::<TooltipInteractionState>(interaction_id)
             .filter(|state| state.identity == identity)
@@ -797,15 +967,6 @@ pub(super) fn show_native_tooltip_card(
         data.get_temp::<TooltipGeometry>(geometry_id)
             .filter(|geometry| geometry.identity == identity)
     });
-    let fade = continue_tooltip_fade(
-        opacity,
-        previous.map(|geometry| geometry.fade),
-        now,
-        hover_runtime_config(context).fade,
-    );
-    if fade.opacity < 1.0 {
-        context.request_repaint_after(METRICS.motion.animation_frame);
-    }
     context.data_mut(|data| {
         data.insert_temp(
             geometry_id,
@@ -813,7 +974,6 @@ pub(super) fn show_native_tooltip_card(
                 identity,
                 origin,
                 card: root_local_card,
-                fade,
                 // The child viewport exclusively owns this bit. The root has
                 // no pointer while the cursor is over a native child and must
                 // preserve the child's last observation across paint passes.
@@ -841,68 +1001,79 @@ pub(super) fn show_native_tooltip_card(
         activate_viewport,
         "diagnostic",
     );
-    ChildViewHost::show(context, captures, spec, theme, &style, |ui, input| {
-        let popup_focused = if capture_viewport {
-            None
-        } else {
-            input.focused
-        };
-        let dismiss_requested = input.escape_pressed;
-        ui.set_opacity(fade.opacity);
-        let frame = if interaction.focused {
-            tooltip_frame.stroke(Stroke::new(
-                1.0,
-                style.visuals.widgets.active.bg_stroke.color,
-            ))
-        } else {
-            tooltip_frame
-        };
-        let frame_response = frame.show(ui, |ui| {
-            egui::ScrollArea::vertical()
-                // Let short tooltips keep their natural height. Filling
-                // the fixed native viewport makes the frame's content
-                // rect reach the viewport edge, clipping its lower
-                // rounded corners.
-                .auto_shrink([false, true])
-                .max_height(METRICS.popup.tooltip_max_height)
-                .show(ui, |ui| show_markdown(ui, detail, link_sender));
-        });
-        let card_rect = frame_response.response.rect;
-        let pointer_inside_viewport = ui.rect_contains_pointer(ui.max_rect());
-        let pointer_inside_card = ui.rect_contains_pointer(card_rect);
-        let popup_interacted = pointer_inside_card && ui.input(|input| input.pointer.any_pressed());
-        let interaction = update_tooltip_interaction_state(
-            interaction,
-            identity,
-            popup_interacted,
-            popup_focused,
-        );
-        let interaction = if dismiss_requested {
-            TooltipInteractionState {
-                focused: false,
-                focus_requested: false,
-                dismissed: true,
-                ..interaction
+    repaint_tooltip_on_change(context, viewport_salt, identity, activate_viewport as u64);
+    let parent = context.viewport_id();
+    let context = context.clone();
+    let link_sender = link_sender.clone();
+    let child_captures = captures.clone();
+    ChildViewHost::show_deferred(
+        &context.clone(),
+        captures,
+        spec,
+        theme,
+        &style.clone(),
+        move |ui, input| {
+            let interaction = context
+                .data(|data| data.get_temp::<TooltipInteractionState>(interaction_id))
+                .filter(|state| state.identity == identity)
+                .unwrap_or(TooltipInteractionState::new(identity));
+            let popup_focused = if child_captures.has_pending_for("diagnostic") {
+                None
+            } else {
+                input.focused
+            };
+            let dismiss_requested = input.escape_pressed;
+            let frame = if interaction.focused {
+                tooltip_frame.stroke(Stroke::new(
+                    1.0,
+                    style.visuals.widgets.active.bg_stroke.color,
+                ))
+            } else {
+                tooltip_frame
+            };
+            let frame_response = frame.show(ui, |ui| {
+                show_tooltip_document(
+                    ui,
+                    &detail,
+                    identity,
+                    interaction.focused || interaction.focus_requested,
+                    &link_sender,
+                );
+            });
+            let card_rect = frame_response.response.rect;
+            let pointer_inside_viewport = ui.rect_contains_pointer(ui.max_rect());
+            let pointer_inside_card = ui.rect_contains_pointer(card_rect);
+            let popup_interacted =
+                pointer_inside_card && ui.input(|input| input.pointer.any_pressed());
+            let interaction = update_tooltip_interaction_state(
+                interaction,
+                identity,
+                popup_interacted,
+                popup_focused,
+            );
+            let interaction = if dismiss_requested {
+                TooltipInteractionState {
+                    focused: false,
+                    focus_requested: false,
+                    dismissed: true,
+                    ..interaction
+                }
+            } else {
+                interaction
+            };
+            publish_tooltip_interaction(
+                &context,
+                parent,
+                geometry_id,
+                interaction_id,
+                interaction,
+                pointer_inside_viewport,
+            );
+            if popup_interacted {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
             }
-        } else {
-            interaction
-        };
-        context.data_mut(|data| {
-            if let Some(geometry) = data.get_temp::<TooltipGeometry>(geometry_id)
-                && let Some(geometry) =
-                    refresh_tooltip_child_geometry(geometry, identity, pointer_inside_viewport)
-            {
-                // Lifetime follows the complete child viewport, including
-                // transparent padding. Click/focus hit-testing above stays
-                // restricted to the visibly painted card.
-                data.insert_temp(geometry_id, geometry);
-                data.insert_temp(interaction_id, interaction);
-            }
-        });
-        if popup_interacted {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
-        }
-    });
+        },
+    );
 }
 
 pub(super) fn show_local_tooltip_card(
@@ -979,23 +1150,55 @@ pub(super) fn frame_content_size(viewport_size: Vec2, frame_margin: Vec2) -> Vec
     )
 }
 
-pub(super) fn show_markdown(ui: &mut egui::Ui, markdown: &str, link_sender: &mpsc::Sender<String>) {
+#[derive(Clone)]
+enum MarkdownBlock {
+    Space,
+    Code {
+        source: String,
+        token: String,
+    },
+    Line {
+        prefix: &'static str,
+        spans: Vec<MarkdownInlineSpan>,
+        scale: f32,
+    },
+}
+
+#[derive(Clone)]
+struct ParsedTooltipMarkdown {
+    source: String,
+    blocks: Vec<MarkdownBlock>,
+}
+
+fn cached_tooltip_markdown(context: &egui::Context, markdown: &str) -> Arc<ParsedTooltipMarkdown> {
+    let id = viewport_scoped_id(context, "tooltip-markdown");
+    if let Some(cached) = context.data(|data| data.get_temp::<Arc<ParsedTooltipMarkdown>>(id))
+        && cached.source == markdown
+    {
+        return cached;
+    }
+    let _span = crate::performance::span("tooltip.markdown.parse");
+    let parsed = Arc::new(ParsedTooltipMarkdown {
+        source: markdown.to_owned(),
+        blocks: parse_tooltip_markdown(markdown),
+    });
+    context.data_mut(|data| data.insert_temp(id, parsed.clone()));
+    parsed
+}
+
+fn parse_tooltip_markdown(markdown: &str) -> Vec<MarkdownBlock> {
+    let mut blocks = Vec::new();
     let mut fenced = false;
     let mut fence_token = String::new();
     let mut fence_lines = Vec::new();
-    let highlighter = GenericSyntaxHighlighter::default();
-    let mut typst_highlighter = SyntaxHighlighter::default();
     for line in markdown.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("```") {
             if fenced {
-                show_markdown_code_block(
-                    ui,
-                    &highlighter,
-                    &mut typst_highlighter,
-                    &fence_lines.join("\n"),
-                    &fence_token,
-                );
+                blocks.push(MarkdownBlock::Code {
+                    source: fence_lines.join("\n"),
+                    token: std::mem::take(&mut fence_token),
+                });
                 fence_lines.clear();
                 fence_token.clear();
             } else {
@@ -1009,7 +1212,7 @@ pub(super) fn show_markdown(ui: &mut egui::Ui, markdown: &str, link_sender: &mps
             continue;
         }
         if trimmed.is_empty() {
-            ui.add_space(theme::SPACE.small);
+            blocks.push(MarkdownBlock::Space);
             continue;
         }
 
@@ -1027,29 +1230,129 @@ pub(super) fn show_markdown(ui: &mut egui::Ui, markdown: &str, link_sender: &mps
         } else {
             ("", trimmed, 1.0)
         };
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 0.0;
-            if !prefix.is_empty() {
-                ui.add(egui::Label::new(prefix).selectable(true));
-            }
-            show_markdown_inline(
-                ui,
-                content,
-                heading,
-                &highlighter,
-                &mut typst_highlighter,
-                link_sender,
-            );
+        blocks.push(MarkdownBlock::Line {
+            prefix,
+            spans: markdown_inline_spans(content),
+            scale: heading,
         });
     }
     if fenced {
-        show_markdown_code_block(
-            ui,
-            &highlighter,
-            &mut typst_highlighter,
-            &fence_lines.join("\n"),
-            &fence_token,
-        );
+        blocks.push(MarkdownBlock::Code {
+            source: fence_lines.join("\n"),
+            token: fence_token,
+        });
+    }
+    blocks
+}
+
+pub(super) fn show_markdown(ui: &mut egui::Ui, markdown: &str, link_sender: &mpsc::Sender<String>) {
+    show_markdown_with_culling(ui, markdown, link_sender, true);
+}
+
+struct TooltipMarkdownLayout {
+    parsed: Arc<ParsedTooltipMarkdown>,
+    width: f32,
+    style: Arc<egui::Style>,
+    font_witness: Arc<egui::Galley>,
+    editor_font: egui::FontId,
+    heights: Vec<Option<f32>>,
+    #[cfg(test)]
+    rendered_blocks: usize,
+}
+
+fn show_markdown_with_culling(
+    ui: &mut egui::Ui,
+    markdown: &str,
+    link_sender: &mpsc::Sender<String>,
+    cull: bool,
+) {
+    let _span = crate::performance::span("tooltip.markdown.paint");
+    let parsed = cached_tooltip_markdown(ui.ctx(), markdown);
+    let id = viewport_scoped_id(ui.ctx(), "tooltip-markdown-layout");
+    let width = ui.available_width();
+    let style = ui.style().clone();
+    let font_witness = ui.fonts_mut(|fonts| {
+        fonts.layout_no_wrap(String::new(), egui::FontId::default(), egui::Color32::WHITE)
+    });
+    let editor_font = theme::editor_font();
+    let layout = ui.ctx().data_mut(|data| {
+        if let Some(cached) = data.get_temp::<Arc<Mutex<TooltipMarkdownLayout>>>(id) {
+            let matches = {
+                let previous = cached.lock().unwrap();
+                Arc::ptr_eq(&parsed, &previous.parsed)
+                    && previous.width == width
+                    && previous.style == style
+                    && Arc::ptr_eq(&font_witness, &previous.font_witness)
+                    && previous.editor_font == editor_font
+            };
+            if matches {
+                return cached;
+            }
+        }
+        let layout = Arc::new(Mutex::new(TooltipMarkdownLayout {
+            #[cfg(test)]
+            rendered_blocks: 0,
+            heights: vec![None; parsed.blocks.len()],
+            parsed: parsed.clone(),
+            width,
+            style,
+            font_witness,
+            editor_font,
+        }));
+        data.insert_temp(id, layout.clone());
+        layout
+    });
+    // Keep geometry for only the current document/style. Scrolling skips
+    // offscreen blocks before highlighting or constructing their widgets.
+    let mut layout = layout.lock().unwrap();
+    #[cfg(test)]
+    {
+        layout.rendered_blocks = 0;
+    }
+    let highlighter = GenericSyntaxHighlighter::default();
+    let mut typst_highlighter = SyntaxHighlighter::default();
+    for (index, block) in parsed.blocks.iter().enumerate() {
+        if cull
+            && let Some(height) = layout.heights[index]
+            && !ui.is_rect_visible(Rect::from_min_size(
+                ui.next_widget_position(),
+                Vec2::new(width, height),
+            ))
+        {
+            ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
+            continue;
+        }
+        let response = ui.push_id(index, |ui| match block {
+            MarkdownBlock::Space => ui.add_space(theme::SPACE.small),
+            MarkdownBlock::Code { source, token } => {
+                show_markdown_code_block(ui, &highlighter, &mut typst_highlighter, source, token)
+            }
+            MarkdownBlock::Line {
+                prefix,
+                spans,
+                scale,
+            } => {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    if !prefix.is_empty() {
+                        ui.add(egui::Label::new(*prefix).selectable(true));
+                    }
+                    show_markdown_inline(
+                        ui,
+                        spans,
+                        *scale,
+                        &highlighter,
+                        &mut typst_highlighter,
+                        link_sender,
+                    );
+                });
+            }
+        });
+        #[cfg(test)]
+        {
+            layout.rendered_blocks += 1;
+        }
+        layout.heights[index] = Some(response.response.rect.height());
     }
 }
 
@@ -1091,19 +1394,16 @@ pub(super) fn cached_tooltip_code_job(
     token: &str,
     dark_mode: bool,
     palette: theme::SyntaxPalette,
-) -> Option<egui::text::LayoutJob> {
+) -> Option<Arc<egui::text::LayoutJob>> {
     let cache_id = viewport_scoped_id(context, "tooltip-code-cache");
     let editor_font = theme::editor_font();
     let colors = tooltip_code_cache_colors(palette);
-    if let Some(job) = context.data(|data| {
-        data.get_temp::<TooltipCodeCache>(cache_id)
-            .and_then(|cache| {
-                cache
-                    .jobs
-                    .iter()
-                    .find(|entry| entry.matches(source, token, dark_mode, &editor_font, &colors))
-                    .map(|entry| entry.job.clone())
-            })
+    if let Some(job) = context.data_mut(|data| {
+        data.get_temp_mut_or_default::<TooltipCodeCache>(cache_id)
+            .jobs
+            .iter()
+            .find(|entry| entry.matches(source, token, dark_mode, &editor_font, &colors))
+            .map(|entry| entry.job.clone())
     }) {
         return job;
     }
@@ -1114,11 +1414,10 @@ pub(super) fn cached_tooltip_code_job(
         token,
         dark_mode,
         palette,
-    );
+    )
+    .map(Arc::new);
     context.data_mut(|data| {
-        let mut cache = data
-            .get_temp::<TooltipCodeCache>(cache_id)
-            .unwrap_or_default();
+        let cache = data.get_temp_mut_or_default::<TooltipCodeCache>(cache_id);
         // Keep exact entries bounded without flushing all recently rendered
         // tooltips when one more diagnostic appears.
         if cache.jobs.len() >= 32 {
@@ -1132,7 +1431,6 @@ pub(super) fn cached_tooltip_code_job(
             colors,
             job: job.clone(),
         });
-        data.insert_temp(cache_id, cache);
     });
     job
 }
@@ -1182,14 +1480,14 @@ pub(super) fn tooltip_code_job(
 
 pub(super) fn show_markdown_inline(
     ui: &mut egui::Ui,
-    text: &str,
+    spans: &[MarkdownInlineSpan],
     scale: f32,
     highlighter: &GenericSyntaxHighlighter,
     typst_highlighter: &mut SyntaxHighlighter,
     link_sender: &mpsc::Sender<String>,
 ) {
     let dark_mode = ui.visuals().dark_mode;
-    for span in markdown_inline_spans(text) {
+    for span in spans {
         if span.code {
             let job = cached_tooltip_code_job(
                 ui.ctx(),
@@ -1205,7 +1503,7 @@ pub(super) fn show_markdown_inline(
                 continue;
             }
         }
-        let mut rich = RichText::new(span.text);
+        let mut rich = RichText::new(&span.text);
         if span.bold {
             rich = rich.strong();
         }
@@ -1215,7 +1513,7 @@ pub(super) fn show_markdown_inline(
         if scale != 1.0 {
             rich = rich.size(theme::TYPE.content * scale);
         }
-        if let Some(target) = span.link {
+        if let Some(target) = &span.link {
             let response = ui
                 .add(
                     egui::Label::new(rich.color(ui.visuals().hyperlink_color).underline())
@@ -1224,8 +1522,11 @@ pub(super) fn show_markdown_inline(
                         .wrap(),
                 )
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
-            if response.clicked() && link_sender.send(target).is_ok() {
-                ui.ctx().request_repaint();
+            if response.clicked() && link_sender.send(target.clone()).is_ok() {
+                let parent = ui
+                    .input(|input| input.viewport().parent)
+                    .unwrap_or(ui.ctx().viewport_id());
+                ui.ctx().request_repaint_of(parent);
             }
         } else {
             ui.add(egui::Label::new(rich).selectable(true).wrap());
@@ -1449,10 +1750,37 @@ pub(super) fn tooltip_region_contains(pointer: Pos2, origin: Rect, card: Rect) -
 pub(super) fn tooltip_identity(origin: Rect, detail: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     detail.hash(&mut hasher);
+    tooltip_identity_from_hash(origin, hasher.finish())
+}
+
+fn tooltip_identity_from_hash(origin: Rect, content_hash: u64) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    content_hash.hash(&mut hasher);
     for coordinate in [origin.min.x, origin.min.y, origin.max.x, origin.max.y] {
         coordinate.to_bits().hash(&mut hasher);
     }
     hasher.finish()
+}
+
+pub(super) fn cached_tooltip_identity(
+    context: &egui::Context,
+    origin: Rect,
+    detail: &Arc<str>,
+) -> u64 {
+    let id = viewport_scoped_id(context, "tooltip-content-identity");
+    let content_hash = context.data_mut(|data| {
+        if let Some((source, hash)) = data.get_temp::<(Arc<str>, u64)>(id)
+            && Arc::ptr_eq(&source, detail)
+        {
+            return hash;
+        }
+        let mut hasher = DefaultHasher::new();
+        detail.hash(&mut hasher);
+        let hash = hasher.finish();
+        data.insert_temp(id, (detail.clone(), hash));
+        hash
+    });
+    tooltip_identity_from_hash(origin, content_hash)
 }
 
 pub(super) fn place_native_tooltip_card(
@@ -1512,29 +1840,6 @@ pub(super) fn place_native_tooltip_card(
     Rect::from_min_size(Pos2::new(x, y), size)
 }
 
-pub(super) fn continue_tooltip_fade(
-    sampled_opacity: f32,
-    previous: Option<TooltipFadeState>,
-    now: f64,
-    duration: Duration,
-) -> TooltipFadeState {
-    let sampled_opacity = sampled_opacity.clamp(0.0, 1.0);
-    let updated_at = previous.map_or(now, |previous| previous.updated_at.max(now));
-    let opacity = if duration.is_zero() {
-        1.0
-    } else if let Some(previous) = previous {
-        let elapsed = (now - previous.updated_at).max(0.0) as f32;
-        let continued = previous.opacity + elapsed / duration.as_secs_f32();
-        sampled_opacity.max(continued).clamp(0.0, 1.0)
-    } else {
-        sampled_opacity
-    };
-    TooltipFadeState {
-        opacity,
-        updated_at,
-    }
-}
-
 pub(super) fn update_tooltip_interaction_state(
     mut state: TooltipInteractionState,
     identity: u64,
@@ -1562,3 +1867,6 @@ pub(super) fn update_tooltip_interaction_state(
     }
     state
 }
+
+#[cfg(test)]
+mod tests;

@@ -71,6 +71,7 @@ pub(super) struct SettingsPanel<'a> {
 }
 impl SettingsPanel<'_> {
     pub(super) fn show(&mut self, ui: &mut egui::Ui) {
+        let _span = crate::performance::span("ui.settings");
         if self.snapshot_scene == Some(UiSnapshotScene::SettingsFontPicker) {
             ui.heading("Font selection");
             ui.horizontal(|ui| {
@@ -569,11 +570,6 @@ impl SettingsPanel<'_> {
                     SettingsTarget::HoverDelay,
                     &mut settings_scroll_target,
                 );
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::HoverFade,
-                    &mut settings_scroll_target,
-                );
                 ui.horizontal_wrapped(|ui| {
                     theme::apply_compact_control_spacing(ui);
                     ui.label(RichText::new(SettingsTarget::PreviewJump.label()).strong());
@@ -596,13 +592,6 @@ impl SettingsPanel<'_> {
                         egui::DragValue::new(&mut edited.hover_delay_ms)
                             .range(0..=2_000)
                             .speed(10)
-                            .suffix(" ms"),
-                    );
-                    ui.label(SettingsTarget::HoverFade.label());
-                    ui.add(
-                        egui::DragValue::new(&mut edited.hover_fade_ms)
-                            .range(0..=500)
-                            .speed(5)
                             .suffix(" ms"),
                     );
                 });
@@ -1353,7 +1342,7 @@ mod tests {
         let mut harness = Harness::builder()
             .with_size(Vec2::new(500.0, 400.0))
             .build_ui(|ui| {
-                install_hover_runtime_config(ui.ctx(), Duration::ZERO, Duration::ZERO);
+                install_hover_runtime_config(ui.ctx(), Duration::ZERO);
                 let id = settings_hover_tooltip_id(ui.ctx());
                 ui.ctx()
                     .data_mut(|data| data.remove::<HoverTooltipOverlay>(id));
@@ -1403,7 +1392,7 @@ mod tests {
         }
         let mut harness = Harness::builder().build_ui_state(
             |ui, detail| {
-                install_hover_runtime_config(ui.ctx(), Duration::ZERO, Duration::ZERO);
+                install_hover_runtime_config(ui.ctx(), Duration::ZERO);
                 let id = settings_hover_tooltip_id(ui.ctx());
                 ui.ctx()
                     .data_mut(|data| data.remove::<HoverTooltipOverlay>(id));
@@ -1428,7 +1417,7 @@ mod tests {
                 .data(|data| data.get_temp::<HoverTooltipOverlay>(id))
                 .unwrap()
                 .detail,
-            "Watching 4 files"
+            "Watching 4 files".into()
         );
     }
 
