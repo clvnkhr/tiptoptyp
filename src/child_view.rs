@@ -248,7 +248,11 @@ pub(crate) fn scoped_child_viewport_id(
     context: &egui::Context,
     salt: &'static str,
 ) -> egui::ViewportId {
-    egui::ViewportId::from_hash_of((context.viewport_id(), salt))
+    child_viewport_id(context.viewport_id(), salt)
+}
+
+pub(crate) fn child_viewport_id(owner: egui::ViewportId, salt: &'static str) -> egui::ViewportId {
+    egui::ViewportId::from_hash_of((owner, salt))
 }
 
 fn decorate_child_viewport(viewport: egui::ViewportBuilder) -> egui::ViewportBuilder {

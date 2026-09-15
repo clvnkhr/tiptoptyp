@@ -4,6 +4,37 @@ use crate::explorer::ExplorerPanelPhase;
 use crate::settings::InterfaceTheme;
 
 #[test]
+fn closing_retained_root_clears_discarded_buffer_autosave_and_old_receipts() {
+    let mut document = DocumentSession::new(
+        tiptoptyp_core::document::WindowSessionId::new(7),
+        "saved",
+        DocumentKind::Typst,
+    );
+    document.replace_loaded(
+        "saved".into(),
+        PathBuf::from("/closed.typ"),
+        DocumentKind::Typst,
+        None,
+    );
+    document.edit(CCursorRange::default(), |source| {
+        source.push_str(" discarded")
+    });
+    let old_key = document.key();
+    let old_save = document.prepare_save(PathBuf::from("/closed.typ"), DocumentKind::Typst);
+    let mut deadline = Some(Instant::now());
+    assert!(document.is_dirty());
+    reset_untitled_buffer(&mut document, &mut deadline);
+    assert_eq!(document.source(), DEFAULT_SOURCE);
+    assert!(!document.is_dirty());
+    assert!(document.path().is_none());
+    assert!(deadline.is_none());
+    assert_eq!(document.key().owner, old_key.owner);
+    assert_ne!(document.key().epoch, old_key.epoch);
+    assert!(document.record_save(old_save.committed(123)).is_err());
+    assert_eq!(document.history_availability(), (false, false));
+}
+
+#[test]
 fn preview_focus_wait_is_static_but_active_transition_animates() {
     let context = egui::Context::default();
     let paint = |waiting| {

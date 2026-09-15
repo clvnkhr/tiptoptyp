@@ -96,6 +96,7 @@ impl AppShell {
             snapshot_scene,
         );
         let shared_settings = primary.settings_snapshot();
+        open_requests.set_repaint_context(context.egui_ctx.clone());
         let mut remaining = VecDeque::from(capture_steps);
         let capture_batch = remaining.pop_front().map(|first| CaptureBatch {
             active_request: captures
@@ -192,13 +193,24 @@ impl AppShell {
         while let Ok(request) = self.native_menu_commands.try_recv() {
             match process_request_action(request) {
                 ProcessRequestAction::Editor(command) => {
-                    if self.active == ActiveSession::Primary && command_reveals_primary(command) {
+                    if !self.primary_visible
+                        && self.secondary.is_empty()
+                        && !command_available_without_document(command)
+                        && !self.command_targets_hidden_root_child(context, command)
+                    {
+                        continue;
+                    }
+                    if self.active == ActiveSession::Primary
+                        && !self.primary_visible
+                        && command_reveals_primary(command)
+                        && !self.command_targets_hidden_root_child(context, command)
+                    {
                         self.show_primary(context);
                     }
                     self.active_editor_mut()
                         .enqueue_native_menu_command(command);
                 }
-                ProcessRequestAction::ReopenPrimary => self.show_primary(context),
+                ProcessRequestAction::Reopen => self.reopen_document_window(context),
                 ProcessRequestAction::CloseProcess => {
                     self.quit_requested = true;
                     context
@@ -261,31 +273,18 @@ impl AppShell {
         }
     }
 
-    fn take_focused_settings_update(&mut self) -> Option<AppSettings> {
-        let mut selected = match self.active {
-            ActiveSession::Primary => self.primary.take_settings_update(),
-            ActiveSession::Secondary(id) => self
-                .secondary
-                .iter_mut()
-                .find(|window| window.id == id)
-                .and_then(|window| window.editor.take_settings_update()),
-        };
+    fn merge_pending_settings(&mut self, target: &mut AppSettings) {
+        // Apply independent edits from every owner; the active owner wins only
+        // when two pending edits change the same field.
         if self.active != ActiveSession::Primary {
-            let update = self.primary.take_settings_update();
-            if selected.is_none() {
-                selected = update;
-            }
+            self.primary.merge_settings_update(target);
         }
         for window in &mut self.secondary {
-            if self.active == ActiveSession::Secondary(window.id) {
-                continue;
-            }
-            let update = window.editor.take_settings_update();
-            if selected.is_none() {
-                selected = update;
+            if self.active != ActiveSession::Secondary(window.id) {
+                window.editor.merge_settings_update(target);
             }
         }
-        selected
+        self.active_editor_mut().merge_settings_update(target);
     }
 
     fn merge_all_session_history(&self, settings: &mut AppSettings, active_settings: &AppSettings) {
@@ -324,13 +323,20 @@ impl AppShell {
         // A removal is an explicit global action. Apply it to every session
         // before MRU merging so a stale sibling list cannot resurrect it.
         self.synchronize_workspace_history_removals();
+        if !self.primary.has_settings_update()
+            && !self
+                .secondary
+                .iter()
+                .any(|window| window.editor.has_settings_update())
+        {
+            return;
+        }
         // Snapshot this before draining pending updates: the active window is
         // authoritative for per-workspace document history even when another
         // window happened to submit the shared preference change.
         let active_settings = self.active_editor().settings_snapshot();
-        let Some(mut settings) = self.take_focused_settings_update() else {
-            return;
-        };
+        let mut settings = self.shared_settings.clone();
+        self.merge_pending_settings(&mut settings);
         self.merge_all_session_history(&mut settings, &active_settings);
         self.shared_settings = settings.clone();
         self.primary
@@ -364,6 +370,9 @@ impl AppShell {
             return;
         };
         let started = if self.primary.document_key().owner == key.owner {
+            if self.primary.is_dirty_for_close() {
+                self.show_primary(context);
+            }
             self.active = ActiveSession::Primary;
             context.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
             self.primary.begin_process_close()
@@ -455,13 +464,69 @@ impl AppShell {
     }
 
     fn show_primary(&mut self, context: &egui::Context) {
-        if self.primary_visible {
-            return;
+        if !self.primary_visible {
+            context
+                .send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Visible(true));
         }
-        context.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Visible(true));
+        context.send_viewport_cmd_to(
+            egui::ViewportId::ROOT,
+            egui::ViewportCommand::Minimized(false),
+        );
         context.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
         self.primary_visible = true;
         self.active = ActiveSession::Primary;
+    }
+
+    fn refresh_active_window(&mut self, context: &egui::Context) {
+        self.active = surviving_active_session(
+            self.active,
+            self.primary_visible,
+            self.secondary.iter().map(|window| window.id),
+        );
+        // Read current focus before dispatching queued process-level commands,
+        // not just after painting the owner that was active in the last pass.
+        if let Some(window) = self.secondary.iter().find(|window| {
+            crate::app::owner_has_focused_viewport(context, window.viewport_id(), true)
+        }) {
+            self.active = ActiveSession::Secondary(window.id);
+        } else if crate::app::owner_has_focused_viewport(
+            context,
+            egui::ViewportId::ROOT,
+            self.primary_visible,
+        ) {
+            self.active = ActiveSession::Primary;
+        }
+    }
+
+    fn command_targets_hidden_root_child(
+        &self,
+        context: &egui::Context,
+        command: AppCommand,
+    ) -> bool {
+        !self.primary_visible
+            && self.active == ActiveSession::Primary
+            && matches!(
+                command,
+                AppCommand::Cut | AppCommand::Copy | AppCommand::Paste | AppCommand::SelectAll
+            )
+            && crate::app::owner_has_focused_viewport(context, egui::ViewportId::ROOT, false)
+    }
+
+    fn reopen_document_window(&mut self, context: &egui::Context) {
+        let target = surviving_active_session(
+            self.active,
+            self.primary_visible,
+            self.secondary.iter().map(|window| window.id),
+        );
+        self.active = target;
+        match target {
+            ActiveSession::Primary => self.show_primary(context),
+            ActiveSession::Secondary(id) => {
+                let viewport = document_viewport_id(id);
+                context.send_viewport_cmd_to(viewport, egui::ViewportCommand::Minimized(false));
+                context.send_viewport_cmd_to(viewport, egui::ViewportCommand::Focus);
+            }
+        }
     }
     fn poll_process_close(&mut self, context: &egui::Context) {
         let Some(requested) = self.closing.current() else {
@@ -546,9 +611,11 @@ impl AppShell {
         }
         if !closed.is_empty() {
             self.secondary.retain(|window| !closed.contains(&window.id));
-            if matches!(self.active, ActiveSession::Secondary(id) if closed.contains(&id)) {
-                self.active = ActiveSession::Primary;
-            }
+            self.active = surviving_active_session(
+                self.active,
+                self.primary_visible,
+                self.secondary.iter().map(|window| window.id),
+            );
         }
     }
 }
@@ -562,16 +629,18 @@ impl eframe::App for AppShell {
         let _span = crate::performance::span("ui.shell.pass");
         crate::performance::tick(ui.ctx(), || !self.captures.has_pending());
         let context = ui.ctx().clone();
+        self.refresh_active_window(&context);
         let completions = crate::worker::take_detached_completions();
         if !completions.is_empty() {
-            self.primary.show_window_notice(completions.join("\n"));
+            self.active_editor_mut()
+                .show_window_notice(completions.join("\n"));
         }
         self.advance_capture_batch(&context);
         self.dispatch_process_requests(&context);
         self.guard_process_close(&context);
         let primary_close_requested = context.input(|input| input.viewport().close_requested());
         self.primary.ui_in_window(ui, frame);
-        if crate::app::owns_focused_input_viewport(&context) {
+        if self.primary_visible && crate::app::owns_focused_input_viewport(&context) {
             self.active = ActiveSession::Primary;
         }
         Self::collect_window_request_from(&mut self.pending_windows, &mut self.primary);
@@ -584,7 +653,11 @@ impl eframe::App for AppShell {
             let editor = self.active_editor();
             let shortcuts = editor.settings_snapshot().effective_shortcuts();
             let _ = crate::native_menu::update_macos_menu(&shortcuts, |command| {
-                editor.native_command_enabled(command)
+                (self.primary_visible
+                    || !self.secondary.is_empty()
+                    || command_available_without_document(command)
+                    || self.command_targets_hidden_root_child(&context, command))
+                    && editor.native_command_enabled(command)
             });
         }
     }
@@ -645,14 +718,14 @@ fn document_viewport_builder(title: String, activate: bool) -> egui::ViewportBui
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProcessRequestAction {
     Editor(AppCommand),
-    ReopenPrimary,
+    Reopen,
     CloseProcess,
 }
 
 fn process_request_action(request: NativeMenuRequest) -> ProcessRequestAction {
     match request {
         NativeMenuRequest::Command(command) => ProcessRequestAction::Editor(command),
-        NativeMenuRequest::Reopen => ProcessRequestAction::ReopenPrimary,
+        NativeMenuRequest::Reopen => ProcessRequestAction::Reopen,
         NativeMenuRequest::Quit => ProcessRequestAction::CloseProcess,
     }
 }
@@ -670,6 +743,36 @@ const fn command_reveals_primary(command: AppCommand) -> bool {
         command,
         AppCommand::Settings | AppCommand::NewWindow | AppCommand::OpenInNewWindow
     )
+}
+
+const fn command_available_without_document(command: AppCommand) -> bool {
+    matches!(
+        command,
+        AppCommand::New
+            | AppCommand::Open
+            | AppCommand::Settings
+            | AppCommand::NewWindow
+            | AppCommand::OpenInNewWindow
+    )
+}
+
+fn surviving_active_session(
+    active: ActiveSession,
+    primary_visible: bool,
+    secondary_ids: impl IntoIterator<Item = u64>,
+) -> ActiveSession {
+    let mut last = None;
+    for id in secondary_ids {
+        if active == ActiveSession::Secondary(id) {
+            return active;
+        }
+        last = Some(id);
+    }
+    if primary_visible {
+        ActiveSession::Primary
+    } else {
+        last.map_or(ActiveSession::Primary, ActiveSession::Secondary)
+    }
 }
 
 fn merge_session_histories<'a>(
@@ -748,6 +851,107 @@ const fn shell_persists_egui_memory(launch_mode: LaunchMode, editor_persists_mem
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closing_active_window_never_selects_a_hidden_root_over_a_survivor() {
+        assert_eq!(
+            surviving_active_session(ActiveSession::Secondary(2), false, [1, 3]),
+            ActiveSession::Secondary(3)
+        );
+        assert_eq!(
+            surviving_active_session(ActiveSession::Secondary(2), true, [1, 3]),
+            ActiveSession::Primary
+        );
+        assert_eq!(
+            surviving_active_session(ActiveSession::Secondary(1), false, [1, 3]),
+            ActiveSession::Secondary(1)
+        );
+        assert_eq!(
+            surviving_active_session(ActiveSession::Primary, false, [1]),
+            ActiveSession::Secondary(1)
+        );
+        assert_eq!(
+            surviving_active_session(ActiveSession::Secondary(2), false, []),
+            ActiveSession::Primary
+        );
+    }
+
+    #[test]
+    fn no_window_state_keeps_creation_and_settings_but_not_document_commands() {
+        for command in [
+            AppCommand::New,
+            AppCommand::NewWindow,
+            AppCommand::Open,
+            AppCommand::OpenInNewWindow,
+            AppCommand::Settings,
+        ] {
+            assert!(command_available_without_document(command));
+        }
+        for command in [
+            AppCommand::Save,
+            AppCommand::SaveAs,
+            AppCommand::Copy,
+            AppCommand::Paste,
+            AppCommand::Find,
+        ] {
+            assert!(!command_available_without_document(command));
+        }
+    }
+
+    #[test]
+    fn current_secondary_and_child_focus_are_visible_before_owner_paint() {
+        let context = egui::Context::default();
+        let owner = document_viewport_id(2);
+        let sibling = document_viewport_id(3);
+        for focused in [
+            owner,
+            crate::child_view::child_viewport_id(owner, "tiptoptyp-settings"),
+        ] {
+            let mut raw = egui::RawInput::default();
+            raw.viewports
+                .get_mut(&egui::ViewportId::ROOT)
+                .unwrap()
+                .focused = Some(false);
+            raw.viewports.insert(
+                focused,
+                egui::ViewportInfo {
+                    focused: Some(true),
+                    ..Default::default()
+                },
+            );
+            let mut output = context.run_ui(raw, |_| {
+                assert!(crate::app::owner_has_focused_viewport(
+                    &context, owner, true
+                ));
+                assert!(!crate::app::owner_has_focused_viewport(
+                    &context, sibling, true
+                ));
+                assert!(!crate::app::owns_focused_input_viewport(&context));
+                assert_eq!(
+                    crate::app::owner_has_focused_viewport(&context, owner, false),
+                    focused != owner
+                );
+            });
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn simultaneous_settings_edits_merge_with_active_conflict_precedence() {
+        let base = AppSettings::default();
+        let mut inactive = base.clone();
+        inactive.auto_save = !base.auto_save;
+        inactive.auto_save_delay_ms = 1234;
+        let mut active = base.clone();
+        active.line_wrap = !base.line_wrap;
+        active.auto_save_delay_ms = 2345;
+        let mut shared = base.clone();
+        shared.apply_edits(&base, inactive);
+        shared.apply_edits(&base, active);
+        assert_eq!(shared.auto_save, !base.auto_save);
+        assert_eq!(shared.line_wrap, !base.line_wrap);
+        assert_eq!(shared.auto_save_delay_ms, 2345);
+    }
     use std::collections::HashMap;
 
     #[derive(Default)]
@@ -818,7 +1022,7 @@ mod tests {
         );
         assert_eq!(
             process_request_action(NativeMenuRequest::Reopen),
-            ProcessRequestAction::ReopenPrimary
+            ProcessRequestAction::Reopen
         );
     }
 

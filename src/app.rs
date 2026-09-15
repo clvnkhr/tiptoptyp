@@ -1606,6 +1606,9 @@ impl EditorApp {
     }
 
     pub(crate) fn finish_window_close(&mut self) {
+        // macOS retains the root native window as a process host. Its closed
+        // document must not retain discarded edits or an autosave destination.
+        self.reset_untitled_document();
         self.document_workflow.revoke_close();
     }
 
@@ -3295,8 +3298,7 @@ impl EditorApp {
     }
 
     fn reset_untitled_document(&mut self) {
-        self.document.replace_untitled(DEFAULT_SOURCE);
-        self.autosave_deadline = None;
+        reset_untitled_buffer(&mut self.document, &mut self.autosave_deadline);
         self.pending_editor_selection = None;
         self.editor_attention = None;
         self.clear_preview_for_document(false);
@@ -7767,8 +7769,14 @@ impl EditorApp {
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     fn refresh_native_window_parent(&mut self, _context: &egui::Context) {}
 
-    pub(crate) fn take_settings_update(&mut self) -> Option<AppSettings> {
-        self.pending_settings.take()
+    pub(crate) fn has_settings_update(&self) -> bool {
+        self.pending_settings.is_some()
+    }
+
+    pub(crate) fn merge_settings_update(&mut self, target: &mut AppSettings) {
+        if let Some(edited) = self.pending_settings.take() {
+            target.apply_edits(&self.settings, edited);
+        }
     }
 
     pub(crate) fn take_workspace_history_removals(&mut self) -> Vec<PathBuf> {
@@ -11708,37 +11716,51 @@ fn same_path(left: &Path, right: &Path) -> bool {
     }
 }
 
+fn reset_untitled_buffer(document: &mut DocumentSession, autosave_deadline: &mut Option<Instant>) {
+    document.replace_untitled(DEFAULT_SOURCE);
+    *autosave_deadline = None;
+}
+
 fn source_editor_id(context: &egui::Context) -> egui::Id {
     viewport_scoped_id(context, "tiptoptyp-source-editor")
 }
 
-fn owned_input_viewports(context: &egui::Context) -> [egui::ViewportId; 12] {
-    let current = context.viewport_id();
+fn owned_input_viewports(current: egui::ViewportId) -> [egui::ViewportId; 12] {
+    use crate::child_view::child_viewport_id;
     [
         current,
-        scoped_child_viewport_id(context, "tiptoptyp-packages"),
-        scoped_child_viewport_id(context, "tiptoptyp-table-editor-overlay"),
-        scoped_child_viewport_id(context, "tiptoptyp-rename-overlay"),
-        scoped_child_viewport_id(context, "tiptoptyp-workspace-chooser"),
-        scoped_child_viewport_id(context, "tiptoptyp-modal-overlay"),
-        scoped_child_viewport_id(context, "tiptoptyp-settings"),
-        scoped_child_viewport_id(context, "tiptoptyp-shortcuts"),
-        scoped_child_viewport_id(context, "tiptoptyp-typst-overrides"),
-        scoped_child_viewport_id(context, "asset-hover-overlay"),
-        scoped_child_viewport_id(context, "tiptoptyp-popup-overlay"),
-        scoped_child_viewport_id(context, "diagnostic-tooltip-overlay"),
+        child_viewport_id(current, "tiptoptyp-packages"),
+        child_viewport_id(current, "tiptoptyp-table-editor-overlay"),
+        child_viewport_id(current, "tiptoptyp-rename-overlay"),
+        child_viewport_id(current, "tiptoptyp-workspace-chooser"),
+        child_viewport_id(current, "tiptoptyp-modal-overlay"),
+        child_viewport_id(current, "tiptoptyp-settings"),
+        child_viewport_id(current, "tiptoptyp-shortcuts"),
+        child_viewport_id(current, "tiptoptyp-typst-overrides"),
+        child_viewport_id(current, "asset-hover-overlay"),
+        child_viewport_id(current, "tiptoptyp-popup-overlay"),
+        child_viewport_id(current, "diagnostic-tooltip-overlay"),
     ]
 }
 
 pub(crate) fn owns_focused_input_viewport(context: &egui::Context) -> bool {
-    let owned = owned_input_viewports(context);
+    owner_has_focused_viewport(context, context.viewport_id(), true)
+}
+
+pub(crate) fn owner_has_focused_viewport(
+    context: &egui::Context,
+    owner: egui::ViewportId,
+    owner_visible: bool,
+) -> bool {
+    let owned = owned_input_viewports(owner);
     context.input(|input| {
         owned.into_iter().any(|viewport| {
-            input
-                .raw
-                .viewports
-                .get(&viewport)
-                .is_some_and(|info| info.focused == Some(true))
+            (owner_visible || viewport != owner)
+                && input
+                    .raw
+                    .viewports
+                    .get(&viewport)
+                    .is_some_and(|info| info.focused == Some(true))
         })
     })
 }
@@ -11749,7 +11771,7 @@ fn focused_input_viewport(context: &egui::Context) -> egui::ViewportId {
     // `EditorApp` is rendered once per pass, so scanning all focused viewports
     // would let the primary editor steal shortcuts typed into a secondary
     // document before that document's callback runs.
-    let owned = owned_input_viewports(context);
+    let owned = owned_input_viewports(current);
     context.input(|input| {
         owned
             .into_iter()
