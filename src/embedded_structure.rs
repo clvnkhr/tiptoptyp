@@ -21,6 +21,17 @@ pub(crate) fn literal_regions(
     if !quoted {
         return regions(source, language);
     }
+    let (decoded, boundaries) = decode_literal(source);
+    regions(&decoded, language)
+        .into_iter()
+        .map(|mut region| {
+            region.range = boundaries[region.range.start]..boundaries[region.range.end];
+            region
+        })
+        .collect()
+}
+
+pub(crate) fn decode_literal(source: &str) -> (String, Vec<usize>) {
     let mut decoded = String::new();
     let mut boundaries = vec![0];
     let mut chars = source.char_indices().peekable();
@@ -58,13 +69,7 @@ pub(crate) fn literal_regions(
         boundaries.extend(std::iter::repeat_n(start, ch.len_utf8() - 1));
         boundaries.push(end);
     }
-    regions(&decoded, language)
-        .into_iter()
-        .map(|mut region| {
-            region.range = boundaries[region.range.start]..boundaries[region.range.end];
-            region
-        })
-        .collect()
+    (decoded, boundaries)
 }
 
 pub(crate) fn regions(source: &str, language: EmbeddedLanguage) -> Vec<Region> {

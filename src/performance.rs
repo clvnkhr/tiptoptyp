@@ -4,7 +4,9 @@
 #[cfg(feature = "profiling")]
 mod recording;
 #[cfg(feature = "profiling")]
-pub(crate) use recording::{Session, span, take_no_window_request, tick};
+pub(crate) use recording::{
+    Session, secondary_repaints, span, take_multi_window_request, take_no_window_request, tick,
+};
 
 #[cfg(not(feature = "profiling"))]
 pub(crate) struct Session;
@@ -42,6 +44,15 @@ pub(crate) fn take_no_window_request() -> bool {
     false
 }
 
+#[cfg(not(feature = "profiling"))]
+pub(crate) fn take_multi_window_request() -> bool {
+    false
+}
+
+#[cfg(not(feature = "profiling"))]
+#[inline(always)]
+pub(crate) fn secondary_repaints(_context: &eframe::egui::Context) {}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -50,5 +61,7 @@ mod tests {
         super::tick(&eframe::egui::Context::default(), || {
             panic!("dormant profiling must not acquire the capture-state lock")
         });
+        assert!(!super::take_multi_window_request());
+        super::secondary_repaints(&eframe::egui::Context::default());
     }
 }

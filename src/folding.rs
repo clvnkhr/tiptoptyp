@@ -69,6 +69,12 @@ impl Folding {
         (available - self.marker_width).max(1.0)
     }
 
+    pub(crate) fn rekey(&mut self, old: DocumentKey, new: DocumentKey) {
+        if self.key == Some(old) {
+            self.key = Some(new);
+        }
+    }
+
     pub(crate) fn prepare(
         &mut self,
         key: DocumentKey,
@@ -82,31 +88,11 @@ impl Folding {
             .key
             .is_some_and(|old| old.owner == key.owner && old.epoch == key.epoch);
         let retained = if same_document && !self.collapsed.is_empty() {
-            let prefix = self
-                .source
-                .bytes()
-                .zip(source.bytes())
-                .take_while(|(a, b)| a == b)
-                .count();
-            let suffix = self.source.as_bytes()[prefix..]
-                .iter()
-                .rev()
-                .zip(source.as_bytes()[prefix..].iter().rev())
-                .take_while(|(a, b)| a == b)
-                .count();
-            let old_end = self.source.len() - suffix;
+            self.remap_unchanged_regions(&source);
             self.regions
                 .iter()
                 .filter(|region| self.collapsed.contains(&region.line))
-                .filter_map(|region| {
-                    if region.end_byte <= prefix {
-                        Some(region.header_byte)
-                    } else if region.header_byte >= old_end {
-                        Some(source.len() - (self.source.len() - region.header_byte))
-                    } else {
-                        None
-                    }
-                })
+                .map(|region| region.header_byte)
                 .collect::<BTreeSet<_>>()
         } else {
             BTreeSet::new()
@@ -162,6 +148,20 @@ impl Folding {
         self.cached = None;
     }
 
+    pub(crate) fn collapse_all(&mut self) {
+        self.collapsed
+            .extend(self.regions.iter().map(|region| region.line));
+        self.cached = None;
+    }
+
+    pub(crate) fn region_at(&self, line: usize) -> Option<&FoldRegion> {
+        // The nearest enclosing header wins, including its own header line.
+        self.regions
+            .iter()
+            .rev()
+            .find(|region| region.line <= line && line < region.end_line)
+    }
+
     pub(crate) fn toggle(&mut self, line: usize) {
         if !self.collapsed.remove(&line) {
             self.collapsed.insert(line);
@@ -196,10 +196,14 @@ impl Folding {
         {
             return Arc::clone(output);
         }
-        // TextEdit may lay out again during an edit, before prepare has seen
-        // the new revision. Never apply old line boundaries to new text.
+        // TextEdit lays out each mutation before DocumentSession commits its
+        // revision. Preserve unaffected folds in that very layout: returning
+        // an expanded galley would paint a flash and scroll to the wrong y.
         if original.job.text.as_str() != self.source.as_ref() {
-            return original;
+            self.remap_unchanged_regions(&original.job.text);
+            if self.collapsed.is_empty() {
+                return original;
+            }
         }
         let mut hidden: Vec<Range<usize>> = Vec::new();
         for region in self
@@ -262,6 +266,64 @@ impl Folding {
         let result = Arc::new(galley);
         self.cached = Some((original, Arc::clone(&result)));
         result
+    }
+
+    /// Translate only untouched regions through one contiguous edit. This is
+    /// also used between multiple TextEdit events in the same frame, without
+    /// reparsing syntax or waiting for the committed document revision.
+    fn remap_unchanged_regions(&mut self, source: &str) {
+        if source == self.source.as_ref() {
+            return;
+        }
+        let mut prefix = self
+            .source
+            .bytes()
+            .zip(source.bytes())
+            .take_while(|(a, b)| a == b)
+            .count();
+        while !self.source.is_char_boundary(prefix) || !source.is_char_boundary(prefix) {
+            prefix -= 1;
+        }
+        let mut suffix = self.source.as_bytes()[prefix..]
+            .iter()
+            .rev()
+            .zip(source.as_bytes()[prefix..].iter().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+        while !self.source.is_char_boundary(self.source.len() - suffix)
+            || !source.is_char_boundary(source.len() - suffix)
+        {
+            suffix -= 1;
+        }
+        let old_end = self.source.len() - suffix;
+        let new_chars = source.chars().count();
+        let old_lines = self.source.bytes().filter(|&b| b == b'\n').count() + 1;
+        let new_lines = source.bytes().filter(|&b| b == b'\n').count() + 1;
+        let mut collapsed = BTreeSet::new();
+        self.regions.retain_mut(|region| {
+            let was_collapsed = self.collapsed.contains(&region.line);
+            if region.end_byte <= prefix {
+                // Entirely before the edit, including insertion at its end.
+            } else if region.header_byte >= old_end {
+                region.header_byte = source.len() - (self.source.len() - region.header_byte);
+                region.end_byte = source.len() - (self.source.len() - region.end_byte);
+                region.header = new_chars - (self.char_count - region.header);
+                region.hidden_chars = (new_chars - (self.char_count - region.hidden_chars.start))
+                    ..(new_chars - (self.char_count - region.hidden_chars.end));
+                region.line = new_lines - (old_lines - region.line);
+                region.end_line = new_lines - (old_lines - region.end_line);
+            } else {
+                return false; // A touched region is revealed, never misapplied.
+            }
+            if was_collapsed {
+                collapsed.insert(region.line);
+            }
+            true
+        });
+        self.collapsed = collapsed;
+        self.char_count = new_chars;
+        self.source = Arc::from(source);
+        self.cached = None;
     }
 }
 #[cfg(test)]
@@ -369,6 +431,115 @@ mod tests {
                 assert!(Arc::ptr_eq(&edited, &folding.layout(Arc::clone(&edited))));
             })
             .drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn edit_time_projection_matches_committed_layout_before_and_after_unicode_folds() {
+        let source = "préface\n#let f() = {\n  αβ\n}\ntail Ω";
+        for edited in [
+            source.replace("préface", "préface\n新"),
+            source.replace("préface\n", ""),
+            source.replace("préface", "prèface"),
+            source.replace("tail Ω", "tail Ω!\nmore"),
+        ] {
+            egui::Context::default()
+                .run_ui(Default::default(), |ui| {
+                    let mut folding = Folding::default();
+                    prepare(&mut folding, source, 0);
+                    folding.toggle(1);
+                    let original = ui.painter().layout(
+                        edited.clone(),
+                        egui::FontId::monospace(14.0),
+                        egui::Color32::WHITE,
+                        90.0,
+                    );
+                    let during_edit = folding.layout(Arc::clone(&original));
+                    assert!(
+                        during_edit.size().y < original.size().y,
+                        "no expanded edit frame"
+                    );
+                    let destination = edited[..edited.find("tail").unwrap()].chars().count();
+                    let caret = egui::text::CCursor::new(destination);
+                    let rect = during_edit.pos_from_cursor(caret);
+                    assert_eq!(
+                        during_edit.cursor_from_pos(rect.center().to_vec2()).index.0,
+                        destination
+                    );
+                    prepare(&mut folding, &edited, 1);
+                    let committed = folding.layout(original);
+                    assert_eq!(during_edit.rows, committed.rows);
+                    assert_eq!(rect, committed.pos_from_cursor(caret));
+                })
+                .drop_without_applying_deltas();
+        }
+    }
+
+    #[test]
+    fn typing_below_a_large_fold_never_scrolls_through_expanded_geometry() {
+        use egui_kittest::Harness;
+        struct State {
+            text: String,
+            folding: Folding,
+            caret: Option<egui::Rect>,
+            scroll: egui::Vec2,
+            height: f32,
+        }
+        let source = format!("#let f() = {{\n{}\n}}\ntail Ω", "  // αβ\n".repeat(100));
+        let mut folding = Folding::default();
+        prepare(&mut folding, &source, 0);
+        folding.toggle(0);
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(400.0, 200.0))
+            .build_ui_state(
+                |ui, state: &mut State| {
+                    let id = ui.id().with("fold-editor");
+                    if state.caret.is_none() {
+                        let mut edit = egui::text_edit::TextEditState::default();
+                        edit.cursor
+                            .set_char_range(Some(egui::text::CCursorRange::one(
+                                egui::text::CCursor::new(state.text.chars().count()),
+                            )));
+                        edit.store(ui.ctx(), id);
+                        ui.memory_mut(|m| m.request_focus(id));
+                    }
+                    let output = egui::ScrollArea::vertical().show(ui, |ui| {
+                        let mut layout = |ui: &egui::Ui, text: &dyn egui::TextBuffer, width| {
+                            state.folding.layout(ui.painter().layout(
+                                text.as_str().into(),
+                                egui::FontId::monospace(14.0),
+                                egui::Color32::WHITE,
+                                width,
+                            ))
+                        };
+                        let output = egui::TextEdit::multiline(&mut state.text)
+                            .id(id)
+                            .code_editor()
+                            .layouter(&mut layout)
+                            .show(ui);
+                        let cursor = output.state.cursor.char_range().unwrap().primary;
+                        state.caret = Some(output.galley.pos_from_cursor(cursor));
+                        state.height = output.galley.size().y;
+                    });
+                    state.scroll = output.state.offset;
+                },
+                State {
+                    text: source,
+                    folding,
+                    caret: None,
+                    scroll: egui::Vec2::ZERO,
+                    height: 0.0,
+                },
+            );
+        harness.run();
+        let height = harness.state().height;
+        for event in [egui::Event::Text("x".into()), egui::Event::Text("é".into())] {
+            harness.event(event);
+            harness.step(); // Check the editing frame, not only a settled repaint.
+            assert_eq!(harness.state().height, height);
+            assert_eq!(harness.state().scroll.y, 0.0);
+            assert!(harness.state().folding.is_collapsed(0));
+        }
+        assert!(harness.state().text.ends_with("tail Ωxé"));
     }
 
     #[test]

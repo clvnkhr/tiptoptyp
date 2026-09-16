@@ -1,5 +1,11 @@
 mod editor_view;
+mod extra_shortcuts;
+mod git_actions;
 mod lifecycle;
+mod mitex_mode;
+mod raster_view;
+mod tabs;
+mod workspace_view;
 use lifecycle::DocumentLifecycle;
 mod native_views;
 mod settings_panel;
@@ -352,9 +358,11 @@ const fn settled_snapshot_preview_status(
         return None;
     }
     match scene {
-        UiSnapshotScene::Main | UiSnapshotScene::FindReplace => {
-            Some(PreviewStatus::Ready(Duration::ZERO))
-        }
+        UiSnapshotScene::Main
+        | UiSnapshotScene::Tabs
+        | UiSnapshotScene::TabsPdf
+        | UiSnapshotScene::TabsImage
+        | UiSnapshotScene::FindReplace => Some(PreviewStatus::Ready(Duration::ZERO)),
         UiSnapshotScene::ProblemsPanel => Some(PreviewStatus::Error),
         _ => None,
     }
@@ -433,6 +441,7 @@ enum UiIcon {
     Previous,
     Refresh,
     Eye,
+    EyeClosed,
     Up,
     Warning,
     Waiting,
@@ -515,6 +524,8 @@ struct EditorCompletionState {
     version: i32,
     request_token: u64,
     cursor: usize,
+    // Cursor in `source`: canonical for LSP, displayed for local completions.
+    source_cursor: usize,
     anchor: Rect,
     explicit: bool,
     is_incomplete: bool,
@@ -707,7 +718,7 @@ fn may_create_window_webview(
         EditorWindowHost::Root => {
             may_create_embedded_webview(prevent_background_activation, focused)
         }
-        // The active platform handle is only an exact match for an immediate
+        // The active platform handle is only an exact match for a secondary
         // child viewport while egui reports that same viewport focused.
         EditorWindowHost::Secondary => focused == Some(true),
     }
@@ -749,6 +760,11 @@ enum AppPopup {
 
 #[derive(Debug, Clone)]
 enum AppPopupAction {
+    GitHunk(
+        crate::git::editor::actions::Action,
+        DocumentKey,
+        crate::git::editor::ChunkDiff,
+    ),
     Command(AppCommand),
     Editor(EditorMenuAction),
     Workspace(WorkspaceMenuAction),
@@ -823,6 +839,7 @@ enum SettingsTarget {
     LineNumbers,
     StickyContextRows,
     AutoPairDelimiters,
+    MitexDollars,
     RainbowBrackets,
     AutoSave,
     AutoSaveDelay,
@@ -847,7 +864,7 @@ enum SettingsTarget {
 }
 
 impl SettingsTarget {
-    const ALL: [Self; 33] = [
+    const ALL: [Self; 34] = [
         Self::Appearance,
         Self::TypstSyntax,
         Self::LightTheme,
@@ -860,6 +877,7 @@ impl SettingsTarget {
         Self::LineNumbers,
         Self::StickyContextRows,
         Self::AutoPairDelimiters,
+        Self::MitexDollars,
         Self::RainbowBrackets,
         Self::AutoSave,
         Self::AutoSaveDelay,
@@ -897,6 +915,7 @@ impl SettingsTarget {
             Self::LineNumbers => "Line numbers",
             Self::StickyContextRows => "Sticky context rows",
             Self::AutoPairDelimiters => "Auto-close delimiters",
+            Self::MitexDollars => "Auto-enable miTeX for compatible documents",
             Self::RainbowBrackets => "Rainbow brackets",
             Self::AutoSave => "Auto-save",
             Self::AutoSaveDelay => "Auto-save delay",
@@ -935,6 +954,7 @@ impl SettingsTarget {
             | Self::LineNumbers
             | Self::StickyContextRows
             | Self::AutoPairDelimiters
+            | Self::MitexDollars
             | Self::RainbowBrackets
             | Self::AutoSave
             | Self::AutoSaveDelay
@@ -976,6 +996,9 @@ impl SettingsTarget {
             Self::StickyContextRows => "editor headings scopes sections breadcrumbs",
             Self::AutoPairDelimiters => {
                 "editor automatic pairing brackets quotes dollar backspace matching"
+            }
+            Self::MitexDollars => {
+                "mitex latex tex dollar inline display block math package version translation"
             }
             Self::RainbowBrackets => {
                 "editor color colour palettes cycles nesting parentheses square braces mixed math"
@@ -1044,6 +1067,7 @@ fn take_settings_scroll_target(
 
 pub struct EditorApp {
     document: DocumentSession,
+    tabs: tabs::Tabs,
     lifecycle: DocumentLifecycle,
     process_close_pending: bool,
     highlighter: SyntaxHighlighter,
@@ -1052,6 +1076,7 @@ pub struct EditorApp {
 
     compiler: Compiler,
     asset_loader: AssetLoader,
+    asset_preview: PreviewController,
     asset_token: crate::asset::AssetToken,
     asset_thumbnail_loader: AssetThumbnailLoader,
     asset_thumbnail_token: crate::asset::ThumbnailToken,
@@ -1065,6 +1090,7 @@ pub struct EditorApp {
 
     view_mode: ViewMode,
     explorer: ExplorerPanelState,
+    focus_explorer_search: bool,
     problems_visible: bool,
     settings_visible: bool,
     settings_window: Arc<std::sync::Mutex<SettingsWindow>>,
@@ -1101,6 +1127,7 @@ pub struct EditorApp {
     // same one-shot reveal, preserving subsequent user choice.
     git_explorer_reveal: bool,
     git_editor: crate::git::editor::GitEditorState,
+    git_hunk_job: crate::worker::ExclusiveJob<String>,
     workspace_chooser_visible: bool,
     workspace_history_removals: Vec<PathBuf>,
     workspace: Option<WorkspaceTree>,
@@ -1316,6 +1343,7 @@ impl EditorApp {
             settings.typst_overrides.for_dark(active_theme.dark_mode),
         ));
         let mut app = Self {
+            tabs: tabs::Tabs::new(snapshot_scene.is_none()),
             lifecycle,
             process_close_pending: false,
             document: DocumentSession::new(
@@ -1328,6 +1356,7 @@ impl EditorApp {
             generic_highlighter,
             compiler: Compiler::new(crate::worker::RepaintTarget::new(context, viewport)),
             asset_loader: AssetLoader::new(crate::worker::RepaintTarget::new(context, viewport)),
+            asset_preview: PreviewController::new(false, PreviewPreference::Native),
             asset_token: Default::default(),
             asset_thumbnail_loader: AssetThumbnailLoader::new(crate::worker::RepaintTarget::new(
                 context, viewport,
@@ -1347,6 +1376,7 @@ impl EditorApp {
             settings_window: Arc::default(),
             retain_settings_viewport: false,
             shortcut_editor_visible: false,
+            focus_explorer_search: false,
             shortcut_query: String::new(),
             shortcut_capture: None,
             shortcut_notice: None,
@@ -1375,6 +1405,7 @@ impl EditorApp {
             git: crate::git::GitPanel::default(),
             git_explorer_reveal: true,
             git_editor: crate::git::editor::GitEditorState::default(),
+            git_hunk_job: Default::default(),
             workspace_chooser_visible: false,
             workspace_history_removals: Vec::new(),
             workspace: None,
@@ -1476,6 +1507,10 @@ impl EditorApp {
                 app.schedule_compile_now();
             }
         } else {
+            if app.settings.mitex_auto_enable && app.snapshot_scene.is_none() {
+                app.document.replace_unprojected_untitled("");
+                app.activate_preferred_tex();
+            }
             app.reset_document_services();
         }
         if app.snapshot_scene.is_some() {
@@ -1524,21 +1559,30 @@ impl EditorApp {
         app
     }
 
-    pub(crate) fn ui_in_window(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        <Self as eframe::App>::ui(self, ui, frame);
+    #[cfg(test)]
+    pub(crate) fn dormant_for_tests(context: &egui::Context, root: PathBuf) -> Self {
+        Self::dormant_window_for_tests(context, root, egui::ViewportId::ROOT)
     }
 
     #[cfg(test)]
-    pub(crate) fn dormant_for_tests(context: &egui::Context, root: PathBuf) -> Self {
+    pub(crate) fn dormant_window_for_tests(
+        context: &egui::Context,
+        root: PathBuf,
+        viewport: egui::ViewportId,
+    ) -> Self {
         Self::new_session(
             context,
-            egui::ViewportId::ROOT,
+            viewport,
             Some(root),
             CaptureController::disabled_for_tests(),
             None,
             Some(UiSnapshotScene::Main),
             AppSettings::default(),
-            EditorWindowHost::Root,
+            if viewport == egui::ViewportId::ROOT {
+                EditorWindowHost::Root
+            } else {
+                EditorWindowHost::Secondary
+            },
             DocumentLifecycle::Dormant,
         )
     }
@@ -1557,7 +1601,17 @@ impl EditorApp {
             .clone()
     }
 
+    pub(crate) fn document_path_for_profile(&self) -> PathBuf {
+        self.document
+            .path()
+            .clone()
+            .expect("profiling uses a saved fixture")
+    }
+
     pub(crate) fn native_command_enabled(&self, command: AppCommand) -> bool {
+        if self.tabs.is_empty() {
+            return workspace_view::empty_workspace_command(command);
+        }
         match command_spec(command).requirement {
             CommandRequirement::Always => true,
             CommandRequirement::SavedDocument => self.document.path().is_some(),
@@ -1589,13 +1643,16 @@ impl EditorApp {
     }
 
     pub(crate) fn document_key(&self) -> DocumentKey {
-        self.document.key()
+        self.tabs
+            .process_close_key
+            .unwrap_or_else(|| self.document.key())
     }
     pub(crate) fn begin_process_close(&mut self) -> bool {
         if self.document_flow_busy() {
             return false;
         }
         self.process_close_pending = true;
+        self.tabs.process_close_key = Some(self.document.key());
         self.document_workflow.revoke_close();
         self.request_document_replacement(
             DeferredDocumentAction::CloseWindow,
@@ -1617,7 +1674,9 @@ impl EditorApp {
     }
     pub(crate) fn finish_process_close(&mut self, accepted: bool) {
         self.process_close_pending = false;
+        self.tabs.process_close_key = None;
         if !accepted {
+            self.tabs.approved.clear();
             self.document_workflow.revoke_close();
         }
     }
@@ -1627,16 +1686,23 @@ impl EditorApp {
 
     pub(crate) fn is_dirty_for_close(&self) -> bool {
         self.is_dirty()
+            || self
+                .tabs
+                .parked
+                .iter()
+                .flatten()
+                .any(|tab| tab.document.is_dirty())
     }
 
     pub(crate) fn close_accepted(&self) -> bool {
-        self.document_workflow.may_close(self.document.key())
+        self.document_workflow.may_close(self.document.key()) && self.tabs_close_approved()
     }
 
     pub(crate) fn finish_window_close(&mut self) {
         if !self.lifecycle.suspend() {
             return;
         }
+        self.tabs = tabs::Tabs::default();
         let _ = self.compiler.pause(self.document.revision());
         self.stop_tinymist_session();
         self.preview.recovery.reset();
@@ -1694,7 +1760,11 @@ impl EditorApp {
     }
 
     /// No painting or stale root input in eframe's hidden-window logic hook.
-    pub(crate) fn hidden_host_logic(&mut self, context: &egui::Context, frame: &eframe::Frame) {
+    pub(crate) fn hidden_host_logic(
+        &mut self,
+        context: &egui::Context,
+        frame: Option<&eframe::Frame>,
+    ) {
         let _span = crate::performance::span("host.dormant.logic");
         self.process_open_requests(context);
         self.execute_pending_document_action(context, frame);
@@ -1724,7 +1794,11 @@ impl EditorApp {
         self.record_notice_transition();
     }
 
-    pub(crate) fn hidden_host_ui(&mut self, context: &egui::Context, frame: &eframe::Frame) {
+    pub(crate) fn hidden_host_ui(
+        &mut self,
+        context: &egui::Context,
+        frame: Option<&eframe::Frame>,
+    ) {
         let _span = crate::performance::span("host.dormant.ui");
         self.sync_runtime_settings(context);
         if owner_has_focused_viewport(context, context.viewport_id(), false) {
@@ -1741,7 +1815,7 @@ impl EditorApp {
     pub(crate) fn register_dormant_settings(
         &mut self,
         context: &egui::Context,
-        frame: &eframe::Frame,
+        frame: Option<&eframe::Frame>,
     ) {
         // Once allocated as a process host, keep this native surface alive
         // across document resumes. Dropping it can detach the current CGL
@@ -1766,6 +1840,15 @@ impl EditorApp {
     }
 
     fn title(&self) -> String {
+        if self.tabs.is_empty() {
+            return format!(
+                "{} — tiptoptyp",
+                self.workspace_root
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+            );
+        }
         let dirty = if self.is_dirty() { "*" } else { "" };
         format!("{}{dirty} — tiptoptyp", self.document_name())
     }
@@ -1917,19 +2000,26 @@ impl EditorApp {
     fn designated_preview_path(&self) -> Option<PathBuf> {
         // A QA scene previews its explicit fixture, regardless of the user's
         // saved project entry. Do not mutate the persisted setting.
-        if self.snapshot_scene.is_some() {
+        if self.snapshot_scene.is_some_and(|scene| {
+            !matches!(
+                scene,
+                UiSnapshotScene::Tabs | UiSnapshotScene::TabsPdf | UiSnapshotScene::TabsImage
+            )
+        }) {
             return None;
         }
-        let root = canonical_or_absolute(&self.workspace_root);
-        let key = root.to_str()?;
-        let value = self.settings.preview_files.get(key)?;
-        let path = canonical_or_absolute(Path::new(value));
-        (path.starts_with(&root)
-            && path.is_file()
-            && path
-                .extension()
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("typ")))
-        .then_some(path)
+        if self.tabs.len() > 1 || self.tabs.preview_explicit {
+            return self
+                .tab_preview_document()
+                .filter(|document| document.kind().is_typst())
+                .map(|document| {
+                    document
+                        .path()
+                        .clone()
+                        .unwrap_or_else(|| self.untitled_tab_path(self.tabs.preview))
+                });
+        }
+        None
     }
 
     fn preview_document_path(&self) -> PathBuf {
@@ -1948,13 +2038,17 @@ impl EditorApp {
     }
 
     fn typst_preview_available(&self) -> bool {
-        typst_preview_available_for(
-            self.document.kind(),
-            self.designated_preview_path().is_some(),
-        )
+        !self.tabs.is_empty()
+            && typst_preview_available_for(
+                self.document.kind(),
+                self.designated_preview_path().is_some(),
+            )
     }
 
     fn current_is_preview_document(&self) -> bool {
+        if self.tabs.len() > 1 || self.tabs.preview_explicit {
+            return self.tabs.active == self.tabs.preview && self.document.kind().is_typst();
+        }
         match &self.document.path() {
             Some(path) => same_path(path, &self.preview_document_path()),
             None => self.designated_preview_path().is_none() && self.document.kind().is_typst(),
@@ -1962,16 +2056,39 @@ impl EditorApp {
     }
 
     fn preview_document_source(&self) -> Result<String, String> {
+        if (self.tabs.len() > 1 || self.tabs.preview_explicit)
+            && let Some(document) = self
+                .tab_preview_document()
+                .filter(|document| document.kind().is_typst())
+        {
+            if document.config().is_none() {
+                return Ok(document.source().clone());
+            }
+            return document
+                .canonical_snapshot()
+                .map(|snapshot| snapshot.source().to_owned())
+                .map_err(|e| e.to_string());
+        }
         let path = self.preview_document_path();
         if self.current_is_preview_document() {
-            return Ok(self.document.source().clone());
+            return self.canonical_document_source();
         }
         fs::read_to_string(&path)
             .map_err(|error| format!("Could not read preview entry {}: {error}", path.display()))
     }
 
+    fn canonical_document_source(&self) -> Result<String, String> {
+        if self.document.config().is_none() {
+            return Ok(self.document.source().clone());
+        }
+        self.document
+            .canonical_snapshot()
+            .map(|snapshot| snapshot.source().to_owned())
+            .map_err(|error| error.to_string())
+    }
+
     fn schedule_project_index(&mut self) {
-        if !self.lifecycle.allows_document_work() {
+        if !self.lifecycle.allows_document_work() || self.tabs.is_empty() {
             return;
         }
         self.project_index_deadline
@@ -1981,11 +2098,11 @@ impl EditorApp {
     fn rebuild_project_index(&mut self, context: &egui::Context) {
         self.project_index_deadline.clear();
         let main = self.preview_document_path();
-        let root = self.project_root();
+        let root = self.tab_preview_root().to_owned();
         let mut overrides = BTreeMap::new();
-        if self.document.kind().is_typst() {
-            let path = self.document.path().clone().unwrap_or_else(|| main.clone());
-            overrides.insert(canonical_or_absolute(&path), self.document.source().clone());
+        if let Err(()) = self.collect_tab_sources(&mut overrides) {
+            self.project_index_job.supersede();
+            return;
         }
         if let Err(error) = self.project_index_job.start_and_repaint(
             "tiptoptyp-project-index",
@@ -2041,39 +2158,14 @@ impl EditorApp {
             });
             return;
         }
-        let (Some(key), Some(value)) = (root.to_str(), path.to_str()) else {
+        if self.document_flow_busy() {
             return;
-        };
-        let selected = self
-            .designated_preview_path()
-            .is_some_and(|current| same_path(&current, &path));
-        if selected {
-            self.settings.preview_files.remove(key);
-        } else {
-            self.settings
-                .preview_files
-                .insert(key.to_owned(), value.to_owned());
         }
-        if let Some(settings) = &mut self.pending_settings {
-            if selected {
-                settings.preview_files.remove(key);
-            } else {
-                settings
-                    .preview_files
-                    .insert(key.to_owned(), value.to_owned());
-            }
+        let active = self.tabs.active;
+        if self.open_tab_path(path, context) {
+            self.select_preview_tab(self.tabs.active, context);
+            self.activate_tab(active, context);
         }
-        self.rebuild_project_index(context);
-        self.restart_tinymist_preserving_preview();
-        self.schedule_compile_now();
-        self.notice = Some(Notice {
-            message: if selected {
-                "Preview follows the active Typst document again".to_owned()
-            } else {
-                format!("Using {} for preview", path.display())
-            },
-            kind: NoticeKind::Success,
-        });
     }
 
     fn remember_open_document(&mut self, path: &Path) {
@@ -2113,6 +2205,12 @@ impl EditorApp {
         self.notice = None;
         self.editor_hover = None;
         self.editor_completion = None;
+        if self.document.config().is_some() {
+            // Mapped positions belong to the previous view revision.
+            self.preview.diagnostics.clear();
+            self.preview.tinymist_diagnostics.clear();
+            self.mark_diagnostics_changed();
+        }
         if self.document.kind().is_typst() {
             // Tinymist sees unsaved edits in every open source file. The CLI
             // fallback can only see an imported subfile after it is saved, so
@@ -2141,7 +2239,7 @@ impl EditorApp {
         self.autosave_deadline = (self.snapshot_scene.is_none()
             && self.settings.auto_save
             && self.document.path().is_some()
-            && self.document.source() != self.document.saved_source())
+            && self.document.is_dirty())
         .then(|| Instant::now() + Duration::from_millis(self.settings.auto_save_delay_ms.max(100)));
     }
 
@@ -2183,6 +2281,9 @@ impl EditorApp {
     }
 
     fn prepare_editor_source_data(&mut self) {
+        let projected = self.document.config().is_some();
+        self.editor_data.set_mitex_dollars(projected);
+        self.highlighter.set_mitex_dollars(projected);
         self.editor_data.prepare_source(&self.document.snapshot());
     }
 
@@ -2220,10 +2321,7 @@ impl EditorApp {
                 return;
             }
         };
-        let source_dir = preview_path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| self.project_root());
+        let source_dir = self.preview_source_directory();
         let display_name = preview_path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
@@ -2232,7 +2330,7 @@ impl EditorApp {
             revision: self.document.revision(),
             rasterize: self.raster_preview_required(),
             source,
-            project_root: self.project_root(),
+            project_root: self.tab_preview_root().to_owned(),
             source_dir,
             display_name,
             typst_executable: self.typst_tool.program.clone(),
@@ -2242,6 +2340,26 @@ impl EditorApp {
         match self.compiler.request(request) {
             Ok(()) => self.preview.status = PreviewStatus::Compiling,
             Err(error) => self.set_compile_error(error),
+        }
+    }
+
+    fn preview_source_directory(&self) -> PathBuf {
+        if self
+            .tab_preview_document()
+            .is_some_and(|document| document.kind().is_typst() && document.path().is_none())
+        {
+            return self.tab_preview_root().into();
+        }
+        if self.current_is_preview_document() && self.document.path().is_none() {
+            // The preview path is only a virtual identity for an untitled
+            // document. Relative imports and private mirrors need a real root.
+            self.current_directory()
+                .unwrap_or_else(|| self.project_root())
+        } else {
+            self.preview_document_path()
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| self.project_root())
         }
     }
 
@@ -2314,48 +2432,55 @@ impl EditorApp {
 
     fn receive_asset_results(&mut self, context: &egui::Context) {
         while let Some(result) = self.asset_loader.try_recv() {
-            if result.token != self.asset_token || !self.document.kind().preview_only() {
-                continue;
+            self.accept_asset_result(context, result);
+        }
+    }
+
+    fn accept_asset_result(&mut self, context: &egui::Context, result: crate::asset::AssetResult) {
+        if result.token != self.asset_token || !self.document.kind().preview_only() {
+            return;
+        }
+        match result.output {
+            Ok(LoadedAsset::Image(page)) => {
+                let key = ArtifactKey::unversioned(self.document.revision());
+                let image_size = page.size;
+                let mut texture = make_preview_texture(context, key, 0, page, false);
+                // Native PDF pages are 144-DPI rasters interpreted in
+                // 72-point coordinates. Doubling the image's logical
+                // raster size cancels that conversion and makes 100% mean
+                // one source image pixel per UI point.
+                texture.size = [
+                    image_size[0].saturating_mul(2),
+                    image_size[1].saturating_mul(2),
+                ];
+                self.asset_preview.replace_asset(key, None, vec![texture]);
             }
-            match result.output {
-                Ok(LoadedAsset::Image(page)) => {
-                    let key = ArtifactKey::unversioned(self.document.revision());
-                    let image_size = page.size;
-                    let mut texture = make_preview_texture(context, key, 0, page, false);
-                    // Native PDF pages are 144-DPI rasters interpreted in
-                    // 72-point coordinates. Doubling the image's logical
-                    // raster size cancels that conversion and makes 100% mean
-                    // one source image pixel per UI point.
-                    texture.size = [
-                        image_size[0].saturating_mul(2),
-                        image_size[1].saturating_mul(2),
-                    ];
-                    self.preview.replace_asset(key, None, vec![texture]);
+            Ok(LoadedAsset::Pdf { bytes, pages }) => {
+                let key = ArtifactKey::unversioned(self.document.revision());
+                let pages = pages
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, page)| {
+                        make_preview_texture(context, key, index, page, self.asset_preview.dark)
+                    })
+                    .collect();
+                self.asset_preview
+                    .replace_asset(key, Some(bytes.into()), pages);
+                if let Some(page) = self.pending_asset_page.take() {
+                    self.asset_preview.requested_page =
+                        Some(page.min(self.asset_preview.content.pages().len().saturating_sub(1)));
                 }
-                Ok(LoadedAsset::Pdf { bytes, pages }) => {
-                    let key = ArtifactKey::unversioned(self.document.revision());
-                    let pages = pages
-                        .into_iter()
-                        .enumerate()
-                        .map(|(index, page)| {
-                            make_preview_texture(context, key, index, page, self.preview.dark)
-                        })
-                        .collect();
-                    self.preview.replace_asset(key, Some(bytes.into()), pages);
-                    if let Some(page) = self.pending_asset_page.take() {
-                        self.preview.requested_page =
-                            Some(page.min(self.preview.content.pages().len().saturating_sub(1)));
-                    }
-                    self.complete_pending_export();
-                }
-                Err(error) => {
+                self.complete_pending_export();
+            }
+            Err(error) => {
+                if !self.typst_preview_available() {
                     self.document_workflow.pending_export = None;
-                    self.preview.status = PreviewStatus::Error;
-                    self.notice = Some(Notice {
-                        message: error,
-                        kind: NoticeKind::Error,
-                    });
                 }
+                self.asset_preview.status = PreviewStatus::Error;
+                self.notice = Some(Notice {
+                    message: error,
+                    kind: NoticeKind::Error,
+                });
             }
         }
     }
@@ -2475,7 +2600,26 @@ impl EditorApp {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| self.document_name());
-        let diagnostics = parse_typst_short_output(&raw, Some(Path::new(&display_name)));
+        let mut diagnostics = parse_typst_short_output(&raw, Some(Path::new(&display_name)));
+        if self.document.config().is_some()
+            && let Ok(snapshot) = self.document.canonical_snapshot()
+        {
+            for diagnostic in &mut diagnostics {
+                if self.diagnostic_targets_current_document(diagnostic) {
+                    diagnostic.location = diagnostic.location.and_then(|location| {
+                        let cursor = char_index_at_line_column(
+                            snapshot.source(),
+                            location.line,
+                            location.column,
+                        );
+                        let cursor = snapshot.editor_scalar_cursor(ScalarOffset::new(cursor))?;
+                        let (line, column) =
+                            line_column_at_char(snapshot.editor_source(), cursor.get());
+                        Some(crate::diagnostics::DiagnosticLocation { line, column })
+                    });
+                }
+            }
+        }
         self.preview.set_diagnostics(raw, diagnostics);
     }
 
@@ -2542,7 +2686,7 @@ impl EditorApp {
         }
     }
 
-    fn compile_pdf(&mut self, frame: &eframe::Frame) {
+    fn compile_pdf(&mut self, frame: Option<&eframe::Frame>) {
         if !self.typst_preview_available() {
             self.notice = Some(Notice {
                 message: "Compile needs a Typst preview entry".to_owned(),
@@ -2551,11 +2695,18 @@ impl EditorApp {
             return;
         }
         let designated = self.designated_preview_path();
-        let Some(path) = default_compile_pdf_path(
-            designated.as_deref(),
-            self.document.kind(),
-            self.document.path().as_deref(),
-        ) else {
+        let destination = if self.tabs.len() > 1 || self.tabs.preview_explicit {
+            self.tab_preview_document().and_then(|document| {
+                default_compile_pdf_path(None, document.kind(), document.path().as_deref())
+            })
+        } else {
+            default_compile_pdf_path(
+                designated.as_deref(),
+                self.document.kind(),
+                self.document.path().as_deref(),
+            )
+        };
+        let Some(path) = destination else {
             // An unsaved Typst document has no meaningful adjacent output
             // path, so ask once where its first PDF should be written.
             self.choose_pdf_output(frame, PdfWriteIntent::Compile);
@@ -2571,6 +2722,8 @@ impl EditorApp {
         self.next_external_file_check = Instant::now();
         self.asset_token.advance();
         self.asset_loader.cancel_before(self.asset_token);
+        self.asset_preview
+            .clear_for_document(self.document.revision(), false);
         self.preview
             .clear_for_document(self.document.revision(), preserve_designated_preview);
         self.pending_asset_page = None;
@@ -2587,7 +2740,7 @@ impl EditorApp {
         }
     }
 
-    fn handle_shortcuts(&mut self, context: &egui::Context, frame: &eframe::Frame) {
+    fn handle_shortcuts(&mut self, context: &egui::Context, frame: Option<&eframe::Frame>) {
         let settings_keys = self.settings_window.lock().unwrap().take_owner_keys();
         if !settings_keys.is_empty() {
             let viewport = scoped_child_viewport_id(context, "tiptoptyp-settings");
@@ -2598,6 +2751,42 @@ impl EditorApp {
             return;
         }
         let shortcuts = self.settings.effective_shortcuts();
+        self.handle_extra_shortcuts(context, shortcut_viewport, &shortcuts);
+        // egui allows extra Shift/Alt modifiers on a simpler shortcut. Consume
+        // Cmd+Shift+W before the File menu's Cmd+W tab action.
+        let child_focused = shortcut_viewport != context.viewport_id();
+        if context.input_mut_for(shortcut_viewport, |input| {
+            tabs::consume_window_close(input, &shortcuts, child_focused)
+        }) {
+            context.send_viewport_cmd_to(shortcut_viewport, egui::ViewportCommand::Close);
+        }
+        if shortcut_viewport == context.viewport_id()
+            && !self.tabs.is_empty()
+            && !self.document_flow_busy()
+            && !self.process_close_pending
+            && let Some(action) = context.input_mut(|input| {
+                consume_shortcut_action(input, &shortcuts, |action| {
+                    matches!(
+                        action,
+                        ShortcutAction::NextTab | ShortcutAction::PreviousTab
+                    )
+                })
+            })
+        {
+            let count = self.tabs.len();
+            let next = if action == ShortcutAction::PreviousTab {
+                (self.tabs.active + count - 1) % count
+            } else {
+                (self.tabs.active + 1) % count
+            };
+            self.activate_tab(next, context);
+        }
+        if shortcut_viewport == context.viewport_id()
+            || (shortcut_viewport == scoped_child_viewport_id(context, "tiptoptyp-popup-overlay")
+                && matches!(self.app_popup, Some(AppPopup::GitChunk { .. })))
+        {
+            self.handle_hunk_shortcuts(context, shortcut_viewport, &shortcuts);
+        }
         // Age the request on the owning document viewport's frame clock. The
         // target may be a child viewport that closes before clipboard delivery;
         // consulting a removed child's clock would panic in debug builds and
@@ -2758,27 +2947,34 @@ impl EditorApp {
             self.search.clear();
         }
 
-        if self.view_mode.shows_preview() && !self.interactive_preview_active() {
+        if self.preview_visible()
+            && (self.document.kind().preview_only() || !self.interactive_preview_active())
+        {
+            let preview = if self.document.kind().preview_only() {
+                &mut self.asset_preview
+            } else {
+                &mut self.preview
+            };
             match context.input_mut_for(shortcut_viewport, |input| {
                 consume_preview_zoom_shortcut(input, &shortcuts)
             }) {
                 Some(PreviewZoomAction::In) => {
-                    self.preview.requested_zoom = Some(
-                        (self.preview.zoom * METRICS.preview.zoom_step)
+                    preview.requested_zoom = Some(
+                        (preview.zoom * METRICS.preview.zoom_step)
                             .clamp(MIN_PREVIEW_ZOOM, MAX_PREVIEW_ZOOM),
                     );
-                    self.preview.fit_width = false;
+                    preview.fit_width = false;
                 }
                 Some(PreviewZoomAction::Out) => {
-                    self.preview.requested_zoom = Some(
-                        (self.preview.zoom / METRICS.preview.zoom_step)
+                    preview.requested_zoom = Some(
+                        (preview.zoom / METRICS.preview.zoom_step)
                             .clamp(MIN_PREVIEW_ZOOM, MAX_PREVIEW_ZOOM),
                     );
-                    self.preview.fit_width = false;
+                    preview.fit_width = false;
                 }
                 Some(PreviewZoomAction::Reset) => {
-                    self.preview.requested_zoom = Some(1.0);
-                    self.preview.fit_width = false;
+                    preview.requested_zoom = Some(1.0);
+                    preview.fit_width = false;
                 }
                 None => {}
             }
@@ -2812,15 +3008,6 @@ impl EditorApp {
                 egui::ViewportCommand::Fullscreen(!fullscreen),
             );
         }
-        if shortcuts
-            .egui(ShortcutAction::CloseWindow)
-            .is_some_and(|shortcut| {
-                context.input_mut_for(shortcut_viewport, |input| input.consume_shortcut(&shortcut))
-            })
-        {
-            context.send_viewport_cmd_to(shortcut_viewport, egui::ViewportCommand::Close);
-        }
-
         if shortcuts
             .egui(ShortcutAction::CaptureUi)
             .is_some_and(|shortcut| {
@@ -2908,7 +3095,7 @@ impl EditorApp {
         &mut self,
         command: AppCommand,
         context: &egui::Context,
-        frame: &eframe::Frame,
+        frame: Option<&eframe::Frame>,
     ) {
         if command_spec(command).menu == CommandMenu::File && self.document_flow_busy() {
             self.notice = Some(Notice {
@@ -2922,6 +3109,7 @@ impl EditorApp {
         }
         match command {
             AppCommand::Settings => self.toggle_settings(),
+            AppCommand::CloseTab => self.request_close_tab(self.tabs.active, context),
             AppCommand::New => self.new_document(),
             AppCommand::NewWindow => {
                 self.pending_window_requests
@@ -2989,7 +3177,11 @@ impl EditorApp {
         }
     }
 
-    fn process_native_menu_commands(&mut self, context: &egui::Context, frame: &eframe::Frame) {
+    fn process_native_menu_commands(
+        &mut self,
+        context: &egui::Context,
+        frame: Option<&eframe::Frame>,
+    ) {
         let focused_viewport = focused_input_viewport(context);
         while let Some(command) = self.queued_native_menu_commands.pop() {
             if self.route_edit_command_to_focused_widget(command, context, focused_viewport) {
@@ -3427,8 +3619,8 @@ impl EditorApp {
         let close_requested = context.input(|input| input.viewport().close_requested());
         if close_request_requires_confirmation(
             close_requested,
-            self.is_dirty(),
-            self.document_workflow.may_close(self.document.key()),
+            self.is_dirty_for_close(),
+            self.close_accepted(),
             self.snapshot_scene.is_some(),
         ) {
             context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -3447,9 +3639,15 @@ impl EditorApp {
 
     fn reset_untitled_document(&mut self) {
         reset_untitled_buffer(&mut self.document, &mut self.autosave_deadline);
+        if self.settings.mitex_auto_enable {
+            self.document.replace_unprojected_untitled("");
+            self.activate_preferred_tex();
+        }
         self.pending_editor_selection = None;
         self.editor_attention = None;
-        self.clear_preview_for_document(false);
+        self.clear_preview_for_document(
+            self.tabs.len() > 1 && self.tabs.active != self.tabs.preview,
+        );
         self.search.clear();
         self.reset_document_services();
         self.schedule_compile_now();
@@ -3466,7 +3664,7 @@ impl EditorApp {
         );
     }
 
-    fn native_file_dialog(&mut self, frame: &eframe::Frame) -> Option<AsyncFileDialog> {
+    fn native_file_dialog(&mut self, frame: Option<&eframe::Frame>) -> Option<AsyncFileDialog> {
         let dialog = AsyncFileDialog::new();
 
         #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -3474,7 +3672,9 @@ impl EditorApp {
             return Some(dialog.set_parent(parent));
         }
 
-        if self.window_host.is_root() {
+        if self.window_host.is_root()
+            && let Some(frame) = frame
+        {
             return Some(dialog.set_parent(frame));
         }
 
@@ -3484,7 +3684,7 @@ impl EditorApp {
         None
     }
 
-    fn settings_file_dialog(&mut self, _frame: &eframe::Frame) -> Option<AsyncFileDialog> {
+    fn settings_file_dialog(&mut self, _frame: Option<&eframe::Frame>) -> Option<AsyncFileDialog> {
         let dialog = AsyncFileDialog::new();
 
         #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -3500,11 +3700,15 @@ impl EditorApp {
 
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
-            Some(dialog.set_parent(_frame))
+            Some(if let Some(frame) = _frame {
+                dialog.set_parent(frame)
+            } else {
+                dialog
+            })
         }
     }
 
-    fn start_open_folder_dialog(&mut self, frame: &eframe::Frame) {
+    fn start_open_folder_dialog(&mut self, frame: Option<&eframe::Frame>) {
         if self.document_workflow.has_dialog() {
             return;
         }
@@ -3577,7 +3781,7 @@ impl EditorApp {
         );
     }
 
-    fn open_in_new_window_dialog(&mut self, frame: &eframe::Frame) {
+    fn open_in_new_window_dialog(&mut self, frame: Option<&eframe::Frame>) {
         if self.document_workflow.has_dialog() {
             return;
         }
@@ -3608,7 +3812,7 @@ impl EditorApp {
         ));
     }
 
-    fn start_open_dialog(&mut self, frame: &eframe::Frame) {
+    fn start_open_dialog(&mut self, frame: Option<&eframe::Frame>) {
         if self.document_workflow.has_dialog() {
             return;
         }
@@ -3646,6 +3850,7 @@ impl EditorApp {
     }
 
     fn load_path(&mut self, path: PathBuf) -> bool {
+        let started = Instant::now();
         let bytes = match fs::read(&path) {
             Ok(bytes) => bytes,
             Err(error) => {
@@ -3680,14 +3885,18 @@ impl EditorApp {
             &self.workspace_root,
             &path,
         );
+        let retain_tex = reloading_current_document && self.document.config().is_some();
+        self.document
+            .replace_loaded_unprojected(source, path.clone(), kind, disk_fingerprint);
+        if (retain_tex || self.settings.mitex_auto_enable) && kind.is_typst() {
+            self.activate_preferred_tex();
+        }
         if workspace_root_changed && let Some(parent) = path.parent() {
             self.workspace_root = canonical_or_absolute(&discover_project_root(parent));
         }
         let workspace_root = self.workspace_root.clone();
         self.remember_workspace(&workspace_root);
 
-        self.document
-            .replace_loaded(source, path.clone(), kind, disk_fingerprint);
         self.autosave_deadline = None;
         self.pending_editor_selection = None;
         self.editor_attention = None;
@@ -3713,18 +3922,27 @@ impl EditorApp {
             self.restart_tinymist();
         }
 
-        if self.preview_processing_enabled() {
+        self.notice = Some(Notice {
+            message: completed_action_label("Opened", &self.document.name(), started.elapsed()),
+            kind: NoticeKind::Success,
+        });
+        if kind.preview_only() {
+            self.request_asset(path);
+        }
+        if self.preview_processing_enabled()
+            && (reloading_current_document
+                || tabs::switch_needs_compile(
+                    keep_designated_preview,
+                    self.raster_preview_required(),
+                    !self.preview.content.pages().is_empty(),
+                    matches!(
+                        self.preview.status,
+                        PreviewStatus::Waiting | PreviewStatus::Compiling
+                    ),
+                ))
+        {
             self.schedule_compile_now();
-        } else if kind.preview_only() {
-            self.preview.status = PreviewStatus::Compiling;
-            if let Err(error) = self.asset_loader.request(self.asset_token, path, kind) {
-                self.preview.status = PreviewStatus::Error;
-                self.notice = Some(Notice {
-                    message: error,
-                    kind: NoticeKind::Error,
-                });
-            }
-        } else {
+        } else if !self.typst_preview_available() {
             self.preview.status = PreviewStatus::Ready(Duration::ZERO);
         }
         self.git.request_refresh();
@@ -3732,7 +3950,7 @@ impl EditorApp {
         true
     }
 
-    fn save_document(&mut self, frame: &eframe::Frame) -> bool {
+    fn save_document(&mut self, frame: Option<&eframe::Frame>) -> bool {
         if !self.document.kind().is_editable() {
             return true;
         }
@@ -3743,7 +3961,7 @@ impl EditorApp {
         }
     }
 
-    fn save_as(&mut self, frame: &eframe::Frame) -> bool {
+    fn save_as(&mut self, frame: Option<&eframe::Frame>) -> bool {
         if !self.document.kind().is_editable() {
             return false;
         }
@@ -3782,6 +4000,13 @@ impl EditorApp {
     }
 
     fn save_to_with_intent(&mut self, path: PathBuf, intent: SaveIntent) -> bool {
+        let started = Instant::now();
+        if self.path_open_in_another_tab(&canonical_or_absolute(&path)) {
+            self.show_file_error(
+                "This file is already open in another tab; switch to it before saving".into(),
+            );
+            return false;
+        }
         // Snapshot scenes freely replace and manipulate the in-memory source
         // to construct deterministic UI states. No capture path is allowed to
         // persist those synthetic edits to the fixture supplied on the CLI.
@@ -3818,9 +4043,22 @@ impl EditorApp {
         } else {
             self.document.kind()
         };
-        let save = self
+        let save = match self
             .document
-            .prepare_save(canonical_or_absolute(&path), saved_kind);
+            .prepare_save(canonical_or_absolute(&path), saved_kind)
+        {
+            Ok(save) => save,
+            Err(error) => {
+                if intent != SaveIntent::Auto {
+                    self.document_workflow.cancel_continuation();
+                }
+                self.notice = Some(Notice {
+                    message: error.to_string(),
+                    kind: NoticeKind::Error,
+                });
+                return false;
+            }
+        };
         let saved_fingerprint = fingerprint(save.source().as_bytes());
         match atomic_write(save.path(), save.source().as_bytes()) {
             Ok(durability) => {
@@ -3874,6 +4112,18 @@ impl EditorApp {
                     action.allow_discard = false;
                     self.document_workflow.queue_action(action);
                 }
+                self.notice = Some(Notice {
+                    message: completed_action_label(
+                        if intent == SaveIntent::Auto {
+                            "Auto-saved"
+                        } else {
+                            "Saved"
+                        },
+                        &self.document.name(),
+                        started.elapsed(),
+                    ),
+                    kind: NoticeKind::Success,
+                });
                 true
             }
             Err(error) => {
@@ -3937,11 +4187,11 @@ impl EditorApp {
         false
     }
 
-    fn export_pdf(&mut self, frame: &eframe::Frame) {
+    fn export_pdf(&mut self, frame: Option<&eframe::Frame>) {
         self.choose_pdf_output(frame, PdfWriteIntent::Export);
     }
 
-    fn choose_pdf_output(&mut self, frame: &eframe::Frame, intent: PdfWriteIntent) {
+    fn choose_pdf_output(&mut self, frame: Option<&eframe::Frame>, intent: PdfWriteIntent) {
         if !self.typst_preview_available() && self.document.kind() != DocumentKind::Pdf {
             self.notice = Some(Notice {
                 message: format!(
@@ -4024,7 +4274,7 @@ impl EditorApp {
     fn choose_tool_binary(
         &mut self,
         target: ToolPickerTarget,
-        frame: &eframe::Frame,
+        frame: Option<&eframe::Frame>,
         settings_context: &egui::Context,
     ) {
         if self.document_flow_busy() {
@@ -4186,7 +4436,7 @@ impl EditorApp {
                         "opening the selected document",
                     );
                 } else {
-                    self.load_path(path);
+                    self.open_tab_path(path, context);
                 }
                 self.schedule_autosave_if_needed();
             }
@@ -4255,15 +4505,20 @@ impl EditorApp {
         }
 
         let typst_output = self.typst_preview_available();
+        let output_preview = if typst_output {
+            &self.preview
+        } else {
+            &self.asset_preview
+        };
         let requires_new_artifact = pdf_output_requires_new_artifact(
             typst_output,
             self.compilation_paused,
             self.compile_deadline.is_some(),
-            self.preview.status,
+            output_preview.status,
         );
         let reusable = pdf_artifact_reusable_for_output(
-            self.preview.content.artifact_key(),
-            self.preview.content.pdf().is_some(),
+            output_preview.content.artifact_key(),
+            output_preview.content.pdf().is_some(),
             self.document.revision(),
             requires_new_artifact,
         );
@@ -4294,14 +4549,19 @@ impl EditorApp {
     }
 
     fn complete_pending_export(&mut self) {
-        let Some(pdf) = self.preview.content.pdf() else {
+        let output_preview = if self.typst_preview_available() {
+            &self.preview
+        } else {
+            &self.asset_preview
+        };
+        let Some(pdf) = output_preview.content.pdf() else {
             return;
         };
         let Some(pending) = take_ready_export(
             &mut self.document_workflow.pending_export,
             self.document.epoch(),
             self.document.revision(),
-            self.preview.content.artifact_key(),
+            output_preview.content.artifact_key(),
         ) else {
             return;
         };
@@ -4337,8 +4597,11 @@ impl EditorApp {
         if !matches!(action, DeferredDocumentAction::CloseWindow) {
             self.lifecycle.request_resume();
         }
+        if matches!(action, DeferredDocumentAction::CloseWindow) {
+            self.tabs.approved.clear();
+        }
         let key = self.document.key();
-        let dirty = self.document.is_dirty();
+        let dirty = self.document.is_dirty() && !tabs::opens_tab(&action);
         let name = self.document.name();
         self.document_workflow
             .queue_replacement(key, dirty, &name, action, description);
@@ -4350,15 +4613,20 @@ impl EditorApp {
         self.document_workflow.present_unsaved(key, &name, pending);
     }
 
-    fn execute_pending_document_action(&mut self, context: &egui::Context, frame: &eframe::Frame) {
+    fn execute_pending_document_action(
+        &mut self,
+        context: &egui::Context,
+        frame: Option<&eframe::Frame>,
+    ) {
         self.execute_pending_document_action_inner(context, frame);
         self.document_workflow.finish_dispatch();
+        self.advance_tab_window_close(context);
     }
 
     fn execute_pending_document_action_inner(
         &mut self,
         context: &egui::Context,
-        frame: &eframe::Frame,
+        frame: Option<&eframe::Frame>,
     ) {
         let Some(mut pending) = self.document_workflow.take_action() else {
             return;
@@ -4441,23 +4709,29 @@ impl EditorApp {
                 self.present_unsaved_prompt(pending);
                 return;
             }
-        } else if self.is_dirty() {
+        } else if self.is_dirty() && !tabs::opens_tab(&pending.action) {
             self.present_unsaved_prompt(pending);
             return;
         }
 
         match pending.action {
-            DeferredDocumentAction::New => self.reset_untitled_document(),
+            DeferredDocumentAction::New => {
+                self.new_tab(context);
+                self.notice = Some(Notice {
+                    message: "Created new document".to_owned(),
+                    kind: NoticeKind::Success,
+                });
+            }
             DeferredDocumentAction::OpenFileDialog => self.start_open_dialog(frame),
             DeferredDocumentAction::OpenFolderDialog => self.start_open_folder_dialog(frame),
             DeferredDocumentAction::CloseWindow => {
-                self.document_workflow.allow_close_for(self.document.key());
-                if !self.process_close_pending {
-                    context.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
+                self.approve_tab_window_close();
+            }
+            DeferredDocumentAction::CloseTab => {
+                self.finish_close_tab(context);
             }
             DeferredDocumentAction::LoadPath(path) => {
-                self.load_path(path);
+                self.open_tab_path(path, context);
             }
             DeferredDocumentAction::OpenFolder(path) => {
                 self.finish_open_folder_selection(path);
@@ -4467,12 +4741,12 @@ impl EditorApp {
                 page,
                 source_position,
             } => {
-                if self.load_path(path) {
+                if self.open_tab_path(path, context) {
                     self.apply_file_link_location(page, source_position);
                 }
             }
             DeferredDocumentAction::FollowTinymistLocation { path, selection } => {
-                if self.load_path(path) {
+                if self.open_tab_path(path, context) {
                     self.apply_tinymist_selection(selection.as_ref());
                 }
             }
@@ -4512,9 +4786,8 @@ impl EditorApp {
         self.restart_tinymist();
     }
 
-    fn should_keep_designated_preview(&self, path: &Path) -> bool {
-        self.designated_preview_path()
-            .is_some_and(|_| path.starts_with(&self.workspace_root))
+    fn should_keep_designated_preview(&self, _path: &Path) -> bool {
+        self.designated_preview_path().is_some()
     }
 
     /// Switch the active editor document without tearing down the designated
@@ -4525,13 +4798,20 @@ impl EditorApp {
         let Some(generation) = self.tinymist_generation else {
             return;
         };
+        let source = match self.canonical_document_source() {
+            Ok(source) => source,
+            Err(error) => {
+                self.preview.tinymist_state = ServiceState::Degraded(error);
+                return;
+            }
+        };
         let old_uri = self.tinymist_uri.take();
         let preview_uri = self.tinymist_preview_uri.clone();
         let document = if kind.is_typst() {
             match TextDocument::from_path(
                 path,
                 revision_as_i32(self.document.revision()),
-                self.document.source(),
+                source.clone(),
             ) {
                 Ok(document) => Some(document),
                 Err(error) => {
@@ -4545,7 +4825,9 @@ impl EditorApp {
         if self.tinymist_current_open
             && let Some(uri) = old_uri
             && preview_uri.as_deref() != Some(uri.as_str())
+            && self.tabs.len() == 1
         {
+            self.tabs.open_uris.remove(&uri);
             let _ = self.tinymist.did_close(generation, uri);
         }
         self.tinymist_current_open = false;
@@ -4554,19 +4836,22 @@ impl EditorApp {
         }
         let document = document.expect("Typst documents have a Tinymist document");
         self.tinymist_uri = Some(document.uri.clone());
-        if preview_uri.as_deref() == Some(document.uri.as_str()) {
+        if preview_uri.as_deref() == Some(document.uri.as_str())
+            || self.tabs.open_uris.contains(&document.uri)
+        {
             self.tinymist_current_open = true;
             if let Err(error) = self.tinymist.did_change(
                 generation,
                 document.uri,
                 revision_as_i32(self.document.revision()),
-                self.document.source().clone(),
+                source,
             ) {
                 self.preview.tinymist_state = ServiceState::Degraded(error.to_string());
             }
             return;
         }
         if self.preview.connection.is_ready() {
+            self.tabs.open_uris.insert(document.uri.clone());
             match self.tinymist.did_open(generation, document) {
                 Ok(()) => self.tinymist_current_open = true,
                 Err(error) => {
@@ -4651,6 +4936,14 @@ impl EditorApp {
     }
 
     fn poll_external_file_change(&mut self, context: &egui::Context) {
+        if self.tabs.is_empty() {
+            return;
+        }
+        // The Tabs scene intentionally uses two in-memory, never-written
+        // fixture documents. They are not externally deleted user files.
+        if self.snapshot_scene == Some(UiSnapshotScene::Tabs) {
+            return;
+        }
         let now = Instant::now();
         if now < self.next_external_file_check {
             context.request_repaint_after(self.next_external_file_check - now);
@@ -4712,6 +5005,9 @@ impl EditorApp {
     }
 
     fn tinymist_document_path(&self) -> PathBuf {
+        if (self.tabs.len() > 1 || self.tabs.preview_explicit) && self.document.path().is_none() {
+            return self.untitled_tab_path(self.tabs.active);
+        }
         self.tinymist_unsaved_document
             .as_ref()
             .map(|document| document.path().to_owned())
@@ -4763,6 +5059,7 @@ impl EditorApp {
     }
 
     fn stop_tinymist_session(&mut self) {
+        self.tabs.open_uris.clear();
         if let Some(generation) = self.tinymist_generation.take() {
             let current_uri = self.tinymist_uri.take();
             let preview_uri = self.tinymist_preview_uri.take();
@@ -4831,6 +5128,10 @@ impl EditorApp {
             self.preview.webview_state = ServiceState::Failed(reason);
             return;
         }
+        if let Err(error) = self.prepare_tab_backings() {
+            self.preview.tinymist_state = ServiceState::Degraded(error);
+            return;
+        }
         self.preview.tinymist_state = ServiceState::Starting("Launching Tinymist LSP".to_owned());
         self.preview.webview_state = if self.preview.requested_backend == PreviewPreference::Native
         {
@@ -4850,7 +5151,7 @@ impl EditorApp {
         } else {
             ServiceState::Starting("Waiting for Tinymist's preview server".to_owned())
         };
-        let mut config = TinymistConfig::new(self.project_root())
+        let mut config = TinymistConfig::new(self.tab_preview_root())
             .with_executable(self.tinymist_tool.program.clone())
             .with_font_paths(self.font_catalog.workspace_directories());
         if let Some(entry_path) = self.designated_preview_path() {
@@ -4860,14 +5161,28 @@ impl EditorApp {
         config.preview.invert_colors =
             tinymist_invert_colors(self.settings.document_theme, self.preview.dark);
         config.preview.refresh = tinymist_preview_refresh(self.compilation_paused);
+        let source = match self.canonical_document_source() {
+            Ok(source) => source,
+            Err(error) => {
+                self.preview.tinymist_state = ServiceState::Degraded(error);
+                return;
+            }
+        };
         match self.tinymist.start_workspace(config) {
             Ok(generation) => {
                 self.preview.recovery.started(generation);
                 let version = revision_as_i32(self.document.revision());
                 let current_document = if self.document.kind().is_typst() {
                     if let Some(path) = self.document.path().as_deref() {
-                        TextDocument::from_path(path, version, self.document.source().clone())
+                        TextDocument::from_path(path, version, source.clone())
                             .map_err(|error| error.to_string())
+                    } else if self.tabs.len() > 1 || self.tabs.preview_explicit {
+                        TextDocument::from_path(
+                            &self.untitled_tab_path(self.tabs.active),
+                            version,
+                            source.clone(),
+                        )
+                        .map_err(|error| error.to_string())
                     } else {
                         let source_dir = self
                             .current_directory()
@@ -4876,11 +5191,10 @@ impl EditorApp {
                             self.project_root(),
                             source_dir,
                             self.document_name(),
-                            self.document.source(),
+                            &source,
                         ) {
                             Ok(document) => {
-                                let text_document =
-                                    document.text_document(version, self.document.source().clone());
+                                let text_document = document.text_document(version, source.clone());
                                 self.tinymist_unsaved_document = Some(document);
                                 Ok(text_document)
                             }
@@ -4926,6 +5240,7 @@ impl EditorApp {
                 self.tinymist_generation = Some(generation);
                 self.preview.connection.start(generation);
                 self.tinymist_current_open = current_document.uri == preview_document.uri;
+                self.tabs.open_uris.insert(preview_document.uri.clone());
                 // The first document opened determines startDefaultPreview.
                 // Imported/current subfiles are opened after Initialized.
                 if let Err(error) = self.tinymist.did_open(generation, preview_document) {
@@ -4945,9 +5260,20 @@ impl EditorApp {
         if !self.document.kind().is_typst() {
             return Ok(());
         }
+        if self.tinymist_unsaved_document.is_none()
+            && (!self.tinymist_current_open
+                || self.tinymist_generation.is_none()
+                || self.tinymist_uri.is_none())
+        {
+            // No source consumer: avoid allocating/copying the document on
+            // every keystroke while the language server is unavailable.
+            return Ok(());
+        }
+        let source = self.canonical_document_source()?;
+        self.update_active_tab_backing(&source)?;
         if let Some(document) = &self.tinymist_unsaved_document {
             document
-                .update_backing_source(self.document.source())
+                .update_backing_source(&source)
                 .map_err(|error| error.to_string())?;
         }
         let (Some(generation), Some(uri)) = (self.tinymist_generation, self.tinymist_uri.clone())
@@ -4963,7 +5289,7 @@ impl EditorApp {
                 generation,
                 uri,
                 revision_as_i32(self.document.revision()),
-                self.document.source().clone(),
+                source,
             )
             .map_err(|error| error.to_string())
     }
@@ -4974,6 +5300,28 @@ impl EditorApp {
                 continue;
             }
             match event {
+                TinymistEvent::CompileStatus {
+                    generation,
+                    path,
+                    status,
+                    received,
+                } => {
+                    if self.tinymist_generation == Some(generation)
+                        && self.preview.recovery.accepts(generation)
+                        && self.preview.tinymist_preview_enabled
+                        && self.may_run_compilation()
+                        && tinymist_status_matches_entry(
+                            &path,
+                            &self
+                                .designated_preview_path()
+                                .unwrap_or_else(|| self.tinymist_document_path()),
+                            &self.project_root(),
+                        )
+                    {
+                        self.preview
+                            .compile_status(generation, path, status, received);
+                    }
+                }
                 TinymistEvent::Starting { .. } => {
                     self.editor_completion = None;
                     self.preview.tinymist_state =
@@ -4998,11 +5346,19 @@ impl EditorApp {
                         && self.tinymist_generation == Some(generation)
                         && let Some(uri) = self.tinymist_uri.clone()
                     {
+                        let source = match self.canonical_document_source() {
+                            Ok(source) => source,
+                            Err(error) => {
+                                self.preview.tinymist_state = ServiceState::Degraded(error);
+                                continue;
+                            }
+                        };
                         let document = TextDocument::typst(
                             uri,
                             revision_as_i32(self.document.revision()),
-                            self.document.source().clone(),
+                            source,
                         );
+                        self.tabs.open_uris.insert(document.uri.clone());
                         match self.tinymist.did_open(generation, document) {
                             Ok(()) => self.tinymist_current_open = true,
                             Err(error) => {
@@ -5011,6 +5367,7 @@ impl EditorApp {
                             }
                         }
                     }
+                    self.sync_parked_tinymist();
                     if take_ready_format_handoff(
                         &mut self.format_when_tinymist_ready,
                         self.document.key(),
@@ -5034,7 +5391,9 @@ impl EditorApp {
                         if !self.preview.connection.connect(generation, endpoint) {
                             continue;
                         }
-                        self.preview.status = PreviewStatus::Ready(Duration::ZERO);
+                        if matches!(self.preview.status, PreviewStatus::Waiting) {
+                            self.preview.status = PreviewStatus::Ready(Duration::ZERO);
+                        }
                         #[cfg(any(target_os = "macos", target_os = "windows"))]
                         let reusing_webview = {
                             let reusing = self.webview.is_some();
@@ -5057,16 +5416,26 @@ impl EditorApp {
                         };
                     }
                 }
-                TinymistEvent::ShowDocument { uri, selection, .. } => {
-                    self.follow_tinymist_location(&uri, selection.as_ref());
+                TinymistEvent::ShowDocument {
+                    generation,
+                    uri,
+                    selection,
+                    ..
+                } => {
+                    if self.tinymist_generation == Some(generation) {
+                        self.follow_tinymist_location(&uri, selection.as_ref());
+                    }
                 }
                 TinymistEvent::PublishDiagnostics {
+                    generation,
                     uri,
                     version,
                     diagnostics,
                     ..
                 } => {
-                    self.receive_tinymist_diagnostics(&uri, version, diagnostics);
+                    if self.tinymist_generation == Some(generation) {
+                        self.receive_tinymist_diagnostics(&uri, version, diagnostics);
+                    }
                 }
                 TinymistEvent::Formatted {
                     generation,
@@ -5077,13 +5446,16 @@ impl EditorApp {
                     self.receive_formatted_document(context, generation, &uri, version, edits);
                 }
                 TinymistEvent::Hovered {
+                    generation,
                     uri,
                     version,
                     request_token,
                     contents,
                     ..
                 } => {
-                    if let Some(hover) = &mut self.editor_hover
+                    if self.tinymist_generation == Some(generation)
+                        && version == revision_as_i32(self.document.revision())
+                        && let Some(hover) = &mut self.editor_hover
                         && hover.request_token == request_token
                         && hover.version == version
                         && hover.uri == uri
@@ -5173,6 +5545,15 @@ impl EditorApp {
     }
 
     fn follow_preview_link(&mut self, target: &str) {
+        let directory = if self.typst_preview_available() {
+            Some(self.preview_source_directory())
+        } else {
+            self.current_directory()
+        };
+        self.follow_preview_link_from(target, directory);
+    }
+
+    fn follow_preview_link_from(&mut self, target: &str, directory: Option<PathBuf>) {
         if let Some(page) = internal_pdf_page_target(target) {
             self.preview.requested_page =
                 Some(page.min(self.preview.content.pages().len().saturating_sub(1)));
@@ -5187,7 +5568,7 @@ impl EditorApp {
         let url = match url::Url::parse(target) {
             Ok(url) => url,
             Err(_) => {
-                let Some(directory) = self.current_directory() else {
+                let Some(directory) = directory else {
                     self.notice = Some(Notice {
                         message: format!("Could not resolve link: {target}"),
                         kind: NoticeKind::Error,
@@ -5272,12 +5653,30 @@ impl EditorApp {
         page: Option<usize>,
         source_position: Option<(usize, usize)>,
     ) {
+        let source_position = if self.document.config().is_some() {
+            source_position.and_then(|(line, column)| {
+                let snapshot = self.document.canonical_snapshot().ok()?;
+                let cursor = char_index_at_line_column(snapshot.source(), line, column);
+                let cursor = snapshot.editor_scalar_cursor(ScalarOffset::new(cursor))?;
+                Some(line_column_at_char(snapshot.editor_source(), cursor.get()))
+            })
+        } else {
+            source_position
+        };
+        self.apply_editor_location(page, source_position);
+    }
+
+    fn apply_editor_location(
+        &mut self,
+        page: Option<usize>,
+        source_position: Option<(usize, usize)>,
+    ) {
         if self.document.kind() == DocumentKind::Pdf {
-            if self.preview.content.pages().is_empty() {
+            if self.asset_preview.content.pages().is_empty() {
                 self.pending_asset_page = page;
             } else if let Some(page) = page {
-                self.preview.requested_page =
-                    Some(page.min(self.preview.content.pages().len().saturating_sub(1)));
+                self.asset_preview.requested_page =
+                    Some(page.min(self.asset_preview.content.pages().len().saturating_sub(1)));
             }
         } else if self.document.kind().is_editable()
             && let Some((line, column)) = source_position
@@ -5330,7 +5729,19 @@ impl EditorApp {
 
     fn apply_tinymist_selection(&mut self, selection: Option<&LspRange>) {
         if let Some(selection) = selection {
-            let range = range_to_scalar_range(self.document.source(), selection).into_range();
+            let range = if self.document.config().is_some() {
+                let Some(range) = self
+                    .document
+                    .canonical_snapshot()
+                    .ok()
+                    .and_then(|snapshot| snapshot.editor_range(*selection))
+                else {
+                    return;
+                };
+                range
+            } else {
+                range_to_scalar_range(self.document.source(), selection).into_range()
+            };
             self.editor_attention = Some(EditorAttention {
                 char_index: range.start,
                 started: Instant::now(),
@@ -5347,8 +5758,22 @@ impl EditorApp {
         let Some(generation) = self.tinymist_generation else {
             return;
         };
-        let (line, character) =
-            scalar_position_at(self.document.source(), ScalarOffset::new(char_index));
+        let position = if self.document.config().is_none() {
+            Some(scalar_position_at(
+                self.document.source(),
+                ScalarOffset::new(char_index),
+            ))
+        } else {
+            self.document
+                .canonical_snapshot()
+                .ok()
+                .and_then(|snapshot| {
+                    snapshot.canonical_preview_position(ScalarOffset::new(char_index))
+                })
+        };
+        let Some((line, character)) = position else {
+            return;
+        };
         let path = self.tinymist_document_path();
         if let Err(error) = self
             .tinymist
@@ -5366,11 +5791,12 @@ impl EditorApp {
     }
 
     fn preview_visible(&self) -> bool {
-        preview_visible_for(
-            self.document.kind(),
-            self.view_mode,
-            self.designated_preview_path().is_some(),
-        )
+        !self.tabs.is_empty()
+            && preview_visible_for(
+                self.document.kind(),
+                self.view_mode,
+                self.designated_preview_path().is_some(),
+            )
     }
 
     fn interactive_preview_requested(&self) -> bool {
@@ -5446,6 +5872,18 @@ impl EditorApp {
         {
             return;
         }
+        let mapped =
+            if self.document.config().is_some() && self.tinymist_uri.as_deref() == Some(uri) {
+                if version != Some(revision_as_i32(self.document.revision())) {
+                    return;
+                }
+                let Ok(snapshot) = self.document.canonical_snapshot() else {
+                    return;
+                };
+                Some(snapshot)
+            } else {
+                None
+            };
         let source = if self.tinymist_preview_uri.as_deref() == Some(uri) {
             DiagnosticSource::Main
         } else {
@@ -5456,7 +5894,20 @@ impl EditorApp {
         };
         let mut converted = diagnostics
             .into_iter()
-            .map(|diagnostic| tinymist_diagnostic(diagnostic, source.clone()))
+            .map(|diagnostic| {
+                let editor_range = mapped
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.editor_range(diagnostic.range));
+                let mut diagnostic = tinymist_diagnostic(diagnostic, source.clone());
+                if mapped.is_some() {
+                    diagnostic.location = editor_range.map(|range| {
+                        let (line, column) =
+                            line_column_at_char(self.document.source(), range.start);
+                        crate::diagnostics::DiagnosticLocation { line, column }
+                    });
+                }
+                diagnostic
+            })
             .collect();
         normalize_diagnostics(&mut converted);
         self.preview.tinymist_diagnostics = converted;
@@ -5536,9 +5987,28 @@ impl EditorApp {
                 TextureOptions::LINEAR,
             );
         }
+        self.asset_preview.dark = self.preview.dark && self.document.kind() != DocumentKind::Image;
+        for (index, page) in self
+            .asset_preview
+            .content
+            .pages_mut()
+            .iter_mut()
+            .enumerate()
+        {
+            let pixels = if self.asset_preview.dark {
+                dark_preview_rgba(&page.rgba)
+            } else {
+                page.rgba.clone()
+            };
+            page.texture = context.load_texture(
+                format!("asset-{index}-{}", self.asset_preview.dark),
+                preview_color_image(page.raster_size, &pixels),
+                TextureOptions::LINEAR,
+            );
+        }
     }
 
-    fn show_toolbar(&mut self, ui: &mut egui::Ui, frame: &eframe::Frame) {
+    fn show_toolbar(&mut self, ui: &mut egui::Ui, frame: Option<&eframe::Frame>) {
         let shortcuts = self.settings.effective_shortcuts();
         #[cfg(target_os = "macos")]
         {
@@ -5565,7 +6035,7 @@ impl EditorApp {
                 let traffic_lights_width = self
                     .window_host
                     .is_root()
-                    .then(|| frame.window_handle().ok())
+                    .then(|| frame.and_then(|frame| frame.window_handle().ok()))
                     .flatten()
                     .and_then(|handle| {
                         eframe::WindowChromeMetrics::from_window_handle(&handle.as_raw())
@@ -5586,87 +6056,14 @@ impl EditorApp {
                 crate::window_logo::snapshot_fixture(ui.ctx());
             }
             crate::window_logo::show(ui, &self.captures);
-            let document_name = self.document_name();
-            let title = format!("{document_name}{}", if self.is_dirty() { "*" } else { "" });
-            // Reserve the dirty marker's slot even while the document is
-            // clean, so saving never shifts the menu and view controls.
-            let natural_title_width = (document_name.chars().count() + 1) as f32
-                * METRICS.toolbar.title_character_width
-                + METRICS.toolbar.title_padding;
-            let title_width = if compact {
-                natural_title_width.clamp(
-                    METRICS.toolbar.compact_title_min,
-                    METRICS.toolbar.compact_title_max,
-                )
-            } else {
-                natural_title_width.clamp(METRICS.toolbar.title_min, METRICS.toolbar.title_max)
-            };
-            let title_response = ui.add_sized(
-                [title_width, METRICS.toolbar.title_height],
-                theme::nonselectable_label(RichText::new(&title).strong())
-                    .truncate()
-                    .sense(Sense::click()),
-            );
-            native_hover_text(
-                title_response.clone(),
-                format!(
-                    "{}\nDouble-click to rename",
-                    self.document.path().as_ref().map_or_else(
-                        || "Unsaved document".to_owned(),
-                        |path| path.display().to_string()
-                    )
-                ),
-            );
-            if title_response.double_clicked() && !self.document_flow_busy() {
-                if let Some(path) = self.document.path().clone() {
-                    self.begin_rename(path);
-                } else {
-                    self.save_as(frame);
-                }
-            }
             if self.settings.titlebar_menus {
-                ui.separator();
                 self.show_file_menu(ui);
                 self.show_edit_menu(ui);
                 self.show_view_menu(ui);
                 ui.separator();
             }
-            if native_hover_text(
-                ui.button("Find"),
-                shortcut_tooltip("Find", &shortcuts, ShortcutAction::Find),
-            )
-            .clicked()
-            {
-                self.toggle_find();
-            }
-            let (pause_label, pause_hint) = compilation_toggle_copy(self.compilation_paused);
-            if native_hover_text(
-                ui.add_enabled(
-                    self.typst_preview_available(),
-                    egui::Button::new(pause_label).selected(self.compilation_paused),
-                ),
-                shortcut_tooltip(pause_hint, &shortcuts, ShortcutAction::ToggleCompilation),
-            )
-            .clicked()
-            {
-                self.toggle_compilation_paused();
-            }
-            if native_hover_text(
-                ui.add_enabled(self.typst_preview_available(), egui::Button::new("Compile")),
-                shortcut_tooltip(
-                    "Compile PDF beside the Typst source",
-                    &shortcuts,
-                    ShortcutAction::Compile,
-                ),
-            )
-            .clicked()
-            {
-                self.compile_pdf(frame);
-            }
 
-            // Consuming the remaining width with a right-to-left layout keeps
-            // the view controls pinned to the opposite edge while the title is
-            // the only item that contracts at narrow window sizes.
+            let tex_available = self.tex_mode_available();
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if native_hover_text(
                     ui.selectable_label(
@@ -5730,8 +6127,73 @@ impl EditorApp {
                 {
                     self.toggle_settings();
                 }
+
+                ui.separator();
+                if native_hover_text(
+                    ui.add_enabled(self.typst_preview_available(), egui::Button::new("Compile")),
+                    shortcut_tooltip(
+                        "Compile PDF beside the Typst source",
+                        &shortcuts,
+                        ShortcutAction::Compile,
+                    ),
+                )
+                .clicked()
+                {
+                    self.compile_pdf(frame);
+                }
+
+                let (pause_label, pause_hint) = compilation_toggle_copy(self.compilation_paused);
+                if native_hover_text(
+                    ui.add_enabled(
+                        self.typst_preview_available(),
+                        egui::Button::new(pause_label).selected(self.compilation_paused),
+                    ),
+                    shortcut_tooltip(pause_hint, &shortcuts, ShortcutAction::ToggleCompilation),
+                )
+                .clicked()
+                {
+                    self.toggle_compilation_paused();
+                }
+                if native_hover_text(
+                    ui.add_enabled(!self.tabs.is_empty(), egui::Button::new("Find")),
+                    shortcut_tooltip("Find", &shortcuts, ShortcutAction::Find),
+                )
+                .clicked()
+                {
+                    self.toggle_find();
+                }
+
+                if tex_available {
+                    let active = self.document.config().is_some();
+                    let response = ui.selectable_label(active, "miTeX");
+                    if response.clicked() {
+                        self.set_tex_mode(!active, ui.ctx());
+                    }
+                    native_hover_text(
+                        response,
+                        if active {
+                            "miTeX is on: dollar math saves as MiTeX calls. Click to turn off."
+                        } else {
+                            "Use TeX inside dollar math. Saves standard MiTeX calls."
+                        },
+                    );
+                }
+                // Lay out the title last so it gets precisely the space left
+                // between the menus and the right-aligned control group.
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    self.show_document_title(ui, frame, compact);
+                });
             });
         });
+    }
+
+    fn show_document_title(
+        &mut self,
+        ui: &mut egui::Ui,
+        frame: Option<&eframe::Frame>,
+        _compact: bool,
+    ) {
+        self.show_tabs(ui, frame);
     }
 
     fn show_file_menu(&mut self, ui: &mut egui::Ui) {
@@ -5792,7 +6254,7 @@ impl EditorApp {
         };
         let changed = previous_key != self.document.key();
         self.store_editor_cursor(context, next.cursor);
-        self.document.reset_editor_history = false;
+        self.document.set_history_reset(false);
         let editor_id = source_editor_id(context);
         context.memory_mut(|memory| memory.request_focus(editor_id));
         if changed {
@@ -6026,8 +6488,8 @@ impl EditorApp {
         } else {
             self.editor_snapshot(context).cursor
         };
-        let applied = match apply_text_edits(
-            self.document.source(),
+        let applied = match self.document.prepare_canonical_edits(
+            self.document.key(),
             &edits,
             ([cursor.primary.index.0, cursor.secondary.index.0]).map(ScalarOffset::new),
         ) {
@@ -6059,7 +6521,7 @@ impl EditorApp {
         let save_after_format = self.manual_format_revision == Some(self.document.revision());
         self.document.edit(cursor, |source| *source = formatted);
         self.store_editor_cursor(context, mapped_cursor);
-        self.document.reset_editor_history = false;
+        self.document.set_history_reset(false);
         self.search.clear();
         self.manual_format_revision = None;
         self.mark_edited();
@@ -6165,36 +6627,34 @@ impl EditorApp {
             self.begin_rename(old_path);
             return;
         }
+        let renamed_kind =
+            crate::document::detect_document(&new_path, self.document.source().as_bytes())
+                .ok()
+                .filter(|kind| kind.is_editable())
+                .unwrap_or(DocumentKind::Text);
+        if renames_current_document && let Err(error) = self.document.can_rename(renamed_kind) {
+            self.show_file_error(error.to_string());
+            return;
+        }
+        if let Err(error) = self.preflight_parked_rename(&old_path, &new_path) {
+            self.show_file_error(error);
+            return;
+        }
         if let Err(error) = fs::rename(&old_path, &new_path) {
             self.show_file_error(format!("Could not rename {}: {error}", old_path.display()));
             return;
         }
         let new_path = new_path.canonicalize().unwrap_or(new_path);
-        if renames_preview_document {
-            let root = canonical_or_absolute(&self.workspace_root);
-            if let (Some(key), Some(value)) = (root.to_str(), new_path.to_str()) {
-                self.settings
-                    .preview_files
-                    .insert(key.to_owned(), value.to_owned());
-                if let Some(settings) = &mut self.pending_settings {
-                    settings
-                        .preview_files
-                        .insert(key.to_owned(), value.to_owned());
-                }
-            }
-        }
+        self.rename_parked_tab(&old_path, &new_path);
         if reload_binary_document {
             // Reload from the renamed file so detection sees the real binary
             // bytes. Using `self.document.source()` here would pass an empty buffer for
             // PDFs/images and could incorrectly turn them into editable text.
             self.load_path(new_path.clone());
         } else if renames_current_document {
-            let kind =
-                crate::document::detect_document(&new_path, self.document.source().as_bytes())
-                    .ok()
-                    .filter(|kind| kind.is_editable())
-                    .unwrap_or(DocumentKind::Text);
-            self.document.rename(new_path.clone(), kind);
+            self.document
+                .rename(new_path.clone(), renamed_kind)
+                .expect("rename preflight above");
             self.remember_open_document(&new_path);
             if preserve_designated_preview {
                 self.reopen_tinymist_current_document(&new_path, self.document.kind());
@@ -6221,11 +6681,18 @@ impl EditorApp {
         });
     }
 
-    fn execute_pending_app_popup_action(&mut self, context: &egui::Context, frame: &eframe::Frame) {
+    fn execute_pending_app_popup_action(
+        &mut self,
+        context: &egui::Context,
+        frame: Option<&eframe::Frame>,
+    ) {
         let Some(action) = self.pending_app_popup_action.take() else {
             return;
         };
         match action {
+            AppPopupAction::GitHunk(action, key, chunk) => {
+                self.perform_hunk_action(context, action, key, chunk)
+            }
             AppPopupAction::Command(command) => {
                 let viewport = focused_input_viewport(context);
                 if !self.route_edit_command_to_focused_widget(command, context, viewport) {
@@ -6380,32 +6847,33 @@ impl EditorApp {
     }
 
     fn rasterizer_service_state(&self) -> ServiceState {
+        let preview = self.status_preview();
         if self.document.kind() == DocumentKind::Text && !self.typst_preview_available() {
             return ServiceState::Disabled("Text files do not need a preview renderer".to_owned());
         }
         if self.document.kind() == DocumentKind::Image
             && !self.typst_preview_available()
-            && !self.preview.content.pages().is_empty()
+            && !preview.content.pages().is_empty()
         {
             return ServiceState::Ready("The selected image decoded successfully".to_owned());
         }
         if self.raster_content_freshness() == Some(RasterContentFreshness::Current) {
             return ServiceState::Ready(format!(
                 "Poppler rendered {} page(s) at {} DPI",
-                self.preview.content.pages().len(),
+                preview.content.pages().len(),
                 crate::compiler::PREVIEW_DPI
             ));
         }
         if self.raster_content_freshness() == Some(RasterContentFreshness::Stale) {
             return ServiceState::Degraded(format!(
                 "Showing {} page(s) from the last successful build",
-                self.preview.content.pages().len()
+                preview.content.pages().len()
             ));
         }
-        if let Some(error) = self.preview.content.error() {
+        if let Some(error) = preview.content.error() {
             return ServiceState::Degraded(error.to_owned());
         }
-        match self.preview.status {
+        match preview.status {
             PreviewStatus::Error => {
                 ServiceState::Failed("No rasterized pages are available".to_owned())
             }
@@ -6416,7 +6884,8 @@ impl EditorApp {
     }
 
     fn raster_content_freshness(&self) -> Option<RasterContentFreshness> {
-        self.preview.raster_freshness(self.document.revision())
+        self.status_preview()
+            .raster_freshness(self.document.revision())
     }
 
     fn show_workspace(&mut self, ui: &mut egui::Ui) {
@@ -6471,7 +6940,7 @@ impl EditorApp {
             } else {
                 0.0
             };
-            ui.add_sized(
+            let search = ui.add_sized(
                 [
                     (ui.available_width() - clear_width).max(1.0),
                     METRICS.explorer.header_row_height,
@@ -6480,6 +6949,9 @@ impl EditorApp {
                     .id_salt("explorer-search")
                     .hint_text("Search Explorer"),
             );
+            if std::mem::take(&mut self.focus_explorer_search) {
+                search.request_focus();
+            }
             if show_clear && icon_button(ui, UiIcon::Close, "Clear Explorer search").clicked() {
                 self.explorer.query_mut().clear();
             }
@@ -6860,8 +7332,22 @@ impl EditorApp {
                 .is_none_or(|hover| hover.requested),
         );
         if should_request {
-            let position =
-                lsp_position_at_scalar(self.document.source(), ScalarOffset::new(range.start));
+            let position = if self.document.config().is_none() {
+                Some(lsp_position_at_scalar(
+                    self.document.source(),
+                    ScalarOffset::new(range.start),
+                ))
+            } else {
+                self.document
+                    .canonical_snapshot()
+                    .ok()
+                    .and_then(|snapshot| {
+                        snapshot.canonical_lsp_position(ScalarOffset::new(range.start))
+                    })
+            };
+            let Some(position) = position else {
+                return;
+            };
             if let Some(hover) = &mut self.editor_hover {
                 hover.requested = true;
                 let _ = self.tinymist.hover_document(
@@ -6899,9 +7385,11 @@ impl EditorApp {
     }
 
     fn request_editor_completion(&mut self, cursor: usize, anchor: Rect, explicit: bool) {
+        self.prepare_editor_source_data();
         if self.document.kind().is_typst()
-            && let Some(all_items) =
+            && let Some(all_items) = self.editor_data.tex_completions(cursor).or_else(|| {
                 crate::completion::font_items(self.document.source(), cursor, &self.font_catalog)
+            })
         {
             let items =
                 crate::completion::filtered_for_source(&all_items, self.document.source(), cursor);
@@ -6911,6 +7399,7 @@ impl EditorApp {
                 version: revision_as_i32(self.document.revision()),
                 request_token: 0,
                 cursor,
+                source_cursor: cursor,
                 anchor,
                 explicit,
                 is_incomplete: false,
@@ -6965,7 +7454,35 @@ impl EditorApp {
         let request_token = self.next_editor_completion_token;
         self.next_editor_completion_token =
             self.next_editor_completion_token.wrapping_add(1).max(1);
-        let position = lsp_position_at_scalar(self.document.source(), ScalarOffset::new(cursor));
+        let (position, source_cursor, source) = if self.document.config().is_none() {
+            (
+                lsp_position_at_scalar(self.document.source(), ScalarOffset::new(cursor)),
+                cursor,
+                self.document.source().clone(),
+            )
+        } else {
+            let snapshot = match self.document.canonical_snapshot() {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    self.editor_completion = None;
+                    if explicit {
+                        self.notice = Some(Notice {
+                            message: error.to_string(),
+                            kind: NoticeKind::Info,
+                        });
+                    }
+                    return;
+                }
+            };
+            let Some(position) = snapshot.canonical_lsp_position(ScalarOffset::new(cursor)) else {
+                return;
+            };
+            let Some(source_cursor) = snapshot.canonical_scalar_cursor(ScalarOffset::new(cursor))
+            else {
+                return;
+            };
+            (position, source_cursor.get(), snapshot.source().to_owned())
+        };
         match self.tinymist.complete_document(
             generation,
             uri.clone(),
@@ -6980,6 +7497,7 @@ impl EditorApp {
                     version,
                     request_token,
                     cursor,
+                    source_cursor,
                     anchor,
                     explicit,
                     is_incomplete: false,
@@ -6994,7 +7512,7 @@ impl EditorApp {
                         .as_ref()
                         .map(|state| state.all_items.clone())
                         .unwrap_or_default(),
-                    source: self.document.source().clone(),
+                    source,
                     local: false,
                 });
             }
@@ -7050,8 +7568,8 @@ impl EditorApp {
         let all_items = items;
         let items = crate::completion::filtered_for_source(
             &all_items,
-            self.document.source(),
-            completion.cursor,
+            &completion.source,
+            completion.source_cursor,
         );
         if items.is_empty() {
             self.editor_completion = None;
@@ -7079,9 +7597,10 @@ impl EditorApp {
         let Some(item) = completion.items.get(index).cloned() else {
             return;
         };
-        let request_cursor = completion.cursor;
+        let request_cursor = completion.source_cursor;
+        let local = completion.local;
         let application =
-            match prepare_completion_application(self.document.source(), request_cursor, &item) {
+            match prepare_completion_application(&completion.source, request_cursor, &item) {
                 Ok(application) => application,
                 Err(error) => {
                     self.editor_completion = None;
@@ -7092,6 +7611,32 @@ impl EditorApp {
                     return;
                 }
             };
+
+        let application = if local {
+            application
+        } else {
+            let applied = tiptoptyp_core::text::AppliedTextEdits {
+                text: application.source,
+                mapped_offsets: [ScalarOffset::new(application.cursor); 2],
+            };
+            match self
+                .document
+                .project_canonical_change(self.document.key(), applied)
+            {
+                Ok(applied) => CompletionApplication {
+                    source: applied.text,
+                    cursor: applied.mapped_offsets[0].get(),
+                },
+                Err(error) => {
+                    self.editor_completion = None;
+                    self.notice = Some(Notice {
+                        message: format!("Could not apply completion: {error}"),
+                        kind: NoticeKind::Error,
+                    });
+                    return;
+                }
+            }
+        };
 
         let snapshot = self.editor_snapshot(context);
         self.document
@@ -7110,6 +7655,29 @@ impl EditorApp {
     }
 
     fn handle_editor_completion_keys(&mut self, context: &egui::Context) {
+        // Enter at a block opener creates the body, even when automatic
+        // language-name suggestions are visible. Tab still accepts them.
+        if self.editor_completion.is_some()
+            && self.settings.auto_pair_delimiters
+            && self.document.kind().is_typst()
+            && context.input(|input| {
+                input.key_pressed(egui::Key::Enter) && input.modifiers == Modifiers::NONE
+            })
+            && let Some(range) =
+                egui::text_edit::TextEditState::load(context, source_editor_id(context))
+                    .and_then(|state| state.cursor.char_range())
+            && range.primary.index == range.secondary.index
+        {
+            let source = self.document.source();
+            let byte = source
+                .char_indices()
+                .nth(range.primary.index.0)
+                .map_or(source.len(), |(byte, _)| byte);
+            if self.auto_pair_syntax.newline(source, byte).is_some() {
+                self.editor_completion = None;
+                return;
+            }
+        }
         let Some(completion) = &mut self.editor_completion else {
             return;
         };
@@ -7143,6 +7711,14 @@ impl EditorApp {
         match &diagnostic.source {
             DiagnosticSource::Main => self.current_is_preview_document(),
             DiagnosticSource::File(path) => {
+                if self.document.config().is_some() && !path.is_absolute() {
+                    return self.diagnostic_target_path(diagnostic).is_some_and(|path| {
+                        self.document
+                            .path()
+                            .as_ref()
+                            .is_some_and(|current| same_path(current, &path))
+                    });
+                }
                 self.document
                     .path()
                     .as_ref()
@@ -7180,7 +7756,7 @@ impl EditorApp {
             return;
         };
         if self.diagnostic_targets_current_document(&diagnostic) {
-            self.apply_file_link_location(None, Some((location.line, location.column)));
+            self.apply_editor_location(None, Some((location.line, location.column)));
             return;
         }
         let Some(path) = self.diagnostic_target_path(&diagnostic) else {
@@ -7196,7 +7772,12 @@ impl EditorApp {
         );
     }
 
-    fn show_preview(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+    fn show_preview(&mut self, ui: &mut egui::Ui, frame: Option<&eframe::Frame>) {
+        if self.document.kind().preview_only() && !self.typst_preview_available() {
+            self.hide_webview();
+            self.show_asset_view(ui);
+            return;
+        }
         // The interactive viewer needs no toolbar, so its content aligns
         // exactly with the code panel. Raster-only page controls get one fixed
         // row and never change height with build status.
@@ -7273,238 +7854,25 @@ impl EditorApp {
     }
 
     fn show_preview_header_controls(&mut self, ui: &mut egui::Ui) {
-        let header_width = ui.available_width();
         if !self.interactive_preview_active() {
-            let raster_is_current =
-                self.raster_content_freshness() == Some(RasterContentFreshness::Current);
-            let page_count =
-                if snapshot_scene_hides_preview_pages(self.snapshot_scene) || !raster_is_current {
-                    0
-                } else {
-                    self.preview.content.pages().len()
-                };
-            if header_width >= METRICS.preview.header_pages_min_width {
-                if icon_button_enabled(
-                    ui,
-                    page_count > 0 && self.preview.visible_page > 0,
-                    UiIcon::Previous,
-                    "Previous page",
-                )
-                .clicked()
-                {
-                    self.preview.requested_page = Some(self.preview.visible_page - 1);
-                }
-                ui.label(if page_count == 0 {
-                    "–/–".to_owned()
-                } else {
-                    format!("{}/{page_count}", self.preview.visible_page + 1)
-                });
-                if icon_button_enabled(
-                    ui,
-                    self.preview.visible_page + 1 < page_count,
-                    UiIcon::Next,
-                    "Next page",
-                )
-                .clicked()
-                {
-                    self.preview.requested_page = Some(self.preview.visible_page + 1);
-                }
-            }
-            if header_width >= METRICS.preview.header_zoom_min_width {
-                ui.separator();
-                if icon_button(ui, UiIcon::ZoomOut, "Zoom out").clicked() {
-                    self.preview.requested_zoom = Some(
-                        (self.preview.zoom / METRICS.preview.zoom_step)
-                            .clamp(MIN_PREVIEW_ZOOM, MAX_PREVIEW_ZOOM),
-                    );
-                    self.preview.fit_width = false;
-                }
-                if icon_button(ui, UiIcon::ZoomIn, "Zoom in").clicked() {
-                    self.preview.requested_zoom = Some(
-                        (self.preview.zoom * METRICS.preview.zoom_step)
-                            .clamp(MIN_PREVIEW_ZOOM, MAX_PREVIEW_ZOOM),
-                    );
-                    self.preview.fit_width = false;
-                }
-                if header_width >= METRICS.preview.header_percent_min_width {
-                    ui.label(format!("{:.0}%", self.preview.zoom * 100.0));
-                }
-                if icon_button(
-                    ui,
-                    UiIcon::FitWidth,
-                    if self.preview.fit_width {
-                        "Fit page width (on)"
-                    } else {
-                        "Fit page width"
-                    },
-                )
-                .clicked()
-                {
-                    self.preview.fit_width = !self.preview.fit_width;
-                }
-            }
+            let fresh = self.raster_content_freshness() == Some(RasterContentFreshness::Current);
+            raster_view::show_controls(
+                ui,
+                &mut self.preview,
+                fresh,
+                snapshot_scene_hides_preview_pages(self.snapshot_scene),
+            );
         }
     }
 
     fn show_native_preview(&mut self, ui: &mut egui::Ui) {
-        let viewport_rect = ui.available_rect_before_wrap();
-        ui.painter()
-            .rect_filled(viewport_rect, 0.0, preview_background(ui));
-        if self.preview.content.pages().is_empty()
-            || snapshot_scene_hides_preview_pages(self.snapshot_scene)
-        {
-            ui.centered_and_justified(|ui| match self.preview.status {
-                PreviewStatus::Error => {
-                    ui.label(RichText::new("Fix the diagnostics to render a preview").weak());
-                }
-                _ => {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label("Building preview…");
-                    });
-                }
-            });
-            return;
-        }
-
-        let widest_page = self
-            .preview
-            .content
-            .pages()
-            .iter()
-            .map(|page| page.size[0] as f32 * PDF_POINTS_PER_PREVIEW_PIXEL)
-            .fold(1.0_f32, f32::max);
-        if self.preview.fit_width {
-            self.preview.zoom = ((viewport_rect.width() - PAGE_MARGIN * 2.0) / widest_page)
-                .clamp(MIN_PREVIEW_ZOOM, MAX_PREVIEW_ZOOM);
-        }
-
-        let scroll_id = ui.make_persistent_id("pdf-preview-scroll");
-        let pointer = ui.ctx().input(|input| input.pointer.latest_pos());
-        let pinch = ui.ctx().input(|input| input.zoom_delta());
-        let pinch_active = pointer.is_some_and(|pointer| viewport_rect.contains(pointer))
-            && (pinch - 1.0).abs() > 0.001;
-        let old_zoom = self.preview.zoom;
-        let new_zoom = if pinch_active {
-            self.preview.fit_width = false;
-            (self.preview.zoom * pinch).clamp(MIN_PREVIEW_ZOOM, MAX_PREVIEW_ZOOM)
-        } else {
-            self.preview
-                .requested_zoom
-                .take()
-                .unwrap_or(self.preview.zoom)
-        };
-        if (new_zoom - old_zoom).abs() > f32::EPSILON {
-            let anchor = pointer
-                .filter(|pointer| viewport_rect.contains(*pointer))
-                .unwrap_or_else(|| viewport_rect.center());
-            let mut state = egui::scroll_area::State::load(ui.ctx(), scroll_id).unwrap_or_default();
-            state.offset =
-                zoom_anchored_offset(state.offset, anchor - viewport_rect.min, old_zoom, new_zoom);
-            state.store(ui.ctx(), scroll_id);
-            self.preview.zoom = new_zoom;
-            self.preview.fit_width = false;
-        }
-
-        let geometries = page_stack_geometry(
-            self.preview.content.pages().iter().map(|page| page.size),
-            self.preview.zoom,
-        );
-        let content_width = geometries
-            .iter()
-            .map(|page| page.size.x)
-            .fold(viewport_rect.width(), f32::max)
-            + PAGE_MARGIN * 2.0;
-        let content_height = stack_height(&geometries);
-        let requested_page = self.preview.requested_page.take();
-        let mut clicked_link = None;
-        let raster_is_current =
-            self.raster_content_freshness() == Some(RasterContentFreshness::Current);
-
-        let output = egui::ScrollArea::both()
-            .id_salt("pdf-preview-scroll")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.set_min_size(Vec2::new(content_width, content_height));
-                let page_theme = theme::preview_palette(self.preview.dark);
-                for (page, geometry) in self.preview.content.pages().iter().zip(&geometries) {
-                    let left = ((content_width - geometry.size.x) * 0.5).max(PAGE_MARGIN);
-                    let rect = Rect::from_min_size(
-                        Pos2::new(
-                            ui.min_rect().left() + left,
-                            ui.min_rect().top() + geometry.top,
-                        ),
-                        geometry.size,
-                    );
-                    let shadow_rect = rect
-                        .translate(Vec2::new(0.0, METRICS.preview.shadow_offset_y))
-                        .expand(METRICS.preview.shadow_expand);
-                    ui.painter().rect_filled(
-                        shadow_rect,
-                        METRICS.preview.shadow_radius,
-                        page_theme.shadow,
-                    );
-                    ui.painter().rect_filled(
-                        rect,
-                        METRICS.preview.page_radius,
-                        page_theme.page_fill,
-                    );
-                    ui.painter().rect_stroke(
-                        rect,
-                        METRICS.preview.page_radius,
-                        Stroke::new(METRICS.preview.page_border_width, page_theme.border),
-                        StrokeKind::Outside,
-                    );
-                    ui.put(
-                        rect,
-                        egui::Image::new(&page.texture)
-                            .fit_to_exact_size(geometry.size)
-                            .alt_text(format!("PDF page {}", geometry.index + 1)),
-                    );
-                    for (link_index, link) in page.links.iter().enumerate() {
-                        if !raster_is_current {
-                            continue;
-                        }
-                        let [left, top, right, bottom] = link.rect;
-                        let link_rect = Rect::from_min_max(
-                            Pos2::new(
-                                rect.left() + left * rect.width(),
-                                rect.top() + top * rect.height(),
-                            ),
-                            Pos2::new(
-                                rect.left() + right * rect.width(),
-                                rect.top() + bottom * rect.height(),
-                            ),
-                        )
-                        .expand(theme::SPACE.tight)
-                        .intersect(rect);
-                        if !link_rect.is_positive() {
-                            continue;
-                        }
-                        let response = ui.interact(
-                            link_rect,
-                            ui.id().with(("pdf-link", geometry.index, link_index)),
-                            Sense::click(),
-                        );
-                        if response.hovered() {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                        }
-                        if response.clicked() {
-                            clicked_link = Some(link.target.clone());
-                        }
-                        native_hover_text(response, &link.target);
-                    }
-                    if requested_page == Some(geometry.index) {
-                        ui.scroll_to_rect(rect, Some(Align::Min));
-                    }
-                }
-            });
-        self.preview.visible_page = visible_page(
-            &geometries,
-            output.state.offset.y,
-            output.inner_rect.height(),
-        );
-        if let Some(target) = clicked_link {
+        let fresh = self.raster_content_freshness() == Some(RasterContentFreshness::Current);
+        if let Some(target) = raster_view::show_pages(
+            ui,
+            &mut self.preview,
+            fresh,
+            snapshot_scene_hides_preview_pages(self.snapshot_scene),
+        ) {
             self.follow_preview_link(&target);
         }
     }
@@ -7643,16 +8011,20 @@ impl EditorApp {
     }
 
     fn record_status_transition(&mut self) {
-        if self.recorded_status == Some(self.preview.status) {
+        if self.tabs.is_empty() {
             return;
         }
-        let kind = match self.preview.status {
+        let status = self.status_preview().status;
+        if self.recorded_status == Some(status) {
+            return;
+        }
+        let kind = match status {
             PreviewStatus::Ready(_) => NoticeKind::Success,
             PreviewStatus::Error => NoticeKind::Error,
             PreviewStatus::Waiting | PreviewStatus::Compiling => NoticeKind::Info,
         };
         self.push_status_log(self.status_detail(), kind);
-        self.recorded_status = Some(self.preview.status);
+        self.recorded_status = Some(status);
     }
 
     fn record_notice_transition(&mut self) {
@@ -7725,14 +8097,50 @@ impl EditorApp {
             .then(|| self.git_editor.line_change_counts())
     }
 
-    fn git_line_change_summary(counts: crate::git::editor::LineChangeCounts) -> String {
-        format!(
-            "Git: +{} added · ~{} modified · −{} deleted",
-            counts.added, counts.modified, counts.deleted
-        )
+    fn git_line_change_summary(
+        context: &egui::Context,
+        counts: crate::git::editor::LineChangeCounts,
+    ) -> egui::text::LayoutJob {
+        use crate::git::editor::ChangeKind;
+        let mut job = egui::text::LayoutJob::default();
+        let format = egui::TextFormat {
+            font_id: egui::FontId::proportional(theme::TYPE.supporting),
+            color: theme::palette(context).neutral,
+            ..Default::default()
+        };
+        job.append("Git: ", 0.0, format.clone());
+        for (index, (symbol, count, kind)) in [
+            ("+", counts.added, ChangeKind::Added),
+            ("~", counts.modified, ChangeKind::Modified),
+            ("-", counts.deleted, ChangeKind::Deleted),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if index > 0 {
+                job.append(" · ", 0.0, format.clone());
+            }
+            job.append(
+                &format!("{symbol}{count}"),
+                0.0,
+                egui::TextFormat {
+                    color: kind.color(context),
+                    ..format.clone()
+                },
+            );
+        }
+        job
     }
 
     fn show_status_bar(&mut self, ui: &mut egui::Ui) {
+        if self.tabs.is_empty() {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.weak("Workspace ready · no open tabs");
+            });
+            return;
+        }
+        self.record_status_transition();
+        self.record_notice_transition();
         self.prepare_editor_source_data();
         let source_metrics = self.editor_data.source_metrics();
         let mut fallbacks = if self.snapshot_scene.is_some() {
@@ -7770,25 +8178,36 @@ impl EditorApp {
                 );
             }
 
-            let (icon, color, timing) =
-                if !self.may_run_compilation() && self.typst_preview_available() {
-                    (UiIcon::Waiting, neutral_color(ui.ctx()), None)
-                } else {
-                    match self.preview.status {
-                        PreviewStatus::Waiting => (UiIcon::Waiting, neutral_color(ui.ctx()), None),
-                        PreviewStatus::Compiling => (UiIcon::Refresh, info_color(ui.ctx()), None),
-                        PreviewStatus::Ready(elapsed) => (
-                            UiIcon::Check,
-                            success_color(ui.ctx()),
-                            preview_timing_label(self.document.kind(), elapsed),
-                        ),
-                        PreviewStatus::Error => (UiIcon::Warning, error_color(ui.ctx()), None),
-                    }
-                };
+            let (icon, color, _) = if !self.may_run_compilation() && self.typst_preview_available()
+            {
+                (UiIcon::Waiting, neutral_color(ui.ctx()), None)
+            } else {
+                match self.status_preview().status {
+                    PreviewStatus::Waiting => (UiIcon::Waiting, neutral_color(ui.ctx()), None),
+                    PreviewStatus::Compiling => (UiIcon::Refresh, info_color(ui.ctx()), None),
+                    PreviewStatus::Ready(elapsed) => (
+                        UiIcon::Check,
+                        success_color(ui.ctx()),
+                        preview_timing_label(self.document.kind(), elapsed),
+                    ),
+                    PreviewStatus::Error => (UiIcon::Warning, error_color(ui.ctx()), None),
+                }
+            };
             let status_detail = self.status_detail();
+            let (message, kind) = self
+                .status_log
+                .front()
+                .map_or((status_detail.as_str(), NoticeKind::Info), |entry| {
+                    (entry.detail.as_str(), entry.kind)
+                });
+            let message_color = match kind {
+                NoticeKind::Info => info_color(ui.ctx()),
+                NoticeKind::Success => success_color(ui.ctx()),
+                NoticeKind::Error => error_color(ui.ctx()),
+            };
             let status_response = ui
                 .horizontal(|ui| {
-                    if matches!(self.preview.status, PreviewStatus::Ready(_))
+                    if matches!(self.status_preview().status, PreviewStatus::Ready(_))
                         && let Some(extension) = self.document_extension_label()
                     {
                         ui.label(
@@ -7800,20 +8219,20 @@ impl EditorApp {
                     } else {
                         static_icon(ui, icon, color);
                     }
-                    if let Some(timing) = timing {
-                        ui.label(
-                            RichText::new(timing)
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(message)
                                 .size(theme::TYPE.supporting)
-                                .strong()
-                                .color(color),
-                        );
-                    }
+                                .color(message_color),
+                        )
+                        .truncate(),
+                    );
                 })
                 .response
                 .interact(Sense::click());
             native_hover_text(
                 status_response.clone(),
-                format!("{status_detail}\nDouble-click for recent status"),
+                format!("{message}\nDouble-click for recent status"),
             );
             if status_response.double_clicked() {
                 self.open_app_popup(AppPopup::StatusLog {
@@ -7836,31 +8255,11 @@ impl EditorApp {
                 );
                 native_hover_text(static_icon(ui, UiIcon::Warning, color), &fallback_detail);
             }
-            if let Some(notice) = &self.notice {
-                ui.separator();
-                let color = match notice.kind {
-                    NoticeKind::Info => info_color(ui.ctx()),
-                    NoticeKind::Success => success_color(ui.ctx()),
-                    NoticeKind::Error => error_color(ui.ctx()),
-                };
-                native_hover_text(
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(&notice.message)
-                                .size(theme::TYPE.supporting)
-                                .color(color),
-                        )
-                        .truncate()
-                        .halign(Align::RIGHT),
-                    ),
-                    &notice.message,
-                );
-            }
             if let Some(counts) = self.git_line_change_counts() {
                 ui.separator();
-                let summary = Self::git_line_change_summary(counts);
+                let summary = Self::git_line_change_summary(ui.ctx(), counts);
                 native_hover_text(
-                    ui.label(RichText::new(summary.clone()).size(theme::TYPE.supporting)),
+                    ui.label(summary),
                     format!(
                         "Git changes in this document\n{} added, {} modified, {} deleted",
                         counts.added, counts.modified, counts.deleted
@@ -7871,11 +8270,14 @@ impl EditorApp {
     }
 
     fn status_detail(&self) -> String {
+        if self.tabs.is_empty() {
+            return "Workspace ready · no open tabs".into();
+        }
         if !self.may_run_compilation() && self.typst_preview_available() {
             return "Automatic preview updates paused".to_owned();
         }
         if !self.typst_preview_available() {
-            return match (self.document.kind(), self.preview.status) {
+            return match (self.document.kind(), self.status_preview().status) {
                 (DocumentKind::Text, _) => "Text file ready".to_owned(),
                 (DocumentKind::Image, PreviewStatus::Compiling) => "Decoding image".to_owned(),
                 (DocumentKind::Image, PreviewStatus::Ready(_)) => "Image ready".to_owned(),
@@ -7892,7 +8294,11 @@ impl EditorApp {
         match self.preview.status {
             PreviewStatus::Waiting => "Preview build queued".to_owned(),
             PreviewStatus::Compiling => "Compiling preview".to_owned(),
-            PreviewStatus::Ready(_) => "Preview ready".to_owned(),
+            PreviewStatus::Ready(elapsed) => preview_timing_label(DocumentKind::Typst, elapsed)
+                .map_or_else(
+                    || "Preview ready".to_owned(),
+                    |timing| format!("Preview ready in {timing}"),
+                ),
             PreviewStatus::Error => self
                 .preview
                 .raw_diagnostics
@@ -7935,6 +8341,21 @@ impl EditorApp {
         self.pending_settings.is_some()
     }
 
+    pub(crate) fn has_shell_work(&self) -> bool {
+        self.has_settings_update()
+            || !self.pending_window_requests.is_empty()
+            || !self.workspace_history_removals.is_empty()
+            || self.process_close_answer().is_some()
+    }
+
+    pub(crate) fn shell_signal(&self) -> (u64, bool, bool) {
+        (
+            self.document.key().epoch,
+            self.is_dirty(),
+            self.interactive_preview_active(),
+        )
+    }
+
     pub(crate) fn merge_settings_update(&mut self, target: &mut AppSettings) {
         if let Some(edited) = self.pending_settings.take() {
             target.apply_edits(&self.settings, edited);
@@ -7955,10 +8376,15 @@ impl EditorApp {
     }
 
     pub(crate) fn apply_shared_settings(&mut self, settings: AppSettings, context: &egui::Context) {
+        let enable_tex = settings.mitex_auto_enable && !self.settings.mitex_auto_enable;
         let autosave_changed = settings.auto_save != self.settings.auto_save
             || settings.auto_save_delay_ms != self.settings.auto_save_delay_ms;
         self.settings = settings;
+        if enable_tex && self.tex_mode_available() {
+            self.set_tex_mode(true, context);
+        }
         if autosave_changed {
+            self.reschedule_parked_autosave();
             self.autosave_deadline = (self.settings.auto_save
                 && self.document.path().is_some()
                 && self.is_dirty())
@@ -8009,6 +8435,14 @@ impl eframe::App for EditorApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        self.ui_in_window(ui, Some(frame));
+    }
+}
+
+impl EditorApp {
+    /// Root passes supply their native frame. Deferred documents use their
+    /// own retained platform parent, never the root's frame/window handle.
+    pub(crate) fn ui_in_window(&mut self, ui: &mut egui::Ui, frame: Option<&eframe::Frame>) {
         let _span = crate::performance::span("ui.editor.pass");
         let context = ui.ctx().clone();
         // Capture the exact platform parent before opening any popup viewport
@@ -8127,6 +8561,8 @@ impl eframe::App for EditorApp {
             }
         }
         self.execute_pending_app_popup_action(&context, frame);
+        self.poll_hunk_action();
+        self.tick_parked_autosave(&context);
         let drop_id = viewport_scoped_id(&context, "file-drop-target");
         context.data_mut(|data| data.remove::<FileDropTarget>(drop_id));
         let force_hover_id = viewport_scoped_id(&context, "force-pointer-tooltip");
@@ -8145,15 +8581,21 @@ impl eframe::App for EditorApp {
             if self.git.take_status_changed() {
                 self.git_editor.request_refresh();
             }
+            let projected = self.document.config().is_some();
+            let projection = if projected {
+                self.document.canonical_snapshot().ok()
+            } else {
+                None
+            };
             self.git_editor.tick(
                 &context,
                 &self.workspace_root,
-                self.document
-                    .path()
-                    .as_deref()
-                    .filter(|_| self.document.kind().is_editable()),
+                self.document.path().as_deref().filter(|_| {
+                    self.document.kind().is_editable() && (!projected || projection.is_some())
+                }),
                 self.document.key(),
                 self.document.source(),
+                projection.as_ref(),
             );
             if matches!(self.app_popup, Some(AppPopup::GitChunk { .. }))
                 && self.git_editor.chunk.is_none()
@@ -8215,45 +8657,47 @@ impl eframe::App for EditorApp {
                 context.request_repaint();
             }
         }
-        let designated_preview = self.designated_preview_path().is_some();
-        if self.document.kind().preview_only() {
-            // This presentation override intentionally does not mutate
-            // `view_mode`: returning to a source file restores the user's Code,
-            // Split, or Preview preference.
-            egui::CentralPanel::default()
-                .frame(theme::content_panel_frame(ui.style()))
-                .show(ui, |ui| self.show_preview(ui, frame));
-        } else if self.document.kind() == DocumentKind::Text && !designated_preview {
-            self.hide_webview();
-            egui::CentralPanel::default()
-                .frame(theme::content_panel_frame(ui.style()))
-                .show(ui, |ui| self.show_editor(ui));
-        } else {
-            match self.view_mode {
-                ViewMode::Code => {
-                    self.hide_webview();
-                    egui::CentralPanel::default()
-                        .frame(theme::content_panel_frame(ui.style()))
-                        .show(ui, |ui| self.show_editor(ui));
-                }
-                ViewMode::Split => {
-                    let layout = theme::split_pane_layout(ui.available_width());
-                    egui::Panel::left("editor")
-                        .frame(theme::content_panel_frame(ui.style()))
-                        .resizable(true)
-                        .default_size(layout.editor_width)
-                        .min_size(layout.editor_minimum)
-                        .max_size(layout.editor_maximum)
-                        .show(ui, |ui| self.show_editor(ui));
-                    egui::CentralPanel::default()
-                        .frame(theme::content_panel_frame(ui.style()))
-                        .show(ui, |ui| self.show_preview(ui, frame));
-                }
-                ViewMode::Preview => {
-                    egui::CentralPanel::default()
-                        .frame(theme::content_panel_frame(ui.style()))
-                        .show(ui, |ui| self.show_preview(ui, frame));
-                }
+        use workspace_view::ContentView;
+        let content_view = workspace_view::content_view(
+            self.tabs.is_empty(),
+            self.document.kind(),
+            self.typst_preview_available(),
+            self.view_mode,
+        );
+        match content_view {
+            ContentView::Empty | ContentView::Source | ContentView::Asset => {
+                self.hide_webview();
+                egui::CentralPanel::default()
+                    .frame(theme::content_panel_frame(ui.style()))
+                    .show(ui, |ui| match content_view {
+                        ContentView::Empty => self.show_empty_workspace(ui, frame),
+                        ContentView::Asset => self.show_asset_view(ui),
+                        _ => self.show_editor(ui),
+                    });
+            }
+            ContentView::SplitSource | ContentView::SplitAsset => {
+                let layout = theme::split_pane_layout(ui.available_width());
+                egui::Panel::left("editor")
+                    .frame(theme::content_panel_frame(ui.style()))
+                    .resizable(true)
+                    .default_size(layout.editor_width)
+                    .min_size(layout.editor_minimum)
+                    .max_size(layout.editor_maximum)
+                    .show(ui, |ui| {
+                        if content_view == ContentView::SplitAsset {
+                            self.show_asset_view(ui);
+                        } else {
+                            self.show_editor(ui);
+                        }
+                    });
+                egui::CentralPanel::default()
+                    .frame(theme::content_panel_frame(ui.style()))
+                    .show(ui, |ui| self.show_preview(ui, frame));
+            }
+            ContentView::Preview => {
+                egui::CentralPanel::default()
+                    .frame(theme::content_panel_frame(ui.style()))
+                    .show(ui, |ui| self.show_preview(ui, frame));
             }
         }
         self.handle_dropped_file(&context);
@@ -8460,7 +8904,7 @@ fn completion_requested_after_events(events: &[egui::Event]) -> bool {
             character.is_alphanumeric()
                 || matches!(
                     character,
-                    '_' | '-' | '.' | '#' | '@' | ':' | '/' | ' ' | '"'
+                    '_' | '-' | '.' | '#' | '@' | ':' | '/' | '\\' | ' ' | '"'
                 )
         }),
         egui::Event::Key {
@@ -8828,9 +9272,7 @@ struct EditorGutterGeometry {
 
 fn editor_gutter_geometry(galley_x: f32) -> EditorGutterGeometry {
     EditorGutterGeometry {
-        // Redistribute the existing nine-point padding: eight before the
-        // number for folding, one after. Do not widen the editor margin.
-        line_number_right: galley_x - METRICS.editor.line_number_right_gap + 8.0,
+        line_number_right: galley_x - METRICS.editor.line_number_right_gap,
         separator_x: galley_x - METRICS.editor.line_number_separator_gap,
     }
 }
@@ -9163,11 +9605,21 @@ fn show_sticky_context_overlay(
                         ui.visuals().text_color(),
                     );
                     if line_numbers {
-                        painter.text(
-                            Pos2::new(gutter.line_number_right, row_rect.top()),
-                            egui::Align2::RIGHT_TOP,
+                        let number = painter.layout_no_wrap(
                             row.line.to_string(),
-                            theme::annotation_font(),
+                            theme::editor_font(),
+                            ui.visuals().weak_text_color(),
+                        );
+                        let source_row =
+                            &snapshot.galley.rows[snapshot.line_rows[row.line - 1].start];
+                        painter.galley(
+                            line_number_position(
+                                gutter.line_number_right,
+                                row_rect.top(),
+                                source_row,
+                                &number,
+                            ),
+                            number,
                             ui.visuals().weak_text_color(),
                         );
                     }
@@ -9288,6 +9740,7 @@ fn paint_line_numbers(
     ui: &mut egui::Ui,
     output: &egui::text_edit::TextEditOutput,
     line_rows: &[Range<usize>],
+    font: egui::FontId,
 ) {
     let painter = ui.painter();
     let gutter = editor_gutter_geometry(output.galley_pos.x);
@@ -9311,14 +9764,29 @@ fn paint_line_numbers(
         if row.size.y == 0.0 || !ui.clip_rect().intersects(row_rect) {
             continue;
         }
-        painter.text(
-            Pos2::new(gutter.line_number_right, row_rect.top()),
-            egui::Align2::RIGHT_TOP,
-            (line + 1).to_string(),
-            theme::annotation_font(),
+        let number = painter.layout_no_wrap((line + 1).to_string(), font.clone(), color);
+        painter.galley(
+            line_number_position(gutter.line_number_right, row_rect.top(), row, &number),
+            number,
             color,
         );
     }
+}
+
+fn line_number_position(
+    right: f32,
+    top: f32,
+    source: &egui::epaint::text::PlacedRow,
+    number: &egui::Galley,
+) -> Pos2 {
+    let number_baseline = number.rows[0].pos.y + number.rows[0].glyphs[0].pos.y;
+    // Source rows can be taller because of fallback glyphs or line spacing.
+    // Align baselines, not bounding boxes. Empty rows retain their own height.
+    let baseline = source.glyphs.first().map_or_else(
+        || (source.size.y - number.size().y).max(0.0) * 0.5 + number_baseline,
+        |glyph| glyph.pos.y,
+    );
+    Pos2::new(right - number.size().x, top + baseline - number_baseline)
 }
 
 fn paint_fold_controls(
@@ -9457,11 +9925,22 @@ fn editor_gutter_width(line_number_width: Option<f32>, git_gutter: bool) -> i8 {
         } else {
             0.0
         };
-        (width + METRICS.editor.line_number_right_gap)
+        (width + METRICS.editor.fold_lane_width + METRICS.editor.line_number_right_gap)
             .ceil()
             .min(f32::from(maximum_number_width)) as i8
     });
     number_width + git_width
+}
+
+fn line_number_column_width(ui: &egui::Ui, line_count: usize, font: &egui::FontId) -> f32 {
+    // Also works with user-selected proportional code fonts. Ten cached glyph
+    // metrics, no string allocation or document-sized layout.
+    let digit_width = ui.fonts_mut(|fonts| {
+        ('0'..='9')
+            .map(|digit| fonts.glyph_width(font, digit))
+            .fold(0.0, f32::max)
+    });
+    digit_width * (line_count.max(1).ilog10() + 1) as f32
 }
 
 fn logical_line_row_ranges(rows: &[egui::epaint::text::PlacedRow]) -> Vec<Range<usize>> {
@@ -9787,7 +10266,9 @@ fn explorer_section_query_matches(
 
 fn workspace_entry_label(text: RichText, is_active: bool) -> egui::Label {
     let text = if is_active {
-        text.font(theme::strong_ui_font()).strong()
+        // Emphasize weight, not size: Explorer inherits its local UI text
+        // size, which need not match the editor's content-font size.
+        text.family(theme::strong_ui_font().family).strong()
     } else {
         text
     };
@@ -10133,7 +10614,8 @@ fn explorer_section_resizable(
                     ui.available_width().max(0.0),
                     METRICS.explorer.section_header_height,
                 ],
-                egui::Button::new(RichText::new(spec.title).strong()).frame(false),
+                egui::Button::new((RichText::new(spec.title).strong(), egui::Atom::grow()))
+                    .frame(false),
             );
             title_clicked = response.clicked();
         });
@@ -10559,6 +11041,25 @@ fn eye_icon_geometry(rect: Rect) -> EyeIconGeometry {
     }
 }
 
+fn closed_eye_icon_geometry(rect: Rect) -> ([Pos2; 4], [[Pos2; 2]; 3]) {
+    // Center the visible lid + lashes, not the (otherwise invisible) full eye.
+    let shift = rect.height() * (0.34 * 0.75 + 0.16) * 0.5;
+    let lid = eye_icon_geometry(rect.translate(Vec2::new(0.0, -shift))).lower;
+    let lashes = [0.2_f32, 0.5, 0.8].map(|t| {
+        let s = 1.0 - t;
+        let root = (lid[0].to_vec2() * s.powi(3)
+            + lid[1].to_vec2() * (3.0 * s * s * t)
+            + lid[2].to_vec2() * (3.0 * s * t * t)
+            + lid[3].to_vec2() * t.powi(3))
+        .to_pos2();
+        [
+            root,
+            root + Vec2::new((t - 0.5) * rect.width() * 0.35, rect.height() * 0.16),
+        ]
+    });
+    (lid, lashes)
+}
+
 fn paint_ui_icon(painter: &egui::Painter, rect: Rect, icon: UiIcon, color: Color32) {
     let center = rect.center();
     let stroke = Stroke::new(METRICS.icon.stroke_width, color);
@@ -10648,6 +11149,20 @@ fn paint_ui_icon(painter: &egui::Painter, rect: Rect, icon: UiIcon, color: Color
                 ),
             ));
             painter.circle_filled(center, geometry.pupil_radius, color);
+        }
+        UiIcon::EyeClosed => {
+            let (lid, lashes) = closed_eye_icon_geometry(rect);
+            painter.add(egui::Shape::CubicBezier(
+                egui::epaint::CubicBezierShape::from_points_stroke(
+                    lid,
+                    false,
+                    Color32::TRANSPARENT,
+                    stroke,
+                ),
+            ));
+            for lash in lashes {
+                painter.line_segment(lash, stroke);
+            }
         }
         UiIcon::ZoomIn | UiIcon::ZoomOut => {
             painter.line_segment(
@@ -10813,37 +11328,65 @@ fn scale_rect_from_egui_to_native(rect: Rect, viewport: Rect, scale: f32) -> Opt
 }
 
 fn show_preview_transition(ui: &mut egui::Ui, waiting_for_focus: bool) {
+    show_centered_preview_message(
+        ui,
+        if waiting_for_focus {
+            "Activate the document window to resume preview"
+        } else {
+            "Building preview…"
+        },
+        !waiting_for_focus,
+    );
+}
+
+fn preview_message_rects(
+    bounds: Rect,
+    text_size: Vec2,
+    spinner_size: f32,
+    gap: f32,
+) -> (Rect, Rect) {
+    let gap = if spinner_size > 0.0 { gap } else { 0.0 };
+    let size = Vec2::new(
+        spinner_size + gap + text_size.x,
+        spinner_size.max(text_size.y),
+    );
+    let group = egui::Align2::CENTER_CENTER.align_size_within_rect(size, bounds);
+    let spinner = Rect::from_center_size(
+        Pos2::new(group.left() + spinner_size * 0.5, group.center().y),
+        Vec2::splat(spinner_size),
+    );
+    let text = Rect::from_center_size(
+        Pos2::new(group.right() - text_size.x * 0.5, group.center().y),
+        text_size,
+    );
+    (spinner, text)
+}
+
+fn show_centered_preview_message(ui: &mut egui::Ui, message: &str, spinning: bool) {
     let rect = ui.available_rect_before_wrap();
     ui.allocate_rect(rect, Sense::hover());
     ui.painter().rect_filled(rect, 0.0, preview_background(ui));
-    ui.scope_builder(
-        egui::UiBuilder::new()
-            .max_rect(rect)
-            .layout(Layout::top_down(Align::Center)),
-        |ui| {
-            ui.add_space(
-                (rect.height() * METRICS.preview.transition_vertical_fraction)
-                    .max(METRICS.preview.transition_min_top_space),
-            );
-            if waiting_for_focus {
-                // Native preview construction intentionally waits for focus.
-                // Animating this indefinite wait repaints the editor at display
-                // refresh rate while the user interacts with Settings.
-                ui.allocate_space(Vec2::splat(ui.spacing().interact_size.y));
-            } else {
-                ui.spinner();
-            }
-            ui.label(
-                RichText::new(if waiting_for_focus {
-                    "Activate the document window to resume preview"
-                } else {
-                    "Updating preview…"
-                })
-                .size(theme::TYPE.supporting)
-                .weak(),
-            );
-        },
+    let spinner_size = if spinning {
+        ui.spacing().interact_size.y
+    } else {
+        0.0
+    };
+    let gap = if spinning {
+        ui.spacing().item_spacing.x
+    } else {
+        0.0
+    };
+    let text = ui.painter().layout(
+        message.to_owned(),
+        theme::supporting_font(),
+        ui.visuals().weak_text_color(),
+        (rect.width() - spinner_size - gap).max(1.0),
     );
+    let (spinner_rect, text_rect) = preview_message_rects(rect, text.size(), spinner_size, gap);
+    if spinning {
+        ui.put(spinner_rect, egui::Spinner::new().size(spinner_size));
+    }
+    ui.put(text_rect, egui::Label::new(text));
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -11114,8 +11657,22 @@ fn find_step_for_enter(enter_pressed: bool, shift: bool) -> Option<FindStep> {
 }
 
 fn preview_timing_label(kind: DocumentKind, elapsed: Duration) -> Option<String> {
-    (kind.is_typst() && !elapsed.is_zero())
-        .then(|| format!("{:.0} ms", elapsed.as_secs_f64() * 1000.0))
+    (kind.is_typst() && !elapsed.is_zero()).then(|| format!("{} ms", elapsed.as_millis().max(1)))
+}
+
+fn completed_action_label(action: &str, name: &str, elapsed: Duration) -> String {
+    format!("{action} {name} in {} ms", elapsed.as_millis().max(1))
+}
+
+fn tinymist_status_matches_entry(reported: &str, entry: &Path, root: &Path) -> bool {
+    if reported.is_empty() {
+        return false;
+    }
+    let reported = reported.replace('\\', "/");
+    reported == entry.to_string_lossy().replace('\\', "/")
+        || entry.strip_prefix(root).ok().is_some_and(|relative| {
+            reported == format!("/{}", relative.to_string_lossy().replace('\\', "/"))
+        })
 }
 
 fn app_popup_blocked_by_root_overlay(
@@ -11888,7 +12445,7 @@ fn same_path(left: &Path, right: &Path) -> bool {
 }
 
 fn reset_untitled_buffer(document: &mut DocumentSession, autosave_deadline: &mut Option<Instant>) {
-    document.replace_untitled(DEFAULT_SOURCE);
+    document.replace_unprojected_untitled(DEFAULT_SOURCE);
     *autosave_deadline = None;
 }
 
@@ -12214,8 +12771,9 @@ fn shortcut_tooltip(label: &str, shortcuts: &ShortcutBindings, action: ShortcutA
     )
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 struct CommandAvailability {
+    empty_workspace: bool,
     can_undo: bool,
     can_redo: bool,
     saved_document: bool,
@@ -12251,7 +12809,11 @@ fn show_command_popup_ui(
         if previous_section.is_some_and(|section| section != spec.section) {
             ui.add(egui::Separator::default().spacing(theme::SPACE.control));
         }
-        let enabled = availability.allows(spec.requirement);
+        let enabled = if availability.empty_workspace {
+            workspace_view::empty_workspace_command(spec.command)
+        } else {
+            availability.allows(spec.requirement)
+        };
         let shortcut = shortcuts.egui(spec.shortcut_action);
         if menu_item_enabled(ui, enabled, spec.title, shortcut).clicked() {
             *action = Some(AppPopupAction::Command(spec.command));
@@ -12271,6 +12833,7 @@ fn show_file_popup_ui(
         ui,
         CommandMenu::File,
         CommandAvailability {
+            empty_workspace: false,
             can_undo: false,
             can_redo: false,
             saved_document: rename_path.is_some(),
@@ -12296,6 +12859,7 @@ fn show_edit_popup_ui(
         ui,
         CommandMenu::Edit,
         CommandAvailability {
+            empty_workspace: false,
             can_undo,
             can_redo,
             saved_document: false,
@@ -12318,6 +12882,7 @@ fn show_view_popup_ui(
         ui,
         CommandMenu::View,
         CommandAvailability {
+            empty_workspace: false,
             can_undo: false,
             can_redo: false,
             saved_document: false,
@@ -12354,11 +12919,11 @@ fn show_workspace_popup_ui(
             .and_then(|extension| extension.to_str())
             .is_some_and(|extension| extension.eq_ignore_ascii_case("typ"));
     let preview_label = if preview_selected {
-        "Stop using for preview"
+        "Preview source"
     } else {
         "Use for preview"
     };
-    if menu_item_enabled(ui, is_typst, preview_label, None).clicked() {
+    if menu_item_enabled(ui, is_typst && !preview_selected, preview_label, None).clicked() {
         *action = Some(AppPopupAction::Workspace(
             WorkspaceMenuAction::TogglePreview(path.to_path_buf()),
         ));

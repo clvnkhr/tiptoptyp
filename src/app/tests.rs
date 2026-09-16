@@ -4,6 +4,216 @@ use crate::explorer::ExplorerPanelPhase;
 use crate::settings::InterfaceTheme;
 
 #[test]
+fn preview_message_group_is_centered_for_narrow_and_wide_panes() {
+    for width in [120.0, 400.0, 900.0] {
+        let bounds = Rect::from_min_size(Pos2::new(37.0, 81.0), Vec2::new(width, 300.0));
+        for text in [Vec2::new(70.0, 16.0), Vec2::new(70.0, 48.0)] {
+            for spinner in [0.0, 18.0] {
+                let (icon, label) = preview_message_rects(bounds, text, spinner, 8.0);
+                let group = if spinner > 0.0 {
+                    icon.union(label)
+                } else {
+                    label
+                };
+                assert_eq!(group.center(), bounds.center());
+                assert_eq!(label.center().y, bounds.center().y);
+                assert!(bounds.contains_rect(group));
+            }
+        }
+    }
+}
+
+#[test]
+fn compile_status_only_matches_the_designated_entry() {
+    let root = Path::new("/workspace");
+    let entry = root.join("chapters/main.typ");
+    for reported in ["/chapters/main.typ", "/workspace/chapters/main.typ"] {
+        assert!(tinymist_status_matches_entry(reported, &entry, root));
+    }
+    for reported in ["", "/other.typ", "/elsewhere/chapters/main.typ"] {
+        assert!(!tinymist_status_matches_entry(reported, &entry, root));
+    }
+}
+
+#[test]
+fn explorer_header_text_stays_left_aligned_as_the_panel_grows() {
+    let mut positions = Vec::new();
+    for width in [180.0, 380.0] {
+        let context = egui::Context::default();
+        let mut output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 180.0))),
+                ..Default::default()
+            },
+            |ui| {
+                explorer_section(ui, "left-title", "Files", true, 60.0, |ui| {
+                    ui.label("body");
+                })
+            },
+        );
+        let text = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Files" => Some(text.pos.x),
+                _ => None,
+            })
+            .expect("painted section title");
+        assert!(text < 60.0, "title must stay beside the disclosure arrow");
+        positions.push(text);
+        output.textures_delta.clear();
+    }
+    assert_eq!(positions[0], positions[1]);
+}
+
+#[test]
+fn left_aligned_explorer_header_keeps_its_full_width_click_target() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(350.0, 200.0))
+        .build_ui(|ui| {
+            explorer_section(ui, "wide-click-title", "Files", true, 60.0, |ui| {
+                ui.label("Visible body");
+            });
+        });
+    harness.run();
+    let header = harness
+        .get_by_role_and_label(egui::accesskit::Role::Button, "Files")
+        .rect();
+    assert!(header.width() > 250.0);
+    let pos = header.right_center() - Vec2::new(4.0, 0.0);
+    harness.event(egui::Event::PointerMoved(pos));
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+    }
+    harness.run();
+    assert!(harness.query_by_label("Visible body").is_none());
+}
+
+#[test]
+fn status_bar_displays_preview_completion_text_and_duration() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    app.preview.status = PreviewStatus::Ready(Duration::from_millis(18));
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(900.0, 80.0))
+        .build_ui_state(|ui, app: &mut EditorApp| app.show_status_bar(ui), app);
+    harness.run();
+    harness.get_by_label("Preview ready in 18 ms");
+}
+
+#[test]
+fn file_open_and_save_report_successful_actions() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("notes.txt");
+    fs::write(&path, "hello").unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    app.snapshot_scene = None;
+    assert!(app.load_path(path.clone()));
+    assert!(
+        app.notice
+            .as_ref()
+            .unwrap()
+            .message
+            .starts_with("Opened notes.txt in ")
+    );
+    assert!(app.save_to(path));
+    assert!(
+        app.notice
+            .as_ref()
+            .unwrap()
+            .message
+            .starts_with("Saved notes.txt in ")
+    );
+}
+
+#[test]
+fn status_bar_shares_one_message_and_preserves_history() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    app.preview.status = PreviewStatus::Ready(Duration::from_millis(18));
+    app.record_status_transition();
+    app.notice = Some(Notice {
+        message: "Saved test.typ in 2 ms".to_owned(),
+        kind: NoticeKind::Success,
+    });
+    app.record_notice_transition();
+    assert_eq!(
+        app.status_log.front().unwrap().detail,
+        "Saved test.typ in 2 ms"
+    );
+    app.preview.status = PreviewStatus::Ready(Duration::from_millis(25));
+    app.record_status_transition();
+    app.record_notice_transition();
+    assert_eq!(
+        app.status_log.front().unwrap().detail,
+        "Preview ready in 25 ms"
+    );
+    assert!(
+        app.status_log
+            .iter()
+            .any(|entry| entry.detail == "Saved test.typ in 2 ms")
+    );
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(900.0, 80.0))
+        .build_ui_state(|ui, app: &mut EditorApp| app.show_status_bar(ui), app);
+    harness.run();
+    harness.get_by_label("Preview ready in 25 ms");
+    assert!(harness.query_by_label("Saved test.typ in 2 ms").is_none());
+}
+
+#[test]
+fn explicit_source_jump_does_not_reveal_the_previous_caret_fold() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    let source = "#let f() = {\n  αβ\n}\ntail Ω";
+    app.document = DocumentSession::new(app.document.key().owner, source, DocumentKind::Typst);
+    app.settings.line_numbers = true;
+    app.snapshot_scene = None;
+    context
+        .run_ui(Default::default(), |ui| app.show_editor(ui))
+        .drop_without_applying_deltas();
+    app.folding.toggle(0);
+    let old = source[..source.find("αβ").unwrap()].chars().count();
+    let target = source[..source.find("tail").unwrap()].chars().count();
+    let id = source_editor_id(&context);
+    let mut state = egui::text_edit::TextEditState::load(&context, id).unwrap();
+    state
+        .cursor
+        .set_char_range(Some(CCursorRange::one(CCursor::new(old))));
+    state.store(&context, id);
+    // This is the same queued source selection used by preview/file links.
+    app.pending_editor_selection = Some(target..target);
+    for _ in 0..2 {
+        context
+            .run_ui(Default::default(), |ui| app.show_editor(ui))
+            .drop_without_applying_deltas();
+        assert!(app.folding.is_collapsed(0));
+        let state = egui::text_edit::TextEditState::load(&context, id).unwrap();
+        assert_eq!(state.cursor.char_range().unwrap().primary.index.0, target);
+    }
+    app.pending_editor_selection = Some(old..old);
+    context
+        .run_ui(Default::default(), |ui| app.show_editor(ui))
+        .drop_without_applying_deltas();
+    assert!(
+        !app.folding.is_collapsed(0),
+        "a jump into the fold reveals it"
+    );
+}
+
+#[test]
 fn dormant_host_rejects_document_jobs_but_delivers_commands_and_dialog_completions() {
     let directory = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
@@ -20,7 +230,7 @@ fn dormant_host_rejects_document_jobs_but_delivers_commands_and_dialog_completio
         app.schedule_project_index();
         app.reset_document_services();
         app.restart_tinymist();
-        let _ = context.run_logic(&raw, |ctx| app.hidden_host_logic(ctx, &frame));
+        let _ = context.run_logic(&raw, |ctx| app.hidden_host_logic(ctx, Some(&frame)));
         assert!(app.compile_deadline.is_none());
         assert!(!app.project_index_deadline.is_pending());
         assert!(!app.project_index_job.is_running());
@@ -29,7 +239,7 @@ fn dormant_host_rejects_document_jobs_but_delivers_commands_and_dialog_completio
     }
     app.pending_tool_picker = Some(PendingDialog::new(ToolPickerTarget::UiFont, async { None }));
     app.enqueue_native_menu_command(AppCommand::Settings);
-    let output = context.run_logic(&raw, |ctx| app.hidden_host_logic(ctx, &frame));
+    let output = context.run_logic(&raw, |ctx| app.hidden_host_logic(ctx, Some(&frame)));
     assert!(app.pending_tool_picker.is_none());
     assert!(app.settings_visible);
     assert!(!app.needs_visible_window());
@@ -45,7 +255,7 @@ fn dormant_host_rejects_document_jobs_but_delivers_commands_and_dialog_completio
             .contains_key(&egui::ViewportId::ROOT)
     );
     app.enqueue_native_menu_command(AppCommand::New);
-    let _ = context.run_logic(&raw, |ctx| app.hidden_host_logic(ctx, &frame));
+    let _ = context.run_logic(&raw, |ctx| app.hidden_host_logic(ctx, Some(&frame)));
     assert!(app.needs_visible_window());
     app.schedule_compile_now();
     app.reset_document_services();
@@ -71,7 +281,7 @@ fn dormant_host_does_not_replay_keyboard_input_from_the_closed_document() {
         repeat: false,
         modifiers: egui::Modifiers::COMMAND,
     });
-    let mut output = context.run_ui(raw, |ui| app.hidden_host_ui(ui.ctx(), &frame));
+    let mut output = context.run_ui(raw, |ui| app.hidden_host_ui(ui.ctx(), Some(&frame)));
     output.textures_delta.clear();
     assert!(!app.needs_visible_window());
     assert!(app.tinymist_generation.is_none());
@@ -85,17 +295,21 @@ fn closing_retained_root_clears_discarded_buffer_autosave_and_old_receipts() {
         "saved",
         DocumentKind::Typst,
     );
-    document.replace_loaded(
-        "saved".into(),
-        PathBuf::from("/closed.typ"),
-        DocumentKind::Typst,
-        None,
-    );
+    document
+        .replace_loaded(
+            "saved".into(),
+            PathBuf::from("/closed.typ"),
+            DocumentKind::Typst,
+            None,
+        )
+        .unwrap();
     document.edit(CCursorRange::default(), |source| {
         source.push_str(" discarded")
     });
     let old_key = document.key();
-    let old_save = document.prepare_save(PathBuf::from("/closed.typ"), DocumentKind::Typst);
+    let old_save = document
+        .prepare_save(PathBuf::from("/closed.typ"), DocumentKind::Typst)
+        .unwrap();
     let mut deadline = Some(Instant::now());
     assert!(document.is_dirty());
     reset_untitled_buffer(&mut document, &mut deadline);
@@ -196,6 +410,7 @@ fn shared_menu_geometry_contains_all_rows_and_frame_margins() {
                             ui,
                             menu,
                             CommandAvailability {
+                                empty_workspace: false,
                                 can_undo: true,
                                 can_redo: true,
                                 saved_document: true,
@@ -251,6 +466,7 @@ fn reused_menu_area_grows_from_file_to_edit_without_retaining_scroll_clipping() 
                                                 ui,
                                                 menu,
                                                 CommandAvailability {
+                                                    empty_workspace: false,
                                                     can_undo: true,
                                                     can_redo: true,
                                                     saved_document: true,
@@ -421,6 +637,7 @@ fn every_shared_menu_command_is_present_and_routes_from_the_popup() {
                                 typst_document: true,
                                 typst_preview: true,
                                 interactive_preview: true,
+                                empty_workspace: false,
                             },
                             &shortcuts,
                             action,
@@ -723,6 +940,7 @@ fn completion_responses_require_exact_request_and_document_identity() {
         version: 12,
         request_token: 41,
         cursor: 3,
+        source_cursor: 3,
         anchor: Rect::ZERO,
         explicit: false,
         is_incomplete: false,
@@ -1951,6 +2169,7 @@ fn fallback_menu_rows_keep_their_caption_left_aligned() {
 #[test]
 fn menu_availability_distinguishes_the_document_from_a_pinned_typst_preview() {
     let text_with_pinned_preview = CommandAvailability {
+        empty_workspace: false,
         can_undo: false,
         can_redo: false,
         saved_document: false,
@@ -3124,7 +3343,7 @@ fn gutter_marker_receives_clicks_beside_the_actual_text_editor() {
                         .desired_width(460.0)
                         .show(ui);
                     let line_rows = logical_line_row_ranges(&output.galley.rows);
-                    paint_line_numbers(ui, &output, &line_rows);
+                    paint_line_numbers(ui, &output, &line_rows, egui::FontId::monospace(14.0));
                     let rows = line_rows
                         .iter()
                         .map(|rows| {
@@ -4068,8 +4287,39 @@ fn explorer_asset_hover_ends_at_the_visible_panel_edge() {
 }
 
 #[test]
-fn active_explorer_entry_keeps_the_shared_content_font_size() {
-    assert_eq!(theme::strong_ui_font().size, theme::TYPE.content);
+fn active_explorer_entry_keeps_the_inherited_font_size() {
+    let context = egui::Context::default();
+    let configuration = theme::configure_editor_fonts(
+        &context,
+        Default::default(),
+        Default::default(),
+        false,
+        500,
+        450,
+    );
+    theme::configure_ui_font(&context, configuration.weighted_ui_loaded);
+    context
+        .run_ui(Default::default(), |ui| {
+            for size in [11.0, 14.0, 20.0] {
+                ui.style_mut()
+                    .text_styles
+                    .get_mut(&egui::TextStyle::Body)
+                    .unwrap()
+                    .size = size;
+                let (_, regular, _) =
+                    workspace_entry_label(RichText::new("document.typ"), false).layout_in_ui(ui);
+                let (_, active, _) =
+                    workspace_entry_label(RichText::new("document.typ"), true).layout_in_ui(ui);
+                assert_eq!(regular.job.sections[0].format.font_id.size, size);
+                assert_eq!(active.job.sections[0].format.font_id.size, size);
+                assert_eq!(
+                    active.job.sections[0].format.font_id.family,
+                    theme::strong_ui_font().family
+                );
+                assert_eq!(regular.size().y, active.size().y);
+            }
+        })
+        .drop_without_applying_deltas();
 }
 
 #[test]
@@ -4505,7 +4755,7 @@ fn sticky_context_uses_the_editor_gutter_and_a_bottom_only_shadow() {
     assert_eq!(
         editor_gutter_geometry(galley_x),
         EditorGutterGeometry {
-            line_number_right: galley_x - METRICS.editor.line_number_right_gap + 8.0,
+            line_number_right: galley_x - METRICS.editor.line_number_right_gap,
             separator_x: galley_x - 0.25,
         }
     );
@@ -4708,7 +4958,7 @@ fn sticky_context_snapshot_fixture_scrolls_past_its_line_six_heading() {
         "old source",
         DocumentKind::Typst,
     );
-    document.reset_editor_history = false;
+    document.set_history_reset(false);
     let revision = document.revision();
     assert!(prepare_sticky_context_snapshot_document(&mut document));
     assert_eq!(document.source(), STICKY_CONTEXT_SNAPSHOT_SOURCE);
@@ -5023,10 +5273,61 @@ fn git_marker_lane_has_constant_width_and_spacing_at_every_digit_count() {
 
     assert_eq!(editor_gutter_width(None, false), 4);
     assert_eq!(editor_gutter_width(None, true), 10);
-    assert_eq!(editor_gutter_width(Some(f32::NAN), true), 15);
-    assert_eq!(editor_gutter_width(Some(f32::INFINITY), true), 15);
+    assert_eq!(editor_gutter_width(Some(f32::NAN), true), 17);
+    assert_eq!(editor_gutter_width(Some(f32::INFINITY), true), 17);
     assert_eq!(editor_gutter_width(Some(f32::MAX), false), 121);
     assert_eq!(editor_gutter_width(Some(f32::MAX), true), 127);
+}
+
+#[test]
+fn line_number_baselines_follow_source_glyphs_and_keep_a_small_gap() {
+    let context = egui::Context::default();
+    context
+        .run_ui(Default::default(), |ui| {
+            for font in [
+                egui::FontId::monospace(14.0),
+                egui::FontId::proportional(19.0),
+            ] {
+                let mut job = egui::text::LayoutJob::simple(
+                    "αβ mixed\n\nwrapped source text".into(),
+                    font.clone(),
+                    Color32::WHITE,
+                    80.0,
+                );
+                for section in &mut job.sections {
+                    section.format.line_height = Some(32.0);
+                }
+                let source = ui.fonts_mut(|fonts| fonts.layout_job(job));
+                let number =
+                    ui.painter()
+                        .layout_no_wrap("123".into(), font.clone(), Color32::WHITE);
+                let width = line_number_column_width(ui, 123, &font);
+                for text in ["1", "88", "100", "123"] {
+                    assert!(
+                        ui.painter()
+                            .layout_no_wrap(text.into(), font.clone(), Color32::WHITE)
+                            .size()
+                            .x
+                            <= width + 0.01
+                    );
+                }
+                let number_baseline = number.rows[0].pos.y + number.rows[0].glyphs[0].pos.y;
+                for row in &source.rows {
+                    let top = 40.0 + row.pos.y;
+                    let gutter = editor_gutter_geometry(200.0);
+                    let position =
+                        line_number_position(gutter.line_number_right, top, row, &number);
+                    assert!((200.0 - position.x - number.size().x - 3.0).abs() < 0.001);
+                    if let Some(glyph) = row.glyphs.first() {
+                        assert!((position.y + number_baseline - top - glyph.pos.y).abs() < 0.001);
+                    } else {
+                        assert!(position.y >= top);
+                        assert!(position.y + number.size().y <= top + row.size.y + 0.001);
+                    }
+                }
+            }
+        })
+        .drop_without_applying_deltas();
 }
 
 #[test]
@@ -5072,7 +5373,7 @@ fn folding_gutter_toggles_from_number_and_arrow_without_overlapping_git() {
                     .layouter(&mut layout)
                     .show(ui);
                 let rows = logical_line_row_ranges(&output.galley.rows);
-                paint_line_numbers(ui, &output, &rows);
+                paint_line_numbers(ui, &output, &rows, egui::FontId::monospace(14.0));
                 let gutter_clicked = paint_fold_controls(ui, &output, &rows, folding, true);
                 let marker_clicked =
                     paint_fold_markers(ui, &output, &rows, folding, &marker, marker_width);
@@ -5540,13 +5841,724 @@ fn bottom_status_collects_every_non_preview_fallback() {
 
 #[test]
 fn git_line_change_summary_keeps_all_change_categories_visible() {
-    let summary = EditorApp::git_line_change_summary(crate::git::editor::LineChangeCounts {
-        added: 12,
-        modified: 3,
-        deleted: 7,
-    });
+    let context = egui::Context::default();
+    let summary = EditorApp::git_line_change_summary(
+        &context,
+        crate::git::editor::LineChangeCounts {
+            added: 12,
+            modified: 3,
+            deleted: 7,
+        },
+    );
 
-    assert_eq!(summary, "Git: +12 added · ~3 modified · −7 deleted");
+    assert_eq!(summary.text, "Git: +12 · ~3 · -7");
+    for (section, kind) in [1, 3, 5].into_iter().zip([
+        crate::git::editor::ChangeKind::Added,
+        crate::git::editor::ChangeKind::Modified,
+        crate::git::editor::ChangeKind::Deleted,
+    ]) {
+        assert_eq!(summary.sections[section].format.color, kind.color(&context));
+    }
+}
+
+#[test]
+fn tex_completion_is_local_and_applies_one_safe_edit() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    app.document.edit(CCursorRange::default(), |source| {
+        *source = "#mi(`\\alp`)".into()
+    });
+    app.request_editor_completion(9, Rect::ZERO, true);
+    let completion = app.editor_completion.as_ref().unwrap();
+    assert!(completion.local);
+    let index = completion
+        .items
+        .iter()
+        .position(|item| item.label == "\\alpha")
+        .unwrap();
+    app.apply_editor_completion(index, &context);
+    assert_eq!(app.document.source(), "#mi(`\\alpha`)");
+    assert!(completion_requested_after_events(&[egui::Event::Text(
+        "\\".into()
+    )]));
+}
+
+const PROJECTED_SOURCE: &str = "#import \"@preview/mitex:0.2.7\": mi\n文 #mi(`\\alpha+😀`) tail\n";
+
+#[test]
+fn projected_application_toolbar_toggle_is_local_to_document() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    app.document.replace_unprojected_untitled("");
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(1200.0, 80.0))
+        .build_ui_state(
+            |ui, app: &mut EditorApp| app.show_toolbar(ui, Some(&eframe::Frame::_new_kittest())),
+            app,
+        );
+    harness.run_steps(3);
+    harness.get_by_label("miTeX").click();
+    harness.run_steps(3);
+    assert!(harness.state().document.config().is_some());
+    assert!(harness.state().pending_settings.is_none());
+    assert!(!harness.state().settings.mitex_auto_enable);
+    harness.get_by_label("miTeX").click();
+    harness.run_steps(3);
+    assert!(harness.state().document.config().is_none());
+    assert!(harness.state().pending_settings.is_none());
+}
+
+#[test]
+fn projected_application_toolbar_order_and_right_alignment_survive_resizing() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    for width in [680.0, 900.0, 1200.0] {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+        app.document.replace_unprojected_untitled("");
+        app.settings.titlebar_menus = true;
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(width, 80.0))
+            .build_ui_state(
+                |ui, app: &mut EditorApp| {
+                    app.show_toolbar(ui, Some(&eframe::Frame::_new_kittest()))
+                },
+                app,
+            );
+        harness.run_steps(3);
+        let compact = harness.query_by_label("Problems").is_none();
+        let labels = [
+            "Window color",
+            "File",
+            "Edit",
+            "View",
+            "Untitled.typ",
+            "miTeX",
+            "Find",
+            "Pause",
+            "Compile",
+            if compact { "Set" } else { "Settings" },
+            if compact { "Files" } else { "Explorer" },
+            if compact { "C" } else { "Code" },
+            if compact { "S" } else { "Split" },
+            if compact { "P" } else { "Preview" },
+            if compact { "!" } else { "Problems" },
+        ];
+        let mut previous_right = 0.0;
+        for label in labels {
+            let rect = harness.get_by_label(label).rect();
+            assert!(
+                rect.left() >= previous_right,
+                "{width}: {label} overlaps preceding control: {rect:?}, previous right {previous_right}"
+            );
+            assert!(rect.right() <= width, "{width}: {label} clips");
+            previous_right = rect.right();
+        }
+        assert!(
+            width - previous_right <= 12.0,
+            "controls must hug the right edge"
+        );
+    }
+}
+
+#[test]
+fn projected_application_toolbar_hides_incompatible_documents_but_keeps_active_toggle() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    for source in ["$ native $", "#let mi(x) = x", "#let unfinished = ("] {
+        app.document.replace_unprojected_untitled(source);
+        assert!(!app.tex_mode_available(), "{source}");
+    }
+    app.document.replace_unprojected_untitled("");
+    assert!(app.tex_mode_available());
+    assert!(app.set_tex_mode(true, &context));
+    app.document.edit(CCursorRange::default(), |source| {
+        source.push_str("$unfinished")
+    });
+    assert!(
+        app.tex_mode_available(),
+        "active mode must remain visible during incomplete edits"
+    );
+    app.document.replace_loaded_unprojected(
+        "text".into(),
+        directory.path().join("notes.txt"),
+        DocumentKind::Text,
+        None,
+    );
+    assert!(!app.tex_mode_available());
+}
+
+#[test]
+fn projected_application_capture_fixture_is_clean_repeatable_and_restorable() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    let original = app.document.source().clone();
+    app.snapshot_scene = Some(UiSnapshotScene::MitexDollars);
+    let mut qa = QaSession::default();
+    qa.prepare(&mut app, &context);
+    assert!(app.document.config().is_some());
+    assert!(
+        !app.document.is_dirty(),
+        "screenshot-exit must not require an unsaved-file decision"
+    );
+    let key = app.document.key();
+    qa.prepare(&mut app, &context);
+    assert_eq!(app.document.key(), key);
+    // Switching scenes must not try interpreting native fixture math as TeX.
+    let mut fixture = DocumentSession::new(
+        tiptoptyp_core::document::WindowSessionId::new(2),
+        &original,
+        DocumentKind::Typst,
+    );
+    fixture.replace_unprojected_untitled("$native$");
+    SceneDocument::capture(&fixture).restore(&mut app.document);
+    assert!(app.document.config().is_none());
+    assert_eq!(app.document.source(), "$native$");
+}
+
+#[test]
+fn projected_application_untitled_compile_uses_real_source_directory_in_both_modes() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    app.document.replace_unprojected_untitled("");
+    let root = directory.path().canonicalize().unwrap();
+    assert_eq!(app.preview_source_directory(), root);
+    assert!(app.set_tex_mode(true, &context));
+    assert_eq!(app.preview_source_directory(), root);
+    assert!(!app.preview_document_path().parent().unwrap().exists());
+}
+
+#[test]
+fn projected_application_settings_toggle_local_completion_and_block_save() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    app.document.replace_unprojected_untitled("");
+    let mut settings = app.settings.clone();
+    settings.mitex_auto_enable = true;
+    app.apply_shared_settings(settings, &context);
+    assert!(app.document.config().is_some());
+    app.document.edit(CCursorRange::default(), |source| {
+        *source = "$\\alp$\n$\n  \\beta\n$".into()
+    });
+    app.request_editor_completion(5, Rect::ZERO, true);
+    let completion = app.editor_completion.as_ref().unwrap();
+    assert!(completion.local);
+    let index = completion
+        .items
+        .iter()
+        .position(|item| item.label == "\\alpha")
+        .unwrap();
+    app.apply_editor_completion(index, &context);
+    assert_eq!(app.document.source(), "$\\alpha$\n$\n  \\beta\n$");
+    let canonical = app.canonical_document_source().unwrap();
+    assert!(canonical.contains("#mi(\"\\\\alpha\")"));
+    assert!(canonical.contains("#mitex(\"\n  \\\\beta\n\")"));
+    let mut settings = app.settings.clone();
+    settings.mitex_auto_enable = false;
+    app.apply_shared_settings(settings, &context);
+    assert!(
+        app.document.config().is_some(),
+        "changing the preference must not disable an active document"
+    );
+    assert!(app.set_tex_mode(false, &context));
+    assert!(app.document.config().is_none());
+    assert_eq!(app.document.source(), &canonical);
+    app.document.replace_unprojected_untitled("$ native math $");
+    assert!(!app.set_tex_mode(true, &context));
+    assert!(
+        app.notice
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("native Typst math on line 1")
+    );
+    assert!(app.document.config().is_none());
+}
+
+#[test]
+fn projected_application_index_and_file_link_navigation_use_canonical_lines() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    app.document.replace_unprojected_untitled("");
+    assert!(app.set_tex_mode(true, &context));
+    app.document.edit(CCursorRange::default(), |source| {
+        *source = "$x$\n= Target\n".into()
+    });
+    let path = directory.path().join("main.typ");
+    fs::write(&path, "").unwrap();
+    let path = path.canonicalize().unwrap();
+    let overrides = BTreeMap::from([(path.clone(), app.canonical_document_source().unwrap())]);
+    let index = analyze_project(directory.path(), &path, &overrides);
+    let target = &index.outline[0];
+    assert_eq!(target.line, 3);
+    app.apply_file_link_location(None, Some((target.line, 1)));
+    assert_eq!(app.pending_editor_selection, Some(4..4));
+    app.apply_editor_location(None, Some((2, 1)));
+    assert_eq!(
+        app.pending_editor_selection,
+        Some(4..4),
+        "diagnostics are already mapped"
+    );
+}
+
+#[test]
+#[ignore = "requires installed Typst, Tinymist and the pinned MiTeX package"]
+fn projected_application_compiles_real_inline_and_block_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    app.document.replace_unprojected_untitled("");
+    assert!(app.set_tex_mode(true, &context));
+    app.document.edit(CCursorRange::default(), |source| {
+        *source = "Inline $\\alpha+\\beta$.\n$\n  \\sum_{n=1}^{\\infty} \\frac{1}{n^2}=\\frac{\\pi^2}{6}\n$\n".into();
+    });
+    let path = directory.path().join("main.typ");
+    let request = app
+        .document
+        .prepare_save(path.clone(), DocumentKind::Typst)
+        .unwrap();
+    let canonical = request.source().to_owned();
+    fs::write(&path, &canonical).unwrap();
+    app.document
+        .record_save(request.committed(fingerprint(canonical.as_bytes())))
+        .unwrap();
+    let tool =
+        crate::toolchain::resolve_tool(crate::toolchain::ToolKind::Typst, &app.settings.typst);
+    let output = std::process::Command::new(tool.program)
+        .arg("compile")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        fs::read(path.with_extension("pdf"))
+            .unwrap()
+            .starts_with(b"%PDF")
+    );
+    app.document
+        .replace_loaded(
+            fs::read_to_string(&path).unwrap(),
+            path,
+            DocumentKind::Typst,
+            None,
+        )
+        .unwrap();
+    assert!(app.document.source().contains("$\\alpha+\\beta$"));
+    assert!(app.document.source().contains("$\n  \\sum"));
+    assert_eq!(app.canonical_document_source().unwrap(), canonical);
+    let program = crate::toolchain::resolve_tool(
+        crate::toolchain::ToolKind::Tinymist,
+        &app.settings.tinymist,
+    )
+    .program;
+    let path = app.document.path().as_ref().unwrap();
+    let generation = app
+        .tinymist
+        .start_workspace(
+            TinymistConfig::new(directory.path())
+                .with_entry_path(path)
+                .with_executable(program),
+        )
+        .unwrap();
+    app.tinymist
+        .did_open(
+            generation,
+            TextDocument::from_path(path, 1, &canonical).unwrap(),
+        )
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut success = false;
+    while Instant::now() < deadline && !success {
+        while let Some(event) = app.tinymist.try_recv() {
+            match event {
+                TinymistEvent::CompileStatus {
+                    status: crate::tinymist::CompileStatus::CompileSuccess,
+                    ..
+                } => success = true,
+                TinymistEvent::CompileStatus {
+                    status: crate::tinymist::CompileStatus::CompileError,
+                    ..
+                } => panic!("Tinymist rejected generated MiTeX"),
+                TinymistEvent::Error {
+                    fatal: true,
+                    message,
+                    ..
+                } => panic!("{message}"),
+                _ => {}
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    app.tinymist.stop_workspace(generation).unwrap();
+    assert!(
+        success,
+        "Tinymist did not compile the generated inline/display MiTeX"
+    );
+}
+
+fn projected_test_app(context: &egui::Context, directory: &Path) -> EditorApp {
+    let mut app = EditorApp::dormant_for_tests(context, directory.to_owned());
+    app.snapshot_scene = None;
+    app.document.replace_unprojected_untitled(PROJECTED_SOURCE);
+    app.document
+        .enable(tiptoptyp::mitex_projection::Config::default())
+        .unwrap();
+    app
+}
+
+#[test]
+fn projected_application_save_autosave_and_backing_source_use_canonical_bytes() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = projected_test_app(&context, directory.path());
+    app.document.edit(CCursorRange::default(), |source| {
+        source.push_str("New $\\beta$")
+    });
+    let displayed = app.document.source().clone();
+    let canonical = app.canonical_document_source().unwrap();
+    assert!(displayed.contains("$\\alpha+😀$"));
+    assert!(canonical.contains("#mi(`\\alpha+😀`)"));
+    assert!(canonical.contains("#mi(\"\\\\beta\")"));
+    assert_eq!(app.preview_document_source().unwrap(), canonical);
+    let path = directory.path().join("saved.typ");
+    assert!(app.save_to(path.clone()));
+    assert_eq!(fs::read_to_string(&path).unwrap(), canonical);
+    assert_eq!(app.document.source(), &displayed);
+    assert_eq!(
+        app.document.disk_fingerprint(),
+        Some(fingerprint(canonical.as_bytes()))
+    );
+    assert!(!app.is_dirty());
+    app.tinymist_unsaved_document = Some(
+        UnsavedTextDocument::create(
+            directory.path(),
+            directory.path(),
+            "Unsaved.typ",
+            "placeholder",
+        )
+        .unwrap(),
+    );
+    app.sync_tinymist_change().unwrap();
+    let backing_path = app
+        .tinymist_unsaved_document
+        .as_ref()
+        .unwrap()
+        .path()
+        .to_owned();
+    assert_eq!(fs::read_to_string(&backing_path).unwrap(), canonical);
+    app.document.edit(CCursorRange::default(), |source| {
+        source.push_str("$unfinished")
+    });
+    assert!(app.is_dirty());
+    app.settings.auto_save = true;
+    app.schedule_autosave_if_needed();
+    assert!(app.autosave_deadline.is_some());
+    assert!(!app.save_to_with_intent(path.clone(), SaveIntent::Auto));
+    assert!(app.sync_tinymist_change().is_err());
+    assert!(app.preview_document_source().is_err());
+    assert_eq!(fs::read_to_string(&path).unwrap(), canonical);
+    assert_eq!(fs::read_to_string(&backing_path).unwrap(), canonical);
+    assert!(app.document.source().ends_with("$unfinished"));
+    app.document
+        .history_step(false, CCursorRange::default())
+        .unwrap();
+    assert!(!app.is_dirty());
+    app.document
+        .edit(CCursorRange::default(), |source| source.push('!'));
+    assert!(app.save_to_with_intent(path.clone(), SaveIntent::Auto));
+    assert_eq!(fs::read_to_string(&path).unwrap(), format!("{canonical}!"));
+}
+
+#[test]
+fn projected_application_auto_enable_skips_incompatible_files_and_respects_manual_mode() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = projected_test_app(&context, directory.path());
+    app.settings.mitex_auto_enable = true;
+    let native = directory.path().join("native.typ");
+    let compatible = directory.path().join("compatible.typ");
+    fs::write(&native, "$native$").unwrap();
+    fs::write(&compatible, PROJECTED_SOURCE).unwrap();
+    assert!(app.load_path(native));
+    assert_eq!(app.document.source(), "$native$");
+    assert!(app.document.config().is_none());
+    assert!(!app.tex_mode_available());
+    assert!(matches!(
+        app.notice.as_ref().unwrap().kind,
+        NoticeKind::Success
+    ));
+    assert!(app.load_path(compatible.clone()));
+    assert!(app.document.config().is_some());
+    assert!(app.set_tex_mode(false, &context));
+    assert!(app.settings.mitex_auto_enable);
+    let unchanged = app.settings.clone();
+    app.apply_shared_settings(unchanged, &context);
+    assert!(
+        app.document.config().is_none(),
+        "manual off survives unrelated settings broadcasts"
+    );
+    app.settings.mitex_auto_enable = false;
+    assert!(app.load_path(compatible));
+    assert!(app.document.config().is_none());
+    assert!(app.tex_mode_available());
+}
+
+#[test]
+fn projected_application_refused_save_cancels_close_without_creating_a_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = projected_test_app(&context, directory.path());
+    app.document
+        .edit(CCursorRange::default(), |source| source.push('$'));
+    app.document_workflow
+        .continue_after_save(PendingDocumentAction {
+            action: DeferredDocumentAction::CloseWindow,
+            key: app.document.key(),
+            allow_discard: false,
+            description: "closing".into(),
+        });
+    let path = directory.path().join("refused.typ");
+    assert!(!app.save_to(path.clone()));
+    assert!(!path.exists());
+    assert!(!app.document_workflow.has_continuation());
+    assert!(app.is_dirty());
+    assert!(app.document.source().ends_with('$'));
+}
+
+#[test]
+fn projected_application_remote_completion_uses_canonical_payload_and_one_undo_step() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = projected_test_app(&context, directory.path());
+    let before = app.document.source().clone();
+    let editor_cursor = before[..before.find("tail").unwrap()].chars().count() + 4;
+    let source_cursor = PROJECTED_SOURCE[..PROJECTED_SOURCE.find("tail").unwrap()]
+        .chars()
+        .count()
+        + 4;
+    let position = |cursor| lsp_position_at_scalar(PROJECTED_SOURCE, ScalarOffset::new(cursor));
+    app.tinymist_generation = Some(Generation(92));
+    app.tinymist_uri = Some("file:///completion.typ".into());
+    let item = CompletionItem {
+        label: "longer tail".into(),
+        detail: None,
+        documentation: None,
+        insert_text: "longer tail".into(),
+        insert_text_is_snippet: false,
+        text_edit: Some(LspTextEdit {
+            range: LspRange {
+                start: position(source_cursor - 4),
+                end: position(source_cursor),
+            },
+            new_text: "longer tail".into(),
+        }),
+        additional_text_edits: Vec::new(),
+        sort_text: None,
+        filter_text: None,
+    };
+    app.editor_completion = Some(EditorCompletionState {
+        generation: Generation(92),
+        uri: "file:///completion.typ".into(),
+        version: revision_as_i32(app.document.revision()),
+        request_token: 1,
+        cursor: editor_cursor,
+        source_cursor,
+        anchor: Rect::ZERO,
+        explicit: true,
+        is_incomplete: false,
+        selected: 0,
+        items: vec![item.clone()],
+        all_items: vec![item],
+        source: PROJECTED_SOURCE.into(),
+        local: false,
+    });
+    app.apply_editor_completion(0, &context);
+    assert_eq!(
+        app.document.source(),
+        &before.replace("tail", "longer tail")
+    );
+    assert_eq!(
+        app.pending_editor_selection,
+        Some(editor_cursor + 7..editor_cursor + 7)
+    );
+    assert_eq!(
+        app.canonical_document_source().unwrap(),
+        PROJECTED_SOURCE.replace("tail", "longer tail")
+    );
+    app.document
+        .history_step(false, CCursorRange::default())
+        .unwrap();
+    assert_eq!(app.document.source(), &before);
+}
+
+#[test]
+fn projected_application_formatting_maps_source_and_cursor_then_undoes_one_edit() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = projected_test_app(&context, directory.path());
+    app.tinymist_generation = Some(Generation(91));
+    app.tinymist_uri = Some("file:///format.typ".into());
+    let before = app.document.source().clone();
+    let cursor = before.chars().count();
+    app.store_editor_cursor(&context, CCursorRange::one(CCursor::new(cursor)));
+    app.document.set_history_reset(false);
+    let start = PROJECTED_SOURCE[..PROJECTED_SOURCE.find("tail").unwrap()]
+        .chars()
+        .count();
+    let edit = LspTextEdit {
+        range: LspRange {
+            start: lsp_position_at_scalar(PROJECTED_SOURCE, ScalarOffset::new(start)),
+            end: lsp_position_at_scalar(PROJECTED_SOURCE, ScalarOffset::new(start + 4)),
+        },
+        new_text: "longer tail".into(),
+    };
+    app.receive_formatted_document(
+        &context,
+        Generation(91),
+        "file:///format.typ",
+        revision_as_i32(app.document.revision()),
+        Some(vec![edit.clone()]),
+    );
+    assert_eq!(
+        app.document.source(),
+        &before.replace("tail", "longer tail")
+    );
+    assert_eq!(
+        app.canonical_document_source().unwrap(),
+        PROJECTED_SOURCE.replace("tail", "longer tail")
+    );
+    assert_eq!(
+        app.editor_snapshot(&context).cursor.primary.index.0,
+        cursor + 7
+    );
+    app.document
+        .history_step(false, CCursorRange::default())
+        .unwrap();
+    assert_eq!(app.document.source(), &before);
+    assert!(!app.is_dirty());
+    let key = app.document.key();
+    app.receive_formatted_document(
+        &context,
+        Generation(91),
+        "file:///format.typ",
+        revision_as_i32(key.revision - 1),
+        Some(vec![edit]),
+    );
+    assert_eq!(app.document.key(), key);
+}
+
+#[test]
+fn projected_application_diagnostics_and_preview_selection_map_canonical_unicode_positions() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = projected_test_app(&context, directory.path());
+    let uri = "file:///diagnostics.typ";
+    app.tinymist_uri = Some(uri.into());
+    app.tinymist_preview_uri = Some(uri.into());
+    let canonical_cursor = PROJECTED_SOURCE[..PROJECTED_SOURCE.find("tail").unwrap()]
+        .chars()
+        .count();
+    let position = lsp_position_at_scalar(PROJECTED_SOURCE, ScalarOffset::new(canonical_cursor));
+    let range = LspRange {
+        start: position,
+        end: position,
+    };
+    let diagnostic = TinymistDiagnostic {
+        range,
+        severity: Some(TinymistDiagnosticSeverity::Warning),
+        code: None,
+        source: None,
+        message: "test warning".into(),
+        raw: serde_json::json!({}),
+    };
+    app.receive_tinymist_diagnostics(
+        uri,
+        Some(revision_as_i32(app.document.revision())),
+        vec![diagnostic.clone()],
+    );
+    let cursor = app.document.source()[..app.document.source().find("tail").unwrap()]
+        .chars()
+        .count();
+    let (line, column) = line_column_at_char(app.document.source(), cursor);
+    let location = app.preview.tinymist_diagnostics[0].location.unwrap();
+    assert_eq!((location.line, location.column), (line, column));
+    let name = app
+        .preview_document_path()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let (canonical_line, canonical_column) =
+        line_column_at_char(PROJECTED_SOURCE, canonical_cursor);
+    app.set_diagnostics(format!(
+        "{name}:{canonical_line}:{canonical_column}: warning: CLI test"
+    ));
+    let cli_location = app.preview.diagnostics[0].location.unwrap();
+    assert_eq!((cli_location.line, cli_location.column), (line, column));
+    app.apply_tinymist_selection(Some(&range));
+    assert_eq!(app.pending_editor_selection, Some(cursor..cursor));
+    app.document
+        .edit(CCursorRange::default(), |source| source.push('!'));
+    app.mark_edited();
+    assert!(app.preview.tinymist_diagnostics.is_empty());
+    app.receive_tinymist_diagnostics(uri, None, vec![diagnostic]);
+    assert!(
+        app.preview.tinymist_diagnostics.is_empty(),
+        "unversioned positions are unsafe after projection"
+    );
+}
+
+#[test]
+fn block_enter_is_not_consumed_by_an_open_completion_popup() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    app.settings.auto_pair_delimiters = true;
+    app.document.edit(CCursorRange::default(), |source| {
+        *source = "#mi(`\\alp`)".into()
+    });
+    app.request_editor_completion(9, Rect::ZERO, true);
+    assert!(!app.editor_completion.as_ref().unwrap().items.is_empty());
+    app.document
+        .edit(CCursorRange::default(), |source| *source = "```tex".into());
+    let id = source_editor_id(&context);
+    let mut state = egui::text_edit::TextEditState::default();
+    state
+        .cursor
+        .set_char_range(Some(CCursorRange::one(CCursor::new(6))));
+    state.store(&context, id);
+    context
+        .run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ui| {
+                app.handle_editor_completion_keys(ui.ctx());
+                assert!(app.editor_completion.is_none());
+                assert!(ui.input(|input| input.key_pressed(egui::Key::Enter)));
+            },
+        )
+        .drop_without_applying_deltas();
+    assert_eq!(app.document.source(), "```tex");
 }
 
 #[test]
@@ -5579,15 +6591,17 @@ fn capture_scene_replacement_does_not_replace_the_batch_fixture() {
         "initial",
         DocumentKind::Typst,
     );
-    document.replace_loaded(
-        "original fixture".to_owned(),
-        PathBuf::from("fixture.typ"),
-        DocumentKind::Typst,
-        Some(7),
-    );
+    document
+        .replace_loaded(
+            "original fixture".to_owned(),
+            PathBuf::from("fixture.typ"),
+            DocumentKind::Typst,
+            Some(7),
+        )
+        .unwrap();
     let fixture = SceneDocument::capture(&document);
     let before = document.key();
-    document.replace_untitled(r#"#set text(font: "")"#);
+    document.replace_untitled(r#"#set text(font: "")"#).unwrap();
     fixture.restore(&mut document);
     assert_eq!(document.source(), "original fixture");
     assert_eq!(document.path(), &Some(PathBuf::from("fixture.typ")));
@@ -5649,7 +6663,7 @@ fn dormant_settings_surface_survives_document_resume_and_close() {
     let frame = eframe::Frame::_new_kittest();
     let child = scoped_child_viewport_id(&context, "tiptoptyp-settings");
     let mut output = context.run_ui(egui::RawInput::default(), |ui| {
-        app.register_dormant_settings(ui.ctx(), &frame);
+        app.register_dormant_settings(ui.ctx(), Some(&frame));
     });
     assert_eq!(output.viewport_output[&child].builder.visible, Some(false));
     output.textures_delta.clear();
@@ -5658,7 +6672,7 @@ fn dormant_settings_surface_survives_document_resume_and_close() {
     for visible in [false, true, false] {
         app.settings_visible = visible;
         let mut output = context.run_ui(egui::RawInput::default(), |ui| {
-            app.show_settings_window(ui.ctx(), &frame);
+            app.show_settings_window(ui.ctx(), Some(&frame));
         });
         assert_eq!(
             output.viewport_output[&child].builder.visible,

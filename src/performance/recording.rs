@@ -50,6 +50,9 @@ impl Session {
                 close_document: AtomicBool::new(
                     std::env::var("TIPTOPTYP_PROFILE_NO_WINDOW").as_deref() == Ok("1"),
                 ),
+                open_documents: AtomicBool::new(
+                    std::env::var("TIPTOPTYP_PROFILE_MULTI_WINDOW").as_deref() == Ok("1"),
+                ),
             })
             .map_err(|_| "only one profiling session is allowed per process")?;
         Ok(Self(Some(output)))
@@ -83,7 +86,18 @@ impl Session {
             root_repaint_requests: stats
                 .repaint_requests
                 .iter()
-                .map(|(&(file, line), &requests)| RepaintReport {
+                .filter(|((secondary, _, _), _)| !secondary)
+                .map(|(&(_, file, line), &requests)| RepaintReport {
+                    file,
+                    line,
+                    requests,
+                })
+                .collect(),
+            secondary_repaint_requests: stats
+                .repaint_requests
+                .iter()
+                .filter(|((secondary, _, _), _)| *secondary)
+                .map(|(&(_, file, line), &requests)| RepaintReport {
                     file,
                     line,
                     requests,
@@ -132,6 +146,14 @@ struct Recorder {
     window: OnceLock<Instant>,
     stats: Mutex<Statistics>,
     close_document: AtomicBool,
+    open_documents: AtomicBool,
+}
+
+/// One bounded setup action, never a synthetic repaint/interaction loop.
+pub(crate) fn take_multi_window_request() -> bool {
+    RECORDER
+        .get()
+        .is_some_and(|recorder| recorder.open_documents.swap(false, Ordering::Relaxed))
 }
 
 /// One close transition after initial capture, before the measured interval.
@@ -166,7 +188,7 @@ pub(crate) fn tick(context: &egui::Context, ready: impl FnOnce() -> bool) {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         for cause in causes {
-            stats.observe_repaint(cause.file, cause.line);
+            stats.observe_repaint(false, cause.file, cause.line);
         }
     }
     if recorder.window.get().is_some() || !ready() {
@@ -191,6 +213,24 @@ pub(crate) fn tick(context: &egui::Context, ready: impl FnOnce() -> bool) {
     {
         eprintln!("profiling readiness/timer failed: {error}");
         context.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
+    }
+}
+
+pub(crate) fn secondary_repaints(context: &egui::Context) {
+    let Some(recorder) = RECORDER.get() else {
+        return;
+    };
+    let now = Instant::now();
+    if !recorder.admits(now, now) {
+        return;
+    }
+    let causes = context.repaint_causes();
+    let mut stats = recorder
+        .stats
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    for cause in causes {
+        stats.observe_repaint(true, cause.file, cause.line);
     }
 }
 
@@ -242,20 +282,23 @@ impl Drop for Span {
 
 #[derive(Default)]
 struct Statistics {
-    repaint_requests: BTreeMap<(&'static str, u32), u64>,
+    repaint_requests: BTreeMap<(bool, &'static str, u32), u64>,
     dropped_repaint_locations: u64,
     scopes: BTreeMap<&'static str, Distribution>,
     dropped_scopes: u64,
 }
 impl Statistics {
-    fn observe_repaint(&mut self, file: &'static str, line: u32) {
+    fn observe_repaint(&mut self, secondary: bool, file: &'static str, line: u32) {
         if self.repaint_requests.len() >= MAX_SCOPES
-            && !self.repaint_requests.contains_key(&(file, line))
+            && !self.repaint_requests.contains_key(&(secondary, file, line))
         {
             self.dropped_repaint_locations = self.dropped_repaint_locations.saturating_add(1);
             return;
         }
-        let count = self.repaint_requests.entry((file, line)).or_default();
+        let count = self
+            .repaint_requests
+            .entry((secondary, file, line))
+            .or_default();
         *count = count.saturating_add(1);
     }
     fn observe(&mut self, name: &'static str, elapsed: Duration) {
@@ -318,6 +361,7 @@ impl Distribution {
 #[derive(Serialize)]
 struct Report {
     root_repaint_requests: Vec<RepaintReport>,
+    secondary_repaint_requests: Vec<RepaintReport>,
     dropped_repaint_locations: u64,
     schema_version: u8,
     complete: bool,
@@ -350,11 +394,11 @@ mod tests {
     fn repaint_call_site_storage_is_bounded_and_known_sites_keep_counting() {
         let mut stats = Statistics::default();
         for line in 0..100 {
-            stats.observe_repaint("source.rs", line);
+            stats.observe_repaint(line % 2 == 0, "source.rs", line);
         }
-        stats.observe_repaint("source.rs", 0);
+        stats.observe_repaint(true, "source.rs", 0);
         assert_eq!(stats.repaint_requests.len(), MAX_SCOPES);
-        assert_eq!(stats.repaint_requests[&("source.rs", 0)], 2);
+        assert_eq!(stats.repaint_requests[&(true, "source.rs", 0)], 2);
         assert_eq!(stats.dropped_repaint_locations, 36);
     }
     #[test]
@@ -368,6 +412,7 @@ mod tests {
             window: OnceLock::new(),
             stats: Mutex::default(),
             close_document: AtomicBool::new(false),
+            open_documents: AtomicBool::new(false),
         };
         assert!(!recorder.admits(origin, origin));
         recorder.window.set(origin).unwrap();

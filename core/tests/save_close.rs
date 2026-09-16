@@ -38,7 +38,11 @@ fn save_close_sequences_cover_cancellation_failure_new_edits_and_durability() {
                 doc.edit(0, |source| source.push_str(" newer"));
             }
             let action = flow
-                .complete_save(&mut doc, write.committed(10), scenario != "uncertain")
+                .complete_save(
+                    doc.record_save(write.committed(10)),
+                    doc.is_dirty(),
+                    scenario != "uncertain",
+                )
                 .unwrap();
             assert_eq!(action, (scenario == "saved").then_some("close"));
             assert_eq!(doc.saved_source(), &writes[0]);
@@ -69,7 +73,10 @@ fn receipt_from_another_window_or_replaced_document_cannot_release_close() {
             doc.replace_untitled("replacement");
         }
         let before = doc.snapshot();
-        assert!(flow.complete_save(&mut doc, receipt, true).is_err());
+        assert!(
+            flow.complete_save(doc.record_save(receipt), doc.is_dirty(), true)
+                .is_err()
+        );
         assert_eq!(doc.snapshot().key(), before.key());
         assert_eq!(doc.source(), before.source());
         assert_eq!(flow.take_continuation(), None);

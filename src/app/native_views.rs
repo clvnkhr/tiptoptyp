@@ -562,13 +562,6 @@ impl EditorApp {
                 {
                     Ok(()) => {
                         if deletes_preview {
-                            if let Some(key) = canonical_or_absolute(&self.workspace_root).to_str()
-                            {
-                                self.settings.preview_files.remove(key);
-                                if let Some(settings) = &mut self.pending_settings {
-                                    settings.preview_files.remove(key);
-                                }
-                            }
                             self.restart_tinymist_preserving_preview();
                             self.schedule_compile_now();
                         }
@@ -1070,6 +1063,27 @@ impl EditorApp {
                             Vec2::new(menu_width, menu_height),
                             popup_generation,
                             |ui| match &popup {
+                                AppPopup::File { .. }
+                                | AppPopup::Edit { .. }
+                                | AppPopup::View { .. }
+                                    if self.tabs.is_empty() =>
+                                {
+                                    let menu = match popup {
+                                        AppPopup::File { .. } => CommandMenu::File,
+                                        AppPopup::Edit { .. } => CommandMenu::Edit,
+                                        _ => CommandMenu::View,
+                                    };
+                                    show_command_popup_ui(
+                                        ui,
+                                        menu,
+                                        CommandAvailability {
+                                            empty_workspace: true,
+                                            ..Default::default()
+                                        },
+                                        &shortcuts,
+                                        &mut action,
+                                    );
+                                }
                                 AppPopup::File { .. } => {
                                     show_file_popup_ui(
                                         ui,
@@ -1142,7 +1156,18 @@ impl EditorApp {
                                     );
                                 }
                                 AppPopup::GitChunk { chunk, .. } => {
-                                    crate::git::editor::show_chunk(ui, chunk);
+                                    if let Some(selected) = crate::git::editor::show_chunk(
+                                        ui,
+                                        chunk,
+                                        &shortcuts,
+                                        self.git_hunk_job.is_running(),
+                                    ) {
+                                        action = Some(AppPopupAction::GitHunk(
+                                            selected,
+                                            self.document.key(),
+                                            chunk.clone(),
+                                        ));
+                                    }
                                 }
                             },
                         );
@@ -1177,7 +1202,7 @@ impl EditorApp {
     pub(super) fn update_webview(
         &mut self,
         context: &egui::Context,
-        frame: &mut eframe::Frame,
+        frame: Option<&eframe::Frame>,
         _rect: Rect,
         native_rect: NativeRect,
         background: Color32,
@@ -1223,9 +1248,9 @@ impl EditorApp {
                 return false;
             }
             let navigation_sender = self.web_link_sender.clone();
-            let navigation_repaint = context.clone();
+            let navigation_repaint = crate::worker::RepaintTarget::current(context);
             let popup_sender = self.web_link_sender.clone();
-            let popup_repaint = context.clone();
+            let popup_repaint = crate::worker::RepaintTarget::current(context);
             let shared_navigation = Arc::new(Mutex::new(navigation_state));
             let navigation_handler_state = Arc::clone(&shared_navigation);
             let popup_handler_state = Arc::clone(&shared_navigation);
@@ -1272,7 +1297,7 @@ impl EditorApp {
                     wry::NewWindowResponse::Deny
                 });
             let built = if self.window_host.is_root() {
-                let Some(window) = frame.winit_window() else {
+                let Some(window) = frame.and_then(eframe::Frame::winit_window) else {
                     self.preview.webview_state = ServiceState::Degraded(
                         "The native window handle is temporarily unavailable".to_owned(),
                     );
@@ -1348,7 +1373,7 @@ impl EditorApp {
     pub(super) fn update_webview(
         &mut self,
         _context: &egui::Context,
-        _frame: &mut eframe::Frame,
+        _frame: Option<&eframe::Frame>,
         _rect: Rect,
         _native_rect: NativeRect,
         _background: Color32,

@@ -9,11 +9,12 @@ use std::{
 };
 
 const HELP: &str = "Usage: cargo xtask profile [options]
-  --scenario main|settings|find|fonts|large|hover|no-window  (default settings)
+  --scenario main|settings|find|fonts|large|hover|no-window|multi-window  (default settings)
   --warmup SECONDS       0..300, after initial capture (default 3)
   --seconds SECONDS      1..300 (default 10)
   --sampler auto|none|sample|perf  (auto: sample on macOS, none elsewhere)
   --skip-build           reuse target/profiling/tiptoptyp; hash is recorded
+  --binary PATH          profile a preserved optimized binary without rebuilding
 
 Uses isolated fixture copies and non-persistent QA windows. Results remain in
 .tiptoptyp/profiles/<unique-run>/. See docs/performance.md for interpretation.";
@@ -25,6 +26,7 @@ struct Options {
     seconds: u64,
     sampler: String,
     skip_build: bool,
+    binary: Option<PathBuf>,
 }
 impl Options {
     fn parse(arguments: &[String]) -> Result<Self, String> {
@@ -34,6 +36,7 @@ impl Options {
             seconds: 10,
             sampler: "auto".into(),
             skip_build: false,
+            binary: None,
         };
         let mut args = arguments.iter();
         while let Some(flag) = args.next() {
@@ -45,6 +48,10 @@ impl Options {
                 .next()
                 .ok_or_else(|| format!("{flag} requires a value"))?;
             match flag.as_str() {
+                "--binary" => {
+                    options.binary = Some(PathBuf::from(value));
+                    options.skip_build = true;
+                }
                 "--scenario" if scenario_scene(value).is_some() => options.scenario = value.clone(),
                 "--warmup" => options.warmup = seconds(value, 0)?,
                 "--seconds" => options.seconds = seconds(value, 1)?,
@@ -66,7 +73,7 @@ fn seconds(value: &str, minimum: u64) -> Result<u64, String> {
 }
 fn scenario_scene(scenario: &str) -> Option<&'static str> {
     match scenario {
-        "main" | "large" | "no-window" => Some("main"),
+        "main" | "large" | "no-window" | "multi-window" => Some("main"),
         "settings" => Some("settings-window"),
         "find" => Some("find-replace"),
         "fonts" => Some("settings-font-picker"),
@@ -146,7 +153,10 @@ pub(super) fn run(arguments: Vec<String>) -> Result<(), String> {
         apply_frame_pointers(&mut build);
         run_status(&mut build, "building optimized profiling executable")?;
     }
-    let binary = root.join(format!("target/profiling/tiptoptyp{extension}"));
+    let binary = options.binary.as_ref().map_or_else(
+        || root.join(format!("target/profiling/tiptoptyp{extension}")),
+        |path| root.join(path),
+    );
     if !binary.is_file() {
         return Err(format!("missing {}", binary.display()));
     }
@@ -168,6 +178,14 @@ pub(super) fn run(arguments: Vec<String>) -> Result<(), String> {
     }
     command
         .env("TIPTOPTYP_PROFILE_DIR", &directory)
+        .env(
+            "TIPTOPTYP_PROFILE_MULTI_WINDOW",
+            if options.scenario == "multi-window" {
+                "1"
+            } else {
+                "0"
+            },
+        )
         .env(
             "TIPTOPTYP_PROFILE_NO_WINDOW",
             if options.scenario == "no-window" {
@@ -526,6 +544,10 @@ mod tests {
             "no-window"
         );
         assert_eq!(scenario_scene("no-window"), Some("main"));
+        assert_eq!(scenario_scene("multi-window"), Some("main"));
+        let preserved = Options::parse(&args(&["--binary", "baseline/tiptoptyp"])).unwrap();
+        assert!(preserved.skip_build);
+        assert_eq!(preserved.binary, Some(PathBuf::from("baseline/tiptoptyp")));
         for invalid in [
             &["--seconds", "0"][..],
             &["--warmup", "301"],

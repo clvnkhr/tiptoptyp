@@ -157,6 +157,15 @@ impl<C> DocumentSession<C> {
             source: self.source_snapshot.clone(),
         }
     }
+    /// Reattach a parked tab without replacing its buffer or undo history.
+    pub fn reactivate_after(&mut self, previous: DocumentKey) {
+        assert_eq!(self.owner, previous.owner);
+        self.epoch = self.epoch.max(previous.epoch).wrapping_add(1);
+        self.revision = self.revision.max(previous.revision).wrapping_add(1);
+        self.saved_revision = self.revision;
+        self.pending_edit = false;
+    }
+
     /// Coalesces edits until the runtime consumes their effects.
     pub fn take_edit(&mut self) -> Option<DocumentSnapshot> {
         std::mem::take(&mut self.pending_edit).then(|| self.snapshot())
@@ -237,6 +246,21 @@ impl<C> DocumentSession<C> {
         disk_fingerprint: Option<u64>,
     ) {
         self.replace(source, Some(path), kind, disk_fingerprint);
+    }
+
+    /// Switch an editor's source representation without pretending to load or
+    /// save a file. Both current and persisted buffers must be supplied in the
+    /// new representation. Path, kind and the actual disk fingerprint survive.
+    /// Old cursor/history coordinates and in-flight receipts do not.
+    pub fn replace_representation(&mut self, source: String, saved_source: String) {
+        self.source_snapshot = Arc::from(source.as_str());
+        self.source = source;
+        self.saved_source = saved_source;
+        self.epoch = self.epoch.wrapping_add(1);
+        self.revision = self.revision.wrapping_add(1);
+        self.saved_revision = self.revision;
+        self.pending_edit = true;
+        self.clear_history();
     }
 
     fn replace(
@@ -392,6 +416,39 @@ impl DocumentKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn representation_change_retains_disk_identity_but_invalidates_old_coordinates_and_receipts() {
+        let mut document =
+            DocumentSession::<usize>::new(WindowSessionId::new(1), "", DocumentKind::Typst);
+        document.replace_loaded(
+            "canonical saved".into(),
+            "draft.typ".into(),
+            DocumentKind::Typst,
+            Some(41),
+        );
+        document.edit(0, |source| source.push_str(" edit"));
+        let old = document.key();
+        let receipt = document
+            .prepare_save("draft.typ".into(), DocumentKind::Typst)
+            .committed(42);
+        document.replace_representation("view edited".into(), "view saved".into());
+        assert_ne!(document.key().epoch, old.epoch);
+        assert!(document.record_save(receipt).is_err());
+        assert_eq!(
+            document.path().as_deref(),
+            Some(std::path::Path::new("draft.typ"))
+        );
+        assert_eq!(document.kind(), DocumentKind::Typst);
+        assert_eq!(document.disk_fingerprint(), Some(41));
+        assert_eq!(document.snapshot().source(), "view edited");
+        assert_eq!(document.saved_source(), "view saved");
+        assert!(document.is_dirty());
+        assert_eq!(document.history_availability(), (false, false));
+        assert!(document.reset_editor_history);
+        assert_eq!(document.take_edit().unwrap().source(), "view edited");
+        assert!(document.take_edit().is_none());
+    }
 
     #[test]
     fn no_op_edits_reuse_snapshot_and_preserve_redo() {

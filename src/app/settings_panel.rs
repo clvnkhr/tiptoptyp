@@ -393,6 +393,14 @@ impl SettingsPanel<'_> {
                 });
                 settings_target_anchor(ui, SettingsTarget::AutoPairDelimiters, &mut settings_scroll_target);
                 ui.checkbox(&mut edited.auto_pair_delimiters, SettingsTarget::AutoPairDelimiters.label());
+                settings_target_anchor(ui, SettingsTarget::MitexDollars, &mut settings_scroll_target);
+                ui.checkbox(&mut edited.mitex_auto_enable, SettingsTarget::MitexDollars.label());
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("MiTeX version");
+                    ui.add(egui::TextEdit::singleline(&mut edited.mitex_version).desired_width(65.0))
+                        .on_hover_text("Pinned package version used when enabling TeX mode. Existing imports are not rewritten.");
+                });
+                ui.label("$x$ → mi · $ x $ → mitex. Native Typst math prevents enabling.");
                 settings_target_anchor(ui, SettingsTarget::RainbowBrackets, &mut settings_scroll_target);
                 show_bracket_controls(ui, &mut edited.rainbow_brackets);
                 settings_target_anchor(

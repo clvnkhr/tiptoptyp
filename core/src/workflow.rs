@@ -22,32 +22,27 @@ impl<A, M, D> Default for Workflow<A, M, D> {
     }
 }
 impl<A, M, D> Workflow<A, M, D> {
-    /// Consume the receipt before releasing a continuation. Newer edits and
+    /// Observe the recorded save before releasing a continuation. Newer edits and
     /// uncertain durability keep the window open even though bytes were saved.
-    pub fn complete_save<C>(
+    pub fn complete_save(
         &mut self,
-        document: &mut crate::document::DocumentSession<C>,
-        receipt: crate::document::SaveReceipt,
+        status: Result<crate::document::SaveStatus, &'static str>,
+        dirty: bool,
         synchronized: bool,
     ) -> Result<Option<A>, &'static str> {
         let continuation = self.after_save.take();
-        if matches!(
-            document.record_save(receipt)?,
-            crate::document::SaveStatus::Stale
-        ) {
+        if matches!(status?, crate::document::SaveStatus::Stale) {
             // Keep a close/open continuation alive until the authoritative
             // save completion arrives. An older completion proves only that
             // older bytes reached the destination.
             self.after_save = continuation;
             return Ok(None);
         }
-        Ok(
-            if synchronized && document.source() == document.saved_source() {
-                continuation
-            } else {
-                None
-            },
-        )
+        Ok(if synchronized && !dirty {
+            continuation
+        } else {
+            None
+        })
     }
     pub fn is_busy(&self) -> bool {
         !matches!(self.phase, Phase::Idle) || self.after_save.is_some()
@@ -202,15 +197,23 @@ mod tests {
         let mut flow = Workflow::<&str, &str, &str>::default();
         flow.continue_after_save("close").unwrap();
         assert_eq!(
-            flow.complete_save(&mut document, older.committed(1), true)
-                .unwrap(),
+            flow.complete_save(
+                document.record_save(older.committed(1)),
+                document.is_dirty(),
+                true
+            )
+            .unwrap(),
             None
         );
         assert!(flow.has_continuation());
         let authoritative = document.prepare_save("draft.txt".into(), DocumentKind::Text);
         assert_eq!(
-            flow.complete_save(&mut document, authoritative.committed(2), true)
-                .unwrap(),
+            flow.complete_save(
+                document.record_save(authoritative.committed(2)),
+                document.is_dirty(),
+                true
+            )
+            .unwrap(),
             Some("close")
         );
         assert!(!flow.has_continuation());

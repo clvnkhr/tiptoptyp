@@ -8,6 +8,8 @@ pub(super) struct QaSession {
     font_file: Option<tempfile::NamedTempFile>,
     git_fixture_prepared: bool,
     folding_prepared: bool,
+    tabs_prepared: bool,
+    asset_fixture: Option<tempfile::TempDir>,
 }
 
 /// A capture batch owns its fixture independently of each scene's editor state.
@@ -27,6 +29,9 @@ impl SceneDocument {
         }
     }
     pub(super) fn restore(&self, document: &mut DocumentSession) -> bool {
+        if document.config().is_some() {
+            document.replace_unprojected_untitled("");
+        }
         if document.source() == &self.source
             && document.saved_source() == &self.source
             && document.path() == &self.path
@@ -36,14 +41,16 @@ impl SceneDocument {
             return false;
         }
         if let Some(path) = &self.path {
-            document.replace_loaded(
-                self.source.clone(),
-                path.clone(),
-                self.kind,
-                self.fingerprint,
-            );
+            document
+                .replace_loaded(
+                    self.source.clone(),
+                    path.clone(),
+                    self.kind,
+                    self.fingerprint,
+                )
+                .expect("ordinary QA fixture replacement");
         } else {
-            document.replace_untitled(self.source.clone());
+            document.replace_unprojected_untitled(self.source.clone());
         }
         true
     }
@@ -172,7 +179,7 @@ pub(super) fn prepare_sticky_context_snapshot_document(document: &mut DocumentSe
     // putting its caret at character zero. The forced ScrollArea offset does
     // not move that caret, which makes this scene exercise scroll-derived
     // sticky context rather than the old cursor-derived behavior.
-    document.reset_editor_history = true;
+    document.set_history_reset(true);
     true
 }
 
@@ -186,7 +193,12 @@ impl QaSession {
         }
         if matches!(
             scene,
-            UiSnapshotScene::Main | UiSnapshotScene::ProblemsPanel | UiSnapshotScene::FindReplace
+            UiSnapshotScene::Main
+                | UiSnapshotScene::Tabs
+                | UiSnapshotScene::TabsPdf
+                | UiSnapshotScene::TabsImage
+                | UiSnapshotScene::ProblemsPanel
+                | UiSnapshotScene::FindReplace
         ) && app.preview.content.pages().is_empty()
         {
             app.captures.defer_target("main");
@@ -213,6 +225,46 @@ impl QaSession {
         }
         let toolbar_anchor = Pos2::new(theme::SPACE.content, METRICS.chrome.toolbar_height);
         match scene {
+            UiSnapshotScene::EmptyWorkspace => {
+                if !self.tabs_prepared {
+                    app.empty_workspace(context);
+                    self.tabs_prepared = true;
+                }
+            }
+            UiSnapshotScene::TabsPdf | UiSnapshotScene::TabsImage => {
+                if !self.tabs_prepared {
+                    if app.preview.content.pages().is_empty() {
+                        return;
+                    }
+                    let (path, kind) = if scene == UiSnapshotScene::TabsPdf {
+                        let Some(pdf) = app.preview.content.pdf() else {
+                            return;
+                        };
+                        let directory = tempfile::tempdir().expect("PDF tab fixture directory");
+                        let path = directory.path().join("reference.pdf");
+                        fs::write(&path, pdf).expect("PDF tab fixture");
+                        self.asset_fixture = Some(directory);
+                        (path, DocumentKind::Pdf)
+                    } else {
+                        (
+                            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                                .join("assets/icons/tiptoptyp-256.png"),
+                            DocumentKind::Image,
+                        )
+                    };
+                    app.prepare_asset_tab_fixture(context, path, kind);
+                    self.tabs_prepared = true;
+                }
+                if app.asset_preview.content.pages().is_empty() {
+                    app.captures.defer_target("main");
+                }
+            }
+            UiSnapshotScene::Tabs => {
+                if !self.tabs_prepared {
+                    app.prepare_tabs_fixture(context);
+                    self.tabs_prepared = true;
+                }
+            }
             UiSnapshotScene::GitEditor | UiSnapshotScene::GitChunk => {
                 const SOURCE: &str = "= Research notes\n\nThe revised model reaches 96% accuracy.\n\n== Method\nWe evaluate the model on three datasets.\n\nThe additional experiment confirms the result.\n\n== Results\nThe complete comparison follows below.\n\nThe remaining measurements agree.\n\n== Discussion\nThese observations support the revised approach.\n";
                 let path = app
@@ -221,12 +273,14 @@ impl QaSession {
                     .clone()
                     .unwrap_or_else(|| app.workspace_root.join("main.typ"));
                 if app.document.source() != SOURCE {
-                    app.document.replace_loaded(
-                        SOURCE.into(),
-                        path.clone(),
-                        DocumentKind::Typst,
-                        app.document.disk_fingerprint(),
-                    );
+                    app.document
+                        .replace_loaded(
+                            SOURCE.into(),
+                            path.clone(),
+                            DocumentKind::Typst,
+                            app.document.disk_fingerprint(),
+                        )
+                        .expect("ordinary QA fixture replacement");
                     app.prepare_editor_source_data();
                 }
                 app.notice = None;
@@ -280,7 +334,7 @@ impl QaSession {
             UiSnapshotScene::UnicodeCompletion => {
                 const SOURCE: &str = "= Unicode symbols\n\n$ sym. $\n\nב ד ∖ ≀ 🜨\n";
                 if app.document.source() != SOURCE {
-                    app.document.replace_untitled(SOURCE);
+                    app.document.replace_unprojected_untitled(SOURCE);
                     app.prepare_editor_source_data();
                 }
                 app.view_mode = ViewMode::Code;
@@ -307,6 +361,7 @@ impl QaSession {
                     version: revision_as_i32(app.document.revision()),
                     request_token: 0,
                     cursor,
+                    source_cursor: cursor,
                     anchor: Rect::NOTHING,
                     explicit: true,
                     is_incomplete: false,
@@ -320,7 +375,7 @@ impl QaSession {
             UiSnapshotScene::FontCompletion => {
                 let source = "#set text(font: \"\")\n= Font completion";
                 if app.document.source() != source {
-                    app.document.replace_untitled(source);
+                    app.document.replace_unprojected_untitled(source);
                     app.prepare_editor_source_data();
                 }
                 app.view_mode = ViewMode::Code;
@@ -340,6 +395,31 @@ impl QaSession {
                 app.problems_visible = false;
                 app.find_visible = false;
                 app.replace_visible = false;
+            }
+            UiSnapshotScene::MitexDollars => {
+                if app.document.config().is_none() {
+                    const SOURCE: &str = "= TeX dollar notation\n\nInline: $\\alpha + \\beta = \\gamma$\n\nDisplay math:\n$\n  \\sum_{n=1}^{\\infty} \\frac{1}{n^2} = \\frac{\\pi^2}{6}\n$\n\nThe saved file contains ordinary MiTeX calls.\n";
+                    let canonical = tiptoptyp::mitex_projection::Projection::open(
+                        "",
+                        tiptoptyp::mitex_projection::Config::default(),
+                    )
+                    .unwrap()
+                    .encode(SOURCE)
+                    .unwrap();
+                    // A capture fixture must be clean so screenshot-exit is
+                    // not intercepted by the unsaved-document close flow.
+                    app.document
+                        .replace_unprojected_untitled(canonical.output());
+                    app.document
+                        .enable(tiptoptyp::mitex_projection::Config::default())
+                        .unwrap();
+                    app.prepare_editor_source_data();
+                    // The fixture changed file identity to Untitled. Give it
+                    // the same private backing/services as a real New document.
+                    app.reset_document_services();
+                }
+                app.view_mode = ViewMode::Code;
+                app.explorer.hide();
             }
             UiSnapshotScene::WindowColor => {
                 app.view_mode = ViewMode::Code;
@@ -362,7 +442,7 @@ impl QaSession {
             UiSnapshotScene::RainbowBrackets => {
                 const SOURCE: &str = "= Rainbow brackets\n\n#let round = (1, (2, (3, (4, (5)))))\n\n#let square = [one #text[two #text[three #text[four #text[five]]]]]\n\n#let curly = { let x = { let y = { 3 }; y }; x }\n\n#let mixed = (1, { [content] }, (2, 3))\n\nMath intervals: $ (0, (1, (2, 3]]] $\n\n// Comments keep their syntax colors: ([{}])\n#let literal = \"[plain string]\"\nRaw text: `([{}])`\n";
                 if app.document.source() != SOURCE {
-                    app.document.replace_untitled(SOURCE);
+                    app.document.replace_unprojected_untitled(SOURCE);
                     app.prepare_editor_source_data();
                 }
                 app.settings.rainbow_brackets = crate::rainbow::RainbowBrackets::default();
@@ -372,7 +452,7 @@ impl QaSession {
             UiSnapshotScene::DelimiterMatch => {
                 const SOURCE: &str = "= Matching delimiters\n\n#let calculate(value) = {\n  let nested = (value, (2, 3))\n  nested\n}\n\nStrings are separate: #repr(\"[literal]\")\nMath: $ (alpha + beta] $\n";
                 if app.document.source() != SOURCE {
-                    app.document.replace_untitled(SOURCE);
+                    app.document.replace_unprojected_untitled(SOURCE);
                     app.prepare_editor_source_data();
                 }
                 app.view_mode = ViewMode::Code;
@@ -396,7 +476,7 @@ impl QaSession {
                         .edit(CCursorRange::one(CCursor::new(0)), |source| {
                             *source = SOURCE.to_owned()
                         });
-                    app.document.reset_editor_history = true;
+                    app.document.set_history_reset(true);
                     app.prepare_editor_source_data();
                     let regions = app.editor_data.context_regions();
                     app.folding.prepare(
@@ -677,22 +757,32 @@ impl QaSession {
         app.recorded_notice = None;
         app.preview.status = PreviewStatus::Ready(Duration::ZERO);
         if let Some(fixture) = &self.document {
+            app.tabs = tabs::Tabs::default();
             if fixture.restore(&mut app.document) {
                 app.preview.content.clear();
             }
         } else {
-            app.document.restore_saved_source();
+            app.document
+                .restore_saved_source()
+                .expect("ordinary QA fixture revert");
         }
         app.theme_override = Some(step.theme.clone());
         app.snapshot_scene = Some(step.scene);
         self.folding_prepared = false;
+        self.tabs_prepared = false;
+        self.asset_fixture = None;
         if step.scene == UiSnapshotScene::StickyContext {
-            app.document.reset_editor_history = true;
+            app.document.set_history_reset(true);
         }
 
         if matches!(
             step.scene,
-            UiSnapshotScene::Main | UiSnapshotScene::ProblemsPanel | UiSnapshotScene::FindReplace
+            UiSnapshotScene::Main
+                | UiSnapshotScene::Tabs
+                | UiSnapshotScene::TabsPdf
+                | UiSnapshotScene::TabsImage
+                | UiSnapshotScene::ProblemsPanel
+                | UiSnapshotScene::FindReplace
         ) && app.preview.content.pages().is_empty()
         {
             app.schedule_compile_now();

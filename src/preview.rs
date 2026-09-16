@@ -155,6 +155,7 @@ pub(crate) struct PreviewController {
     pub(crate) tinymist_state: ServiceState,
     pub(crate) webview_state: ServiceState,
     pub(crate) status: PreviewStatus,
+    compile_started: Option<(crate::tinymist::Generation, String, std::time::Instant)>,
     pub(crate) raw_diagnostics: String,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) tinymist_diagnostics: Vec<Diagnostic>,
@@ -170,6 +171,42 @@ pub(crate) struct PreviewController {
 }
 
 impl PreviewController {
+    /// Measure server notification intervals, not UI queue delay. Repeated
+    /// word-count/status reports must not restart or erase a completed timing.
+    pub(crate) fn compile_status(
+        &mut self,
+        generation: crate::tinymist::Generation,
+        path: String,
+        status: crate::tinymist::CompileStatus,
+        received: std::time::Instant,
+    ) {
+        use crate::tinymist::CompileStatus;
+        match status {
+            CompileStatus::Compiling => {
+                if !self
+                    .compile_started
+                    .as_ref()
+                    .is_some_and(|(g, p, _)| *g == generation && *p == path)
+                {
+                    self.compile_started = Some((generation, path, received));
+                }
+                self.status = PreviewStatus::Compiling;
+            }
+            CompileStatus::CompileSuccess | CompileStatus::CompileError => {
+                let elapsed = self
+                    .compile_started
+                    .take()
+                    .filter(|(g, p, _)| *g == generation && *p == path)
+                    .map(|(_, _, start)| received.saturating_duration_since(start));
+                if status == CompileStatus::CompileError {
+                    self.status = PreviewStatus::Error;
+                } else if let Some(elapsed) = elapsed {
+                    self.status = PreviewStatus::Ready(elapsed);
+                }
+            }
+        }
+    }
+
     /// Translate protocol failures into one recovery transition. Formatting,
     /// navigation, and hover errors do not restart an otherwise healthy server.
     pub(crate) fn receive_tinymist_failure(
@@ -226,6 +263,7 @@ impl PreviewController {
                 "Waiting for Tinymist's preview server".to_owned(),
             ),
             status: PreviewStatus::Waiting,
+            compile_started: None,
             raw_diagnostics: String::new(),
             diagnostics: Vec::new(),
             tinymist_diagnostics: Vec::new(),
@@ -293,6 +331,7 @@ impl PreviewController {
         }
 
         self.content.clear();
+        self.compile_started = None;
         self.visible_page = 0;
         self.raw_diagnostics.clear();
         self.diagnostics.clear();
@@ -528,6 +567,60 @@ pub fn dark_preview_rgba(rgba: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interactive_compile_timing_uses_one_matching_cycle_and_ignores_duplicate_reports() {
+        use crate::tinymist::{CompileStatus::*, Generation};
+        let mut preview = PreviewController::new(false, PreviewPreference::Interactive);
+        let start = std::time::Instant::now();
+        preview.compile_status(Generation(1), "/main.typ".into(), CompileSuccess, start);
+        assert_eq!(
+            preview.status,
+            PreviewStatus::Waiting,
+            "no fabricated startup timing"
+        );
+        preview.compile_status(Generation(1), "/main.typ".into(), Compiling, start);
+        preview.compile_status(
+            Generation(1),
+            "/main.typ".into(),
+            Compiling,
+            start + Duration::from_millis(5),
+        );
+        preview.compile_status(
+            Generation(1),
+            "/main.typ".into(),
+            CompileSuccess,
+            start + Duration::from_millis(18),
+        );
+        assert_eq!(
+            preview.status,
+            PreviewStatus::Ready(Duration::from_millis(18))
+        );
+        preview.compile_status(
+            Generation(1),
+            "/main.typ".into(),
+            CompileSuccess,
+            start + Duration::from_secs(1),
+        );
+        assert_eq!(
+            preview.status,
+            PreviewStatus::Ready(Duration::from_millis(18))
+        );
+        preview.compile_status(Generation(1), "/main.typ".into(), Compiling, start);
+        preview.compile_status(
+            Generation(2),
+            "/main.typ".into(),
+            CompileSuccess,
+            start + Duration::from_secs(1),
+        );
+        assert!(
+            !matches!(preview.status, PreviewStatus::Ready(_)),
+            "never time across server generations"
+        );
+        preview.compile_status(Generation(2), "/other.typ".into(), Compiling, start);
+        preview.compile_status(Generation(2), "/other.typ".into(), CompileError, start);
+        assert_eq!(preview.status, PreviewStatus::Error);
+    }
 
     #[test]
     fn protocol_failures_wait_and_only_the_fifth_selects_fallback() {

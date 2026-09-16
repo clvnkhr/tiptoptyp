@@ -20,6 +20,17 @@ struct LogoState {
     blur_started: Option<Instant>,
 }
 
+pub(crate) fn toggle(context: &egui::Context) {
+    let id = viewport_scoped_id(context, "window-logo-color");
+    context.data_mut(|data| {
+        let state = data.get_temp_mut_or_default::<LogoState>(id);
+        state.open = !state.open;
+        state.had_focus = false;
+        state.blur_started = None;
+    });
+    context.request_repaint();
+}
+
 pub(crate) fn show(ui: &mut egui::Ui, captures: &CaptureController) {
     let context = ui.ctx().clone();
     let owner_id = context.viewport_id();

@@ -155,6 +155,7 @@ pub(crate) enum DeferredDocumentAction {
     OpenFileDialog,
     OpenFolderDialog,
     CloseWindow,
+    CloseTab,
     LoadPath(PathBuf),
     OpenFolder(PathBuf),
     FollowFileLink {
@@ -237,10 +238,12 @@ impl DocumentWorkflow {
     pub(crate) fn complete_save(
         &mut self,
         document: &mut crate::document::DocumentSession,
-        receipt: tiptoptyp_core::document::SaveReceipt,
+        receipt: tiptoptyp::mitex_document::SaveReceipt,
         synchronized: bool,
     ) -> Result<Option<PendingDocumentAction>, &'static str> {
-        self.flow.complete_save(document, receipt, synchronized)
+        let status = document.record_save(receipt);
+        self.flow
+            .complete_save(status, document.is_dirty(), synchronized)
     }
     pub(crate) fn allow_close_for(&mut self, key: DocumentKey) {
         self.close_permit = Some(key);

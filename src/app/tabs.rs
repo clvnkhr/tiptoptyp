@@ -1,0 +1,896 @@
+//! Tabs park document state, never an EditorApp or background service. Exactly
+//! one slot is active; the first slot is the initial preview source.
+use super::*;
+
+pub(super) struct ParkedTab {
+    pub(super) document: DocumentSession,
+    folding: crate::folding::Folding,
+    editor: Option<egui::text_edit::TextEditState>,
+    autosave: Option<Instant>,
+    workspace: PathBuf,
+}
+
+#[cfg(test)]
+#[path = "tabs_tests.rs"]
+mod tests;
+
+pub(super) struct Tabs {
+    pub(super) parked: Vec<Option<ParkedTab>>,
+    pub(super) active: usize,
+    pub(super) preview: usize,
+    pub(super) preview_explicit: bool,
+    ids: Vec<u64>,
+    next_id: u64,
+    pub(super) approved: Vec<(u64, DocumentKey)>,
+    advance_close: bool,
+    pub(super) process_close_key: Option<DocumentKey>,
+    next_autosave: Option<Instant>,
+    reveal_active: bool,
+    pub(super) open_uris: std::collections::BTreeSet<String>,
+    unsaved: BTreeMap<u64, UnsavedTextDocument>,
+}
+
+impl Default for Tabs {
+    fn default() -> Self {
+        Self {
+            parked: vec![None],
+            active: 0,
+            preview: 0,
+            preview_explicit: false,
+            ids: vec![0],
+            next_id: 1,
+            approved: Vec::new(),
+            advance_close: false,
+            process_close_key: None,
+            next_autosave: None,
+            reveal_active: false,
+            open_uris: Default::default(),
+            unsaved: Default::default(),
+        }
+    }
+}
+impl Tabs {
+    pub(super) fn new(preview_explicit: bool) -> Self {
+        Self {
+            preview_explicit,
+            ..Self::default()
+        }
+    }
+    pub(super) fn len(&self) -> usize {
+        self.parked.len()
+    }
+    pub(super) fn is_empty(&self) -> bool {
+        self.parked.is_empty()
+    }
+    pub(super) fn empty_after(&self) -> Self {
+        Self {
+            parked: Vec::new(),
+            ids: Vec::new(),
+            next_id: self.next_id,
+            preview_explicit: true,
+            ..Self::default()
+        }
+    }
+    fn open_first(&mut self) {
+        assert!(self.is_empty());
+        self.parked.push(None);
+        self.ids.push(self.next_id);
+        self.next_id += 1;
+        self.active = 0;
+        self.preview = 0;
+        self.preview_explicit = true;
+    }
+    pub(super) fn active_id(&self) -> u64 {
+        self.ids.get(self.active).copied().unwrap_or(self.next_id)
+    }
+    fn refresh_autosave(&mut self) {
+        self.next_autosave = self
+            .parked
+            .iter()
+            .flatten()
+            .filter_map(|tab| tab.autosave)
+            .min();
+    }
+}
+
+pub(super) fn opens_tab(action: &DeferredDocumentAction) -> bool {
+    matches!(
+        action,
+        DeferredDocumentAction::New
+            | DeferredDocumentAction::OpenFileDialog
+            | DeferredDocumentAction::LoadPath(_)
+            | DeferredDocumentAction::FollowFileLink { .. }
+            | DeferredDocumentAction::FollowTinymistLocation { .. }
+    )
+}
+
+pub(super) fn switch_needs_compile(
+    preserve: bool,
+    raster: bool,
+    has_pages: bool,
+    pending: bool,
+) -> bool {
+    !preserve || (raster && (!has_pages || pending))
+}
+
+pub(super) fn consume_window_close(
+    input: &mut egui::InputState,
+    shortcuts: &ShortcutBindings,
+    child_focused: bool,
+) -> bool {
+    // Cmd+W in Settings or a popup closes that viewport, not its owner's tab.
+    consume_shortcut_action(input, shortcuts, |action| {
+        action == ShortcutAction::CloseWindow
+            || (child_focused && action == ShortcutAction::CloseTab)
+    })
+    .is_some()
+}
+
+impl EditorApp {
+    pub(super) fn collect_tab_sources(
+        &self,
+        overrides: &mut BTreeMap<PathBuf, String>,
+    ) -> Result<(), ()> {
+        for index in 0..self.tabs.len() {
+            let document = self.tab_document(index).unwrap();
+            if !document.kind().is_typst() {
+                continue;
+            }
+            let path = document.path().clone().unwrap_or_else(|| {
+                if index == self.tabs.preview {
+                    self.preview_document_path()
+                } else {
+                    self.untitled_tab_path(index)
+                }
+            });
+            let source = if document.config().is_none() {
+                document.source().clone()
+            } else {
+                document
+                    .canonical_snapshot()
+                    .map_err(|_| ())?
+                    .source()
+                    .to_owned()
+            };
+            // Saved paths were canonicalized when opened; never stat every
+            // parked file just to assemble an indexing request.
+            overrides.insert(path, source);
+        }
+        Ok(())
+    }
+    pub(super) fn prepare_tabs_fixture(&mut self, context: &egui::Context) {
+        self.append_tab(context);
+        self.document.replace_loaded_unprojected(
+            "= Methods\n\nDraft notes for the next section.\n".into(),
+            self.workspace_root.join("methods.typ"),
+            DocumentKind::Typst,
+            None,
+        );
+        self.document.edit(CCursorRange::default(), |source| {
+            source.push_str("\nAn unsaved revision.\n")
+        });
+        self.append_tab(context);
+        self.document.replace_loaded_unprojected(
+            "# Research notes\n".into(),
+            self.workspace_root.join("notes.md"),
+            DocumentKind::Text,
+            None,
+        );
+        self.activate_tab(1, context);
+    }
+
+    pub(super) fn prepare_asset_tab_fixture(
+        &mut self,
+        context: &egui::Context,
+        path: PathBuf,
+        kind: DocumentKind,
+    ) {
+        self.append_tab(context);
+        self.document
+            .replace_loaded_unprojected(String::new(), path.clone(), kind, None);
+        self.clear_preview_for_document(true);
+        self.request_asset(path);
+    }
+    pub(super) fn path_open_in_another_tab(&self, path: &Path) -> bool {
+        self.tabs
+            .parked
+            .iter()
+            .flatten()
+            .any(|tab| tab.document.path().as_deref() == Some(path))
+    }
+    fn tab_document(&self, index: usize) -> Option<&DocumentSession> {
+        if index >= self.tabs.len() {
+            return None;
+        }
+        if index == self.tabs.active {
+            Some(&self.document)
+        } else {
+            self.tabs
+                .parked
+                .get(index)?
+                .as_ref()
+                .map(|tab| &tab.document)
+        }
+    }
+    pub(super) fn tab_preview_document(&self) -> Option<&DocumentSession> {
+        self.tab_document(self.tabs.preview)
+    }
+    pub(super) fn tab_preview_root(&self) -> &Path {
+        if self
+            .tab_preview_document()
+            .is_none_or(|document| !document.kind().is_typst())
+        {
+            return &self.workspace_root;
+        }
+        self.tabs.parked[self.tabs.preview]
+            .as_ref()
+            .map_or(self.workspace_root.as_path(), |tab| tab.workspace.as_path())
+    }
+    pub(super) fn untitled_tab_path(&self, index: usize) -> PathBuf {
+        if let Some(backing) = self.tabs.unsaved.get(&self.tabs.ids[index]) {
+            return backing.path().into();
+        }
+        self.tabs.parked[index]
+            .as_ref()
+            .map_or(&self.workspace_root, |tab| &tab.workspace)
+            .join(".tiptoptyp/documents")
+            .join(format!("untitled-{}.typ", self.tabs.ids[index]))
+    }
+
+    pub(super) fn prepare_tab_backings(&mut self) -> Result<(), String> {
+        if self.tabs.len() == 1 && !self.tabs.preview_explicit {
+            return Ok(());
+        }
+        for index in 0..self.tabs.len() {
+            let document = self.tab_document(index).unwrap();
+            if !document.kind().is_typst() || document.path().is_some() {
+                continue;
+            }
+            let id = self.tabs.ids[index];
+            if self.tabs.unsaved.contains_key(&id) {
+                continue;
+            }
+            let source = document.canonical_snapshot().map_err(|e| e.to_string())?;
+            let root = self.tabs.parked[index]
+                .as_ref()
+                .map_or(&self.workspace_root, |tab| &tab.workspace);
+            let backing = UnsavedTextDocument::create(
+                root,
+                root,
+                format!("Untitled-{}.typ", id + 1),
+                source.source(),
+            )
+            .map_err(|e| e.to_string())?;
+            self.tabs.unsaved.insert(id, backing);
+        }
+        Ok(())
+    }
+
+    pub(super) fn sync_parked_tinymist(&mut self) {
+        let Some(generation) = self.tinymist_generation else {
+            return;
+        };
+        for index in 0..self.tabs.len() {
+            if index == self.tabs.active {
+                continue;
+            }
+            let document = self.tab_document(index).unwrap();
+            if !document.kind().is_typst() {
+                continue;
+            }
+            let path = document
+                .path()
+                .clone()
+                .unwrap_or_else(|| self.untitled_tab_path(index));
+            let Ok(source) = document.canonical_snapshot() else {
+                continue;
+            };
+            let Ok(document) = TextDocument::from_path(
+                &path,
+                revision_as_i32(self.document.revision()),
+                source.source(),
+            ) else {
+                continue;
+            };
+            if self.tabs.open_uris.contains(&document.uri) {
+                continue;
+            }
+            let uri = document.uri.clone();
+            if self.tinymist.did_open(generation, document).is_ok() {
+                self.tabs.open_uris.insert(uri);
+            }
+        }
+    }
+
+    pub(super) fn update_active_tab_backing(&self, source: &str) -> Result<(), String> {
+        if let Some(backing) = self.tabs.unsaved.get(&self.tabs.active_id()) {
+            backing
+                .update_backing_source(source)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn rename_parked_tab(&mut self, old: &Path, new: &Path) {
+        for tab in self.tabs.parked.iter_mut().flatten() {
+            if tab.document.path().as_deref() == Some(old) {
+                let kind = parked_rename_kind(&tab.document, new);
+                // Renaming through Explorer must update the parked buffer,
+                // not leave it autosaving back to the old filename.
+                tab.document
+                    .rename(new.into(), kind)
+                    .expect("parked rename preflight");
+            }
+        }
+        if let Ok(uri) = crate::tinymist::path_to_file_uri(old) {
+            self.tabs.open_uris.remove(&uri);
+            if let Some(generation) = self.tinymist_generation {
+                let _ = self.tinymist.did_close(generation, uri);
+            }
+        }
+        self.sync_parked_tinymist();
+    }
+
+    pub(super) fn preflight_parked_rename(&self, old: &Path, new: &Path) -> Result<(), String> {
+        if self.path_open_in_another_tab(new) {
+            return Err("The destination is open in another tab".into());
+        }
+        for tab in self
+            .tabs
+            .parked
+            .iter()
+            .flatten()
+            .filter(|tab| tab.document.path().as_deref() == Some(old))
+        {
+            tab.document
+                .can_rename(parked_rename_kind(&tab.document, new))
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn reschedule_parked_autosave(&mut self) {
+        let deadline =
+            Instant::now() + Duration::from_millis(self.settings.auto_save_delay_ms.max(100));
+        for tab in self.tabs.parked.iter_mut().flatten() {
+            tab.autosave = (self.settings.auto_save
+                && tab.document.path().is_some()
+                && tab.document.is_dirty())
+            .then_some(deadline);
+        }
+        self.tabs.refresh_autosave();
+    }
+
+    fn park_with(&mut self, mut incoming: ParkedTab, context: &egui::Context) -> ParkedTab {
+        if let Some(backing) = self.tinymist_unsaved_document.take() {
+            self.tabs.unsaved.insert(self.tabs.active_id(), backing);
+        }
+        let old_key = incoming.document.key();
+        incoming.document.reactivate_after(self.document.key());
+        incoming.folding.rekey(old_key, incoming.document.key());
+        // Close approvals survive a pure view switch, never an intervening edit.
+        for (_, key) in &mut self.tabs.approved {
+            if *key == old_key {
+                *key = incoming.document.key();
+            }
+        }
+        let outgoing = ParkedTab {
+            document: std::mem::replace(&mut self.document, incoming.document),
+            folding: std::mem::replace(&mut self.folding, incoming.folding),
+            editor: egui::text_edit::TextEditState::load(context, source_editor_id(context)),
+            autosave: std::mem::replace(&mut self.autosave_deadline, incoming.autosave),
+            workspace: std::mem::replace(&mut self.workspace_root, incoming.workspace),
+        };
+        incoming
+            .editor
+            .unwrap_or_default()
+            .store(context, source_editor_id(context));
+        self.pending_editor_selection = None;
+        self.editor_attention = None;
+        self.last_editor_caret = None;
+        self.editor_completion = None;
+        self.editor_hover = None;
+        self.tooltip_request = None;
+        self.close_app_popup();
+        self.search.clear();
+        self.document_workflow.revoke_close();
+        outgoing
+    }
+
+    fn append_tab(&mut self, context: &egui::Context) {
+        let incoming = ParkedTab {
+            document: DocumentSession::new(self.document.key().owner, "", DocumentKind::Typst),
+            folding: Default::default(),
+            editor: None,
+            autosave: None,
+            workspace: self.workspace_root.clone(),
+        };
+        let old = self.park_with(incoming, context);
+        self.tabs.parked[self.tabs.active] = Some(old);
+        self.tabs.active = self.tabs.len();
+        self.tabs.parked.push(None);
+        self.tabs.ids.push(self.tabs.next_id);
+        self.tabs.next_id += 1;
+        self.tabs.reveal_active = true;
+        self.tabs.refresh_autosave();
+    }
+
+    pub(super) fn new_tab(&mut self, context: &egui::Context) {
+        if self.tabs.is_empty() {
+            self.tabs.open_first();
+        } else if self.lifecycle.allows_document_work() {
+            self.append_tab(context);
+        }
+        self.reset_untitled_document();
+    }
+
+    pub(super) fn open_tab_path(&mut self, path: PathBuf, context: &egui::Context) -> bool {
+        let path = canonical_or_absolute(&path);
+        if self.tabs.is_empty() {
+            self.tabs.open_first();
+            if self.load_path(path) {
+                return true;
+            }
+            self.empty_workspace(context);
+            return false;
+        }
+        if let Some(index) = (0..self.tabs.len()).find(|&i| {
+            self.tab_document(i)
+                .is_some_and(|d| d.path().as_ref() == Some(&path))
+        }) {
+            self.activate_tab(index, context);
+            return true;
+        }
+        let replace_welcome =
+            self.tabs.len() == 1 && self.document.path().is_none() && !self.is_dirty();
+        if replace_welcome || !self.lifecycle.allows_document_work() {
+            return self.load_path(path);
+        }
+        let old = self.tabs.active;
+        self.append_tab(context);
+        if self.load_path(path) {
+            return true;
+        }
+        let failed = self.tabs.active;
+        self.activate_tab(old, context);
+        self.remove_parked_tab(failed);
+        false
+    }
+
+    pub(super) fn activate_tab(&mut self, index: usize, context: &egui::Context) {
+        if index == self.tabs.active || index >= self.tabs.len() {
+            return;
+        }
+        let incoming = self.tabs.parked[index]
+            .take()
+            .expect("inactive tab owns its document");
+        let preserve_preview = self.typst_preview_available();
+        let workspace_changed = incoming.workspace != self.workspace_root;
+        let outgoing = self.park_with(incoming, context);
+        self.tabs.parked[self.tabs.active] = Some(outgoing);
+        self.tabs.active = index;
+        self.tabs.reveal_active = true;
+        self.tabs.refresh_autosave();
+        self.clear_preview_for_document(preserve_preview);
+        self.git_editor.clear_document();
+        if workspace_changed {
+            self.reset_document_services();
+        } else if let Some(path) = self.document.path().clone() {
+            if self.tinymist_generation.is_some() {
+                self.reopen_tinymist_current_document(&path, self.document.kind());
+            } else {
+                self.restart_tinymist();
+            }
+        } else {
+            self.restart_tinymist_preserving_preview();
+        }
+        if self.document.kind().preview_only()
+            && let Some(path) = self.document.path().clone()
+        {
+            self.request_asset(path);
+        }
+        self.git_editor.request_refresh();
+        if self.typst_preview_available()
+            && switch_needs_compile(
+                preserve_preview,
+                self.raster_preview_required(),
+                !self.preview.content.pages().is_empty(),
+                matches!(
+                    self.preview.status,
+                    PreviewStatus::Compiling | PreviewStatus::Waiting
+                ),
+            )
+        {
+            self.schedule_compile_now();
+        }
+        self.schedule_project_index();
+        context.request_repaint();
+    }
+
+    fn remove_parked_tab(&mut self, index: usize) {
+        assert_ne!(index, self.tabs.active);
+        if let Some(document) = self.tab_document(index) {
+            let path = document
+                .path()
+                .clone()
+                .unwrap_or_else(|| self.untitled_tab_path(index));
+            if let Ok(uri) = crate::tinymist::path_to_file_uri(&path) {
+                self.tabs.open_uris.remove(&uri);
+                if let Some(generation) = self.tinymist_generation {
+                    let _ = self.tinymist.did_close(generation, uri);
+                }
+            }
+        }
+        let id = self.tabs.ids.remove(index);
+        self.tabs.unsaved.remove(&id);
+        self.tabs.parked.remove(index);
+        self.tabs.approved.retain(|(approved, _)| *approved != id);
+        if self.tabs.active > index {
+            self.tabs.active -= 1;
+        }
+        if self.tabs.preview > index {
+            self.tabs.preview -= 1;
+        } else if self.tabs.preview == index {
+            self.tabs.preview = 0;
+        }
+        self.tabs.refresh_autosave();
+    }
+
+    pub(super) fn request_close_tab(&mut self, index: usize, context: &egui::Context) {
+        if self.document_flow_busy() || self.process_close_pending || index >= self.tabs.len() {
+            return;
+        }
+        self.activate_tab(index, context);
+        self.request_document_replacement(DeferredDocumentAction::CloseTab, "closing this tab");
+    }
+
+    pub(super) fn finish_close_tab(&mut self, context: &egui::Context) {
+        if self.tabs.len() <= 1 {
+            self.empty_workspace(context);
+            return;
+        }
+        let closing = self.tabs.active;
+        let changed_preview = self.tabs.preview == closing;
+        let next = if closing > 0 { closing - 1 } else { 1 };
+        self.activate_tab(next, context);
+        self.remove_parked_tab(closing);
+        if changed_preview {
+            self.tabs.preview_explicit = true;
+            self.restart_tinymist_preserving_preview();
+            self.schedule_compile_now();
+        }
+    }
+
+    pub(super) fn tabs_close_approved(&self) -> bool {
+        self.tabs.parked.iter().enumerate().all(|(i, tab)| {
+            tab.as_ref().is_none_or(|tab| {
+                !tab.document.is_dirty()
+                    || self
+                        .tabs
+                        .approved
+                        .contains(&(self.tabs.ids[i], tab.document.key()))
+            })
+        })
+    }
+
+    pub(super) fn approve_tab_window_close(&mut self) {
+        self.tabs
+            .approved
+            .push((self.tabs.active_id(), self.document.key()));
+        self.tabs.advance_close = true;
+    }
+
+    pub(super) fn advance_tab_window_close(&mut self, context: &egui::Context) {
+        if !std::mem::take(&mut self.tabs.advance_close) {
+            return;
+        }
+        if let Some(index) = (0..self.tabs.len()).find(|&i| {
+            self.tab_document(i).is_some_and(|d| {
+                d.is_dirty() && !self.tabs.approved.contains(&(self.tabs.ids[i], d.key()))
+            })
+        }) {
+            self.activate_tab(index, context);
+            self.document_workflow.queue_replacement(
+                self.document.key(),
+                self.is_dirty(),
+                &self.document.name(),
+                DeferredDocumentAction::CloseWindow,
+                "closing this window",
+            );
+        } else {
+            self.document_workflow.allow_close_for(self.document.key());
+            if !self.process_close_pending {
+                context.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+    }
+
+    pub(super) fn select_preview_tab(&mut self, index: usize, context: &egui::Context) {
+        if self.tabs.preview == index && self.tabs.preview_explicit {
+            return;
+        }
+        if self
+            .tab_document(index)
+            .is_none_or(|d| !d.kind().is_typst())
+        {
+            return;
+        }
+        self.tabs.preview = index;
+        self.tabs.preview_explicit = true;
+        self.restart_tinymist_preserving_preview();
+        self.schedule_compile_now();
+        self.schedule_project_index();
+        context.request_repaint();
+    }
+
+    pub(super) fn show_tabs(&mut self, ui: &mut egui::Ui, frame: Option<&eframe::Frame>) {
+        let mut select = None;
+        let mut close = None;
+        let mut preview = None;
+        let mut rename = None;
+        let height = METRICS.toolbar.title_height;
+        let width = ui.available_width().max(0.0);
+        if width < 1.0 {
+            return;
+        }
+        let reveal = std::mem::take(&mut self.tabs.reveal_active);
+        ui.allocate_ui_with_layout(
+            Vec2::new(width, height),
+            Layout::left_to_right(Align::Center),
+            |ui| {
+                egui::ScrollArea::horizontal()
+                    .id_salt("document-tabs")
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                    .auto_shrink([false, true])
+                    .max_height(height)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            for index in 0..self.tabs.len() {
+                                let document = self.tab_document(index).unwrap();
+                                let name = document.name();
+                                let active = index == self.tabs.active;
+                                ui.push_id(self.tabs.ids[index], |ui| {
+                                    let title_width = ((name.chars().count() + 1) as f32
+                                        * METRICS.toolbar.title_character_width
+                                        + METRICS.toolbar.title_padding)
+                                        .clamp(54.0, 200.0)
+                                        .min((width - 44.0).max(24.0));
+                                    let tab = tab_widget(
+                                        ui,
+                                        document,
+                                        active,
+                                        index == self.tabs.preview,
+                                        title_width,
+                                    );
+                                    if active && reveal {
+                                        ui.scroll_to_rect(tab.rect, Some(Align::Center));
+                                    }
+                                    let response = tab.title;
+                                    if response.hovered() {
+                                        native_hover_text(
+                                            response.clone(),
+                                            document.path().as_ref().map_or_else(
+                                                || "Unsaved document".into(),
+                                                |path| path.display().to_string(),
+                                            ),
+                                        );
+                                    }
+                                    if response.clicked() {
+                                        select = Some(index);
+                                    }
+                                    if response.double_clicked() {
+                                        rename = Some(index);
+                                    }
+                                    if response.clicked_by(egui::PointerButton::Middle) {
+                                        close = Some(index);
+                                    }
+                                    if tab.preview.clicked() {
+                                        preview = Some(index);
+                                    }
+                                    if tab.close.clicked() {
+                                        close = Some(index);
+                                    }
+                                    ui.separator();
+                                });
+                            }
+                        });
+                    });
+            },
+        );
+        if self.document_flow_busy() || self.process_close_pending {
+            return;
+        }
+        if let Some(index) = close {
+            self.request_close_tab(index, ui.ctx());
+        } else if let Some(index) = preview {
+            self.select_preview_tab(index, ui.ctx());
+        } else if let Some(index) = rename {
+            self.activate_tab(index, ui.ctx());
+            if let Some(path) = self.document.path().clone() {
+                self.begin_rename(path);
+            } else {
+                self.save_as(frame);
+            }
+        } else if let Some(index) = select {
+            self.activate_tab(index, ui.ctx());
+        }
+    }
+
+    pub(super) fn tick_parked_autosave(&mut self, context: &egui::Context) {
+        let Some(deadline) = self.tabs.next_autosave else {
+            return;
+        };
+        if !self.settings.auto_save || self.snapshot_scene.is_some() {
+            return;
+        }
+        let now = Instant::now();
+        if now < deadline {
+            context.request_repaint_after(deadline - now);
+            return;
+        }
+        if self.document_flow_busy() || self.process_close_pending {
+            return;
+        }
+        let mut saved = false;
+        for tab in self.tabs.parked.iter_mut().flatten() {
+            if tab.autosave.is_none_or(|deadline| deadline > now) {
+                continue;
+            }
+            tab.autosave = None;
+            let Some(path) = tab.document.path().clone() else {
+                continue;
+            };
+            if !tab.document.is_dirty() {
+                continue;
+            }
+            let save = (|| -> Result<(), String> {
+                if !disk_matches_fingerprint(&path, tab.document.disk_fingerprint()) {
+                    return Err("Auto-save paused: file changed on disk".into());
+                }
+                let request = tab
+                    .document
+                    .prepare_save(path.clone(), tab.document.kind())
+                    .map_err(|e| e.to_string())?;
+                let fingerprint = fingerprint(request.source().as_bytes());
+                let durability = atomic_write(request.path(), request.source().as_bytes())
+                    .map_err(|e| e.to_string())?;
+                tab.document
+                    .record_save(request.committed(fingerprint))
+                    .map_err(str::to_owned)?;
+                if let crate::private_workspace::WriteDurability::Uncertain(error) = durability {
+                    return Err(error.to_string());
+                }
+                Ok(())
+            })();
+            match save {
+                Ok(()) => saved = true,
+                Err(error) => {
+                    self.notice = Some(Notice {
+                        message: format!("{}: {error}", path.display()),
+                        kind: NoticeKind::Error,
+                    })
+                }
+            }
+        }
+        self.tabs.refresh_autosave();
+        if saved {
+            self.git.request_refresh();
+            self.git_editor.request_refresh();
+            self.schedule_compile_now();
+        }
+    }
+}
+
+struct TabResponse {
+    rect: Rect,
+    title: egui::Response,
+    preview: egui::Response,
+    close: egui::Response,
+}
+
+fn tab_widget(
+    ui: &mut egui::Ui,
+    document: &DocumentSession,
+    active: bool,
+    chosen: bool,
+    title_width: f32,
+) -> TabResponse {
+    let name = document.name();
+    let height = METRICS.toolbar.title_height;
+    let frame = egui::Frame::new()
+        .fill(if active {
+            ui.visuals().selection.bg_fill
+        } else {
+            Color32::TRANSPARENT
+        })
+        .corner_radius(ui.visuals().widgets.inactive.corner_radius)
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            ui.horizontal(|ui| {
+                let title = ui.add_sized(
+                    [title_width, height],
+                    egui::Button::new(
+                        RichText::new(format!(
+                            "{name}{}",
+                            if document.is_dirty() { "*" } else { "" }
+                        ))
+                        .strong(),
+                    )
+                    .frame(false)
+                    .truncate(),
+                );
+                let compatible = document.kind().is_typst();
+                let preview = tab_icon_button(
+                    ui,
+                    compatible,
+                    if chosen && compatible {
+                        UiIcon::Eye
+                    } else {
+                        UiIcon::EyeClosed
+                    },
+                    &format!("Preview {name}"),
+                );
+                let preview = native_hover_text(
+                    preview,
+                    if chosen && compatible {
+                        "Preview source"
+                    } else if compatible {
+                        "Use this tab for preview"
+                    } else {
+                        "Only Typst tabs can drive the preview"
+                    },
+                );
+                let close = tab_icon_button(ui, true, UiIcon::Close, &format!("Close {name}"));
+                let close = native_hover_text(close, format!("Close {name}"));
+                (title, preview, close)
+            })
+            .inner
+        });
+    let (title, preview, close) = frame.inner;
+    TabResponse {
+        rect: frame.response.rect,
+        title,
+        preview,
+        close,
+    }
+}
+
+fn tab_icon_rect(button: Rect, icon: UiIcon) -> Rect {
+    Rect::from_center_size(
+        button.center(),
+        Vec2::splat(if icon == UiIcon::Close { 8.0 } else { 14.0 }),
+    )
+}
+
+fn tab_icon_button(ui: &mut egui::Ui, enabled: bool, icon: UiIcon, label: &str) -> egui::Response {
+    let response = ui
+        .add_enabled_ui(enabled, |ui| {
+            ui.add_sized(
+                [18.0, METRICS.toolbar.title_height],
+                egui::Button::new("").frame(false),
+            )
+        })
+        .inner;
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    let color = if enabled {
+        ui.style().interact(&response).fg_stroke.color
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    paint_ui_icon(
+        ui.painter(),
+        tab_icon_rect(response.rect, icon),
+        icon,
+        color,
+    );
+    response
+}
+
+fn parked_rename_kind(document: &DocumentSession, path: &Path) -> DocumentKind {
+    if document.kind().preview_only() {
+        document.kind()
+    } else {
+        crate::document::detect_document(path, document.source().as_bytes())
+            .unwrap_or(DocumentKind::Text)
+    }
+}

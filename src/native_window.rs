@@ -1,6 +1,6 @@
 //! Access to the native window which currently owns keyboard focus.
 //!
-//! eframe exposes the root window through `Frame`, but its immediate child
+//! eframe exposes the root window through `Frame`, but its deferred child
 //! viewport callback does not carry a `Frame`. Both Wry and rfd only need a
 //! standards-based raw-window handle, so resolve the focused platform window
 //! while running inside that child callback. WebView creation is separately

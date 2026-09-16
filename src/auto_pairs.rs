@@ -18,6 +18,78 @@ impl Default for PairSyntax {
 }
 
 impl PairSyntax {
+    fn raw_fence_at(&self, byte: usize) -> Option<Option<usize>> {
+        let mut node = LinkedNode::new(self.0.root()).leaf_at(byte, Side::After)?;
+        loop {
+            if node.kind() == SyntaxKind::Raw {
+                let mut delimiters = node
+                    .children()
+                    .filter(|child| child.kind() == SyntaxKind::RawDelim);
+                if delimiters.next()?.offset() != byte {
+                    return None;
+                }
+                return Some(delimiters.next().map(|closing| closing.offset()));
+            }
+            node = node.parent()?.clone();
+        }
+    }
+
+    pub(crate) fn newline(&mut self, source: &str, byte: usize) -> Option<(String, usize)> {
+        let line_start = source[..byte].rfind('\n').map_or(0, |at| at + 1);
+        let prefix = &source[line_start..byte];
+        let indent_len = prefix
+            .bytes()
+            .take_while(|b| matches!(b, b' ' | b'\t'))
+            .count();
+        let indent = &prefix[..indent_len];
+        if source[..byte].ends_with('$') && source[byte..].starts_with('$') {
+            self.prepare(source);
+            if self.empty_at(source, byte) {
+                let body = format!("\n{indent}\t");
+                let advance = body.chars().count();
+                return Some((format!("{body}\n{indent}"), advance));
+            }
+        }
+        let last_tick = prefix.rfind('`')?;
+        let fence_start = prefix[..=last_tick].trim_end_matches('`').len();
+        let header = &prefix[fence_start..];
+        let ticks = last_tick + 1 - fence_start;
+        if ticks < 3
+            || !header[ticks..]
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "_-+".contains(c))
+        {
+            return None;
+        }
+        self.prepare(source);
+        let fence = &header[..ticks];
+        let opening = line_start + fence_start;
+        let closing = match self.raw_fence_at(opening) {
+            Some(closing) => closing,
+            None => {
+                // An unfinished fence is an Error node, not a Raw node.
+                // Probe a complete block to validate its syntax context.
+                self.0.edit(byte..byte, &format!("\nx\n{fence}"));
+                if self.raw_fence_at(opening) != Some(Some(byte + 3)) {
+                    return None;
+                }
+                None
+            }
+        };
+        let body = format!("\n{indent}");
+        let advance = body.chars().count();
+        match closing {
+            Some(at) if at == byte => Some((format!("{body}\n{indent}"), advance)),
+            Some(_) => Some((body, advance)),
+            None if byte == source.len()
+                || source[byte..].starts_with(['\n', ')', ']', '}', ',']) =>
+            {
+                Some((format!("{body}\n{indent}{fence}"), advance))
+            }
+            _ => None,
+        }
+    }
+
     fn prepare(&mut self, source: &str) {
         self.0.replace(source);
     }
@@ -152,6 +224,25 @@ impl TextBuffer for PairingBuffer<'_> {
         self.source.delete_char_range(range);
     }
     fn insert_text_at(&mut self, cursor: &mut CCursor, text: &str, limit: usize) {
+        if self.enabled && text == "\n" {
+            let byte = self.source.byte_index_from_char_index(cursor.index).0;
+            if let Some((inserted, advance)) = self.syntax.newline(self.source, byte)
+                && limit.saturating_sub(self.source.chars().count()) >= inserted.chars().count()
+            {
+                self.source.insert_text(&inserted, cursor.index);
+                cursor.index += advance;
+                return;
+            }
+        }
+        // Completing a triple fence is not opening a fourth,
+        // paired single backtick. Its matching fence is inserted on Enter.
+        if self.enabled && text == "`" {
+            let byte = self.source.byte_index_from_char_index(cursor.index).0;
+            if self.source[..byte].ends_with("``") && !self.source[..byte].ends_with("```") {
+                self.source.insert_text_at(cursor, text, limit);
+                return;
+            }
+        }
         let mut chars = text.chars();
         let typed = chars.next();
         if self.enabled
@@ -261,6 +352,92 @@ mod tests {
                 "backspace {input}"
             );
         }
+    }
+
+    #[test]
+    fn enter_expands_fences_and_empty_math_with_the_caret_inside() {
+        for (before, expected) in [
+            ("```tex|", "```tex\n|\n```"),
+            ("```|", "```\n|\n```"),
+            ("  ```typ|", "  ```typ\n  |\n  ```"),
+            ("````latex|", "````latex\n|\n````"),
+            ("```tex|```", "```tex\n|\n```"),
+            ("```tex|\n```", "```tex\n|\n```"),
+            ("#mi(```tex|)", "#mi(```tex\n|\n```)"),
+            ("text ```tex|", "text ```tex\n|\n```"),
+            ("$|$", "$\n\t|\n$"),
+            ("  $|$", "  $\n  \t|\n  $"),
+            ("文 $|$", "文 $\n\t|\n$"),
+        ] {
+            let cursor = before[..before.find('|').unwrap()].chars().count();
+            let expected_cursor = expected[..expected.find('|').unwrap()].chars().count();
+            assert_eq!(
+                typed(&before.replace('|', ""), cursor, "\n"),
+                (expected.replace('|', ""), expected_cursor),
+                "{before}"
+            );
+        }
+    }
+
+    #[test]
+    fn enter_does_not_pair_closing_fences_comments_strings_or_math_contents() {
+        for before in [
+            "```tex\nx\n```|",
+            "// ```tex|",
+            "/*\n```tex|\n*/",
+            "#let x = \"$|$\"",
+            "```tex\n$|$\n```",
+            "$x|$",
+            "\\$|$",
+            "````\n```tex|\n````",
+        ] {
+            let byte = before.find('|').unwrap();
+            let cursor = before[..byte].chars().count();
+            assert_eq!(
+                typed(&before.replace('|', ""), cursor, "\n"),
+                (before.replace('|', "\n"), cursor + 1),
+                "{before}"
+            );
+        }
+    }
+
+    #[test]
+    fn enter_obeys_disabled_pairing_verbatim_input_and_character_limit() {
+        for (enabled, events, limit) in [
+            (false, vec![], usize::MAX),
+            (true, vec![egui::Event::Paste("\n".into())], usize::MAX),
+            (
+                true,
+                vec![egui::Event::Ime(egui::ImeEvent::Commit("\n".into()))],
+                usize::MAX,
+            ),
+            (true, vec![], 3),
+        ] {
+            let mut source = "$$".to_owned();
+            let mut syntax = PairSyntax::default();
+            let mut cursor = CCursor::new(1);
+            PairingBuffer::new(&mut source, &mut syntax, enabled, &events).insert_text_at(
+                &mut cursor,
+                "\n",
+                limit,
+            );
+            assert_eq!(source, "$\n$");
+            assert_eq!(cursor.index.0, 2);
+        }
+    }
+
+    #[test]
+    fn ordinary_enter_does_not_parse() {
+        let mut source = "ordinary text".to_owned();
+        let mut syntax = PairSyntax::default();
+        let mut cursor = CCursor::new(source.chars().count());
+        PairingBuffer::new(&mut source, &mut syntax, true, &[]).insert_text_at(
+            &mut cursor,
+            "\n",
+            usize::MAX,
+        );
+        assert_eq!(source, "ordinary text\n");
+        assert!(syntax.0.text().is_empty());
     }
 
     #[test]
@@ -440,6 +617,47 @@ mod tests {
             cursor,
         );
         assert_eq!(doc.source(), "]");
+    }
+
+    #[test]
+    fn native_enter_after_typed_fence_or_dollar_is_one_undoable_edit() {
+        for (opening, expected, caret) in [
+            ("```tex", "```tex\n\n```", 7),
+            ("$", "$\n\t\n$", 3),
+            ("#mi(```tex", "#mi(```tex\n\n```)", 11),
+        ] {
+            let ctx = egui::Context::default();
+            let mut syntax = PairSyntax::default();
+            let mut doc = DocumentSession::new(WindowSessionId::new(1), "", DocumentKind::Typst);
+            let mut cursor = CCursorRange::one(CCursor::new(0));
+            for ch in opening.chars() {
+                cursor = frame(
+                    &ctx,
+                    &mut doc,
+                    &mut syntax,
+                    vec![egui::Event::Text(ch.to_string())],
+                    true,
+                    cursor,
+                );
+            }
+            let before = doc.source().to_owned();
+            let previous_cursor = cursor;
+            cursor = frame(
+                &ctx,
+                &mut doc,
+                &mut syntax,
+                vec![key(egui::Key::Enter)],
+                true,
+                cursor,
+            );
+            assert_eq!(doc.source(), expected, "{opening}");
+            assert_eq!(cursor.primary.index.0, caret);
+            let undo = doc.history_step(false, cursor).unwrap();
+            assert_eq!(doc.source(), &before);
+            assert_eq!(undo.cursor, previous_cursor);
+            doc.history_step(true, undo.cursor).unwrap();
+            assert_eq!(doc.source(), expected);
+        }
     }
 
     #[test]

@@ -173,6 +173,7 @@ impl PreviewOptions {
             // False tells Tinymist to use standard window/showDocument, which
             // is advertised and handled below.
             "customizedShowDocument": false,
+            "compileStatus": "enable",
         })
     }
 }
@@ -451,6 +452,12 @@ pub struct TinymistDiagnostic {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TinymistEvent {
+    CompileStatus {
+        generation: Generation,
+        path: String,
+        status: CompileStatus,
+        received: Instant,
+    },
     Starting {
         generation: Generation,
     },
@@ -537,10 +544,19 @@ pub enum TinymistEvent {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CompileStatus {
+    Compiling,
+    CompileSuccess,
+    CompileError,
+}
+
 impl TinymistEvent {
     pub fn generation(&self) -> Generation {
         match self {
             Self::Starting { generation }
+            | Self::CompileStatus { generation, .. }
             | Self::Initialized { generation }
             | Self::PreviewReady { generation, .. }
             | Self::ShowDocument { generation, .. }
@@ -2708,6 +2724,26 @@ fn handle_server_notification(
     current_generation: &AtomicU64,
 ) {
     match method {
+        "tinymist/compileStatus" => {
+            #[derive(Deserialize)]
+            struct Report {
+                path: String,
+                status: CompileStatus,
+            }
+            if let Ok(report) = serde_json::from_value::<Report>(params) {
+                emit(
+                    events,
+                    context,
+                    current_generation,
+                    TinymistEvent::CompileStatus {
+                        generation: session.generation,
+                        path: report.path,
+                        status: report.status,
+                        received: Instant::now(),
+                    },
+                );
+            }
+        }
         "textDocument/publishDiagnostics" => {
             let Some(uri) = params.get("uri").and_then(Value::as_str) else {
                 emit(
@@ -3184,6 +3220,7 @@ mod tests {
         assert!(args.contains(&"--no-open"));
         assert_eq!(settings["preview"]["refresh"], "onType");
         assert_eq!(settings["customizedShowDocument"], false);
+        assert_eq!(settings["compileStatus"], "enable");
     }
 
     #[test]
@@ -3367,6 +3404,74 @@ mod tests {
             unsaved.path().to_owned()
         };
         assert!(!private_path.exists());
+    }
+
+    #[test]
+    #[ignore = "requires a real Tinymist executable; set TIPTOPTYP_TEST_TINYMIST to override discovery"]
+    fn real_tinymist_reports_preview_compile_cycles() {
+        let program = std::env::var_os("TIPTOPTYP_TEST_TINYMIST")
+            .map(PathBuf::from)
+            .expect("set TIPTOPTYP_TEST_TINYMIST for this native integration probe");
+        let project = tempfile::tempdir().unwrap();
+        let path = project.path().join("main.typ");
+        fs::write(&path, "= Preview status\nHello").unwrap();
+        let sidecar = TinymistSidecar::new(crate::worker::RepaintTarget::test());
+        let config = TinymistConfig::new(project.path())
+            .with_entry_path(&path)
+            .with_executable(program);
+        let generation = sidecar.start_workspace(config).unwrap();
+        sidecar
+            .did_open(
+                generation,
+                TextDocument::from_path(&path, 1, "= Preview status\nHello").unwrap(),
+            )
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut started = None;
+        let mut elapsed = None;
+        while Instant::now() < deadline && elapsed.is_none() {
+            while let Some(event) = sidecar.try_recv() {
+                match event {
+                    TinymistEvent::CompileStatus {
+                        generation: g,
+                        path,
+                        status,
+                        received,
+                    } => {
+                        assert_eq!(g, generation);
+                        assert_eq!(path, "/main.typ");
+                        match status {
+                            CompileStatus::Compiling => {
+                                started.get_or_insert(received);
+                            }
+                            CompileStatus::CompileSuccess => {
+                                if let Some(start) = started {
+                                    elapsed = Some(received.duration_since(start));
+                                }
+                            }
+                            CompileStatus::CompileError => {
+                                panic!("valid fixture failed to compile")
+                            }
+                        }
+                    }
+                    TinymistEvent::Error {
+                        message,
+                        fatal: true,
+                        ..
+                    } => panic!("{message}"),
+                    _ => {}
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            elapsed.is_some(),
+            "no matching compile start/success notifications"
+        );
+        eprintln!(
+            "Observed Tinymist preview compile cycle: {:?}",
+            elapsed.unwrap()
+        );
     }
 
     #[test]
@@ -4178,6 +4283,8 @@ mod tests {
         let messages = [
             json!({"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}}),
             json!({"jsonrpc":"2.0","id":2,"result":{"staticServerPort":41723}}),
+            json!({"jsonrpc":"2.0", "method":"tinymist/compileStatus", "params":{"path":"/main.typ", "status":"compiling"}}),
+            json!({"jsonrpc":"2.0", "method":"tinymist/compileStatus", "params":{"path":"/main.typ", "status":"compileSuccess", "pageCount":1}}),
             json!({
                 "jsonrpc":"2.0",
                 "method":"textDocument/publishDiagnostics",
@@ -4237,11 +4344,25 @@ mod tests {
         let mut preview_url = None;
         let mut diagnostic = None;
         let mut jump = None;
+        let mut compile_reports = Vec::new();
         while Instant::now() < deadline
-            && (preview_url.is_none() || diagnostic.is_none() || jump.is_none())
+            && (preview_url.is_none()
+                || diagnostic.is_none()
+                || jump.is_none()
+                || compile_reports.len() < 2)
         {
             while let Some(event) = sidecar.try_recv() {
                 match event {
+                    TinymistEvent::CompileStatus {
+                        generation: g,
+                        path,
+                        status,
+                        received,
+                    } => {
+                        assert_eq!(g, generation);
+                        assert_eq!(path, "/main.typ");
+                        compile_reports.push((status, received));
+                    }
                     TinymistEvent::PreviewReady { url, .. } => preview_url = Some(url),
                     TinymistEvent::PublishDiagnostics { diagnostics, .. } => {
                         diagnostic = diagnostics.into_iter().next()
@@ -4256,6 +4377,10 @@ mod tests {
         assert_eq!(preview_url.as_deref(), Some("http://127.0.0.1:41723"));
         assert_eq!(diagnostic.unwrap().message, "fake warning");
         assert_eq!(jump.unwrap().start.line.get(), 4);
+        assert_eq!(compile_reports.len(), 2);
+        assert_eq!(compile_reports[0].0, CompileStatus::Compiling);
+        assert_eq!(compile_reports[1].0, CompileStatus::CompileSuccess);
+        assert!(compile_reports[1].1 >= compile_reports[0].1);
 
         // Add another frame so the shell's line-oriented capture observes the
         // preceding response body even though LSP payloads have no delimiter.

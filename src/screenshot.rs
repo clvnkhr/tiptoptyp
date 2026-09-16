@@ -68,8 +68,13 @@ impl UiCaptureStep {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum UiSnapshotScene {
     Main,
+    Tabs,
+    EmptyWorkspace,
+    TabsPdf,
+    TabsImage,
     StickyContext,
     Folding,
+    MitexDollars,
     WindowColor,
     DelimiterMatch,
     RainbowBrackets,
@@ -108,10 +113,15 @@ pub enum UiSnapshotScene {
 }
 
 impl UiSnapshotScene {
-    pub const ALL: [Self; 38] = [
+    pub const ALL: [Self; 43] = [
         Self::Main,
+        Self::Tabs,
+        Self::EmptyWorkspace,
+        Self::TabsPdf,
+        Self::TabsImage,
         Self::StickyContext,
         Self::Folding,
+        Self::MitexDollars,
         Self::WindowColor,
         Self::DelimiterMatch,
         Self::RainbowBrackets,
@@ -152,8 +162,13 @@ impl UiSnapshotScene {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Main => "main",
+            Self::Tabs => "tabs",
+            Self::EmptyWorkspace => "empty-workspace",
+            Self::TabsPdf => "tabs-pdf",
+            Self::TabsImage => "tabs-image",
             Self::StickyContext => "sticky-context",
             Self::Folding => "folding",
+            Self::MitexDollars => "mitex-dollars",
             Self::WindowColor => "window-color",
             Self::DelimiterMatch => "delimiter-match",
             Self::RainbowBrackets => "rainbow-brackets",
@@ -196,10 +211,15 @@ impl UiSnapshotScene {
     pub const fn viewport_target(self) -> &'static str {
         match self {
             Self::Main
+            | Self::Tabs
+            | Self::EmptyWorkspace
+            | Self::TabsPdf
+            | Self::TabsImage
             | Self::FontCompletion
             | Self::UnicodeCompletion
             | Self::StickyContext
             | Self::Folding
+            | Self::MitexDollars
             | Self::DelimiterMatch
             | Self::RainbowBrackets
             | Self::ProblemsPanel
@@ -245,8 +265,13 @@ impl UiSnapshotScene {
         let value = value.trim();
         let scene = match value {
             "main" => Self::Main,
+            "tabs" => Self::Tabs,
+            "empty-workspace" => Self::EmptyWorkspace,
+            "tabs-pdf" => Self::TabsPdf,
+            "tabs-image" => Self::TabsImage,
             "sticky-context" => Self::StickyContext,
             "folding" => Self::Folding,
+            "mitex-dollars" => Self::MitexDollars,
             "window-color" => Self::WindowColor,
             "delimiter-match" => Self::DelimiterMatch,
             "rainbow-brackets" => Self::RainbowBrackets,

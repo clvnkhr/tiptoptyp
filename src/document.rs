@@ -1,7 +1,7 @@
 use eframe::egui::text::CCursorRange;
 use std::path::Path;
 pub(crate) use tiptoptyp_core::document::{DocumentKey, DocumentKind, DocumentSnapshot};
-pub(crate) type DocumentSession = tiptoptyp_core::document::DocumentSession<CCursorRange>;
+pub(crate) type DocumentSession = tiptoptyp::mitex_document::Document<CCursorRange>;
 pub(crate) type EditorSnapshot = tiptoptyp_core::document::EditorSnapshot<CCursorRange>;
 pub(crate) fn detect_document(path: &Path, bytes: &[u8]) -> Result<DocumentKind, String> {
     // Content signatures take precedence over a misleading extension. In

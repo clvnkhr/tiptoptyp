@@ -5,7 +5,14 @@
 //! source buffer, undo history, compiler, Tinymist process, workspace, and
 //! dirty-close flow never cross session boundaries.
 
-use std::{collections::VecDeque, path::PathBuf};
+use std::{
+    cell::{Ref, RefMut},
+    collections::VecDeque,
+    path::PathBuf,
+};
+
+mod document_host;
+use document_host::DocumentHost;
 
 use eframe::egui;
 
@@ -30,7 +37,7 @@ enum ActiveSession {
 
 struct SecondaryWindow {
     id: u64,
-    editor: EditorApp,
+    editor: DocumentHost,
     activate_once: bool,
 }
 
@@ -59,7 +66,7 @@ fn root_capture_needs_warmup(previous: UiSnapshotScene, next: UiSnapshotScene) -
 /// Application shell which keeps the eframe root editor and all additional
 /// document viewports in the same process and on the same event loop.
 pub(crate) struct AppShell {
-    primary: EditorApp,
+    primary: DocumentHost,
     closing: tiptoptyp_core::closing::CloseCoordinator,
     secondary: Vec<SecondaryWindow>,
     active: ActiveSession,
@@ -96,6 +103,16 @@ impl AppShell {
             snapshot_scene,
         );
         let shared_settings = primary.settings_snapshot();
+        let pending_windows = if crate::performance::take_multi_window_request() {
+            (0..3)
+                .map(|_| PendingWindow {
+                    request: EditorWindowRequest::Open(primary.document_path_for_profile()),
+                    settings: primary.settings_snapshot(),
+                })
+                .collect()
+        } else {
+            VecDeque::new()
+        };
         open_requests.set_repaint_context(context.egui_ctx.clone());
         let mut remaining = VecDeque::from(capture_steps);
         let capture_batch = remaining.pop_front().map(|first| CaptureBatch {
@@ -107,12 +124,12 @@ impl AppShell {
             close_when_finished: captures.closes_after_captures(),
         });
         Self {
-            primary,
+            primary: DocumentHost::new(primary),
             closing: Default::default(),
             secondary: Vec::new(),
             active: ActiveSession::Primary,
             next_session_id: FIRST_SECONDARY_SESSION_ID,
-            pending_windows: VecDeque::new(),
+            pending_windows,
             open_requests,
             native_menu_commands,
             captures,
@@ -135,6 +152,7 @@ impl AppShell {
 
         if let Some(error) = result.error {
             self.primary
+                .borrow_mut()
                 .show_window_notice(format!("UI screenshot batch failed: {error}"));
             if batch.close_when_finished {
                 context.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -147,6 +165,7 @@ impl AppShell {
                 context.send_viewport_cmd(egui::ViewportCommand::Close);
             } else {
                 self.primary
+                    .borrow_mut()
                     .show_window_notice("UI screenshot batch completed".to_owned());
             }
             return;
@@ -160,32 +179,35 @@ impl AppShell {
             .captures
             .queue_step(&next)
             .expect("an active screenshot batch keeps captures enabled");
-        self.primary.set_capture_step(&next, context);
+        self.primary.borrow_mut().set_capture_step(&next, context);
         batch.active_request = request;
         batch.active_scene = next.scene;
         self.capture_batch = Some(batch);
         context.request_repaint();
     }
 
-    fn active_editor_mut(&mut self) -> &mut EditorApp {
+    fn active_editor_mut(&self) -> RefMut<'_, EditorApp> {
         match self.active {
-            ActiveSession::Primary => &mut self.primary,
-            ActiveSession::Secondary(id) => self
-                .secondary
-                .iter_mut()
-                .find(|window| window.id == id)
-                .map_or(&mut self.primary, |window| &mut window.editor),
-        }
-    }
-
-    fn active_editor(&self) -> &EditorApp {
-        match self.active {
-            ActiveSession::Primary => &self.primary,
+            ActiveSession::Primary => self.primary.borrow_mut(),
             ActiveSession::Secondary(id) => self
                 .secondary
                 .iter()
                 .find(|window| window.id == id)
-                .map_or(&self.primary, |window| &window.editor),
+                .map_or_else(
+                    || self.primary.borrow_mut(),
+                    |window| window.editor.borrow_mut(),
+                ),
+        }
+    }
+
+    fn active_editor(&self) -> Ref<'_, EditorApp> {
+        match self.active {
+            ActiveSession::Primary => self.primary.borrow(),
+            ActiveSession::Secondary(id) => self
+                .secondary
+                .iter()
+                .find(|window| window.id == id)
+                .map_or_else(|| self.primary.borrow(), |window| window.editor.borrow()),
         }
     }
 
@@ -217,6 +239,7 @@ impl AppShell {
                     }
                     self.active_editor_mut()
                         .enqueue_native_menu_command(command);
+                    context.request_repaint_of(self.active_viewport());
                 }
                 ProcessRequestAction::Reopen => self.reopen_document_window(context),
                 ProcessRequestAction::CloseProcess => {
@@ -231,9 +254,9 @@ impl AppShell {
         while let Ok(path) = self.open_requests.try_recv() {
             if !reused_primary
                 && self.secondary.is_empty()
-                && self.primary.can_reuse_for_external_open()
+                && self.primary.borrow().can_reuse_for_external_open()
             {
-                self.primary.open_external_path(path);
+                self.primary.borrow_mut().open_external_path(path);
                 self.show_primary(context);
                 reused_primary = true;
             } else {
@@ -274,7 +297,7 @@ impl AppShell {
             );
             self.secondary.push(SecondaryWindow {
                 id,
-                editor,
+                editor: DocumentHost::new(editor),
                 activate_once: true,
             });
             self.active = ActiveSession::Secondary(id);
@@ -285,11 +308,11 @@ impl AppShell {
         // Apply independent edits from every owner; the active owner wins only
         // when two pending edits change the same field.
         if self.active != ActiveSession::Primary {
-            self.primary.merge_settings_update(target);
+            self.primary.borrow_mut().merge_settings_update(target);
         }
         for window in &mut self.secondary {
             if self.active != ActiveSession::Secondary(window.id) {
-                window.editor.merge_settings_update(target);
+                window.editor.borrow_mut().merge_settings_update(target);
             }
         }
         self.active_editor_mut().merge_settings_update(target);
@@ -298,20 +321,20 @@ impl AppShell {
     fn merge_all_session_history(&self, settings: &mut AppSettings, active_settings: &AppSettings) {
         let mut inactive_settings = Vec::with_capacity(self.secondary.len());
         if self.active != ActiveSession::Primary {
-            inactive_settings.push(self.primary.settings_snapshot());
+            inactive_settings.push(self.primary.borrow().settings_snapshot());
         }
         for window in &self.secondary {
             if self.active != ActiveSession::Secondary(window.id) {
-                inactive_settings.push(window.editor.settings_snapshot());
+                inactive_settings.push(window.editor.borrow().settings_snapshot());
             }
         }
         merge_session_histories(settings, inactive_settings.iter(), active_settings);
     }
 
     fn synchronize_workspace_history_removals(&mut self) {
-        let mut removals = self.primary.take_workspace_history_removals();
+        let mut removals = self.primary.borrow_mut().take_workspace_history_removals();
         for window in &mut self.secondary {
-            removals.extend(window.editor.take_workspace_history_removals());
+            removals.extend(window.editor.borrow_mut().take_workspace_history_removals());
         }
         removals.sort();
         removals.dedup();
@@ -321,9 +344,9 @@ impl AppShell {
         for root in &removals {
             self.shared_settings.forget_workspace(root);
         }
-        self.primary.apply_workspace_history_removals(&removals);
+        self.primary.forget_workspaces(&removals);
         for window in &mut self.secondary {
-            window.editor.apply_workspace_history_removals(&removals);
+            window.editor.forget_workspaces(&removals);
         }
     }
 
@@ -331,11 +354,11 @@ impl AppShell {
         // A removal is an explicit global action. Apply it to every session
         // before MRU merging so a stale sibling list cannot resurrect it.
         self.synchronize_workspace_history_removals();
-        if !self.primary.has_settings_update()
+        if !self.primary.borrow().has_settings_update()
             && !self
                 .secondary
                 .iter()
-                .any(|window| window.editor.has_settings_update())
+                .any(|window| window.editor.borrow().has_settings_update())
         {
             return;
         }
@@ -347,57 +370,57 @@ impl AppShell {
         self.merge_pending_settings(&mut settings);
         self.merge_all_session_history(&mut settings, &active_settings);
         self.shared_settings = settings.clone();
-        self.primary
-            .apply_shared_settings(settings.clone(), context);
+        self.primary.queue_settings(settings.clone());
+        context.request_repaint_of(egui::ViewportId::ROOT);
         for window in &mut self.secondary {
-            window
-                .editor
-                .apply_shared_settings(settings.clone(), context);
+            window.editor.queue_settings(settings.clone());
+            context.request_repaint_of(window.viewport_id());
         }
     }
 
     fn document_keys(&self) -> Vec<crate::document::DocumentKey> {
-        std::iter::once(self.primary.document_key())
+        std::iter::once(self.primary.borrow().document_key())
             .chain(
                 self.secondary
                     .iter()
-                    .map(|window| window.editor.document_key()),
+                    .map(|window| window.editor.borrow().document_key()),
             )
             .collect()
     }
     fn cancel_process_close(&mut self) {
         self.closing.cancel();
         self.quit_requested = false;
-        self.primary.finish_process_close(false);
+        self.primary.borrow_mut().finish_process_close(false);
         for window in &mut self.secondary {
-            window.editor.finish_process_close(false);
+            window.editor.borrow_mut().finish_process_close(false);
         }
     }
     fn request_next_close(&mut self, context: &egui::Context) {
         let Some(key) = self.closing.current() else {
             return;
         };
-        let started = if self.primary.document_key().owner == key.owner {
-            if self.primary.is_dirty_for_close() {
+        let started = if self.primary.borrow().document_key().owner == key.owner {
+            if self.primary.borrow().is_dirty_for_close() {
                 self.show_primary(context);
             }
             self.active = ActiveSession::Primary;
             context.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
-            self.primary.begin_process_close()
+            self.primary.borrow_mut().begin_process_close()
         } else if let Some(window) = self
             .secondary
             .iter_mut()
-            .find(|window| window.editor.document_key().owner == key.owner)
+            .find(|window| window.editor.borrow().document_key().owner == key.owner)
         {
             self.active = ActiveSession::Secondary(window.id);
             window.activate_once = true;
-            window.editor.begin_process_close()
+            context.request_repaint_of(window.viewport_id());
+            window.editor.borrow_mut().begin_process_close()
         } else {
             false
         };
         if !started {
             self.cancel_process_close();
-            self.primary.show_window_notice(
+            self.primary.borrow_mut().show_window_notice(
                 "Closing canceled: finish the active document operation and try again".to_owned(),
             );
         }
@@ -424,18 +447,18 @@ impl AppShell {
         if self.closing.is_active() && self.closing.current().is_none() {
             self.cancel_process_close();
             context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.primary.show_window_notice(
+            self.primary.borrow_mut().show_window_notice(
                 "Closing canceled because a document changed after confirmation".to_owned(),
             );
             return;
         }
         if !self.closing.is_active()
             && !crate::worker::has_active_operations()
-            && !self.primary.is_dirty_for_close()
+            && !self.primary.borrow().is_dirty_for_close()
             && !self
                 .secondary
                 .iter()
-                .any(|window| window.editor.is_dirty_for_close())
+                .any(|window| window.editor.borrow().is_dirty_for_close())
         {
             return;
         }
@@ -452,8 +475,9 @@ impl AppShell {
                 self.launch_mode,
                 self.quit_requested,
             )
-            || self.primary.process_close_pending()
-            || (self.primary.is_dirty_for_close() && !self.primary.close_accepted())
+            || self.primary.borrow().process_close_pending()
+            || (self.primary.borrow().is_dirty_for_close()
+                && !self.primary.borrow().close_accepted())
         {
             return;
         }
@@ -466,7 +490,7 @@ impl AppShell {
             egui::ViewportId::ROOT,
             egui::ViewportCommand::Visible(false),
         );
-        self.primary.finish_window_close();
+        self.primary.borrow_mut().finish_window_close();
         self.primary_visible = false;
         if self.active == ActiveSession::Primary
             && let Some(window) = self.secondary.last()
@@ -476,7 +500,7 @@ impl AppShell {
     }
 
     fn show_primary(&mut self, context: &egui::Context) {
-        self.primary.request_window_resume();
+        self.primary.borrow_mut().request_window_resume();
         if !self.primary_visible {
             context
                 .send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Visible(true));
@@ -571,22 +595,22 @@ impl AppShell {
             }
             return;
         };
-        let editor = if self.primary.document_key().owner == requested.owner {
+        let editor = if self.primary.borrow().document_key().owner == requested.owner {
             Some(&self.primary)
         } else {
             self.secondary
                 .iter()
-                .find(|window| window.editor.document_key().owner == requested.owner)
+                .find(|window| window.editor.borrow().document_key().owner == requested.owner)
                 .map(|window| &window.editor)
         };
         let Some(editor) = editor else {
             self.cancel_process_close();
             return;
         };
-        let Some(accepted) = editor.process_close_answer() else {
+        let Some(accepted) = editor.borrow().process_close_answer() else {
             return;
         };
-        let key = editor.document_key();
+        let key = editor.borrow().document_key();
         if !accepted || !self.closing.accept(requested, key) {
             self.cancel_process_close();
         } else if self.closing.current().is_some() {
@@ -597,72 +621,78 @@ impl AppShell {
     }
     fn commit_process_close(&mut self, context: &egui::Context) {
         let keys = self.document_keys();
-        if !self.closing.ready(&keys) || !self.pending_windows.is_empty() {
+        if !self.closing.ready(&keys)
+            || !self.pending_windows.is_empty()
+            || !self.primary.borrow().close_accepted()
+            || self
+                .secondary
+                .iter()
+                .any(|window| !window.editor.borrow().close_accepted())
+        {
             self.cancel_process_close();
-            self.primary.show_window_notice(
+            self.primary.borrow_mut().show_window_notice(
                 "Closing canceled because a document changed during confirmation".to_owned(),
             );
         } else if self
             .closing
             .can_exit(&keys, crate::worker::has_active_operations())
         {
-            self.primary.finish_process_close(true);
+            self.primary.borrow_mut().finish_process_close(true);
             context.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
         } else {
-            self.primary.show_window_notice(
+            self.primary.borrow_mut().show_window_notice(
                 "Waiting for the active background operation before closing".to_owned(),
             );
         }
     }
 
-    fn show_secondary_windows(&mut self, context: &egui::Context, frame: &mut eframe::Frame) {
-        let mut closed = Vec::new();
-        let mut newly_active = None;
-        let pending_windows = &mut self.pending_windows;
+    fn collect_secondary_events(&mut self) {
+        for window in &mut self.secondary {
+            Self::collect_window_request_from(
+                &mut self.pending_windows,
+                &mut window.editor.borrow_mut(),
+            );
+        }
+        self.secondary.retain(|window| !window.editor.closed());
+        self.active = surviving_active_session(
+            self.active,
+            self.primary_visible,
+            self.secondary.iter().map(|window| window.id),
+        );
+    }
 
+    fn show_secondary_windows(&mut self, context: &egui::Context) {
         for window in &mut self.secondary {
             let viewport_id = window.viewport_id();
             let activate = std::mem::take(&mut window.activate_once);
-            let builder = document_viewport_builder(window.editor.window_title(), activate);
-            let mut close_accepted = false;
-            let mut focused = false;
-            crate::viewport_fonts::show_immediate(context, viewport_id, builder, |ui, _class| {
-                let close_requested = ui.ctx().input(|input| input.viewport().close_requested());
-                window.editor.ui_in_window(ui, frame);
-                focused = crate::app::owns_focused_input_viewport(ui.ctx());
-                close_accepted = window.editor.close_accepted()
-                    || (close_requested && !window.editor.is_dirty_for_close());
-            });
-            if focused {
-                newly_active = Some(window.id);
-            }
-            Self::collect_window_request_from(pending_windows, &mut window.editor);
-            if close_accepted && !window.editor.process_close_pending() {
-                closed.push(window.id);
-            }
-        }
-
-        if let Some(id) = newly_active {
-            self.active = ActiveSession::Secondary(id);
-        }
-        if !closed.is_empty() {
-            self.secondary.retain(|window| !closed.contains(&window.id));
-            self.active = surviving_active_session(
-                self.active,
-                self.primary_visible,
-                self.secondary.iter().map(|window| window.id),
+            let builder =
+                document_viewport_builder(window.editor.borrow().window_title(), activate);
+            let token = window.editor.token();
+            crate::viewport_fonts::show_deferred(
+                context,
+                viewport_id,
+                builder,
+                move |ui, _class| {
+                    token.paint(ui);
+                },
             );
+        }
+    }
+
+    fn active_viewport(&self) -> egui::ViewportId {
+        match self.active {
+            ActiveSession::Primary => egui::ViewportId::ROOT,
+            ActiveSession::Secondary(id) => document_viewport_id(id),
         }
     }
 }
 
 impl eframe::App for AppShell {
     fn logic(&mut self, context: &egui::Context, frame: &mut eframe::Frame) {
-        if self.primary_visible {
-            return;
-        }
         // eframe skips ui entirely when the root and all children are hidden.
         // This path must neither paint nor consume the previous frame's input.
+        self.primary.apply_settings(context);
+        self.collect_secondary_events();
         self.refresh_active_window(context);
         self.dispatch_process_requests(context);
         self.guard_process_close(context);
@@ -670,9 +700,17 @@ impl eframe::App for AppShell {
         if !completions.is_empty() {
             self.active_editor_mut()
                 .show_window_notice(completions.join("\n"));
+            context.request_repaint_of(self.active_viewport());
         }
-        self.primary.hidden_host_logic(context, frame);
-        Self::collect_window_request_from(&mut self.pending_windows, &mut self.primary);
+        if !self.primary_visible {
+            self.primary
+                .borrow_mut()
+                .hidden_host_logic(context, Some(frame));
+        }
+        Self::collect_window_request_from(
+            &mut self.pending_windows,
+            &mut self.primary.borrow_mut(),
+        );
         if !self.primary_visible
             && self.secondary.is_empty()
             && let Some(pending) = self.pending_windows.pop_front()
@@ -680,10 +718,12 @@ impl eframe::App for AppShell {
             // A file dialog or Settings shortcut can finish after the last
             // document closes. Reuse the dormant root; creating an immediate
             // secondary here would require a UI pass that cannot yet run.
-            self.primary.reuse_dormant_window(pending.request);
+            self.primary
+                .borrow_mut()
+                .reuse_dormant_window(pending.request);
             self.show_primary(context);
         }
-        if self.primary.needs_visible_window() {
+        if self.primary.borrow().needs_visible_window() {
             self.show_primary(context);
         }
         self.poll_process_close(context);
@@ -697,37 +737,36 @@ impl eframe::App for AppShell {
         if crate::performance::take_no_window_request() {
             self.retire_primary_window(&context);
         }
-        self.refresh_active_window(&context);
-        let completions = crate::worker::take_detached_completions();
-        if !completions.is_empty() {
-            self.active_editor_mut()
-                .show_window_notice(completions.join("\n"));
-        }
         self.advance_capture_batch(&context);
-        self.dispatch_process_requests(&context);
-        self.guard_process_close(&context);
         let primary_close_requested = context.input(|input| input.viewport().close_requested());
         if self.primary_visible {
-            self.primary.ui_in_window(ui, frame);
+            self.primary.borrow_mut().ui_in_window(ui, Some(frame));
         } else {
-            self.primary.hidden_host_ui(&context, frame);
-            if self.primary.needs_visible_window() {
+            self.primary
+                .borrow_mut()
+                .hidden_host_ui(&context, Some(frame));
+            if self.primary.borrow().needs_visible_window() {
                 self.show_primary(&context);
             }
         }
         if self.primary_visible && crate::app::owns_focused_input_viewport(&context) {
             self.active = ActiveSession::Primary;
         }
-        Self::collect_window_request_from(&mut self.pending_windows, &mut self.primary);
+        Self::collect_window_request_from(
+            &mut self.pending_windows,
+            &mut self.primary.borrow_mut(),
+        );
         let primary_was_visible = self.primary_visible;
         self.finish_primary_window_close(&context, primary_close_requested);
         if primary_was_visible && !self.primary_visible {
             // Register (but do not show) Settings on the last visible pass,
             // so the no-window logic path can reveal this existing viewport.
-            self.primary.register_dormant_settings(&context, frame);
+            self.primary
+                .borrow_mut()
+                .register_dormant_settings(&context, Some(frame));
         }
-        self.show_secondary_windows(&context, frame);
         self.open_pending_windows(&context);
+        self.show_secondary_windows(&context);
         self.poll_process_close(&context);
         self.update_native_menu(&context);
     }
@@ -744,15 +783,18 @@ impl eframe::App for AppShell {
     }
 
     fn auto_save_interval(&self) -> std::time::Duration {
-        self.primary.auto_save_interval()
+        self.primary.borrow().auto_save_interval()
     }
 
     fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
-        self.primary.clear_color(visuals)
+        self.primary.borrow().clear_color(visuals)
     }
 
     fn persist_egui_memory(&self) -> bool {
-        shell_persists_egui_memory(self.launch_mode, self.primary.persist_egui_memory())
+        shell_persists_egui_memory(
+            self.launch_mode,
+            self.primary.borrow().persist_egui_memory(),
+        )
     }
 
     fn raw_input_hook(&mut self, context: &egui::Context, raw_input: &mut egui::RawInput) {
@@ -770,7 +812,10 @@ fn document_viewport_builder(title: String, activate: bool) -> egui::ViewportBui
         .with_title(title)
         .with_inner_size(theme::METRICS.chrome.main_size)
         .with_min_inner_size(theme::METRICS.chrome.main_min_size)
-        .with_transparent(true)
+        // New document viewports need an opaque AppKit backing, like
+        // Settings. They never use window alpha; their popup children do.
+        .with_transparent(false)
+        .with_has_shadow(true)
         .with_fullsize_content_view(true)
         .with_title_shown(false)
         .with_titlebar_shown(false);
@@ -888,19 +933,10 @@ fn merge_session_histories<'a>(
                 .entry(workspace.clone())
                 .or_insert_with(|| file.clone());
         }
-        for (workspace, file) in &session.preview_files {
-            target
-                .preview_files
-                .entry(workspace.clone())
-                .or_insert_with(|| file.clone());
-        }
     }
     target
         .last_opened_files
         .extend(active_session.last_opened_files.clone());
-    target
-        .preview_files
-        .extend(active_session.preview_files.clone());
 }
 
 fn persist_shell_settings(
@@ -923,6 +959,109 @@ mod tests {
     use eframe::App as _;
 
     #[test]
+    fn native_command_wakes_and_executes_only_its_deferred_document_owner() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        context.set_embed_viewports(false);
+        let primary = EditorApp::dormant_for_tests(&context, directory.path().into());
+        let shared_settings = primary.settings_snapshot();
+        let (_, open_requests) = crate::open_requests::channel();
+        let (sender, native_menu_commands) = crate::native_menu::channel();
+        let mut shell = AppShell {
+            primary: DocumentHost::new(primary),
+            shared_settings,
+            open_requests,
+            native_menu_commands,
+            closing: Default::default(),
+            secondary: Vec::new(),
+            active: ActiveSession::Primary,
+            next_session_id: 3,
+            pending_windows: VecDeque::new(),
+            captures: CaptureController::disabled_for_tests(),
+            capture_batch: None,
+            launch_mode: LaunchMode::Interactive,
+            primary_visible: true,
+            quit_requested: false,
+        };
+        let mut raw = egui::RawInput::default();
+        raw.viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .unwrap()
+            .focused = Some(false);
+        for id in [1, 2] {
+            let viewport = document_viewport_id(id);
+            shell.secondary.push(SecondaryWindow {
+                id,
+                activate_once: false,
+                editor: DocumentHost::new(EditorApp::dormant_window_for_tests(
+                    &context,
+                    directory.path().into(),
+                    viewport,
+                )),
+            });
+            raw.viewports.insert(
+                viewport,
+                egui::ViewportInfo {
+                    parent: Some(egui::ViewportId::ROOT),
+                    focused: Some(id == 1),
+                    ..Default::default()
+                },
+            );
+        }
+        for _ in 0..3 {
+            for id in [
+                egui::ViewportId::ROOT,
+                document_viewport_id(1),
+                document_viewport_id(2),
+            ] {
+                raw.viewport_id = id;
+                context
+                    .run_ui(raw.clone(), |_| {})
+                    .drop_without_applying_deltas();
+            }
+        }
+        raw.viewport_id = egui::ViewportId::ROOT;
+        let output = context.run_ui(raw.clone(), |ui| shell.show_secondary_windows(ui.ctx()));
+        let callback = output.viewport_output[&document_viewport_id(1)]
+            .viewport_ui_cb
+            .clone()
+            .unwrap();
+        output.drop_without_applying_deltas();
+        sender
+            .send(NativeMenuRequest::Command(AppCommand::NewWindow))
+            .unwrap();
+        let _ = context.run_logic(&raw, |context| {
+            shell.logic(context, &mut eframe::Frame::_new_kittest())
+        });
+        assert_eq!(shell.active, ActiveSession::Secondary(1));
+        assert!(context.has_requested_repaint_for(&document_viewport_id(1)));
+        assert!(
+            shell.pending_windows.is_empty(),
+            "menu must wait for owner input context"
+        );
+        raw.viewport_id = document_viewport_id(1);
+        context
+            .run_ui(raw, |ui| callback(ui))
+            .drop_without_applying_deltas();
+        shell.collect_secondary_events();
+        assert_eq!(shell.pending_windows.len(), 1);
+        assert!(shell.primary.borrow_mut().take_window_request().is_none());
+        assert!(
+            shell.secondary[1]
+                .editor
+                .borrow_mut()
+                .take_window_request()
+                .is_none()
+        );
+        shell.collect_secondary_events();
+        assert_eq!(
+            shell.pending_windows.len(),
+            1,
+            "native command must be consumed once"
+        );
+    }
+
+    #[test]
     fn no_window_logic_reopens_documents_and_settings_without_an_editor_paint() {
         let directory = tempfile::tempdir().unwrap();
         let context = egui::Context::default();
@@ -931,7 +1070,7 @@ mod tests {
         let (_open_sender, open_requests) = crate::open_requests::channel();
         let (menu_sender, native_menu_commands) = crate::native_menu::channel();
         let mut shell = AppShell {
-            primary,
+            primary: DocumentHost::new(primary),
             shared_settings,
             open_requests,
             native_menu_commands,
@@ -961,7 +1100,7 @@ mod tests {
         }
         let _ = context.run_logic(&raw, |ctx| shell.logic(ctx, &mut frame));
         assert!(!shell.primary_visible);
-        assert!(!shell.primary.needs_visible_window());
+        assert!(!shell.primary.borrow().needs_visible_window());
         menu_sender
             .send(NativeMenuRequest::Command(AppCommand::Settings))
             .unwrap();
@@ -978,12 +1117,12 @@ mod tests {
             NativeMenuRequest::Reopen,
             NativeMenuRequest::Command(AppCommand::NewWindow),
         ] {
-            shell.primary.finish_window_close();
+            shell.primary.borrow_mut().finish_window_close();
             shell.primary_visible = false;
             menu_sender.send(request).unwrap();
             let output = context.run_logic(&raw, |ctx| shell.logic(ctx, &mut frame));
             assert!(shell.primary_visible);
-            assert!(shell.primary.needs_visible_window());
+            assert!(shell.primary.borrow().needs_visible_window());
             assert!(shell.secondary.is_empty());
             assert!(
                 output.viewport_commands[&egui::ViewportId::ROOT]
@@ -991,7 +1130,7 @@ mod tests {
                     .any(|command| matches!(command, egui::ViewportCommand::Visible(true)))
             );
         }
-        shell.primary.finish_window_close();
+        shell.primary.borrow_mut().finish_window_close();
         shell.primary_visible = false;
         menu_sender
             .send(NativeMenuRequest::Command(AppCommand::Open))
@@ -999,7 +1138,7 @@ mod tests {
         // Test routing without launching a native picker in the headless suite.
         let _ = context.run_logic(&raw, |ctx| shell.dispatch_process_requests(ctx));
         assert!(shell.primary_visible);
-        assert!(shell.primary.needs_visible_window());
+        assert!(shell.primary.borrow().needs_visible_window());
     }
 
     #[test]
@@ -1256,6 +1395,10 @@ mod tests {
         let existing = document_viewport_builder("existing".to_owned(), false);
         assert_eq!(first.active, Some(true));
         assert_eq!(existing.active, None);
+        assert_eq!(first.transparent, Some(false));
+        assert_eq!(existing.transparent, Some(false));
+        assert_eq!(first.has_shadow, Some(true));
+        assert_eq!(existing.has_shadow, Some(true));
     }
 
     #[test]
@@ -1270,25 +1413,16 @@ mod tests {
         shared
             .last_opened_files
             .insert("/shared".to_owned(), "/shared/from-baseline.typ".to_owned());
-        shared
-            .preview_files
-            .insert("/shared".to_owned(), "/shared/baseline-main.typ".to_owned());
 
         let mut inactive = AppSettings::default();
         inactive
             .last_opened_files
             .insert("/shared".to_owned(), "/shared/from-inactive.typ".to_owned());
-        inactive
-            .preview_files
-            .insert("/shared".to_owned(), "/shared/inactive-main.typ".to_owned());
 
         let mut active = AppSettings::default();
         active
             .last_opened_files
             .insert("/shared".to_owned(), "/shared/from-active.typ".to_owned());
-        active
-            .preview_files
-            .insert("/shared".to_owned(), "/shared/active-main.typ".to_owned());
 
         merge_session_histories(&mut shared, [&inactive], &active);
 
@@ -1296,7 +1430,6 @@ mod tests {
             shared.last_opened_files["/shared"],
             "/shared/from-active.typ"
         );
-        assert_eq!(shared.preview_files["/shared"], "/shared/active-main.typ");
     }
 
     #[test]
@@ -1314,10 +1447,6 @@ mod tests {
             last_opened_files: std::collections::BTreeMap::from([(
                 "/inactive".to_owned(),
                 "/inactive/open.typ".to_owned(),
-            )]),
-            preview_files: std::collections::BTreeMap::from([(
-                "/inactive".to_owned(),
-                "/inactive/main.typ".to_owned(),
             )]),
             ..AppSettings::default()
         };
@@ -1337,7 +1466,6 @@ mod tests {
             ["/active", "/shared", "/baseline", "/inactive"]
         );
         assert_eq!(shared.last_opened_files["/inactive"], "/inactive/open.typ");
-        assert_eq!(shared.preview_files["/inactive"], "/inactive/main.typ");
         assert_eq!(shared.last_opened_files["/baseline"], "/baseline/open.typ");
     }
 }

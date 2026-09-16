@@ -85,3 +85,38 @@ at 3.29–3.77 ms, and cached projection lookup at 10–13 ns per call (10,000 c
 These are in-process wall times, excluding font layout, painting, input dispatch
 and GPU work—not scroll FPS or total toggle latency. Tests separately assert
 cache identity and source-coordinate invariants instead of asserting timings.
+
+## Edit-frame correctness — 2026-09-16 (161/162)
+
+TextEdit invokes its layouter again during each text mutation, before the
+document revision is committed. Previously that layout returned an unfolded
+galley whenever text differed from the fold snapshot. It both painted expanded
+lines for a frame and let TextEdit scroll the caret using expanded coordinates.
+The following folded frame then used a different vertical coordinate system.
+
+The layouter now translates unaffected regions through the changed source range
+immediately, including Unicode scalar offsets and inserted/deleted lines. It
+reveals touched regions, never applies stale ranges, and does not parse syntax
+inside the layout callback. The next revision's shared structural index remains
+authoritative. Unchanged galley identity still returns the cached projection.
+
+Explicit source destinations are installed before TextEdit runs. This prevents
+the old caret from revealing another collapsed region after the destination's
+layout has already been computed. Tests exercise the real editor's queued
+selection path, jumping both into and past folds. A TextEdit/ScrollArea harness
+also inspects each typing frame below a 100-line fold, rather than merely
+checking the settled repaint.
+
+The unchanged optimized folding microbenchmark was run before and after with
+the same 500-function fixture, 14-point monospace font, 600-point width and
+10,000 cache lookups (macOS 14.6.1 ARM64, Rust 1.96.0, release profile). Baseline:
+5,457 µs index, 3,743 µs cold projection, 13 ns mean cache lookup. After:
+5,451 µs, 3,296 µs, 10 ns respectively. Single runs show no evident regression
+in this workload, not a speedup or typing-latency result; the edit-time remapping
+path is covered by deterministic geometry tests, not this timing probe.
+Logs and metadata: `.tiptoptyp/profiles/folding-161-162/`.
+
+Fresh release framebuffer inspected:
+`.tiptoptyp/screenshots/agent-review/1789550147872-0001-main-folding.png`.
+Fold markers, source line numbers, wrapping and gutter alignment remain intact.
+The transient editing bug is verified by input-frame tests, not a static image.

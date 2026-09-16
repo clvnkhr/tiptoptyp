@@ -121,6 +121,18 @@ impl EditorApp {
             find_next = true;
         }
 
+        self.apply_find_actions(ui.ctx(), find_previous, find_next, replace_one, replace_all);
+    }
+
+    pub(super) fn apply_find_actions(
+        &mut self,
+        context: &egui::Context,
+        find_previous: bool,
+        find_next: bool,
+        replace_one: bool,
+        replace_all: bool,
+    ) {
+        let search_revision = self.document.key();
         if find_previous {
             self.pending_editor_selection = self
                 .search
@@ -147,7 +159,7 @@ impl EditorApp {
         }
         if replace_one {
             let before = self.document.source().clone();
-            let snapshot = self.editor_snapshot(ui.ctx());
+            let snapshot = self.editor_snapshot(context);
             let replaced = self.document.edit(snapshot.cursor, |source| {
                 self.search.replace_one(
                     source,
@@ -170,7 +182,7 @@ impl EditorApp {
         }
         if replace_all {
             let before = self.document.source().clone();
-            let snapshot = self.editor_snapshot(ui.ctx());
+            let snapshot = self.editor_snapshot(context);
             let count = self.document.edit(snapshot.cursor, |source| {
                 self.search.replace_all(
                     source,
@@ -204,7 +216,7 @@ impl EditorApp {
                 .cursor
                 .set_char_range(Some(CCursorRange::one(CCursor::new(0))));
             state.store(ui.ctx(), source_editor_id(ui.ctx()));
-            self.document.reset_editor_history = false;
+            self.document.set_history_reset(false);
         }
         self.prepare_editor_data();
         let source_metrics = self.editor_data.source_metrics();
@@ -226,16 +238,8 @@ impl EditorApp {
         let line_numbers =
             sticky_context_snapshot || folding_snapshot || self.settings.line_numbers;
         let git_gutter = self.git_editor.has_gutter(self.document.path().as_deref());
-        let line_number_width = line_numbers.then(|| {
-            ui.painter()
-                .layout_no_wrap(
-                    line_count.to_string(),
-                    theme::annotation_font(),
-                    ui.visuals().weak_text_color(),
-                )
-                .size()
-                .x
-        });
+        let line_number_width =
+            line_numbers.then(|| line_number_column_width(ui, line_count, &theme::editor_font()));
         let gutter_width = editor_gutter_width(line_number_width, git_gutter);
         let dark_mode = ui.visuals().dark_mode;
         let document_kind = self.document.kind();
@@ -291,11 +295,22 @@ impl EditorApp {
         };
         let completion_edit_triggered = document_kind.is_typst()
             && ui.input(|input| completion_requested_after_events(&input.events));
-        let snapshot_before_edit = self.editor_snapshot(ui.ctx());
         if let Some(selection) = &self.pending_editor_selection {
             self.folding.reveal(selection.start);
             self.folding.reveal(selection.end);
+            // Install explicit destinations before TextEdit handles input and
+            // scrolls. Its old caret may lie inside a still-collapsed region;
+            // revealing that stale caret after layout changes the coordinates
+            // underneath the pending jump.
+            let id = source_editor_id(ui.ctx());
+            let mut state = egui::text_edit::TextEditState::load(ui.ctx(), id).unwrap_or_default();
+            state.cursor.set_char_range(Some(CCursorRange::two(
+                CCursor::new(selection.start),
+                CCursor::new(selection.end),
+            )));
+            state.store(ui.ctx(), id);
         }
+        let snapshot_before_edit = self.editor_snapshot(ui.ctx());
         self.highlighter
             .set_rainbow_brackets(self.settings.rainbow_brackets);
         let auto_pair_enabled = self.settings.auto_pair_delimiters && document_kind.is_typst();
@@ -336,7 +351,7 @@ impl EditorApp {
         };
 
         let scroll_area = egui::ScrollArea::new([!line_wrap, true])
-            .id_salt("source-editor-scroll")
+            .id_salt(("source-editor-scroll", self.tabs.active_id()))
             .auto_shrink([false, false]);
         let scroll_area = if let Some(offset) = snapshot_scroll_offset {
             scroll_area.vertical_scroll_offset(offset)
@@ -528,7 +543,7 @@ impl EditorApp {
                 self.diagnostic_tooltip = Some(tooltip);
             }
             if line_numbers {
-                paint_line_numbers(ui, &output, &line_rows);
+                paint_line_numbers(ui, &output, &line_rows, theme::editor_font());
                 let gutter_clicked =
                     paint_fold_controls(ui, &output, &line_rows, folding, git_gutter);
                 let marker_clicked = paint_fold_markers(
@@ -934,6 +949,7 @@ impl EditorApp {
             if changed
                 && completion_edit_triggered
                 && let Some(mut previous) = previous_completion
+                && (previous.local || self.document.config().is_none())
                 && let Some(items) = crate::completion::rebase(
                     &previous.all_items,
                     &previous.source,
@@ -950,6 +966,7 @@ impl EditorApp {
                 );
                 previous.source = self.document.source().clone();
                 previous.cursor = cursor;
+                previous.source_cursor = cursor;
                 previous.version = revision_as_i32(self.document.revision());
                 previous.selected = 0;
                 self.editor_completion = Some(previous);
@@ -1087,8 +1104,8 @@ impl EditorApp {
                             for (index, item) in items.iter().enumerate() {
                                 let label = crate::completion::display_label(
                                     item,
-                                    self.document.source(),
-                                    completion.cursor,
+                                    &completion.source,
+                                    completion.source_cursor,
                                 );
                                 let mut response = ui.add_sized(
                                     [ui.available_width(), COMPLETION_ROW_HEIGHT],

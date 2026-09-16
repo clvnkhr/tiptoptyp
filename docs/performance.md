@@ -16,6 +16,7 @@ tools or silently switch to a different sampler when one fails.
 cargo xtask profile --scenario settings
 cargo xtask profile --scenario large --sampler none
 cargo xtask profile --scenario find --warmup 5 --seconds 30 --skip-build
+cargo xtask profile --scenario multi-window --warmup 8 --seconds 8
 cargo xtask profile --help
 ```
 
@@ -26,6 +27,13 @@ prove that it matches the current source or was built with those flags. Omit it
 after code changes. Normal release packaging is unchanged. The Cargo settings
 follow the official [custom-profile documentation](https://doc.rust-lang.org/cargo/reference/profiles.html)
 and rustc's [frame-pointer option](https://doc.rust-lang.org/rustc/codegen-options/index.html#force-frame-pointers).
+
+`--binary PATH` profiles a preserved optimized binary without rebuilding it,
+while retaining its actual path and hash in metadata. This allows interleaved
+baseline/after repeats without modifying the working tree or overwriting the
+current executable. As with `--skip-build`, record that binary's build provenance;
+the runner cannot infer it from the current source. Do not run builds or other
+profiling sessions concurrently with a measured workload.
 
 Every run creates a fresh, Git-ignored `.tiptoptyp/profiles/<unique-run>/` with an
 isolated document/workspace. The existing non-persistent UI QA scenes supply
@@ -49,6 +57,7 @@ repository status/indexing needs a separate, controlled repository workload.
 | `hover` | Function-hover native popup above the editor |
 | `large` | 5,000 Unicode comment lines and 100 definitions, over 300 KB of source; short rendered PDF |
 | `no-window` | Capture the small document, then close it through the retained-root lifecycle before warmup; no document windows remain |
+| `multi-window` | The small isolated document opened in four independent document sessions; three secondary native windows are created once before warmup |
 
 These are **steady-state starting points**, not automated typing, scrolling,
 startup, or huge-PDF benchmarks. For an active workload, choose a longer duration,
@@ -127,6 +136,14 @@ sites are retained, with excess occurrences counted in
 `dropped_repaint_locations`. Free-form repaint reasons are not recorded because
 they can contain application text. This helped distinguish an indefinite
 preview spinner from normal workspace/file polling while Settings was open.
+
+`secondary_repaint_requests` records the same information across secondary
+document passes. Root and secondary counters share the same 64-location bound;
+there are no per-window unbounded maps or per-frame log writes. These include
+delayed requests, not just immediate redraws. Deferred documents repaint on
+their own input, timers and worker notifications; registration in a root pass
+does not execute their editor layout. The native event loop and native webviews
+remain on the UI thread. See [multi-window results](multi-window-audit.md#independent-document-repaints-todo-174).
 
 Settings uses an independently repainted native viewport. Scroll, search, hints,
 and font-preview completion stay local; preference edits, app commands, native

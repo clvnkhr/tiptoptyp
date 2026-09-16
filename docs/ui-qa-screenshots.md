@@ -56,12 +56,17 @@ The accepted scenes and their framebuffer targets are:
 | Scene | Capture target | Themed state |
 | --- | --- | --- |
 | `main` | `main` | Main split editor and preview |
+| `tabs` | `main` | Adjacent title-bar tabs with close controls, a dirty active tab, and the first tab selected as preview source |
+| `empty-workspace` | `main` | No document tabs; workspace Explorer and New/Open remain available |
+| `tabs-pdf` | `main` | PDF tab in the editor pane beside the first tab's Typst preview |
+| `tabs-image` | `main` | Image tab in the editor pane beside the first tab's Typst preview |
 | `window-color` | `logo-color` | Per-window logo background picker |
 | `rainbow-brackets` | `main` | Independent bracket-family color cycles, nesting, and literal exclusions |
 | `bracket-settings` | `settings` | Automatic pairing and per-family rainbow palette controls |
 | `delimiter-match` | `main` | Matching delimiters at the caret without relaying out the source |
 | `sticky-context` | `main` | Scrolled source editor with stacked headings and a multiline function header pinned independently of the caret |
 | `folding` | `main` | Collapsed Typst, Markdown and TeX regions alongside expanded siblings and Git markers, using the unchanged gutter width |
+| `mitex-dollars` | `main` | Active TeX mode toolbar control and inline/display TeX highlighting |
 | `file-menu` | `popup` | File menu |
 | `edit-menu` | `popup` | Edit menu and shortcut alignment |
 | `settings-window` | `settings` | Settings child window |
@@ -83,7 +88,7 @@ The accepted scenes and their framebuffer targets are:
 | `font-completion` | `main` | Fuzzy font completion with a lazily loaded font sample |
 | `settings-font-picker` | `settings` | Searchable font picker and the same live font sample used in hover cards |
 | `git-editor` | `main` | Default-open Git section, badges, line totals, and gutter markers |
-| `git-chunk` | `popup` | Selected chunk compared with the last commit, in the owning editor’s popup |
+| `git-chunk` | `popup` | Selected chunk compared with the last commit, with stage/unstage/revert and navigation buttons and shortcut labels |
 | `git-panel` | `main` | Repository status in the real Explorer Git subpanel using an in-memory fixture |
 | `asset-preview` | `asset-hover` | Image-only asset card |
 | `document-font-selector` | `popup` | Scrollable font selector for a `text(font: …)` argument |

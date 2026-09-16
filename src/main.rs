@@ -42,6 +42,7 @@ mod search;
 mod settings;
 mod shortcuts;
 mod syntax_theme;
+mod tex_completion;
 mod theme;
 mod tinymist;
 mod toolchain;

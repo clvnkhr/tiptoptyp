@@ -233,6 +233,10 @@ pub(crate) struct AppSettings {
     #[serde(default = "default_true")]
     pub(crate) auto_pair_delimiters: bool,
     #[serde(default)]
+    pub(crate) mitex_auto_enable: bool,
+    #[serde(default = "default_mitex_version")]
+    pub(crate) mitex_version: String,
+    #[serde(default)]
     pub(crate) rainbow_brackets: crate::rainbow::RainbowBrackets,
     #[serde(default)]
     pub(crate) explorer_order: ExplorerOrder,
@@ -273,8 +277,6 @@ pub(crate) struct AppSettings {
     pub(crate) recent_workspaces: Vec<String>,
     /// Last successfully opened source document, keyed by canonical project root.
     pub(crate) last_opened_files: BTreeMap<String, String>,
-    /// Designated Typst preview entry point, keyed by canonical project root.
-    pub(crate) preview_files: BTreeMap<String, String>,
     pub(crate) typst: ToolPreference,
     pub(crate) tinymist: ToolPreference,
 }
@@ -294,6 +296,8 @@ impl Default for AppSettings {
             line_numbers: true,
             sticky_context_rows: true,
             auto_pair_delimiters: true,
+            mitex_auto_enable: false,
+            mitex_version: default_mitex_version(),
             rainbow_brackets: crate::rainbow::RainbowBrackets::default(),
             explorer_order: ExplorerOrder::default(),
             source_preview_trigger: SourcePreviewTrigger::DoubleClick,
@@ -315,7 +319,6 @@ impl Default for AppSettings {
             typst_overrides: TypstOverrideThemes::default(),
             recent_workspaces: Vec::new(),
             last_opened_files: BTreeMap::new(),
-            preview_files: BTreeMap::new(),
             typst: ToolPreference::default(),
             tinymist: ToolPreference::default(),
         }
@@ -324,6 +327,10 @@ impl Default for AppSettings {
 
 const fn default_true() -> bool {
     true
+}
+
+fn default_mitex_version() -> String {
+    "0.2.7".into()
 }
 
 impl AppSettings {
@@ -351,6 +358,8 @@ impl AppSettings {
             line_numbers,
             sticky_context_rows,
             auto_pair_delimiters,
+            mitex_auto_enable,
+            mitex_version,
             rainbow_brackets,
             explorer_order,
             source_preview_trigger,
@@ -372,7 +381,6 @@ impl AppSettings {
             typst_overrides,
             recent_workspaces,
             last_opened_files,
-            preview_files,
             typst,
             tinymist,
         );
@@ -465,7 +473,6 @@ impl AppSettings {
 
         self.last_opened_files =
             normalize_workspace_map(std::mem::take(&mut self.last_opened_files));
-        self.preview_files = normalize_workspace_map(std::mem::take(&mut self.preview_files));
     }
 
     fn normalize_builtin_theme_slots(&mut self) {
@@ -602,7 +609,6 @@ mod tests {
         assert!(settings.shortcut_overrides.is_empty());
         assert!(settings.effective_shortcuts().conflicts().is_empty());
         assert!(settings.last_opened_files.is_empty());
-        assert!(settings.preview_files.is_empty());
         assert!(settings.recent_workspaces.is_empty());
         assert_eq!(settings.typst.mode, ToolMode::Bundled);
         assert_eq!(settings.tinymist.mode, ToolMode::Bundled);
@@ -690,6 +696,8 @@ mod tests {
             line_numbers: false,
             sticky_context_rows: false,
             auto_pair_delimiters: false,
+            mitex_auto_enable: true,
+            mitex_version: "0.2.7".into(),
             rainbow_brackets: crate::rainbow::RainbowBrackets {
                 enabled: false,
                 palettes: [crate::rainbow::BracketPalette::Orchid; 4],
@@ -717,10 +725,6 @@ mod tests {
             shortcut_overrides: ShortcutOverrides::default(),
             typst_overrides,
             last_opened_files: BTreeMap::from([(
-                "/workspace".to_owned(),
-                "/workspace/main.typ".to_owned(),
-            )]),
-            preview_files: BTreeMap::from([(
                 "/workspace".to_owned(),
                 "/workspace/main.typ".to_owned(),
             )]),

@@ -168,3 +168,146 @@ Regression coverage exercises retained Settings registration before/after
 resume and Settings close, no-window command rejection, New Window/Open routing,
 and hidden-child focus. These are deterministic state/viewport-output tests,
 not native CGL or AppKit menu verification. No rendering/layout contract changed.
+
+## New-window shadows — 2026-09-16 (164)
+
+The report was narrowed to newly created document windows, not the initial
+window opened with a file. Secondary document builders unnecessarily requested
+transparent backing, unlike persistent Settings windows. They now explicitly
+request opaque backing and native shadows. The working root builder is unchanged;
+popup children retain their independent transparency and no-shadow policy.
+No per-frame native calls, shadow invalidation loop or preview-bound changes
+were added. Builder tests cover both initial activation and later frames.
+
+An isolated release app copy with its own bundle identifier was launched in
+non-persistent QA mode. Using its native File → New Window menu created and
+focused `Untitled.typ`; the editor and WKWebView preview rendered, and quitting
+the QA process completed successfully. The existing user app was not operated.
+The computer-use app capture is cropped at the window boundary, so this verifies
+the native creation path and content, **not the exterior shadow pixels**. Manual
+shadow confirmation remains necessary. Root framebuffer
+`.tiptoptyp/screenshots/agent-review/1789550158961-0001-main.png` was also inspected;
+it does not capture the secondary window or its exterior shadow.
+
+## Independent document repaints (todo 174)
+
+The document UI was coupled through `show_viewport_immediate`: input, a caret
+blink or a worker completion in one document made the shell paint every document
+and switch native OpenGL surfaces between them. Compilers and Tinymist workers
+were already separate. Moving AppKit/Wry objects to worker threads would not
+address that repaint multiplication safely. This matches the
+[egui immediate-viewport contract](https://docs.rs/egui/0.36.1/egui/struct.Context.html#method.show_viewport_immediate).
+
+Secondary documents now use deferred viewport callbacks. A root pass registers
+their continued existence without laying them out or swapping their buffers.
+Their input, timers and worker completions wake only their owner. Focus changes,
+document replacement/dirty transitions, settings edits, new-window requests and
+close answers notify the process dispatcher. Native menu commands explicitly
+wake their destination, and process dispatch also works in root logic when the
+root is hidden/occluded. Webview navigation callbacks retain their owner repaint
+target rather than a context whose active viewport can change.
+
+Native editors remain UI-thread-owned, with no `unsafe Send`, cross-thread native
+handles or rendering lock around the shell. A deferred callback carries a unique
+token; a thread-local weak registry resolves it only on its creating event-loop
+thread. Closing the host removes the registration, so late callbacks cannot
+touch a closed/replaced document. The root supplies its eframe native frame;
+deferred documents use only their own retained native parent for previews and
+dialogs. Existing native bounds and window appearance are unchanged.
+
+Shared preference broadcasts coalesce and apply on each owner's own viewport
+pass, without echoing back as edits. Explicit workspace-history removals also
+invalidate queued broadcasts so sleeping windows cannot resurrect forgotten
+entries. No polling loop, continuous repaint or per-frame disk logging was added.
+
+Regression tests cover deferred registration without editor painting, repeated
+wheel-input frames without parent/sibling passes, root frames without child
+painting, owner-local settings application, late callback safety/thread affinity,
+clean child closing, queued-history removal and one-shot native command delivery.
+The existing dirty-close, process-close, focus, Settings and dormant-root tests
+remain applicable. These test scheduling/state rather than wall-time thresholds.
+
+Reproduce the isolated four-window native workload with:
+
+```sh
+cargo xtask profile --scenario multi-window --warmup 8 --seconds 8
+```
+
+The runner opens the same small fixture in four independent sessions once before
+warmup; it does not manufacture interaction or a repaint loop. Its `--binary`
+option permits repeated measurements against a preserved optimized baseline,
+with the actual binary/fixture/tool hashes retained in each run's metadata.
+
+Validation: formatting (root and xtask), strict all-target Clippy both with and
+without `profiling`, the complete ordinary suite (59 library and 741 application
+tests plus supporting suites), the profiling suite (747 application tests plus
+supporting suites), and all 13 xtask tests passed. This changes scheduling, not
+the maintained visual layout or native preview bounds; gallery regeneration and
+native geometry traces are not required for this change.
+
+### Matched native measurements
+
+2026-09-16, Apple M2 Max, macOS 14.6.1 (23G93), arm64, rustc 1.96.0;
+optimized `profiling` build with frame pointers. Four copies of the same 812-byte
+fixture, unchanged main QA scene/Latte launch override and inherited secondary
+preferences, default window sizes (1400 × 900 points, constrained by the display),
+same display/scale, 8 seconds warmup followed by 8 seconds idle measurement,
+native `sample` at 1 ms. No typing, scrolling or window resizing was scripted.
+The final three runs were sequential with no concurrent builds or test runs.
+
+| Run | Editor passes / total UI ms | Shell mean ms | Process CPU advance, s |
+| --- | ---: | ---: | ---: |
+| Preserved immediate baseline | 384 / 380.46 | 14.08 | 0.97 |
+| Final deferred build A | 73 / 65.89 | 1.02 | 0.21 |
+| Final deferred build B | 136 / 108.16 | 0.78 | 0.35 |
+
+Artifacts under `.tiptoptyp/profiles/` (metadata, summary, CPU sample, logs,
+process readings and initial framebuffer):
+
+- Baseline repeat: `1789574977093-82556-multi-window-0`.
+- Final A: `1789574955871-81866-multi-window-0`.
+- Final B: `1789574998189-77827-multi-window-0`.
+
+The baseline's 96 shell passes each painted all four editors. Shell spans
+previously included child painting and native surface switches/buffer waits;
+deferred child work is now outside that span. Thus the shell reduction is not
+an end-to-end FPS multiplier. The editor totals measure UI work across all
+documents, not native swaps, and must not be summed with overlapping shell
+spans. `ps` CPU readings bracket sampling and analysis rather than an exact
+eight-second CPU interval. Caret, hover, native events and polling timings cause
+run-to-run count variation. Worker/sidecar CPU, large projects and active native
+scroll latency are not established by this small idle fixture.
+
+Early diagnostic runs `1789573832717-71981-multi-window-0`,
+`1789574196766-73148-multi-window-0`, and
+`1789574493543-74756-multi-window-0` are retained but not used in the table:
+development checks overlapped those runs and some spans contain long pauses.
+They identified the exact 4:1 paint coupling, native GL surface-switch/wait
+stacks and secondary caret/hover/polling repaint causes. The final comparison
+uses the preserved baseline binary rather than reconstructing an old tree.
+
+Binary SHA-256 (original optimized baseline build and final build):
+
+```text
+3e988f7b52d4d07dafa57494f8a0fb47e3c28ef371058c2bb1f1c9dd1fe4b3bd  baseline
+808bd595d7ed9ce27d64990010d0445fe965274d84ef858f04e0f7ed7cd49bfc  final
+```
+
+Fixture hash `3625fd0a2b8656e8569d3a9df61ac867a2454fd38df1baea54af9b3bf8a38289`
+and toolchain manifest hash
+`f25c5aace663cb0a8b742081d5c748b1a15069f75fd65d18414be19986f75301`
+match across the compared runs; full compiler/sidecar/build provenance is in
+their metadata. These local results are not a cross-platform performance claim.
+
+All six initial viewport PNGs were freshly captured and inspected: editor text,
+toolbar and preview fallback remain aligned without missing glyphs. Final A
+uses `workspace/.tiptoptyp/screenshots/1789574958450-0001-main.png`;
+final B uses `workspace/.tiptoptyp/screenshots/1789575000236-0001-main.png`.
+These are individual egui framebuffers, not proof of composed native preview
+geometry or manual cross-window focus/file-picker behavior.
+
+The final binary also passed the existing `no-window` native smoke profile
+(`1789575059389-83419-no-window-0`, six-second warmup/measurement, sampler none):
+no UI spans or repaint requests, with process CPU unchanged at 1.04 s. Its fresh
+initial framebuffer `1789575061288-0001-main.png` was inspected as well; it does
+not visually establish the later hidden-window state.

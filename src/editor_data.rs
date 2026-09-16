@@ -79,6 +79,10 @@ pub(crate) struct EditorDerivedData {
     char_starts: Vec<usize>,
     parsed_source: Source,
     parsed_key: Option<DocumentKey>,
+    tex_key: Option<DocumentKey>,
+    mitex_dollars: bool,
+    mitex_compatibility: Option<(DocumentKey, String, bool)>,
+    tex_index: crate::tex_completion::Index,
     regions_key: Option<DocumentKey>,
     regions: Arc<[ContextRegion]>,
     delimiter_query: Option<(DocumentKey, usize)>,
@@ -96,6 +100,10 @@ pub(crate) struct EditorDerivedData {
     syntax_rebuilds: usize,
     #[cfg(test)]
     hover_queries: usize,
+    #[cfg(test)]
+    tex_rebuilds: usize,
+    #[cfg(test)]
+    compatibility_checks: usize,
 }
 
 impl Default for EditorDerivedData {
@@ -107,6 +115,10 @@ impl Default for EditorDerivedData {
             char_starts: vec![0],
             parsed_source: Source::detached(String::new()),
             parsed_key: None,
+            tex_key: None,
+            mitex_dollars: false,
+            mitex_compatibility: None,
+            tex_index: crate::tex_completion::Index::default(),
             regions_key: None,
             regions: Arc::from([]),
             delimiter_query: None,
@@ -124,11 +136,40 @@ impl Default for EditorDerivedData {
             syntax_rebuilds: 0,
             #[cfg(test)]
             hover_queries: 0,
+            #[cfg(test)]
+            tex_rebuilds: 0,
+            #[cfg(test)]
+            compatibility_checks: 0,
         }
     }
 }
 
 impl EditorDerivedData {
+    pub(crate) fn mitex_compatible(&mut self, version: &str) -> bool {
+        let Some(key) = self.source_key else {
+            return false;
+        };
+        let version = version.trim();
+        if let Some((cached_key, cached_version, compatible)) = &self.mitex_compatibility
+            && *cached_key == key
+            && cached_version == version
+        {
+            return *compatible;
+        }
+        self.prepare_syntax();
+        let compatible = tiptoptyp::mitex_projection::Projection::compatible(
+            &self.parsed_source,
+            &tiptoptyp::mitex_projection::Config {
+                package: format!("@preview/mitex:{version}"),
+            },
+        );
+        self.mitex_compatibility = Some((key, version.to_owned(), compatible));
+        #[cfg(test)]
+        {
+            self.compatibility_checks += 1;
+        }
+        compatible
+    }
     pub(crate) fn prepare_source(&mut self, snapshot: &DocumentSnapshot) {
         let key = snapshot.key();
         let source = snapshot.source();
@@ -177,6 +218,33 @@ impl EditorDerivedData {
         #[cfg(test)]
         {
             self.syntax_rebuilds += 1;
+        }
+    }
+
+    pub(crate) fn tex_completions(
+        &mut self,
+        cursor: usize,
+    ) -> Option<Vec<crate::tinymist::CompletionItem>> {
+        self.prepare_syntax();
+        if self.tex_key != self.source_key {
+            self.tex_index = if self.mitex_dollars {
+                crate::tex_completion::Index::projected(&self.parsed_source)
+            } else {
+                crate::tex_completion::Index::new(&self.parsed_source)
+            };
+            self.tex_key = self.source_key;
+            #[cfg(test)]
+            {
+                self.tex_rebuilds += 1;
+            }
+        }
+        self.tex_index.items(&self.source_snapshot, cursor)
+    }
+
+    pub(crate) fn set_mitex_dollars(&mut self, enabled: bool) {
+        if self.mitex_dollars != enabled {
+            self.mitex_dollars = enabled;
+            self.tex_key = None;
         }
     }
 
@@ -573,6 +641,78 @@ mod tests {
     use super::*;
     use crate::diagnostics::DiagnosticLocation;
 
+    #[test]
+    fn mitex_compatibility_reuses_syntax_and_only_checks_changed_revisions_or_versions() {
+        let mut data = EditorDerivedData::default();
+        let source = "#import \"@preview/mitex:0.2.7\": mi\n#mi(`x`)";
+        data.prepare_source(&DocumentSnapshot::fixture(revision(1), source));
+        data.prepare_syntax();
+        for _ in 0..100 {
+            assert!(data.mitex_compatible("0.2.7"));
+        }
+        assert_eq!(data.syntax_rebuilds, 1);
+        assert_eq!(data.compatibility_checks, 1);
+        assert!(
+            data.tex_key.is_none(),
+            "compatibility must not construct completion data"
+        );
+        assert!(!data.mitex_compatible("0.2.6"));
+        assert_eq!(data.syntax_rebuilds, 1);
+        assert_eq!(data.compatibility_checks, 2);
+        data.prepare_source(&DocumentSnapshot::fixture(revision(2), "$ native $"));
+        assert!(!data.mitex_compatible("0.2.7"));
+        assert_eq!(data.syntax_rebuilds, 2);
+        assert_eq!(data.compatibility_checks, 3);
+    }
+
+    #[test]
+    #[ignore = "opt-in matched compatibility-cache measurement; no timing assertion"]
+    fn profile_mitex_compatibility_cache() {
+        use std::{
+            hint::black_box,
+            time::{Duration, Instant},
+        };
+        let fixture =
+            "// Unicode 文 😀 representative source for projection caching\n".repeat(5000);
+        let mut baseline = EditorDerivedData::default();
+        let mut checked = EditorDerivedData::default();
+        let mut elapsed = [Duration::ZERO; 2];
+        for iteration in 0..210 {
+            let source = format!("{fixture}{}", if iteration % 2 == 0 { "a" } else { "b" });
+            let snapshot = DocumentSnapshot::fixture(revision(iteration), &source);
+            for which in if iteration % 2 == 0 { [0, 1] } else { [1, 0] } {
+                let data = if which == 0 {
+                    &mut baseline
+                } else {
+                    &mut checked
+                };
+                let start = Instant::now();
+                data.prepare_source(&snapshot);
+                data.prepare_syntax();
+                if which == 1 {
+                    assert!(black_box(data.mitex_compatible("0.2.7")));
+                }
+                if iteration >= 10 {
+                    elapsed[which] += start.elapsed();
+                }
+            }
+        }
+        let start = Instant::now();
+        for _ in 0..20_000 {
+            black_box(checked.mitex_compatible(black_box("0.2.7")));
+        }
+        let idle = start.elapsed();
+        assert_eq!(checked.compatibility_checks, 210);
+        assert_eq!(checked.syntax_rebuilds, baseline.syntax_rebuilds);
+        eprintln!(
+            "fixture_bytes={} warmup=10 changed_revisions=200 baseline_source_and_syntax_us={} with_compatibility_us={} cached_checks=20000 cached_us={}",
+            fixture.len() + 1,
+            elapsed[0].as_micros(),
+            elapsed[1].as_micros(),
+            idle.as_micros()
+        );
+    }
+
     fn revision(revision: u64) -> DocumentKey {
         DocumentKey::new(
             tiptoptyp_core::document::WindowSessionId::new(1),
@@ -830,5 +970,34 @@ mod tests {
             assert_eq!(data.source_metrics().line_count, 50_001);
         }
         assert_eq!(data.rebuild_counts(), (1, 0));
+    }
+
+    #[test]
+    fn tex_index_is_lazy_and_reused_until_revision_changes() {
+        let mut data = EditorDerivedData::default();
+        let source = "#mi(`\\newcommand{\\custom}{x} \\cu`)";
+        data.prepare_source(&DocumentSnapshot::fixture(revision(1), source));
+        assert_eq!(data.tex_rebuilds, 0);
+        let cursor = source.find("\\cu`)").unwrap() + 3;
+        for _ in 0..100 {
+            assert!(
+                data.tex_completions(cursor)
+                    .unwrap()
+                    .iter()
+                    .any(|item| item.label == "\\custom")
+            );
+        }
+        assert_eq!(data.tex_rebuilds, 1);
+        assert_eq!(data.syntax_rebuilds, 1);
+        let source = "#mi(`\\cu`)";
+        data.prepare_source(&DocumentSnapshot::fixture(revision(2), source));
+        assert!(
+            !data
+                .tex_completions(8)
+                .unwrap()
+                .iter()
+                .any(|item| item.label == "\\custom")
+        );
+        assert_eq!(data.tex_rebuilds, 2);
     }
 }

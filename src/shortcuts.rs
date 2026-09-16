@@ -24,6 +24,11 @@ pub(crate) enum ShortcutAction {
     Rename,
     Packages,
     Git,
+    StageHunk,
+    UnstageHunk,
+    RevertHunk,
+    PreviousHunk,
+    NextHunk,
     ExportPdf,
     Undo,
     Redo,
@@ -54,11 +59,40 @@ pub(crate) enum ShortcutAction {
     Minimize,
     ToggleFullscreen,
     CloseWindow,
+    CloseTab,
+    NextTab,
+    PreviousTab,
     CaptureUi,
+    KeyboardShortcuts,
+    ToggleTexMode,
+    UseTabForPreview,
+    ToggleFold,
+    CollapseAll,
+    ExpandAll,
+    FindNext,
+    FindPrevious,
+    ReplaceOne,
+    ReplaceAll,
+    ToggleFindCase,
+    ToggleFindRegex,
+    PreviewPreviousPage,
+    PreviewNextPage,
+    PreviewFitWidth,
+    ExplorerSearch,
+    RefreshWorkspace,
+    StatusHistory,
+    ToggleLineWrap,
+    ToggleLineNumbers,
+    ToggleStickyContext,
+    UiScaleReset,
+    WindowColor,
+    FileMenu,
+    EditMenu,
+    ViewMenu,
 }
 
 impl ShortcutAction {
-    pub(crate) const ALL: [Self; 42] = [
+    pub(crate) const ALL: [Self; 76] = [
         Self::Settings,
         Self::New,
         Self::NewWindow,
@@ -70,6 +104,11 @@ impl ShortcutAction {
         Self::Rename,
         Self::Packages,
         Self::Git,
+        Self::StageHunk,
+        Self::UnstageHunk,
+        Self::RevertHunk,
+        Self::PreviousHunk,
+        Self::NextHunk,
         Self::ExportPdf,
         Self::Undo,
         Self::Redo,
@@ -100,7 +139,36 @@ impl ShortcutAction {
         Self::Minimize,
         Self::ToggleFullscreen,
         Self::CloseWindow,
+        Self::CloseTab,
+        Self::NextTab,
+        Self::PreviousTab,
         Self::CaptureUi,
+        Self::KeyboardShortcuts,
+        Self::ToggleTexMode,
+        Self::UseTabForPreview,
+        Self::ToggleFold,
+        Self::CollapseAll,
+        Self::ExpandAll,
+        Self::FindNext,
+        Self::FindPrevious,
+        Self::ReplaceOne,
+        Self::ReplaceAll,
+        Self::ToggleFindCase,
+        Self::ToggleFindRegex,
+        Self::PreviewPreviousPage,
+        Self::PreviewNextPage,
+        Self::PreviewFitWidth,
+        Self::ExplorerSearch,
+        Self::RefreshWorkspace,
+        Self::StatusHistory,
+        Self::ToggleLineWrap,
+        Self::ToggleLineNumbers,
+        Self::ToggleStickyContext,
+        Self::UiScaleReset,
+        Self::WindowColor,
+        Self::FileMenu,
+        Self::EditMenu,
+        Self::ViewMenu,
     ];
 
     pub(crate) const fn id(self) -> &'static str {
@@ -116,6 +184,11 @@ impl ShortcutAction {
             Self::Rename => "file.rename",
             Self::Packages => "view.packages",
             Self::Git => "view.git",
+            Self::StageHunk => "git.stage_hunk",
+            Self::UnstageHunk => "git.unstage_hunk",
+            Self::RevertHunk => "git.revert_hunk",
+            Self::PreviousHunk => "git.previous_hunk",
+            Self::NextHunk => "git.next_hunk",
             Self::ExportPdf => "file.export_pdf",
             Self::Undo => "edit.undo",
             Self::Redo => "edit.redo",
@@ -146,7 +219,36 @@ impl ShortcutAction {
             Self::Minimize => "window.minimize",
             Self::ToggleFullscreen => "window.toggle_fullscreen",
             Self::CloseWindow => "window.close",
+            Self::CloseTab => "file.close_tab",
+            Self::NextTab => "tabs.next",
+            Self::PreviousTab => "tabs.previous",
             Self::CaptureUi => "developer.capture_ui",
+            Self::KeyboardShortcuts => "application.shortcuts",
+            Self::ToggleTexMode => "editor.toggle_tex_mode",
+            Self::UseTabForPreview => "tabs.use_for_preview",
+            Self::ToggleFold => "editor.toggle_fold",
+            Self::CollapseAll => "editor.collapse_all",
+            Self::ExpandAll => "editor.expand_all",
+            Self::FindNext => "edit.find_next",
+            Self::FindPrevious => "edit.find_previous",
+            Self::ReplaceOne => "edit.replace_one",
+            Self::ReplaceAll => "edit.replace_all",
+            Self::ToggleFindCase => "edit.find_case",
+            Self::ToggleFindRegex => "edit.find_regex",
+            Self::PreviewPreviousPage => "preview.previous_page",
+            Self::PreviewNextPage => "preview.next_page",
+            Self::PreviewFitWidth => "preview.fit_width",
+            Self::ExplorerSearch => "workspace.search",
+            Self::RefreshWorkspace => "workspace.refresh",
+            Self::StatusHistory => "view.status_history",
+            Self::ToggleLineWrap => "editor.line_wrap",
+            Self::ToggleLineNumbers => "editor.line_numbers",
+            Self::ToggleStickyContext => "editor.sticky_context",
+            Self::UiScaleReset => "window.interface_scale_reset",
+            Self::WindowColor => "window.color",
+            Self::FileMenu => "menu.file",
+            Self::EditMenu => "menu.edit",
+            Self::ViewMenu => "menu.view",
         }
     }
 
@@ -167,6 +269,11 @@ impl ShortcutAction {
             Self::Rename => "Rename file",
             Self::Packages => "Packages",
             Self::Git => "Git",
+            Self::StageHunk => "Stage hunk",
+            Self::UnstageHunk => "Unstage hunk",
+            Self::RevertHunk => "Revert hunk",
+            Self::PreviousHunk => "Previous hunk",
+            Self::NextHunk => "Next hunk",
             Self::ExportPdf => "Export PDF",
             Self::Undo => "Undo",
             Self::Redo => "Redo",
@@ -197,13 +304,48 @@ impl ShortcutAction {
             Self::Minimize => "Minimize window",
             Self::ToggleFullscreen => "Toggle full screen",
             Self::CloseWindow => "Close window",
+            Self::CloseTab => "Close tab",
+            Self::NextTab => "Next tab",
+            Self::PreviousTab => "Previous tab",
             Self::CaptureUi => "Capture application UI",
+            Self::KeyboardShortcuts => "Keyboard shortcuts",
+            Self::ToggleTexMode => "Toggle miTeX notation",
+            Self::UseTabForPreview => "Use active tab for preview",
+            Self::ToggleFold => "Toggle fold at caret",
+            Self::CollapseAll => "Collapse all folds",
+            Self::ExpandAll => "Expand all folds",
+            Self::FindNext => "Next match",
+            Self::FindPrevious => "Previous match",
+            Self::ReplaceOne => "Replace current match",
+            Self::ReplaceAll => "Replace all matches",
+            Self::ToggleFindCase => "Toggle case-sensitive search",
+            Self::ToggleFindRegex => "Toggle regular expressions",
+            Self::PreviewPreviousPage => "Previous preview page",
+            Self::PreviewNextPage => "Next preview page",
+            Self::PreviewFitWidth => "Toggle fit preview width",
+            Self::ExplorerSearch => "Search Explorer",
+            Self::RefreshWorkspace => "Refresh workspace",
+            Self::StatusHistory => "Status history",
+            Self::ToggleLineWrap => "Toggle line wrapping",
+            Self::ToggleLineNumbers => "Toggle line numbers",
+            Self::ToggleStickyContext => "Toggle sticky context",
+            Self::UiScaleReset => "Reset interface scale",
+            Self::WindowColor => "Window color",
+            Self::FileMenu => "File menu",
+            Self::EditMenu => "Edit menu",
+            Self::ViewMenu => "View menu",
         }
     }
 
     pub(crate) const fn group(self) -> &'static str {
         match self {
             Self::Settings => "Application",
+            Self::CloseTab | Self::NextTab | Self::PreviousTab => "Tabs",
+            Self::StageHunk
+            | Self::UnstageHunk
+            | Self::RevertHunk
+            | Self::PreviousHunk
+            | Self::NextHunk => "Git",
             Self::New
             | Self::NewWindow
             | Self::Open
@@ -244,6 +386,32 @@ impl ShortcutAction {
             | Self::ToggleFullscreen
             | Self::CloseWindow => "Window",
             Self::CaptureUi => "Developer",
+            Self::KeyboardShortcuts => "Application",
+            Self::ToggleTexMode => "Editor",
+            Self::UseTabForPreview => "Tabs",
+            Self::ToggleFold => "Editor",
+            Self::CollapseAll => "Editor",
+            Self::ExpandAll => "Editor",
+            Self::FindNext => "Editor",
+            Self::FindPrevious => "Editor",
+            Self::ReplaceOne => "Editor",
+            Self::ReplaceAll => "Editor",
+            Self::ToggleFindCase => "Editor",
+            Self::ToggleFindRegex => "Editor",
+            Self::PreviewPreviousPage => "Preview",
+            Self::PreviewNextPage => "Preview",
+            Self::PreviewFitWidth => "Preview",
+            Self::ExplorerSearch => "Window",
+            Self::RefreshWorkspace => "Window",
+            Self::StatusHistory => "Window",
+            Self::ToggleLineWrap => "Editor",
+            Self::ToggleLineNumbers => "Editor",
+            Self::ToggleStickyContext => "Editor",
+            Self::UiScaleReset => "Window",
+            Self::WindowColor => "Window",
+            Self::FileMenu => "Window",
+            Self::EditMenu => "Window",
+            Self::ViewMenu => "Window",
         }
     }
 }
@@ -277,6 +445,16 @@ pub(crate) struct ShortcutChord {
 }
 
 impl ShortcutChord {
+    const fn key_only(key: egui::Key) -> Self {
+        Self {
+            key,
+            primary: false,
+            control: false,
+            shift: false,
+            alt: false,
+        }
+    }
+
     pub(crate) const fn primary(key: egui::Key) -> Self {
         Self {
             key,
@@ -973,7 +1151,14 @@ fn default_binding(action: ShortcutAction, platform: ShortcutPlatform) -> Option
         Action::ChangeWorkspaceRoot => ShortcutChord::primary(Key::O).shift(),
         Action::Save => ShortcutChord::primary(Key::S),
         Action::SaveAs => ShortcutChord::primary(Key::S).shift(),
-        Action::Rename | Action::Packages | Action::Git => return None,
+        Action::Rename => ShortcutChord::key_only(Key::F2),
+        Action::Packages => ShortcutChord::primary(Key::P).alt().shift(),
+        Action::Git => ShortcutChord::primary(Key::G).alt(),
+        Action::StageHunk => ShortcutChord::primary(Key::S).alt(),
+        Action::UnstageHunk => ShortcutChord::primary(Key::U).alt(),
+        Action::RevertHunk => ShortcutChord::primary(Key::R).alt(),
+        Action::PreviousHunk => ShortcutChord::primary(Key::ArrowUp).alt(),
+        Action::NextHunk => ShortcutChord::primary(Key::ArrowDown).alt(),
         Action::ExportPdf => ShortcutChord::primary(Key::E).shift(),
         Action::Undo => ShortcutChord::primary(Key::Z),
         Action::Redo => ShortcutChord::primary(Key::Z).shift(),
@@ -994,7 +1179,7 @@ fn default_binding(action: ShortcutAction, platform: ShortcutPlatform) -> Option
             shift: true,
             alt: true,
         },
-        Action::SyncPreview => return None,
+        Action::SyncPreview => ShortcutChord::primary(Key::J).shift(),
         Action::Problems => ShortcutChord::primary(Key::Num5),
         Action::Explorer => ShortcutChord::primary(Key::Num1),
         Action::Code => ShortcutChord::primary(Key::Num2),
@@ -1018,9 +1203,38 @@ fn default_binding(action: ShortcutAction, platform: ShortcutPlatform) -> Option
             shift: false,
             alt: false,
         },
-        Action::ToggleFullscreen => return None,
-        Action::CloseWindow => ShortcutChord::primary(Key::W),
+        Action::ToggleFullscreen => ShortcutChord::key_only(Key::F11),
+        Action::CloseWindow => ShortcutChord::primary(Key::W).shift(),
+        Action::CloseTab => ShortcutChord::primary(Key::W),
+        Action::NextTab => ShortcutChord::control(Key::Tab),
+        Action::PreviousTab => ShortcutChord::control(Key::Tab).shift(),
         Action::CaptureUi => ShortcutChord::primary(Key::F12).shift(),
+        Action::KeyboardShortcuts => ShortcutChord::primary(Key::Comma).alt(),
+        Action::ToggleTexMode => ShortcutChord::primary(Key::M).alt(),
+        Action::UseTabForPreview => ShortcutChord::primary(Key::P).alt(),
+        Action::ToggleFold => ShortcutChord::primary(Key::L).alt(),
+        Action::CollapseAll => ShortcutChord::primary(Key::L).alt().shift(),
+        Action::ExpandAll => ShortcutChord::primary(Key::E).alt().shift(),
+        Action::FindNext => ShortcutChord::primary(Key::G),
+        Action::FindPrevious => ShortcutChord::primary(Key::G).shift(),
+        Action::ReplaceOne => ShortcutChord::primary(Key::Enter).alt(),
+        Action::ReplaceAll => ShortcutChord::primary(Key::Enter).alt().shift(),
+        Action::ToggleFindCase => ShortcutChord::primary(Key::C).alt(),
+        Action::ToggleFindRegex => ShortcutChord::primary(Key::X).alt(),
+        Action::PreviewPreviousPage => ShortcutChord::primary(Key::PageUp),
+        Action::PreviewNextPage => ShortcutChord::primary(Key::PageDown),
+        Action::PreviewFitWidth => ShortcutChord::primary(Key::W).alt(),
+        Action::ExplorerSearch => ShortcutChord::primary(Key::E).alt(),
+        Action::RefreshWorkspace => ShortcutChord::primary(Key::R).alt().shift(),
+        Action::StatusHistory => ShortcutChord::primary(Key::H).alt(),
+        Action::ToggleLineWrap => ShortcutChord::primary(Key::Z).alt(),
+        Action::ToggleLineNumbers => ShortcutChord::primary(Key::N).alt(),
+        Action::ToggleStickyContext => ShortcutChord::primary(Key::T).alt(),
+        Action::UiScaleReset => ShortcutChord::primary(Key::Num0),
+        Action::WindowColor => ShortcutChord::primary(Key::B).alt(),
+        Action::FileMenu => ShortcutChord::primary(Key::F1).alt(),
+        Action::EditMenu => ShortcutChord::primary(Key::F2).alt(),
+        Action::ViewMenu => ShortcutChord::primary(Key::F3).alt(),
     })
 }
 
@@ -1049,21 +1263,11 @@ mod tests {
             let bindings = ShortcutBindings::defaults(platform);
             assert_eq!(bindings.iter().count(), ShortcutAction::ALL.len());
             assert!(bindings.conflicts().is_empty());
-            assert_eq!(bindings.binding(ShortcutAction::SyncPreview), None);
-            assert!(ShortcutAction::ALL.into_iter().all(|action| {
-                matches!(
-                    action,
-                    ShortcutAction::SyncPreview | ShortcutAction::ToggleFullscreen
-                ) && platform == ShortcutPlatform::Other
-                    || matches!(
-                        action,
-                        ShortcutAction::SyncPreview
-                            | ShortcutAction::Rename
-                            | ShortcutAction::Packages
-                            | ShortcutAction::Git
-                    )
-                    || bindings.binding(action).is_some()
-            }));
+            assert!(
+                ShortcutAction::ALL
+                    .into_iter()
+                    .all(|action| bindings.binding(action).is_some())
+            );
         }
 
         assert_eq!(

@@ -68,6 +68,7 @@ commands! {
     SaveAs => ("Save As…", File, 1, Always, 104),
     Rename => ("Rename…", File, 1, SavedDocument, 108),
     ExportPdf => ("Export PDF…", File, 2, TypstPreview, 105),
+    CloseTab => ("Close Tab", File, 3, Always, 109),
     Undo => ("Undo", Edit, 0, Undo, 200),
     Redo => ("Redo", Edit, 0, Redo, 201),
     Cut => ("Cut", Edit, 1, Always, 202),
@@ -746,6 +747,8 @@ mod tests {
                 (AppCommand::Code, egui::Key::Num2),
                 (AppCommand::Split, egui::Key::Num3),
                 (AppCommand::Preview, egui::Key::Num4),
+                (AppCommand::Packages, egui::Key::P),
+                (AppCommand::Git, egui::Key::G),
             ]
         );
     }

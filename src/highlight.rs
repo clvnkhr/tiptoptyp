@@ -25,6 +25,7 @@ pub struct SyntaxHighlighter {
     cached_code_mode: bool,
     styles: ResolvedTypstStyles,
     rainbow: Option<crate::rainbow::RainbowBrackets>,
+    mitex_dollars: bool,
     #[cfg(test)]
     cache_builds: usize,
 }
@@ -40,6 +41,7 @@ impl Default for SyntaxHighlighter {
             cached_code_mode: false,
             styles: ResolvedTypstStyles::default(),
             rainbow: None,
+            mitex_dollars: false,
             #[cfg(test)]
             cache_builds: 0,
         }
@@ -47,6 +49,12 @@ impl Default for SyntaxHighlighter {
 }
 
 impl SyntaxHighlighter {
+    pub(crate) fn set_mitex_dollars(&mut self, enabled: bool) {
+        if self.mitex_dollars != enabled {
+            self.mitex_dollars = enabled;
+            self.has_cache = false;
+        }
+    }
     pub(crate) fn set_rainbow_brackets(&mut self, settings: crate::rainbow::RainbowBrackets) {
         if self.rainbow != Some(settings) {
             self.rainbow = Some(settings);
@@ -135,6 +143,42 @@ impl SyntaxHighlighter {
         );
         if let Some(rainbow) = self.rainbow {
             crate::rainbow::apply(&mut job, root, rainbow, dark_mode);
+        }
+        if self.mitex_dollars && !code_mode {
+            let ranges = tiptoptyp::mitex_projection::dollar_payloads(&self.parsed_source);
+            let mut sections = Vec::new();
+            let mut start = 0;
+            let copy = |sections: &mut Vec<LayoutSection>, range: std::ops::Range<usize>| {
+                let first = job
+                    .sections
+                    .partition_point(|section| section.byte_range.end.0 <= range.start);
+                for section in &job.sections[first..] {
+                    if section.byte_range.start.0 >= range.end {
+                        break;
+                    }
+                    let mut part = section.clone();
+                    part.byte_range = ByteIndex(part.byte_range.start.0.max(range.start))
+                        ..ByteIndex(part.byte_range.end.0.min(range.end));
+                    sections.push(part);
+                }
+            };
+            for range in ranges {
+                copy(&mut sections, start..range.start);
+                if let Some(tex) =
+                    EmbeddedLanguage::TexMath.highlight(&source[range.clone()], dark_mode, syntect)
+                {
+                    sections.extend(tex.sections.into_iter().map(|mut section| {
+                        section.byte_range = ByteIndex(section.byte_range.start.0 + range.start)
+                            ..ByteIndex(section.byte_range.end.0 + range.start);
+                        section
+                    }));
+                } else {
+                    copy(&mut sections, range.clone());
+                }
+                start = range.end;
+            }
+            copy(&mut sections, start..source.len());
+            job.sections = sections;
         }
         if code_mode {
             trim_layout_job(&mut job, 2, 1);
@@ -907,6 +951,31 @@ mod tests {
             next_byte = section.byte_range.end.0;
         }
         assert_eq!(next_byte, source.len());
+    }
+    #[test]
+    fn dollar_tex_highlighting_is_opt_in_mapped_and_cached() {
+        let source = "文 $\\alpha + x_2$\n$\n  \\beta^2\n$\n`$not math$`";
+        let syntect = GenericSyntaxHighlighter::default();
+        let mut highlighter = SyntaxHighlighter::default();
+        let normal = highlighter.highlight(source, true, &syntect);
+        highlighter.set_mitex_dollars(false);
+        assert_eq!(normal, highlighter.highlight(source, true, &syntect));
+        assert_eq!(highlighter.cache_builds, 1);
+        highlighter.set_mitex_dollars(true);
+        let tex = highlighter.highlight(source, true, &syntect);
+        assert_exact_mapping(&tex, source);
+        assert_ne!(tex.sections, normal.sections);
+        let expected = EmbeddedLanguage::TexMath
+            .highlight("\\alpha + x_2", true, &syntect)
+            .unwrap();
+        assert_eq!(
+            format_at(&tex, source.find("\\alpha").unwrap()),
+            format_at(&expected, 0)
+        );
+        assert_eq!(tex, highlighter.highlight(source, true, &syntect));
+        assert_eq!(highlighter.cache_builds, 2);
+        highlighter.set_mitex_dollars(false);
+        assert_eq!(normal, highlighter.highlight(source, true, &syntect));
     }
 
     #[test]

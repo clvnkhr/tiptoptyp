@@ -5,7 +5,7 @@ impl EditorApp {
     pub(super) fn consume_settings_actions(
         &mut self,
         context: &egui::Context,
-        frame: &eframe::Frame,
+        frame: Option<&eframe::Frame>,
     ) {
         let close = if self.settings_window.lock().unwrap().has_actions() {
             let original = self.settings_snapshot();
@@ -38,7 +38,11 @@ impl EditorApp {
         }
     }
 
-    pub(super) fn show_settings_window(&mut self, context: &egui::Context, frame: &eframe::Frame) {
+    pub(super) fn show_settings_window(
+        &mut self,
+        context: &egui::Context,
+        frame: Option<&eframe::Frame>,
+    ) {
         use super::{settings_panel::SettingsStatus, settings_window::SettingsWindowInput};
         self.consume_settings_actions(context, frame);
         // The dormant host's surface must survive the first resumed frame,
@@ -398,7 +402,7 @@ impl EditorApp {
         &mut self,
         actions: Vec<super::settings_panel::SettingsAction>,
         context: &egui::Context,
-        frame: &eframe::Frame,
+        frame: Option<&eframe::Frame>,
     ) {
         use super::settings_panel::SettingsAction;
         for action in actions {

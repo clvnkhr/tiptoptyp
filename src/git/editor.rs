@@ -20,6 +20,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub(crate) mod actions;
+
 const EDIT_DEBOUNCE: Duration = Duration::from_millis(180);
 /// Reserved space for the Git change marker beside the line-number gutter.
 ///
@@ -275,6 +277,15 @@ fn parse_hunks(diff: &str) -> Result<Vec<Hunk>, String> {
 }
 
 fn compare_buffer(root: &Path, before: &[u8], buffer: &str) -> Result<Vec<Hunk>, String> {
+    compare_buffer_context(root, before, buffer, 3)
+}
+
+fn compare_buffer_context(
+    root: &Path,
+    before: &[u8],
+    buffer: &str,
+    context: usize,
+) -> Result<Vec<Hunk>, String> {
     if before == buffer.as_bytes() || before.contains(&0) {
         return Ok(Vec::new());
     }
@@ -284,7 +295,9 @@ fn compare_buffer(root: &Path, before: &[u8], buffer: &str) -> Result<Vec<Hunk>,
     new.write_all(buffer.as_bytes())
         .map_err(|e| e.to_string())?;
     let mut command = diff_args();
-    command.extend(args(&["--no-index", "--no-renames", "--unified=3", "--"]));
+    command.extend(args(&["--no-index", "--no-renames"]));
+    command.push(format!("--unified={context}").into());
+    command.push("--".into());
     command.push(old.path().as_os_str().to_owned());
     command.push(new.path().as_os_str().to_owned());
     let diff = run_command(root, &command, true)?;
@@ -371,6 +384,11 @@ impl Default for GitEditorState {
 }
 
 impl GitEditorState {
+    pub(crate) fn clear_document(&mut self) {
+        self.hunks.clear();
+        self.chunk = None;
+        self.request_refresh();
+    }
     /// Request a scan after a filesystem or Git operation changes the
     /// repository. Git decorations are event driven; the editor does not
     /// wake up on a periodic timer just to rediscover an unchanged snapshot.
@@ -396,6 +414,7 @@ impl GitEditorState {
         path: Option<&Path>,
         document: DocumentKey,
         source: &str,
+        projection: Option<&tiptoptyp::mitex_document::CanonicalSnapshot>,
     ) {
         let key = RequestKey {
             workspace: workspace.into(),
@@ -416,14 +435,28 @@ impl GitEditorState {
             LatestJobPoll::Idle | LatestJobPoll::Pending => {}
         }
         if !self.job.is_running() && self.refresh_requested && now >= self.scan_deadline {
-            let source = source.to_owned();
+            let source = projection
+                .map_or(source, |snapshot| snapshot.source())
+                .to_owned();
+            let projection = projection.cloned();
             self.refresh_requested = false;
             let work = move || {
                 let snapshot = status_snapshot(&key.workspace)?;
+                let hunks =
+                    buffer_hunks(&snapshot, key.path.as_deref(), &source).map(|mut hunks| {
+                        if let Some(projection) = projection {
+                            for hunk in &mut hunks {
+                                for change in &mut hunk.changes {
+                                    change.lines = projection.editor_lines(change.lines.clone());
+                                }
+                            }
+                        }
+                        hunks
+                    });
                 Ok(ScanResult {
                     repository: snapshot.initialized.then(|| snapshot.root.clone()),
                     status: FileStatuses::from_snapshot(&snapshot),
-                    hunks: buffer_hunks(&snapshot, key.path.as_deref(), &source),
+                    hunks,
                     key,
                 })
             };
@@ -494,6 +527,37 @@ impl GitEditorState {
                 hunk: hunk.clone(),
             });
         }
+    }
+
+    pub(crate) fn selection_is_current(&self, key: DocumentKey, chunk: &ChunkDiff) -> bool {
+        self.current.as_ref().is_some_and(|current| {
+            current.document == key && current.path.as_ref() == Some(&chunk.path)
+        }) && self.hunks.iter().any(|hunk| hunk == &chunk.hunk)
+    }
+
+    pub(crate) fn navigate(&mut self, path: &Path, line: usize, previous: bool) -> Option<usize> {
+        let selected = self
+            .chunk
+            .as_ref()
+            .and_then(|chunk| self.hunks.iter().position(|h| h == &chunk.hunk));
+        let start = |h: &Hunk| h.changes.first().map_or(0, |change| change.lines.start);
+        let count = self.hunks.len();
+        if count == 0 {
+            return None;
+        }
+        let index = match selected {
+            Some(index) if previous => (index + count - 1) % count,
+            Some(index) => (index + 1) % count,
+            None if previous => self
+                .hunks
+                .iter()
+                .rposition(|h| start(h) < line)
+                .unwrap_or(count - 1),
+            None => self.hunks.iter().position(|h| start(h) > line).unwrap_or(0),
+        };
+        let line = start(&self.hunks[index]);
+        self.open_chunk(index, path);
+        Some(line)
     }
 
     pub(crate) fn snapshot_fixture(
@@ -646,11 +710,31 @@ pub(crate) fn show_markers(
     selected
 }
 
-pub(crate) fn show_chunk(ui: &mut egui::Ui, chunk: &ChunkDiff) {
+pub(crate) fn show_chunk(
+    ui: &mut egui::Ui,
+    chunk: &ChunkDiff,
+    shortcuts: &crate::shortcuts::ShortcutBindings,
+    busy: bool,
+) -> Option<actions::Action> {
+    let mut selected = None;
     ui.heading("Changes since last commit");
     ui.add(egui::Label::new(chunk.path.to_string_lossy()).truncate())
         .on_hover_text(chunk.path.display().to_string());
     ui.weak("Selected chunk, including unsaved edits at the time it was opened.");
+    ui.horizontal_wrapped(|ui| {
+        for action in actions::Action::ALL {
+            let shortcut = shortcuts.display(action.shortcut()).unwrap_or_default();
+            if ui
+                .add_enabled(
+                    !busy,
+                    egui::Button::new(action.label()).shortcut_text(shortcut),
+                )
+                .clicked()
+            {
+                selected = Some(action);
+            }
+        }
+    });
     ui.separator();
     egui::ScrollArea::both()
         .id_salt("git-chunk-text")
@@ -658,6 +742,7 @@ pub(crate) fn show_chunk(ui: &mut egui::Ui, chunk: &ChunkDiff) {
         .show(ui, |ui| {
             super::show_colored_diff(ui, &chunk.hunk.text);
         });
+    selected
 }
 
 #[cfg(test)]
@@ -665,6 +750,21 @@ mod tests {
     use super::*;
     use crate::git::snapshot;
     use std::{fs, thread};
+
+    #[test]
+    fn hunk_navigation_uses_caret_then_selection_and_wraps_both_ways() {
+        let path = Path::new("main.typ");
+        let source = (0..20).map(|i| format!("line {i}\n")).collect::<String>();
+        let mut state = GitEditorState::snapshot_fixture(Path::new("."), path, &source, false);
+        assert_eq!(state.navigate(path, 3, false), Some(7));
+        assert_eq!(state.navigate(path, 0, false), Some(12));
+        assert_eq!(state.navigate(path, 0, false), Some(2));
+        assert_eq!(state.navigate(path, 0, true), Some(12));
+        state.chunk = None;
+        assert_eq!(state.navigate(path, 7, true), Some(2));
+        state.hunks.clear();
+        assert_eq!(state.navigate(path, 0, false), None);
+    }
 
     fn key(root: &Path, revision: u64) -> RequestKey {
         RequestKey {
@@ -678,7 +778,7 @@ mod tests {
         }
     }
 
-    fn initialize(root: &Path, source: &str) {
+    pub(super) fn initialize(root: &Path, source: &str) {
         text_run(root, &["init"]).unwrap();
         for (name, value) in [
             ("user.name", "Test"),
@@ -1021,6 +1121,7 @@ mod tests {
             request.path.as_deref(),
             request.document,
             "unchanged",
+            None,
         );
 
         assert!(!state.job.is_running());
@@ -1057,6 +1158,7 @@ mod tests {
             request.path.as_deref(),
             request.document,
             "unchanged",
+            None,
         );
 
         assert!(repaint_rx.try_recv().is_err());
@@ -1158,6 +1260,7 @@ mod tests {
                     request.path.as_deref(),
                     request.document,
                     buffer,
+                    None,
                 );
             }
             if states.iter().all(|state| !state.hunks.is_empty()) {
@@ -1323,6 +1426,10 @@ mod tests {
                                 path: "/project/main.typ".into(),
                                 hunk: hunks[*index].clone(),
                             },
+                            &crate::shortcuts::ShortcutBindings::defaults(
+                                crate::shortcuts::ShortcutPlatform::current(),
+                            ),
+                            false,
                         );
                     }
                 },
