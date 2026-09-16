@@ -456,7 +456,11 @@ fn worker_loop(
 
         // Only the latest queued command matters, whether it requests a new
         // editor snapshot or pauses the watcher.
-        let command = requests.recv_timeout(WORKER_POLL_INTERVAL);
+        let command = if session.is_some() {
+            requests.recv_timeout(WORKER_POLL_INTERVAL)
+        } else {
+            requests.recv().map_err(|_| RecvTimeoutError::Disconnected)
+        };
         match command {
             Ok(CompilerCommand::Pause) => {
                 session = None;

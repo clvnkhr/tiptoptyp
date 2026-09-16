@@ -9,7 +9,7 @@ use std::{
 };
 
 const HELP: &str = "Usage: cargo xtask profile [options]
-  --scenario main|settings|find|fonts|large|hover  (default settings)
+  --scenario main|settings|find|fonts|large|hover|no-window  (default settings)
   --warmup SECONDS       0..300, after initial capture (default 3)
   --seconds SECONDS      1..300 (default 10)
   --sampler auto|none|sample|perf  (auto: sample on macOS, none elsewhere)
@@ -66,7 +66,7 @@ fn seconds(value: &str, minimum: u64) -> Result<u64, String> {
 }
 fn scenario_scene(scenario: &str) -> Option<&'static str> {
     match scenario {
-        "main" | "large" => Some("main"),
+        "main" | "large" | "no-window" => Some("main"),
         "settings" => Some("settings-window"),
         "find" => Some("find-replace"),
         "fonts" => Some("settings-font-picker"),
@@ -168,6 +168,14 @@ pub(super) fn run(arguments: Vec<String>) -> Result<(), String> {
     }
     command
         .env("TIPTOPTYP_PROFILE_DIR", &directory)
+        .env(
+            "TIPTOPTYP_PROFILE_NO_WINDOW",
+            if options.scenario == "no-window" {
+                "1"
+            } else {
+                "0"
+            },
+        )
         .env("TIPTOPTYP_PROFILE_WARMUP", options.warmup.to_string())
         .env("TIPTOPTYP_PROFILE_SECONDS", options.seconds.to_string())
         .env("TIPTOPTYP_TYPST", typst)
@@ -511,6 +519,13 @@ mod tests {
     #[test]
     fn options_validate_before_building_or_launching() {
         assert_eq!(Options::parse(&[]).unwrap().scenario, "settings");
+        assert_eq!(
+            Options::parse(&args(&["--scenario", "no-window"]))
+                .unwrap()
+                .scenario,
+            "no-window"
+        );
+        assert_eq!(scenario_scene("no-window"), Some("main"));
         for invalid in [
             &["--seconds", "0"][..],
             &["--warmup", "301"],

@@ -193,13 +193,21 @@ impl AppShell {
         while let Ok(request) = self.native_menu_commands.try_recv() {
             match process_request_action(request) {
                 ProcessRequestAction::Editor(command) => {
-                    if !self.primary_visible
-                        && self.secondary.is_empty()
-                        && !command_available_without_document(command)
-                        && !self.command_targets_hidden_root_child(context, command)
-                    {
+                    if !self.command_available(context, command) {
                         continue;
                     }
+                    // With no document windows, the clean retained root is
+                    // itself the next new window; no invisible parent UI pass
+                    // is needed to instantiate a secondary viewport.
+                    let command = if !self.primary_visible && self.secondary.is_empty() {
+                        match command {
+                            AppCommand::NewWindow => AppCommand::New,
+                            AppCommand::OpenInNewWindow => AppCommand::Open,
+                            command => command,
+                        }
+                    } else {
+                        command
+                    };
                     if self.active == ActiveSession::Primary
                         && !self.primary_visible
                         && command_reveals_primary(command)
@@ -449,6 +457,10 @@ impl AppShell {
         {
             return;
         }
+        self.retire_primary_window(context);
+    }
+
+    fn retire_primary_window(&mut self, context: &egui::Context) {
         context.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::CancelClose);
         context.send_viewport_cmd_to(
             egui::ViewportId::ROOT,
@@ -464,6 +476,7 @@ impl AppShell {
     }
 
     fn show_primary(&mut self, context: &egui::Context) {
+        self.primary.request_window_resume();
         if !self.primary_visible {
             context
                 .send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Visible(true));
@@ -510,6 +523,29 @@ impl AppShell {
                 AppCommand::Cut | AppCommand::Copy | AppCommand::Paste | AppCommand::SelectAll
             )
             && crate::app::owner_has_focused_viewport(context, egui::ViewportId::ROOT, false)
+    }
+
+    fn command_available(&self, context: &egui::Context, command: AppCommand) -> bool {
+        (self.primary_visible
+            || !self.secondary.is_empty()
+            || command_available_without_document(command)
+            || self.command_targets_hidden_root_child(context, command))
+            && self.active_editor().native_command_enabled(command)
+    }
+
+    fn update_native_menu(&self, context: &egui::Context) {
+        #[cfg(target_os = "macos")]
+        {
+            let shortcuts = self
+                .active_editor()
+                .settings_snapshot()
+                .effective_shortcuts();
+            let _ = crate::native_menu::update_macos_menu(&shortcuts, |command| {
+                self.command_available(context, command)
+            });
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = context;
     }
 
     fn reopen_document_window(&mut self, context: &egui::Context) {
@@ -622,13 +658,45 @@ impl AppShell {
 
 impl eframe::App for AppShell {
     fn logic(&mut self, context: &egui::Context, frame: &mut eframe::Frame) {
-        self.primary.logic(context, frame);
+        if self.primary_visible {
+            return;
+        }
+        // eframe skips ui entirely when the root and all children are hidden.
+        // This path must neither paint nor consume the previous frame's input.
+        self.refresh_active_window(context);
+        self.dispatch_process_requests(context);
+        self.guard_process_close(context);
+        let completions = crate::worker::take_detached_completions();
+        if !completions.is_empty() {
+            self.active_editor_mut()
+                .show_window_notice(completions.join("\n"));
+        }
+        self.primary.hidden_host_logic(context, frame);
+        Self::collect_window_request_from(&mut self.pending_windows, &mut self.primary);
+        if !self.primary_visible
+            && self.secondary.is_empty()
+            && let Some(pending) = self.pending_windows.pop_front()
+        {
+            // A file dialog or Settings shortcut can finish after the last
+            // document closes. Reuse the dormant root; creating an immediate
+            // secondary here would require a UI pass that cannot yet run.
+            self.primary.reuse_dormant_window(pending.request);
+            self.show_primary(context);
+        }
+        if self.primary.needs_visible_window() {
+            self.show_primary(context);
+        }
+        self.poll_process_close(context);
+        self.update_native_menu(context);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let _span = crate::performance::span("ui.shell.pass");
         crate::performance::tick(ui.ctx(), || !self.captures.has_pending());
         let context = ui.ctx().clone();
+        if crate::performance::take_no_window_request() {
+            self.retire_primary_window(&context);
+        }
         self.refresh_active_window(&context);
         let completions = crate::worker::take_detached_completions();
         if !completions.is_empty() {
@@ -639,27 +707,29 @@ impl eframe::App for AppShell {
         self.dispatch_process_requests(&context);
         self.guard_process_close(&context);
         let primary_close_requested = context.input(|input| input.viewport().close_requested());
-        self.primary.ui_in_window(ui, frame);
+        if self.primary_visible {
+            self.primary.ui_in_window(ui, frame);
+        } else {
+            self.primary.hidden_host_ui(&context, frame);
+            if self.primary.needs_visible_window() {
+                self.show_primary(&context);
+            }
+        }
         if self.primary_visible && crate::app::owns_focused_input_viewport(&context) {
             self.active = ActiveSession::Primary;
         }
         Self::collect_window_request_from(&mut self.pending_windows, &mut self.primary);
+        let primary_was_visible = self.primary_visible;
         self.finish_primary_window_close(&context, primary_close_requested);
+        if primary_was_visible && !self.primary_visible {
+            // Register (but do not show) Settings on the last visible pass,
+            // so the no-window logic path can reveal this existing viewport.
+            self.primary.register_dormant_settings(&context, frame);
+        }
         self.show_secondary_windows(&context, frame);
         self.open_pending_windows(&context);
         self.poll_process_close(&context);
-        #[cfg(target_os = "macos")]
-        {
-            let editor = self.active_editor();
-            let shortcuts = editor.settings_snapshot().effective_shortcuts();
-            let _ = crate::native_menu::update_macos_menu(&shortcuts, |command| {
-                (self.primary_visible
-                    || !self.secondary.is_empty()
-                    || command_available_without_document(command)
-                    || self.command_targets_hidden_root_child(&context, command))
-                    && editor.native_command_enabled(command)
-            });
-        }
+        self.update_native_menu(&context);
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
@@ -748,8 +818,7 @@ const fn command_reveals_primary(command: AppCommand) -> bool {
 const fn command_available_without_document(command: AppCommand) -> bool {
     matches!(
         command,
-        AppCommand::New
-            | AppCommand::Open
+        AppCommand::Open
             | AppCommand::Settings
             | AppCommand::NewWindow
             | AppCommand::OpenInNewWindow
@@ -851,6 +920,87 @@ const fn shell_persists_egui_memory(launch_mode: LaunchMode, editor_persists_mem
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eframe::App as _;
+
+    #[test]
+    fn no_window_logic_reopens_documents_and_settings_without_an_editor_paint() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let primary = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+        let shared_settings = primary.settings_snapshot();
+        let (_open_sender, open_requests) = crate::open_requests::channel();
+        let (menu_sender, native_menu_commands) = crate::native_menu::channel();
+        let mut shell = AppShell {
+            primary,
+            shared_settings,
+            open_requests,
+            native_menu_commands,
+            closing: Default::default(),
+            secondary: Vec::new(),
+            active: ActiveSession::Primary,
+            next_session_id: FIRST_SECONDARY_SESSION_ID,
+            pending_windows: VecDeque::new(),
+            captures: CaptureController::disabled_for_tests(),
+            capture_batch: None,
+            launch_mode: LaunchMode::Interactive,
+            primary_visible: false,
+            quit_requested: false,
+        };
+        let mut frame = eframe::Frame::_new_kittest();
+        let raw = egui::RawInput::default();
+        for command in [
+            AppCommand::New,
+            AppCommand::Copy,
+            AppCommand::Paste,
+            AppCommand::Save,
+        ] {
+            assert!(!shell.command_available(&context, command));
+            menu_sender
+                .send(NativeMenuRequest::Command(command))
+                .unwrap();
+        }
+        let _ = context.run_logic(&raw, |ctx| shell.logic(ctx, &mut frame));
+        assert!(!shell.primary_visible);
+        assert!(!shell.primary.needs_visible_window());
+        menu_sender
+            .send(NativeMenuRequest::Command(AppCommand::Settings))
+            .unwrap();
+        let output = context.run_logic(&raw, |ctx| shell.logic(ctx, &mut frame));
+        let child =
+            crate::child_view::child_viewport_id(egui::ViewportId::ROOT, "tiptoptyp-settings");
+        assert!(
+            output.viewport_commands[&child]
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::Visible(true)))
+        );
+        assert!(!shell.primary_visible);
+        for request in [
+            NativeMenuRequest::Reopen,
+            NativeMenuRequest::Command(AppCommand::NewWindow),
+        ] {
+            shell.primary.finish_window_close();
+            shell.primary_visible = false;
+            menu_sender.send(request).unwrap();
+            let output = context.run_logic(&raw, |ctx| shell.logic(ctx, &mut frame));
+            assert!(shell.primary_visible);
+            assert!(shell.primary.needs_visible_window());
+            assert!(shell.secondary.is_empty());
+            assert!(
+                output.viewport_commands[&egui::ViewportId::ROOT]
+                    .iter()
+                    .any(|command| matches!(command, egui::ViewportCommand::Visible(true)))
+            );
+        }
+        shell.primary.finish_window_close();
+        shell.primary_visible = false;
+        menu_sender
+            .send(NativeMenuRequest::Command(AppCommand::Open))
+            .unwrap();
+        // Test routing without launching a native picker in the headless suite.
+        let _ = context.run_logic(&raw, |ctx| shell.dispatch_process_requests(ctx));
+        assert!(shell.primary_visible);
+        assert!(shell.primary.needs_visible_window());
+    }
 
     #[test]
     fn closing_active_window_never_selects_a_hidden_root_over_a_survivor() {
@@ -877,9 +1027,33 @@ mod tests {
     }
 
     #[test]
+    fn hidden_child_with_stale_focus_does_not_enable_clipboard_commands() {
+        let context = egui::Context::default();
+        let child =
+            crate::child_view::child_viewport_id(egui::ViewportId::ROOT, "tiptoptyp-settings");
+        for hidden in [false, true] {
+            let mut raw = egui::RawInput::default();
+            raw.viewports.insert(
+                child,
+                egui::ViewportInfo {
+                    focused: Some(true),
+                    minimized: Some(false),
+                    occluded: Some(hidden),
+                    ..Default::default()
+                },
+            );
+            let _ = context.run_logic(&raw, |ctx| {
+                assert_eq!(
+                    crate::app::owner_has_focused_viewport(ctx, egui::ViewportId::ROOT, false),
+                    !hidden
+                );
+            });
+        }
+    }
+
+    #[test]
     fn no_window_state_keeps_creation_and_settings_but_not_document_commands() {
         for command in [
-            AppCommand::New,
             AppCommand::NewWindow,
             AppCommand::Open,
             AppCommand::OpenInNewWindow,
@@ -888,6 +1062,7 @@ mod tests {
             assert!(command_available_without_document(command));
         }
         for command in [
+            AppCommand::New,
             AppCommand::Save,
             AppCommand::SaveAs,
             AppCommand::Copy,

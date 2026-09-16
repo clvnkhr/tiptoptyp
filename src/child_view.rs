@@ -35,6 +35,7 @@ pub(crate) struct ChildViewSpec {
     capture_target: &'static str,
     active: bool,
     mouse_passthrough: bool,
+    visible: Option<bool>,
 }
 
 impl ChildViewSpec {
@@ -57,6 +58,7 @@ impl ChildViewSpec {
             capture_target,
             active: true,
             mouse_passthrough: false,
+            visible: None,
         }
     }
 
@@ -78,6 +80,7 @@ impl ChildViewSpec {
             capture_target,
             active: true,
             mouse_passthrough: false,
+            visible: None,
         }
     }
 
@@ -97,6 +100,7 @@ impl ChildViewSpec {
             capture_target,
             active: true,
             mouse_passthrough: false,
+            visible: None,
         }
     }
 
@@ -117,7 +121,13 @@ impl ChildViewSpec {
             capture_target,
             active,
             mouse_passthrough: false,
+            visible: None,
         }
+    }
+
+    pub(crate) fn with_visible(mut self, visible: bool) -> Self {
+        self.visible = Some(visible);
+        self
     }
 
     fn viewport(self) -> egui::ViewportBuilder {
@@ -140,7 +150,9 @@ impl ChildViewSpec {
                 .with_active(self.active)
                 .with_mouse_passthrough(self.mouse_passthrough),
         };
-        decorate_child_viewport(viewport)
+        let mut viewport = decorate_child_viewport(viewport);
+        viewport.visible = self.visible;
+        viewport
     }
 }
 

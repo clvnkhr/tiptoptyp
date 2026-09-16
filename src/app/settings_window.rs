@@ -4,6 +4,8 @@ use super::{settings_panel::*, *};
 
 #[derive(PartialEq)]
 pub(super) struct SettingsWindowInput {
+    pub(super) visible: bool,
+    pub(super) retain_when_closed: bool,
     pub(super) settings: AppSettings,
     pub(super) theme_override: Option<CaptureThemeProfile>,
     pub(super) snapshot_scene: Option<UiSnapshotScene>,
@@ -25,6 +27,56 @@ mod tests {
         Harness,
         kittest::{Queryable as _, by},
     };
+
+    #[test]
+    fn dormant_settings_is_registered_hidden_and_close_retains_it_for_logic_reopen() {
+        let context = egui::Context::default();
+        context.set_embed_viewports(false);
+        let shared = Arc::new(Mutex::new(SettingsWindow::default()));
+        let captures = CaptureController::disabled_for_tests();
+        let child = scoped_child_viewport_id(&context, "tiptoptyp-settings");
+        let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+            let mut snapshot = input(ui.ctx());
+            snapshot.visible = false;
+            snapshot.retain_when_closed = true;
+            SettingsWindow::show(
+                &shared,
+                ui.ctx(),
+                &captures,
+                snapshot,
+                &FontCatalog::default(),
+            );
+        });
+        assert_eq!(output.viewport_output[&child].builder.visible, Some(false));
+        let callback = output.viewport_output[&child]
+            .viewport_ui_cb
+            .clone()
+            .unwrap();
+        output.textures_delta.clear();
+        let mut raw = egui::RawInput {
+            viewport_id: child,
+            ..Default::default()
+        };
+        raw.viewports
+            .entry(child)
+            .or_default()
+            .events
+            .push(egui::ViewportEvent::Close);
+        let mut output = context.run_ui(raw, |ui| callback(ui));
+        let commands = &output.viewport_output[&child].commands;
+        assert!(
+            commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::CancelClose))
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::Visible(false)))
+        );
+        output.textures_delta.clear();
+        assert!(shared.lock().unwrap().has_actions());
+    }
 
     #[test]
     fn settings_search_native_edit_commands_and_preference_clicks_survive_deferred_delivery() {
@@ -122,6 +174,8 @@ mod tests {
     fn input(context: &egui::Context) -> SettingsWindowInput {
         use crate::toolchain::{ToolKind, ToolOrigin};
         SettingsWindowInput {
+            visible: true,
+            retain_when_closed: false,
             settings: AppSettings::default(),
             theme_override: None,
             snapshot_scene: None,
@@ -454,7 +508,45 @@ impl SettingsWindow {
         input: SettingsWindowInput,
         fonts: &FontCatalog,
     ) {
+        let child = scoped_child_viewport_id(context, "tiptoptyp-settings");
+        let changed = {
+            let mut state = shared.lock().unwrap();
+            state.synchronize(input, fonts) || state.ui.scroll_target.is_some()
+        };
+        if changed || captures.has_pending_for("settings") {
+            context.request_repaint_of(child);
+        }
+        Self::show_registered(shared, context, captures);
+    }
+
+    /// Re-register a retained hidden surface without rebuilding its settings,
+    /// toolchain and font snapshots on every editor frame.
+    pub(super) fn retain_hidden(
+        shared: &Arc<Mutex<Self>>,
+        context: &egui::Context,
+        captures: &CaptureController,
+    ) -> bool {
+        {
+            let mut state = shared.lock().unwrap();
+            let Some(input) = state.input.as_mut() else {
+                return false;
+            };
+            input.visible = false;
+            input.retain_when_closed = true;
+        }
+        Self::show_registered(shared, context, captures);
+        true
+    }
+
+    fn show_registered(
+        shared: &Arc<Mutex<Self>>,
+        context: &egui::Context,
+        captures: &CaptureController,
+    ) {
+        let state = shared.lock().unwrap();
+        let input = state.input.as_ref().expect("registered Settings input");
         let appearance = input.appearance;
+        let visible = input.visible;
         let style = input.style.clone();
         let narrow = matches!(
             input.snapshot_scene,
@@ -464,14 +556,7 @@ impl SettingsWindow {
                     | UiSnapshotScene::SettingsStatus
             )
         );
-        let child = scoped_child_viewport_id(context, "tiptoptyp-settings");
-        let changed = {
-            let mut state = shared.lock().unwrap();
-            state.synchronize(input, fonts) || state.ui.scroll_target.is_some()
-        };
-        if changed || captures.has_pending_for("settings") {
-            context.request_repaint_of(child);
-        }
+        drop(state);
         let spec = ChildViewSpec::persistent(
             "tiptoptyp-settings",
             "tiptoptyp Settings",
@@ -485,7 +570,8 @@ impl SettingsWindow {
             ],
             METRICS.chrome.settings_min_size,
             "settings",
-        );
+        )
+        .with_visible(visible);
         let parent = context.viewport_id();
         let shared = shared.clone();
         let child_captures = captures.clone();
@@ -508,6 +594,17 @@ impl SettingsWindow {
                 state.text_input_focused = ui.ctx().text_edit_focused();
                 let shortcut = state.collect_owner_shortcuts(ui.ctx());
                 if state.accept_actions(actions) || close || gained_focus || shortcut {
+                    if close
+                        && state
+                            .input
+                            .as_ref()
+                            .is_some_and(|input| input.retain_when_closed)
+                    {
+                        ui.ctx()
+                            .send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                        ui.ctx()
+                            .send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                    }
                     state.close_requested |= close;
                     // Search, scrolling, tooltips, picker navigation and font
                     // preview completion are all local to this child viewport.

@@ -48,6 +48,7 @@ repository status/indexing needs a separate, controlled repository workload.
 | `fonts` | Settings font picker open, deterministic sample font |
 | `hover` | Function-hover native popup above the editor |
 | `large` | 5,000 Unicode comment lines and 100 definitions, over 300 KB of source; short rendered PDF |
+| `no-window` | Capture the small document, then close it through the retained-root lifecycle before warmup; no document windows remain |
 
 These are **steady-state starting points**, not automated typing, scrolling,
 startup, or huge-PDF benchmarks. For an active workload, choose a longer duration,
@@ -57,6 +58,14 @@ case isolates source scaling; it does not establish preview scaling.
 QA helpers remain active (including deterministic font-picker fixture setup);
 use the samples to distinguish fixture overhead and confirm suspected production
 hot paths in an ordinary app launch before changing them.
+
+The `no-window` scenario sets `TIPTOPTYP_PROFILE_NO_WINDOW=1` for the profiling
+build. It performs one document-close transition after capture, not repeated
+synthetic frames. The normal profiling deadline still quits the process.
+Compare worker waiting stacks and retained service threads as well as UI spans:
+eframe already suppresses editor painting when all native windows are hidden,
+so an empty span report alone does not establish that document services stopped.
+See [the dormant-host results](multi-window-audit.md#dormant-host-lifecycle-todo-160).
 
 The app finishes its initial QA capture, signals readiness, warms up (default
 3 seconds), measures for 10 seconds, and closes after a 2-second grace period.

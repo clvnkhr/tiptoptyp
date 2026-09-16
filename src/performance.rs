@@ -4,7 +4,7 @@
 #[cfg(feature = "profiling")]
 mod recording;
 #[cfg(feature = "profiling")]
-pub(crate) use recording::{Session, span, tick};
+pub(crate) use recording::{Session, span, take_no_window_request, tick};
 
 #[cfg(not(feature = "profiling"))]
 pub(crate) struct Session;
@@ -36,6 +36,11 @@ pub(crate) fn span(_name: &'static str) -> Span {
 #[cfg(not(feature = "profiling"))]
 #[inline(always)]
 pub(crate) fn tick(_context: &eframe::egui::Context, _ready: impl FnOnce() -> bool) {}
+
+#[cfg(not(feature = "profiling"))]
+pub(crate) fn take_no_window_request() -> bool {
+    false
+}
 
 #[cfg(test)]
 mod tests {

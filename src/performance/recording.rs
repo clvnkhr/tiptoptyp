@@ -5,7 +5,10 @@ use std::{
     fs::{File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
-    sync::{Mutex, OnceLock},
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -44,6 +47,9 @@ impl Session {
                 duration,
                 window: OnceLock::new(),
                 stats: Mutex::new(Statistics::default()),
+                close_document: AtomicBool::new(
+                    std::env::var("TIPTOPTYP_PROFILE_NO_WINDOW").as_deref() == Ok("1"),
+                ),
             })
             .map_err(|_| "only one profiling session is allowed per process")?;
         Ok(Self(Some(output)))
@@ -125,6 +131,14 @@ struct Recorder {
     duration: Duration,
     window: OnceLock<Instant>,
     stats: Mutex<Statistics>,
+    close_document: AtomicBool,
+}
+
+/// One close transition after initial capture, before the measured interval.
+pub(crate) fn take_no_window_request() -> bool {
+    RECORDER.get().is_some_and(|recorder| {
+        recorder.window.get().is_some() && recorder.close_document.swap(false, Ordering::Relaxed)
+    })
 }
 
 impl Recorder {
@@ -353,6 +367,7 @@ mod tests {
             duration: Duration::from_secs(3),
             window: OnceLock::new(),
             stats: Mutex::default(),
+            close_document: AtomicBool::new(false),
         };
         assert!(!recorder.admits(origin, origin));
         recorder.window.set(origin).unwrap();

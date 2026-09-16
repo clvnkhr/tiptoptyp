@@ -1561,7 +1561,12 @@ fn worker_loop(
             }
         }
 
-        let command = match commands.recv_timeout(WORKER_POLL_INTERVAL) {
+        let next = if session.is_some() {
+            commands.recv_timeout(WORKER_POLL_INTERVAL)
+        } else {
+            commands.recv().map_err(|_| RecvTimeoutError::Disconnected)
+        };
+        let command = match next {
             Ok(command) => command,
             Err(RecvTimeoutError::Timeout) => continue,
             Err(RecvTimeoutError::Disconnected) => break,

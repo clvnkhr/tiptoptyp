@@ -1,4 +1,6 @@
 mod editor_view;
+mod lifecycle;
+use lifecycle::DocumentLifecycle;
 mod native_views;
 mod settings_panel;
 mod settings_view;
@@ -1042,6 +1044,7 @@ fn take_settings_scroll_target(
 
 pub struct EditorApp {
     document: DocumentSession,
+    lifecycle: DocumentLifecycle,
     process_close_pending: bool,
     highlighter: SyntaxHighlighter,
     auto_pair_syntax: crate::auto_pairs::PairSyntax,
@@ -1065,6 +1068,7 @@ pub struct EditorApp {
     problems_visible: bool,
     settings_visible: bool,
     settings_window: Arc<std::sync::Mutex<SettingsWindow>>,
+    retain_settings_viewport: bool,
     shortcut_editor_visible: bool,
     shortcut_query: String,
     shortcut_capture: Option<ShortcutAction>,
@@ -1200,6 +1204,7 @@ impl EditorApp {
             snapshot_scene,
             settings,
             EditorWindowHost::Root,
+            DocumentLifecycle::Active,
         );
         if let Some(message) = load_error {
             push_status_log_entry(
@@ -1229,6 +1234,7 @@ impl EditorApp {
         snapshot_scene: Option<UiSnapshotScene>,
         mut settings: AppSettings,
         window_host: EditorWindowHost,
+        lifecycle: DocumentLifecycle,
     ) -> Self {
         if snapshot_scene.is_some() {
             settings.ui_font_weight = DEFAULT_UI_FONT_WEIGHT;
@@ -1310,6 +1316,7 @@ impl EditorApp {
             settings.typst_overrides.for_dark(active_theme.dark_mode),
         ));
         let mut app = Self {
+            lifecycle,
             process_close_pending: false,
             document: DocumentSession::new(
                 tiptoptyp_core::document::WindowSessionId::new(viewport.0.value()),
@@ -1328,7 +1335,7 @@ impl EditorApp {
             asset_thumbnail_token: Default::default(),
             asset_hover: None,
             pending_asset_page: None,
-            compile_deadline: Some(Instant::now()),
+            compile_deadline: lifecycle.allows_document_work().then(Instant::now),
             compilation_paused: false,
             preview: PreviewController::new(preview_dark, settings.preview_preference),
             editor_data: EditorDerivedData::default(),
@@ -1338,6 +1345,7 @@ impl EditorApp {
             problems_visible: false,
             settings_visible: false,
             settings_window: Arc::default(),
+            retain_settings_viewport: false,
             shortcut_editor_visible: false,
             shortcut_query: String::new(),
             shortcut_capture: None,
@@ -1376,7 +1384,11 @@ impl EditorApp {
             workspace_scan: LatestJob::default(),
             next_workspace_refresh: Instant::now(),
             project_index: ProjectIndex::default(),
-            project_index_deadline: tiptoptyp_core::scheduling::Debounce::at(Instant::now()),
+            project_index_deadline: if lifecycle.allows_document_work() {
+                tiptoptyp_core::scheduling::Debounce::at(Instant::now())
+            } else {
+                Default::default()
+            },
             project_index_job: LatestJob::default(),
             captures,
             snapshot_scene,
@@ -1501,6 +1513,7 @@ impl EditorApp {
             None,
             settings,
             EditorWindowHost::Secondary,
+            DocumentLifecycle::Active,
         );
         if let Some(workspace_root) = untitled_workspace {
             app.workspace_root = canonical_or_absolute(&workspace_root);
@@ -1513,6 +1526,21 @@ impl EditorApp {
 
     pub(crate) fn ui_in_window(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         <Self as eframe::App>::ui(self, ui, frame);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn dormant_for_tests(context: &egui::Context, root: PathBuf) -> Self {
+        Self::new_session(
+            context,
+            egui::ViewportId::ROOT,
+            Some(root),
+            CaptureController::disabled_for_tests(),
+            None,
+            Some(UiSnapshotScene::Main),
+            AppSettings::default(),
+            EditorWindowHost::Root,
+            DocumentLifecycle::Dormant,
+        )
     }
 
     /// Assign a process-level native menu command to this document session.
@@ -1606,10 +1634,120 @@ impl EditorApp {
     }
 
     pub(crate) fn finish_window_close(&mut self) {
+        if !self.lifecycle.suspend() {
+            return;
+        }
+        let _ = self.compiler.pause(self.document.revision());
+        self.stop_tinymist_session();
+        self.preview.recovery.reset();
+        self.preview.connection.suspend(false);
+        self.preview.tinymist_state = ServiceState::Disabled("No document window is open".into());
+        self.preview.webview_state = ServiceState::Disabled("No document window is open".into());
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            self.webview = None;
+            self.webview_url = None;
+            self.webview_navigation = None;
+            self.webview_reload_pending = false;
+        }
+        self.compile_deadline = None;
+        self.project_index_deadline.clear();
+        self.project_index_job.supersede();
+        self.workspace_scan.supersede();
+        self.workspace = None;
+        self.workspace_error = None;
+        self.project_index = ProjectIndex::default();
+        // Read results are discarded. Exclusive mutations detach to the
+        // process completion mailbox instead of being canceled on close.
+        self.git = Default::default();
+        self.git_editor = Default::default();
+        self.asset_thumbnail_token.advance();
+        self.asset_thumbnail_loader
+            .cancel_before(self.asset_thumbnail_token);
+        self.close_app_popup();
+        self.diagnostic_tooltip = None;
+        self.tooltip_request = None;
         // macOS retains the root native window as a process host. Its closed
         // document must not retain discarded edits or an autosave destination.
         self.reset_untitled_document();
         self.document_workflow.revoke_close();
+    }
+
+    pub(crate) fn request_window_resume(&mut self) {
+        self.lifecycle.request_resume();
+    }
+
+    pub(crate) fn reuse_dormant_window(&mut self, request: EditorWindowRequest) {
+        self.lifecycle.request_resume();
+        match request {
+            EditorWindowRequest::New { workspace_root } => {
+                self.workspace_root = canonical_or_absolute(&workspace_root);
+                self.remember_workspace(&self.workspace_root.clone());
+                self.reset_untitled_document();
+            }
+            EditorWindowRequest::Open(path) => self.open_external_path(path),
+        }
+    }
+
+    pub(crate) fn needs_visible_window(&self) -> bool {
+        self.lifecycle.needs_visible_window()
+    }
+
+    /// No painting or stale root input in eframe's hidden-window logic hook.
+    pub(crate) fn hidden_host_logic(&mut self, context: &egui::Context, frame: &eframe::Frame) {
+        let _span = crate::performance::span("host.dormant.logic");
+        self.process_open_requests(context);
+        self.execute_pending_document_action(context, frame);
+        self.poll_export_dialog(context);
+        self.poll_tool_picker(context);
+        self.poll_document_dialog(context);
+        self.poll_file_import();
+        self.poll_package_catalog(context);
+        self.poll_font_catalog(context);
+        self.consume_settings_actions(context, frame);
+        let was_visible = self.settings_visible;
+        self.process_native_menu_commands(context, frame);
+        if was_visible != self.settings_visible {
+            let child = scoped_child_viewport_id(context, "tiptoptyp-settings");
+            context
+                .send_viewport_cmd_to(child, egui::ViewportCommand::Visible(self.settings_visible));
+            if self.settings_visible {
+                context.send_viewport_cmd_to(child, egui::ViewportCommand::Minimized(false));
+                context.send_viewport_cmd_to(child, egui::ViewportCommand::Focus);
+            }
+        }
+        // Drain canceled service results without accepting them or retrying.
+        while self.compiler.try_recv().is_some() {}
+        while self.asset_loader.try_recv().is_some() {}
+        while self.asset_thumbnail_loader.try_recv().is_some() {}
+        while self.tinymist.try_recv().is_some() {}
+        self.record_notice_transition();
+    }
+
+    pub(crate) fn hidden_host_ui(&mut self, context: &egui::Context, frame: &eframe::Frame) {
+        let _span = crate::performance::span("host.dormant.ui");
+        self.sync_runtime_settings(context);
+        if owner_has_focused_viewport(context, context.viewport_id(), false) {
+            self.handle_shortcuts(context, frame);
+        }
+        self.show_settings_window(context, frame);
+        self.show_shortcut_editor_window(context);
+        self.show_typst_overrides_window(context);
+        self.show_workspace_chooser(context);
+        self.show_package_manager_window(context);
+        self.show_app_modal_window(context);
+    }
+
+    pub(crate) fn register_dormant_settings(
+        &mut self,
+        context: &egui::Context,
+        frame: &eframe::Frame,
+    ) {
+        // Once allocated as a process host, keep this native surface alive
+        // across document resumes. Dropping it can detach the current CGL
+        // view before eframe switches back to the root surface.
+        self.retain_settings_viewport = true;
+        self.show_settings_window(context, frame);
     }
 
     pub(crate) fn show_window_notice(&mut self, message: String) {
@@ -1833,6 +1971,9 @@ impl EditorApp {
     }
 
     fn schedule_project_index(&mut self) {
+        if !self.lifecycle.allows_document_work() {
+            return;
+        }
         self.project_index_deadline
             .schedule(Instant::now() + PROJECT_INDEX_DEBOUNCE);
     }
@@ -2339,7 +2480,10 @@ impl EditorApp {
     }
 
     fn schedule_compile_now(&mut self) {
-        if !self.preview_processing_enabled() || !self.may_run_compilation() {
+        if !self.lifecycle.allows_document_work()
+            || !self.preview_processing_enabled()
+            || !self.may_run_compilation()
+        {
             self.compile_deadline = None;
             return;
         }
@@ -3169,7 +3313,7 @@ impl EditorApp {
         context.request_repaint();
     }
 
-    fn handle_dropped_file(&mut self, context: &egui::Context) {
+    fn poll_file_import(&mut self) {
         match self.file_import.poll() {
             LatestJobPoll::Ready(message) => {
                 self.notice = Some(Notice {
@@ -3184,6 +3328,10 @@ impl EditorApp {
             }
             LatestJobPoll::Pending | LatestJobPoll::Idle => {}
         }
+    }
+
+    fn handle_dropped_file(&mut self, context: &egui::Context) {
+        self.poll_file_import();
         if self.document_flow_busy() || self.file_import.is_running() {
             return;
         }
@@ -4186,6 +4334,9 @@ impl EditorApp {
         if self.document_flow_busy() {
             return;
         }
+        if !matches!(action, DeferredDocumentAction::CloseWindow) {
+            self.lifecycle.request_resume();
+        }
         let key = self.document.key();
         let dirty = self.document.is_dirty();
         let name = self.document.name();
@@ -4341,6 +4492,9 @@ impl EditorApp {
     }
 
     fn reset_document_services(&mut self) {
+        if !self.lifecycle.allows_document_work() {
+            return;
+        }
         let root = self.project_root();
         self.workspace = None;
         self.workspace_error = None;
@@ -4423,6 +4577,9 @@ impl EditorApp {
     }
 
     fn request_workspace_scan(&mut self, root: PathBuf) {
+        if !self.lifecycle.allows_document_work() {
+            return;
+        }
         if let Err(error) = self
             .workspace_scan
             .start("tiptoptyp-workspace-scan", move || {
@@ -4605,13 +4762,7 @@ impl EditorApp {
         }
     }
 
-    fn restart_tinymist_with_handoff(&mut self, preserve_preview: bool) {
-        // A restart invalidates every outstanding formatting request. Do not
-        // carry save-after-format intent into the replacement generation.
-        self.manual_format_revision = None;
-        self.editor_completion = None;
-        let start_preview = self.tinymist_session_requested();
-        self.preview.tinymist_preview_enabled = start_preview;
+    fn stop_tinymist_session(&mut self) {
         if let Some(generation) = self.tinymist_generation.take() {
             let current_uri = self.tinymist_uri.take();
             let preview_uri = self.tinymist_preview_uri.take();
@@ -4630,6 +4781,17 @@ impl EditorApp {
         self.tinymist_current_open = false;
         // Keep the private backing alive through didClose, then clean it.
         self.tinymist_unsaved_document.take();
+    }
+
+    fn restart_tinymist_with_handoff(&mut self, preserve_preview: bool) {
+        if !self.lifecycle.allows_document_work() {
+            return;
+        }
+        self.manual_format_revision = None;
+        self.editor_completion = None;
+        let start_preview = self.tinymist_session_requested();
+        self.preview.tinymist_preview_enabled = start_preview;
+        self.stop_tinymist_session();
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         let has_webview = self.webview.is_some();
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -7955,6 +8117,15 @@ impl eframe::App for EditorApp {
         // them after shortcut normalization so they reach the focused widget
         // unchanged during the UI pass below.
         self.process_native_menu_commands(&context, frame);
+        if self.lifecycle.needs_visible_window() {
+            // A New/Open queued during dormancy replaces the buffer before
+            // services start, avoiding a throwaway untitled service generation.
+            self.execute_pending_document_action(&context, frame);
+            if self.lifecycle.activate() {
+                self.reset_document_services();
+                self.schedule_compile_now();
+            }
+        }
         self.execute_pending_app_popup_action(&context, frame);
         let drop_id = viewport_scoped_id(&context, "file-drop-target");
         context.data_mut(|data| data.remove::<FileDropTarget>(drop_id));
@@ -11760,7 +11931,7 @@ pub(crate) fn owner_has_focused_viewport(
                     .raw
                     .viewports
                     .get(&viewport)
-                    .is_some_and(|info| info.focused == Some(true))
+                    .is_some_and(|info| info.focused == Some(true) && info.visible() != Some(false))
         })
     })
 }

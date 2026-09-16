@@ -4,6 +4,81 @@ use crate::explorer::ExplorerPanelPhase;
 use crate::settings::InterfaceTheme;
 
 #[test]
+fn dormant_host_rejects_document_jobs_but_delivers_commands_and_dialog_completions() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    context.set_embed_viewports(false);
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    let frame = eframe::Frame::_new_kittest();
+    let mut raw = egui::RawInput::default();
+    raw.viewports
+        .get_mut(&egui::ViewportId::ROOT)
+        .unwrap()
+        .focused = Some(false);
+    for _ in 0..20 {
+        app.schedule_compile_now();
+        app.schedule_project_index();
+        app.reset_document_services();
+        app.restart_tinymist();
+        let _ = context.run_logic(&raw, |ctx| app.hidden_host_logic(ctx, &frame));
+        assert!(app.compile_deadline.is_none());
+        assert!(!app.project_index_deadline.is_pending());
+        assert!(!app.project_index_job.is_running());
+        assert!(!app.workspace_scan.is_running());
+        assert!(app.tinymist_generation.is_none());
+    }
+    app.pending_tool_picker = Some(PendingDialog::new(ToolPickerTarget::UiFont, async { None }));
+    app.enqueue_native_menu_command(AppCommand::Settings);
+    let output = context.run_logic(&raw, |ctx| app.hidden_host_logic(ctx, &frame));
+    assert!(app.pending_tool_picker.is_none());
+    assert!(app.settings_visible);
+    assert!(!app.needs_visible_window());
+    let settings_id = scoped_child_viewport_id(&context, "tiptoptyp-settings");
+    assert!(
+        output.viewport_commands[&settings_id]
+            .iter()
+            .any(|command| matches!(command, egui::ViewportCommand::Visible(true)))
+    );
+    assert!(
+        !output
+            .viewport_commands
+            .contains_key(&egui::ViewportId::ROOT)
+    );
+    app.enqueue_native_menu_command(AppCommand::New);
+    let _ = context.run_logic(&raw, |ctx| app.hidden_host_logic(ctx, &frame));
+    assert!(app.needs_visible_window());
+    app.schedule_compile_now();
+    app.reset_document_services();
+    assert!(
+        app.compile_deadline.is_none(),
+        "resumption waits for queued replacement"
+    );
+    assert!(app.tinymist_generation.is_none());
+}
+
+#[test]
+fn dormant_host_does_not_replay_keyboard_input_from_the_closed_document() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    context.set_embed_viewports(false);
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    let frame = eframe::Frame::_new_kittest();
+    let mut raw = egui::RawInput::default();
+    raw.events.push(egui::Event::Key {
+        key: egui::Key::N,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::COMMAND,
+    });
+    let mut output = context.run_ui(raw, |ui| app.hidden_host_ui(ui.ctx(), &frame));
+    output.textures_delta.clear();
+    assert!(!app.needs_visible_window());
+    assert!(app.tinymist_generation.is_none());
+    assert!(app.compile_deadline.is_none());
+}
+
+#[test]
 fn closing_retained_root_clears_discarded_buffer_autosave_and_old_receipts() {
     let mut document = DocumentSession::new(
         tiptoptyp_core::document::WindowSessionId::new(7),
@@ -5564,4 +5639,31 @@ fn bracket_settings_controls_change_each_palette_and_can_be_disabled() {
     harness.run();
     assert!(harness.state().enabled);
     assert_eq!(harness.state().palettes[0], BracketPalette::Orchid);
+}
+#[test]
+fn dormant_settings_surface_survives_document_resume_and_close() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    context.set_embed_viewports(false);
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    let frame = eframe::Frame::_new_kittest();
+    let child = scoped_child_viewport_id(&context, "tiptoptyp-settings");
+    let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+        app.register_dormant_settings(ui.ctx(), &frame);
+    });
+    assert_eq!(output.viewport_output[&child].builder.visible, Some(false));
+    output.textures_delta.clear();
+    app.request_window_resume();
+    assert!(app.lifecycle.activate());
+    for visible in [false, true, false] {
+        app.settings_visible = visible;
+        let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+            app.show_settings_window(ui.ctx(), &frame);
+        });
+        assert_eq!(
+            output.viewport_output[&child].builder.visible,
+            Some(visible)
+        );
+        output.textures_delta.clear();
+    }
 }

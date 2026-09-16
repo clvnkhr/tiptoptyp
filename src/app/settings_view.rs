@@ -2,8 +2,11 @@
 use super::*;
 
 impl EditorApp {
-    pub(super) fn show_settings_window(&mut self, context: &egui::Context, frame: &eframe::Frame) {
-        use super::{settings_panel::SettingsStatus, settings_window::SettingsWindowInput};
+    pub(super) fn consume_settings_actions(
+        &mut self,
+        context: &egui::Context,
+        frame: &eframe::Frame,
+    ) {
         let close = if self.settings_window.lock().unwrap().has_actions() {
             let original = self.settings_snapshot();
             let mut edited = original.clone();
@@ -29,13 +32,30 @@ impl EditorApp {
             } else {
                 context.viewport_id()
             };
-            context.send_viewport_cmd_to(target, egui::ViewportCommand::Focus);
+            if self.lifecycle.allows_document_work() || self.shortcut_editor_visible {
+                context.send_viewport_cmd_to(target, egui::ViewportCommand::Focus);
+            }
         }
-        if !self.settings_visible
-            || self.document_workflow.modal().is_some()
-            || self.rename_dialog.is_some()
-        {
+    }
+
+    pub(super) fn show_settings_window(&mut self, context: &egui::Context, frame: &eframe::Frame) {
+        use super::{settings_panel::SettingsStatus, settings_window::SettingsWindowInput};
+        self.consume_settings_actions(context, frame);
+        // The dormant host's surface must survive the first resumed frame,
+        // including modal dialogs. Hiding is safe; destroying its current CGL
+        // view before eframe switches surfaces is not.
+        let retain = self.retain_settings_viewport || !self.lifecycle.allows_document_work();
+        let visible = self.settings_visible
+            && self.document_workflow.modal().is_none()
+            && self.rename_dialog.is_none();
+        if !visible && !retain {
             self.settings_window.lock().unwrap().suspend();
+            return;
+        }
+        if !visible
+            && retain
+            && SettingsWindow::retain_hidden(&self.settings_window, context, &self.captures)
+        {
             return;
         }
         let appearance = self
@@ -49,6 +69,8 @@ impl EditorApp {
                 }
             });
         let input = SettingsWindowInput {
+            visible,
+            retain_when_closed: retain,
             settings: self.settings_snapshot(),
             theme_override: self.theme_override.clone(),
             snapshot_scene: self.snapshot_scene,
