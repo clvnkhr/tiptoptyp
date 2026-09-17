@@ -34,7 +34,26 @@ impl PairSyntax {
         }
     }
 
+    fn raw_delimiter_has_language(source: &str, byte: usize) -> bool {
+        let ticks = source[byte..]
+            .bytes()
+            .take_while(|tick| *tick == b'`')
+            .count();
+        ticks >= 3
+            && source[byte + ticks..]
+                .chars()
+                .next()
+                .is_some_and(|character| {
+                    character.is_ascii_alphanumeric() || "_-+".contains(character)
+                })
+    }
+
     pub(crate) fn newline(&mut self, source: &str, byte: usize) -> Option<(String, usize)> {
+        let line_ending = if source.contains("\r\n") {
+            "\r\n"
+        } else {
+            "\n"
+        };
         let line_start = source[..byte].rfind('\n').map_or(0, |at| at + 1);
         let prefix = &source[line_start..byte];
         let indent_len = prefix
@@ -45,9 +64,9 @@ impl PairSyntax {
         if source[..byte].ends_with('$') && source[byte..].starts_with('$') {
             self.prepare(source);
             if self.empty_at(source, byte) {
-                let body = format!("\n{indent}\t");
+                let body = format!("{line_ending}{indent}  ");
                 let advance = body.chars().count();
-                return Some((format!("{body}\n{indent}"), advance));
+                return Some((format!("{body}{line_ending}{indent}"), advance));
             }
         }
         let last_tick = prefix.rfind('`')?;
@@ -65,28 +84,37 @@ impl PairSyntax {
         let fence = &header[..ticks];
         let opening = line_start + fence_start;
         let closing = match self.raw_fence_at(opening) {
-            Some(closing) => closing,
-            None => {
-                // An unfinished fence is an Error node, not a Raw node.
+            Some(Some(at)) if !Self::raw_delimiter_has_language(source, at) => Some(at),
+            Some(None) | Some(Some(_)) | None => {
+                // A later tagged raw delimiter is another block opener, not
+                // the closer for this unfinished opener.
                 // Probe a complete block to validate its syntax context.
-                self.0.edit(byte..byte, &format!("\nx\n{fence}"));
-                if self.raw_fence_at(opening) != Some(Some(byte + 3)) {
+                self.0
+                    .edit(byte..byte, &format!("{line_ending}x{line_ending}{fence}"));
+                let closing_offset = byte + 2 * line_ending.len() + 1;
+                if self.raw_fence_at(opening) != Some(Some(closing_offset)) {
                     return None;
                 }
                 None
             }
         };
-        let body = format!("\n{indent}");
+        let body = format!("{line_ending}{indent}");
         let advance = body.chars().count();
         match closing {
-            Some(at) if at == byte => Some((format!("{body}\n{indent}"), advance)),
+            Some(at) if at == byte => Some((format!("{body}{line_ending}{indent}"), advance)),
             Some(_) => Some((body, advance)),
             None if byte == source.len()
-                || source[byte..].starts_with(['\n', ')', ']', '}', ',']) =>
+                || source[byte..].starts_with(['\n', '\r', ')', ']', '}', ',']) =>
             {
-                Some((format!("{body}\n{indent}{fence}"), advance))
+                Some((format!("{body}{line_ending}{indent}{fence}"), advance))
             }
-            _ => None,
+            None => {
+                let trailing_line_ending = if byte < source.len() { line_ending } else { "" };
+                Some((
+                    format!("{body}{line_ending}{indent}{fence}{trailing_line_ending}"),
+                    advance,
+                ))
+            }
         }
     }
 
@@ -234,12 +262,34 @@ impl TextBuffer for PairingBuffer<'_> {
                 return;
             }
         }
+        if self.enabled && text == " " {
+            let byte = self.source.byte_index_from_char_index(cursor.index).0;
+            if self.source[..byte].ends_with('$') && self.source[byte..].starts_with('$') {
+                self.syntax.prepare(self.source);
+                if self.syntax.empty_at(self.source, byte)
+                    && limit.saturating_sub(self.source.chars().count()) >= 2
+                {
+                    self.source.insert_text("  ", cursor.index);
+                    cursor.index += 1;
+                    return;
+                }
+            }
+        }
         // Completing a triple fence is not opening a fourth,
         // paired single backtick. Its matching fence is inserted on Enter.
         if self.enabled && text == "`" {
             let byte = self.source.byte_index_from_char_index(cursor.index).0;
             if self.source[..byte].ends_with("``") && !self.source[..byte].ends_with("```") {
-                self.source.insert_text_at(cursor, text, limit);
+                if self.source[byte..].starts_with('`') {
+                    // The first backtick created an empty single-backtick
+                    // pair. Treat the third typed backtick as the end of the
+                    // opening fence by stepping over that generated closer;
+                    // inserting another one would leave four ticks and make
+                    // Enter fail to recognize the fence.
+                    cursor.index += 1;
+                } else {
+                    self.source.insert_text_at(cursor, text, limit);
+                }
                 return;
             }
         }
@@ -361,13 +411,31 @@ mod tests {
             ("```|", "```\n|\n```"),
             ("  ```typ|", "  ```typ\n  |\n  ```"),
             ("````latex|", "````latex\n|\n````"),
+            ("```|\nexisting", "```\n|\n```\nexisting"),
+            ("```tex|\nexisting", "```tex\n|\n```\nexisting"),
+            ("before\n```|\nafter", "before\n```\n|\n```\nafter"),
+            ("before\n```tex|\nafter", "before\n```tex\n|\n```\nafter"),
+            (
+                "before\n  ```tex|\nafter",
+                "before\n  ```tex\n  |\n  ```\nafter",
+            ),
+            (
+                "before\r\n```tex|\r\nafter",
+                "before\r\n```tex\r\n|\r\n```\r\nafter",
+            ),
+            ("```tex|body", "```tex\n|\n```\nbody"),
+            ("text ```tex|body", "text ```tex\n|\n```\nbody"),
+            (
+                "```tex|\n```tex\n\\test=1\n```",
+                "```tex\n|\n```\n```tex\n\\test=1\n```",
+            ),
             ("```tex|```", "```tex\n|\n```"),
             ("```tex|\n```", "```tex\n|\n```"),
             ("#mi(```tex|)", "#mi(```tex\n|\n```)"),
             ("text ```tex|", "text ```tex\n|\n```"),
-            ("$|$", "$\n\t|\n$"),
-            ("  $|$", "  $\n  \t|\n  $"),
-            ("文 $|$", "文 $\n\t|\n$"),
+            ("$|$", "$\n  |\n$"),
+            ("  $|$", "  $\n    |\n  $"),
+            ("文 $|$", "文 $\n  |\n$"),
         ] {
             let cursor = before[..before.find('|').unwrap()].chars().count();
             let expected_cursor = expected[..expected.find('|').unwrap()].chars().count();
@@ -377,6 +445,51 @@ mod tests {
                 "{before}"
             );
         }
+    }
+
+    fn typed_chars(source: &str, caret: usize, text: &str) -> (String, usize) {
+        let mut source = source.to_owned();
+        let mut syntax = PairSyntax::default();
+        let mut cursor = CCursor::new(caret);
+        for typed in text.chars() {
+            PairingBuffer::new(&mut source, &mut syntax, true, &[]).insert_text_at(
+                &mut cursor,
+                &typed.to_string(),
+                usize::MAX,
+            );
+        }
+        (source, cursor.index.0)
+    }
+
+    #[test]
+    fn typing_three_backticks_turns_the_generated_closer_into_the_fence() {
+        for opening in ["```", "```tex"] {
+            let (source, caret) = typed_chars("", 0, opening);
+            assert_eq!(source, opening);
+            assert_eq!(caret, opening.chars().count());
+            assert_eq!(
+                typed(&source, caret, "\n"),
+                (format!("{opening}\n\n```"), opening.chars().count() + 1)
+            );
+        }
+    }
+
+    #[test]
+    fn space_inside_an_empty_math_pair_is_inserted_on_both_sides_of_the_caret() {
+        for (source, caret, expected, expected_caret) in [
+            ("$$", 1, "$  $", 2),
+            ("  $$", 3, "  $  $", 4),
+            ("$x$", 1, "$ x$", 2),
+        ] {
+            assert_eq!(
+                typed(source, caret, " "),
+                (expected.into(), expected_caret),
+                "{source:?} at {caret}"
+            );
+        }
+
+        let (source, caret) = typed_chars("", 0, "$");
+        assert_eq!(typed(&source, caret, " "), ("$  $".into(), 2));
     }
 
     #[test]
@@ -620,10 +733,37 @@ mod tests {
     }
 
     #[test]
+    fn native_space_after_dollar_keeps_the_caret_between_math_padding() {
+        let ctx = egui::Context::default();
+        let mut syntax = PairSyntax::default();
+        let mut doc = DocumentSession::new(WindowSessionId::new(1), "", DocumentKind::Typst);
+        let mut cursor = frame(
+            &ctx,
+            &mut doc,
+            &mut syntax,
+            vec![egui::Event::Text("$".into())],
+            true,
+            CCursorRange::one(CCursor::new(0)),
+        );
+        assert_eq!(doc.source(), "$$");
+        assert_eq!(cursor.primary.index.0, 1);
+        cursor = frame(
+            &ctx,
+            &mut doc,
+            &mut syntax,
+            vec![egui::Event::Text(" ".into())],
+            true,
+            cursor,
+        );
+        assert_eq!(doc.source(), "$  $");
+        assert_eq!(cursor.primary.index.0, 2);
+    }
+
+    #[test]
     fn native_enter_after_typed_fence_or_dollar_is_one_undoable_edit() {
         for (opening, expected, caret) in [
             ("```tex", "```tex\n\n```", 7),
-            ("$", "$\n\t\n$", 3),
+            ("$", "$\n  \n$", 4),
             ("#mi(```tex", "#mi(```tex\n\n```)", 11),
         ] {
             let ctx = egui::Context::default();

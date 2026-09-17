@@ -795,7 +795,7 @@ impl QaSession {
 /// Seed the real resizable Explorer with a deterministic, visible fixture width.
 fn prepare_git_panel_capture(context: &egui::Context, explorer: &mut ExplorerPanelState) {
     explorer.open();
-    let id = egui::Id::new("filesystem");
+    let id = explorer_panel_id(context);
     let rect = egui::PanelState::load(context, id)
         .map_or(context.content_rect(), |state| state.outer_rect);
     let outer_rect = explorer_width_restored_rect(rect, METRICS.chrome.explorer_default_width);
@@ -815,16 +815,17 @@ mod tests {
             .build_ui_state(
                 |ui, state: &mut (ExplorerPanelState, crate::git::GitPanel)| {
                     // Simulate root geometry left by a preceding child-window scene.
+                    let panel_id = explorer_panel_id(ui.ctx());
                     ui.ctx().data_mut(|data| {
                         data.insert_persisted(
-                            egui::Id::new("filesystem"),
+                            panel_id,
                             egui::PanelState {
                                 outer_rect: Rect::from_min_size(Pos2::ZERO, Vec2::new(12.0, 700.0)),
                             },
                         )
                     });
                     prepare_git_panel_capture(ui.ctx(), &mut state.0);
-                    egui::Panel::left("filesystem")
+                    egui::Panel::left(panel_id)
                         .frame(theme::content_panel_frame(ui.style()))
                         .default_size(METRICS.chrome.explorer_default_width)
                         .min_size(METRICS.chrome.explorer_min_width)
@@ -839,7 +840,7 @@ mod tests {
                 ),
             );
         harness.run();
-        let width = egui::PanelState::load(&harness.ctx, egui::Id::new("filesystem"))
+        let width = egui::PanelState::load(&harness.ctx, explorer_panel_id(&harness.ctx))
             .unwrap()
             .size()
             .x;

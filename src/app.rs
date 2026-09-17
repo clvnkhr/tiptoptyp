@@ -138,6 +138,10 @@ const STICKY_CONTEXT_STACK_RESOLUTION_LIMIT: usize = 32;
 const STICKY_CONTEXT_BOTTOM_COVER: f32 = 1.0;
 const STICKY_CONTEXT_SNAPSHOT_SCROLL_OFFSET: f32 = 176.0;
 
+fn explorer_panel_id(context: &egui::Context) -> egui::Id {
+    viewport_scoped_id(context, "filesystem")
+}
+
 fn explorer_width_restored_rect(rect: Rect, width: f32) -> Rect {
     Rect::from_min_size(rect.min, Vec2::new(width, rect.height()))
 }
@@ -847,6 +851,7 @@ enum SettingsTarget {
     ExplorerOrder,
     InterfaceScale,
     TitleBarMenus,
+    FixedTabWidth,
     UiFont,
     UiFontWeight,
     CodeFont,
@@ -864,7 +869,7 @@ enum SettingsTarget {
 }
 
 impl SettingsTarget {
-    const ALL: [Self; 34] = [
+    const ALL: [Self; 35] = [
         Self::Appearance,
         Self::TypstSyntax,
         Self::LightTheme,
@@ -885,6 +890,7 @@ impl SettingsTarget {
         Self::ExplorerOrder,
         Self::InterfaceScale,
         Self::TitleBarMenus,
+        Self::FixedTabWidth,
         Self::UiFont,
         Self::UiFontWeight,
         Self::CodeFont,
@@ -923,6 +929,7 @@ impl SettingsTarget {
             Self::ExplorerOrder => "Explorer panel order",
             Self::InterfaceScale => "Interface scale",
             Self::TitleBarMenus => "Show title-bar menus",
+            Self::FixedTabWidth => "Fixed tab width",
             Self::UiFont => "UI font",
             Self::UiFontWeight => "UI font weight",
             Self::CodeFont => "Code font",
@@ -962,6 +969,7 @@ impl SettingsTarget {
             | Self::ExplorerOrder
             | Self::InterfaceScale
             | Self::TitleBarMenus
+            | Self::FixedTabWidth
             | Self::UiFont
             | Self::UiFontWeight
             | Self::CodeFont
@@ -1011,6 +1019,7 @@ impl SettingsTarget {
             }
             Self::InterfaceScale => "editor ui zoom percent size",
             Self::TitleBarMenus => "editor titlebar file edit view chrome",
+            Self::FixedTabWidth => "editor tabs documents fixed width size equal drag reorder",
             Self::UiFont => "editor interface family system choose",
             Self::UiFontWeight => "editor interface bold variable",
             Self::CodeFont => "editor source monospace family choose",
@@ -8626,19 +8635,17 @@ impl EditorApp {
             panel.show(ui, |ui| self.show_problems(ui));
         }
         if self.explorer.panel_visible() {
+            let panel_id = explorer_panel_id(&context);
             if let Some(width) = self.explorer.take_restored_width()
-                && let Some(state) = egui::PanelState::load(&context, egui::Id::new("filesystem"))
+                && let Some(state) = egui::PanelState::load(&context, panel_id)
             {
                 let outer_rect = explorer_width_restored_rect(state.outer_rect, width);
                 context.data_mut(|data| {
-                    data.insert_persisted(
-                        egui::Id::new("filesystem"),
-                        egui::PanelState { outer_rect },
-                    );
+                    data.insert_persisted(panel_id, egui::PanelState { outer_rect });
                 });
             }
             let show_contents = self.explorer.contents_visible();
-            egui::Panel::left("filesystem")
+            egui::Panel::left(panel_id)
                 .frame(theme::content_panel_frame(ui.style()))
                 .resizable(true)
                 .default_size(METRICS.chrome.explorer_default_width)
@@ -8648,9 +8655,7 @@ impl EditorApp {
                         self.show_workspace(ui);
                     }
                 });
-            if show_contents
-                && let Some(state) = egui::PanelState::load(&context, egui::Id::new("filesystem"))
-            {
+            if show_contents && let Some(state) = egui::PanelState::load(&context, panel_id) {
                 self.explorer.remember_width(state.size().x);
             }
             if self.explorer.finish_frame() {

@@ -2902,6 +2902,63 @@ fn explorer_reopen_restores_the_last_open_width() {
 }
 
 #[test]
+fn explorer_panel_state_is_scoped_to_each_document_viewport() {
+    let context = egui::Context::default();
+    let mut raw = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 600.0))),
+        ..Default::default()
+    };
+    let secondary = egui::ViewportId::from_hash_of(("document-window", 1_u64));
+    raw.viewports.insert(secondary, Default::default());
+    let mut ids = [None; 2];
+
+    raw.viewport_id = egui::ViewportId::ROOT;
+    context
+        .run_ui(raw.clone(), |ui| ids[0] = Some(explorer_panel_id(ui.ctx())))
+        .drop_without_applying_deltas();
+    raw.viewport_id = secondary;
+    context
+        .run_ui(raw, |ui| ids[1] = Some(explorer_panel_id(ui.ctx())))
+        .drop_without_applying_deltas();
+
+    assert_ne!(ids[0], ids[1]);
+}
+
+#[test]
+fn explorer_panel_clamps_a_stale_tiny_width_to_the_usable_minimum() {
+    let context = egui::Context::default();
+    context
+        .run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 600.0))),
+                ..Default::default()
+            },
+            |ui| {
+                let id = explorer_panel_id(ui.ctx());
+                ui.ctx().data_mut(|data| {
+                    data.insert_persisted(
+                        id,
+                        egui::PanelState {
+                            outer_rect: Rect::from_min_size(Pos2::ZERO, Vec2::new(12.0, 600.0)),
+                        },
+                    );
+                });
+                egui::Panel::left(id)
+                    .default_size(METRICS.chrome.explorer_default_width)
+                    .min_size(METRICS.chrome.explorer_min_width)
+                    .show(ui, |_ui| {});
+            },
+        )
+        .drop_without_applying_deltas();
+
+    let width = egui::PanelState::load(&context, explorer_panel_id(&context))
+        .unwrap()
+        .size()
+        .x;
+    assert!(width >= METRICS.chrome.explorer_min_width, "{width}");
+}
+
+#[test]
 fn explorer_sections_split_the_body_budget_without_hiding_headers() {
     let available = 500.0;
     let frame_height = 2.0;
@@ -6559,6 +6616,172 @@ fn block_enter_is_not_consumed_by_an_open_completion_popup() {
         )
         .drop_without_applying_deltas();
     assert_eq!(app.document.source(), "```tex");
+}
+
+#[test]
+fn live_editor_pairs_fences_for_character_and_batched_text_events() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    app.snapshot_scene = None;
+    app.settings.auto_pair_delimiters = true;
+    app.document.replace_unprojected_untitled("");
+    let id = source_editor_id(&context);
+    let frame = |app: &mut EditorApp, events| {
+        context
+            .run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 500.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.show_editor(ui),
+            )
+            .drop_without_applying_deltas();
+    };
+    frame(&mut app, Vec::new());
+    for (events, expected) in [
+        (vec![egui::Event::Text("```".into())], "```".to_owned()),
+        (
+            vec![
+                egui::Event::Text("`".into()),
+                egui::Event::Text("`".into()),
+                egui::Event::Text("`".into()),
+            ],
+            "```".to_owned(),
+        ),
+    ] {
+        app.document.replace_unprojected_untitled("");
+        context.memory_mut(|memory| memory.request_focus(id));
+        let mut state = egui::text_edit::TextEditState::load(&context, id).unwrap_or_default();
+        state
+            .cursor
+            .set_char_range(Some(CCursorRange::one(CCursor::new(0))));
+        state.store(&context, id);
+        frame(&mut app, events);
+        assert_eq!(app.document.source(), &expected);
+        context.memory_mut(|memory| memory.request_focus(id));
+        let mut state = egui::text_edit::TextEditState::load(&context, id).unwrap();
+        state
+            .cursor
+            .set_char_range(Some(CCursorRange::one(CCursor::new(3))));
+        state.store(&context, id);
+        frame(
+            &mut app,
+            vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+        assert_eq!(app.document.source(), "```\n\n```");
+    }
+}
+
+#[test]
+fn live_editor_pairs_a_fence_before_existing_document_content() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    app.snapshot_scene = None;
+    app.settings.auto_pair_delimiters = true;
+    app.document
+        .replace_unprojected_untitled("before\n```tex\nafter\n```tex\n\\test=1\n```");
+    let id = source_editor_id(&context);
+    let frame = |app: &mut EditorApp, events| {
+        context
+            .run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 500.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.show_editor(ui),
+            )
+            .drop_without_applying_deltas();
+    };
+    let caret = "before\n```tex".chars().count();
+    frame(&mut app, Vec::new());
+    context.memory_mut(|memory| memory.request_focus(id));
+    let mut state = egui::text_edit::TextEditState::default();
+    state
+        .cursor
+        .set_char_range(Some(CCursorRange::one(CCursor::new(caret))));
+    state.store(&context, id);
+    frame(
+        &mut app,
+        vec![egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }],
+    );
+    assert_eq!(
+        app.document.source(),
+        "before\n```tex\n\n```\nafter\n```tex\n\\test=1\n```"
+    );
+}
+
+#[test]
+fn live_editor_pairs_a_typed_fence_in_the_middle_of_a_document() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    app.snapshot_scene = None;
+    app.settings.auto_pair_delimiters = true;
+    app.document.replace_unprojected_untitled("before\n\nafter");
+    let id = source_editor_id(&context);
+    let frame = |app: &mut EditorApp, events| {
+        context
+            .run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 500.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.show_editor(ui),
+            )
+            .drop_without_applying_deltas();
+    };
+    frame(&mut app, Vec::new());
+    let mut caret = "before\n".chars().count();
+    context.memory_mut(|memory| memory.request_focus(id));
+    let mut state = egui::text_edit::TextEditState::load(&context, id).unwrap();
+    state
+        .cursor
+        .set_char_range(Some(CCursorRange::one(CCursor::new(caret))));
+    state.store(&context, id);
+    for ch in "```tex".chars() {
+        context.memory_mut(|memory| memory.request_focus(id));
+        let mut state = egui::text_edit::TextEditState::load(&context, id).unwrap();
+        state
+            .cursor
+            .set_char_range(Some(CCursorRange::one(CCursor::new(caret))));
+        state.store(&context, id);
+        frame(&mut app, vec![egui::Event::Text(ch.to_string())]);
+        caret += 1;
+    }
+    context.memory_mut(|memory| memory.request_focus(id));
+    let mut state = egui::text_edit::TextEditState::load(&context, id).unwrap();
+    state
+        .cursor
+        .set_char_range(Some(CCursorRange::one(CCursor::new(caret))));
+    state.store(&context, id);
+    frame(
+        &mut app,
+        vec![egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }],
+    );
+    assert_eq!(app.document.source(), "before\n```tex\n\n```\nafter");
 }
 
 #[test]

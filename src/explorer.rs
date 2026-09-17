@@ -183,6 +183,13 @@ mod tests {
     }
 }
 /// Visibility and size restoration belong to the panel, not keyboard/menu adapters.
+///
+/// This is also the smallest useful width to persist. The live panel can be
+/// temporarily constrained by a narrow viewport, but retaining that transient
+/// constraint would make a later normal-sized window reopen with a nearly
+/// invisible Explorer.
+pub(crate) const EXPLORER_MIN_WIDTH: f32 = 96.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExplorerPanelPhase {
     Open,
@@ -253,7 +260,7 @@ impl ExplorerPanelState {
         &mut self.query
     }
     pub(crate) fn remember_width(&mut self, width: f32) {
-        if self.contents_visible() && width.is_finite() && width > 0.0 {
+        if self.contents_visible() && width.is_finite() && width >= EXPLORER_MIN_WIDTH {
             self.width = Some(width);
         }
     }
@@ -289,6 +296,10 @@ mod panel_tests {
         state.remember_width(330.0);
         state.toggle();
         state.finish_frame();
+        state.open();
+        assert_eq!(state.take_restored_width(), Some(330.0));
+        state.remember_width(EXPLORER_MIN_WIDTH - 1.0);
+        state.hide();
         state.open();
         assert_eq!(state.take_restored_width(), Some(330.0));
         state.remember_width(f32::NAN);

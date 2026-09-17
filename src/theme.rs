@@ -1116,7 +1116,7 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
         problems_min_height: 70.0,
         problems_max_height: 320.0,
         explorer_default_width: 230.0,
-        explorer_min_width: 0.0,
+        explorer_min_width: crate::explorer::EXPLORER_MIN_WIDTH,
         split_editor_fraction: 0.52,
         split_preview_fraction: 0.48,
         split_preview_reserve: 96.0,

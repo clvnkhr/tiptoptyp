@@ -267,6 +267,9 @@ pub(crate) struct AppSettings {
     /// Keep the in-window File/Edit/View controls visible beside the document
     /// title. Native macOS menus remain available when this is disabled.
     pub(crate) titlebar_menus: bool,
+    /// Give every document tab the same width instead of sizing it to its name.
+    #[serde(default)]
+    pub(crate) fixed_tab_width: bool,
     /// User changes from the current platform's built-in command bindings.
     /// Action IDs and chords are normalized after deserialization.
     #[serde(default, skip_serializing_if = "ShortcutOverrides::is_empty")]
@@ -315,6 +318,7 @@ impl Default for AppSettings {
             code_font_face_index: 0,
             code_font_weight: DEFAULT_UI_FONT_WEIGHT,
             titlebar_menus: true,
+            fixed_tab_width: false,
             shortcut_overrides: ShortcutOverrides::default(),
             typst_overrides: TypstOverrideThemes::default(),
             recent_workspaces: Vec::new(),
@@ -377,6 +381,7 @@ impl AppSettings {
             code_font_face_index,
             code_font_weight,
             titlebar_menus,
+            fixed_tab_width,
             shortcut_overrides,
             typst_overrides,
             recent_workspaces,
@@ -604,6 +609,7 @@ mod tests {
         );
         assert!(settings.auto_save);
         assert_eq!(settings.auto_save_delay_ms, 750);
+        assert!(!settings.fixed_tab_width);
         assert_eq!(settings.hover_delay_ms, DEFAULT_HOVER_DELAY_MS);
         assert_eq!(settings.typst_overrides, TypstOverrideThemes::default());
         assert!(settings.shortcut_overrides.is_empty());
@@ -722,6 +728,7 @@ mod tests {
             code_font_face_index: 1,
             code_font_weight: 450,
             titlebar_menus: false,
+            fixed_tab_width: true,
             shortcut_overrides: ShortcutOverrides::default(),
             typst_overrides,
             last_opened_files: BTreeMap::from([(

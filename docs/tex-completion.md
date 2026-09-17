@@ -49,7 +49,7 @@ result as an already present opening fence.
 
 Enter between an empty Typst dollar pair creates an indented body and puts the
 closing dollar on its own line. The body uses the existing leading indentation
-plus one Tab, matching the editor's default Tab insertion. Both operations leave
+plus two spaces, matching Typst's formatter indentation. Both operations leave
 the caret in the body and are a single document edit for undo/redo. An open
 completion popup does not consume this block-opening Enter; Tab still accepts
 its selected suggestion.

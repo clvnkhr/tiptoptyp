@@ -433,6 +433,11 @@ impl SettingsPanel<'_> {
                     SettingsTarget::TitleBarMenus,
                     &mut settings_scroll_target,
                 );
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::FixedTabWidth,
+                    &mut settings_scroll_target,
+                );
                 ui.horizontal_wrapped(|ui| {
                     theme::apply_compact_control_spacing(ui);
                     ui.label(RichText::new(SettingsTarget::InterfaceScale.label()).strong());
@@ -445,6 +450,10 @@ impl SettingsPanel<'_> {
                     ui.checkbox(
                         &mut edited.titlebar_menus,
                         SettingsTarget::TitleBarMenus.label(),
+                    );
+                    ui.checkbox(
+                        &mut edited.fixed_tab_width,
+                        SettingsTarget::FixedTabWidth.label(),
                     );
                 });
                 settings_target_anchor(ui, SettingsTarget::UiFont, &mut settings_scroll_target);
@@ -1147,6 +1156,16 @@ mod tests {
                 .2
                 .iter()
                 .any(|a| matches!(a, SettingsAction::Update(settings) if settings.theme_invert))
+        );
+        harness.state_mut().2.clear();
+        harness.get_by_label("Fixed tab width").click();
+        harness.run();
+        assert!(
+            harness
+                .state()
+                .2
+                .iter()
+                .any(|a| matches!(a, SettingsAction::Update(settings) if settings.fixed_tab_width))
         );
         harness.state_mut().2.clear();
         harness.get_by_label("Overrides…").click();

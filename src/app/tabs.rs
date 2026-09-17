@@ -83,6 +83,22 @@ impl Tabs {
     pub(super) fn active_id(&self) -> u64 {
         self.ids.get(self.active).copied().unwrap_or(self.next_id)
     }
+
+    /// Move one tab to another position without changing which document is
+    /// active or which document drives the preview.
+    pub(super) fn reorder(&mut self, from: usize, to: usize) -> bool {
+        if from >= self.len() || to >= self.len() || from == to {
+            return false;
+        }
+
+        let parked = self.parked.remove(from);
+        self.parked.insert(to, parked);
+        let id = self.ids.remove(from);
+        self.ids.insert(to, id);
+        self.active = moved_index(self.active, from, to);
+        self.preview = moved_index(self.preview, from, to);
+        true
+    }
     fn refresh_autosave(&mut self) {
         self.next_autosave = self
             .parked
@@ -628,6 +644,9 @@ impl EditorApp {
         let mut close = None;
         let mut preview = None;
         let mut rename = None;
+        let mut dragged_id = None;
+        let mut dragged_pointer = None;
+        let mut tab_rects = Vec::new();
         let height = METRICS.toolbar.title_height;
         let width = ui.available_width().max(0.0);
         if width < 1.0 {
@@ -650,11 +669,13 @@ impl EditorApp {
                                 let name = document.name();
                                 let active = index == self.tabs.active;
                                 ui.push_id(self.tabs.ids[index], |ui| {
-                                    let title_width = ((name.chars().count() + 1) as f32
-                                        * METRICS.toolbar.title_character_width
-                                        + METRICS.toolbar.title_padding)
-                                        .clamp(54.0, 200.0)
-                                        .min((width - 44.0).max(24.0));
+                                    let compatible = document.kind().is_typst();
+                                    let title_width = tab_title_width(
+                                        &name,
+                                        width,
+                                        self.settings.fixed_tab_width,
+                                        compatible,
+                                    );
                                     let tab = tab_widget(
                                         ui,
                                         document,
@@ -662,10 +683,16 @@ impl EditorApp {
                                         index == self.tabs.preview,
                                         title_width,
                                     );
+                                    tab_rects.push((self.tabs.ids[index], tab.rect));
                                     if active && reveal {
                                         ui.scroll_to_rect(tab.rect, Some(Align::Center));
                                     }
                                     let response = tab.title;
+                                    let drag = response.interact(Sense::drag());
+                                    if drag.drag_started() || drag.dragged() {
+                                        dragged_id = Some(self.tabs.ids[index]);
+                                        dragged_pointer = drag.interact_pointer_pos();
+                                    }
                                     if response.hovered() {
                                         native_hover_text(
                                             response.clone(),
@@ -684,7 +711,9 @@ impl EditorApp {
                                     if response.clicked_by(egui::PointerButton::Middle) {
                                         close = Some(index);
                                     }
-                                    if tab.preview.clicked() {
+                                    if let Some(tab_preview) = tab.preview
+                                        && tab_preview.clicked()
+                                    {
                                         preview = Some(index);
                                     }
                                     if tab.close.clicked() {
@@ -697,6 +726,15 @@ impl EditorApp {
                     });
             },
         );
+        if let (Some(dragged_id), Some(pointer)) = (dragged_id, dragged_pointer)
+            && let Some(from) = self.tabs.ids.iter().position(|id| *id == dragged_id)
+            && let Some(mut insertion) = tab_drop_index(&tab_rects, pointer)
+        {
+            if insertion > from {
+                insertion -= 1;
+            }
+            self.tabs.reorder(from, insertion);
+        }
         if self.document_flow_busy() || self.process_close_pending {
             return;
         }
@@ -784,8 +822,54 @@ impl EditorApp {
 struct TabResponse {
     rect: Rect,
     title: egui::Response,
-    preview: egui::Response,
+    preview: Option<egui::Response>,
     close: egui::Response,
+}
+
+const FIXED_TAB_WIDTH: f32 = 160.0;
+const TAB_BUTTON_WIDTH: f32 = 18.0;
+const TAB_ITEM_SPACING: f32 = 2.0;
+
+fn tab_title_width(name: &str, available_width: f32, fixed_width: bool, compatible: bool) -> f32 {
+    let controls_width = TAB_BUTTON_WIDTH
+        + TAB_ITEM_SPACING
+        + if compatible {
+            TAB_BUTTON_WIDTH + TAB_ITEM_SPACING
+        } else {
+            0.0
+        };
+    if fixed_width {
+        return (FIXED_TAB_WIDTH - controls_width).max(24.0);
+    }
+
+    ((name.chars().count() + 1) as f32 * METRICS.toolbar.title_character_width
+        + METRICS.toolbar.title_padding)
+        .clamp(54.0, 200.0)
+        .min((available_width - controls_width - TAB_ITEM_SPACING).max(24.0))
+}
+
+fn moved_index(index: usize, from: usize, to: usize) -> usize {
+    if index == from {
+        to
+    } else if from < to && (from..=to).contains(&index) {
+        index - 1
+    } else if to < from && (to..=from).contains(&index) {
+        index + 1
+    } else {
+        index
+    }
+}
+
+fn tab_drop_index(tab_rects: &[(u64, Rect)], pointer: Pos2) -> Option<usize> {
+    let first = tab_rects.first()?.1;
+    let last = tab_rects.last()?.1;
+    if pointer.y < first.top() || pointer.y > last.bottom() {
+        return None;
+    }
+    tab_rects
+        .iter()
+        .position(|(_, rect)| pointer.x < rect.center().x)
+        .or(Some(tab_rects.len()))
 }
 
 fn tab_widget(
@@ -819,27 +903,26 @@ fn tab_widget(
                     .frame(false)
                     .truncate(),
                 );
-                let compatible = document.kind().is_typst();
-                let preview = tab_icon_button(
-                    ui,
-                    compatible,
-                    if chosen && compatible {
-                        UiIcon::Eye
-                    } else {
-                        UiIcon::EyeClosed
-                    },
-                    &format!("Preview {name}"),
-                );
-                let preview = native_hover_text(
-                    preview,
-                    if chosen && compatible {
-                        "Preview source"
-                    } else if compatible {
-                        "Use this tab for preview"
-                    } else {
-                        "Only Typst tabs can drive the preview"
-                    },
-                );
+                let preview = document.kind().is_typst().then(|| {
+                    let preview = tab_icon_button(
+                        ui,
+                        true,
+                        if chosen {
+                            UiIcon::Eye
+                        } else {
+                            UiIcon::EyeClosed
+                        },
+                        &format!("Preview {name}"),
+                    );
+                    native_hover_text(
+                        preview,
+                        if chosen {
+                            "Preview source"
+                        } else {
+                            "Use this tab for preview"
+                        },
+                    )
+                });
                 let close = tab_icon_button(ui, true, UiIcon::Close, &format!("Close {name}"));
                 let close = native_hover_text(close, format!("Close {name}"));
                 (title, preview, close)

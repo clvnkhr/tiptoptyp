@@ -8,15 +8,19 @@ fn tab_highlight_contains_both_controls_and_vector_icons_share_a_centerline() {
     context
         .run_ui(Default::default(), |ui| {
             let tab = tab_widget(ui, &app.document, true, true, 110.0);
-            for control in [&tab.title, &tab.preview, &tab.close] {
+            let preview = tab
+                .preview
+                .as_ref()
+                .expect("Typst tabs have a preview control");
+            for control in [&tab.title, preview, &tab.close] {
                 assert!(tab.rect.contains_rect(control.rect));
             }
-            let eye = tab_icon_rect(tab.preview.rect, UiIcon::Eye);
+            let eye = tab_icon_rect(preview.rect, UiIcon::Eye);
             let close = tab_icon_rect(tab.close.rect, UiIcon::Close);
             assert_eq!(eye.center().y, close.center().y);
             let (lid, lashes) = closed_eye_icon_geometry(eye);
             assert!(((lid[0].y + lashes[1][1].y) * 0.5 - close.center().y).abs() < 0.001);
-            assert!(tab.preview.rect.contains_rect(eye));
+            assert!(preview.rect.contains_rect(eye));
             assert!(tab.close.rect.contains_rect(close));
             assert!(
                 tab.rect.width() < 180.0,
@@ -25,6 +29,51 @@ fn tab_highlight_contains_both_controls_and_vector_icons_share_a_centerline() {
             assert!(tab.rect.height() < 40.0);
         })
         .drop_without_applying_deltas();
+}
+
+#[test]
+fn non_typst_tabs_have_no_preview_eye_and_fixed_widths_are_stable() {
+    let context = egui::Context::default();
+    let root = tempfile::tempdir().unwrap();
+    let mut app = fixture(&context, root.path());
+    app.document.replace_loaded_unprojected(
+        "notes".into(),
+        root.path().join("notes.md"),
+        DocumentKind::Text,
+        None,
+    );
+    context
+        .run_ui(Default::default(), |ui| {
+            let tab = tab_widget(ui, &app.document, true, false, 140.0);
+            assert!(tab.preview.is_none());
+            assert!(tab.rect.contains_rect(tab.title.rect));
+            assert!(tab.rect.contains_rect(tab.close.rect));
+            let typst_width = tab_title_width("short.typ", 700.0, true, true) + 40.0;
+            let text_width = tab_title_width("notes.md", 700.0, true, false) + 20.0;
+            assert_eq!(typst_width, FIXED_TAB_WIDTH);
+            assert_eq!(text_width, FIXED_TAB_WIDTH);
+        })
+        .drop_without_applying_deltas();
+}
+
+#[test]
+fn reordering_tabs_remaps_active_and_preview_without_changing_tab_identity() {
+    let mut tabs = Tabs::new(false);
+    tabs.parked = vec![None, None, None, None];
+    tabs.ids = vec![10, 20, 30, 40];
+    tabs.active = 1;
+    tabs.preview = 3;
+
+    assert!(tabs.reorder(1, 3));
+    assert_eq!(tabs.ids, vec![10, 30, 40, 20]);
+    assert_eq!(tabs.active, 3);
+    assert_eq!(tabs.preview, 2);
+
+    assert!(tabs.reorder(2, 0));
+    assert_eq!(tabs.ids, vec![40, 10, 30, 20]);
+    assert_eq!(tabs.active, 3);
+    assert_eq!(tabs.preview, 0);
+    assert!(!tabs.reorder(0, 0));
 }
 
 #[test]
@@ -45,6 +94,55 @@ fn vector_tab_controls_remain_named_and_do_not_select_a_different_tab() {
     assert_eq!(harness.state().tabs.preview, 0);
     assert_eq!(harness.state().tabs.active, active);
     harness.get_by_label("Close first.typ");
+}
+
+#[test]
+fn tab_titles_can_be_dragged_to_reorder_tabs() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let root = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&context, root.path());
+    app.append_tab(&context);
+    app.document.replace_loaded_unprojected(
+        "second".into(),
+        root.path().join("second.typ"),
+        DocumentKind::Typst,
+        None,
+    );
+    app.append_tab(&context);
+    app.document.replace_loaded_unprojected(
+        "third".into(),
+        root.path().join("third.typ"),
+        DocumentKind::Typst,
+        None,
+    );
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(700.0, 70.0))
+        .build_ui_state(|ui, app: &mut EditorApp| app.show_tabs(ui, None), app);
+    harness.run_steps(3);
+
+    let first = harness.get_by_label("first.typ").rect();
+    let third = harness.get_by_label("third.typ").rect();
+    let ids = harness.state().tabs.ids.clone();
+    let start = first.center();
+    let end = third.right_center() + Vec2::new(12.0, 0.0);
+    harness.event(egui::Event::PointerMoved(start));
+    harness.event(egui::Event::PointerButton {
+        pos: start,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.event(egui::Event::PointerMoved(end));
+    harness.event(egui::Event::PointerButton {
+        pos: end,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.run_steps(4);
+
+    assert_eq!(harness.state().tabs.ids, vec![ids[1], ids[2], ids[0]]);
 }
 
 #[test]
