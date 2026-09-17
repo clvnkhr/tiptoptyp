@@ -6023,14 +6023,33 @@ impl EditorApp {
         {
             // The toolbar occupies the native title-bar row. Controls start to
             // the right of the traffic lights, while empty toolbar space stays
-            // draggable.
-            let drag = ui.interact(
-                ui.max_rect(),
-                ui.id().with("window-title-drag"),
-                Sense::drag(),
+            // draggable. A tab title is also a drag target; skip the broad
+            // window target while the pointer is over a tab or a tab drag is
+            // already in progress, otherwise macOS starts moving the window.
+            let pointer_claimed_by_tab = ui.ctx().input(|input| {
+                self.tabs
+                    .claims_window_drag(input.pointer.latest_pos(), input.pointer.primary_down())
+            });
+            // AppKit can move a full-size-content window directly, without
+            // any egui StartDrag command. Disable that path on hover, before
+            // mouse-down, and retain the guard throughout a tab gesture.
+            let focused = ui
+                .ctx()
+                .input(|input| input.viewport().focused == Some(true));
+            self.tabs.suppress_native_drag(
+                self.native_window_parent.as_ref(),
+                pointer_claimed_by_tab && focused,
             );
-            if drag.drag_started() {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            if !pointer_claimed_by_tab {
+                let drag = ui.interact(
+                    ui.max_rect(),
+                    ui.id().with("window-title-drag"),
+                    Sense::drag(),
+                );
+                if drag.drag_started() {
+                    self.tabs.trace_native_drag(ui.ctx());
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                }
             }
         }
 

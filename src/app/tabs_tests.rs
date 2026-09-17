@@ -1,6 +1,30 @@
 use super::*;
 
 #[test]
+fn native_drag_is_excluded_on_tab_hover_and_until_the_tab_gesture_ends() {
+    let mut tabs = Tabs::default();
+    tabs.tab_drag_rects.push(Rect::from_min_max(
+        Pos2::new(100.0, 0.0),
+        Pos2::new(250.0, 25.0),
+    ));
+    let tab = Some(Pos2::new(150.0, 12.0));
+    let empty_toolbar = Some(Pos2::new(350.0, 12.0));
+    assert!(
+        tabs.claims_window_drag(tab, false),
+        "suppress AppKit before mouse-down"
+    );
+    assert!(!tabs.claims_window_drag(empty_toolbar, false));
+    tabs.tab_drag_active = true;
+    assert!(tabs.claims_window_drag(empty_toolbar, true));
+    assert!(
+        tabs.claims_window_drag(None, true),
+        "leaving the viewport must not release a held drag"
+    );
+    assert!(!tabs.claims_window_drag(empty_toolbar, false));
+    assert!(!tabs.claims_window_drag(None, false));
+}
+
+#[test]
 fn tab_highlight_contains_both_controls_and_vector_icons_share_a_centerline() {
     let context = egui::Context::default();
     let root = tempfile::tempdir().unwrap();
@@ -98,6 +122,13 @@ fn vector_tab_controls_remain_named_and_do_not_select_a_different_tab() {
 
 #[test]
 fn tab_titles_can_be_dragged_to_reorder_tabs() {
+    check_tab_drag(false, false);
+    check_tab_drag(true, false);
+    check_tab_drag(false, true);
+    check_tab_drag(true, true);
+}
+
+fn check_tab_drag(release_with_move: bool, narrow: bool) {
     use egui_kittest::{Harness, kittest::Queryable as _};
     let root = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
@@ -117,23 +148,82 @@ fn tab_titles_can_be_dragged_to_reorder_tabs() {
         None,
     );
     let mut harness = Harness::builder()
-        .with_size(Vec2::new(700.0, 70.0))
-        .build_ui_state(|ui, app: &mut EditorApp| app.show_tabs(ui, None), app);
+        .with_size(Vec2::new(if narrow { 1000.0 } else { 1800.0 }, 400.0))
+        .build_ui_state(
+            |ui, app: &mut EditorApp| {
+                egui::Panel::top("toolbar")
+                    .exact_size(METRICS.chrome.toolbar_height)
+                    .show(ui, |ui| app.show_toolbar(ui, None));
+            },
+            app,
+        );
     harness.run_steps(3);
 
-    let first = harness.get_by_label("first.typ").rect();
+    let first = harness
+        .get_by_label(if narrow { "second.typ" } else { "first.typ" })
+        .rect();
     let third = harness.get_by_label("third.typ").rect();
     let ids = harness.state().tabs.ids.clone();
-    let start = first.center();
-    let end = third.right_center() + Vec2::new(12.0, 0.0);
-    harness.event(egui::Event::PointerMoved(start));
+    let (start, end) = if narrow {
+        (third.center(), first.left_center() + Vec2::new(2.0, 0.0))
+    } else {
+        (first.center(), third.right_center() + Vec2::new(12.0, 0.0))
+    };
+    assert!(
+        harness
+            .state()
+            .tabs
+            .tab_drag_rects
+            .iter()
+            .any(|rect| rect.contains(start)),
+        "the test must press a visible tab"
+    );
+    let active_id = harness.state().tabs.active_id();
+    let preview_id = ids[harness.state().tabs.preview];
+    if release_with_move {
+        // Native backends can coalesce movement and a button event into one
+        // frame; Harness::event normally gives every event its own frame.
+        harness
+            .input_mut()
+            .events
+            .push(egui::Event::PointerMoved(start));
+    } else {
+        harness.event(egui::Event::PointerMoved(start));
+        harness.run_steps(1);
+    }
     harness.event(egui::Event::PointerButton {
         pos: start,
         button: egui::PointerButton::Primary,
         pressed: true,
         modifiers: egui::Modifiers::NONE,
     });
-    harness.event(egui::Event::PointerMoved(end));
+    harness.run_steps(1);
+    assert!(
+        harness.state().tabs.tab_drag_source.is_some(),
+        "tab must own the press"
+    );
+    if release_with_move {
+        harness
+            .input_mut()
+            .events
+            .push(egui::Event::PointerMoved(end));
+    } else {
+        for step in 1..=20 {
+            harness.event(egui::Event::PointerMoved(
+                start.lerp(end, step as f32 / 20.0),
+            ));
+            harness.run_steps(2);
+            assert!(
+                !harness.output().viewport_output.values().any(|viewport| {
+                    viewport
+                        .commands
+                        .iter()
+                        .any(|command| matches!(command, egui::ViewportCommand::StartDrag))
+                }),
+                "a tab gesture must not move the native window"
+            );
+        }
+    }
     harness.event(egui::Event::PointerButton {
         pos: end,
         button: egui::PointerButton::Primary,
@@ -142,7 +232,20 @@ fn tab_titles_can_be_dragged_to_reorder_tabs() {
     });
     harness.run_steps(4);
 
-    assert_eq!(harness.state().tabs.ids, vec![ids[1], ids[2], ids[0]]);
+    assert_eq!(
+        harness.state().tabs.ids,
+        if narrow {
+            vec![ids[0], ids[2], ids[1]]
+        } else {
+            vec![ids[1], ids[2], ids[0]]
+        }
+    );
+    assert_eq!(harness.state().tabs.active_id(), active_id);
+    assert_eq!(
+        harness.state().tabs.ids[harness.state().tabs.preview],
+        preview_id
+    );
+    assert!(harness.state().tabs.tab_drag_source.is_none());
 }
 
 #[test]

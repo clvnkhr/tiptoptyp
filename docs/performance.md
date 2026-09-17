@@ -5,6 +5,8 @@ Measure before optimizing, preserve comparable evidence, and protect the cause
 with deterministic tests. Completing the profiling setup does not mean every
 subsystem has been optimized.
 
+For failed tab gestures, use the bounded, opt-in [tab drag diagnostics](tab-drag-debugging.md).
+
 ## One-command native runs
 
 Prerequisites: a desktop session, the normal Rust development dependencies,

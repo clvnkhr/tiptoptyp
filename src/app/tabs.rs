@@ -1,6 +1,7 @@
 //! Tabs park document state, never an EditorApp or background service. Exactly
 //! one slot is active; the first slot is the initial preview source.
 use super::*;
+mod trace;
 
 pub(super) struct ParkedTab {
     pub(super) document: DocumentSession,
@@ -26,6 +27,12 @@ pub(super) struct Tabs {
     pub(super) process_close_key: Option<DocumentKey>,
     next_autosave: Option<Instant>,
     reveal_active: bool,
+    tab_drag_rects: Vec<Rect>,
+    tab_drag_active: bool,
+    tab_drag_source: Option<u64>,
+    drag_trace: trace::Trace,
+    #[cfg(target_os = "macos")]
+    native_drag_guard: Option<crate::native_window::TitlebarDragGuard>,
     pub(super) open_uris: std::collections::BTreeSet<String>,
     unsaved: BTreeMap<u64, UnsavedTextDocument>,
 }
@@ -44,12 +51,51 @@ impl Default for Tabs {
             process_close_key: None,
             next_autosave: None,
             reveal_active: false,
+            tab_drag_rects: Vec::new(),
+            tab_drag_active: false,
+            tab_drag_source: None,
+            drag_trace: trace::Trace::default(),
+            #[cfg(target_os = "macos")]
+            native_drag_guard: None,
             open_uris: Default::default(),
             unsaved: Default::default(),
         }
     }
 }
 impl Tabs {
+    #[cfg(target_os = "macos")]
+    pub(super) fn suppress_native_drag(
+        &mut self,
+        parent: Option<&crate::native_window::ActiveWindowHandle>,
+        suppress: bool,
+    ) {
+        if !suppress || parent.is_none() {
+            self.native_drag_guard = None;
+        } else if let Some(parent) = parent
+            && self
+                .native_drag_guard
+                .as_ref()
+                .is_none_or(|guard| !guard.matches_parent(parent))
+        {
+            // Restore the old window before acquiring a guard for its replacement.
+            self.native_drag_guard = None;
+            self.native_drag_guard = parent.suppress_titlebar_drag();
+        }
+    }
+
+    fn native_drag_suppressed(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            self.native_drag_guard.is_some()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    }
+    pub(super) fn trace_native_drag(&mut self, context: &egui::Context) {
+        self.drag_trace.native_drag(context);
+    }
     pub(super) fn new(preview_explicit: bool) -> Self {
         Self {
             preview_explicit,
@@ -82,6 +128,14 @@ impl Tabs {
     }
     pub(super) fn active_id(&self) -> u64 {
         self.ids.get(self.active).copied().unwrap_or(self.next_id)
+    }
+
+    pub(super) fn claims_window_drag(&self, pointer: Option<Pos2>, primary_down: bool) -> bool {
+        pointer.is_some_and(|pointer| {
+            self.tab_drag_rects
+                .iter()
+                .any(|rect| rect.contains(pointer))
+        }) || (self.tab_drag_active && primary_down)
     }
 
     /// Move one tab to another position without changing which document is
@@ -640,101 +694,172 @@ impl EditorApp {
     }
 
     pub(super) fn show_tabs(&mut self, ui: &mut egui::Ui, frame: Option<&eframe::Frame>) {
+        let trace_sample = self.tabs.drag_trace.sample(ui.ctx());
+        let mut trace_widgets = String::new();
         let mut select = None;
         let mut close = None;
         let mut preview = None;
         let mut rename = None;
-        let mut dragged_id = None;
-        let mut dragged_pointer = None;
+        let mut pressed_tab = None;
         let mut tab_rects = Vec::new();
         let height = METRICS.toolbar.title_height;
         let width = ui.available_width().max(0.0);
         if width < 1.0 {
+            if trace_sample {
+                self.tabs
+                    .drag_trace
+                    .record(ui.ctx(), format!("outcome=no-space width={width}"));
+            }
+            self.tabs.tab_drag_rects.clear();
+            self.tabs.tab_drag_active = false;
+            self.tabs.tab_drag_source = None;
             return;
         }
         let reveal = std::mem::take(&mut self.tabs.reveal_active);
-        ui.allocate_ui_with_layout(
-            Vec2::new(width, height),
-            Layout::left_to_right(Align::Center),
-            |ui| {
-                egui::ScrollArea::horizontal()
-                    .id_salt("document-tabs")
-                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-                    .auto_shrink([false, true])
-                    .max_height(height)
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            for index in 0..self.tabs.len() {
-                                let document = self.tab_document(index).unwrap();
-                                let name = document.name();
-                                let active = index == self.tabs.active;
-                                ui.push_id(self.tabs.ids[index], |ui| {
-                                    let compatible = document.kind().is_typst();
-                                    let title_width = tab_title_width(
-                                        &name,
-                                        width,
-                                        self.settings.fixed_tab_width,
-                                        compatible,
-                                    );
-                                    let tab = tab_widget(
-                                        ui,
-                                        document,
-                                        active,
-                                        index == self.tabs.preview,
-                                        title_width,
-                                    );
-                                    tab_rects.push((self.tabs.ids[index], tab.rect));
-                                    if active && reveal {
-                                        ui.scroll_to_rect(tab.rect, Some(Align::Center));
-                                    }
-                                    let response = tab.title;
-                                    let drag = response.interact(Sense::drag());
-                                    if drag.drag_started() || drag.dragged() {
-                                        dragged_id = Some(self.tabs.ids[index]);
-                                        dragged_pointer = drag.interact_pointer_pos();
-                                    }
-                                    if response.hovered() {
-                                        native_hover_text(
-                                            response.clone(),
-                                            document.path().as_ref().map_or_else(
-                                                || "Unsaved document".into(),
-                                                |path| path.display().to_string(),
-                                            ),
+        let tab_viewport = ui
+            .allocate_ui_with_layout(
+                Vec2::new(width, height),
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    egui::ScrollArea::horizontal()
+                        .id_salt("document-tabs")
+                        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                        .auto_shrink([false, true])
+                        .max_height(height)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                for index in 0..self.tabs.len() {
+                                    let document = self.tab_document(index).unwrap();
+                                    let name = document.name();
+                                    let active = index == self.tabs.active;
+                                    ui.push_id(self.tabs.ids[index], |ui| {
+                                        let compatible = document.kind().is_typst();
+                                        let title_width = tab_title_width(
+                                            &name,
+                                            width,
+                                            self.settings.fixed_tab_width,
+                                            compatible,
                                         );
-                                    }
-                                    if response.clicked() {
-                                        select = Some(index);
-                                    }
-                                    if response.double_clicked() {
-                                        rename = Some(index);
-                                    }
-                                    if response.clicked_by(egui::PointerButton::Middle) {
-                                        close = Some(index);
-                                    }
-                                    if let Some(tab_preview) = tab.preview
-                                        && tab_preview.clicked()
-                                    {
-                                        preview = Some(index);
-                                    }
-                                    if tab.close.clicked() {
-                                        close = Some(index);
-                                    }
-                                    ui.separator();
-                                });
-                            }
-                        });
-                    });
-            },
-        );
-        if let (Some(dragged_id), Some(pointer)) = (dragged_id, dragged_pointer)
-            && let Some(from) = self.tabs.ids.iter().position(|id| *id == dragged_id)
-            && let Some(mut insertion) = tab_drop_index(&tab_rects, pointer)
-        {
-            if insertion > from {
-                insertion -= 1;
-            }
-            self.tabs.reorder(from, insertion);
+                                        let tab = tab_widget(
+                                            ui,
+                                            document,
+                                            active,
+                                            index == self.tabs.preview,
+                                            title_width,
+                                        );
+                                        tab_rects.push((self.tabs.ids[index], tab.rect));
+                                        if active && reveal {
+                                            ui.scroll_to_rect(tab.rect, Some(Align::Center));
+                                        }
+                                        let response = tab.title;
+                                        if trace_sample && index < 16 {
+                                            use std::fmt::Write as _;
+                                            let _ = write!(trace_widgets,
+                                                " tab={} widget={:?} rect={:?} clip={:?} contains={} hovered={} owns={} dragged={} stopped={} clicked={};",
+                                                self.tabs.ids[index], response.id, response.rect, ui.clip_rect(),
+                                                response.contains_pointer(), response.hovered(), response.is_pointer_button_down_on(),
+                                                response.dragged(), response.drag_stopped(), response.clicked());
+                                        }
+                                        // Register ownership on the title itself, so neither
+                                        // the scroll area nor the native title bar takes it.
+                                        if response.is_pointer_button_down_on()
+                                            && ui.input(|input| input.pointer.primary_down())
+                                        {
+                                            pressed_tab = Some(self.tabs.ids[index]);
+                                        }
+                                        if response.hovered() {
+                                            native_hover_text(
+                                                response.clone(),
+                                                document.path().as_ref().map_or_else(
+                                                    || "Unsaved document".into(),
+                                                    |path| path.display().to_string(),
+                                                ),
+                                            );
+                                        }
+                                        if response.clicked() {
+                                            select = Some(index);
+                                        }
+                                        if response.double_clicked() {
+                                            rename = Some(index);
+                                        }
+                                        if response.clicked_by(egui::PointerButton::Middle) {
+                                            close = Some(index);
+                                        }
+                                        if let Some(tab_preview) = tab.preview
+                                            && tab_preview.clicked()
+                                        {
+                                            preview = Some(index);
+                                        }
+                                        if tab.close.clicked() {
+                                            close = Some(index);
+                                        }
+                                        ui.separator();
+                                    });
+                                }
+                            });
+                        })
+                },
+            )
+            .inner
+            .inner_rect
+            .intersect(ui.clip_rect());
+        if let Some(id) = pressed_tab {
+            self.tabs.tab_drag_source = Some(id);
         }
+        let (primary_down, primary_released, pointer, decidedly_dragging) =
+            ui.ctx().input(|input| {
+                (
+                    input.pointer.primary_down(),
+                    input.pointer.button_released(egui::PointerButton::Primary),
+                    input.pointer.latest_pos(),
+                    input.pointer.is_decidedly_dragging(),
+                )
+            });
+        // A release and the final movement can arrive together. Apply the
+        // destination before clearing the gesture, including on that frame.
+        let source_before = self.tabs.tab_drag_source;
+        let mut outcome = if source_before.is_some() {
+            "below-threshold"
+        } else {
+            "no-source"
+        };
+        if primary_down || primary_released {
+            self.tabs.tab_drag_active = self.tabs.tab_drag_source.is_some();
+            if let (Some(source), Some(pointer)) = (self.tabs.tab_drag_source, pointer)
+                && decidedly_dragging
+            {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                outcome = "no-drop-target";
+                if let Some(from) = self.tabs.ids.iter().position(|id| *id == source)
+                    && let Some(mut insertion) = tab_drop_index(&tab_rects, pointer)
+                {
+                    if insertion > from {
+                        insertion -= 1;
+                    }
+                    if self.tabs.reorder(from, insertion) {
+                        outcome = "reordered";
+                        ui.ctx().request_repaint();
+                    } else {
+                        outcome = "same-slot";
+                    }
+                }
+            }
+        }
+        if trace_sample {
+            self.tabs.drag_trace.record(ui.ctx(), format!(
+                "source={source_before:?} pressed_tab={pressed_tab:?} outcome={outcome} strip={tab_viewport:?} native_drag_suppressed={} tab_count={} order={:?} widgets(first16)={trace_widgets}",
+                self.tabs.native_drag_suppressed(), self.tabs.len(), &self.tabs.ids[..self.tabs.ids.len().min(16)]));
+        }
+        if !primary_down {
+            self.tabs.tab_drag_source = None;
+            self.tabs.tab_drag_active = false;
+        }
+        self.tabs.tab_drag_rects.clear();
+        self.tabs.tab_drag_rects.extend(
+            tab_rects
+                .iter()
+                .map(|(_, rect)| rect.intersect(tab_viewport)),
+        );
         if self.document_flow_busy() || self.process_close_pending {
             return;
         }
@@ -901,6 +1026,7 @@ fn tab_widget(
                         .strong(),
                     )
                     .frame(false)
+                    .sense(Sense::click_and_drag())
                     .truncate(),
                 );
                 let preview = document.kind().is_typst().then(|| {

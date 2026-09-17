@@ -12,7 +12,7 @@ mod platform {
     use std::{ffi::c_void, ptr::NonNull};
 
     use objc2::{MainThreadMarker, rc::Retained};
-    use objc2_app_kit::{NSApplication, NSView};
+    use objc2_app_kit::{NSApplication, NSView, NSWindow};
     use raw_window_handle::{
         AppKitWindowHandle, DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle,
         RawWindowHandle, WindowHandle,
@@ -26,8 +26,46 @@ mod platform {
     }
 
     impl ActiveWindowHandle {
+        #[cfg(test)]
+        #[allow(dead_code)] // Also compiled by the opt-in native integration harness.
+        pub(crate) fn from_test_view(view: Retained<NSView>) -> Self {
+            Self { view }
+        }
         pub(crate) fn is_same_window(&self, other: &Self) -> bool {
             std::ptr::eq(&*self.view, &*other.view)
+        }
+
+        pub(crate) fn suppress_titlebar_drag(&self) -> Option<TitlebarDragGuard> {
+            let window = self.view.window()?;
+            let was_movable = window.isMovable();
+            // Full-size content does not remove AppKit's title-bar dragging.
+            // egui gesture ownership alone cannot prevent that native path.
+            window.setMovable(false);
+            Some(TitlebarDragGuard {
+                parent: self.clone(),
+                window,
+                was_movable,
+            })
+        }
+    }
+
+    /// Retains the exact document window and restores its previous policy on
+    /// pointer exit, focus loss, viewport replacement, or session destruction.
+    pub(crate) struct TitlebarDragGuard {
+        parent: ActiveWindowHandle,
+        window: Retained<NSWindow>,
+        was_movable: bool,
+    }
+
+    impl TitlebarDragGuard {
+        pub(crate) fn matches_parent(&self, parent: &ActiveWindowHandle) -> bool {
+            self.parent.is_same_window(parent)
+        }
+    }
+
+    impl Drop for TitlebarDragGuard {
+        fn drop(&mut self) {
+            self.window.setMovable(self.was_movable);
         }
     }
 
@@ -111,6 +149,9 @@ mod platform {
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) use platform::{ActiveWindowHandle, active_window_handle};
+
+#[cfg(target_os = "macos")]
+pub(crate) use platform::TitlebarDragGuard;
 
 /// Enable WKWebView's native trackpad magnification gesture.
 ///

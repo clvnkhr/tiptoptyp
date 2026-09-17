@@ -44,6 +44,10 @@ winit = { version = "=0.30.13", default-features = false, features = ["rwh_06"] 
 tiptoptyp-core = { path = "core", features = ["test-support"] }
 egui_kittest = "0.36.1"
 
+[[test]]
+name = "native_window_drag"
+harness = false
+
 [workspace]
 members = ["core"]
 default-members = [".", "core"]
