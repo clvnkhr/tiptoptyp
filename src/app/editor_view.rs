@@ -968,12 +968,14 @@ impl EditorApp {
                 previous.cursor = cursor;
                 previous.source_cursor = cursor;
                 previous.version = revision_as_i32(self.document.revision());
+                previous.key = self.document.key();
                 previous.selected = 0;
                 self.editor_completion = Some(previous);
             }
             let completion_still_current = self.editor_completion.as_ref().is_none_or(|state| {
                 state.cursor == cursor
                     && state.version == revision_as_i32(self.document.revision())
+                    && state.key == self.document.key()
                     && (state.local
                         || (self.tinymist_generation == Some(state.generation)
                             && self.tinymist_uri.as_deref() == Some(state.uri.as_str())))
@@ -1050,122 +1052,54 @@ impl EditorApp {
     }
 
     pub(super) fn show_editor_completion_popup(&mut self, context: &egui::Context, viewport: Rect) {
+        use super::completion_popup::{self, CompletionAction, CompletionPopupInput};
         let Some(completion) = self.editor_completion.as_ref() else {
             return;
         };
         if completion.items.is_empty() || !viewport.is_positive() {
             return;
         }
-
-        let items = completion.items.clone();
-        let selected = completion.selected.min(items.len().saturating_sub(1));
-        let is_incomplete = completion.is_incomplete;
-        let anchor = completion.anchor;
-        let popup_width = COMPLETION_POPUP_WIDTH.min((viewport.width() - 8.0).max(1.0));
-        let frame = theme::popup_card_frame(&context.style_of(context.theme()));
-        let margin = frame.total_margin().sum();
-        let inner_width = (popup_width - margin.x).max(1.0);
-        let list_height = (items.len() as f32 * (COMPLETION_ROW_HEIGHT + theme::SPACE.small)
-            - theme::SPACE.small)
-            .clamp(COMPLETION_ROW_HEIGHT, COMPLETION_POPUP_MAX_HEIGHT);
+        let selected = completion.selected.min(completion.items.len() - 1);
         let preview_family = completion
             .local
             .then(|| {
                 self.font_catalog
                     .families()
                     .iter()
-                    .find(|family| family.name == items[selected].label)
+                    .find(|family| family.name == completion.items[selected].label)
             })
-            .flatten()
-            .cloned();
-        let footer_height =
-            f32::from(preview_family.is_some()) * 36.0 + f32::from(is_incomplete) * 40.0;
-        let desired_size = Vec2::new(popup_width, list_height + footer_height + margin.y);
-        let position = completion_popup_position(anchor, desired_size, viewport);
-        let mut clicked = None;
-        let mut hovered = None;
-
-        let popup = egui::Area::new(viewport_scoped_id(context, "editor-completion-popup"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(position)
-            .constrain_to(viewport)
-            .show(context, |ui| {
-                frame.show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = theme::SPACE.small;
-                    ui.set_min_width(inner_width);
-                    ui.set_max_width(inner_width);
-                    ui.set_height(list_height + footer_height);
-                    egui::ScrollArea::vertical()
-                        .id_salt("editor-completion-items")
-                        .max_height(list_height)
-                        .min_scrolled_height(0.0)
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            for (index, item) in items.iter().enumerate() {
-                                let label = crate::completion::display_label(
-                                    item,
-                                    &completion.source,
-                                    completion.source_cursor,
-                                );
-                                let mut response = ui.add_sized(
-                                    [ui.available_width(), COMPLETION_ROW_HEIGHT],
-                                    egui::Button::selectable(
-                                        index == selected,
-                                        RichText::new(label).monospace(),
-                                    )
-                                    .right_text("")
-                                    .truncate(),
-                                );
-                                if let Some(documentation) = item.documentation.as_deref() {
-                                    response = response.on_hover_text(documentation);
-                                }
-                                if response.hovered() {
-                                    hovered = Some(index);
-                                }
-                                if response.clicked() {
-                                    clicked = Some(index);
-                                }
-                                if index == selected {
-                                    response.scroll_to_me(Some(Align::Center));
-                                }
-                            }
-                        });
-                    if let Some(family) = &preview_family
-                        && !crate::font_preview::show(ui, "completion", family)
-                        && self.snapshot_scene == Some(UiSnapshotScene::FontCompletion)
-                    {
-                        self.captures.defer_target("main");
-                    }
-                    if is_incomplete {
-                        ui.separator();
-                        ui.label(
-                            RichText::new("Keep typing for more suggestions")
-                                .size(theme::TYPE.supporting)
-                                .weak(),
-                        );
-                    }
-                });
-            });
-
-        if let Some(index) = hovered
-            && let Some(completion) = &mut self.editor_completion
-        {
-            completion.selected = index;
+            .flatten();
+        let mut pending_font_sample = false;
+        let action = completion_popup::show(
+            context,
+            viewport,
+            CompletionPopupInput {
+                items: &completion.items,
+                source: &completion.source,
+                source_cursor: completion.source_cursor,
+                selected,
+                is_incomplete: completion.is_incomplete,
+                anchor: completion.anchor,
+                has_footer: preview_family.is_some(),
+            },
+            |ui| {
+                if let Some(family) = preview_family {
+                    pending_font_sample = !crate::font_preview::show(ui, "completion", family);
+                }
+            },
+        );
+        if pending_font_sample && self.snapshot_scene == Some(UiSnapshotScene::FontCompletion) {
+            self.captures.defer_target("main");
         }
-        if let Some(index) = clicked {
-            self.apply_editor_completion(index, context);
-            return;
-        }
-
-        let clicked_outside = context.input(|input| {
-            input.pointer.any_pressed()
-                && input
-                    .pointer
-                    .interact_pos()
-                    .is_some_and(|pointer| !popup.response.rect.contains(pointer))
-        });
-        if clicked_outside {
-            self.editor_completion = None;
+        match action {
+            Some(CompletionAction::Select(index)) => {
+                if let Some(completion) = &mut self.editor_completion {
+                    completion.selected = index;
+                }
+            }
+            Some(CompletionAction::Accept(index)) => self.apply_editor_completion(index, context),
+            Some(CompletionAction::Dismiss) => self.editor_completion = None,
+            None => {}
         }
     }
 }

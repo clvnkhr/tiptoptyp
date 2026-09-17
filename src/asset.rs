@@ -13,8 +13,8 @@ use std::{
 };
 
 use crate::{
-    compiler::{PreviewPage, rasterize_pdf, rasterize_pdf_first_page},
     document::DocumentKind,
+    pdf::{PreviewPage, rasterize_pdf, rasterize_pdf_first_page},
     private_workspace::project_root_for_path,
 };
 

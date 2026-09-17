@@ -1,7 +1,7 @@
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    fs,
+    fs, io,
     path::{Component, Path, PathBuf},
 };
 use typst_syntax::{LinkedNode, Source, SyntaxKind, ast};
@@ -61,6 +61,20 @@ pub struct UnresolvedDependency {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IndexCompleteness {
+    pub file_limit_reached: bool,
+    pub unreadable_files: Vec<IndexReadFailure>,
+    // Built once by the worker, not formatted during Explorer repainting.
+    warning: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexReadFailure {
+    pub path: PathBuf,
+    pub kind: io::ErrorKind,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProjectIndex {
     pub outline: Vec<OutlineEntry>,
     pub subfiles: Vec<PathBuf>,
@@ -71,6 +85,34 @@ pub struct ProjectIndex {
     /// Import/include expressions which require Typst evaluation. The indexer
     /// deliberately reports rather than follows them.
     pub unresolved_dependencies: Vec<UnresolvedDependency>,
+    pub completeness: IndexCompleteness,
+}
+
+impl ProjectIndex {
+    pub fn warning(&self) -> Option<&str> {
+        self.completeness.warning.as_deref()
+    }
+
+    fn update_warning(&mut self) {
+        let mut reasons = Vec::new();
+        if self.completeness.file_limit_reached {
+            reasons.push(format!("{MAX_PROJECT_FILES}-file limit reached"));
+        }
+        if !self.completeness.unreadable_files.is_empty() {
+            reasons.push(format!(
+                "unreadable files: {}",
+                self.completeness.unreadable_files.len()
+            ));
+        }
+        if !self.unresolved_dependencies.is_empty() {
+            reasons.push(format!(
+                "dynamic dependencies: {}",
+                self.unresolved_dependencies.len()
+            ));
+        }
+        self.completeness.warning = (!reasons.is_empty())
+            .then(|| format!("Partial project index · {}", reasons.join(" · ")));
+    }
 }
 
 /// Build a compact, deterministic index from one Typst entry point.
@@ -84,8 +126,9 @@ pub fn analyze_project(
     main: &Path,
     overrides: &BTreeMap<PathBuf, String>,
 ) -> ProjectIndex {
-    let root = canonical_or_owned(root);
-    let main = canonical_or_owned(main);
+    let mut paths = PathNormalizer::default();
+    let root = paths.normalize(root);
+    let main = paths.normalize(main);
     if !main.starts_with(&root)
         || main
             .extension()
@@ -99,7 +142,7 @@ pub fn analyze_project(
     let overrides: HashMap<_, _> = overrides
         .iter()
         .rev()
-        .map(|(path, source)| (canonical_or_owned(path), source.as_str()))
+        .map(|(path, source)| (paths.normalize(path), source.as_str()))
         .collect();
     let mut visited = HashSet::new();
     let mut pending = vec![main.clone()];
@@ -111,14 +154,21 @@ pub fn analyze_project(
         if !visited.insert(path.clone()) {
             continue;
         }
-        let Some(source) = source_for(&path, &overrides) else {
-            continue;
+        let source = match source_for(&path, &overrides) {
+            Ok(source) => source,
+            Err(error) => {
+                index.completeness.unreadable_files.push(IndexReadFailure {
+                    path,
+                    kind: error.kind(),
+                });
+                continue;
+            }
         };
         if path != main {
             index.subfiles.push(path.clone());
         }
         visit_source(&path, &source, &mut index, &mut packages, |target| {
-            let Some(resolved) = resolve_local_typst_path(&root, &path, target) else {
+            let Some(resolved) = resolve_local_typst_path(&root, &path, target, &mut paths) else {
                 return;
             };
             if !visited.contains(&resolved) {
@@ -127,16 +177,27 @@ pub fn analyze_project(
         });
     }
 
+    // Duplicate/cyclic pending entries do not mean that anything was omitted.
+    index.completeness.file_limit_reached = pending.iter().any(|path| !visited.contains(path));
+    index
+        .completeness
+        .unreadable_files
+        .sort_by(|a, b| a.path.cmp(&b.path));
+    index.update_warning();
     index.subfiles.sort();
     index.packages = packages.into_iter().collect();
     index
 }
 
-fn source_for<'a>(path: &Path, overrides: &'a HashMap<PathBuf, &'a str>) -> Option<Cow<'a, str>> {
-    overrides
-        .get(path)
-        .map(|source| Cow::Borrowed(*source))
-        .or_else(|| fs::read_to_string(path).ok().map(Cow::Owned))
+fn source_for<'a>(
+    path: &Path,
+    overrides: &'a HashMap<PathBuf, &'a str>,
+) -> io::Result<Cow<'a, str>> {
+    if let Some(source) = overrides.get(path) {
+        Ok(Cow::Borrowed(*source))
+    } else {
+        fs::read_to_string(path).map(Cow::Owned)
+    }
 }
 
 fn visit_source(
@@ -290,14 +351,19 @@ impl LineIndex {
     }
 }
 
-fn resolve_local_typst_path(root: &Path, source: &Path, target: &str) -> Option<PathBuf> {
+fn resolve_local_typst_path(
+    root: &Path,
+    source: &Path,
+    target: &str,
+    paths: &mut PathNormalizer,
+) -> Option<PathBuf> {
     let target = Path::new(target);
     let candidate = if target.is_absolute() {
         root.join(target.strip_prefix(Component::RootDir.as_os_str()).ok()?)
     } else {
         source.parent()?.join(target)
     };
-    let candidate = canonical_or_owned(&candidate);
+    let candidate = paths.normalize(&candidate);
     (candidate.starts_with(root)
         && candidate
             .extension()
@@ -305,13 +371,188 @@ fn resolve_local_typst_path(root: &Path, source: &Path, target: &str) -> Option<
     .then_some(candidate)
 }
 
-fn canonical_or_owned(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+#[derive(Default)]
+struct PathNormalizer {
+    // Per traversal, bounded independently of the number of missing imports.
+    parents: HashMap<PathBuf, PathBuf>,
+    #[cfg(test)]
+    attempts: usize,
+}
+
+impl PathNormalizer {
+    fn normalize(&mut self, path: &Path) -> PathBuf {
+        #[cfg(test)]
+        {
+            self.attempts += 1;
+        }
+        path.canonicalize().unwrap_or_else(|_| {
+            // Missing/unsaved files must use the same workspace identity as existing
+            // files, including aliases such as /var -> /private/var on macOS.
+            match (path.parent(), path.file_name()) {
+                (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => {
+                    if let Some(canonical) = self.parents.get(parent) {
+                        return canonical.join(name);
+                    }
+                    let canonical = self.normalize(parent);
+                    if self.parents.len() < MAX_PROJECT_FILES {
+                        self.parents.insert(parent.to_owned(), canonical.clone());
+                    }
+                    canonical.join(name)
+                }
+                _ => path.to_owned(),
+            }
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_siblings_reuse_one_parent_lookup_and_cache_is_bounded() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let mut paths = PathNormalizer::default();
+        for index in 0..64 {
+            let missing = root.join(format!("missing-{index}.typ"));
+            assert_eq!(paths.normalize(&missing), missing);
+        }
+        assert_eq!(
+            paths.attempts, 65,
+            "one attempt per file plus one shared parent"
+        );
+        assert_eq!(paths.parents.len(), 1);
+        for index in 0..MAX_PROJECT_FILES + 10 {
+            paths.normalize(&root.join(format!("missing-dir-{index}/file.typ")));
+        }
+        assert_eq!(paths.parents.len(), MAX_PROJECT_FILES);
+        assert!(
+            PathNormalizer::default().parents.is_empty(),
+            "no cache survives an indexing pass"
+        );
+    }
+
+    fn virtual_project(children: usize) -> ProjectIndex {
+        let project = tempfile::tempdir().unwrap();
+        let main = project.path().join("main.typ");
+        let mut source = "= Main\n#include \"main.typ\"\n".to_owned();
+        let mut overrides = BTreeMap::new();
+        for child in 0..children {
+            source.push_str(&format!("#include \"child-{child}.typ\"\n"));
+            overrides.insert(
+                project.path().join(format!("child-{child}.typ")),
+                format!("= Child {child}\n"),
+            );
+        }
+        // Keep a duplicate pending at the exact traversal boundary.
+        if children > 0 {
+            source.push_str("#include \"child-0.typ\"\n");
+        }
+        overrides.insert(main.clone(), source);
+        analyze_project(project.path(), &main, &overrides)
+    }
+
+    #[test]
+    fn traversal_cutoff_reports_only_unvisited_files_and_bounds_work() {
+        let complete = virtual_project(MAX_PROJECT_FILES - 1);
+        assert_eq!(complete.outline.len(), MAX_PROJECT_FILES);
+        assert!(!complete.completeness.file_limit_reached);
+        assert!(
+            complete.warning().is_none(),
+            "duplicates and cycles are not omissions"
+        );
+        let partial = virtual_project(MAX_PROJECT_FILES);
+        assert_eq!(partial.outline.len(), MAX_PROJECT_FILES);
+        assert_eq!(partial.subfiles.len(), MAX_PROJECT_FILES - 1);
+        assert!(partial.completeness.file_limit_reached);
+        assert!(partial.completeness.unreadable_files.is_empty());
+        assert_eq!(
+            partial.warning(),
+            Some("Partial project index · 256-file limit reached")
+        );
+        assert!(std::ptr::eq(
+            partial.warning().unwrap(),
+            partial.warning().unwrap()
+        ));
+    }
+
+    #[test]
+    fn read_failures_are_deduplicated_and_overrides_recover_without_disk_reads() {
+        let project = tempfile::tempdir().unwrap();
+        let main = project.path().join("main.typ");
+        let missing = project.path().join("missing.typ");
+        let invalid = project.path().join("invalid.typ");
+        fs::write(&main, "= Available\n#include \"missing.typ\"\n#include \"missing.typ\"\n#include \"invalid.typ\"\n#include target\n").unwrap();
+        fs::write(&invalid, [0xff, 0xfe]).unwrap();
+        let index = analyze_project(project.path(), &main, &BTreeMap::new());
+        assert_eq!(index.outline.len(), 1);
+        assert_eq!(index.unresolved_dependencies.len(), 1);
+        assert_eq!(
+            index.completeness.unreadable_files,
+            vec![
+                IndexReadFailure {
+                    path: invalid.canonicalize().unwrap(),
+                    kind: io::ErrorKind::InvalidData
+                },
+                IndexReadFailure {
+                    path: project.path().canonicalize().unwrap().join("missing.typ"),
+                    kind: io::ErrorKind::NotFound
+                },
+            ]
+        );
+        assert_eq!(
+            index.warning(),
+            Some("Partial project index · unreadable files: 2 · dynamic dependencies: 1")
+        );
+        let overrides = BTreeMap::from([
+            (missing, "= Unsaved\n".to_owned()),
+            (invalid, "= Recovered\n".to_owned()),
+            (
+                main.clone(),
+                "#include \"missing.typ\"\n#include \"invalid.typ\"\n".to_owned(),
+            ),
+        ]);
+        let recovered = analyze_project(project.path(), &main, &overrides);
+        assert_eq!(recovered.outline.len(), 2);
+        assert!(recovered.completeness.unreadable_files.is_empty());
+        assert!(recovered.warning().is_none());
+    }
+
+    #[test]
+    fn missing_entry_is_partial_but_package_policy_is_not_a_read_failure() {
+        let project = tempfile::tempdir().unwrap();
+        let main = project.path().join("main.typ");
+        let missing = analyze_project(project.path(), &main, &BTreeMap::new());
+        assert_eq!(missing.completeness.unreadable_files.len(), 1);
+        assert!(missing.warning().is_some());
+        fs::write(&main, "#import \"@preview/nonexistent-package:0.0.0\": *\n").unwrap();
+        let package = analyze_project(project.path(), &main, &BTreeMap::new());
+        assert_eq!(package.packages, ["@preview/nonexistent-package:0.0.0"]);
+        assert!(package.warning().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_files_and_unsaved_overrides_share_symlinked_workspace_identity() {
+        let project = tempfile::tempdir().unwrap();
+        let root = project.path().join("workspace");
+        fs::create_dir(&root).unwrap();
+        let alias = project.path().join("alias");
+        std::os::unix::fs::symlink(&root, &alias).unwrap();
+        let main = alias.join("not-created-yet/main.typ");
+        let missing = analyze_project(&alias, &main, &BTreeMap::new());
+        assert_eq!(
+            missing.completeness.unreadable_files[0].path,
+            root.canonicalize()
+                .unwrap()
+                .join("not-created-yet/main.typ")
+        );
+        let overrides = BTreeMap::from([(main.clone(), "= Unsaved\n".to_owned())]);
+        let unsaved = analyze_project(&root, &main, &overrides);
+        assert_eq!(unsaved.outline[0].title, "Unsaved");
+        assert!(unsaved.warning().is_none());
+    }
 
     #[test]
     fn indexes_recursive_project_structure_and_unsaved_overrides() {

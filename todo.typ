@@ -242,8 +242,8 @@ does not include the viewer features in items 1, 118 or 163.
 185. [ ] (A01; after 184) Replace the active hole and parallel tab vectors with a document store keyed by stable IDs, a separate order list, and optional active/preview IDs. Route existing callers through the accessors and remove obsolete storage; identity tests must pass unchanged.
 186. [ ] (A01; after 185) Unify active and parked ownership of folding, saved editor-widget state and autosave metadata in the document records, reusing the fields already present in ParkedTab. Test stale replies across switches and that tab changes start no extra services; measure switch allocations and many-tab idle work. Keep services window-owned.
 
-187. [ ] (A02) Add adversarial save-order tests before changing execution: edits during save, overlapping same-path requests, failed/uncertain writes, and close during completion. Assert that only the matching durable receipt can approve a close.
-188. [ ] (A02; after 187) Wrap the existing core SaveRequest/SaveReceipt and durability outcomes in immutable worker inputs/results carrying canonical bytes, expected disk state, intent and continuation token. Do not duplicate core document identity or receipt validation. Adapt the existing save path without changing execution timing; test receipt identity and durability handling.
+187. [x] (A02) Add adversarial save-order tests before changing execution: edits during save, overlapping same-path requests, failed/uncertain writes, and close during completion. Assert that only the matching durable receipt can approve a close.
+188. [x] (A02; after 187) Wrap the existing core SaveRequest/SaveReceipt and durability outcomes in immutable worker inputs/results carrying canonical bytes, expected disk state, intent and continuation token. Do not duplicate core document identity or receipt validation. Adapt the existing save path without changing execution timing; test receipt identity and durability handling.
 189. [ ] (A02; after 188) Execute save disk work as protected background transactions. Recheck expected disk state inside the app-owned path lease, serialize same-path writes, and retain completion after owner closure. A controllable slow-writer test must leave UI dispatch non-blocking; do not claim atomicity against external writers.
 190. [ ] (A02; after 189) Route active manual save and parked-tab autosave through the same coordinator and remove duplicated write policy. Preserve manual-only formatting and reject stale receipts; test save/close continuations for both paths without automatic conflict merging.
 
@@ -255,25 +255,25 @@ does not include the viewer features in items 1, 118 or 163.
 195. [ ] (A04; after 194) Route service start/stop, rendering and repaint requests through preview effects. Assert one effect per transition, no duplicate compilation and no idle repaint loop; keep native views and texture handles in adapters.
 196. [ ] (A04; after 195) Make preview rendering consume a read-only status snapshot distinguishing requested/effective backend, canonical artifact availability and native readiness. Remove view-side policy changes and test recovery/status agreement.
 
-197. [ ] (A05) Extract PDF rasterization and link extraction from the compiler into a reusable PDF service for compiled documents and opened assets. Preserve canonical export bytes and existing page/link results with focused parity tests.
+197. [x] (A05) Extract PDF rasterization and link extraction from the compiler into a reusable PDF service for compiled documents and opened assets. Preserve canonical export bytes and existing page/link results with focused parity tests.
 198. [ ] (A05; after 197) Separate all-page dimensions/metadata from decoded pixels and uploaded textures. Key resident pages by artifact, page, scale and relevant appearance revision; test stale artifact/theme rejection and retention of valid old content during replacement.
 199. [ ] (A05; after 198) Request raster pages by visible range with bounded adjacent-page prefetch and cooperative cancellation. Test scroll/zoom and replacement ordering so obsolete requests cannot replace current pages or discard valid displayed content prematurely.
 200. [ ] (A05; after 199) Enforce process-wide decoded-pixel and texture byte budgets with eviction that coordinates visible-page demand across windows. Add 1/20/100-page bounded-residency tests and matched optimized cold/warm, idle/scroll/zoom measurements; keep export quality unchanged and document oversized-page handling.
 
 201. [x] (A06) Extract bounded LSP framing into a private transport module without changing sidecar commands/events or threads. Test malformed, oversized and truncated frames plus shutdown ordering; introduce no extra payload copies or queues.
-202. [ ] (A06; after 201) Move JSON-RPC feature DTOs/codecs into a UI-independent protocol module. Preserve existing wire fixtures and fake/real-server coverage; keep the public sidecar interface unchanged.
-203. [ ] (A06; after 202) Reassess the remaining session/process coupling after codec extraction. Extract only transition logic whose ownership becomes clearer; retain existing generation/document-version fields and admission checks rather than duplicating them. Test stale replies and restart/shutdown ordering; do not introduce a generic LSP framework or move threads for organizational reasons.
+202. [x] (A06; after 201) Move JSON-RPC feature DTOs/codecs into a UI-independent protocol module. Preserve existing wire fixtures and fake/real-server coverage; keep the public sidecar interface unchanged.
+203. [x] (A06; after 202) Reassess the remaining session/process coupling after codec extraction. Extract only transition logic whose ownership becomes clearer; retain existing generation/document-version fields and admission checks rather than duplicating them. Test stale replies and restart/shutdown ordering; do not introduce a generic LSP framework or move threads for organizational reasons.
 
 204. [ ] (A07) First reproduce superseded project-index jobs continuing to consume work and record queue/payload/concurrency bounds. Implement the smallest shared bounded read-job runner needed for that client: fixed concurrency, keyed pending replacement and byte accounting. Do not build a generic executor or priority hierarchy without a second demonstrated use case; test fair admission and keep protected mutations/long-lived protocol supervisors separate.
 205. [ ] (A07; after 204) Add cooperative cancellation checkpoints and owner/source-key completion routing to the executor. Test that superseding 100 requests cannot run 100 obsolete jobs and that closed owners receive no UI result; wake only the owning viewport.
 206. [ ] (A07; after 205) Migrate project indexing as the first executor client and remove its superseded per-request spawning path. Measure foreground latency under repeated indexing and multi-window load; retain literal-only analysis and bounded cancellation checkpoints.
 
-207. [ ] (A08) Extend ProjectIndex with completeness metadata for traversal-cap hits and unreadable local files; retain its existing unresolved-expression records rather than adding a duplicate dependency model. Surface concise warnings instead of implying complete results; test each case without evaluating Typst or indexing downloaded packages.
+207. [x] (A08) Extend ProjectIndex with completeness metadata for traversal-cap hits and unreadable local files; retain its existing unresolved-expression records rather than adding a duplicate dependency model. Surface concise warnings instead of implying complete results; test each case without evaluating Typst or indexing downloaded packages.
 208. [ ] (A08) Share immutable filesystem snapshots through a canonical-root workspace service while keeping each window's selection, expansion and search local. Test that two windows reuse an unchanged scan and closing one does not invalidate the other's snapshot; use 204–206 if adopting that executor.
 209. [ ] (A08; after 208) Coalesce filesystem notifications and use metadata filtering plus a conservative verification fallback instead of routine whole-file checks. Test atomic-save, delete, rename and missed-event recovery; measure scan/read counts across two windows and retain separate filesystem, language-index and Git models.
 
-210. [ ] (A09) Introduce a typed completion-edit transaction carrying source version, validated coordinate ranges, selection and one undo intent. Reuse core validation and miTeX preflight; test Unicode, CRLF, invalid ranges, stale replies and one-step undo while leaving typing/IME with TextEdit.
-211. [ ] (A09; after 210) Extract the completion popup renderer behind read-only inputs and typed actions, without access to EditorApp or services. Add semantic acceptance/selection tests and check unchanged-frame allocations; do not add full-source copies or broaden this patch to every editor feature.
+210. [x] (A09) Introduce a typed completion-edit transaction carrying source version, validated coordinate ranges, selection and one undo intent. Reuse core validation and miTeX preflight; test Unicode, CRLF, invalid ranges, stale replies and one-step undo while leaving typing/IME with TextEdit.
+211. [x] (A09; after 210) Extract the completion popup renderer behind read-only inputs and typed actions, without access to EditorApp or services. Add semantic acceptance/selection tests and check unchanged-frame allocations; do not add full-source copies or broaden this patch to every editor feature.
 
 212. [ ] (A10) Extract Git command execution and status/diff codecs behind a repository service handle. Preserve argument-array invocation and add disposable-repository coverage for quoted paths, new files, CRLF and missing final newlines; this is not the visual redesign in item 183.
 213. [x] (A10; independent of 212) Route hunk index mutations through the existing repository-root transaction lease and revalidate baselines under that lease. Share the transaction entry point with panel operations; do not postpone this correctness fix for a service extraction. Test overlap with panel operations, conflicts, partial staging and preservation of unrelated staged changes; retain protected completions.
@@ -288,7 +288,76 @@ does not include the viewer features in items 1, 118 or 163.
 220. [x] (A12) Generate or validate runtime tool-version metadata from toolchain/manifest.tsv so constants and packaging cannot drift. Add a mismatch regression/build check; preserve resolution precedence without bundling new tools or retaining compatibility aliases.
 221. [x] (A12) Correct obsolete miTeX comments in src/lib.rs and add superseding current-state notes to ADR 0002 for per-window Tinymist, the separate Settings viewport and conditional CLI compilation. Cross-link the current ownership/module map without erasing historical decision context.
 
+= Immutable save handoff (2026-09-17)
+
+- Item 188: `src/save_transaction.rs` wraps the existing projection-aware request
+  and receipt with expected disk state, save intent, durability and continuation
+  token. Both active and parked saves use it synchronously; no source copy,
+  additional disk read, hash pass, queue or thread is introduced.
+- Core Workflow now allocates non-reused save-continuation tokens. An earlier
+  save cannot approve or cancel a later close request. Document receipt identity
+  and revision validation remain solely in the existing document model.
+- Tests cover canonical Unicode/miTeX bytes, pointer reuse, failed versus
+  committed-but-uncertain writes, wrong owner/epoch, replaced continuation,
+  duplicate completion and token exhaustion. Formatting, ordinary/profiling
+  strict Clippy and full tests, all 13 xtask tests and boundary checks pass.
+- This is correctness/testability groundwork, not a claimed latency improvement.
+  Lease-protected disk-state rechecks and background execution remain item 189;
+  shared scheduling/save policy remains item 190. Details and performance scope:
+  `docs/architecture-followup.md`.
+
+= Architecture implementation batch: saves, PDF, completions (2026-09-17)
+
+- Item 187: added adversarial tests using the real document/workflow adapter for
+  edits during save, out-of-order same-path receipts, failed and uncertain writes,
+  canceled close, replaced documents and one-time close continuation. These
+  control receipt ordering; disk execution remains synchronous until 188–190.
+- Item 197: moved PDF page/link types, rasterization and link extraction into
+  `src/pdf.rs`, used directly by compiler, assets, thumbnails and preview views.
+  Canonical export bytes, DPI, decoded pixels, link normalization, first-page
+  bounds and cancellation retain focused coverage. No extra workers or copies.
+- Item 203: reassessed after codec extraction. Keep Session's ordered handshake,
+  pending requests, documents and pipes together rather than introduce competing
+  ownership. New canceled/duplicate reply and shutdown/replacement tests protect
+  request identity, shutdown-before-exit and reaping-before-replacement. Existing
+  generation/version admission and independent forced termination remain intact.
+- Item 210: introduced a consumed, versioned completion transaction, with explicit
+  canonical/display coordinates, core edit validation, miTeX preflight, resulting
+  selection and one undo commit. Full document keys protect epoch/owner changes;
+  regressions cover Unicode, CRLF, invalid ranges, stale transactions and undo.
+- Item 211: extracted the read-only completion popup with typed selection,
+  acceptance and dismissal actions. Semantic interaction and placement tests
+  pass. Borrow items/source and the selected font family instead of cloning.
+  A matched optimized payload-handoff probe reduced allocations from 1,135,250
+  bytes per paint to zero for 256 documentation-heavy suggestions; this excludes
+  egui rendering and GPU costs. Normal tests enforce the allocation contract.
+- Evidence, ownership rationale and raw probe metadata:
+  `docs/architecture-followup.md`. No fresh visual claim: layout is unchanged.
+  Formatting, strict ordinary/profiling Clippy, both full test suites, all 13
+  xtask tests and both real-Tinymist tests pass.
+
 = Architecture todo review (2026-09-17)
+
+- Item 207: ProjectIndex now retains unreadable paths/error kinds and an explicit
+  traversal-cutoff flag. Leftover duplicates/cycles do not produce false cutoff
+  warnings at exactly 256 visited files. Existing dynamic-dependency records feed
+  the same concise partial-index summary, with no second dependency model.
+  Explorer displays the wrapping summary once above its sections, including while
+  searching; a recovered index removes it. Missing/unsaved paths now canonicalize
+  their existing ancestors so symlinked workspace paths do not silently exclude
+  them or lose their in-memory overrides.
+- Item 207 verification: new deterministic tests cover exact/over-limit traversal,
+  duplicate/cyclic references, missing entry/imported files, invalid UTF-8,
+  override recovery, dynamic dependencies, package exclusions and symlink aliases.
+  A semantic UI test covers warning visibility during an empty search, narrow
+  wrapping and removal after recovery. Required formatting, strict Clippy, full
+  normal tests (800 application passes, 8 opt-in tests ignored) and 13 xtask tests
+  pass. No screenshot is claimed; behavior and wrapping have deterministic tests.
+- Item 207 resource impact: no extra indexing jobs, repaints or package downloads.
+  Failure records are bounded by the existing 256-file traversal limit; summary
+  aggregation happens once in the worker and rendering borrows the cached text.
+  Missing-path normalization performs ancestor checks only after canonicalization
+  fails. No material normal-frame performance change or measured speedup claimed.
 
 - Item 213 implemented after review: panel writes and Stage/Unstage hunks now use
   one repository-root transaction entry point. Root discovery precedes the lease;
@@ -1334,3 +1403,22 @@ Only deferred items 1, 2, and 26 remain unchecked.
   at the font scene; scene-aware catalog invalidation fixed it and the complete
   rerun succeeded. No native bounds or maintained gallery layout changed;
   these are individual viewport checks, not composed desktop verification.
+
+= Architecture performance verification and protocol extraction (2026-09-17)
+
+- Items 2, 207: matched optimized baseline comparisons found missing-import
+  indexing regressed from 0.64 ms to 1.01 ms. A bounded, per-analysis parent
+  normalization cache restores 0.64 ms without retaining stale filesystem state.
+  Regression tests protect shared-parent lookup reuse and the 256-entry bound.
+- Main, Settings, four-window, intact indexing, and LSP framing measurements
+  showed no other material regression. See `docs/architecture-performance.md`
+  for metadata, retained evidence, sampled Settings outliers, and limitations.
+  These measurements do not establish GPU costs or long-running leak behavior.
+- Item 202: extracted pure feature DTOs and codecs into
+  `src/tinymist/protocol.rs`, retaining the public sidecar interface and wire
+  fixtures. Borrowed notification tests protect against document copies;
+  architecture tests reject UI, process, and thread dependencies in the module.
+  No runtime scheduling or ownership changes were introduced. Native timings
+  precede this pure extraction; fake-server and both real-Tinymist tests pass.
+- Verification: formatting, normal and profiling-feature Clippy and full test
+  suites, plus all 13 xtask tests and xtask formatting pass.

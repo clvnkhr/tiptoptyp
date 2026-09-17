@@ -9,6 +9,7 @@ mod auto_pairs;
 mod child_view;
 mod compiler;
 mod completion;
+mod completion_edit;
 mod delimiters;
 mod diagnostics;
 mod document;
@@ -30,6 +31,7 @@ mod native_window;
 #[allow(unsafe_code)]
 mod open_requests;
 mod package_catalog;
+mod pdf;
 mod performance;
 mod presentation;
 mod preview;

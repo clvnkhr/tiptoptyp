@@ -241,6 +241,17 @@ measurements. When fixing a performance bug, add a focused invariant test and
 record before/after evidence using this workflow. Investigating individual hot
 paths remains ongoing work, not an unchecked part of the profiling setup.
 
+## Architecture regression probes
+
+See [the architecture performance review](architecture-performance.md) for
+matched baseline/fixed measurements, retained evidence, limitations, and the
+opt-in `architecture_cost_probe` command. Normal test runs skip its timing loop;
+deterministic tests protect bounded normalization work and borrowed wire payloads.
+
+The [next architecture batch](architecture-followup.md) records the completion
+popup payload allocation comparison and its opt-in reproduction command. It
+isolates item-list copying, not whole-frame or GPU costs.
+
 ## Hover popup probes
 
 ```sh

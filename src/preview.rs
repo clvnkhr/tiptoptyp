@@ -3,8 +3,9 @@ use std::{sync::Arc, time::Duration};
 use eframe::egui::{TextureHandle, Vec2};
 
 use crate::{
-    compiler::{ArtifactKey, PREVIEW_DPI, PreviewLink},
+    compiler::ArtifactKey,
     diagnostics::Diagnostic,
+    pdf::{PREVIEW_DPI, PreviewLink},
     settings::PreviewPreference,
     theme::METRICS,
 };

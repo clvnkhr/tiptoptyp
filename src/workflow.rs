@@ -237,13 +237,19 @@ pub(crate) struct DocumentWorkflow {
 impl DocumentWorkflow {
     pub(crate) fn complete_save(
         &mut self,
+        token: Option<tiptoptyp_core::workflow::SaveContinuationToken>,
         document: &mut crate::document::DocumentSession,
         receipt: tiptoptyp::mitex_document::SaveReceipt,
         synchronized: bool,
     ) -> Result<Option<PendingDocumentAction>, &'static str> {
         let status = document.record_save(receipt);
         self.flow
-            .complete_save(status, document.is_dirty(), synchronized)
+            .complete_save(token, status, document.is_dirty(), synchronized)
+    }
+    pub(crate) fn continuation_token(
+        &self,
+    ) -> Option<tiptoptyp_core::workflow::SaveContinuationToken> {
+        self.flow.continuation_token()
     }
     pub(crate) fn allow_close_for(&mut self, key: DocumentKey) {
         self.close_permit = Some(key);
@@ -389,6 +395,191 @@ mod tests {
         epoch: 3,
         revision: 8,
     };
+
+    fn save_fixture() -> crate::document::DocumentSession {
+        let mut document = crate::document::DocumentSession::new(
+            tiptoptyp_core::document::WindowSessionId::new(1),
+            "saved",
+            crate::document::DocumentKind::Text,
+        );
+        document
+            .replace_loaded(
+                "saved".into(),
+                "draft.txt".into(),
+                crate::document::DocumentKind::Text,
+                Some(1),
+            )
+            .unwrap();
+        document
+    }
+
+    fn close_after_save(flow: &mut DocumentWorkflow, key: DocumentKey) {
+        flow.continue_after_save(PendingDocumentAction {
+            action: DeferredDocumentAction::CloseWindow,
+            key,
+            allow_discard: false,
+            description: "closing".into(),
+        });
+    }
+
+    #[test]
+    fn edit_during_save_records_written_bytes_but_cannot_release_close() {
+        let mut document = save_fixture();
+        let mut flow = DocumentWorkflow::default();
+        close_after_save(&mut flow, document.key());
+        let request = document
+            .prepare_save("draft.txt".into(), document.kind())
+            .unwrap();
+        document.edit(egui::text::CCursorRange::default(), |source| {
+            source.push_str(" later")
+        });
+        assert!(
+            flow.complete_save(
+                flow.continuation_token(),
+                &mut document,
+                request.committed(1),
+                true
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(document.is_dirty());
+        assert_eq!(document.saved_source(), "saved");
+        assert_eq!(document.source(), "saved later");
+        assert!(!flow.may_close(document.key()));
+        assert!(!flow.has_continuation());
+    }
+
+    #[test]
+    fn overlapping_same_path_receipts_release_only_the_authoritative_close_once() {
+        let mut document = save_fixture();
+        let older = document
+            .prepare_save("draft.txt".into(), document.kind())
+            .unwrap();
+        document.edit(egui::text::CCursorRange::default(), |source| {
+            source.push_str(" newer")
+        });
+        let newer = document
+            .prepare_save("draft.txt".into(), document.kind())
+            .unwrap();
+        document.record_save(newer.committed(2)).unwrap();
+        let mut flow = DocumentWorkflow::default();
+        close_after_save(&mut flow, document.key());
+        assert!(
+            flow.complete_save(
+                flow.continuation_token(),
+                &mut document,
+                older.committed(1),
+                true
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(flow.has_continuation());
+        assert_eq!(document.saved_source(), "saved newer");
+        assert_eq!(document.disk_fingerprint(), Some(2));
+        let authoritative = document
+            .prepare_save("draft.txt".into(), document.kind())
+            .unwrap();
+        let action = flow
+            .complete_save(
+                flow.continuation_token(),
+                &mut document,
+                authoritative.committed(2),
+                true,
+            )
+            .unwrap()
+            .unwrap();
+        assert!(matches!(action.action, DeferredDocumentAction::CloseWindow));
+        assert_eq!(action.key, document.key());
+        assert!(flow.take_continuation().is_none());
+        assert!(
+            !flow.may_close(document.key()),
+            "completion returns intent, not a native close permit"
+        );
+    }
+
+    #[test]
+    fn failed_and_uncertain_writes_never_release_a_close() {
+        for synchronized in [false, true] {
+            let mut document = save_fixture();
+            document.edit(egui::text::CCursorRange::default(), |source| {
+                source.push_str(" edit")
+            });
+            let mut flow = DocumentWorkflow::default();
+            close_after_save(&mut flow, document.key());
+            let request = document
+                .prepare_save("draft.txt".into(), document.kind())
+                .unwrap();
+            if synchronized {
+                // Failed disk work must not manufacture a receipt. Exercise the
+                // same explicit-save error adapter used by save_to_with_intent.
+                drop(request);
+                flow.present_error("write failed".into());
+                assert!(document.is_dirty());
+                assert_eq!(document.saved_source(), "saved");
+            } else {
+                assert!(
+                    flow.complete_save(
+                        flow.continuation_token(),
+                        &mut document,
+                        request.committed(2),
+                        false
+                    )
+                    .unwrap()
+                    .is_none()
+                );
+                assert!(
+                    !document.is_dirty(),
+                    "written bytes are recorded even when sync is uncertain"
+                );
+            }
+            assert!(!flow.has_continuation());
+            assert!(!flow.may_close(document.key()));
+            assert!(flow.take_action().is_none());
+        }
+    }
+
+    #[test]
+    fn cancelled_close_and_replaced_owner_reject_late_completion_authority() {
+        let mut document = save_fixture();
+        let mut flow = DocumentWorkflow::default();
+        close_after_save(&mut flow, document.key());
+        let request = document
+            .prepare_save("draft.txt".into(), document.kind())
+            .unwrap();
+        flow.cancel_continuation();
+        assert!(
+            flow.complete_save(
+                flow.continuation_token(),
+                &mut document,
+                request.committed(1),
+                true
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(!flow.may_close(document.key()));
+        let request = document
+            .prepare_save("draft.txt".into(), document.kind())
+            .unwrap();
+        let old_key = document.key();
+        flow.allow_close_for(old_key);
+        document.replace_unprojected_untitled("replacement");
+        close_after_save(&mut flow, document.key());
+        assert!(
+            flow.complete_save(
+                flow.continuation_token(),
+                &mut document,
+                request.committed(1),
+                true
+            )
+            .is_err()
+        );
+        assert_eq!(document.source(), "replacement");
+        assert!(!flow.may_close(document.key()));
+        assert!(flow.take_continuation().is_none());
+    }
 
     #[test]
     fn asynchronous_dialog_wakes_its_own_window_after_focus_changes() {

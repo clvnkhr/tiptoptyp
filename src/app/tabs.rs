@@ -914,13 +914,18 @@ impl EditorApp {
                     .document
                     .prepare_save(path.clone(), tab.document.kind())
                     .map_err(|e| e.to_string())?;
-                let fingerprint = fingerprint(request.source().as_bytes());
-                let durability = atomic_write(request.path(), request.source().as_bytes())
-                    .map_err(|e| e.to_string())?;
+                let expected = tab
+                    .document
+                    .disk_fingerprint()
+                    .map_or(ExpectedDiskState::Unchecked, ExpectedDiskState::Fingerprint);
+                let completion = SaveInput::new(request, expected, SaveIntent::Auto, None)
+                    .execute_with(|input| atomic_write(input.path(), input.bytes()));
+                let committed = completion.result?;
+                let durability = committed.durability;
                 tab.document
-                    .record_save(request.committed(fingerprint))
+                    .record_save(committed.receipt)
                     .map_err(str::to_owned)?;
-                if let crate::private_workspace::WriteDurability::Uncertain(error) = durability {
+                if let tiptoptyp::save_transaction::WriteDurability::Uncertain(error) = durability {
                     return Err(error.to_string());
                 }
                 Ok(())

@@ -1,5 +1,9 @@
+use super::completion_popup::completion_popup_position;
 use super::*;
 use crate::asset::AssetThumbnailResult;
+use crate::completion_edit::{
+    CompletionApplication, SnippetExpansion, expand_lsp_snippet, prepare_completion_application,
+};
 use crate::explorer::ExplorerPanelPhase;
 use crate::settings::InterfaceTheme;
 
@@ -935,6 +939,7 @@ fn completion_popup_prefers_below_then_flips_and_clamps() {
 #[test]
 fn completion_responses_require_exact_request_and_document_identity() {
     let pending = EditorCompletionState {
+        key: DocumentKey::new(tiptoptyp_core::document::WindowSessionId::new(1), 1, 12),
         generation: Generation(7),
         uri: "file:///project/main.typ".to_owned(),
         version: 12,
@@ -1056,6 +1061,110 @@ fn completion_without_server_range_replaces_only_identifier_prefix() {
             cursor: 8,
         }
     );
+}
+
+#[test]
+fn completion_transaction_preserves_unicode_crlf_and_one_undo() {
+    use crate::completion_edit::{CompletionCoordinates, CompletionTransaction};
+    use tiptoptyp_core::document::WindowSessionId;
+    let before = "😀\r\n#al";
+    let mut document = tiptoptyp::mitex_document::Document::new(
+        WindowSessionId::new(1),
+        before,
+        DocumentKind::Typst,
+    );
+    let mut item = completion_item("alpha");
+    item.text_edit = Some(LspTextEdit {
+        range: LspRange {
+            start: LspPosition::new(1, 1),
+            end: LspPosition::new(1, 3),
+        },
+        new_text: "alpha".into(),
+    });
+    item.additional_text_edits.push(LspTextEdit {
+        range: LspRange {
+            start: LspPosition::new(0, 0),
+            end: LspPosition::new(0, 0),
+        },
+        new_text: "é".into(),
+    });
+    let transaction = CompletionTransaction::prepare(
+        document.key(),
+        before,
+        6,
+        &item,
+        CompletionCoordinates::Canonical,
+    )
+    .unwrap();
+    assert_eq!(transaction.commit(&mut document, 6).unwrap(), 10..10);
+    assert_eq!(document.source(), "é😀\r\n#alpha");
+    document.history_step(false, 10).unwrap();
+    assert_eq!(document.source(), before);
+    assert!(document.history_step(false, 6).is_none());
+    for range in [
+        LspRange {
+            start: LspPosition::new(0, 1),
+            end: LspPosition::new(0, 2),
+        },
+        LspRange {
+            start: LspPosition::new(1, 3),
+            end: LspPosition::new(1, 1),
+        },
+        LspRange {
+            start: LspPosition::new(99, 0),
+            end: LspPosition::new(99, 0),
+        },
+    ] {
+        item.text_edit.as_mut().unwrap().range = range;
+        assert!(
+            CompletionTransaction::prepare(
+                document.key(),
+                before,
+                6,
+                &item,
+                CompletionCoordinates::Display
+            )
+            .is_err()
+        );
+        assert_eq!(document.source(), before);
+    }
+}
+
+#[test]
+fn completion_transaction_rejects_changed_revision_epoch_and_owner() {
+    use crate::completion_edit::{CompletionCoordinates, CompletionTransaction};
+    use tiptoptyp_core::document::WindowSessionId;
+    for change in 0..3 {
+        let mut document = tiptoptyp::mitex_document::Document::new(
+            WindowSessionId::new(1),
+            "al",
+            DocumentKind::Typst,
+        );
+        let transaction = CompletionTransaction::prepare(
+            document.key(),
+            "al",
+            2,
+            &completion_item("alpha"),
+            CompletionCoordinates::Display,
+        )
+        .unwrap();
+        match change {
+            0 => document.edit(2, |source| source.push('x')),
+            1 => document.replace_unprojected_untitled("replacement"),
+            _ => {
+                document = tiptoptyp::mitex_document::Document::new(
+                    WindowSessionId::new(2),
+                    "al",
+                    DocumentKind::Typst,
+                )
+            }
+        }
+        let before = document.source().clone();
+        let key = document.key();
+        assert!(transaction.commit(&mut document, 2).is_err());
+        assert_eq!(document.source(), &before);
+        assert_eq!(document.key(), key);
+    }
 }
 
 #[test]
@@ -3089,6 +3198,41 @@ fn explorer_search_covers_every_project_index_section() {
         [true, false, false, false, false, false, false, false],
         "an empty result keeps the Files surface open for its empty-state message"
     );
+}
+
+#[test]
+fn partial_project_index_warning_is_visible_and_disappears_after_recovery() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let project = tempfile::tempdir().unwrap();
+    let main = project.path().join("main.typ");
+    let partial = analyze_project(project.path(), &main, &BTreeMap::new());
+    let warning = partial.warning().unwrap().to_owned();
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(200.0, 300.0))
+        .build_ui(|ui| {
+            show_project_index_warning(ui, &partial);
+            show_project_index_section(
+                ui,
+                ExplorerSection::Contents,
+                project.path(),
+                &partial,
+                "no-match",
+            );
+        });
+    harness.run();
+    harness.get_by_label(&warning);
+    harness.get_by_label("No matches");
+    let rect = harness.get_by_label(&warning).rect();
+    assert!(
+        rect.width() <= 200.0,
+        "warning must wrap within the Explorer"
+    );
+    drop(harness);
+    std::fs::write(&main, "= Recovered\n").unwrap();
+    let complete = analyze_project(project.path(), &main, &BTreeMap::new());
+    let mut harness = Harness::builder().build_ui(|ui| show_project_index_warning(ui, &complete));
+    harness.run();
+    assert!(harness.query_by_label(&warning).is_none());
 }
 
 #[test]
@@ -6426,6 +6570,7 @@ fn projected_application_remote_completion_uses_canonical_payload_and_one_undo_s
         filter_text: None,
     };
     app.editor_completion = Some(EditorCompletionState {
+        key: app.document.key(),
         generation: Generation(92),
         uri: "file:///completion.typ".into(),
         version: revision_as_i32(app.document.revision()),

@@ -33,20 +33,22 @@ fn launch_policy_and_lsp_transport_have_focused_owners() {
             "capture renderer owns launch policy: {forbidden}"
         );
     }
-    let transport = fs::read_to_string(root.join("tinymist/transport.rs")).unwrap();
-    let production = transport.split("#[cfg(test)]").next().unwrap();
-    for forbidden in [
-        "crate::",
-        "super::",
-        "eframe",
-        "egui",
-        "std::process",
-        "std::thread",
-    ] {
-        assert!(
-            !production.contains(forbidden),
-            "framing depends on application/session code: {forbidden}"
-        );
+    for module in ["tinymist/transport.rs", "tinymist/protocol.rs"] {
+        let source = fs::read_to_string(root.join(module)).unwrap();
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        for forbidden in [
+            "crate::",
+            "super::",
+            "eframe",
+            "egui",
+            "std::process",
+            "std::thread",
+        ] {
+            assert!(
+                !production.contains(forbidden),
+                "{module} depends on application/session code: {forbidden}"
+            );
+        }
     }
 }
 
@@ -95,6 +97,62 @@ fn core_has_no_platform_dependencies_or_effect_apis() {
 }
 
 #[test]
+fn pdf_service_is_shared_without_compiler_or_view_ownership() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let pdf = fs::read_to_string(root.join("pdf.rs")).unwrap();
+    for forbidden in [
+        "crate::compiler",
+        "eframe",
+        "egui",
+        "CompileRequest",
+        "CompileArtifact",
+    ] {
+        assert!(
+            !pdf.contains(forbidden),
+            "PDF service depends on {forbidden}"
+        );
+    }
+    let asset = fs::read_to_string(root.join("asset.rs")).unwrap();
+    assert!(!asset.contains("compiler::"));
+    let compiler = fs::read_to_string(root.join("compiler.rs")).unwrap();
+    for forbidden in [
+        "fn rasterize_pdf",
+        "fn parse_pdf_links",
+        "quick_xml",
+        "image::load_from_memory",
+    ] {
+        assert!(
+            !compiler.contains(forbidden),
+            "compiler still owns {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn save_handoff_does_not_own_io_ui_or_another_document_identity() {
+    let source = include_str!("../src/save_transaction.rs")
+        .split("#[cfg(test)]")
+        .next()
+        .unwrap();
+    for forbidden in [
+        "std::fs",
+        "std::thread",
+        "eframe",
+        "egui",
+        "DocumentKey",
+        "struct SaveReceipt",
+        "struct SaveRequest",
+        ".to_owned()",
+        ".to_vec()",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "save handoff duplicates ownership via {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn viewport_creation_and_font_installation_stay_in_rendering_adapters() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     for path in rust_files(&root) {
@@ -122,7 +180,7 @@ fn viewport_creation_and_font_installation_stay_in_rendering_adapters() {
 #[test]
 fn focused_ui_modules_cannot_take_the_whole_application_or_run_its_services() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/app");
-    for name in ["settings_panel.rs", "tooltips.rs"] {
+    for name in ["settings_panel.rs", "tooltips.rs", "completion_popup.rs"] {
         let source = fs::read_to_string(root.join(name)).unwrap();
         let production = source.split("#[cfg(test)]").next().unwrap();
         let compact: String = production.chars().filter(|c| !c.is_whitespace()).collect();

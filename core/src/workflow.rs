@@ -9,15 +9,21 @@ enum Phase<A, M, D> {
     Dialog(D),
 }
 
+/// Identifies one save-dependent action within its owning workflow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SaveContinuationToken(u64);
+
 pub struct Workflow<A, M, D> {
     phase: Phase<A, M, D>,
-    after_save: Option<A>,
+    after_save: Option<(SaveContinuationToken, A)>,
+    next_continuation: u64,
 }
 impl<A, M, D> Default for Workflow<A, M, D> {
     fn default() -> Self {
         Self {
             phase: Phase::Idle,
             after_save: None,
+            next_continuation: 0,
         }
     }
 }
@@ -26,10 +32,17 @@ impl<A, M, D> Workflow<A, M, D> {
     /// uncertain durability keep the window open even though bytes were saved.
     pub fn complete_save(
         &mut self,
+        token: Option<SaveContinuationToken>,
         status: Result<crate::document::SaveStatus, &'static str>,
         dirty: bool,
         synchronized: bool,
     ) -> Result<Option<A>, &'static str> {
+        if token != self.continuation_token() {
+            // A previous save may update persisted state, but must not release
+            // or cancel an action installed after it was submitted.
+            status?;
+            return Ok(None);
+        }
         let continuation = self.after_save.take();
         if matches!(status?, crate::document::SaveStatus::Stale) {
             // Keep a close/open continuation alive until the authoritative
@@ -39,7 +52,7 @@ impl<A, M, D> Workflow<A, M, D> {
             return Ok(None);
         }
         Ok(if synchronized && !dirty {
-            continuation
+            continuation.map(|(_, action)| action)
         } else {
             None
         })
@@ -59,6 +72,9 @@ impl<A, M, D> Workflow<A, M, D> {
     }
     pub fn has_continuation(&self) -> bool {
         self.after_save.is_some()
+    }
+    pub fn continuation_token(&self) -> Option<SaveContinuationToken> {
+        self.after_save.as_ref().map(|(token, _)| *token)
     }
     pub fn queue(&mut self, action: A) -> Result<(), A> {
         if !matches!(self.phase, Phase::Idle | Phase::Executing) {
@@ -120,11 +136,15 @@ impl<A, M, D> Workflow<A, M, D> {
         if self.after_save.is_some() {
             return Err(action);
         }
-        self.after_save = Some(action);
+        let Some(next) = self.next_continuation.checked_add(1) else {
+            return Err(action);
+        };
+        self.next_continuation = next;
+        self.after_save = Some((SaveContinuationToken(next), action));
         Ok(())
     }
     pub fn take_continuation(&mut self) -> Option<A> {
-        self.after_save.take()
+        self.after_save.take().map(|(_, action)| action)
     }
     pub fn cancel_continuation(&mut self) {
         self.after_save = None;
@@ -142,6 +162,56 @@ impl<A, M, D> Workflow<A, M, D> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_old_or_unrelated_save_cannot_release_or_cancel_a_new_close() {
+        use crate::document::SaveStatus;
+        let mut flow = Workflow::<&str, (), ()>::default();
+        flow.continue_after_save("first close").unwrap();
+        let old = flow.continuation_token();
+        flow.cancel_continuation();
+        flow.continue_after_save("second close").unwrap();
+        let current = flow.continuation_token();
+        assert_ne!(old, current);
+        assert!(flow.continue_after_save("duplicate").is_err());
+        assert_eq!(flow.continuation_token(), current);
+        for token in [None, old] {
+            for (status, synchronized) in [
+                (Ok(SaveStatus::Applied), true),
+                (Ok(SaveStatus::Applied), false),
+                (Ok(SaveStatus::Stale), true),
+                (Err("wrong document"), true),
+            ] {
+                let result = flow.complete_save(token, status, false, synchronized);
+                if status.is_err() {
+                    assert!(result.is_err());
+                } else {
+                    assert_eq!(result.unwrap(), None);
+                }
+                assert_eq!(flow.continuation_token(), current);
+            }
+        }
+        assert_eq!(
+            flow.complete_save(current, Ok(SaveStatus::Applied), false, true)
+                .unwrap(),
+            Some("second close")
+        );
+        assert_eq!(
+            flow.complete_save(current, Ok(SaveStatus::Applied), false, true)
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn exhausted_continuation_tokens_are_not_reused() {
+        let mut flow = Workflow::<&str, (), ()> {
+            next_continuation: u64::MAX,
+            ..Default::default()
+        };
+        assert!(flow.continue_after_save("close").is_err());
+        assert_eq!(flow.continuation_token(), None);
+    }
     #[test]
     fn save_before_close_has_exclusive_phases_and_one_continuation() {
         let mut flow = Workflow::<&str, &str, &str>::default();
@@ -198,6 +268,7 @@ mod tests {
         flow.continue_after_save("close").unwrap();
         assert_eq!(
             flow.complete_save(
+                flow.continuation_token(),
                 document.record_save(older.committed(1)),
                 document.is_dirty(),
                 true
@@ -209,6 +280,7 @@ mod tests {
         let authoritative = document.prepare_save("draft.txt".into(), DocumentKind::Text);
         assert_eq!(
             flow.complete_save(
+                flow.continuation_token(),
                 document.record_save(authoritative.committed(2)),
                 document.is_dirty(),
                 true

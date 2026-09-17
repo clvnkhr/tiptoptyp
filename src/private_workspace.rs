@@ -15,6 +15,7 @@ use std::{
 };
 
 pub const PRIVATE_DIRECTORY_NAME: &str = ".tiptoptyp";
+use tiptoptyp::save_transaction::WriteDurability;
 
 /// Validated access to one project's private artifact directory.
 #[derive(Debug, Clone)]
@@ -252,15 +253,6 @@ pub fn project_root_for_path(path: &Path) -> io::Result<PathBuf> {
 /// which guarantees that `persist` does not cross filesystem boundaries even
 /// when Save As or PDF export targets another mounted volume.
 pub struct AtomicFileWriter;
-
-/// An Err from the writer means persist did not succeed. Once the destination
-/// changed, durability uncertainty is a committed outcome, never a retryable
-/// pre-commit failure.
-#[derive(Debug)]
-pub enum WriteDurability {
-    Synchronized,
-    Uncertain(String),
-}
 
 impl AtomicFileWriter {
     pub fn write(destination: impl AsRef<Path>, contents: &[u8]) -> io::Result<WriteDurability> {

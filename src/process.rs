@@ -7,6 +7,23 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Join a pipe reader only after it has actually completed.
+///
+/// `Child::wait` closes the direct child's pipe handles, but an executable
+/// wrapper can leave the same handles open in a descendant. Rust cannot cancel
+/// a thread blocked in `Read`, so timing out deliberately detaches that reader
+/// instead of hanging the owning worker or the application during `Drop`.
+pub(crate) fn finish_reader_with_timeout<T>(
+    reader: thread::JoinHandle<T>,
+    timeout: Duration,
+) -> Option<T> {
+    let deadline = Instant::now() + timeout;
+    while !reader.is_finished() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    reader.is_finished().then(|| reader.join().ok()).flatten()
+}
+
 struct ReapedChild(Child);
 impl Drop for ReapedChild {
     fn drop(&mut self) {

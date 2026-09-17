@@ -15,6 +15,9 @@ pub mod mitex_projection;
 /// The application routes enabled-mode editing and service adapters through this API.
 pub mod mitex_document;
 
+/// Immutable save requests/results shared by synchronous and future worker adapters.
+pub mod save_transaction;
+
 /// Theme catalogue, import, and transformation APIs.
 pub mod themes {
     /// Bundled theme catalogue.

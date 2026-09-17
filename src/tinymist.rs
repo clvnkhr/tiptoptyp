@@ -20,7 +20,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{Value, json};
 use url::Url;
 
@@ -28,6 +28,19 @@ use crate::private_workspace::{PrivateTypstDocument, PrivateWorkspace};
 
 mod transport;
 use transport::{read_lsp_message, write_lsp_message};
+
+mod protocol;
+#[cfg(test)]
+use protocol::DEFAULT_PREVIEW_TASK_ID;
+use protocol::{
+    CompileReport, ContentChange, DidChangeParams, DidOpenParams, Notification, ShowDocumentParams,
+    VersionedDocument, completion_document_params, configuration_response, format_document_params,
+    hover_document_params, parse_completion_result, parse_diagnostic, parse_format_document_result,
+    parse_hover_result, parse_port, rpc_error_message, scroll_preview_params,
+};
+pub use protocol::{
+    CompileStatus, CompletionItem, DiagnosticSeverity, TextDocument, TinymistDiagnostic,
+};
 
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(300);
@@ -39,7 +52,6 @@ const INITIALIZE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const PREVIEW_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const INTERACTIVE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const FORMAT_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
-const DEFAULT_PREVIEW_TASK_ID: &str = "default_preview";
 
 pub type Result<T> = std::result::Result<T, TinymistError>;
 
@@ -262,46 +274,6 @@ impl TinymistConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TextDocument {
-    pub uri: String,
-    pub language_id: String,
-    pub version: i32,
-    pub text: String,
-}
-
-#[derive(Serialize)]
-struct Notification<'a, Params> {
-    jsonrpc: &'static str,
-    method: &'a str,
-    params: Params,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DidOpenParams<'a> {
-    text_document: &'a TextDocument,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DidChangeParams<'a> {
-    text_document: VersionedDocument<'a>,
-    content_changes: [ContentChange<'a>; 1],
-}
-
-#[derive(Serialize)]
-struct VersionedDocument<'a> {
-    uri: &'a str,
-    version: i32,
-}
-
-#[derive(Serialize)]
-struct ContentChange<'a> {
-    text: &'a str,
-}
-
 impl TextDocument {
     pub fn typst(uri: impl Into<String>, version: i32, text: impl Into<String>) -> Self {
         Self {
@@ -401,55 +373,6 @@ pub fn path_to_file_uri(path: &Path) -> Result<String> {
 
 use tiptoptyp_core::text::{LineIndex, LspPosition, LspRange, LspTextEdit, ScalarColumn};
 
-/// One completion candidate returned by Tinymist.
-///
-/// The model intentionally keeps only the standard fields the editor can
-/// apply safely. Commands attached to completion items are not executed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CompletionItem {
-    pub label: String,
-    pub detail: Option<String>,
-    pub documentation: Option<String>,
-    pub filter_text: Option<String>,
-    pub sort_text: Option<String>,
-    pub insert_text: String,
-    pub insert_text_is_snippet: bool,
-    pub text_edit: Option<LspTextEdit>,
-    pub additional_text_edits: Vec<LspTextEdit>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DiagnosticSeverity {
-    Error,
-    Warning,
-    Information,
-    Hint,
-    Other(u64),
-}
-
-impl DiagnosticSeverity {
-    fn from_lsp(value: u64) -> Self {
-        match value {
-            1 => Self::Error,
-            2 => Self::Warning,
-            3 => Self::Information,
-            4 => Self::Hint,
-            other => Self::Other(other),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct TinymistDiagnostic {
-    pub range: LspRange,
-    pub severity: Option<DiagnosticSeverity>,
-    pub code: Option<Value>,
-    pub source: Option<String>,
-    pub message: String,
-    /// The complete diagnostic, including related information, tags and data.
-    pub raw: Value,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum TinymistEvent {
     CompileStatus {
@@ -542,14 +465,6 @@ pub enum TinymistEvent {
         code: Option<i32>,
         reason: String,
     },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum CompileStatus {
-    Compiling,
-    CompileSuccess,
-    CompileError,
 }
 
 impl TinymistEvent {
@@ -2366,252 +2281,6 @@ fn handle_rpc_message(
     Ok(())
 }
 
-fn format_document_params(uri: &str) -> Value {
-    json!({
-        "textDocument": { "uri": uri },
-        "options": {
-            "tabSize": 2,
-            "insertSpaces": true,
-        },
-    })
-}
-
-fn hover_document_params(uri: &str, position: LspPosition) -> Value {
-    json!({
-        "textDocument": { "uri": uri },
-        "position": position,
-    })
-}
-
-fn completion_document_params(uri: &str, position: LspPosition) -> Value {
-    json!({
-        "textDocument": { "uri": uri },
-        "position": position,
-        "context": { "triggerKind": 1 },
-    })
-}
-
-fn parse_hover_result(result: &Value) -> (Option<String>, Option<LspRange>) {
-    let Some(object) = result.as_object() else {
-        return (None, None);
-    };
-    let range = object
-        .get("range")
-        .and_then(|range| serde_json::from_value(range.clone()).ok());
-    let contents = object
-        .get("contents")
-        .and_then(flatten_hover_contents)
-        .map(|contents| contents.trim().to_owned())
-        .filter(|contents| !contents.is_empty());
-    (contents, range)
-}
-
-fn flatten_hover_contents(contents: &Value) -> Option<String> {
-    match contents {
-        Value::String(text) => Some(text.clone()),
-        Value::Array(parts) => {
-            let parts = parts
-                .iter()
-                .filter_map(flatten_hover_contents)
-                .filter(|part| !part.trim().is_empty())
-                .collect::<Vec<_>>();
-            (!parts.is_empty()).then(|| parts.join("\n\n"))
-        }
-        Value::Object(object) => {
-            let value = object.get("value")?.as_str()?;
-            let language = object.get("language").and_then(Value::as_str);
-            Some(language.map_or_else(
-                || value.to_owned(),
-                |language| format!("```{}\n{value}\n```", language.trim()),
-            ))
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) => None,
-    }
-}
-
-fn parse_completion_result(
-    result: &Value,
-) -> std::result::Result<(bool, Vec<CompletionItem>), String> {
-    if result.is_null() {
-        return Ok((false, Vec::new()));
-    }
-    let (is_incomplete, items, defaults) = if let Some(items) = result.as_array() {
-        (false, items.as_slice(), None)
-    } else {
-        let object = result
-            .as_object()
-            .ok_or_else(|| "completion result is neither a list nor CompletionList".to_owned())?;
-        let items = object
-            .get("items")
-            .and_then(Value::as_array)
-            .ok_or_else(|| "CompletionList.items is not an array".to_owned())?;
-        (
-            object
-                .get("isIncomplete")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-            items.as_slice(),
-            object.get("itemDefaults").and_then(Value::as_object),
-        )
-    };
-
-    let default_range = defaults
-        .and_then(|defaults| defaults.get("editRange"))
-        .and_then(completion_edit_range);
-    let default_snippet = defaults
-        .and_then(|defaults| defaults.get("insertTextFormat"))
-        .and_then(Value::as_u64)
-        == Some(2);
-    let mut parsed = Vec::with_capacity(items.len());
-    for value in items {
-        let object = value
-            .as_object()
-            .ok_or_else(|| "completion item is not an object".to_owned())?;
-        let label = object
-            .get("label")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "completion item has no string label".to_owned())?
-            .to_owned();
-        let inserted = object
-            .get("textEditText")
-            .or_else(|| object.get("insertText"))
-            .and_then(Value::as_str)
-            .unwrap_or(&label)
-            .to_owned();
-        let text_edit = match object.get("textEdit") {
-            Some(value) => Some(parse_completion_text_edit(value)?),
-            None => default_range.map(|range| LspTextEdit {
-                range,
-                new_text: inserted.clone(),
-            }),
-        };
-        let additional_text_edits = object
-            .get("additionalTextEdits")
-            .map(parse_completion_additional_edits)
-            .transpose()?
-            .unwrap_or_default();
-        parsed.push(CompletionItem {
-            label,
-            detail: object
-                .get("detail")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            documentation: object
-                .get("documentation")
-                .and_then(completion_documentation),
-            filter_text: object
-                .get("filterText")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            sort_text: object
-                .get("sortText")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            insert_text: inserted,
-            insert_text_is_snippet: object
-                .get("insertTextFormat")
-                .and_then(Value::as_u64)
-                .map_or(default_snippet, |format| format == 2),
-            text_edit,
-            additional_text_edits,
-        });
-    }
-    Ok((is_incomplete, parsed))
-}
-
-fn completion_edit_range(value: &Value) -> Option<LspRange> {
-    serde_json::from_value(value.clone()).ok().or_else(|| {
-        value
-            .get("replace")
-            .or_else(|| value.get("insert"))
-            .and_then(|range| serde_json::from_value(range.clone()).ok())
-    })
-}
-
-fn parse_completion_text_edit(value: &Value) -> std::result::Result<LspTextEdit, String> {
-    let new_text = value
-        .get("newText")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "completion textEdit has no newText".to_owned())?
-        .to_owned();
-    let range = value
-        .get("range")
-        .or_else(|| value.get("replace"))
-        .or_else(|| value.get("insert"))
-        .and_then(|range| serde_json::from_value(range.clone()).ok())
-        .ok_or_else(|| "completion textEdit has no valid range".to_owned())?;
-    Ok(LspTextEdit { range, new_text })
-}
-
-fn parse_completion_additional_edits(
-    value: &Value,
-) -> std::result::Result<Vec<LspTextEdit>, String> {
-    let values = value
-        .as_array()
-        .ok_or_else(|| "additionalTextEdits is not an array".to_owned())?;
-    values.iter().map(parse_completion_text_edit).collect()
-}
-
-fn completion_documentation(value: &Value) -> Option<String> {
-    match value {
-        Value::String(text) => Some(text.clone()),
-        Value::Object(object) => object
-            .get("value")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        _ => None,
-    }
-}
-
-fn parse_format_document_result(
-    result: Value,
-) -> std::result::Result<Option<Vec<LspTextEdit>>, serde_json::Error> {
-    serde_json::from_value(result)
-}
-
-fn scroll_preview_params(path: &Path, line: LineIndex, character: ScalarColumn) -> Value {
-    json!({
-        "command": "tinymist.scrollPreview",
-        "arguments": [
-            DEFAULT_PREVIEW_TASK_ID,
-            {
-                "event": "panelScrollTo",
-                "filepath": path.to_string_lossy(),
-                "line": line,
-                "character": character,
-            }
-        ],
-    })
-}
-
-fn parse_port(value: &Value) -> Option<u16> {
-    let port = value
-        .as_u64()
-        .or_else(|| value.as_str()?.parse::<u64>().ok())?;
-    let port = u16::try_from(port).ok()?;
-    (port != 0).then_some(port)
-}
-
-fn rpc_error_message(error: &Value) -> String {
-    let message = error
-        .get("message")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown JSON-RPC error");
-    match error.get("code").and_then(Value::as_i64) {
-        Some(code) => format!("{message} (JSON-RPC error {code})"),
-        None => message.to_owned(),
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ShowDocumentParams {
-    uri: String,
-    external: Option<bool>,
-    take_focus: Option<bool>,
-    selection: Option<LspRange>,
-}
-
 fn handle_server_request(
     session: &mut Session,
     id: Value,
@@ -2686,35 +2355,6 @@ fn handle_server_request(
     }
 }
 
-fn configuration_response(params: &Value, settings: &Value) -> Value {
-    let Some(items) = params.get("items").and_then(Value::as_array) else {
-        return Value::Array(Vec::new());
-    };
-    Value::Array(
-        items
-            .iter()
-            .map(|item| {
-                item.get("section")
-                    .and_then(Value::as_str)
-                    .map(|section| configuration_section(settings, section))
-                    .unwrap_or_else(|| settings.clone())
-            })
-            .collect(),
-    )
-}
-
-fn configuration_section(settings: &Value, section: &str) -> Value {
-    if section.is_empty() || section == "tinymist" {
-        return settings.clone();
-    }
-    let section = section.strip_prefix("tinymist.").unwrap_or(section);
-    section
-        .split('.')
-        .try_fold(settings, |value, component| value.get(component))
-        .cloned()
-        .unwrap_or(Value::Null)
-}
-
 fn handle_server_notification(
     session: &Session,
     method: &str,
@@ -2725,12 +2365,7 @@ fn handle_server_notification(
 ) {
     match method {
         "tinymist/compileStatus" => {
-            #[derive(Deserialize)]
-            struct Report {
-                path: String,
-                status: CompileStatus,
-            }
-            if let Ok(report) = serde_json::from_value::<Report>(params) {
+            if let Ok(report) = serde_json::from_value::<CompileReport>(params) {
                 emit(
                     events,
                     context,
@@ -2814,28 +2449,6 @@ fn handle_server_notification(
             },
         ),
     }
-}
-
-fn parse_diagnostic(raw: &Value) -> Option<TinymistDiagnostic> {
-    let range = serde_json::from_value(raw.get("range")?.clone()).ok()?;
-    let message = raw.get("message")?.as_str()?.to_owned();
-    let severity = raw
-        .get("severity")
-        .and_then(Value::as_u64)
-        .map(DiagnosticSeverity::from_lsp);
-    let code = raw.get("code").filter(|code| !code.is_null()).cloned();
-    let source = raw
-        .get("source")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    Some(TinymistDiagnostic {
-        range,
-        severity,
-        code,
-        source,
-        message,
-        raw: raw.clone(),
-    })
 }
 
 fn emit(
@@ -3697,6 +3310,167 @@ mod tests {
                 generation: Generation(2)
             }
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelled_completion_reply_cannot_consume_the_replacement_request() {
+        let root = tempfile::tempdir().unwrap();
+        let supervisor = Arc::new(ProcessSupervisor::default());
+        let config = TinymistConfig::new(root.path())
+            .with_command("/bin/sh", ["-c", "exec cat >/dev/null"].map(OsString::from));
+        let mut session = Session::spawn(Generation(7), config, supervisor).unwrap();
+        let uri = "file:///test.typ";
+        let request = |version, request_token| PendingRequest::CompleteDocument {
+            uri: uri.into(),
+            version,
+            request_token,
+        };
+        let old = session
+            .send_request("textDocument/completion", json!({}), request(1, 41))
+            .unwrap();
+        session.cancel_pending_completions(uri).unwrap();
+        let new = session
+            .send_request("textDocument/completion", json!({}), request(2, 42))
+            .unwrap();
+        let (events, receiver) = mpsc::channel();
+        let context = crate::worker::RepaintTarget::test();
+        let generation = AtomicU64::new(7);
+        handle_rpc_message(
+            &mut session,
+            json!({"jsonrpc":"2.0","id":old,"result":[{"label":"stale"}]}),
+            &events,
+            &context,
+            &generation,
+        )
+        .unwrap();
+        assert!(receiver.try_recv().is_err());
+        assert!(session.pending.contains_key(&new));
+        assert!(matching_session(Some(&mut session), Generation(6)).is_none());
+        handle_rpc_message(
+            &mut session,
+            json!({"jsonrpc":"2.0","id":new,"result":[{"label":"current"}]}),
+            &events,
+            &context,
+            &generation,
+        )
+        .unwrap();
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            TinymistEvent::Completed {
+                version: 2,
+                request_token: 42,
+                ..
+            }
+        ));
+        assert!(!session.pending.contains_key(&new));
+        // Duplicate delivery cannot publish or consume another completion.
+        handle_rpc_message(
+            &mut session,
+            json!({"jsonrpc":"2.0","id":new,"result":[]}),
+            &events,
+            &context,
+            &generation,
+        )
+        .unwrap();
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_handshake_precedes_reaping_and_replacement_installation() {
+        let root = tempfile::tempdir().unwrap();
+        let supervisor = Arc::new(ProcessSupervisor::default());
+        for initialized in [false, true] {
+            let captured = root.path().join(format!("input-{initialized}.bin"));
+            let mut config = TinymistConfig::new(root.path()).with_command(
+                "/bin/sh",
+                [
+                    OsString::from("-c"),
+                    OsString::from("exec cat >\"$1\""),
+                    OsString::from("capture"),
+                    captured.as_os_str().to_owned(),
+                ],
+            );
+            config.start_preview = false;
+            let mut session = Session::spawn(Generation(1), config, supervisor.clone()).unwrap();
+            let old_child = session.child.clone();
+            let (events, receiver) = mpsc::channel();
+            let context = crate::worker::RepaintTarget::test();
+            let generation = AtomicU64::new(1);
+            let (incoming, messages) = mpsc::channel();
+            if initialized {
+                handle_rpc_message(
+                    &mut session,
+                    json!({"jsonrpc":"2.0","id":1,"result":{}}),
+                    &events,
+                    &context,
+                    &generation,
+                )
+                .unwrap();
+                assert_eq!(session.phase, SessionPhase::Initialized);
+                assert!(session.phase.can_sync_documents());
+                incoming
+                    .send(Incoming::Message(
+                        json!({"jsonrpc":"2.0","id":session.next_request_id,"result":null}),
+                    ))
+                    .unwrap();
+            } else {
+                assert!(!session.phase.can_sync_documents());
+            }
+            session.incoming = messages;
+            finish_session(
+                session,
+                true,
+                "restart".into(),
+                &events,
+                &context,
+                &generation,
+            );
+            assert!(try_wait_child(&old_child).unwrap().is_some());
+            assert!(!supervisor.has_active_process());
+            assert!(receiver.try_iter().any(|event| matches!(
+                event,
+                TinymistEvent::Stopped {
+                    generation: Generation(1),
+                    ..
+                }
+            )));
+            let bytes = fs::read(&captured).unwrap();
+            let mut reader = Cursor::new(bytes);
+            let mut methods = Vec::new();
+            while let Some(message) = read_lsp_message(&mut reader).unwrap() {
+                if let Some(method) = message.get("method").and_then(Value::as_str) {
+                    methods.push(method.to_owned());
+                }
+            }
+            if initialized {
+                assert_eq!(
+                    methods,
+                    [
+                        "initialize",
+                        "initialized",
+                        "workspace/didChangeConfiguration",
+                        "shutdown",
+                        "exit"
+                    ]
+                );
+            } else {
+                assert_eq!(methods, ["initialize"]);
+            }
+            let replacement = Session::spawn(
+                Generation(2),
+                TinymistConfig::new(root.path())
+                    .with_command("/bin/sh", ["-c", "exec cat >/dev/null"].map(OsString::from)),
+                supervisor.clone(),
+            )
+            .unwrap();
+            // A late old-session cleanup cannot clear the replacement process.
+            supervisor.clear(Generation(1), &old_child);
+            assert!(supervisor.has_active_process());
+            drop(replacement);
+            assert!(!supervisor.has_active_process());
+        }
     }
 
     #[cfg(unix)]

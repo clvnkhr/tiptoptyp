@@ -356,6 +356,7 @@ impl QaSession {
                     })
                     .collect::<Vec<_>>();
                 app.editor_completion = Some(EditorCompletionState {
+                    key: app.document.key(),
                     generation: Generation(0),
                     uri: String::new(),
                     version: revision_as_i32(app.document.revision()),
