@@ -1,0 +1,9 @@
+[
+  {
+    "pid": 7017,
+    "ppid": 7009,
+    "rss_kib": 783776,
+    "cpu_time": "0:00.87",
+    "command": "/Users/calvinkhor/Documents/GitHub/mytypst/target/profiling/tiptoptyp"
+  }
+]

@@ -12,8 +12,9 @@ use std::{
 
 use crate::settings::{ToolMode, ToolPreference};
 
-pub(crate) const BUNDLED_TYPST_VERSION: &str = "0.15.1";
-pub(crate) const BUNDLED_TINYMIST_VERSION: &str = "0.15.2";
+// Build-time values from the packaging manifest, not process environment reads.
+pub(crate) const BUNDLED_TYPST_VERSION: &str = env!("TIPTOPTYP_BUNDLED_TYPST_VERSION");
+pub(crate) const BUNDLED_TINYMIST_VERSION: &str = env!("TIPTOPTYP_BUNDLED_TINYMIST_VERSION");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ToolKind {

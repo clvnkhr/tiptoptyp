@@ -1,0 +1,15 @@
+{
+  "command": [
+    "/usr/bin/footprint",
+    "--noCategories",
+    "-f",
+    "bytes",
+    "-p",
+    "6638",
+    "-p",
+    "6644"
+  ],
+  "exit": 0,
+  "stdout": "======================================================================\ntiptoptyp [6638]: 64-bit    Footprint: 463376320 B (16384 bytes per page)\n======================================================================\n\nAuxiliary data:\n    dirty: -\n    phys_footprint_peak: 463392704 B\n    phys_footprint: 463376320 B\n\n======================================================================\ntinymist-aarch64-apple-darwin [6644]: 64-bit    Footprint: 25512384 B (16384 bytes per page)\n======================================================================\n\nAuxiliary data:\n    dirty: -\n    phys_footprint_peak: 30312896 B\n    phys_footprint: 25512384 B\n\n======================================================================\nSummary Footprint: 488823168 B\n======================================================================\n\n\n",
+  "stderr": ""
+}

@@ -18,11 +18,10 @@ use eframe::egui;
 
 use crate::{
     app::{EditorApp, EditorWindowRequest},
+    launch::LaunchMode,
     native_menu::{AppCommand, NativeMenuReceiver, NativeMenuRequest},
     open_requests::OpenRequestReceiver,
-    screenshot::{
-        CaptureController, CaptureThemeProfile, LaunchMode, UiCaptureStep, UiSnapshotScene,
-    },
+    screenshot::{CaptureController, CaptureThemeProfile, UiCaptureStep, UiSnapshotScene},
     settings::{AppSettings, normalize_workspace_root},
     theme,
 };
@@ -1293,13 +1292,17 @@ mod tests {
             recent_workspaces: vec!["/qa/fixture".to_owned()],
             ..AppSettings::default()
         };
-        let mut capture_storage = MemoryStorage::default();
-        persist_shell_settings(
+        for mode in [
             LaunchMode::DeterministicCapture,
-            &mut capture_storage,
-            &fixture_settings,
-        );
-        assert!(capture_storage.0.is_empty());
+            LaunchMode::Profiling {
+                deterministic_capture: true,
+            },
+        ] {
+            let mut capture_storage = MemoryStorage::default();
+            persist_shell_settings(mode, &mut capture_storage, &fixture_settings);
+            assert!(capture_storage.0.is_empty());
+            assert!(!shell_persists_egui_memory(mode, true));
+        }
 
         let mut interactive_storage = MemoryStorage::default();
         persist_shell_settings(

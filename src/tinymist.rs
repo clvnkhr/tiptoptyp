@@ -8,7 +8,7 @@ use std::{
     collections::HashMap,
     ffi::OsString,
     fmt,
-    io::{self, BufRead, BufReader, Read, Write},
+    io::{self, BufRead, BufReader, Read},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, ExitStatus, Stdio},
     sync::{
@@ -26,6 +26,9 @@ use url::Url;
 
 use crate::private_workspace::{PrivateTypstDocument, PrivateWorkspace};
 
+mod transport;
+use transport::{read_lsp_message, write_lsp_message};
+
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(300);
 const EXIT_TIMEOUT: Duration = Duration::from_millis(200);
@@ -36,9 +39,6 @@ const INITIALIZE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const PREVIEW_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const INTERACTIVE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const FORMAT_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
-const MAX_HEADER_LINE_BYTES: usize = 8 * 1024;
-const MAX_HEADER_BYTES: usize = 32 * 1024;
-const MAX_MESSAGE_BYTES: usize = 32 * 1024 * 1024;
 const DEFAULT_PREVIEW_TASK_ID: &str = "default_preview";
 
 pub type Result<T> = std::result::Result<T, TinymistError>;
@@ -3011,87 +3011,6 @@ fn finish_reader_before<T>(reader: thread::JoinHandle<T>, deadline: Instant) -> 
         thread::sleep(Duration::from_millis(5));
     }
     reader.is_finished().then(|| reader.join().ok()).flatten()
-}
-
-fn write_lsp_message(writer: &mut impl Write, message: &impl Serialize) -> io::Result<()> {
-    let payload = serde_json::to_vec(message)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    if payload.len() > MAX_MESSAGE_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "JSON-RPC message is too large",
-        ));
-    }
-    write!(writer, "Content-Length: {}\r\n\r\n", payload.len())?;
-    writer.write_all(&payload)?;
-    writer.flush()
-}
-
-fn read_lsp_message(reader: &mut impl BufRead) -> io::Result<Option<Value>> {
-    let mut content_length = None;
-    let mut total_header_bytes = 0usize;
-    let mut saw_header = false;
-
-    loop {
-        let mut line = Vec::new();
-        let read = reader.read_until(b'\n', &mut line)?;
-        if read == 0 {
-            if !saw_header {
-                return Ok(None);
-            }
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "EOF in JSON-RPC headers",
-            ));
-        }
-        saw_header = true;
-        total_header_bytes = total_header_bytes.saturating_add(read);
-        if line.len() > MAX_HEADER_LINE_BYTES || total_header_bytes > MAX_HEADER_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "JSON-RPC headers are too large",
-            ));
-        }
-
-        while matches!(line.last(), Some(b'\n' | b'\r')) {
-            line.pop();
-        }
-        if line.is_empty() {
-            break;
-        }
-        let header = std::str::from_utf8(&line)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        let (name, value) = header.split_once(':').ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "malformed JSON-RPC header")
-        })?;
-        if name.trim().eq_ignore_ascii_case("content-length") {
-            if content_length.is_some() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "duplicate Content-Length header",
-                ));
-            }
-            let length = value.trim().parse::<usize>().map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, "invalid Content-Length header")
-            })?;
-            if length == 0 || length > MAX_MESSAGE_BYTES {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "JSON-RPC payload length is outside the accepted range",
-                ));
-            }
-            content_length = Some(length);
-        }
-    }
-
-    let content_length = content_length.ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "missing Content-Length header")
-    })?;
-    let mut payload = vec![0; content_length];
-    reader.read_exact(&mut payload)?;
-    serde_json::from_slice(&payload)
-        .map(Some)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
 #[cfg(test)]

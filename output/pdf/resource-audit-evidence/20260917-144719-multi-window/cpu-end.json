@@ -1,0 +1,65 @@
+[
+  {
+    "pid": 6794,
+    "ppid": 6775,
+    "rss_kib": 448400,
+    "cpu_time": "0:01.83",
+    "command": "/Users/calvinkhor/Documents/GitHub/mytypst/target/profiling/tiptoptyp"
+  },
+  {
+    "pid": 6795,
+    "ppid": 6794,
+    "rss_kib": 34480,
+    "cpu_time": "0:00.32",
+    "command": "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/tinymist-aarch64-apple-darwin"
+  },
+  {
+    "pid": 6797,
+    "ppid": 6794,
+    "rss_kib": 41120,
+    "cpu_time": "0:00.26",
+    "command": "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/tinymist-aarch64-apple-darwin"
+  },
+  {
+    "pid": 6798,
+    "ppid": 6794,
+    "rss_kib": 41008,
+    "cpu_time": "0:00.27",
+    "command": "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/tinymist-aarch64-apple-darwin"
+  },
+  {
+    "pid": 6799,
+    "ppid": 6794,
+    "rss_kib": 38208,
+    "cpu_time": "0:00.28",
+    "command": "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/tinymist-aarch64-apple-darwin"
+  },
+  {
+    "pid": 6800,
+    "ppid": 6794,
+    "rss_kib": 43056,
+    "cpu_time": "0:00.23",
+    "command": "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/typst-aarch64-apple-darwin"
+  },
+  {
+    "pid": 6803,
+    "ppid": 6794,
+    "rss_kib": 44448,
+    "cpu_time": "0:00.23",
+    "command": "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/typst-aarch64-apple-darwin"
+  },
+  {
+    "pid": 6806,
+    "ppid": 6794,
+    "rss_kib": 52416,
+    "cpu_time": "0:00.23",
+    "command": "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/typst-aarch64-apple-darwin"
+  },
+  {
+    "pid": 6809,
+    "ppid": 6794,
+    "rss_kib": 49408,
+    "cpu_time": "0:00.22",
+    "command": "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/typst-aarch64-apple-darwin"
+  }
+]

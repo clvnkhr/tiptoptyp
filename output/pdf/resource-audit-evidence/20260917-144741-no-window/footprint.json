@@ -1,0 +1,13 @@
+{
+  "command": [
+    "/usr/bin/footprint",
+    "--noCategories",
+    "-f",
+    "bytes",
+    "-p",
+    "7017"
+  ],
+  "exit": 0,
+  "stdout": "======================================================================\ntiptoptyp [7017]: 64-bit    Footprint: 428773184 B (16384 bytes per page)\n======================================================================\n\nAuxiliary data:\n    dirty: -\n    phys_footprint_peak: 448286400 B\n    phys_footprint: 428773184 B\n\n",
+  "stderr": ""
+}

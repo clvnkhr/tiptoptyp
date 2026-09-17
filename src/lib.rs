@@ -7,12 +7,12 @@ mod builtin_themes;
 mod sublime_theme;
 mod theme_transform;
 
-/// Checked, reversible source translation for the planned MiTeX editing mode.
-/// This is a foundation API; the application does not enable the mode yet.
+/// Checked, reversible source translation for the optional MiTeX editing mode.
+/// Ordinary Typst editing bypasses projection work.
 pub mod mitex_projection;
 
 /// Projection-aware document lifecycle and canonical save/service snapshots.
-/// Application controls remain gated until all service adapters are routed.
+/// The application routes enabled-mode editing and service adapters through this API.
 pub mod mitex_document;
 
 /// Theme catalogue, import, and transformation APIs.

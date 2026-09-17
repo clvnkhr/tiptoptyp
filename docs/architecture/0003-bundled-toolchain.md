@@ -32,8 +32,12 @@ decision:
 Packages ship Typst 0.15.1 and Tinymist 0.15.2. These were the latest stable
 releases on the decision date and share the 0.15 Typst generation. The exact
 per-target archive names and SHA-256 digests live in
-`toolchain/manifest.tsv`; changing a version requires changing that audited
-manifest and the runtime version constants together.
+`toolchain/manifest.tsv`. Since 2026-09-17, `build.rs` derives the runtime labels
+from that manifest at compile time; there is no second version literal to update
+and no runtime manifest read. Missing tools, duplicate tool/target rows, malformed
+rows and disagreements between a tool's target versions fail the build. The shared
+validator is covered by `tests/toolchain_manifest.rs`. Resolution precedence is
+unchanged; these build-time values are not process-environment overrides.
 
 The packaging task downloads only HTTPS GitHub release assets, verifies the
 committed digest before extraction, rejects absolute and parent-traversing

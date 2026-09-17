@@ -1,0 +1,23 @@
+[
+  {
+    "pid": 8274,
+    "ppid": 6440,
+    "rss_kib": 581536,
+    "cpu_time": "0:01.03",
+    "command": "/Users/calvinkhor/Documents/GitHub/mytypst/target/profiling/tiptoptyp"
+  },
+  {
+    "pid": 8275,
+    "ppid": 8274,
+    "rss_kib": 35904,
+    "cpu_time": "0:00.26",
+    "command": "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/tinymist-aarch64-apple-darwin"
+  },
+  {
+    "pid": 8278,
+    "ppid": 8274,
+    "rss_kib": 34896,
+    "cpu_time": "0:00.19",
+    "command": "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/typst-aarch64-apple-darwin"
+  }
+]

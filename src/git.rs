@@ -1022,17 +1022,25 @@ fn snapshot(workspace: &Path) -> Result<Snapshot, String> {
 fn status_snapshot(workspace: &Path) -> Result<Snapshot, String> {
     // No-renames gives one NUL-delimited record per path, including both sides
     // of a rename, without ambiguous quoting or arrow parsing.
+    let Some(root) = repository_root(workspace)? else {
+        return Ok(Snapshot {
+            root: workspace.to_path_buf(),
+            ..Default::default()
+        });
+    };
+    status_at_root(root)
+}
+
+fn repository_root(workspace: &Path) -> Result<Option<PathBuf>, String> {
     let root_bytes = match run(workspace, &args(&["rev-parse", "--show-toplevel"])) {
         Ok(root) => root,
-        Err(error) if error.contains("not a git repository") => {
-            return Ok(Snapshot {
-                root: workspace.to_path_buf(),
-                ..Default::default()
-            });
-        }
+        Err(error) if error.contains("not a git repository") => return Ok(None),
         Err(error) => return Err(error),
     };
-    let root = path_from_bytes(root_bytes.strip_suffix(b"\n").unwrap_or(&root_bytes))?;
+    path_from_bytes(root_bytes.strip_suffix(b"\n").unwrap_or(&root_bytes)).map(Some)
+}
+
+fn status_at_root(root: PathBuf) -> Result<Snapshot, String> {
     let status = run(
         &root,
         &args(&[
@@ -1066,11 +1074,25 @@ fn perform(workspace: &Path, operation: Operation) -> Result<ResultData, String>
     if matches!(operation, Operation::Refresh | Operation::Diff(..)) {
         return perform_locked(workspace, operation);
     }
-    let root = snapshot(workspace)?.root;
-    crate::resource_lock::with_resource(&root, || perform_locked(workspace, operation))
+    with_repository_transaction(workspace, |root| perform_locked(root, operation))
+}
+
+/// All app-owned index/repository mutations share this lease. Resolve identity
+/// first, but read status, HEAD and index preconditions only after acquiring it.
+/// Git's own locks and patch checks still handle unrelated external writers.
+fn with_repository_transaction<T>(
+    workspace: &Path,
+    operation: impl FnOnce(&Path) -> Result<T, String>,
+) -> Result<T, String> {
+    let root = repository_root(workspace)?.unwrap_or_else(|| workspace.to_owned());
+    crate::resource_lock::with_resource(&root, || operation(&root))
 }
 
 fn perform_locked(workspace: &Path, operation: Operation) -> Result<ResultData, String> {
+    #[cfg(test)]
+    if !matches!(operation, Operation::Refresh | Operation::Diff(..)) {
+        assert!(crate::resource_lock::is_locked_for_test(workspace));
+    }
     let before = snapshot(workspace)?;
     let root = &before.root;
     let committed = matches!(operation, Operation::Commit(_));

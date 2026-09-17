@@ -218,7 +218,165 @@ I was using two different windows with two different workspaces. Possibly i was 
 178. [x] Closing the last tab leaves an empty workspace window with Explorer and New/Open controls. PDF/image tabs use the editor pane while a pinned Typst preview remains visible, with independent asset loading, page navigation and zoom. Empty-workspace commands/reopening, stale results, no empty-document service work and split-pane/page-margin geometry have regression coverage. Required checks pass; fresh light/dark captures and the regenerated 68-image gallery were inspected. Matched local idle profiles showed no added work, not an interaction speedup. Evidence and limitations: `docs/tabs-and-git-hunks.md`.
 179. [x] Extend the selected-tab highlight across the title and both controls. Reuse the Explorer's vector eye with a filled pupil for the preview tab, add a centered closed-eye variant for other tabs, and draw a vertically aligned path-based close icon. Geometry and named-control regressions pass; fresh light/dark captures inspected and the 68-image gallery regenerated/validated. Evidence: `docs/tabs-and-git-hunks.md`.
 180. [ ] when we cmd+N new, it opens a new tab, which is ok, but it also takes over the preview, which is not ok. the preview should stay on the file set to be used for preview.
-181. [ ] (deferred) we should be able to open from template. 
+181. [ ] (deferred) we should be able to open from template.
+182. [ ] pretty animation for dragging tabs
+183. [ ] prettier git diff
+
+== Architecture audit follow-up
+
+Source: `output/pdf/architecture-audit.typ`, proposals A01–A12. These are
+implementation tasks, not completed audit findings. Each item should ship as a
+focused change, preserving existing behavior unless explicitly stated otherwise.
+Review corrections (2026-09-17): prioritize correctness fixes 213 and 207, then
+small boundary extractions such as 202. Establish 184 and 187 before changing
+document storage or save timing. Preview and background-work tracks can proceed
+separately; neither requires a whole-application rewrite.
+Keep the existing core, native thread affinity, plain-mode projection bypass and
+protected-mutation completion guarantees. Record matched optimized before/after
+measurements for performance-sensitive changes; use deterministic invariants rather
+than timing thresholds. These tasks refine item 117, not replace its broader
+multi-window measurement and shared repository-status goals. PDF resource work
+does not include the viewer features in items 1, 118 or 163.
+
+184. [ ] (A01) Centralize document access through the existing stable tab IDs before changing storage; do not invent a second identity system. Reuse existing tests and add missing characterization coverage for reorder, active/preview identity, empty workspace, dirty close, and switching with retained undo/selection; preserve the preview-selection rule in item 180.
+185. [ ] (A01; after 184) Replace the active hole and parallel tab vectors with a document store keyed by stable IDs, a separate order list, and optional active/preview IDs. Route existing callers through the accessors and remove obsolete storage; identity tests must pass unchanged.
+186. [ ] (A01; after 185) Unify active and parked ownership of folding, saved editor-widget state and autosave metadata in the document records, reusing the fields already present in ParkedTab. Test stale replies across switches and that tab changes start no extra services; measure switch allocations and many-tab idle work. Keep services window-owned.
+
+187. [ ] (A02) Add adversarial save-order tests before changing execution: edits during save, overlapping same-path requests, failed/uncertain writes, and close during completion. Assert that only the matching durable receipt can approve a close.
+188. [ ] (A02; after 187) Wrap the existing core SaveRequest/SaveReceipt and durability outcomes in immutable worker inputs/results carrying canonical bytes, expected disk state, intent and continuation token. Do not duplicate core document identity or receipt validation. Adapt the existing save path without changing execution timing; test receipt identity and durability handling.
+189. [ ] (A02; after 188) Execute save disk work as protected background transactions. Recheck expected disk state inside the app-owned path lease, serialize same-path writes, and retain completion after owner closure. A controllable slow-writer test must leave UI dispatch non-blocking; do not claim atomicity against external writers.
+190. [ ] (A02; after 189) Route active manual save and parked-tab autosave through the same coordinator and remove duplicated write policy. Preserve manual-only formatting and reject stale receipts; test save/close continuations for both paths without automatic conflict merging.
+
+191. [ ] (A03; after 184) Define versioned synchronization inputs and typed open/change/close/backing-update effects. Add command-log tests for edit, switch, close, preview-entry change and miTeX-mode change using current behavior as the contract.
+192. [ ] (A03; after 191) Extract canonical snapshot collection, open-URI tracking, private backing ownership and active/preview root selection into one synchronization coordinator. Keep filesystem and service IO in adapters; remove duplicate orchestration paths.
+193. [ ] (A03; after 192) Enforce document/generation checks at synchronization-result boundaries. Test rejection of late replies, canonical/display coordinate separation, and zero translation work for ordinary documents; explicitly retain the CLI imported-subfiles-from-disk limitation.
+
+194. [ ] (A04) Extract app-side preview transitions into event/effect functions over the existing connection, recovery and content models. Do not add parallel state or a second retry policy. Reuse existing tests and cover missing sequences for fifth-failure fallback, duplicate failures, late readiness, pause/restart, export during recovery and preview-entry changes.
+195. [ ] (A04; after 194) Route service start/stop, rendering and repaint requests through preview effects. Assert one effect per transition, no duplicate compilation and no idle repaint loop; keep native views and texture handles in adapters.
+196. [ ] (A04; after 195) Make preview rendering consume a read-only status snapshot distinguishing requested/effective backend, canonical artifact availability and native readiness. Remove view-side policy changes and test recovery/status agreement.
+
+197. [ ] (A05) Extract PDF rasterization and link extraction from the compiler into a reusable PDF service for compiled documents and opened assets. Preserve canonical export bytes and existing page/link results with focused parity tests.
+198. [ ] (A05; after 197) Separate all-page dimensions/metadata from decoded pixels and uploaded textures. Key resident pages by artifact, page, scale and relevant appearance revision; test stale artifact/theme rejection and retention of valid old content during replacement.
+199. [ ] (A05; after 198) Request raster pages by visible range with bounded adjacent-page prefetch and cooperative cancellation. Test scroll/zoom and replacement ordering so obsolete requests cannot replace current pages or discard valid displayed content prematurely.
+200. [ ] (A05; after 199) Enforce process-wide decoded-pixel and texture byte budgets with eviction that coordinates visible-page demand across windows. Add 1/20/100-page bounded-residency tests and matched optimized cold/warm, idle/scroll/zoom measurements; keep export quality unchanged and document oversized-page handling.
+
+201. [x] (A06) Extract bounded LSP framing into a private transport module without changing sidecar commands/events or threads. Test malformed, oversized and truncated frames plus shutdown ordering; introduce no extra payload copies or queues.
+202. [ ] (A06; after 201) Move JSON-RPC feature DTOs/codecs into a UI-independent protocol module. Preserve existing wire fixtures and fake/real-server coverage; keep the public sidecar interface unchanged.
+203. [ ] (A06; after 202) Reassess the remaining session/process coupling after codec extraction. Extract only transition logic whose ownership becomes clearer; retain existing generation/document-version fields and admission checks rather than duplicating them. Test stale replies and restart/shutdown ordering; do not introduce a generic LSP framework or move threads for organizational reasons.
+
+204. [ ] (A07) First reproduce superseded project-index jobs continuing to consume work and record queue/payload/concurrency bounds. Implement the smallest shared bounded read-job runner needed for that client: fixed concurrency, keyed pending replacement and byte accounting. Do not build a generic executor or priority hierarchy without a second demonstrated use case; test fair admission and keep protected mutations/long-lived protocol supervisors separate.
+205. [ ] (A07; after 204) Add cooperative cancellation checkpoints and owner/source-key completion routing to the executor. Test that superseding 100 requests cannot run 100 obsolete jobs and that closed owners receive no UI result; wake only the owning viewport.
+206. [ ] (A07; after 205) Migrate project indexing as the first executor client and remove its superseded per-request spawning path. Measure foreground latency under repeated indexing and multi-window load; retain literal-only analysis and bounded cancellation checkpoints.
+
+207. [ ] (A08) Extend ProjectIndex with completeness metadata for traversal-cap hits and unreadable local files; retain its existing unresolved-expression records rather than adding a duplicate dependency model. Surface concise warnings instead of implying complete results; test each case without evaluating Typst or indexing downloaded packages.
+208. [ ] (A08) Share immutable filesystem snapshots through a canonical-root workspace service while keeping each window's selection, expansion and search local. Test that two windows reuse an unchanged scan and closing one does not invalidate the other's snapshot; use 204–206 if adopting that executor.
+209. [ ] (A08; after 208) Coalesce filesystem notifications and use metadata filtering plus a conservative verification fallback instead of routine whole-file checks. Test atomic-save, delete, rename and missed-event recovery; measure scan/read counts across two windows and retain separate filesystem, language-index and Git models.
+
+210. [ ] (A09) Introduce a typed completion-edit transaction carrying source version, validated coordinate ranges, selection and one undo intent. Reuse core validation and miTeX preflight; test Unicode, CRLF, invalid ranges, stale replies and one-step undo while leaving typing/IME with TextEdit.
+211. [ ] (A09; after 210) Extract the completion popup renderer behind read-only inputs and typed actions, without access to EditorApp or services. Add semantic acceptance/selection tests and check unchanged-frame allocations; do not add full-source copies or broaden this patch to every editor feature.
+
+212. [ ] (A10) Extract Git command execution and status/diff codecs behind a repository service handle. Preserve argument-array invocation and add disposable-repository coverage for quoted paths, new files, CRLF and missing final newlines; this is not the visual redesign in item 183.
+213. [x] (A10; independent of 212) Route hunk index mutations through the existing repository-root transaction lease and revalidate baselines under that lease. Share the transaction entry point with panel operations; do not postpone this correctness fix for a service extraction. Test overlap with panel operations, conflicts, partial staging and preservation of unrelated staged changes; retain protected completions.
+214. [ ] (A10; after 212 and 213) Make Git panel/gutter/popup views consume immutable state and emit typed actions only, removing service-to-UI dependencies. Test that rendering cannot execute Git and that checked hunk revert remains one editor undo; preserve item 115's controls and safety rules.
+
+215. [ ] (A11) Give child-view and popup resources explicit owner lifecycle hooks distinguishing temporary hide, durable close and dormant native hosting. Test reopen, scroll dismissal, keyboard focus and inert late callbacks without destroying every hidden view.
+216. [ ] (A11; after 215) Dispose closed-viewport font-sample slots and other owner-keyed context caches through those hooks. Add repeated open/preview/close tests asserting live cache counts return to baseline or a documented bound; measure retained resources after repeated cycles.
+217. [ ] (A11; deferred pending measurement, after 215) First trace redundant native property updates and measure their cost. Implement diffing only if it materially reduces work; invalidate applied-state caches on native recreation and external geometry changes. Preserve clipping/reopen behavior with geometry tests and native bounds traces; use proportionate whole-window observation for composition, not a viewport PNG. If no useful saving is found, record that result rather than adding a cache.
+
+218. [x] (A12) Move ordinary LaunchOptions parsing out of screenshot ownership into a launch module with explicit normal/capture/profile modes. Test existing argument behavior and QA/profile non-persistence; preserve tool-selection precedence.
+219. [ ] (A12) Derive a cached capability snapshot from existing tool resolution and service state, separating editing/LSP, interactive preview, PDF generation, rasterization and link extraction. Expose missing raster/link capabilities separately; invalidate on tool-preference changes and explicit refresh, and test partial availability. Do not add a competing discovery/status service or probe tools in a frame callback.
+220. [x] (A12) Generate or validate runtime tool-version metadata from toolchain/manifest.tsv so constants and packaging cannot drift. Add a mismatch regression/build check; preserve resolution precedence without bundling new tools or retaining compatibility aliases.
+221. [x] (A12) Correct obsolete miTeX comments in src/lib.rs and add superseding current-state notes to ADR 0002 for per-window Tinymist, the separate Settings viewport and conditional CLI compilation. Cross-link the current ownership/module map without erasing historical decision context.
+
+= Architecture todo review (2026-09-17)
+
+- Item 213 implemented after review: panel writes and Stage/Unstage hunks now use
+  one repository-root transaction entry point. Root discovery precedes the lease;
+  status, HEAD, index and patch preconditions are read under it. Nested workspace
+  aliases resolve to the same lease. Navigation/Revert actions cannot enter the
+  index-write path. Revert remains an editor edit and the existing ExclusiveJob
+  protected-completion mechanism is unchanged. External Git writers still rely
+  on Git's own locking/patch validation, not this process-local lease.
+- Item 213 verification: all 48 focused Git tests pass, including new simultaneous
+  two-window hunk plus panel staging, locked baseline revalidation, real merge
+  conflict rejection and index preservation. Tests assert that mutating paths
+  hold the resource lease; existing quoted-path/new-file/CRLF/no-final-newline,
+  partial-stage and one-step projected-undo regressions remain passing. Required
+  formatting, strict Clippy, full normal suite and all 13 xtask tests pass.
+- Item 213 resource impact: the added lease is worker-side and action-triggered;
+  no idle repaints, per-frame work or extra workers. Hunk root/status discovery
+  is not duplicated, and panel lock discovery no longer needs a full status/log
+  snapshot. No wall-time speedup claim or unrelated GUI benchmark; UI pixels and
+  native composition are unchanged. Item 207 is the next small correctness task.
+
+- A01 (184–186): justified by active-hole/parallel-vector invariants, not by an
+  absence of IDs. Reuse current IDs and tests; no rope or per-tab service rewrite.
+- A02 (187–190): worthwhile because saves still perform disk work synchronously.
+  Existing core requests/receipts and writer leases are assets to reuse. When
+  moving expected-state checks under the lease, avoid recursively acquiring the
+  same non-reentrant writer lock. Preserve durable-close rules before optimizing.
+- A03/A04 (191–196): useful only if extraction removes duplicate orchestration.
+  Existing version admission, recovery and content models remain authoritative;
+  do not build a generic event bus or mirror state in a new coordinator.
+- A05 (197–200): strong resource-efficiency case: the raster viewer retains all
+  pages while culling only drawing. Separate metadata before introducing bounded
+  residency, and measure multi-window resource limits. Export remains untouched.
+- A06 (202–203): codecs are a clear pure boundary. Reassess further session splits
+  after that move; file size alone is not a reason for another abstraction.
+- A07 (204–206): real concern: LatestJob replaces receivers but spawns work that
+  can continue. Start with indexing and explicit bounds, not a general scheduler.
+- A08 (207–209): incomplete scans silently skip unreadable files/cap overflow,
+  so honest completeness reporting is a small immediate win. Shared snapshots
+  and filesystem notifications need reliable invalidation and a tested fallback;
+  they must not share window-local filters or unsaved buffers accidentally.
+- A09 (210–211): one completion transaction/view seam is reasonable. Reuse core
+  coordinates/projection preflight; do not rewrite TextEdit, IME or every popup.
+- A10 (212–214): the repository lease gap is a correctness issue independent of
+  code organization. Implement 213 first; later service extraction must preserve
+  checked patch semantics and protected completions rather than replace Git.
+- A11 (215–217): owner cleanup is justified by viewport-keyed retained font slots.
+  Property diffing is only a hypothesis and is now measurement-gated. Hidden and
+  closed native views must remain distinct.
+- A12 (219): capability reporting is useful, but derive it from current resolution
+  and service state instead of adding a second source of truth. Completed items
+  218/220/221 remain valid and are not reopened by this review.
+
+= Architecture audit implementation: first small changes (2026-09-17)
+
+- Item 221: Corrected the enabled miTeX API comments and added a dated ADR 0002
+  amendment plus an ownership/module map. Original rationale remains historical;
+  current notes describe independent document/Settings viewports, per-window
+  Tinymist, conditional CLI work and the imported-subfile limitation.
+- Item 220: Build-time metadata now comes from `toolchain/manifest.tsv`, replacing
+  duplicate runtime version literals. The shared validator rejects missing tools,
+  duplicate targets, malformed rows and cross-target version disagreement. Three
+  integration tests cover generation and rejection. No runtime manifest IO or
+  changes to executable selection, bundled binaries or compatibility behavior.
+- Item 218: Moved launch types, argument/environment parsing and persistence policy
+  into `src/launch.rs`; the capture renderer no longer owns application startup.
+  Explicit profiling mode preserves session-owned storage. Normal profiles can
+  persist only to that isolated store; capture profiles still do not persist QA
+  fixtures. Existing capture/CLI tests and new mode/storage tests pass. Capture
+  naming, scene routing and pixel output contracts are unchanged.
+- Item 201: Extracted JSON-RPC framing into `src/tinymist/transport.rs` without
+  moving workers or changing sidecar commands/events. Also fixed the header limit:
+  previously checked only after an unbounded line read, it now limits the read
+  itself. Deterministic regressions assert at most 8,193 bytes consumed for an
+  overlong header line and 32,769 for oversized aggregate headers, including the
+  single overflow-detection byte. Invalid lengths fail before payload allocation.
+  Existing framing, process-shutdown and stale-session tests remain intact.
+- Verification: required formatting, strict Clippy, normal tests and 13 xtask
+  tests pass; profiling-feature checks also run for the launch-policy change.
+  Both real Tinymist preview-cycle and unsaved-formatting probes pass with
+  `TIPTOPTYP_TEST_TINYMIST` explicitly selecting the bundled macOS arm64 binary.
+  The initial preview probe lacked that required environment selection and failed
+  before starting its server; rerunning with the explicit path succeeded.
+- Performance: no new idle repaints, per-frame IO, worker queues or payload copies.
+  Version generation runs only at build time; launch parsing remains startup-only.
+  Framing resource bounds are tested deterministically, not presented as a measured
+  interaction-speed improvement. No pixel/native geometry changes or visual
+  verification claimed. Remaining audit tasks stay open; item 202 is next.
+
 = resolved in the 2026-09-13 easy backlog pass
 
 - Status/Git follow-up (2026-09-16): color-code compact +/~/- line totals with the same added/modified/deleted theme colors as the gutter, keeping one shared status-message location and history.

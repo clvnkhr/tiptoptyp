@@ -1,0 +1,10 @@
+{
+  "root_repaint_requests": [],
+  "secondary_repaint_requests": [],
+  "dropped_repaint_locations": 0,
+  "schema_version": 1,
+  "complete": true,
+  "measured_seconds": 10.0,
+  "dropped_scopes": 0,
+  "scopes": []
+}

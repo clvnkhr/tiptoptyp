@@ -1,0 +1,111 @@
+{
+  "root_repaint_requests": [
+    {
+      "file": "src/app.rs",
+      "line": 4944,
+      "requests": 59
+    },
+    {
+      "file": "src/app.rs",
+      "line": 4958,
+      "requests": 49
+    },
+    {
+      "file": "src/app.rs",
+      "line": 4962,
+      "requests": 10
+    },
+    {
+      "file": "src/worker.rs",
+      "line": 47,
+      "requests": 4
+    }
+  ],
+  "secondary_repaint_requests": [
+    {
+      "file": "src/app.rs",
+      "line": 4944,
+      "requests": 122
+    },
+    {
+      "file": "src/app.rs",
+      "line": 4958,
+      "requests": 92
+    },
+    {
+      "file": "src/app.rs",
+      "line": 4962,
+      "requests": 30
+    }
+  ],
+  "dropped_repaint_locations": 0,
+  "schema_version": 1,
+  "complete": true,
+  "measured_seconds": 10.0,
+  "dropped_scopes": 0,
+  "scopes": [
+    {
+      "name": "compile.receive",
+      "calls": 181,
+      "total_ms": 0.102837,
+      "mean_us": 0.5681602209944752,
+      "max_us": 5.625,
+      "p50_upper_us": 0.511,
+      "p95_upper_us": 2.047
+    },
+    {
+      "name": "highlight.total",
+      "calls": 181,
+      "total_ms": 1.127408,
+      "mean_us": 6.2287734806629835,
+      "max_us": 16.042,
+      "p50_upper_us": 8.191,
+      "p95_upper_us": 16.383
+    },
+    {
+      "name": "ui.editor.pass",
+      "calls": 181,
+      "total_ms": 109.696294,
+      "mean_us": 606.0568729281767,
+      "max_us": 3253.959,
+      "p50_upper_us": 524.287,
+      "p95_upper_us": 4194.303
+    },
+    {
+      "name": "ui.explorer",
+      "calls": 181,
+      "total_ms": 24.782372,
+      "mean_us": 136.919182320442,
+      "max_us": 568.375,
+      "p50_upper_us": 131.071,
+      "p95_upper_us": 524.287
+    },
+    {
+      "name": "ui.shell.pass",
+      "calls": 59,
+      "total_ms": 49.945875,
+      "mean_us": 846.5402542372882,
+      "max_us": 3357.709,
+      "p50_upper_us": 1048.575,
+      "p95_upper_us": 4194.303
+    },
+    {
+      "name": "ui.source",
+      "calls": 181,
+      "total_ms": 33.986374,
+      "mean_us": 187.77002209944752,
+      "max_us": 2552.666,
+      "p50_upper_us": 65.535,
+      "p95_upper_us": 2097.151
+    },
+    {
+      "name": "worker.job",
+      "calls": 25,
+      "total_ms": 9.903999,
+      "mean_us": 396.15996,
+      "max_us": 2549.875,
+      "p50_upper_us": 131.071,
+      "p95_upper_us": 2097.151
+    }
+  ]
+}

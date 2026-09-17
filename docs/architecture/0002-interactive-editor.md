@@ -2,6 +2,44 @@
 
 Status: accepted, 2026-09-02
 
+## Current-state amendment (2026-09-17)
+
+The decisions below preserve the original rationale, not an exact description of
+the current implementation. These notes supersede the corresponding ownership and
+execution details in decisions 1–3:
+
+- Settings now owns a separate deferred native viewport. Its local interaction
+  repaints independently of document windows; changed preferences/actions return
+  to the owner. It no longer temporarily replaces the workspace view.
+- Tinymist sessions are owned per document window, not per workspace or per tab.
+  Tabs share window services; active editing and the designated preview entry are
+  distinct. Document windows also repaint independently, while native UI remains
+  on its required thread.
+- Interactive preview does not require a parallel CLI compile for every edit.
+  The CLI artifact path runs when raster preview, deterministic capture or an
+  explicit PDF export needs it. Export still uses canonical PDF bytes, never
+  rendered screen pixels. Recovery preserves the requested backend and permits
+  four delayed retries before fallback on the fifth failure.
+- Optional miTeX editing is enabled in the application: displayed TeX dollar
+  notation maps to canonical Typst/MiTeX source at save and service boundaries.
+  Ordinary documents bypass that projection. CLI compilation still reads imported
+  subfiles from disk; this is not a multi-file unsaved-buffer compiler overlay.
+
+### Current ownership map
+
+| Boundary | Implementation and maintained contract |
+| --- | --- |
+| Shell, independent windows and shared preferences | `src/windowing.rs`; [multi-window audit](../multi-window-audit.md) |
+| Window orchestration and tab-owned document state | `src/app.rs`, `src/app/tabs.rs`; [tabs and Git hunks](../tabs-and-git-hunks.md) |
+| Settings presentation and deferred host | `src/app/settings_panel.rs`, `src/app/settings_window.rs`; [focused ownership](0005-focused-ui-and-recovery.md) |
+| Canonical/displayed document boundary | `src/mitex_document.rs`, `src/mitex_projection.rs`; [miTeX projection](../mitex-projection.md) |
+| Protocol, artifact production and preview policy | `src/tinymist.rs`, `src/compiler.rs`, `src/preview.rs`, `core/src/recovery.rs`; [focused recovery](0005-focused-ui-and-recovery.md) |
+| Native child-view composition | `src/app/native_views.rs`, `src/child_view.rs`; [native boundaries](0004-native-unsafe-boundaries.md) |
+
+The broader [architecture audit](../../output/pdf/architecture-audit.typ) describes
+remaining extraction opportunities; its proposals are not already implemented
+boundaries. `todo.typ` items 184–221 track those changes.
+
 ## Context
 
 The first MVP used an `egui::TextEdit`, a hand-written lexer, and a persistent

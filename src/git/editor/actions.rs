@@ -212,7 +212,24 @@ pub(crate) fn change_index(
     hunk: &Hunk,
     action: Action,
 ) -> Result<String, String> {
-    let snapshot = status_snapshot(workspace)?;
+    if !matches!(action, Action::Stage | Action::Unstage) {
+        return Err("Only Stage and Unstage can change the Git index".into());
+    }
+    crate::git::with_repository_transaction(workspace, |root| {
+        change_index_locked(root, path, source, hunk, action)
+    })
+}
+
+fn change_index_locked(
+    root: &Path,
+    path: &Path,
+    source: &str,
+    hunk: &Hunk,
+    action: Action,
+) -> Result<String, String> {
+    #[cfg(test)]
+    assert!(crate::resource_lock::is_locked_for_test(root));
+    let snapshot = crate::git::status_at_root(root.to_owned())?;
     let canonical = path.canonicalize().map_err(|e| e.to_string())?;
     let path = canonical.as_path();
     let relative = path
@@ -327,6 +344,131 @@ pub(crate) fn change_index(
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn panel_and_hunks_from_nested_workspaces_preserve_each_others_index_changes() {
+        use std::{sync::Barrier, thread};
+        let repository = tempfile::tempdir().unwrap();
+        let root = repository.path();
+        let original = (0..40)
+            .map(|line| format!("line {line}\n"))
+            .collect::<String>();
+        super::super::tests::initialize(root, &original);
+        let path = root.join("main.typ");
+        let nested = root.join("nested");
+        fs::create_dir(&nested).unwrap();
+        fs::write(root.join("notes.typ"), "panel change\n").unwrap();
+        let first = original.replace("line 2\n", "first window\n");
+        let second = original.replace("line 35\n", "second window\n");
+        let first_hunk = compare_buffer(root, original.as_bytes(), &first)
+            .unwrap()
+            .remove(0);
+        let second_hunk = compare_buffer(root, original.as_bytes(), &second)
+            .unwrap()
+            .remove(0);
+        let barrier = Barrier::new(4);
+        thread::scope(|scope| {
+            let first_job = scope.spawn(|| {
+                barrier.wait();
+                change_index(root, &path, &first, &first_hunk, Action::Stage)
+            });
+            let second_job = scope.spawn(|| {
+                barrier.wait();
+                change_index(&nested, &path, &second, &second_hunk, Action::Stage)
+            });
+            let panel_job = scope.spawn(|| {
+                barrier.wait();
+                crate::git::perform(
+                    &nested.join("."),
+                    crate::git::Operation::Stage("notes.typ".into()),
+                )
+            });
+            barrier.wait();
+            first_job.join().unwrap().unwrap();
+            second_job.join().unwrap().unwrap();
+            panel_job.join().unwrap().unwrap();
+        });
+        assert_eq!(
+            run(root, &args(&["show", ":main.typ"])).unwrap(),
+            first.replace("line 35\n", "second window\n").as_bytes()
+        );
+        assert_eq!(
+            run(root, &args(&["show", ":notes.typ"])).unwrap(),
+            b"panel change\n"
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
+        assert!(!crate::resource_lock::is_locked_for_test(root));
+    }
+
+    #[test]
+    fn hunk_preconditions_are_rechecked_inside_the_repository_lease() {
+        let repository = tempfile::tempdir().unwrap();
+        let root = repository.path();
+        let original = "one\ntwo\nthree\n";
+        super::super::tests::initialize(root, original);
+        let path = root.join("main.typ");
+        let buffer = original.replace("two", "buffer");
+        let hunk = compare_buffer(root, original.as_bytes(), &buffer)
+            .unwrap()
+            .remove(0);
+        crate::git::with_repository_transaction(root, |root| {
+            // Simulate an earlier queued panel mutation winning the lease.
+            fs::write(&path, "one\nnew baseline\nthree\n").unwrap();
+            crate::git::perform_locked(root, crate::git::Operation::Stage("main.typ".into()))?;
+            crate::git::perform_locked(root, crate::git::Operation::Commit("Changed HEAD".into()))?;
+            let before = run(root, &args(&["show", ":main.typ"]))?;
+            assert!(
+                change_index_locked(root, &path, &buffer, &hunk, Action::Stage)
+                    .unwrap_err()
+                    .contains("baseline")
+            );
+            assert_eq!(run(root, &args(&["show", ":main.typ"]))?, before);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn conflicts_and_non_index_actions_cannot_mutate_the_index() {
+        let repository = tempfile::tempdir().unwrap();
+        let root = repository.path();
+        super::super::tests::initialize(root, "original\n");
+        let path = root.join("main.typ");
+        let hunk = compare_buffer(root, b"original\n", "buffer\n")
+            .unwrap()
+            .remove(0);
+        let original_index = run(root, &args(&["ls-files", "--stage"])).unwrap();
+        for action in [Action::Revert, Action::Next, Action::Previous] {
+            assert!(change_index(root, &path, "buffer\n", &hunk, action).is_err());
+            assert_eq!(
+                run(root, &args(&["ls-files", "--stage"])).unwrap(),
+                original_index
+            );
+        }
+        let branch = text_run(root, &["branch", "--show-current"]).unwrap();
+        text_run(root, &["checkout", "-b", "conflicting-change"]).unwrap();
+        fs::write(&path, "other\n").unwrap();
+        text_run(root, &["commit", "-am", "Other"]).unwrap();
+        text_run(root, &["checkout", branch.trim()]).unwrap();
+        fs::write(&path, "ours\n").unwrap();
+        text_run(root, &["commit", "-am", "Ours"]).unwrap();
+        assert!(text_run(root, &["merge", "--no-edit", "conflicting-change"]).is_err());
+        let conflicted_index = run(root, &args(&["ls-files", "--stage"])).unwrap();
+        let conflicted_file = fs::read(&path).unwrap();
+        for action in [Action::Stage, Action::Unstage] {
+            assert!(
+                change_index(root, &path, "buffer\n", &hunk, action)
+                    .unwrap_err()
+                    .contains("Resolve the merge conflict")
+            );
+            assert_eq!(
+                run(root, &args(&["ls-files", "--stage"])).unwrap(),
+                conflicted_index
+            );
+            assert_eq!(fs::read(&path).unwrap(), conflicted_file);
+        }
+        assert!(!crate::resource_lock::is_locked_for_test(root));
+    }
 
     #[test]
     fn partial_staging_preserves_other_hunks_and_working_file() {

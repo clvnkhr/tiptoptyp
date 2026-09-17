@@ -1,0 +1,30 @@
+[
+  {
+    "pid": 6902,
+    "ppid": 1,
+    "rss_kib": 89920,
+    "cpu_time": "0:00.19",
+    "command": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent"
+  },
+  {
+    "pid": 6903,
+    "ppid": 1,
+    "rss_kib": 35328,
+    "cpu_time": "0:00.09",
+    "command": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.Networking.xpc/Contents/MacOS/com.apple.WebKit.Networking"
+  },
+  {
+    "pid": 6904,
+    "ppid": 1,
+    "rss_kib": 29792,
+    "cpu_time": "0:00.07",
+    "command": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.GPU.xpc/Contents/MacOS/com.apple.WebKit.GPU"
+  },
+  {
+    "pid": 6939,
+    "ppid": 1,
+    "rss_kib": 48192,
+    "cpu_time": "0:00.10",
+    "command": "/System/Volumes/Preboot/Cryptexes/App/System/Library/StagedFrameworks/Safari/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent"
+  }
+]

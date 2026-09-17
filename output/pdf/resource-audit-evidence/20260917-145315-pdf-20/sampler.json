@@ -1,0 +1,13 @@
+{
+  "command": [
+    "/usr/bin/sample",
+    "8709",
+    "4",
+    "1",
+    "-file",
+    "/Users/calvinkhor/Documents/GitHub/mytypst/output/pdf/resource-audit-evidence/20260917-145315-pdf-20/cpu.sample.txt"
+  ],
+  "exit": 0,
+  "stdout": "",
+  "stderr": "Sampling process 8709 for 4 seconds with 1 millisecond of run time between samples\nSampling completed, processing symbols...\nSample analysis of process 8709 written to file /Users/calvinkhor/Documents/GitHub/mytypst/output/pdf/resource-audit-evidence/20260917-145315-pdf-20/cpu.sample.txt\n"
+}

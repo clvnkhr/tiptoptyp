@@ -1,0 +1,11 @@
+{
+  "command": [
+    "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/typst-aarch64-apple-darwin",
+    "compile",
+    "/Users/calvinkhor/Documents/GitHub/mytypst/output/pdf/resource-audit-evidence/20260917-144802-pdf-1/workspace/main.typ",
+    "/Users/calvinkhor/Documents/GitHub/mytypst/output/pdf/resource-audit-evidence/20260917-144802-pdf-1/workspace/fixture.pdf"
+  ],
+  "exit": 0,
+  "stdout": "",
+  "stderr": ""
+}

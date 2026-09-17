@@ -1,0 +1,95 @@
+{
+  "root_repaint_requests": [
+    {
+      "file": "src/app.rs",
+      "line": 4944,
+      "requests": 52
+    },
+    {
+      "file": "src/app.rs",
+      "line": 4958,
+      "requests": 42
+    },
+    {
+      "file": "src/app.rs",
+      "line": 4962,
+      "requests": 10
+    },
+    {
+      "file": "src/worker.rs",
+      "line": 47,
+      "requests": 5
+    }
+  ],
+  "secondary_repaint_requests": [],
+  "dropped_repaint_locations": 0,
+  "schema_version": 1,
+  "complete": true,
+  "measured_seconds": 10.0,
+  "dropped_scopes": 0,
+  "scopes": [
+    {
+      "name": "compile.receive",
+      "calls": 52,
+      "total_ms": 0.033169,
+      "mean_us": 0.6378653846153847,
+      "max_us": 1.416,
+      "p50_upper_us": 1.023,
+      "p95_upper_us": 2.047
+    },
+    {
+      "name": "highlight.total",
+      "calls": 52,
+      "total_ms": 0.86771,
+      "mean_us": 16.68673076923077,
+      "max_us": 504.292,
+      "p50_upper_us": 8.191,
+      "p95_upper_us": 16.383
+    },
+    {
+      "name": "ui.editor.pass",
+      "calls": 52,
+      "total_ms": 34.991957,
+      "mean_us": 672.92225,
+      "max_us": 5753.0,
+      "p50_upper_us": 524.287,
+      "p95_upper_us": 2097.151
+    },
+    {
+      "name": "ui.explorer",
+      "calls": 52,
+      "total_ms": 6.262714,
+      "mean_us": 120.43680769230768,
+      "max_us": 300.334,
+      "p50_upper_us": 131.071,
+      "p95_upper_us": 262.143
+    },
+    {
+      "name": "ui.shell.pass",
+      "calls": 52,
+      "total_ms": 37.742874,
+      "mean_us": 725.8245,
+      "max_us": 5847.75,
+      "p50_upper_us": 524.287,
+      "p95_upper_us": 2097.151
+    },
+    {
+      "name": "ui.source",
+      "calls": 52,
+      "total_ms": 6.123625,
+      "mean_us": 117.76201923076924,
+      "max_us": 575.375,
+      "p50_upper_us": 131.071,
+      "p95_upper_us": 524.287
+    },
+    {
+      "name": "worker.job",
+      "calls": 10,
+      "total_ms": 5.767833,
+      "mean_us": 576.7833,
+      "max_us": 1578.167,
+      "p50_upper_us": 262.143,
+      "p95_upper_us": 2097.151
+    }
+  ]
+}

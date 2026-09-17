@@ -1,0 +1,9 @@
+[
+  {
+    "pid": 6711,
+    "ppid": 1,
+    "rss_kib": 31824,
+    "cpu_time": "0:00.04",
+    "command": "/System/Volumes/Preboot/Cryptexes/App/System/Library/StagedFrameworks/Safari/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent"
+  }
+]

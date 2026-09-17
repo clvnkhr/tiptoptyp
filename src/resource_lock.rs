@@ -37,6 +37,14 @@ pub(crate) fn with_resource<R>(path: &Path, operation: impl FnOnce() -> R) -> R 
 }
 
 #[cfg(test)]
+pub(crate) fn is_locked_for_test(path: &Path) -> bool {
+    matches!(
+        resource_lock(path).try_lock(),
+        Err(std::sync::TryLockError::WouldBlock)
+    )
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]

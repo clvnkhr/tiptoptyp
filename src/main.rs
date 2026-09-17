@@ -22,6 +22,7 @@ mod font_preview;
 mod generic_highlight;
 mod git;
 mod highlight;
+mod launch;
 #[allow(unsafe_code)]
 mod native_menu;
 #[allow(unsafe_code)]
@@ -55,7 +56,8 @@ mod workflow;
 mod workspace;
 
 use eframe::egui;
-use screenshot::{CaptureController, LaunchOptions, ScreenshotApp};
+use launch::LaunchOptions;
+use screenshot::{CaptureController, ScreenshotApp};
 use shortcuts::ShortcutBindings;
 use tiptoptyp::themes::{
     builtin as builtin_themes, sublime as sublime_theme, transform as theme_transform,
@@ -73,7 +75,8 @@ fn main() -> eframe::Result {
 }
 
 fn run(profile_storage: Option<std::path::PathBuf>) -> eframe::Result {
-    let launch = LaunchOptions::from_process().map_err(invalid_launch_configuration)?;
+    let launch =
+        LaunchOptions::from_process(profile_storage).map_err(invalid_launch_configuration)?;
     if let Some(profile) = &launch.theme_profile
         && profile.name != settings::SYSTEM_THEME_ID
         && builtin_themes::find(&profile.name).is_none()
@@ -107,7 +110,7 @@ fn run(profile_storage: Option<std::path::PathBuf>) -> eframe::Result {
     }
     let captures = CaptureController::new(capture_config);
     let options = eframe::NativeOptions {
-        persistence_path: profile_storage,
+        persistence_path: launch.persistence_path,
         ..native_options(deterministic_snapshot)
     };
 

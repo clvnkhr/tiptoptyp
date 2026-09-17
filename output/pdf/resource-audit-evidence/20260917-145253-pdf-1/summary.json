@@ -1,0 +1,95 @@
+{
+  "root_repaint_requests": [
+    {
+      "file": "src/app.rs",
+      "line": 4944,
+      "requests": 195
+    },
+    {
+      "file": "src/app.rs",
+      "line": 4958,
+      "requests": 185
+    },
+    {
+      "file": "src/app.rs",
+      "line": 4962,
+      "requests": 10
+    },
+    {
+      "file": "src/worker.rs",
+      "line": 47,
+      "requests": 5
+    }
+  ],
+  "secondary_repaint_requests": [],
+  "dropped_repaint_locations": 0,
+  "schema_version": 1,
+  "complete": true,
+  "measured_seconds": 10.0,
+  "dropped_scopes": 0,
+  "scopes": [
+    {
+      "name": "compile.receive",
+      "calls": 195,
+      "total_ms": 0.071412,
+      "mean_us": 0.3662153846153846,
+      "max_us": 4.75,
+      "p50_upper_us": 0.255,
+      "p95_upper_us": 2.047
+    },
+    {
+      "name": "highlight.total",
+      "calls": 195,
+      "total_ms": 0.270162,
+      "mean_us": 1.385446153846154,
+      "max_us": 11.0,
+      "p50_upper_us": 1.023,
+      "p95_upper_us": 4.095
+    },
+    {
+      "name": "ui.editor.pass",
+      "calls": 195,
+      "total_ms": 75.538994,
+      "mean_us": 387.3794564102564,
+      "max_us": 1683.958,
+      "p50_upper_us": 524.287,
+      "p95_upper_us": 1048.575
+    },
+    {
+      "name": "ui.explorer",
+      "calls": 195,
+      "total_ms": 25.179695,
+      "mean_us": 129.12664102564102,
+      "max_us": 711.834,
+      "p50_upper_us": 131.071,
+      "p95_upper_us": 524.287
+    },
+    {
+      "name": "ui.shell.pass",
+      "calls": 195,
+      "total_ms": 88.380417,
+      "mean_us": 453.23290769230766,
+      "max_us": 1895.083,
+      "p50_upper_us": 524.287,
+      "p95_upper_us": 1048.575
+    },
+    {
+      "name": "ui.source",
+      "calls": 195,
+      "total_ms": 13.838548,
+      "mean_us": 70.96691282051282,
+      "max_us": 937.917,
+      "p50_upper_us": 65.535,
+      "p95_upper_us": 262.143
+    },
+    {
+      "name": "worker.job",
+      "calls": 10,
+      "total_ms": 10.794624,
+      "mean_us": 1079.4624,
+      "max_us": 2690.0,
+      "p50_upper_us": 131.071,
+      "p95_upper_us": 4194.303
+    }
+  ]
+}

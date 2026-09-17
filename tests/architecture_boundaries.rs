@@ -18,6 +18,39 @@ fn rust_files(root: &Path) -> Vec<PathBuf> {
 }
 
 #[test]
+fn launch_policy_and_lsp_transport_have_focused_owners() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let screenshot = fs::read_to_string(root.join("screenshot.rs")).unwrap();
+    let production = screenshot.split("#[cfg(test)]\nmod tests").next().unwrap();
+    for forbidden in [
+        "LaunchOptions",
+        "LaunchMode",
+        "parse_launch_options",
+        "crate::launch",
+    ] {
+        assert!(
+            !production.contains(forbidden),
+            "capture renderer owns launch policy: {forbidden}"
+        );
+    }
+    let transport = fs::read_to_string(root.join("tinymist/transport.rs")).unwrap();
+    let production = transport.split("#[cfg(test)]").next().unwrap();
+    for forbidden in [
+        "crate::",
+        "super::",
+        "eframe",
+        "egui",
+        "std::process",
+        "std::thread",
+    ] {
+        assert!(
+            !production.contains(forbidden),
+            "framing depends on application/session code: {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn core_has_no_platform_dependencies_or_effect_apis() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let manifest: toml::Value = fs::read_to_string(root.join("core/Cargo.toml"))

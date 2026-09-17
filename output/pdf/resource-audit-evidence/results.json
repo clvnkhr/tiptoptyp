@@ -1,0 +1,262 @@
+[
+  {
+    "scenario": "main",
+    "directory": "20260917-144636-main",
+    "complete": true,
+    "exit": 0,
+    "app_mib": 447.7,
+    "direct_family_mib": 496.8,
+    "direct_processes": 3,
+    "cpu_interval_seconds": 4.616,
+    "app_cpu_seconds": 0.05,
+    "direct_family_cpu_seconds": 0.05,
+    "app_cpu_one_core_percent": 1.08,
+    "editor_calls": 52,
+    "editor_mean_us": 672.9,
+    "editor_total_ms": 34.99,
+    "highlight_rebuilds": 0,
+    "binary_sha256": "4f1e10879464c6bedd6e886b57b869dab2ea9a9cc0d65a3e68b9b307e8515dd5",
+    "memory_processes": [
+      [
+        "tiptoptyp",
+        6450,
+        469471552
+      ],
+      [
+        "tinymist-aarch64-apple-darwin",
+        6452,
+        28478016
+      ],
+      [
+        "typst-aarch64-apple-darwin",
+        6460,
+        22972608
+      ]
+    ]
+  },
+  {
+    "scenario": "settings",
+    "directory": "20260917-144658-settings",
+    "complete": true,
+    "exit": 0,
+    "app_mib": 441.9,
+    "direct_family_mib": 466.2,
+    "direct_processes": 2,
+    "cpu_interval_seconds": 4.332,
+    "app_cpu_seconds": 0.07,
+    "direct_family_cpu_seconds": 0.07,
+    "app_cpu_one_core_percent": 1.62,
+    "editor_calls": 49,
+    "editor_mean_us": 873.7,
+    "editor_total_ms": 42.81,
+    "highlight_rebuilds": 0,
+    "binary_sha256": "4f1e10879464c6bedd6e886b57b869dab2ea9a9cc0d65a3e68b9b307e8515dd5",
+    "memory_processes": [
+      [
+        "tiptoptyp",
+        6638,
+        463376320
+      ],
+      [
+        "tinymist-aarch64-apple-darwin",
+        6644,
+        25512384
+      ]
+    ]
+  },
+  {
+    "scenario": "multi-window",
+    "directory": "20260917-144719-multi-window",
+    "complete": true,
+    "exit": 0,
+    "app_mib": 722.9,
+    "direct_family_mib": 924.9,
+    "direct_processes": 9,
+    "cpu_interval_seconds": 4.498,
+    "app_cpu_seconds": 0.19,
+    "direct_family_cpu_seconds": 0.2,
+    "app_cpu_one_core_percent": 4.22,
+    "editor_calls": 181,
+    "editor_mean_us": 606.1,
+    "editor_total_ms": 109.7,
+    "highlight_rebuilds": 0,
+    "binary_sha256": "4f1e10879464c6bedd6e886b57b869dab2ea9a9cc0d65a3e68b9b307e8515dd5",
+    "memory_processes": [
+      [
+        "tiptoptyp",
+        6794,
+        758059968
+      ],
+      [
+        "tinymist-aarch64-apple-darwin",
+        6797,
+        28887552
+      ],
+      [
+        "tinymist-aarch64-apple-darwin",
+        6795,
+        28789056
+      ],
+      [
+        "tinymist-aarch64-apple-darwin",
+        6799,
+        28035328
+      ],
+      [
+        "tinymist-aarch64-apple-darwin",
+        6798,
+        27822464
+      ],
+      [
+        "typst-aarch64-apple-darwin",
+        6803,
+        25266432
+      ],
+      [
+        "typst-aarch64-apple-darwin",
+        6809,
+        25200832
+      ],
+      [
+        "typst-aarch64-apple-darwin",
+        6800,
+        24709248
+      ],
+      [
+        "typst-aarch64-apple-darwin",
+        6806,
+        23005440
+      ]
+    ]
+  },
+  {
+    "scenario": "no-window",
+    "directory": "20260917-144741-no-window",
+    "complete": true,
+    "exit": 0,
+    "app_mib": 408.9,
+    "direct_family_mib": 408.9,
+    "direct_processes": 1,
+    "cpu_interval_seconds": 4.25,
+    "app_cpu_seconds": 0.01,
+    "direct_family_cpu_seconds": 0.01,
+    "app_cpu_one_core_percent": 0.24,
+    "editor_calls": 0,
+    "editor_mean_us": 0,
+    "editor_total_ms": 0,
+    "highlight_rebuilds": 0,
+    "binary_sha256": "4f1e10879464c6bedd6e886b57b869dab2ea9a9cc0d65a3e68b9b307e8515dd5",
+    "memory_processes": [
+      [
+        "tiptoptyp",
+        7017,
+        428773184
+      ]
+    ]
+  },
+  {
+    "scenario": "large",
+    "directory": "20260917-145204-large",
+    "complete": true,
+    "exit": 0,
+    "app_mib": 438.8,
+    "direct_family_mib": 474.8,
+    "direct_processes": 3,
+    "cpu_interval_seconds": 4.722,
+    "app_cpu_seconds": 0.16,
+    "direct_family_cpu_seconds": 0.16,
+    "app_cpu_one_core_percent": 3.39,
+    "editor_calls": 101,
+    "editor_mean_us": 1627.0,
+    "editor_total_ms": 164.32,
+    "highlight_rebuilds": 0,
+    "binary_sha256": "4f1e10879464c6bedd6e886b57b869dab2ea9a9cc0d65a3e68b9b307e8515dd5",
+    "memory_processes": [
+      [
+        "tiptoptyp",
+        8274,
+        460149056
+      ],
+      [
+        "tinymist-aarch64-apple-darwin",
+        8275,
+        23136832
+      ],
+      [
+        "typst-aarch64-apple-darwin",
+        8278,
+        14551168
+      ]
+    ]
+  },
+  {
+    "scenario": "pdf-1",
+    "directory": "20260917-145253-pdf-1",
+    "complete": true,
+    "exit": 0,
+    "app_mib": 417.3,
+    "direct_family_mib": 443.1,
+    "direct_processes": 3,
+    "cpu_interval_seconds": 4.25,
+    "app_cpu_seconds": 0.1,
+    "direct_family_cpu_seconds": 0.1,
+    "app_cpu_one_core_percent": 2.35,
+    "editor_calls": 195,
+    "editor_mean_us": 387.4,
+    "editor_total_ms": 75.54,
+    "highlight_rebuilds": 0,
+    "binary_sha256": "4f1e10879464c6bedd6e886b57b869dab2ea9a9cc0d65a3e68b9b307e8515dd5",
+    "memory_processes": [
+      [
+        "tiptoptyp",
+        8564,
+        437587456
+      ],
+      [
+        "tinymist-aarch64-apple-darwin",
+        8566,
+        18549312
+      ],
+      [
+        "typst-aarch64-apple-darwin",
+        8568,
+        8439360
+      ]
+    ]
+  },
+  {
+    "scenario": "pdf-20",
+    "directory": "20260917-145315-pdf-20",
+    "complete": true,
+    "exit": 0,
+    "app_mib": 665.8,
+    "direct_family_mib": 698.8,
+    "direct_processes": 3,
+    "cpu_interval_seconds": 4.254,
+    "app_cpu_seconds": 0.07,
+    "direct_family_cpu_seconds": 0.07,
+    "app_cpu_one_core_percent": 1.65,
+    "editor_calls": 175,
+    "editor_mean_us": 349.0,
+    "editor_total_ms": 61.07,
+    "highlight_rebuilds": 0,
+    "binary_sha256": "4f1e10879464c6bedd6e886b57b869dab2ea9a9cc0d65a3e68b9b307e8515dd5",
+    "memory_processes": [
+      [
+        "tiptoptyp",
+        8709,
+        698143424
+      ],
+      [
+        "tinymist-aarch64-apple-darwin",
+        8711,
+        20679168
+      ],
+      [
+        "typst-aarch64-apple-darwin",
+        8713,
+        13879424
+      ]
+    ]
+  }
+]

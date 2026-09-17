@@ -1,0 +1,29 @@
+{
+  "command": [
+    "/usr/bin/footprint",
+    "--noCategories",
+    "-f",
+    "bytes",
+    "-p",
+    "6794",
+    "-p",
+    "6795",
+    "-p",
+    "6797",
+    "-p",
+    "6798",
+    "-p",
+    "6799",
+    "-p",
+    "6800",
+    "-p",
+    "6803",
+    "-p",
+    "6806",
+    "-p",
+    "6809"
+  ],
+  "exit": 0,
+  "stdout": "======================================================================\ntiptoptyp [6794]: 64-bit    Footprint: 758059968 B (16384 bytes per page)\n======================================================================\n\nAuxiliary data:\n    dirty: -\n    phys_footprint_peak: 757945280 B\n    phys_footprint: 757912512 B\n\n======================================================================\ntinymist-aarch64-apple-darwin [6797]: 64-bit    Footprint: 28887552 B (16384 bytes per page)\n======================================================================\n\nAuxiliary data:\n    dirty: -\n    phys_footprint_peak: 31394304 B\n    phys_footprint: 28887552 B\n\n======================================================================\ntinymist-aarch64-apple-darwin [6795]: 64-bit    Footprint: 28789056 B (16384 bytes per page)\n======================================================================\n\nAuxiliary data:\n    dirty: -\n    phys_footprint_peak: 31394112 B\n    phys_footprint: 28789056 B\n\n======================================================================\ntinymist-aarch64-apple-darwin [6799]: 64-bit    Footprint: 28035328 B (16384 bytes per page)\n======================================================================\n\nAuxiliary data:\n    dirty: -\n    phys_footprint_peak: 34048256 B\n    phys_footprint: 28035328 B\n\n======================================================================\ntinymist-aarch64-apple-darwin [6798]: 64-bit    Footprint: 27822464 B (16384 bytes per page)\n======================================================================\n\nAuxiliary data:\n    dirty: -\n    phys_footprint_peak: 29657472 B\n    phys_footprint: 27822464 B\n\n======================================================================\ntypst-aarch64-apple-darwin [6803]: 64-bit    Footprint: 25266432 B (16384 bytes per page)\n======================================================================\n\nAuxiliary data:\n    dirty: -\n    phys_footprint_peak: 27904256 B\n    phys_footprint: 25266432 B\n\n======================================================================\ntypst-aarch64-apple-darwin [6809]: 64-bit    Footprint: 25200832 B (16384 bytes per page)\n======================================================================\n\nAuxiliary data:\n    dirty: -\n    phys_footprint_peak: 29116608 B\n    phys_footprint: 25200832 B\n\n======================================================================\ntypst-aarch64-apple-darwin [6800]: 64-bit    Footprint: 24709248 B (16384 bytes per page)\n======================================================================\n\nAuxiliary data:\n    dirty: -\n    phys_footprint_peak: 28575872 B\n    phys_footprint: 24709248 B\n\n======================================================================\ntypst-aarch64-apple-darwin [6806]: 64-bit    Footprint: 23005440 B (16384 bytes per page)\n======================================================================\n\nAuxiliary data:\n    dirty: -\n    phys_footprint_peak: 29903104 B\n    phys_footprint: 23005440 B\n\n======================================================================\nSummary Footprint: 969186496 B\n======================================================================\n\n\n",
+  "stderr": ""
+}

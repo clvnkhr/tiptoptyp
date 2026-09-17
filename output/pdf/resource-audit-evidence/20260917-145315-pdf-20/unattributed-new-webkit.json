@@ -1,0 +1,16 @@
+[
+  {
+    "pid": 8772,
+    "ppid": 1,
+    "rss_kib": 125328,
+    "cpu_time": "0:00.21",
+    "command": "/System/Volumes/Preboot/Cryptexes/App/System/Library/StagedFrameworks/Safari/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent"
+  },
+  {
+    "pid": 8791,
+    "ppid": 1,
+    "rss_kib": 2576,
+    "cpu_time": "0:00.02",
+    "command": "/System/Volumes/Preboot/Cryptexes/App/System/Library/StagedFrameworks/Safari/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent"
+  }
+]
