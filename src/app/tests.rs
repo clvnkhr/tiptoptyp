@@ -3557,12 +3557,14 @@ fn gutter_marker_receives_clicks_beside_the_actual_text_editor() {
                                 .translate(output.galley_pos.to_vec2())
                         })
                         .collect::<Vec<_>>();
-                    if let Some(index) = crate::git::editor::show_markers(
-                        ui,
-                        std::slice::from_ref(&hunk),
-                        &rows,
-                        output.response.rect.left(),
-                    ) {
+                    if let Some(crate::git::editor::view::Action::OpenChunk(index)) =
+                        crate::git::editor::view::show_markers(
+                            ui,
+                            std::slice::from_ref(&hunk),
+                            &rows,
+                            output.response.rect.left(),
+                        )
+                    {
                         *clicked = Some(index);
                     }
                 },

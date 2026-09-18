@@ -351,7 +351,12 @@ impl EditorApp {
         };
 
         let scroll_area = egui::ScrollArea::new([!line_wrap, true])
-            .id_salt(("source-editor-scroll", self.tabs.active_id()))
+            .id_salt((
+                "source-editor-scroll",
+                self.tabs
+                    .active_id()
+                    .expect("editor requires an active tab"),
+            ))
             .auto_shrink([false, false]);
         let scroll_area = if let Some(offset) = snapshot_scroll_offset {
             scroll_area.vertical_scroll_offset(offset)
@@ -579,7 +584,7 @@ impl EditorApp {
                         Some(first.union(last).translate(output.galley_pos.to_vec2()))
                     })
                     .collect::<Vec<_>>();
-                git_chunk_clicked = crate::git::editor::show_markers(
+                git_chunk_clicked = crate::git::editor::view::show_markers(
                     ui,
                     &self.git_editor.hunks,
                     &logical_rows,
@@ -916,7 +921,7 @@ impl EditorApp {
             self.open_app_popup(popup);
         }
 
-        if let Some(index) = git_chunk_clicked
+        if let Some(crate::git::editor::view::Action::OpenChunk(index)) = git_chunk_clicked
             && let Some(path) = &self.document.path()
         {
             self.git_editor.open_chunk(index, path);

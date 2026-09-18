@@ -9,9 +9,9 @@ use super::{
 };
 use crate::{
     builtin_themes,
+    capabilities::CapabilitySnapshot,
     explorer::{ExplorerOrder, ExplorerSection},
     font_catalog::FontCatalog,
-    preview::ServiceState,
     screenshot::{CaptureController, CaptureThemeProfile, UiSnapshotScene},
     settings::{
         AppSettings, ColorThemeChoice, DocumentTheme, InterfaceTheme, PreviewPreference,
@@ -48,10 +48,7 @@ pub(super) struct SettingsStatus {
     pub(super) fallback_reason: Option<String>,
     pub(super) requested_backend: PreviewPreference,
     pub(super) interactive_active: bool,
-    pub(super) tinymist: ServiceState,
-    pub(super) webview: ServiceState,
-    pub(super) compiler: ServiceState,
-    pub(super) rasterizer: ServiceState,
+    pub(super) capabilities: CapabilitySnapshot,
 }
 
 pub(super) struct SettingsPanel<'a> {
@@ -757,24 +754,24 @@ impl SettingsPanel<'_> {
                             "Packaged language server",
                             syntax_color,
                         );
-                        for name in ["LSP", "Vector", "Watcher", "PDF"] {
+                        for name in ["Editing", "LSP", "Interactive", "PDF", "Raster", "Links"] {
                             show_status_chip(ui, name, "Ready", "Ready", syntax_color);
                         }
                     } else {
                         show_tool_status_chip(ui, "Typst", self.typst_tool);
                         show_tool_status_chip(ui, "Tinymist", self.tinymist_tool);
-                        show_service_status_chip(ui, "LSP", &self.status.tinymist);
-                        show_service_status_chip(ui, "Vector", &self.status.webview);
-                        show_service_status_chip(ui, "Watcher", &self.status.compiler);
-                        show_service_status_chip(ui, "PDF", &self.status.rasterizer);
+                        let capabilities = &self.status.capabilities;
+                        show_service_status_chip(ui, "Editing", &capabilities.editing);
+                        show_service_status_chip(ui, "LSP", &capabilities.lsp);
+                        show_service_status_chip(
+                            ui,
+                            "Interactive",
+                            &capabilities.interactive_preview,
+                        );
+                        show_service_status_chip(ui, "PDF", &capabilities.pdf_generation);
+                        show_service_status_chip(ui, "Raster", &capabilities.rasterization);
+                        show_service_status_chip(ui, "Links", &capabilities.link_extraction);
                     }
-                    show_status_chip(
-                        ui,
-                        "Syntax",
-                        "Ready",
-                        "typst-syntax (official parser)",
-                        syntax_color,
-                    );
                 });
                 settings_target_anchor(
                     ui,
@@ -1061,6 +1058,7 @@ mod tests {
 
     #[test]
     fn settings_renderer_emits_actions_without_mutating_live_preferences_or_services() {
+        use crate::preview::ServiceState;
         use crate::toolchain::{ToolKind, ToolOrigin};
         let captures = CaptureController::disabled_for_tests();
         let fonts = FontCatalog::default();
@@ -1113,10 +1111,14 @@ mod tests {
                             fallback_reason: None,
                             requested_backend: PreviewPreference::Interactive,
                             interactive_active: false,
-                            tinymist: ServiceState::Failed("failure".into()),
-                            webview: ServiceState::Failed("failure".into()),
-                            compiler: ServiceState::Ready("ready".into()),
-                            rasterizer: ServiceState::Ready("ready".into()),
+                            capabilities: CapabilitySnapshot {
+                                editing: ServiceState::Ready("ready".into()),
+                                lsp: ServiceState::Failed("failure".into()),
+                                interactive_preview: ServiceState::Failed("failure".into()),
+                                pdf_generation: ServiceState::Ready("ready".into()),
+                                rasterization: ServiceState::Failed("pdftoppm unavailable".into()),
+                                link_extraction: ServiceState::Ready("ready".into()),
+                            },
                         },
                         project_root: Path::new("."),
                         captures: &captures,
@@ -1132,6 +1134,9 @@ mod tests {
                 ),
             );
         harness.run();
+        for capability in ["Editing", "LSP", "Interactive", "PDF", "Raster", "Links"] {
+            harness.get_by_label(capability);
+        }
         assert!(
             harness.state().2.is_empty(),
             "idle Settings must not emit updates"

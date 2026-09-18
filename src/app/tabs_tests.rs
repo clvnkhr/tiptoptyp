@@ -101,6 +101,66 @@ fn reordering_tabs_remaps_active_and_preview_without_changing_tab_identity() {
 }
 
 #[test]
+fn stable_ids_resolve_the_same_documents_across_reorder() {
+    let root = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&context, root.path());
+    let first = app.tabs.active_id().unwrap();
+    app.append_tab(&context);
+    app.document.replace_loaded_unprojected(
+        "second".into(),
+        root.path().join("second.typ"),
+        DocumentKind::Typst,
+        None,
+    );
+    let second = app.tabs.active_id().unwrap();
+
+    assert!(app.tabs.reorder(0, 1));
+    assert_eq!(app.tabs.ids().collect::<Vec<_>>(), vec![second, first]);
+    assert_eq!(app.tabs.active_id(), Some(second));
+    assert_eq!(app.tabs.preview_id(), Some(first));
+    assert_eq!(app.document_for_tab(first).unwrap().source(), "first");
+    assert_eq!(app.document_for_tab(second).unwrap().source(), "second");
+}
+
+#[test]
+fn new_tabs_preserve_the_designated_preview_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&context, root.path());
+    app.lifecycle = DocumentLifecycle::Active;
+    let first = app.tabs.active_id().unwrap();
+
+    app.new_tab(&context);
+    assert_eq!(app.tabs.preview_id(), Some(first));
+    app.document.replace_loaded_unprojected(
+        "second".into(),
+        root.path().join("second.typ"),
+        DocumentKind::Typst,
+        None,
+    );
+    let second = app.tabs.active_id().unwrap();
+    app.select_preview_tab(second, &context);
+    app.activate_tab(first, &context);
+
+    app.new_tab(&context);
+    assert_eq!(app.tabs.preview_id(), Some(second));
+    assert_ne!(
+        app.tabs.active_id(),
+        Some(second),
+        "new tab reused preview ID"
+    );
+    assert_eq!(
+        app.tabs.ids().collect::<Vec<_>>(),
+        vec![first, second, 2],
+        "tab order or identity changed"
+    );
+    assert_eq!(app.document_for_tab(second).unwrap().source(), "second");
+    assert_eq!(app.preview_document_source().unwrap(), "second");
+    assert_ne!(app.tabs.active_id(), app.tabs.preview_id());
+}
+
+#[test]
 fn vector_tab_controls_remain_named_and_do_not_select_a_different_tab() {
     use egui_kittest::{Harness, kittest::Queryable as _};
     let root = tempfile::tempdir().unwrap();
@@ -454,7 +514,7 @@ fn save_completion_follows_a_parked_tab_id_after_reorder_not_the_active_slot() {
     );
     app.document
         .edit(CCursorRange::default(), |source| source.push('!'));
-    let saved_tab = app.tabs.active_id();
+    let saved_tab = app.tabs.active_id().unwrap();
     let (entered, ready) = std::sync::mpsc::channel();
     let (release, wait) = std::sync::mpsc::channel();
     let locked_path = path.clone();
@@ -558,6 +618,7 @@ fn tabs_preserve_unsaved_sources_undo_cursor_and_first_preview() {
         .edit(cursor, |source| source.push_str(" edited"));
     app.store_editor_cursor(&context, cursor);
     let stale = app.document.key();
+    let first = app.tabs.active_id().unwrap();
     app.append_tab(&context);
     app.document.replace_loaded_unprojected(
         "second".into(),
@@ -567,17 +628,18 @@ fn tabs_preserve_unsaved_sources_undo_cursor_and_first_preview() {
     );
     assert_eq!(app.tabs.len(), 2);
     assert_eq!(app.preview_document_source().unwrap(), "first edited");
-    app.activate_tab(0, &context);
+    let second = app.tabs.active_id().unwrap();
+    app.activate_tab(first, &context);
     assert_eq!(app.document.source(), "first edited");
     assert!(app.is_dirty());
     assert_ne!(app.document.key(), stale);
     assert_eq!(app.editor_snapshot(&context).cursor.primary.index.0, 3);
     app.undo_editor(&context, false);
     assert_eq!(app.document.source(), "first");
-    app.activate_tab(1, &context);
+    app.activate_tab(second, &context);
     assert_eq!(app.document.source(), "second");
-    app.select_preview_tab(1, &context);
-    app.activate_tab(0, &context);
+    app.select_preview_tab(second, &context);
+    app.activate_tab(first, &context);
     assert_eq!(app.preview_document_source().unwrap(), "second");
     assert!(!app.current_is_preview_document());
 }
@@ -617,11 +679,12 @@ fn closing_preview_tab_reselects_first_survivor_and_preserves_dirty_sibling() {
     let root = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
     let mut app = fixture(&context, root.path());
+    let first = app.tabs.active_id().unwrap();
     app.append_tab(&context);
     app.document.replace_unprojected_untitled("second");
     app.document
         .edit(CCursorRange::default(), |source| source.push('!'));
-    app.activate_tab(0, &context);
+    app.activate_tab(first, &context);
     app.finish_close_tab(&context);
     assert_eq!(app.tabs.len(), 1);
     assert_eq!(app.tabs.preview, 0);

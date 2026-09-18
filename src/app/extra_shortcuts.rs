@@ -113,7 +113,11 @@ impl EditorApp {
             A::ToggleTexMode if self.tex_mode_available() => {
                 self.set_tex_mode(self.document.config().is_none(), context);
             }
-            A::UseTabForPreview => self.select_preview_tab(self.tabs.active, context),
+            A::UseTabForPreview => {
+                if let Some(id) = self.tabs.active_id() {
+                    self.select_preview_tab(id, context);
+                }
+            }
             A::ToggleFold | A::CollapseAll | A::ExpandAll => self.fold_shortcut(action, context),
             A::FindNext | A::FindPrevious | A::ReplaceOne | A::ReplaceAll
                 if self.document.kind().is_editable() =>

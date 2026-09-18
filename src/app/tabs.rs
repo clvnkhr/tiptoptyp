@@ -16,10 +16,10 @@ pub(super) struct ParkedTab {
 mod tests;
 
 pub(super) struct Tabs {
-    pub(super) parked: Vec<Option<ParkedTab>>,
-    pub(super) active: usize,
-    pub(super) preview: usize,
-    pub(super) preview_explicit: bool,
+    parked: Vec<Option<ParkedTab>>,
+    active: usize,
+    preview: usize,
+    preview_explicit: bool,
     ids: Vec<u64>,
     next_id: u64,
     pub(super) approved: Vec<(u64, DocumentKey)>,
@@ -126,8 +126,20 @@ impl Tabs {
         self.preview = 0;
         self.preview_explicit = true;
     }
-    pub(super) fn active_id(&self) -> u64 {
-        self.ids.get(self.active).copied().unwrap_or(self.next_id)
+    pub(super) fn active_id(&self) -> Option<u64> {
+        self.ids.get(self.active).copied()
+    }
+    pub(super) fn preview_id(&self) -> Option<u64> {
+        self.ids.get(self.preview).copied()
+    }
+    pub(super) fn active_index(&self) -> Option<usize> {
+        self.active_id().map(|_| self.active)
+    }
+    pub(super) fn ids(&self) -> impl ExactSizeIterator<Item = u64> + '_ {
+        self.ids.iter().copied()
+    }
+    pub(super) fn uses_designated_preview(&self) -> bool {
+        self.len() > 1 || self.preview_explicit
     }
     pub(super) fn id_at(&self, index: usize) -> Option<u64> {
         self.ids.get(index).copied()
@@ -207,16 +219,16 @@ impl EditorApp {
         &self,
         overrides: &mut BTreeMap<PathBuf, String>,
     ) -> Result<(), ()> {
-        for index in 0..self.tabs.len() {
-            let document = self.tab_document(index).unwrap();
+        for id in self.tabs.ids() {
+            let document = self.document_for_tab(id).unwrap();
             if !document.kind().is_typst() {
                 continue;
             }
             let path = document.path().clone().unwrap_or_else(|| {
-                if index == self.tabs.preview {
+                if Some(id) == self.tabs.preview_id() {
                     self.preview_document_path()
                 } else {
-                    self.untitled_tab_path(index)
+                    self.untitled_tab_path(id)
                 }
             });
             let source = if document.config().is_none() {
@@ -252,7 +264,8 @@ impl EditorApp {
             DocumentKind::Text,
             None,
         );
-        self.activate_tab(1, context);
+        let methods = self.tabs.id_at(1).unwrap();
+        self.activate_tab(methods, context);
     }
 
     pub(super) fn prepare_asset_tab_fixture(
@@ -268,13 +281,12 @@ impl EditorApp {
         self.request_asset(path);
     }
     pub(super) fn path_open_in_another_tab(&self, path: &Path) -> bool {
-        self.tabs
-            .parked
-            .iter()
-            .flatten()
-            .any(|tab| tab.document.path().as_deref() == Some(path))
+        self.tabs.ids().any(|id| {
+            self.document_for_tab(id)
+                .is_some_and(|document| document.path().as_deref() == Some(path))
+        })
     }
-    pub(super) fn tab_document(&self, index: usize) -> Option<&DocumentSession> {
+    fn document_at_index(&self, index: usize) -> Option<&DocumentSession> {
         if index >= self.tabs.len() {
             return None;
         }
@@ -289,10 +301,10 @@ impl EditorApp {
         }
     }
     pub(super) fn tab_preview_document(&self) -> Option<&DocumentSession> {
-        self.tab_document(self.tabs.preview)
+        self.document_for_tab(self.tabs.preview_id()?)
     }
     pub(super) fn document_for_tab(&self, id: u64) -> Option<&DocumentSession> {
-        self.tab_document(self.tabs.index_of(id)?)
+        self.document_at_index(self.tabs.index_of(id)?)
     }
     pub(super) fn document_for_tab_mut(&mut self, id: u64) -> Option<&mut DocumentSession> {
         let index = self.tabs.index_of(id)?;
@@ -316,25 +328,35 @@ impl EditorApp {
         self.tabs.refresh_autosave();
     }
     pub(super) fn tab_preview_root(&self) -> &Path {
+        let Some(id) = self.tabs.preview_id() else {
+            return &self.workspace_root;
+        };
         if self
-            .tab_preview_document()
+            .document_for_tab(id)
             .is_none_or(|document| !document.kind().is_typst())
         {
             return &self.workspace_root;
         }
-        self.tabs.parked[self.tabs.preview]
-            .as_ref()
-            .map_or(self.workspace_root.as_path(), |tab| tab.workspace.as_path())
+        self.tab_workspace(id).unwrap_or(&self.workspace_root)
     }
-    pub(super) fn untitled_tab_path(&self, index: usize) -> PathBuf {
-        if let Some(backing) = self.tabs.unsaved.get(&self.tabs.ids[index]) {
+    fn tab_workspace(&self, id: u64) -> Option<&Path> {
+        let index = self.tabs.index_of(id)?;
+        if Some(id) == self.tabs.active_id() {
+            Some(&self.workspace_root)
+        } else {
+            self.tabs.parked[index]
+                .as_ref()
+                .map(|tab| tab.workspace.as_path())
+        }
+    }
+    pub(super) fn untitled_tab_path(&self, id: u64) -> PathBuf {
+        if let Some(backing) = self.tabs.unsaved.get(&id) {
             return backing.path().into();
         }
-        self.tabs.parked[index]
-            .as_ref()
-            .map_or(&self.workspace_root, |tab| &tab.workspace)
+        self.tab_workspace(id)
+            .unwrap_or(&self.workspace_root)
             .join(".tiptoptyp/documents")
-            .join(format!("untitled-{}.typ", self.tabs.ids[index]))
+            .join(format!("untitled-{id}.typ"))
     }
 
     pub(super) fn prepare_tab_backings(&mut self) -> Result<(), String> {
@@ -342,18 +364,16 @@ impl EditorApp {
             return Ok(());
         }
         for index in 0..self.tabs.len() {
-            let document = self.tab_document(index).unwrap();
+            let id = self.tabs.id_at(index).unwrap();
+            let document = self.document_for_tab(id).unwrap();
             if !document.kind().is_typst() || document.path().is_some() {
                 continue;
             }
-            let id = self.tabs.ids[index];
             if self.tabs.unsaved.contains_key(&id) {
                 continue;
             }
             let source = document.canonical_snapshot().map_err(|e| e.to_string())?;
-            let root = self.tabs.parked[index]
-                .as_ref()
-                .map_or(&self.workspace_root, |tab| &tab.workspace);
+            let root = self.tab_workspace(id).unwrap_or(&self.workspace_root);
             let backing = UnsavedTextDocument::create(
                 root,
                 root,
@@ -371,17 +391,18 @@ impl EditorApp {
             return;
         };
         for index in 0..self.tabs.len() {
-            if index == self.tabs.active {
+            let id = self.tabs.id_at(index).unwrap();
+            if Some(id) == self.tabs.active_id() {
                 continue;
             }
-            let document = self.tab_document(index).unwrap();
+            let document = self.document_for_tab(id).unwrap();
             if !document.kind().is_typst() {
                 continue;
             }
             let path = document
                 .path()
                 .clone()
-                .unwrap_or_else(|| self.untitled_tab_path(index));
+                .unwrap_or_else(|| self.untitled_tab_path(id));
             let Ok(source) = document.canonical_snapshot() else {
                 continue;
             };
@@ -403,7 +424,11 @@ impl EditorApp {
     }
 
     pub(super) fn update_active_tab_backing(&self, source: &str) -> Result<(), String> {
-        if let Some(backing) = self.tabs.unsaved.get(&self.tabs.active_id()) {
+        if let Some(backing) = self
+            .tabs
+            .active_id()
+            .and_then(|id| self.tabs.unsaved.get(&id))
+        {
             backing
                 .update_backing_source(source)
                 .map_err(|e| e.to_string())?;
@@ -463,7 +488,11 @@ impl EditorApp {
 
     fn park_with(&mut self, mut incoming: ParkedTab, context: &egui::Context) -> ParkedTab {
         if let Some(backing) = self.tinymist_unsaved_document.take() {
-            self.tabs.unsaved.insert(self.tabs.active_id(), backing);
+            let id = self
+                .tabs
+                .active_id()
+                .expect("parking requires an active tab");
+            self.tabs.unsaved.insert(id, backing);
         }
         let old_key = incoming.document.key();
         incoming.document.reactivate_after(self.document.key());
@@ -534,11 +563,12 @@ impl EditorApp {
             self.empty_workspace(context);
             return false;
         }
-        if let Some(index) = (0..self.tabs.len()).find(|&i| {
-            self.tab_document(i)
-                .is_some_and(|d| d.path().as_ref() == Some(&path))
-        }) {
-            self.activate_tab(index, context);
+        let existing = self.tabs.ids().find(|&id| {
+            self.document_for_tab(id)
+                .is_some_and(|document| document.path().as_ref() == Some(&path))
+        });
+        if let Some(id) = existing {
+            self.activate_tab(id, context);
             return true;
         }
         let replace_welcome =
@@ -546,19 +576,22 @@ impl EditorApp {
         if replace_welcome || !self.lifecycle.allows_document_work() {
             return self.load_path(path);
         }
-        let old = self.tabs.active;
+        let old = self.tabs.active_id().expect("non-empty tab set");
         self.append_tab(context);
         if self.load_path(path) {
             return true;
         }
-        let failed = self.tabs.active;
+        let failed = self.tabs.active_id().expect("new tab is active");
         self.activate_tab(old, context);
         self.remove_parked_tab(failed);
         false
     }
 
-    pub(super) fn activate_tab(&mut self, index: usize, context: &egui::Context) {
-        if index == self.tabs.active || index >= self.tabs.len() {
+    pub(super) fn activate_tab(&mut self, id: u64, context: &egui::Context) {
+        let Some(index) = self.tabs.index_of(id) else {
+            return;
+        };
+        if Some(id) == self.tabs.active_id() {
             return;
         }
         let incoming = self.tabs.parked[index]
@@ -607,13 +640,14 @@ impl EditorApp {
         context.request_repaint();
     }
 
-    fn remove_parked_tab(&mut self, index: usize) {
+    fn remove_parked_tab(&mut self, id: u64) {
+        let index = self.tabs.index_of(id).expect("removed tab must exist");
         assert_ne!(index, self.tabs.active);
-        if let Some(document) = self.tab_document(index) {
+        if let Some(document) = self.document_for_tab(id) {
             let path = document
                 .path()
                 .clone()
-                .unwrap_or_else(|| self.untitled_tab_path(index));
+                .unwrap_or_else(|| self.untitled_tab_path(id));
             if let Ok(uri) = crate::tinymist::path_to_file_uri(&path) {
                 self.tabs.open_uris.remove(&uri);
                 if let Some(generation) = self.tinymist_generation {
@@ -621,7 +655,8 @@ impl EditorApp {
                 }
             }
         }
-        let id = self.tabs.ids.remove(index);
+        let removed = self.tabs.ids.remove(index);
+        debug_assert_eq!(removed, id);
         self.tabs.unsaved.remove(&id);
         self.tabs.parked.remove(index);
         self.tabs.approved.retain(|(approved, _)| *approved != id);
@@ -636,11 +671,14 @@ impl EditorApp {
         self.tabs.refresh_autosave();
     }
 
-    pub(super) fn request_close_tab(&mut self, index: usize, context: &egui::Context) {
-        if self.document_flow_busy() || self.process_close_pending || index >= self.tabs.len() {
+    pub(super) fn request_close_tab(&mut self, id: u64, context: &egui::Context) {
+        if self.document_flow_busy()
+            || self.process_close_pending
+            || self.tabs.index_of(id).is_none()
+        {
             return;
         }
-        self.activate_tab(index, context);
+        self.activate_tab(id, context);
         self.request_document_replacement(DeferredDocumentAction::CloseTab, "closing this tab");
     }
 
@@ -649,9 +687,15 @@ impl EditorApp {
             self.empty_workspace(context);
             return;
         }
-        let closing = self.tabs.active;
-        let changed_preview = self.tabs.preview == closing;
-        let next = if closing > 0 { closing - 1 } else { 1 };
+        let closing = self.tabs.active_id().expect("non-empty tab set");
+        let closing_index = self.tabs.active_index().unwrap();
+        let changed_preview = self.tabs.preview_id() == Some(closing);
+        let next_index = if closing_index > 0 {
+            closing_index - 1
+        } else {
+            1
+        };
+        let next = self.tabs.id_at(next_index).unwrap();
         self.activate_tab(next, context);
         self.remove_parked_tab(closing);
         if changed_preview {
@@ -674,9 +718,11 @@ impl EditorApp {
     }
 
     pub(super) fn approve_tab_window_close(&mut self) {
-        self.tabs
-            .approved
-            .push((self.tabs.active_id(), self.document.key()));
+        let id = self
+            .tabs
+            .active_id()
+            .expect("approval requires an active tab");
+        self.tabs.approved.push((id, self.document.key()));
         self.tabs.advance_close = true;
     }
 
@@ -684,12 +730,13 @@ impl EditorApp {
         if !std::mem::take(&mut self.tabs.advance_close) {
             return;
         }
-        if let Some(index) = (0..self.tabs.len()).find(|&i| {
-            self.tab_document(i).is_some_and(|d| {
-                d.is_dirty() && !self.tabs.approved.contains(&(self.tabs.ids[i], d.key()))
+        let unapproved = self.tabs.ids().find(|&id| {
+            self.document_for_tab(id).is_some_and(|document| {
+                document.is_dirty() && !self.tabs.approved.contains(&(id, document.key()))
             })
-        }) {
-            self.activate_tab(index, context);
+        });
+        if let Some(id) = unapproved {
+            self.activate_tab(id, context);
             self.document_workflow.queue_replacement(
                 self.document.key(),
                 self.is_dirty(),
@@ -705,17 +752,17 @@ impl EditorApp {
         }
     }
 
-    pub(super) fn select_preview_tab(&mut self, index: usize, context: &egui::Context) {
-        if self.tabs.preview == index && self.tabs.preview_explicit {
+    pub(super) fn select_preview_tab(&mut self, id: u64, context: &egui::Context) {
+        if self.tabs.preview_id() == Some(id) && self.tabs.preview_explicit {
             return;
         }
         if self
-            .tab_document(index)
+            .document_for_tab(id)
             .is_none_or(|d| !d.kind().is_typst())
         {
             return;
         }
-        self.tabs.preview = index;
+        self.tabs.preview = self.tabs.index_of(id).unwrap();
         self.tabs.preview_explicit = true;
         self.restart_tinymist_preserving_preview();
         self.schedule_compile_now();
@@ -759,10 +806,11 @@ impl EditorApp {
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 for index in 0..self.tabs.len() {
-                                    let document = self.tab_document(index).unwrap();
+                                    let id = self.tabs.id_at(index).unwrap();
+                                    let document = self.document_for_tab(id).unwrap();
                                     let name = document.name();
-                                    let active = index == self.tabs.active;
-                                    ui.push_id(self.tabs.ids[index], |ui| {
+                                    let active = Some(id) == self.tabs.active_id();
+                                    ui.push_id(id, |ui| {
                                         let compatible = document.kind().is_typst();
                                         let title_width = tab_title_width(
                                             &name,
@@ -774,10 +822,10 @@ impl EditorApp {
                                             ui,
                                             document,
                                             active,
-                                            index == self.tabs.preview,
+                                            Some(id) == self.tabs.preview_id(),
                                             title_width,
                                         );
-                                        tab_rects.push((self.tabs.ids[index], tab.rect));
+                                        tab_rects.push((id, tab.rect));
                                         if active && reveal {
                                             ui.scroll_to_rect(tab.rect, Some(Align::Center));
                                         }
@@ -786,7 +834,7 @@ impl EditorApp {
                                             use std::fmt::Write as _;
                                             let _ = write!(trace_widgets,
                                                 " tab={} widget={:?} rect={:?} clip={:?} contains={} hovered={} owns={} dragged={} stopped={} clicked={};",
-                                                self.tabs.ids[index], response.id, response.rect, ui.clip_rect(),
+                                                id, response.id, response.rect, ui.clip_rect(),
                                                 response.contains_pointer(), response.hovered(), response.is_pointer_button_down_on(),
                                                 response.dragged(), response.drag_stopped(), response.clicked());
                                         }
@@ -795,7 +843,7 @@ impl EditorApp {
                                         if response.is_pointer_button_down_on()
                                             && ui.input(|input| input.pointer.primary_down())
                                         {
-                                            pressed_tab = Some(self.tabs.ids[index]);
+                                            pressed_tab = Some(id);
                                         }
                                         if response.hovered() {
                                             native_hover_text(
@@ -807,21 +855,21 @@ impl EditorApp {
                                             );
                                         }
                                         if response.clicked() {
-                                            select = Some(index);
+                                            select = Some(id);
                                         }
                                         if response.double_clicked() {
-                                            rename = Some(index);
+                                            rename = Some(id);
                                         }
                                         if response.clicked_by(egui::PointerButton::Middle) {
-                                            close = Some(index);
+                                            close = Some(id);
                                         }
                                         if let Some(tab_preview) = tab.preview
                                             && tab_preview.clicked()
                                         {
-                                            preview = Some(index);
+                                            preview = Some(id);
                                         }
                                         if tab.close.clicked() {
-                                            close = Some(index);
+                                            close = Some(id);
                                         }
                                         ui.separator();
                                     });
@@ -893,19 +941,19 @@ impl EditorApp {
         if self.document_flow_busy() || self.process_close_pending {
             return;
         }
-        if let Some(index) = close {
-            self.request_close_tab(index, ui.ctx());
-        } else if let Some(index) = preview {
-            self.select_preview_tab(index, ui.ctx());
-        } else if let Some(index) = rename {
-            self.activate_tab(index, ui.ctx());
+        if let Some(id) = close {
+            self.request_close_tab(id, ui.ctx());
+        } else if let Some(id) = preview {
+            self.select_preview_tab(id, ui.ctx());
+        } else if let Some(id) = rename {
+            self.activate_tab(id, ui.ctx());
             if let Some(path) = self.document.path().clone() {
                 self.begin_rename(path);
             } else {
                 self.save_as(frame);
             }
-        } else if let Some(index) = select {
-            self.activate_tab(index, ui.ctx());
+        } else if let Some(id) = select {
+            self.activate_tab(id, ui.ctx());
         }
     }
 

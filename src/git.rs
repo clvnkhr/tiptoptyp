@@ -1,10 +1,7 @@
 //! Basic Git operations. Commands run off the UI thread, with literal paths
 //! and no terminal prompts; every result carries its originating workspace.
 pub(crate) mod editor;
-use crate::{
-    theme,
-    worker::{ExclusiveJob, LatestJobPoll},
-};
+use crate::worker::{ExclusiveJob, LatestJobPoll};
 use eframe::egui;
 #[cfg(test)]
 use repository::{
@@ -21,6 +18,7 @@ use std::{
     sync::Arc,
 };
 pub(crate) mod repository;
+pub(crate) mod view;
 
 impl DiffKind {
     fn description(self) -> &'static str {
@@ -55,91 +53,12 @@ struct DiffView {
 
 #[derive(Debug)]
 struct DiffContent {
-    text: String,
-    layout: Option<DiffLayout>,
+    text: Arc<str>,
 }
 
 impl From<String> for DiffContent {
     fn from(text: String) -> Self {
-        Self { text, layout: None }
-    }
-}
-
-#[derive(Debug)]
-struct DiffLayout {
-    style: DiffStyle,
-    font_cache: Arc<egui::Galley>,
-    galley: Arc<egui::Galley>,
-}
-
-#[derive(Debug, PartialEq)]
-struct DiffStyle {
-    font: egui::FontId,
-    colors: [egui::Color32; 4],
-}
-
-impl DiffStyle {
-    fn from_ui(ui: &egui::Ui) -> Self {
-        let palette = theme::palette(ui.ctx());
-        Self {
-            font: egui::TextStyle::Monospace.resolve(ui.style()),
-            colors: [
-                palette.success,
-                palette.error,
-                palette.info,
-                ui.visuals().text_color(),
-            ],
-        }
-    }
-
-    fn layout_job(&self, content: &str) -> egui::text::LayoutJob {
-        let mut layout = egui::text::LayoutJob::default();
-        for line in content.split_inclusive('\n') {
-            let color = self.colors[if line.starts_with('+') {
-                0
-            } else if line.starts_with('-') {
-                1
-            } else if line.starts_with("@@") {
-                2
-            } else {
-                3
-            }];
-            layout.append(
-                line,
-                0.0,
-                egui::TextFormat {
-                    font_id: self.font.clone(),
-                    color,
-                    ..Default::default()
-                },
-            );
-        }
-        layout
-    }
-}
-
-impl DiffContent {
-    fn galley(&mut self, ui: &egui::Ui) -> Arc<egui::Galley> {
-        let style = DiffStyle::from_ui(ui);
-        // As with viewport_fonts, an empty layout witnesses egui's font-cache
-        // lifetime. Fonts, density, and atlas resets must invalidate retained
-        // galleys even if the logical FontId stayed the same.
-        let font_cache = ui.fonts_mut(|fonts| {
-            fonts.layout_no_wrap(String::new(), egui::FontId::default(), egui::Color32::WHITE)
-        });
-        if let Some(layout) = &self.layout
-            && layout.style == style
-            && Arc::ptr_eq(&layout.font_cache, &font_cache)
-        {
-            return Arc::clone(&layout.galley);
-        }
-        let galley = ui.painter().layout_job(style.layout_job(&self.text));
-        self.layout = Some(DiffLayout {
-            style,
-            font_cache,
-            galley: Arc::clone(&galley),
-        });
-        galley
+        Self { text: text.into() }
     }
 }
 
@@ -163,6 +82,7 @@ pub(crate) struct GitPanel {
     pending_operation: Option<Operation>,
     background_refresh: bool,
     status_changed: bool,
+    view_cache: view::Cache,
     #[cfg(test)]
     rendered_change_rows: usize,
 }
@@ -185,6 +105,7 @@ impl Default for GitPanel {
             pending_operation: None,
             background_refresh: false,
             status_changed: false,
+            view_cache: view::Cache::default(),
             #[cfg(test)]
             rendered_change_rows: 0,
         }
@@ -368,177 +289,47 @@ impl GitPanel {
         }
     }
 
-    pub(crate) fn show(&mut self, ui: &mut egui::Ui, dirty: bool) {
-        #[cfg(test)]
-        {
-            self.rendered_change_rows = 0;
-        }
+    pub(crate) fn show(&mut self, ui: &mut egui::Ui, dirty: bool) -> view::Output {
         // The app update loop polls independently of whether this body is open.
-        // Rendering supplied state must not start a repository scan.
-        let mut action = None;
+        // The view receives immutable model state and cannot start repository IO.
         // Maintenance scans stay out of the visible loading state. They must
         // not dim controls or replace the stable status row on every timer
         // tick; explicit operations still use the normal busy state.
         let busy =
             (self.job.is_running() && !self.background_refresh) || self.pending_operation.is_some();
-        let palette = theme::palette(ui.ctx());
-        egui::ScrollArea::vertical().id_salt("git-page").auto_shrink([false, false]).show(ui, |ui| {
-            ui.add_enabled_ui(!busy, |ui| {
-                right_action_row(ui, |ui| {
-                    if self.snapshot.initialized {
-                        for (label, hint, operation) in [
-                            ("Push", "Send local commits to the configured remote.", Operation::Push),
-                            ("Pull", "Fetch and fast-forward the current branch. Divergent branches are left unchanged.", Operation::Pull),
-                            ("Fetch", "Download remote updates without changing working files.", Operation::Fetch),
-                        ] {
-                            if ui.add_enabled(!dirty, egui::Button::new(label)).on_hover_text(hint).clicked() {
-                                action = Some(operation);
-                            }
-                        }
-                    } else if ui.button("Initialize repository").clicked() {
-                        action = Some(Operation::Init);
-                    }
-                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        ui.add(egui::Label::new(egui::RichText::new(&self.snapshot.branch).strong()).truncate());
-                    });
-                });
-            });
-            if dirty {
-                ui.colored_label(palette.warning, "Save editor changes before staging or committing. Git uses files on disk.");
-            }
-            ui.add_space(theme::SPACE.content);
-            ui.separator();
-            if self.snapshot.initialized {
-                let staged = self.snapshot.entries.staged;
-                ui.add_enabled_ui(!busy, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.strong("Changes");
-                        ui.weak(format!("{} files · {staged} staged", self.snapshot.entries.len()));
-                    });
-                    right_action_row(ui, |ui| {
-                        if ui.add_enabled(staged > 0, egui::Button::new("Unstage all"))
-                            .on_hover_text("Remove all changes from the staging area. Keep all working files and edits.").clicked() {
-                            action = Some(Operation::UnstageAll);
-                        }
-                        if ui.add_enabled(!dirty && self.snapshot.entries.stageable, egui::Button::new("Stage all"))
-                            .on_hover_text("Stage all working changes, excluding .tiptoptyp temporary files.").clicked() {
-                            action = Some(Operation::StageAll);
-                        }
-                    });
-                    ui.add_space(theme::SPACE.small);
-                    egui::ScrollArea::vertical().id_salt("git-changes").max_height(192.0).auto_shrink([false, true]).show_rows(ui, change_row_height(ui), self.snapshot.entries.len(), |ui, rows| {
-                        let buttons = ChangeButtons::for_ui(ui);
-                        for row in rows {
-                            let entry = &self.snapshot.entries[row];
-                            #[cfg(test)]
-                            { self.rendered_change_rows += 1; }
-                            let selected = self.diff.as_ref().is_some_and(|diff| diff.selection.path == entry.path);
-                            let fill = if selected { palette.active_row } else if row % 2 == 0 { ui.visuals().faint_bg_color } else { egui::Color32::TRANSPARENT };
-                            egui::Frame::new().fill(fill).inner_margin(egui::Margin::symmetric(0, 4)).show(ui, |ui| {
-                                ui.push_id(&entry.path, |ui| {
-                                    right_action_row(ui, |ui| {
-                                        if let Some(operation) = buttons.show(ui, entry, dirty) {
-                                            action = Some(operation);
-                                        }
-                                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                            ui.add_space(theme::SPACE.small);
-                                            ui.add(egui::Label::new(egui::RichText::new(format!("{}{}", entry.index, entry.worktree)).monospace().color(if entry.staged() { palette.success } else { palette.warning })))
-                                                .on_hover_text("Git status: staging area / working file. A added, M modified, D deleted, ? untracked.");
-                                            ui.add(egui::Label::new(entry.path.to_string_lossy()).truncate()).on_hover_text(entry.path.display().to_string());
-                                        });
-                                    });
-                                });
-                            });
-                        }
-                        if self.snapshot.entries.is_empty() {
-                            ui.add_space(theme::SPACE.content);
-                            ui.colored_label(palette.success, "Working tree clean");
-                            ui.add_space(theme::SPACE.content);
-                        }
-                    });
-                });
-                if self.snapshot.entries.staged_private {
-                    ui.colored_label(palette.warning, "Temporary .tiptoptyp files are already staged. Unstage all keeps these files out of the next commit.");
-                }
-                ui.add_space(theme::SPACE.content);
-                self.show_diff(ui);
-                ui.add_space(theme::SPACE.content);
-                ui.separator();
-                ui.add_enabled(!busy, egui::TextEdit::multiline(&mut self.commit_message).hint_text("Describe your changes…").desired_width(f32::INFINITY).desired_rows(2));
-                right_action_row(ui, |ui| {
-                    if ui.add_enabled(!busy && !dirty && staged > 0 && !self.commit_message.trim().is_empty(), egui::Button::new("Commit staged changes")).clicked() {
-                        action = Some(Operation::Commit(self.commit_message.clone()));
-                    }
-                });
-                egui::CollapsingHeader::new("Recent commits").show(ui, |ui| { ui.monospace(&self.snapshot.history); });
-            }
-            ui.separator();
-            ui.horizontal(|ui| {
-                if busy { ui.spinner(); }
-                ui.add(egui::Label::new(egui::RichText::new(&self.message).color(if self.failed { palette.error } else { palette.neutral })).selectable(true));
-            });
-        });
-        if let Some(action) = action {
-            self.start(ui.ctx(), action);
-            ui.ctx().request_repaint();
+        let output = view::show_panel(
+            ui,
+            view::Input {
+                snapshot: &self.snapshot,
+                message: &self.message,
+                commit_message: &self.commit_message,
+                failed: self.failed,
+                diff: self.diff.as_ref(),
+                busy,
+                dirty,
+            },
+            &mut self.view_cache,
+        );
+        #[cfg(test)]
+        {
+            self.rendered_change_rows = output.rendered_change_rows;
         }
+        output
     }
 
-    fn show_diff(&mut self, ui: &mut egui::Ui) {
-        let Some(diff) = &mut self.diff else {
-            return;
-        };
-        let palette = theme::palette(ui.ctx());
-        let response = egui::Frame::group(ui.style())
-            .inner_margin(theme::SPACE.content)
-            .show(ui, |ui| {
-                right_action_row(ui, |ui| {
-                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        ui.strong(diff.selection.kind.title());
-                    });
-                });
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(diff.selection.path.to_string_lossy()).monospace(),
-                    )
-                    .truncate(),
-                )
-                .on_hover_text(diff.selection.path.display().to_string());
-                ui.weak(diff.selection.kind.description());
-                ui.separator();
-                match &mut diff.content {
-                    None => {
-                        ui.horizontal(|ui| {
-                            ui.spinner();
-                            ui.label("Loading diff…");
-                        });
-                    }
-                    Some(Err(error)) => {
-                        ui.colored_label(palette.error, error.as_str());
-                    }
-                    Some(Ok(content)) if content.text.is_empty() => {
-                        ui.label(diff.selection.kind.empty_message());
-                    }
-                    Some(Ok(content)) => {
-                        egui::ScrollArea::both()
-                            .id_salt((
-                                "git-diff",
-                                &diff.selection.path,
-                                diff.selection.kind == DiffKind::Staged,
-                            ))
-                            .max_height(230.0)
-                            .auto_shrink([false, true])
-                            .show(ui, |ui| {
-                                let galley = content.galley(ui);
-                                ui.add(egui::Label::new(galley).selectable(true).extend());
-                            });
-                    }
-                }
-            })
-            .response;
-        if diff.reveal {
-            response.scroll_to_me(Some(egui::Align::Center));
+    pub(crate) fn apply_view_output(&mut self, context: &egui::Context, output: view::Output) {
+        if let Some(message) = output.commit_message {
+            self.commit_message = message;
+        }
+        if let Some(selection) = output.revealed
+            && let Some(diff) = &mut self.diff
+            && diff.selection == selection
+        {
             diff.reveal = false;
+        }
+        if let Some(operation) = output.operation {
+            self.start(context, operation);
+            context.request_repaint();
         }
     }
 
@@ -602,119 +393,19 @@ impl GitPanel {
     }
 }
 
-/// Reserve action columns from the right before allowing left-hand text to
-/// consume the remaining width. Long paths can never displace the buttons.
-fn right_action_row(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
-    ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), contents);
-    });
-}
-
-fn change_row_height(ui: &egui::Ui) -> f32 {
-    // The action buttons have a 24-point minimum, and each row's frame adds
-    // four points above and below. Honor larger fonts and button padding too.
-    (ui.text_style_height(&egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.y)
-        .max(ui.text_style_height(&egui::TextStyle::Body))
-        .max(ui.text_style_height(&egui::TextStyle::Monospace))
-        .max(ui.spacing().interact_size.y)
-        .max(24.0)
-        + 8.0
-}
-
-struct ChangeButtons {
-    widths: [f32; 2],
-    abbreviated: bool,
-}
-
-impl ChangeButtons {
-    fn for_ui(ui: &egui::Ui) -> Self {
-        let font = egui::TextStyle::Button.resolve(ui.style());
-        let width = |label: &str| {
-            ui.painter()
-                .layout_no_wrap(label.into(), font.clone(), ui.visuals().text_color())
-                .size()
-                .x
-                + ui.spacing().button_padding.x * 2.0
-        };
-        let full = [
-            width("Unstage").max(width("Stage")),
-            width("Staged diff").max(width("Diff")),
-        ];
-        // Keep room for the status and a useful part of the filename. Every
-        // visible row makes the same decision, independent of staging state.
-        let abbreviated = ui.available_width()
-            < full.iter().sum::<f32>() + 128.0 + 2.0 * ui.spacing().item_spacing.x;
-        let compact = width("S").max(width("U")).max(width("D")).max(24.0);
-        Self {
-            widths: if abbreviated { [compact; 2] } else { full },
-            abbreviated,
-        }
-    }
-
-    fn show(&self, ui: &mut egui::Ui, entry: &Entry, dirty: bool) -> Option<Operation> {
-        let staged = entry.staged();
-        let actions = if staged {
-            [
-                (
-                    "Unstage",
-                    true,
-                    "Keep the working file and remove its staged changes.",
-                    Operation::Unstage as fn(PathBuf) -> Operation,
-                ),
-                (
-                    "Staged diff",
-                    true,
-                    "Show changes staged for the next commit.",
-                    |path| Operation::Diff(path, DiffKind::Staged),
-                ),
-            ]
-        } else {
-            [
-                (
-                    "Stage",
-                    !dirty && entry.stageable(),
-                    "Stage this file's working changes for the next commit.",
-                    Operation::Stage as fn(PathBuf) -> Operation,
-                ),
-                (
-                    "Diff",
-                    entry.unstaged(),
-                    "Show this file's unstaged working changes.",
-                    |path| Operation::Diff(path, DiffKind::WorkingTree),
-                ),
-            ]
-        };
-        let mut selected = None;
-        for ((label, enabled, hint, operation), width) in actions.into_iter().zip(self.widths) {
-            let text = if self.abbreviated { &label[..1] } else { label };
-            let response = ui.add_enabled(
-                enabled,
-                egui::Button::new(text).min_size(egui::vec2(width, 24.0)),
-            );
-            // Retain full accessible names even when only initials are painted.
-            response.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label)
-            });
-            if response.on_hover_text(format!("{label}: {hint}")).clicked() {
-                selected = Some(operation(entry.path.clone()));
-            }
-        }
-        selected
-    }
-}
-
-fn show_colored_diff(ui: &mut egui::Ui, content: &str) {
-    let layout = DiffStyle::from_ui(ui).layout_job(content);
-    ui.add(egui::Label::new(layout).selectable(true).extend());
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme;
     use std::{
         thread,
         time::{Duration, Instant},
     };
+
+    fn show_panel(ui: &mut egui::Ui, panel: &mut GitPanel) {
+        let output = panel.show(ui, false);
+        panel.apply_view_output(ui.ctx(), output);
+    }
 
     #[test]
     fn typing_with_an_open_git_panel_only_builds_visible_change_rows() {
@@ -736,7 +427,7 @@ mod tests {
                     egui::Panel::left("git-test-panel")
                         .exact_size(560.0)
                         .show(ui, |ui| {
-                            panel.show(ui, false);
+                            show_panel(ui, panel);
                         });
                     egui::CentralPanel::default().show(ui, |ui| {
                         let label = ui.label("Source editor");
@@ -842,24 +533,25 @@ mod tests {
     #[test]
     fn diff_layout_is_reused_until_text_style_or_font_cache_changes() {
         let context = egui::Context::default();
+        let mut cache = view::Cache::default();
         let mut diff: DiffContent = "+new\n-old\n@@ hunk @@\n context\n".repeat(1000).into();
-        let draw = |diff: &mut DiffContent| {
+        let draw = |diff: &DiffContent, cache: &mut view::Cache| {
             let mut galley = None;
             context
                 .run_ui(Default::default(), |ui| {
-                    galley = Some(diff.galley(ui));
+                    galley = Some(cache.diff_galley(ui, &diff.text));
                 })
                 .drop_without_applying_deltas();
             galley.unwrap()
         };
-        let first = draw(&mut diff);
+        let first = draw(&diff, &mut cache);
         for _ in 0..3 {
-            assert!(Arc::ptr_eq(&first, &draw(&mut diff)));
+            assert!(Arc::ptr_eq(&first, &draw(&diff, &mut cache)));
         }
         context.set_visuals(egui::Visuals::light());
-        let light = draw(&mut diff);
+        let light = draw(&diff, &mut cache);
         assert!(!Arc::ptr_eq(&first, &light));
-        assert!(Arc::ptr_eq(&light, &draw(&mut diff)));
+        assert!(Arc::ptr_eq(&light, &draw(&diff, &mut cache)));
         theme::configure_editor_fonts(
             &context,
             theme::FontRequest::default(),
@@ -868,14 +560,14 @@ mod tests {
             theme::FONT_WEIGHT_NORMAL,
             theme::FONT_WEIGHT_NORMAL,
         );
-        let new_fonts = draw(&mut diff);
+        let new_fonts = draw(&diff, &mut cache);
         assert!(!Arc::ptr_eq(&light, &new_fonts));
-        assert!(Arc::ptr_eq(&new_fonts, &draw(&mut diff)));
+        assert!(Arc::ptr_eq(&new_fonts, &draw(&diff, &mut cache)));
         context.set_pixels_per_point(2.0);
-        let scaled = draw(&mut diff);
+        let scaled = draw(&diff, &mut cache);
         assert!(!Arc::ptr_eq(&new_fonts, &scaled));
         diff = "+replacement\n".to_owned().into();
-        assert_eq!(draw(&mut diff).text(), "+replacement\n");
+        assert_eq!(draw(&diff, &mut cache).text(), "+replacement\n");
     }
 
     #[test]
@@ -974,7 +666,7 @@ mod tests {
             .build_ui_state(
                 |ui, panel| {
                     panel.poll(ui.ctx(), root);
-                    panel.show(ui, false);
+                    show_panel(ui, panel);
                 },
                 panel,
             );
@@ -1025,7 +717,7 @@ mod tests {
             .build_ui_state(
                 |ui, panel| {
                     panel.poll(ui.ctx(), root);
-                    panel.show(ui, false);
+                    show_panel(ui, panel);
                 },
                 panel,
             );
@@ -1393,10 +1085,7 @@ mod tests {
         for width in [240.0, 560.0, 860.0] {
             let mut harness = Harness::builder()
                 .with_size(egui::vec2(width, 900.0))
-                .build_ui_state(
-                    |ui, panel| panel.show(ui, false),
-                    GitPanel::snapshot_fixture(),
-                );
+                .build_ui_state(show_panel, GitPanel::snapshot_fixture());
             harness.run();
             assert!(harness.query_by_label("Git").is_none());
             assert!(harness.query_by_label("Refresh").is_none());
@@ -1491,7 +1180,7 @@ mod tests {
             .build_ui_state(
                 |ui, panel| {
                     panel.poll(ui.ctx(), root);
-                    panel.show(ui, false);
+                    show_panel(ui, panel);
                 },
                 panel,
             );
@@ -1553,7 +1242,7 @@ mod tests {
         panel.diff.as_mut().unwrap().content = None;
         let mut harness = Harness::builder()
             .with_size(egui::vec2(860.0, 900.0))
-            .build_ui_state(|ui, panel| panel.show(ui, false), panel);
+            .build_ui_state(show_panel, panel);
         harness.run_steps(2);
         harness.get_by_label("Loading diff…");
         for kind in [DiffKind::WorkingTree, DiffKind::Staged] {
@@ -1590,7 +1279,7 @@ mod tests {
             .content
             .take()
             .unwrap()
-            .map(|content| content.text);
+            .map(|content| content.text.to_string());
         let (sender, receiver) = std::sync::mpsc::channel();
         let workspace = panel.workspace.clone();
         panel
@@ -1616,7 +1305,7 @@ mod tests {
             .build_ui_state(
                 |ui, panel| {
                     panel.poll(ui.ctx(), Path::new("/Projects/research-paper"));
-                    panel.show(ui, false);
+                    show_panel(ui, panel);
                 },
                 panel,
             );

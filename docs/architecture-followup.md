@@ -189,5 +189,76 @@ This extraction has no expected material performance impact: command sequences,
 payload ownership, worker counts, output bounds and repaint scheduling are
 unchanged. The nested-workspace fix adds a conditional path copy on completion
 and avoids a spurious refresh. No speedup or fresh native profile is claimed.
-Item 214 remains separate: panel rendering still calls its controller's action
-admission; fully read-only views and typed returned actions are not yet complete.
+Item 214 was completed subsequently; the next section records its read-only
+views and typed returned actions.
+
+## Read-only Git views (214)
+
+`src/git/view.rs` renders panel snapshots through immutable Input and returns a
+typed Output containing at most one repository operation, a commit-text edit and
+a consumed reveal request. `GitPanel::show` performs no repository admission;
+the app applies the output after Explorer section rendering. The view has no
+repository handle, worker, process or filesystem access. A source-boundary test
+protects that rule and a semantic test invokes the renderer directly to show a
+Fetch click can only produce an action.
+
+`src/git/editor/view.rs` similarly owns the gutter and selected-hunk popup. It
+returns OpenChunk or RunHunk, while editor/controller code retains selection
+validation, one-undo revert application and protected index mutations. The hunk
+buttons are small controls on the same row as the popup title; shortcuts remain
+in hover hints and accessibility keeps each full action label. Deterministic UI
+geometry tests cover the common baseline and compact height, so this behavioral
+layout change did not require screenshot evidence.
+
+Presentation caching remains bounded and demand-driven. The commit edit mirror
+resynchronizes only when model text differs, and clones text only for an actual
+edit or Commit action. Diff contents use shared Arc strings; the existing galley
+cache now lives in view state and keys content identity, style and font-cache
+identity. Ordinary frames add no source copy, worker, IO, queue or repaint.
+Therefore no material performance change is expected or claimed.
+
+## Cached capability snapshot (219)
+
+`src/capabilities.rs` derives one cached, read-only snapshot from the resolved
+Typst/Tinymist tools and the existing live service states. It reports editing,
+LSP, interactive preview, PDF generation, rasterization and PDF-link extraction
+independently. A missing Typst compiler therefore does not hide a working LSP,
+and missing `pdftoppm` does not misreport PDF generation or `pdftohtml` link
+extraction as unavailable.
+
+Optional Poppler executable lookup reuses the PATH policy in `toolchain.rs`.
+It runs once when a window session is created and again only for the existing
+explicit Refresh tools action. Tool-preference changes invalidate the derived
+snapshot without repeating unrelated Poppler discovery. Settings-frame reads
+compare owned state and return the cached snapshot; they perform no filesystem,
+environment or process work and add no worker, queue or repaint source.
+
+Pure tests cover partial tool/platform availability and distinguish cheap
+preference invalidation from explicit re-probing. A source boundary prevents
+effect APIs from entering capability derivation and prevents Settings renderers
+from invoking tool discovery. Semantic Settings coverage verifies all six
+capabilities remain individually visible. This is clearer status reporting and
+bounded discovery, not a claimed runtime speedup.
+
+## Stable tab identity accessors (184; user item 180)
+
+The existing numeric tab IDs are now the window-facing identity boundary.
+Cross-tab document lookup and selection, close, rename, preview, save and
+navigation actions carry IDs; only `tabs.rs` translates them to the current
+positional representation. Active and preview identity accessors return `None`
+for the empty workspace, and positional fields plus parked storage are private.
+A dependency test rejects production window code that reaches those slots or
+the removed index-based document helper directly.
+
+Characterization coverage retains reorder identity, empty-workspace behavior,
+dirty-close admission, saved selection/undo history and stale save routing. A
+new active-lifecycle regression specifically exercises repeated New commands:
+the designated preview ID and source remain pinned while the new editor tab
+becomes active. This closes user item 180 and protects its rule before item 185
+changes storage.
+
+The change replaces integer-index handoffs with constant-time ID lookup over
+the same small order vector. Rendering already visited that vector and now
+carries the ID it read instead of a position; there is no additional frame
+scan, source clone, service start or repaint. No speedup or new native profile
+is claimed.

@@ -14,13 +14,10 @@ pub(super) struct PendingSave {
 impl EditorApp {
     /// True means admitted, never that bytes are already durable.
     pub(super) fn save_to(&mut self, path: PathBuf, context: &egui::Context) -> bool {
-        self.submit_save(
-            self.tabs.active_id(),
-            path,
-            SaveIntent::Explicit,
-            true,
-            context,
-        )
+        let Some(tab) = self.tabs.active_id() else {
+            return false;
+        };
+        self.submit_save(tab, path, SaveIntent::Explicit, true, context)
     }
     pub(super) fn save_to_with_intent(
         &mut self,
@@ -29,7 +26,10 @@ impl EditorApp {
         context: &egui::Context,
     ) -> bool {
         // Auto-save and the second write after formatting never request formatting.
-        self.submit_save(self.tabs.active_id(), path, intent, false, context)
+        let Some(tab) = self.tabs.active_id() else {
+            return false;
+        };
+        self.submit_save(tab, path, intent, false, context)
     }
     pub(super) fn submit_save(
         &mut self,
@@ -44,11 +44,11 @@ impl EditorApp {
             return false;
         }
         let path = canonical_or_absolute(&path);
-        if (0..self.tabs.len()).any(|index| {
-            self.tabs.id_at(index) != Some(tab)
+        if self.tabs.ids().any(|id| {
+            id != tab
                 && self
-                    .tab_document(index)
-                    .is_some_and(|d| d.path().as_ref() == Some(&path))
+                    .document_for_tab(id)
+                    .is_some_and(|document| document.path().as_ref() == Some(&path))
         }) {
             self.show_file_error(
                 "This file is already open in another tab; switch to it before saving".into(),
@@ -100,7 +100,7 @@ impl EditorApp {
                 return false;
             }
         };
-        let continuation = (tab == self.tabs.active_id())
+        let continuation = (self.tabs.active_id() == Some(tab))
             .then(|| self.document_workflow.continuation_token())
             .flatten();
         let input = SaveInput::new(request, expected, intent, continuation);
@@ -159,7 +159,7 @@ impl EditorApp {
                 return;
             }
         };
-        let active = self.tabs.active_id() == pending.tab;
+        let active = self.tabs.active_id() == Some(pending.tab);
         let token_matches =
             result.completion.continuation == self.document_workflow.continuation_token();
         let current = self.document_for_tab(pending.tab).is_some_and(|doc| {

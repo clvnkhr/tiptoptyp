@@ -1156,7 +1156,9 @@ impl EditorApp {
                                     );
                                 }
                                 AppPopup::GitChunk { chunk, .. } => {
-                                    if let Some(selected) = crate::git::editor::show_chunk(
+                                    if let Some(crate::git::editor::view::Action::RunHunk(
+                                        selected,
+                                    )) = crate::git::editor::view::show_chunk(
                                         ui,
                                         chunk,
                                         &shortcuts,

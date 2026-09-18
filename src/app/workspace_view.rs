@@ -144,25 +144,33 @@ impl EditorApp {
             .raster_freshness(self.document.revision())
             == Some(RasterContentFreshness::Current);
         let target = ui
-            .push_id(("asset-tab", self.tabs.active_id()), |ui| {
-                theme::panel_header(ui, "asset-header", |ui| {
-                    raster_view::show_controls(ui, &mut self.asset_preview, fresh, false)
-                });
-                if self.asset_preview.content.pages().is_empty() {
-                    let failed = self.asset_preview.status == PreviewStatus::Error;
-                    show_centered_preview_message(
-                        ui,
-                        if failed {
-                            "Could not load file"
-                        } else {
-                            "Loading file…"
-                        },
-                        !failed,
-                    );
-                    return None;
-                }
-                raster_view::show_pages(ui, &mut self.asset_preview, fresh, false)
-            })
+            .push_id(
+                (
+                    "asset-tab",
+                    self.tabs
+                        .active_id()
+                        .expect("asset view requires an active tab"),
+                ),
+                |ui| {
+                    theme::panel_header(ui, "asset-header", |ui| {
+                        raster_view::show_controls(ui, &mut self.asset_preview, fresh, false)
+                    });
+                    if self.asset_preview.content.pages().is_empty() {
+                        let failed = self.asset_preview.status == PreviewStatus::Error;
+                        show_centered_preview_message(
+                            ui,
+                            if failed {
+                                "Could not load file"
+                            } else {
+                                "Loading file…"
+                            },
+                            !failed,
+                        );
+                        return None;
+                    }
+                    raster_view::show_pages(ui, &mut self.asset_preview, fresh, false)
+                },
+            )
             .inner;
         if let Some(target) = target {
             if let Some(page) = internal_pdf_page_target(&target) {

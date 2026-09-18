@@ -19,6 +19,7 @@ use std::{
 };
 
 mod actions;
+pub(crate) mod view;
 
 const EDIT_DEBOUNCE: Duration = Duration::from_millis(180);
 /// Reserved space for the Git change marker beside the line-number gutter.
@@ -487,76 +488,10 @@ pub(crate) fn marker_geometry(
     })
 }
 
-pub(crate) fn show_markers(
-    ui: &mut egui::Ui,
-    hunks: &[Hunk],
-    rows: &[egui::Rect],
-    gutter_left: f32,
-) -> Option<usize> {
-    let mut selected = None;
-    for (index, hunk) in hunks.iter().enumerate() {
-        for (part, change) in hunk.changes.iter().enumerate() {
-            let Some(geometry) = marker_geometry(change, rows, gutter_left, ui.clip_rect()) else {
-                continue;
-            };
-            let response = ui.interact(
-                geometry.hit,
-                ui.id().with(("git-hunk", index, part)),
-                egui::Sense::click(),
-            );
-            let label = change.label();
-            response
-                .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
-            let color = change.kind.color(ui.ctx());
-            if geometry.paint.is_positive() {
-                ui.painter().rect_filled(geometry.paint, 1.0, color);
-            }
-            if response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(format!("{label}\nClick to compare this chunk with the last commit. Includes unsaved edits.")).clicked() {
-                selected = Some(index);
-            }
-        }
-    }
-    selected
-}
-
-pub(crate) fn show_chunk(
-    ui: &mut egui::Ui,
-    chunk: &ChunkDiff,
-    shortcuts: &crate::shortcuts::ShortcutBindings,
-    busy: bool,
-) -> Option<super::repository::hunks::Action> {
-    let mut selected = None;
-    ui.heading("Changes since last commit");
-    ui.add(egui::Label::new(chunk.path.to_string_lossy()).truncate())
-        .on_hover_text(chunk.path.display().to_string());
-    ui.weak("Selected chunk, including unsaved edits at the time it was opened.");
-    ui.horizontal_wrapped(|ui| {
-        for action in super::repository::hunks::Action::ALL {
-            let shortcut = shortcuts.display(action.shortcut()).unwrap_or_default();
-            if ui
-                .add_enabled(
-                    !busy,
-                    egui::Button::new(action.label()).shortcut_text(shortcut),
-                )
-                .clicked()
-            {
-                selected = Some(action);
-            }
-        }
-    });
-    ui.separator();
-    egui::ScrollArea::both()
-        .id_salt("git-chunk-text")
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            super::show_colored_diff(ui, &chunk.hunk.text);
-        });
-    selected
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::editor::view::{Action as ViewAction, show_chunk, show_markers};
     use crate::git::repository::snapshot;
     use std::{fs, thread};
 
@@ -1224,7 +1159,8 @@ mod tests {
                             )
                         })
                         .collect::<Vec<_>>();
-                    if let Some(index) = show_markers(ui, &hunks, &rows, 8.0) {
+                    if let Some(ViewAction::OpenChunk(index)) = show_markers(ui, &hunks, &rows, 8.0)
+                    {
                         *selected = Some(index);
                     }
                     ui.add_space(90.0);

@@ -51,6 +51,31 @@ fn git_repository_execution_and_codecs_do_not_depend_on_views() {
     }
 }
 
+#[test]
+fn git_views_have_no_repository_or_worker_effect_handles() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/git");
+    for path in [root.join("view.rs"), root.join("editor/view.rs")] {
+        let source = fs::read_to_string(&path).unwrap();
+        for forbidden in [
+            "Repository",
+            "ExclusiveJob",
+            "LatestJob",
+            "std::fs",
+            "std::process",
+            "Command::new",
+            ".execute(",
+            ".status(",
+            ".change_index(",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{} can execute Git through {forbidden}",
+                path.display()
+            );
+        }
+    }
+}
+
 fn rust_files(root: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     for entry in fs::read_dir(root).unwrap() {
@@ -94,6 +119,62 @@ fn launch_policy_and_lsp_transport_have_focused_owners() {
             assert!(
                 !production.contains(forbidden),
                 "{module} depends on application/session code: {forbidden}"
+            );
+        }
+    }
+}
+
+#[test]
+fn capability_derivation_cannot_probe_or_render() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let capabilities = fs::read_to_string(root.join("capabilities.rs")).unwrap();
+    let production = capabilities.split("#[cfg(test)]").next().unwrap();
+    for forbidden in [
+        "eframe",
+        "egui",
+        "std::fs",
+        "std::process",
+        "Command::new",
+        "std::env",
+    ] {
+        assert!(
+            !production.contains(forbidden),
+            "capability derivation owns effect or UI API {forbidden}"
+        );
+    }
+    for view in ["app/settings_panel.rs", "app/settings_view.rs"] {
+        let source = fs::read_to_string(root.join(view)).unwrap();
+        assert!(
+            !source.contains("resolve_path_program"),
+            "{view} probes optional tools while presenting capabilities"
+        );
+    }
+}
+
+#[test]
+fn window_code_uses_stable_tab_accessors_instead_of_storage_slots() {
+    let app = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/app");
+    for path in rust_files(&app) {
+        let relative = path.strip_prefix(&app).unwrap().to_str().unwrap();
+        if matches!(relative, "tabs.rs" | "tabs_tests.rs") {
+            continue;
+        }
+        let source = fs::read_to_string(&path).unwrap();
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        let compact: String = production.chars().filter(|c| !c.is_whitespace()).collect();
+        for field in [".tabs.active", ".tabs.preview"] {
+            let direct = compact.match_indices(field).any(|(offset, _)| {
+                compact.as_bytes().get(offset + field.len()).copied() != Some(b'_')
+            });
+            assert!(
+                !direct,
+                "{relative} accesses positional tab storage through {field}"
+            );
+        }
+        for forbidden in [".tabs.parked", ".tabs.ids[", ".tab_document("] {
+            assert!(
+                !compact.contains(forbidden),
+                "{relative} bypasses stable tab accessors through {forbidden}"
             );
         }
     }

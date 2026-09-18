@@ -6,6 +6,7 @@ mod app;
 mod app_icon;
 mod asset;
 mod auto_pairs;
+mod capabilities;
 mod child_view;
 mod compiler;
 mod completion;

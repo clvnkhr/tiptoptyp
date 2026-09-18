@@ -209,10 +209,14 @@ mod tests {
                 fallback_reason: None,
                 requested_backend: PreviewPreference::Interactive,
                 interactive_active: true,
-                tinymist: ServiceState::Ready("ready".into()),
-                webview: ServiceState::Ready("ready".into()),
-                compiler: ServiceState::Ready("ready".into()),
-                rasterizer: ServiceState::Ready("ready".into()),
+                capabilities: crate::capabilities::CapabilitySnapshot {
+                    editing: ServiceState::Ready("ready".into()),
+                    lsp: ServiceState::Ready("ready".into()),
+                    interactive_preview: ServiceState::Ready("ready".into()),
+                    pdf_generation: ServiceState::Ready("ready".into()),
+                    rasterization: ServiceState::Ready("ready".into()),
+                    link_extraction: ServiceState::Ready("ready".into()),
+                },
             },
             project_root: ".".into(),
             appearance: egui::Theme::Dark,
@@ -231,7 +235,7 @@ mod tests {
         window.ui.staged_code_font_weight = Some(700);
         assert!(!window.synchronize(input(&context), &fonts));
         let mut changed = input(&context);
-        changed.status.tinymist = ServiceState::Failed("offline".into());
+        changed.status.capabilities.lsp = ServiceState::Failed("offline".into());
         assert!(window.synchronize(changed, &fonts));
         assert_eq!(faces, window.fonts.families().as_ptr());
         assert_eq!(window.ui.query, "font");

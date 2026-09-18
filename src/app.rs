@@ -47,6 +47,7 @@ use rfd::AsyncFileDialog;
 use crate::{
     asset::{AssetLoader, AssetThumbnailLoader, LoadedAsset},
     builtin_themes,
+    capabilities::CapabilityCache,
     child_view::{
         ChildViewHost, ChildViewSpec, POPUP_BLUR_GRACE, popup_focus_should_close,
         scoped_child_viewport_id, viewport_scoped_id,
@@ -1109,6 +1110,7 @@ pub struct EditorApp {
     tool_refresh_requested: bool,
     typst_tool: ToolResolution,
     tinymist_tool: ToolResolution,
+    capabilities: CapabilityCache,
     workspace_root: PathBuf,
     git: crate::git::GitPanel,
     // The default Git section should be visible even if an older session
@@ -1287,6 +1289,7 @@ impl EditorApp {
         );
         let typst_tool = resolve_tool(ToolKind::Typst, &settings.typst);
         let tinymist_tool = resolve_tool(ToolKind::Tinymist, &settings.tinymist);
+        let capabilities = CapabilityCache::discover();
         context.options_mut(|options| {
             options.zoom_with_keyboard = false;
             options.sync_window_theme = true;
@@ -1392,6 +1395,7 @@ impl EditorApp {
             tool_refresh_requested: false,
             typst_tool,
             tinymist_tool,
+            capabilities,
             workspace_root,
             git: crate::git::GitPanel::default(),
             git_explorer_reveal: true,
@@ -1679,12 +1683,12 @@ impl EditorApp {
 
     pub(crate) fn is_dirty_for_close(&self) -> bool {
         self.is_dirty()
-            || self
-                .tabs
-                .parked
-                .iter()
-                .flatten()
-                .any(|tab| tab.document.is_dirty())
+            || self.tabs.ids().any(|id| {
+                self.tabs.active_id() != Some(id)
+                    && self
+                        .document_for_tab(id)
+                        .is_some_and(DocumentSession::is_dirty)
+            })
     }
 
     pub(crate) fn close_accepted(&self) -> bool {
@@ -2004,15 +2008,16 @@ impl EditorApp {
         }) {
             return None;
         }
-        if self.tabs.len() > 1 || self.tabs.preview_explicit {
+        if self.tabs.uses_designated_preview() {
             return self
                 .tab_preview_document()
                 .filter(|document| document.kind().is_typst())
                 .map(|document| {
-                    document
-                        .path()
-                        .clone()
-                        .unwrap_or_else(|| self.untitled_tab_path(self.tabs.preview))
+                    document.path().clone().unwrap_or_else(|| {
+                        self.untitled_tab_path(
+                            self.tabs.preview_id().expect("preview tab must exist"),
+                        )
+                    })
                 });
         }
         None
@@ -2042,8 +2047,9 @@ impl EditorApp {
     }
 
     fn current_is_preview_document(&self) -> bool {
-        if self.tabs.len() > 1 || self.tabs.preview_explicit {
-            return self.tabs.active == self.tabs.preview && self.document.kind().is_typst();
+        if self.tabs.uses_designated_preview() {
+            return self.tabs.active_id() == self.tabs.preview_id()
+                && self.document.kind().is_typst();
         }
         match &self.document.path() {
             Some(path) => same_path(path, &self.preview_document_path()),
@@ -2052,7 +2058,7 @@ impl EditorApp {
     }
 
     fn preview_document_source(&self) -> Result<String, String> {
-        if (self.tabs.len() > 1 || self.tabs.preview_explicit)
+        if self.tabs.uses_designated_preview()
             && let Some(document) = self
                 .tab_preview_document()
                 .filter(|document| document.kind().is_typst())
@@ -2157,9 +2163,10 @@ impl EditorApp {
         if self.document_flow_busy() {
             return;
         }
-        let active = self.tabs.active;
+        let active = self.tabs.active_id().expect("non-empty tab set");
         if self.open_tab_path(path, context) {
-            self.select_preview_tab(self.tabs.active, context);
+            let preview = self.tabs.active_id().expect("opened tab must be active");
+            self.select_preview_tab(preview, context);
             self.activate_tab(active, context);
         }
     }
@@ -2689,7 +2696,7 @@ impl EditorApp {
             return;
         }
         let designated = self.designated_preview_path();
-        let destination = if self.tabs.len() > 1 || self.tabs.preview_explicit {
+        let destination = if self.tabs.uses_designated_preview() {
             self.tab_preview_document().and_then(|document| {
                 default_compile_pdf_path(None, document.kind(), document.path().as_deref())
             })
@@ -2768,11 +2775,13 @@ impl EditorApp {
             })
         {
             let count = self.tabs.len();
-            let next = if action == ShortcutAction::PreviousTab {
-                (self.tabs.active + count - 1) % count
+            let active = self.tabs.active_index().expect("non-empty tab set");
+            let next_index = if action == ShortcutAction::PreviousTab {
+                (active + count - 1) % count
             } else {
-                (self.tabs.active + 1) % count
+                (active + 1) % count
             };
+            let next = self.tabs.id_at(next_index).unwrap();
             self.activate_tab(next, context);
         }
         if shortcut_viewport == context.viewport_id()
@@ -3103,7 +3112,11 @@ impl EditorApp {
         }
         match command {
             AppCommand::Settings => self.toggle_settings(),
-            AppCommand::CloseTab => self.request_close_tab(self.tabs.active, context),
+            AppCommand::CloseTab => {
+                if let Some(id) = self.tabs.active_id() {
+                    self.request_close_tab(id, context);
+                }
+            }
             AppCommand::New => self.new_document(),
             AppCommand::NewWindow => {
                 self.pending_window_requests
@@ -3442,6 +3455,12 @@ impl EditorApp {
             self.tinymist_tool = next_tinymist;
         }
 
+        if refresh_tools {
+            self.capabilities.refresh_tools();
+        } else if changes.typst || changes.tinymist {
+            self.capabilities.invalidate();
+        }
+
         // A system appearance event changes the effective preview palette when
         // the document follows the interface, so refresh Tinymist as well as
         // the raster-page textures.
@@ -3638,7 +3657,7 @@ impl EditorApp {
         self.pending_editor_selection = None;
         self.editor_attention = None;
         self.clear_preview_for_document(
-            self.tabs.len() > 1 && self.tabs.active != self.tabs.preview,
+            self.tabs.len() > 1 && self.tabs.active_id() != self.tabs.preview_id(),
         );
         self.search.clear();
         self.reset_document_services();
@@ -4465,7 +4484,9 @@ impl EditorApp {
                         observed: observed_disk_fingerprint,
                     }
                 };
-                self.submit_save(self.tabs.active_id(), path, intent, true, context);
+                if let Some(tab) = self.tabs.active_id() {
+                    self.submit_save(tab, path, intent, true, context);
+                }
                 return;
             }
             action => pending.action = action,
@@ -4775,8 +4796,8 @@ impl EditorApp {
     }
 
     fn tinymist_document_path(&self) -> PathBuf {
-        if (self.tabs.len() > 1 || self.tabs.preview_explicit) && self.document.path().is_none() {
-            return self.untitled_tab_path(self.tabs.active);
+        if self.tabs.uses_designated_preview() && self.document.path().is_none() {
+            return self.untitled_tab_path(self.tabs.active_id().expect("non-empty tab set"));
         }
         self.tinymist_unsaved_document
             .as_ref()
@@ -4946,9 +4967,11 @@ impl EditorApp {
                     if let Some(path) = self.document.path().as_deref() {
                         TextDocument::from_path(path, version, source.clone())
                             .map_err(|error| error.to_string())
-                    } else if self.tabs.len() > 1 || self.tabs.preview_explicit {
+                    } else if self.tabs.uses_designated_preview() {
                         TextDocument::from_path(
-                            &self.untitled_tab_path(self.tabs.active),
+                            &self.untitled_tab_path(
+                                self.tabs.active_id().expect("non-empty tab set"),
+                            ),
                             version,
                             source.clone(),
                         )
@@ -6830,6 +6853,7 @@ impl EditorApp {
         let order = self.settings.explorer_order;
         let mut open_package_manager = false;
         let mut index_target = None;
+        let mut git_output = None;
         let git_dirty = self.document.is_dirty();
         let section_resize = show_explorer_sections(
             ui,
@@ -6928,7 +6952,9 @@ impl EditorApp {
                         ui.colored_label(error_color(ui.ctx()), error);
                     }
                 }
-                ExplorerSection::Git => self.git.show(ui, git_dirty),
+                ExplorerSection::Git => {
+                    git_output = Some(self.git.show(ui, git_dirty));
+                }
                 _ => {
                     let outcome = show_project_index_section(
                         ui,
@@ -6944,6 +6970,10 @@ impl EditorApp {
                 }
             },
         );
+
+        if let Some(output) = git_output {
+            self.git.apply_view_output(ui.ctx(), output);
+        }
 
         if open_package_manager {
             self.open_package_manager(ui.ctx());

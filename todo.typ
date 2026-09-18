@@ -217,7 +217,7 @@ I was using two different windows with two different workspaces. Possibly i was 
 177. [x] Line numbers use the configured editor font and align actual glyph baselines, including sticky headers and taller fallback-font rows. Keep a three-point text gap and separate fold/Git lanes; size the column correctly for proportional digits. Geometry, folded-row and semantic tests pass; fresh light/dark framebuffers inspected. Evidence: `docs/tabs-and-git-hunks.md`.
 178. [x] Closing the last tab leaves an empty workspace window with Explorer and New/Open controls. PDF/image tabs use the editor pane while a pinned Typst preview remains visible, with independent asset loading, page navigation and zoom. Empty-workspace commands/reopening, stale results, no empty-document service work and split-pane/page-margin geometry have regression coverage. Required checks pass; fresh light/dark captures and the regenerated 68-image gallery were inspected. Matched local idle profiles showed no added work, not an interaction speedup. Evidence and limitations: `docs/tabs-and-git-hunks.md`.
 179. [x] Extend the selected-tab highlight across the title and both controls. Reuse the Explorer's vector eye with a filled pupil for the preview tab, add a centered closed-eye variant for other tabs, and draw a vertically aligned path-based close icon. Geometry and named-control regressions pass; fresh light/dark captures inspected and the 68-image gallery regenerated/validated. Evidence: `docs/tabs-and-git-hunks.md`.
-180. [ ] when we cmd+N new, it opens a new tab, which is ok, but it also takes over the preview, which is not ok. the preview should stay on the file set to be used for preview.
+180. [x] Cmd+N opens a new tab without changing the designated preview tab or its source. Stable-ID regression coverage exercises repeated New operations with a different pinned preview.
 181. [ ] (deferred) we should be able to open from template.
 182. [ ] pretty animation for dragging tabs
 183. [ ] prettier git diff
@@ -238,7 +238,7 @@ than timing thresholds. These tasks refine item 117, not replace its broader
 multi-window measurement and shared repository-status goals. PDF resource work
 does not include the viewer features in items 1, 118 or 163.
 
-184. [ ] (A01) Centralize document access through the existing stable tab IDs before changing storage; do not invent a second identity system. Reuse existing tests and add missing characterization coverage for reorder, active/preview identity, empty workspace, dirty close, and switching with retained undo/selection; preserve the preview-selection rule in item 180.
+184. [x] (A01) Centralize document access through the existing stable tab IDs before changing storage; do not invent a second identity system. Reuse existing tests and add missing characterization coverage for reorder, active/preview identity, empty workspace, dirty close, and switching with retained undo/selection; preserve the preview-selection rule in item 180.
 185. [ ] (A01; after 184) Replace the active hole and parallel tab vectors with a document store keyed by stable IDs, a separate order list, and optional active/preview IDs. Route existing callers through the accessors and remove obsolete storage; identity tests must pass unchanged.
 186. [ ] (A01; after 185) Unify active and parked ownership of folding, saved editor-widget state and autosave metadata in the document records, reusing the fields already present in ParkedTab. Test stale replies across switches and that tab changes start no extra services; measure switch allocations and many-tab idle work. Keep services window-owned.
 
@@ -277,16 +277,73 @@ does not include the viewer features in items 1, 118 or 163.
 
 212. [x] (A10) Extract Git command execution and status/diff codecs behind a repository service handle. Preserve argument-array invocation and add disposable-repository coverage for quoted paths, new files, CRLF and missing final newlines; this is not the visual redesign in item 183.
 213. [x] (A10; independent of 212) Route hunk index mutations through the existing repository-root transaction lease and revalidate baselines under that lease. Share the transaction entry point with panel operations; do not postpone this correctness fix for a service extraction. Test overlap with panel operations, conflicts, partial staging and preservation of unrelated staged changes; retain protected completions.
-214. [ ] (A10; after 212 and 213) Make Git panel/gutter/popup views consume immutable state and emit typed actions only, removing service-to-UI dependencies. Test that rendering cannot execute Git and that checked hunk revert remains one editor undo; preserve item 115's controls and safety rules.
+214. [x] (A10; after 212 and 213) Make Git panel/gutter/popup views consume immutable state and emit typed actions only, removing service-to-UI dependencies. Test that rendering cannot execute Git and that checked hunk revert remains one editor undo; preserve item 115's controls and safety rules.
 
 215. [ ] (A11) Give child-view and popup resources explicit owner lifecycle hooks distinguishing temporary hide, durable close and dormant native hosting. Test reopen, scroll dismissal, keyboard focus and inert late callbacks without destroying every hidden view.
 216. [ ] (A11; after 215) Dispose closed-viewport font-sample slots and other owner-keyed context caches through those hooks. Add repeated open/preview/close tests asserting live cache counts return to baseline or a documented bound; measure retained resources after repeated cycles.
 217. [ ] (A11; deferred pending measurement, after 215) First trace redundant native property updates and measure their cost. Implement diffing only if it materially reduces work; invalidate applied-state caches on native recreation and external geometry changes. Preserve clipping/reopen behavior with geometry tests and native bounds traces; use proportionate whole-window observation for composition, not a viewport PNG. If no useful saving is found, record that result rather than adding a cache.
 
 218. [x] (A12) Move ordinary LaunchOptions parsing out of screenshot ownership into a launch module with explicit normal/capture/profile modes. Test existing argument behavior and QA/profile non-persistence; preserve tool-selection precedence.
-219. [ ] (A12) Derive a cached capability snapshot from existing tool resolution and service state, separating editing/LSP, interactive preview, PDF generation, rasterization and link extraction. Expose missing raster/link capabilities separately; invalidate on tool-preference changes and explicit refresh, and test partial availability. Do not add a competing discovery/status service or probe tools in a frame callback.
+219. [x] (A12) Derive a cached capability snapshot from existing tool resolution and service state, separating editing/LSP, interactive preview, PDF generation, rasterization and link extraction. Expose missing raster/link capabilities separately; invalidate on tool-preference changes and explicit refresh, and test partial availability. Do not add a competing discovery/status service or probe tools in a frame callback.
 220. [x] (A12) Generate or validate runtime tool-version metadata from toolchain/manifest.tsv so constants and packaging cannot drift. Add a mismatch regression/build check; preserve resolution precedence without bundling new tools or retaining compatibility aliases.
 221. [x] (A12) Correct obsolete miTeX comments in src/lib.rs and add superseding current-state notes to ADR 0002 for per-window Tinymist, the separate Settings viewport and conditional CLI compilation. Cross-link the current ownership/module map without erasing historical decision context.
+
+= Cached capability snapshot (2026-09-18)
+
+- Item 219: one cached snapshot now reports editing, LSP, interactive preview,
+  PDF generation, rasterization and PDF-link extraction independently from the
+  current tool resolutions and service states. Missing `pdftoppm` and
+  `pdftohtml` are visible separately and cannot collapse the compiler or each
+  other into a generic failure.
+- Optional executable discovery reuses `toolchain.rs`, runs at session startup,
+  and repeats only for explicit Refresh tools. Typst/Tinymist preference changes
+  invalidate only the derived snapshot; Settings-frame reads do no filesystem,
+  environment or process work.
+- Pure partial-availability and cache-invalidation tests, semantic Settings
+  coverage and a source dependency boundary protect those rules. This adds no
+  worker, queue or repaint loop and claims no runtime speedup. Architecture
+  checklist: 18 of 38 complete, 20 remain.
+
+= Stable tab identity accessors (2026-09-18)
+
+- Items 180 and 184: cross-tab document lookup and tab actions now use the
+  existing stable numeric IDs. Active/preview IDs are optional for the empty
+  workspace; positional slots are private to `tabs.rs`. Selection, close,
+  rename, preview choice, save routing, dirty-close checks and navigation
+  resolve IDs at the storage boundary instead of carrying indices across work.
+- New characterization coverage proves IDs continue to resolve the same source
+  after reorder and that repeated New-tab operations leave both the designated
+  preview identity and source unchanged. Existing empty-workspace, dirty-close,
+  retained undo/selection, stale-save and idle-service tests remain the contract.
+- A source boundary prevents window code from reaching active/preview slots,
+  parked storage or the old index-based document helper. This is a preparatory
+  ownership seam for item 185, not a storage rewrite. It adds no per-frame scan,
+  worker, source copy or repaint; no performance improvement is claimed.
+  Architecture checklist: 19 of 38 complete, 19 remain.
+
+= Read-only Git views (2026-09-18)
+
+- Item 214: the Git panel renderer now consumes immutable snapshot/status/diff
+  input and returns a typed output batch. The app/controller applies commit-text,
+  reveal and repository-operation actions only after section rendering. Gutter
+  markers and hunk popups likewise return typed OpenChunk/RunHunk actions.
+- The renderer owns only presentation caches: the commit buffer is copied only
+  when the model changes or the user edits it, and diff galleys remain keyed by
+  shared content identity, style and font-cache identity. No workers, queues,
+  filesystem probes or repaint loops were added.
+- Source-boundary and semantic tests prove Git views have no repository/worker
+  effect handles and clicking controls emits actions without executing Git.
+  Existing checked projected-revert coverage still restores the pre-revert text
+  in one editor undo; repository lease/conflict tests remain passing.
+- Hunk popup actions are now small buttons on the same title row as "Changes
+  since last commit". Shortcut text moved to hover hints to reduce width while
+  full accessible labels remain. A deterministic geometry test checks all five
+  controls share the title baseline and stay below 24 points high.
+- All 54 focused Git tests, 9 architecture-boundary tests, full Rust tests,
+  strict Clippy, formatting and all 13 xtask tests pass. No new runtime work is
+  expected beyond constant-size typed outputs; no performance speedup is claimed.
+  The semantic geometry check is sufficient for this layout change, so no
+  screenshot is claimed. Architecture checklist: 17 of 38 complete, 21 remain.
 
 = Git repository service boundary (2026-09-17)
 

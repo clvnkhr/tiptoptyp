@@ -72,6 +72,20 @@ impl EditorApp {
                     egui::Theme::Light
                 }
             });
+        let capabilities = self
+            .capabilities
+            .snapshot(crate::capabilities::CapabilityInputs {
+                typst: self.typst_tool.clone(),
+                tinymist: self.tinymist_tool.clone(),
+                lsp: self.preview.tinymist_state.clone(),
+                interactive_preview: self.preview.webview_state.clone(),
+                pdf_generation: self.compiler_service_state(),
+                rasterization: self.rasterizer_service_state(),
+                interactive_preview_supported: cfg!(any(
+                    target_os = "macos",
+                    target_os = "windows"
+                )),
+            });
         let input = SettingsWindowInput {
             visible,
             retain_when_closed: retain,
@@ -88,10 +102,7 @@ impl EditorApp {
                 fallback_reason: self.preview_fallback_reason(),
                 requested_backend: self.preview.requested_backend,
                 interactive_active: self.interactive_preview_active(),
-                tinymist: self.preview.tinymist_state.clone(),
-                webview: self.preview.webview_state.clone(),
-                compiler: self.compiler_service_state(),
-                rasterizer: self.rasterizer_service_state(),
+                capabilities,
             },
             project_root: self.project_root(),
             appearance,

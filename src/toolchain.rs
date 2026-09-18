@@ -87,6 +87,35 @@ pub(crate) struct ToolResolution {
     pub(crate) fallback_reason: Option<String>,
 }
 
+/// Resolution for an optional executable supplied by the host environment.
+///
+/// Unlike [`ToolResolution`], these programs are neither bundled nor user
+/// selectable. Keeping their discovery here preserves one PATH policy for all
+/// runtime tools without pretending they are required sidecars.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PathProgramResolution {
+    binary: &'static str,
+    program: Option<PathBuf>,
+}
+
+impl PathProgramResolution {
+    pub(crate) fn from_program(binary: &'static str, program: Option<PathBuf>) -> Self {
+        Self { binary, program }
+    }
+
+    pub(crate) fn is_available(&self) -> bool {
+        self.program.is_some()
+    }
+
+    pub(crate) fn binary(&self) -> &'static str {
+        self.binary
+    }
+
+    pub(crate) fn program(&self) -> Option<&Path> {
+        self.program.as_deref()
+    }
+}
+
 impl ToolResolution {
     fn new(
         kind: ToolKind,
@@ -129,6 +158,20 @@ pub(crate) fn resolve_tool(kind: ToolKind, preference: &ToolPreference) -> ToolR
         || tool_environment_override(kind, |name| env::var_os(name)),
         || find_on_path(kind.binary_name()),
     )
+}
+
+pub(crate) fn resolve_path_program(binary: &'static str) -> PathProgramResolution {
+    resolve_path_program_from(binary, || find_on_path(binary))
+}
+
+fn resolve_path_program_from<SearchPath>(
+    binary: &'static str,
+    search_path: SearchPath,
+) -> PathProgramResolution
+where
+    SearchPath: FnOnce() -> Option<PathBuf>,
+{
+    PathProgramResolution::from_program(binary, search_path())
 }
 
 fn tool_environment_override<Lookup>(
@@ -569,6 +612,23 @@ mod tests {
         assert_eq!(resolved.origin, ToolOrigin::Custom);
         assert!(!environment_called.get());
         assert!(!path_called.get());
+    }
+
+    #[test]
+    fn optional_path_programs_use_the_shared_discovery_policy() {
+        use std::cell::Cell;
+
+        let searched = Cell::new(0);
+        let expected = PathBuf::from("/tools/pdftoppm");
+        let resolution = resolve_path_program_from("pdftoppm", || {
+            searched.set(searched.get() + 1);
+            Some(expected.clone())
+        });
+
+        assert_eq!(searched.get(), 1);
+        assert!(resolution.is_available());
+        assert_eq!(resolution.binary(), "pdftoppm");
+        assert_eq!(resolution.program(), Some(expected.as_path()));
     }
 
     #[test]

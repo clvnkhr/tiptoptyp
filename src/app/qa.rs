@@ -832,7 +832,7 @@ mod tests {
                         .min_size(METRICS.chrome.explorer_min_width)
                         .show(ui, |ui| {
                             let mut content = clipped_panel_content_ui(ui, "git-capture-test");
-                            state.1.show(&mut content, false);
+                            let _ = state.1.show(&mut content, false);
                         });
                 },
                 (
