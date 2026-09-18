@@ -341,7 +341,7 @@ impl QaSession {
                 app.view_mode = ViewMode::Code;
                 app.explorer.hide();
                 let cursor = SOURCE.find("sym.").unwrap() + 4;
-                app.pending_editor_selection = Some(cursor..cursor);
+                app.pending_editor_selection = Some(EditorSelection::Focus(cursor..cursor));
                 let items = crate::unicode_fonts::SYMBOL_EXAMPLES
                     .into_iter()
                     .map(|(name, symbol)| CompletionItem {
@@ -381,7 +381,7 @@ impl QaSession {
                     app.prepare_editor_source_data();
                 }
                 app.view_mode = ViewMode::Code;
-                app.pending_editor_selection = Some(17..17);
+                app.pending_editor_selection = Some(EditorSelection::Focus(17..17));
                 app.request_editor_completion(
                     17,
                     Rect::from_min_size(Pos2::new(300.0, 180.0), Vec2::splat(1.0)),
@@ -459,7 +459,7 @@ impl QaSession {
                 }
                 app.view_mode = ViewMode::Code;
                 let cursor = SOURCE.find('{').unwrap();
-                app.pending_editor_selection = Some(cursor..cursor);
+                app.pending_editor_selection = Some(EditorSelection::Focus(cursor..cursor));
             }
             UiSnapshotScene::StickyContext => {
                 app.notice = None;

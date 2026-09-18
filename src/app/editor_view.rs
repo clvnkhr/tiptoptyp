@@ -145,7 +145,7 @@ impl EditorApp {
                     self.find_case_sensitive,
                     self.find_regex,
                 )
-                .map(|matched| matched.char_range.clone());
+                .map(|matched| EditorSelection::Search(matched.char_range.clone()));
         }
         if find_next {
             let source = self.tabs.current_record().document.source();
@@ -158,7 +158,7 @@ impl EditorApp {
                     self.find_case_sensitive,
                     self.find_regex,
                 )
-                .map(|matched| matched.char_range.clone());
+                .map(|matched| EditorSelection::Search(matched.char_range.clone()));
         }
         if replace_one {
             let before = self.document().source().clone();
@@ -183,7 +183,7 @@ impl EditorApp {
                 self.pending_editor_selection = self
                     .search
                     .selected()
-                    .map(|matched| matched.char_range.clone());
+                    .map(|matched| EditorSelection::Search(matched.char_range.clone()));
                 if *self.document().source() != before {
                     self.mark_edited();
                 }
@@ -313,6 +313,7 @@ impl EditorApp {
         let completion_edit_triggered = document_kind.is_typst()
             && ui.input(|input| completion_requested_after_events(&input.events));
         if let Some(selection) = self.pending_editor_selection.clone() {
+            let selection = selection.range();
             self.folding_mut().reveal(selection.start);
             self.folding_mut().reveal(selection.end);
             // Install explicit destinations before TextEdit handles input and
@@ -491,7 +492,8 @@ impl EditorApp {
                 ui.ctx().request_repaint();
             }
 
-            if let Some(range) = pending_selection {
+            if let Some(selection) = pending_selection {
+                let range = selection.range();
                 let len = document.source().chars().count();
                 let range = range.start.min(len)..range.end.min(len);
                 let cursor_range =
@@ -499,7 +501,7 @@ impl EditorApp {
                 output.state.cursor.set_char_range(Some(cursor_range));
                 current_char = Some(range.end);
                 output.state.clone().store(ui.ctx(), output.response.id);
-                if !self.find_visible {
+                if selection.takes_focus() {
                     #[cfg(any(target_os = "macos", target_os = "windows"))]
                     if let Some(webview) = self.webview.as_ref()
                         && let Err(error) = webview.focus_parent()
@@ -1058,7 +1060,7 @@ impl EditorApp {
                 line_numbers,
             )
         {
-            self.pending_editor_selection = Some(target..target);
+            self.pending_editor_selection = Some(EditorSelection::Focus(target..target));
             self.editor_completion = None;
             let editor_id = source_editor_id(ui.ctx());
             ui.ctx()

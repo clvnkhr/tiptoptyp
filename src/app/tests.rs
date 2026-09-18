@@ -2,6 +2,32 @@ use super::completion_popup::completion_popup_position;
 use super::*;
 
 #[test]
+fn source_navigation_takes_editor_focus_even_with_find_open() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    app.document_mut()
+        .replace_unprojected_untitled("alpha beta gamma");
+    app.find_visible = true;
+    app.focus_find = true;
+    context
+        .run_ui(Default::default(), |ui| {
+            app.show_find_bar(ui);
+            app.show_editor(ui);
+        })
+        .drop_without_applying_deltas();
+    app.apply_editor_location(None, Some((1, 1)));
+    context
+        .run_ui(Default::default(), |ui| {
+            app.show_find_bar(ui);
+            app.show_editor(ui);
+        })
+        .drop_without_applying_deltas();
+    assert!(context.memory(|memory| memory.has_focus(source_editor_id(&context))));
+    assert!(app.find_visible, "navigation should not close the Find bar");
+}
+
+#[test]
 fn mac_word_navigation_after_source_jump_reaches_text_edit() {
     let directory = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
@@ -10,7 +36,7 @@ fn mac_word_navigation_after_source_jump_reaches_text_edit() {
     app.snapshot_scene = None;
     app.document_mut()
         .replace_unprojected_untitled("alpha beta gamma");
-    app.pending_editor_selection = Some(0..0);
+    app.pending_editor_selection = Some(EditorSelection::Focus(0..0));
     for _ in 0..2 {
         context
             .run_ui(Default::default(), |ui| app.show_editor(ui))
@@ -39,6 +65,155 @@ fn mac_word_navigation_after_source_jump_reaches_text_edit() {
         .drop_without_applying_deltas();
     let state = egui::text_edit::TextEditState::load(&context, source_editor_id(&context)).unwrap();
     assert_eq!(state.cursor.char_range().unwrap().primary.index.0, 5);
+}
+
+#[test]
+fn navigation_entry_points_focus_only_their_owner_and_keep_mac_arrow_shortcuts() {
+    for owner in [
+        egui::ViewportId::ROOT,
+        egui::ViewportId::from_hash_of("navigation-secondary"),
+    ] {
+        for route in ["index", "problems", "preview"] {
+            let directory = tempfile::tempdir().unwrap();
+            let context = egui::Context::default();
+            context.set_os(egui::os::OperatingSystem::Mac);
+            let mut app =
+                EditorApp::dormant_window_for_tests(&context, directory.path().into(), owner);
+            app.document_mut()
+                .replace_unprojected_untitled("alpha beta gamma");
+            let path = directory.path().join("main.typ");
+            app.document_mut()
+                .rename(path.clone(), DocumentKind::Typst)
+                .unwrap();
+            app.find_visible = true;
+            app.focus_find = true;
+            let raw = || {
+                let mut input = egui::RawInput {
+                    viewport_id: owner,
+                    ..Default::default()
+                };
+                input.viewports.insert(owner, Default::default());
+                input
+            };
+            context
+                .run_ui(raw(), |ui| {
+                    app.show_find_bar(ui);
+                    app.show_editor(ui);
+                })
+                .drop_without_applying_deltas();
+            match route {
+                "index" => app.navigate_file_location(path, None, Some((1, 1)), "index test"),
+                "problems" => app.jump_to_diagnostic(Diagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    source: DiagnosticSource::Main,
+                    location: Some(DiagnosticLocation { line: 1, column: 1 }),
+                    message: "test".into(),
+                    details: Vec::new(),
+                }),
+                "preview" => app.follow_tinymist_location(
+                    url::Url::from_file_path(path).unwrap().as_str(),
+                    Some(&LspRange {
+                        start: LspPosition::new(0, 0),
+                        end: LspPosition::new(0, 0),
+                    }),
+                ),
+                _ => unreachable!(),
+            }
+            let output = context.run_ui(raw(), |ui| {
+                app.show_find_bar(ui);
+                app.show_editor(ui);
+            });
+            let focused: Vec<_> = output
+                .viewport_output
+                .iter()
+                .filter_map(|(id, output)| {
+                    output
+                        .commands
+                        .iter()
+                        .any(|command| matches!(command, egui::ViewportCommand::Focus))
+                        .then_some(*id)
+                })
+                .collect();
+            assert_eq!(focused, vec![owner], "{route}");
+            output.drop_without_applying_deltas();
+            assert!(app.pending_editor_selection.is_none());
+            for (modifiers, key, expected) in [
+                (Modifiers::ALT, egui::Key::ArrowRight, 5),
+                (Modifiers::ALT, egui::Key::ArrowLeft, 0),
+                (Modifiers::MAC_CMD, egui::Key::ArrowRight, 16),
+                (Modifiers::MAC_CMD, egui::Key::ArrowLeft, 0),
+            ] {
+                let mut input = raw();
+                input.events = vec![
+                    egui::Event::ModifiersChanged(modifiers),
+                    egui::Event::Key {
+                        key,
+                        physical_key: Some(key),
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    },
+                ];
+                let output = context.run_ui(input, |ui| {
+                    app.handle_shortcuts(ui.ctx(), None);
+                    app.show_find_bar(ui);
+                    app.show_editor(ui);
+                    let state =
+                        egui::text_edit::TextEditState::load(ui.ctx(), source_editor_id(ui.ctx()))
+                            .unwrap();
+                    assert_eq!(
+                        state.cursor.char_range().unwrap().primary.index.0,
+                        expected,
+                        "{route}: {key:?}"
+                    );
+                });
+                assert!(
+                    !output.viewport_output.values().any(|output| output
+                        .commands
+                        .iter()
+                        .any(|command| matches!(command, egui::ViewportCommand::Focus))),
+                    "focus transfer is one-shot"
+                );
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
+}
+
+#[test]
+fn find_selection_preserves_find_focus_and_does_not_activate_native_window() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+    app.document_mut()
+        .replace_unprojected_untitled("alpha beta alpha");
+    app.find_visible = true;
+    app.focus_find = true;
+    app.find_query = "alpha".into();
+    context
+        .run_ui(Default::default(), |ui| {
+            app.show_find_bar(ui);
+            app.show_editor(ui);
+        })
+        .drop_without_applying_deltas();
+    let focused = context.memory(|memory| memory.focused());
+    app.apply_find_actions(&context, false, true, false, false);
+    assert!(matches!(
+        app.pending_editor_selection,
+        Some(EditorSelection::Search(_))
+    ));
+    let output = context.run_ui(Default::default(), |ui| {
+        app.show_find_bar(ui);
+        app.show_editor(ui);
+    });
+    assert_eq!(context.memory(|memory| memory.focused()), focused);
+    assert!(!output.viewport_output.values().any(|output| {
+        output
+            .commands
+            .iter()
+            .any(|command| matches!(command, egui::ViewportCommand::Focus))
+    }));
+    output.drop_without_applying_deltas();
 }
 use crate::asset::AssetThumbnailResult;
 use crate::completion_edit::{
@@ -240,7 +415,7 @@ fn explicit_source_jump_does_not_reveal_the_previous_caret_fold() {
         .set_char_range(Some(CCursorRange::one(CCursor::new(old))));
     state.store(&context, id);
     // This is the same queued source selection used by preview/file links.
-    app.pending_editor_selection = Some(target..target);
+    app.pending_editor_selection = Some(EditorSelection::Focus(target..target));
     let mut requested_native_focus = false;
     for _ in 0..2 {
         let output = context.run_ui(Default::default(), |ui| app.show_editor(ui));
@@ -258,7 +433,7 @@ fn explicit_source_jump_does_not_reveal_the_previous_caret_fold() {
         "source navigation must reclaim keyboard ownership from the native preview"
     );
     assert_eq!(context.memory(|memory| memory.focused()), Some(id));
-    app.pending_editor_selection = Some(old..old);
+    app.pending_editor_selection = Some(EditorSelection::Focus(old..old));
     context
         .run_ui(Default::default(), |ui| app.show_editor(ui))
         .drop_without_applying_deltas();
@@ -6429,11 +6604,14 @@ fn projected_application_index_and_file_link_navigation_use_canonical_lines() {
     let target = &index.outline[0];
     assert_eq!(target.line, 3);
     app.apply_file_link_location(None, Some((target.line, 1)));
-    assert_eq!(app.pending_editor_selection, Some(4..4));
+    assert_eq!(
+        app.pending_editor_selection,
+        Some(EditorSelection::Focus(4..4))
+    );
     app.apply_editor_location(None, Some((2, 1)));
     assert_eq!(
         app.pending_editor_selection,
-        Some(4..4),
+        Some(EditorSelection::Focus(4..4)),
         "diagnostics are already mapped"
     );
 }
@@ -6725,7 +6903,7 @@ fn projected_application_remote_completion_uses_canonical_payload_and_one_undo_s
     );
     assert_eq!(
         app.pending_editor_selection,
-        Some(editor_cursor + 7..editor_cursor + 7)
+        Some(EditorSelection::Focus(editor_cursor + 7..editor_cursor + 7))
     );
     assert_eq!(
         app.canonical_document_source().unwrap(),
@@ -6857,7 +7035,10 @@ fn projected_application_diagnostics_and_preview_selection_map_canonical_unicode
     let cli_location = app.preview.diagnostics[0].location.unwrap();
     assert_eq!((cli_location.line, cli_location.column), (line, column));
     app.apply_tinymist_selection(Some(&range));
-    assert_eq!(app.pending_editor_selection, Some(cursor..cursor));
+    assert_eq!(
+        app.pending_editor_selection,
+        Some(EditorSelection::Focus(cursor..cursor))
+    );
     app.document_mut()
         .edit(CCursorRange::default(), |source| source.push('!'));
     app.mark_edited();

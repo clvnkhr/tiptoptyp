@@ -225,7 +225,7 @@ impl EditorApp {
             }
         };
         if let Some(target) = target {
-            self.pending_editor_selection = Some(target..target);
+            self.pending_editor_selection = Some(EditorSelection::Focus(target..target));
             let id = source_editor_id(context);
             let mut state = egui::text_edit::TextEditState::load(context, id).unwrap_or_default();
             state

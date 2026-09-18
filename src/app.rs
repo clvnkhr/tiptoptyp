@@ -1,4 +1,6 @@
 mod completion_popup;
+mod navigation;
+use navigation::EditorSelection;
 mod explorer_view;
 #[cfg(test)]
 use explorer_view::{
@@ -56,9 +58,9 @@ use std::{
 use tiptoptyp::save_transaction::{ExpectedDiskState, SaveInput, SaveIntent, fingerprint};
 use tiptoptyp_core::geometry::{EguiRect, NativeRect, ViewportTransform};
 #[cfg(test)]
-use tiptoptyp_core::text::LspPosition;
-use tiptoptyp_core::text::{LspRange, LspTextEdit, ScalarOffset};
-use tiptoptyp_core::text::{lsp_position_at_scalar, range_to_scalar_range, scalar_position_at};
+use tiptoptyp_core::text::{LspPosition, LspRange};
+use tiptoptyp_core::text::{LspTextEdit, ScalarOffset};
+use tiptoptyp_core::text::{lsp_position_at_scalar, scalar_position_at};
 
 use eframe::egui::{
     self, Align, Color32, ColorImage, KeyboardShortcut, Layout, Modifiers, Pos2, Rect, RichText,
@@ -1160,7 +1162,7 @@ pub struct EditorApp {
     find_case_sensitive: bool,
     find_regex: bool,
     focus_find: bool,
-    pending_editor_selection: Option<Range<usize>>,
+    pending_editor_selection: Option<EditorSelection>,
     editor_attention: Option<EditorAttention>,
     editor_hover: Option<EditorHoverState>,
     next_editor_hover_token: u64,
@@ -5729,126 +5731,7 @@ impl EditorApp {
             });
             return;
         }
-        let same_document = self
-            .document()
-            .path()
-            .as_ref()
-            .is_some_and(|current| same_path(current, &path));
-        if !same_document {
-            self.request_document_replacement(
-                DeferredDocumentAction::FollowFileLink {
-                    path,
-                    page,
-                    source_position,
-                },
-                "following a document link",
-            );
-            return;
-        }
-        self.apply_file_link_location(page, source_position);
-    }
-
-    fn apply_file_link_location(
-        &mut self,
-        page: Option<usize>,
-        source_position: Option<(usize, usize)>,
-    ) {
-        let source_position = if self.document().config().is_some() {
-            source_position.and_then(|(line, column)| {
-                let snapshot = self.document().canonical_snapshot().ok()?;
-                let cursor = char_index_at_line_column(snapshot.source(), line, column);
-                let cursor = snapshot.editor_scalar_cursor(ScalarOffset::new(cursor))?;
-                Some(line_column_at_char(snapshot.editor_source(), cursor.get()))
-            })
-        } else {
-            source_position
-        };
-        self.apply_editor_location(page, source_position);
-    }
-
-    fn apply_editor_location(
-        &mut self,
-        page: Option<usize>,
-        source_position: Option<(usize, usize)>,
-    ) {
-        if self.document().kind() == DocumentKind::Pdf {
-            if self.asset_preview.content.pages().is_empty() {
-                self.pending_asset_page = page;
-            } else if let Some(page) = page {
-                self.asset_preview.requested_page =
-                    Some(page.min(self.asset_preview.content.pages().len().saturating_sub(1)));
-            }
-        } else if self.document().kind().is_editable()
-            && let Some((line, column)) = source_position
-        {
-            let char_index = char_index_at_line_column(self.document().source(), line, column);
-            self.pending_editor_selection = Some(char_index..char_index);
-            self.editor_attention = Some(EditorAttention {
-                char_index,
-                started: Instant::now(),
-            });
-            if self.document().kind().is_typst() {
-                self.view_mode = ViewMode::Split;
-            }
-        }
-    }
-
-    fn follow_tinymist_location(&mut self, uri: &str, selection: Option<&LspRange>) {
-        let Ok(url) = url::Url::parse(uri) else {
-            return;
-        };
-        let Ok(path) = url.to_file_path() else {
-            return;
-        };
-        let virtual_untitled =
-            self.document().path().is_none() && path == self.tinymist_document_path();
-        let same_document = virtual_untitled
-            || self
-                .document()
-                .path()
-                .as_ref()
-                .is_some_and(|current| same_path(current, &path));
-        if !same_document {
-            if path
-                .extension()
-                .is_none_or(|extension| !extension.eq_ignore_ascii_case("typ"))
-            {
-                return;
-            }
-            self.request_document_replacement(
-                DeferredDocumentAction::FollowTinymistLocation {
-                    path,
-                    selection: selection.cloned(),
-                },
-                "following the preview location",
-            );
-            return;
-        }
-        self.apply_tinymist_selection(selection);
-    }
-
-    fn apply_tinymist_selection(&mut self, selection: Option<&LspRange>) {
-        if let Some(selection) = selection {
-            let range = if self.document().config().is_some() {
-                let Some(range) = self
-                    .document()
-                    .canonical_snapshot()
-                    .ok()
-                    .and_then(|snapshot| snapshot.editor_range(*selection))
-                else {
-                    return;
-                };
-                range
-            } else {
-                range_to_scalar_range(self.document().source(), selection).into_range()
-            };
-            self.editor_attention = Some(EditorAttention {
-                char_index: range.start,
-                started: Instant::now(),
-            });
-            self.pending_editor_selection = Some(range);
-        }
-        self.view_mode = ViewMode::Split;
+        self.navigate_file_location(path, page, source_position, "following a document link");
     }
 
     fn jump_source_to_preview(&mut self, char_index: usize) {
@@ -6871,7 +6754,7 @@ impl EditorApp {
         self.document_mut().edit(snapshot.cursor, |source| {
             source.replace_range(target.value_range, &replacement)
         });
-        self.pending_editor_selection = Some(selection_end..selection_end);
+        self.pending_editor_selection = Some(EditorSelection::Focus(selection_end..selection_end));
         self.search.clear();
         self.mark_edited();
         self.notice = Some(Notice {
@@ -7271,23 +7154,12 @@ impl EditorApp {
             );
         }
         if let Some((path, line)) = index_target {
-            if self
-                .document()
-                .path()
-                .as_ref()
-                .is_some_and(|current| same_path(current, &path))
-            {
-                self.apply_file_link_location(None, Some((line, 1)));
-            } else {
-                self.request_document_replacement(
-                    DeferredDocumentAction::FollowFileLink {
-                        path,
-                        page: None,
-                        source_position: Some((line, 1)),
-                    },
-                    "opening a project index entry",
-                );
-            }
+            self.navigate_file_location(
+                path,
+                None,
+                Some((line, 1)),
+                "opening a project index entry",
+            );
         }
         if let Some(popup) = popup_request {
             self.open_app_popup(popup);
@@ -7733,7 +7605,7 @@ impl EditorApp {
                 return;
             }
         };
-        self.pending_editor_selection = Some(selection);
+        self.pending_editor_selection = Some(EditorSelection::Focus(selection));
         self.search.clear();
         self.editor_completion = None;
         self.mark_edited();
@@ -7797,71 +7669,6 @@ impl EditorApp {
             let selected = completion.selected;
             self.apply_editor_completion(selected, context);
         }
-    }
-
-    fn diagnostic_targets_current_document(&self, diagnostic: &Diagnostic) -> bool {
-        match &diagnostic.source {
-            DiagnosticSource::Main => self.current_is_preview_document(),
-            DiagnosticSource::File(path) => {
-                if self.document().config().is_some() && !path.is_absolute() {
-                    return self.diagnostic_target_path(diagnostic).is_some_and(|path| {
-                        self.document()
-                            .path()
-                            .as_ref()
-                            .is_some_and(|current| same_path(current, &path))
-                    });
-                }
-                self.document()
-                    .path()
-                    .as_ref()
-                    .is_some_and(|current| same_path(current, path))
-                    || (self.document().path().is_none()
-                        && same_path(&self.tinymist_document_path(), path))
-            }
-            DiagnosticSource::Global => false,
-        }
-    }
-
-    fn diagnostic_target_path(&self, diagnostic: &Diagnostic) -> Option<PathBuf> {
-        match &diagnostic.source {
-            DiagnosticSource::Main => Some(self.preview_document_path()),
-            DiagnosticSource::File(path) if path.is_absolute() => Some(path.clone()),
-            DiagnosticSource::File(path) => {
-                let preview_dir = self
-                    .preview_document_path()
-                    .parent()
-                    .map(Path::to_path_buf)
-                    .unwrap_or_else(|| self.project_root());
-                let from_preview = preview_dir.join(path);
-                if from_preview.exists() {
-                    Some(from_preview)
-                } else {
-                    Some(self.project_root().join(path))
-                }
-            }
-            DiagnosticSource::Global => None,
-        }
-    }
-
-    fn jump_to_diagnostic(&mut self, diagnostic: Diagnostic) {
-        let Some(location) = diagnostic.location else {
-            return;
-        };
-        if self.diagnostic_targets_current_document(&diagnostic) {
-            self.apply_editor_location(None, Some((location.line, location.column)));
-            return;
-        }
-        let Some(path) = self.diagnostic_target_path(&diagnostic) else {
-            return;
-        };
-        self.request_document_replacement(
-            DeferredDocumentAction::FollowFileLink {
-                path,
-                page: None,
-                source_position: Some((location.line, location.column)),
-            },
-            "opening a diagnostic location",
-        );
     }
 
     fn show_preview(&mut self, ui: &mut egui::Ui, frame: Option<&eframe::Frame>) {

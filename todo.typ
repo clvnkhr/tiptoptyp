@@ -26,6 +26,29 @@ native navigation acceptance remains explicitly part of 237, not this extraction
 237. [ ] Consolidate Problems, index and preview navigation/focus handoff after
 reproducing the native failure. Test document/range routing and secondary owners;
 do not equate helper tests with verified native word-navigation behavior.
+Implementation: `src/app/navigation.rs` owns destination conversion, diagnostic
+targeting, current-file/deferred routing and source-range handoff. File links and
+Explorer entries share routing; Problems retain already-mapped editor coordinates,
+while canonical file/LSP positions still use the miTeX mapping. Existing document
+workflow epoch checks and native-parent → viewport → TextEdit focus order remain.
+Reproduced a concrete focus failure before fixing it: with Find open, a source
+jump moved the caret but left Find focused. The existing pending selection now
+distinguishes Search (retain focus) from Focus (source/editor navigation), rather
+than introducing a separate focus flag. Find stays open after navigation.
+Regression coverage exercises all three entry points in root and secondary
+viewports, Option/Cmd Left/Right, owner-only one-shot focus and Find focus retention.
+This is deterministic UI coverage, not an observed macOS WebView first-responder
+handoff; leave the item open for that native acceptance check.
+Accounting versus the preceding leaf-extraction commit: app.rs 12,840 → 12,647
+(−193); navigation module 226 lines; other production adapters +3, for +36 total
+non-test lines. Tests +181. The added selection intent fixes a demonstrated
+correctness gap; it is not claimed as a net-negative consolidation. No workers,
+repaint loops, per-frame source copies or native geometry changes are introduced;
+the extra branch runs only for a pending selection. No timing speedup is claimed.
+Verification: failing-before/passing-after Find-open focus regression, all 13
+navigation-filter tests, Find focus-retention test, 1,061 full-suite test executions
+(16 opt-in tests ignored), 13 xtask tests, formatting and strict all-target Clippy
+pass. Native WebView delivery remains unverified; steps 238–240 are not started.
 
 238. [ ] Narrow Explorer ownership to explicit tree/index/selection inputs and
 typed actions, with watcher effects outside painting. Remove full EditorApp access
