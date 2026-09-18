@@ -1,0 +1,516 @@
+//! Owner-local admission and receipt routing; disk effects stay in save_io.
+use super::*;
+use tiptoptyp::save_transaction::WriteDurability;
+
+pub(super) struct PendingSave {
+    pub tab: u64,
+    pub key: DocumentKey,
+    path: PathBuf,
+    path_changed: bool,
+    format_after: bool,
+    started: Instant,
+}
+
+impl EditorApp {
+    /// True means admitted, never that bytes are already durable.
+    pub(super) fn save_to(&mut self, path: PathBuf, context: &egui::Context) -> bool {
+        self.submit_save(
+            self.tabs.active_id(),
+            path,
+            SaveIntent::Explicit,
+            true,
+            context,
+        )
+    }
+    pub(super) fn save_to_with_intent(
+        &mut self,
+        path: PathBuf,
+        intent: SaveIntent,
+        context: &egui::Context,
+    ) -> bool {
+        // Auto-save and the second write after formatting never request formatting.
+        self.submit_save(self.tabs.active_id(), path, intent, false, context)
+    }
+    pub(super) fn submit_save(
+        &mut self,
+        tab: u64,
+        path: PathBuf,
+        intent: SaveIntent,
+        format_after: bool,
+        context: &egui::Context,
+    ) -> bool {
+        let started = Instant::now();
+        if self.snapshot_scene.is_some() || self.save_job.is_running() {
+            return false;
+        }
+        let path = canonical_or_absolute(&path);
+        if (0..self.tabs.len()).any(|index| {
+            self.tabs.id_at(index) != Some(tab)
+                && self
+                    .tab_document(index)
+                    .is_some_and(|d| d.path().as_ref() == Some(&path))
+        }) {
+            self.show_file_error(
+                "This file is already open in another tab; switch to it before saving".into(),
+            );
+            return false;
+        }
+        let Some(document) = self.document_for_tab(tab) else {
+            return false;
+        };
+        let path_changed = document
+            .path()
+            .as_ref()
+            .is_none_or(|current| !same_path(current, &path));
+        let expected = match intent {
+            SaveIntent::ExplicitConfirmed { observed } => {
+                observed.map_or(ExpectedDiskState::Missing, ExpectedDiskState::Fingerprint)
+            }
+            SaveIntent::Auto if document.disk_fingerprint().is_none() || path_changed => {
+                self.notice = Some(Notice {
+                    message: "Auto-save paused: no known disk baseline".into(),
+                    kind: NoticeKind::Error,
+                });
+                return false;
+            }
+            _ if path_changed => ExpectedDiskState::Unchecked,
+            _ => document
+                .disk_fingerprint()
+                .map_or(ExpectedDiskState::Unchecked, ExpectedDiskState::Fingerprint),
+        };
+        let kind = if path_changed {
+            crate::document::detect_document(&path, document.source().as_bytes())
+                .ok()
+                .filter(|kind| kind.is_editable())
+                .unwrap_or(DocumentKind::Text)
+        } else {
+            document.kind()
+        };
+        let key = document.key();
+        let request = match document.prepare_save(path.clone(), kind) {
+            Ok(request) => request,
+            Err(error) => {
+                if intent != SaveIntent::Auto {
+                    self.document_workflow.cancel_continuation();
+                }
+                self.notice = Some(Notice {
+                    message: error.to_string(),
+                    kind: NoticeKind::Error,
+                });
+                return false;
+            }
+        };
+        let continuation = (tab == self.tabs.active_id())
+            .then(|| self.document_workflow.continuation_token())
+            .flatten();
+        let input = SaveInput::new(request, expected, intent, continuation);
+        if let Err(error) = self
+            .save_job
+            .start_and_repaint("Save document", context, move || {
+                Ok(crate::save_io::execute(input))
+            })
+        {
+            if intent != SaveIntent::Auto {
+                self.document_workflow.cancel_continuation();
+            }
+            self.notice = Some(Notice {
+                message: error,
+                kind: NoticeKind::Error,
+            });
+            return false;
+        }
+        self.pending_save = Some(PendingSave {
+            tab,
+            key,
+            path,
+            path_changed,
+            format_after: format_after && continuation.is_none(),
+            started,
+        });
+        self.document_workflow.save_in_flight = true;
+        self.set_tab_autosave(tab, None);
+        self.notice = Some(Notice {
+            message: "Saving…".into(),
+            kind: NoticeKind::Info,
+        });
+        true
+    }
+
+    pub(super) fn poll_save(&mut self, context: &egui::Context) {
+        self.poll_save_inner(context);
+        self.document_workflow.finish_dispatch();
+    }
+
+    fn poll_save_inner(&mut self, context: &egui::Context) {
+        let result = match self.save_job.poll() {
+            LatestJobPoll::Idle | LatestJobPoll::Pending => return,
+            LatestJobPoll::Ready(result) => Ok(result),
+            LatestJobPoll::Failed(error) => Err(error),
+        };
+        self.document_workflow.save_in_flight = false;
+        let Some(pending) = self.pending_save.take() else {
+            return;
+        };
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => {
+                self.document_workflow.cancel_continuation();
+                self.show_file_error(error);
+                return;
+            }
+        };
+        let active = self.tabs.active_id() == pending.tab;
+        let token_matches =
+            result.completion.continuation == self.document_workflow.continuation_token();
+        let current = self.document_for_tab(pending.tab).is_some_and(|doc| {
+            doc.key().owner == pending.key.owner && doc.epoch() == pending.key.epoch
+        });
+        if !current {
+            if token_matches {
+                self.document_workflow.cancel_continuation();
+            }
+            self.notice = Some(Notice {
+                message: crate::worker::OperationSummary::completion_summary(&result),
+                kind: NoticeKind::Info,
+            });
+            return;
+        }
+        let unchanged = self
+            .document_for_tab(pending.tab)
+            .is_some_and(|doc| doc.key() == pending.key);
+        let intent = result.completion.intent;
+        let committed = match result.completion.result {
+            Ok(committed) => committed,
+            Err(error) => {
+                if let Some(observed) = result.conflict {
+                    if active && unchanged && intent != SaveIntent::Auto {
+                        self.document_workflow.set_modal(AppModal::Overwrite {
+                            message: format!(
+                                "{} changed on disk. Overwrite those changes?",
+                                pending.path.display()
+                            ),
+                            path: pending.path,
+                            key: self.document.key(),
+                            expected_disk_fingerprint: self.document.disk_fingerprint(),
+                            observed_disk_fingerprint: match observed {
+                                ExpectedDiskState::Fingerprint(value) => Some(value),
+                                _ => None,
+                            },
+                        });
+                        self.document_workflow.modal_had_focus = false;
+                        self.document_workflow.modal_suspended = false;
+                        return;
+                    }
+                } else if intent == SaveIntent::Auto {
+                    self.set_tab_autosave(pending.tab, Some(Instant::now() + AUTOSAVE_RETRY_DELAY));
+                }
+                if token_matches {
+                    self.document_workflow.cancel_continuation();
+                }
+                self.notice = Some(Notice {
+                    message: format!("Could not save {}: {error}", pending.path.display()),
+                    kind: NoticeKind::Error,
+                });
+                return;
+            }
+        };
+        let synchronized = matches!(committed.durability, WriteDurability::Synchronized);
+        let continuation = if active {
+            self.document_workflow.complete_save(
+                result.completion.continuation,
+                &mut self.document,
+                committed.receipt,
+                synchronized,
+            )
+        } else {
+            if token_matches {
+                self.document_workflow.cancel_continuation();
+            }
+            self.document_for_tab_mut(pending.tab)
+                .unwrap()
+                .record_save(committed.receipt)
+                .map(|_| None)
+        };
+        let continuation = match continuation {
+            Ok(action) => action,
+            Err(error) => {
+                self.notice = Some(Notice {
+                    message: error.into(),
+                    kind: NoticeKind::Error,
+                });
+                return;
+            }
+        };
+        let dirty = self
+            .document_for_tab(pending.tab)
+            .is_some_and(|doc| doc.is_dirty());
+        let deadline = (dirty && self.settings.auto_save).then(|| {
+            Instant::now() + Duration::from_millis(self.settings.auto_save_delay_ms.max(100))
+        });
+        self.set_tab_autosave(pending.tab, deadline);
+        if active {
+            self.external_file_change_notice = None;
+            if pending.path_changed {
+                if !pending.path.starts_with(&self.workspace_root)
+                    && let Some(parent) = pending.path.parent()
+                {
+                    self.workspace_root = canonical_or_absolute(&discover_project_root(parent));
+                }
+                self.preview.content.invalidate();
+                self.reset_document_services();
+            }
+            self.remember_open_document(&pending.path);
+        }
+        self.refresh_workspace();
+        self.git.request_refresh();
+        self.git_editor.request_refresh();
+        if self.preview_processing_enabled() {
+            self.schedule_compile_now();
+        }
+        self.schedule_project_index();
+        if let WriteDurability::Uncertain(error) = committed.durability {
+            if token_matches {
+                self.document_workflow.cancel_continuation();
+            }
+            self.notice = Some(Notice {
+                message: format!(
+                    "Saved {}, but durability is uncertain: {error}. The document remains open.",
+                    pending.path.display()
+                ),
+                kind: NoticeKind::Error,
+            });
+            return;
+        }
+        if let Some(mut action) = continuation {
+            action.key = self.document.key();
+            action.allow_discard = false;
+            self.document_workflow.queue_action(action);
+        }
+        self.notice = Some(Notice {
+            message: completed_action_label(
+                if intent == SaveIntent::Auto {
+                    "Auto-saved"
+                } else {
+                    "Saved"
+                },
+                &pending
+                    .path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy(),
+                pending.started.elapsed(),
+            ),
+            kind: NoticeKind::Success,
+        });
+        if active && unchanged && pending.format_after && self.document.kind().is_typst() {
+            if pending.path_changed {
+                self.format_when_tinymist_ready =
+                    save_as_format_handoff(true, self.document.kind(), self.document.key());
+            } else {
+                self.request_format_after_manual_save();
+            }
+        }
+        context.request_repaint();
+    }
+
+    #[cfg(test)]
+    pub(super) fn finish_save_for_test(&mut self, context: &egui::Context) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while self.save_job.is_running() {
+            self.poll_save(context);
+            assert!(Instant::now() < deadline, "save never completed");
+            std::thread::yield_now();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    fn hold_destination(path: PathBuf) -> (mpsc::Sender<()>, std::thread::JoinHandle<()>) {
+        let (entered, ready) = mpsc::channel();
+        let (release, wait) = mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            crate::resource_lock::with_resource(&path, || {
+                entered.send(()).unwrap();
+                let _ = wait.recv();
+            })
+        });
+        ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        (release, thread)
+    }
+
+    #[test]
+    fn delayed_save_keeps_new_edits_dirty_and_does_not_release_close() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("note.txt");
+        fs::write(&path, "old").unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        app.snapshot_scene = None;
+        app.document.replace_loaded_unprojected(
+            "old".into(),
+            path.clone(),
+            DocumentKind::Text,
+            Some(fingerprint(b"old")),
+        );
+        app.document.edit(CCursorRange::default(), |source| {
+            *source = "submitted".into()
+        });
+        app.document_workflow
+            .continue_after_save(PendingDocumentAction {
+                action: DeferredDocumentAction::CloseWindow,
+                key: app.document.key(),
+                allow_discard: false,
+                description: "closing".into(),
+            });
+        let (release, holder) = hold_destination(path.clone());
+        assert!(app.save_to(path.clone(), &context));
+        assert!(
+            !app.save_to(path.clone(), &context),
+            "only one immutable request per owner"
+        );
+        app.document_workflow.finish_dispatch();
+        assert!(app.document_workflow.has_continuation());
+        app.document
+            .edit(CCursorRange::default(), |source| source.push_str(" newer"));
+        app.poll_save(&context);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "old");
+        release.send(()).unwrap();
+        holder.join().unwrap();
+        app.finish_save_for_test(&context);
+        assert_eq!(fs::read_to_string(path).unwrap(), "submitted");
+        assert_eq!(app.document.source(), "submitted newer");
+        assert!(app.document.is_dirty());
+        assert!(!app.document_workflow.has_continuation());
+        assert!(app.document_workflow.take_action().is_none());
+        assert!(app.manual_format_revision.is_none());
+    }
+
+    #[test]
+    fn durable_save_releases_one_close_and_conflicts_require_a_fresh_confirmation() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("note.txt");
+        fs::write(&path, "old").unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        app.snapshot_scene = None;
+        app.document.replace_loaded_unprojected(
+            "old".into(),
+            path.clone(),
+            DocumentKind::Text,
+            Some(fingerprint(b"old")),
+        );
+        app.document.edit(CCursorRange::default(), |source| {
+            *source = "submitted".into()
+        });
+        app.document_workflow
+            .continue_after_save(PendingDocumentAction {
+                action: DeferredDocumentAction::CloseTab,
+                key: app.document.key(),
+                allow_discard: false,
+                description: "closing".into(),
+            });
+        fs::write(&path, "external").unwrap();
+        assert!(app.save_to(path.clone(), &context));
+        app.finish_save_for_test(&context);
+        assert!(matches!(
+            app.document_workflow.modal(),
+            Some(AppModal::Overwrite { .. })
+        ));
+        assert!(app.document_workflow.has_continuation());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "external");
+        app.document_workflow.clear_modal();
+        // A confirmation does not authorize overwriting a still later change.
+        fs::write(&path, "external again").unwrap();
+        let confirmed = SaveIntent::ExplicitConfirmed {
+            observed: Some(fingerprint(b"external")),
+        };
+        assert!(app.save_to_with_intent(path.clone(), confirmed, &context));
+        app.finish_save_for_test(&context);
+        assert!(matches!(
+            app.document_workflow.modal(),
+            Some(AppModal::Overwrite { .. })
+        ));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "external again");
+        app.document_workflow.clear_modal();
+        assert!(app.save_to_with_intent(
+            path.clone(),
+            SaveIntent::ExplicitConfirmed {
+                observed: Some(fingerprint(b"external again"))
+            },
+            &context
+        ));
+        app.document_workflow.finish_dispatch();
+        app.finish_save_for_test(&context);
+        assert_eq!(fs::read_to_string(path).unwrap(), "submitted");
+        assert!(matches!(
+            app.document_workflow.take_action().unwrap().action,
+            DeferredDocumentAction::CloseTab
+        ));
+        assert!(app.document_workflow.take_action().is_none());
+    }
+
+    #[test]
+    fn auto_save_does_not_format_and_manual_save_as_waits_for_durable_completion() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("note.typ");
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        app.snapshot_scene = None;
+        app.document.replace_unprojected_untitled("hello");
+        let (release, holder) = hold_destination(path.clone());
+        assert!(app.save_to(path.clone(), &context));
+        assert!(app.format_when_tinymist_ready.is_none());
+        assert!(app.document.path().is_none());
+        release.send(()).unwrap();
+        holder.join().unwrap();
+        app.finish_save_for_test(&context);
+        assert_eq!(app.format_when_tinymist_ready, Some(app.document.key()));
+        app.format_when_tinymist_ready = None;
+        app.document
+            .edit(CCursorRange::default(), |source| source.push('!'));
+        assert!(app.save_to_with_intent(path, SaveIntent::Auto, &context));
+        app.finish_save_for_test(&context);
+        assert!(app.format_when_tinymist_ready.is_none());
+        assert!(app.manual_format_revision.is_none());
+    }
+
+    #[test]
+    fn replaced_document_does_not_accept_a_late_receipt_or_lose_its_new_close_intent() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("note.txt");
+        fs::write(&path, "old").unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        app.snapshot_scene = None;
+        app.document.replace_loaded_unprojected(
+            "submitted".into(),
+            path.clone(),
+            DocumentKind::Text,
+            Some(fingerprint(b"old")),
+        );
+        let (release, holder) = hold_destination(path.clone());
+        assert!(app.save_to(path.clone(), &context));
+        app.document.replace_unprojected_untitled("replacement");
+        let key = app.document.key();
+        app.document_workflow
+            .continue_after_save(PendingDocumentAction {
+                action: DeferredDocumentAction::CloseWindow,
+                key,
+                allow_discard: false,
+                description: "new close".into(),
+            });
+        release.send(()).unwrap();
+        holder.join().unwrap();
+        app.finish_save_for_test(&context);
+        assert_eq!(fs::read_to_string(path).unwrap(), "submitted");
+        assert_eq!(app.document.source(), "replacement");
+        assert_eq!(app.document.key(), key);
+        assert!(app.document.path().is_none());
+        assert!(app.document_workflow.has_continuation());
+        assert!(app.document_workflow.take_action().is_none());
+    }
+}

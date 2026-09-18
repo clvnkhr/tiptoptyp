@@ -1,4 +1,6 @@
 mod exclusive;
+#[cfg(test)]
+pub(crate) use exclusive::take_matching_detached_completion;
 pub(crate) use exclusive::{
     ExclusiveJob, OperationSummary, has_active_operations, take_detached_completions,
 };

@@ -439,6 +439,46 @@ fn fixture(context: &egui::Context, root: &Path) -> EditorApp {
 }
 
 #[test]
+fn save_completion_follows_a_parked_tab_id_after_reorder_not_the_active_slot() {
+    let root = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&context, root.path());
+    app.snapshot_scene = None;
+    let path = root.path().join("first.typ");
+    fs::write(&path, "first").unwrap();
+    app.document.replace_loaded_unprojected(
+        "first".into(),
+        path.clone(),
+        DocumentKind::Typst,
+        Some(fingerprint(b"first")),
+    );
+    app.document
+        .edit(CCursorRange::default(), |source| source.push('!'));
+    let saved_tab = app.tabs.active_id();
+    let (entered, ready) = std::sync::mpsc::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    let locked_path = path.clone();
+    let holder = std::thread::spawn(move || {
+        crate::resource_lock::with_resource(&locked_path, || {
+            entered.send(()).unwrap();
+            let _ = wait.recv();
+        })
+    });
+    ready.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(app.save_to(path.clone(), &context));
+    app.append_tab(&context);
+    app.document.replace_unprojected_untitled("other tab");
+    assert!(app.tabs.reorder(0, 1));
+    release.send(()).unwrap();
+    holder.join().unwrap();
+    app.finish_save_for_test(&context);
+    assert_eq!(fs::read_to_string(path).unwrap(), "first!");
+    assert_eq!(app.document.source(), "other tab");
+    assert!(!app.document_for_tab(saved_tab).unwrap().is_dirty());
+    assert!(app.manual_format_revision.is_none());
+}
+
+#[test]
 fn close_window_shortcut_is_not_consumed_as_close_tab() {
     for (action, closes_window) in [
         (ShortcutAction::CloseWindow, true),
@@ -683,6 +723,7 @@ fn parked_autosave_checks_disk_and_never_overwrites_external_edits() {
     app.autosave_deadline = Some(Instant::now());
     app.append_tab(&context);
     app.tick_parked_autosave(&context);
+    app.finish_save_for_test(&context);
     assert_eq!(fs::read_to_string(&path).unwrap(), "first!");
     assert!(!app.tabs.parked[0].as_ref().unwrap().document.is_dirty());
     let tab = app.tabs.parked[0].as_mut().unwrap();
@@ -692,6 +733,7 @@ fn parked_autosave_checks_disk_and_never_overwrites_external_edits() {
     app.tabs.refresh_autosave();
     fs::write(&path, "external").unwrap();
     app.tick_parked_autosave(&context);
+    app.finish_save_for_test(&context);
     assert_eq!(fs::read_to_string(path).unwrap(), "external");
     assert!(app.tabs.parked[0].as_ref().unwrap().document.is_dirty());
 }

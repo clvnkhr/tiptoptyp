@@ -40,6 +40,7 @@ mod process;
 mod project_index;
 mod rainbow;
 mod resource_lock;
+mod save_io;
 mod screenshot;
 mod search;
 mod settings;

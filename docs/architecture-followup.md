@@ -115,6 +115,10 @@ introduced as part of this batch.
 
 ## Next step: immutable save handoff (188)
 
+Subsequent update: [189–190 now route these inputs through protected background
+saves](background-saves.md). The description below records the intermediate
+synchronous stage and its tests, not the current execution model.
+
 `src/save_transaction.rs` now wraps the existing projection-aware SaveRequest
 and SaveReceipt instead of defining another document identity. SaveInput owns
 the original request, intent, expected disk state, and an optional continuation
@@ -147,3 +151,43 @@ adds constant-size metadata and token comparisons, with no additional source
 allocation, file read or hash pass. This is preparatory refactoring, **not a
 measured save-latency improvement**. The actual responsiveness work is deferred
 to the controlled slow-writer and same-path concurrency tests in item 189.
+
+## Repository execution boundary (212)
+
+`src/git/repository.rs` owns subprocess discovery/execution, bounded output,
+status decoding, repository snapshots and whole-file/index commands. Its
+`diff` module owns unified hunk models/parsing and buffer comparisons; `hunks`
+owns checked revert construction and index patch transactions. These modules
+have no UI imports. Panel/editor adapters retain worker admission, projection
+coordinate mapping, receipt routing, layout caches and rendering. The borrowed
+`Repository` handle is constructed inside the existing worker closures and
+does not discover Git, allocate a path or create a service thread.
+
+Invocation still uses argument arrays and literal pathspecs, no terminal prompts,
+the existing 60-second process limit and 4-MiB output limits. Panel and hunk
+mutations retain the shared repository-root lease and under-lease baseline
+checks from 213. Revert remains a checked string result applied through the
+existing single editor undo transaction. No compatibility forwarding API remains
+at the old editor mutation paths.
+
+The extraction exposed a result-routing bug: a mutation submitted from a nested
+workspace returned its resolved repository root as its workspace. The panel
+treated that as a stale completion, losing commit-message clearing and requesting
+another refresh. Repository results now retain the requesting workspace while
+their snapshots retain the resolved root. Direct service and async panel tests
+cover this distinction.
+
+Disposable-repository coverage exercises quoted/Unicode names (quotes on Unix),
+new files, CRLF and missing final newlines through scan, stage, commit, diff,
+unstage and checked revert, asserting exact index bytes and unchanged working
+files. Existing tests cover literal pathspecs, non-UTF-8 decoding, concurrent
+panel/hunk transactions, partial staging and conflict rejection. A dependency
+test guards against UI imports in the repository layer and command/codec
+implementations returning to the views.
+
+This extraction has no expected material performance impact: command sequences,
+payload ownership, worker counts, output bounds and repaint scheduling are
+unchanged. The nested-workspace fix adds a conditional path copy on completion
+and avoids a spurious refresh. No speedup or fresh native profile is claimed.
+Item 214 remains separate: panel rendering still calls its controller's action
+admission; fully read-only views and typed returned actions are not yet complete.

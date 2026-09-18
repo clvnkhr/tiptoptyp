@@ -129,6 +129,12 @@ impl Tabs {
     pub(super) fn active_id(&self) -> u64 {
         self.ids.get(self.active).copied().unwrap_or(self.next_id)
     }
+    pub(super) fn id_at(&self, index: usize) -> Option<u64> {
+        self.ids.get(index).copied()
+    }
+    pub(super) fn index_of(&self, id: u64) -> Option<usize> {
+        self.ids.iter().position(|&value| value == id)
+    }
 
     pub(super) fn claims_window_drag(&self, pointer: Option<Pos2>, primary_down: bool) -> bool {
         pointer.is_some_and(|pointer| {
@@ -268,7 +274,7 @@ impl EditorApp {
             .flatten()
             .any(|tab| tab.document.path().as_deref() == Some(path))
     }
-    fn tab_document(&self, index: usize) -> Option<&DocumentSession> {
+    pub(super) fn tab_document(&self, index: usize) -> Option<&DocumentSession> {
         if index >= self.tabs.len() {
             return None;
         }
@@ -284,6 +290,30 @@ impl EditorApp {
     }
     pub(super) fn tab_preview_document(&self) -> Option<&DocumentSession> {
         self.tab_document(self.tabs.preview)
+    }
+    pub(super) fn document_for_tab(&self, id: u64) -> Option<&DocumentSession> {
+        self.tab_document(self.tabs.index_of(id)?)
+    }
+    pub(super) fn document_for_tab_mut(&mut self, id: u64) -> Option<&mut DocumentSession> {
+        let index = self.tabs.index_of(id)?;
+        if index == self.tabs.active {
+            Some(&mut self.document)
+        } else {
+            self.tabs.parked[index]
+                .as_mut()
+                .map(|tab| &mut tab.document)
+        }
+    }
+    pub(super) fn set_tab_autosave(&mut self, id: u64, deadline: Option<Instant>) {
+        let Some(index) = self.tabs.index_of(id) else {
+            return;
+        };
+        if index == self.tabs.active {
+            self.autosave_deadline = deadline;
+        } else if let Some(tab) = &mut self.tabs.parked[index] {
+            tab.autosave = deadline;
+        }
+        self.tabs.refresh_autosave();
     }
     pub(super) fn tab_preview_root(&self) -> &Path {
         if self
@@ -894,57 +924,31 @@ impl EditorApp {
         if self.document_flow_busy() || self.process_close_pending {
             return;
         }
-        let mut saved = false;
-        for tab in self.tabs.parked.iter_mut().flatten() {
-            if tab.autosave.is_none_or(|deadline| deadline > now) {
-                continue;
-            }
-            tab.autosave = None;
-            let Some(path) = tab.document.path().clone() else {
-                continue;
-            };
-            if !tab.document.is_dirty() {
-                continue;
-            }
-            let save = (|| -> Result<(), String> {
-                if !disk_matches_fingerprint(&path, tab.document.disk_fingerprint()) {
-                    return Err("Auto-save paused: file changed on disk".into());
+        let candidate = self
+            .tabs
+            .parked
+            .iter_mut()
+            .enumerate()
+            .find_map(|(index, slot)| {
+                let tab = slot.as_mut()?;
+                if tab.autosave.is_none_or(|deadline| deadline > now) {
+                    return None;
                 }
-                let request = tab
-                    .document
-                    .prepare_save(path.clone(), tab.document.kind())
-                    .map_err(|e| e.to_string())?;
-                let expected = tab
-                    .document
-                    .disk_fingerprint()
-                    .map_or(ExpectedDiskState::Unchecked, ExpectedDiskState::Fingerprint);
-                let completion = SaveInput::new(request, expected, SaveIntent::Auto, None)
-                    .execute_with(|input| atomic_write(input.path(), input.bytes()));
-                let committed = completion.result?;
-                let durability = committed.durability;
-                tab.document
-                    .record_save(committed.receipt)
-                    .map_err(str::to_owned)?;
-                if let tiptoptyp::save_transaction::WriteDurability::Uncertain(error) = durability {
-                    return Err(error.to_string());
-                }
-                Ok(())
-            })();
-            match save {
-                Ok(()) => saved = true,
-                Err(error) => {
-                    self.notice = Some(Notice {
-                        message: format!("{}: {error}", path.display()),
-                        kind: NoticeKind::Error,
-                    })
-                }
-            }
-        }
+                tab.autosave = None;
+                (tab.document.is_dirty())
+                    .then(|| tab.document.path().clone())
+                    .flatten()
+                    .map(|path| (index, path))
+            });
         self.tabs.refresh_autosave();
-        if saved {
-            self.git.request_refresh();
-            self.git_editor.request_refresh();
-            self.schedule_compile_now();
+        if let Some((index, path)) = candidate {
+            self.submit_save(
+                self.tabs.id_at(index).unwrap(),
+                path,
+                SaveIntent::Auto,
+                false,
+                context,
+            );
         }
     }
 }

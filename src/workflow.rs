@@ -224,6 +224,7 @@ pub(crate) enum AppModalChoice {
 /// it from applying to a replacement document or a newer revision.
 #[derive(Default)]
 pub(crate) struct DocumentWorkflow {
+    pub(crate) save_in_flight: bool,
     flow:
         tiptoptyp_core::workflow::Workflow<PendingDocumentAction, AppModal, PendingDocumentDialog>,
     pub(crate) modal_had_focus: bool,
@@ -283,9 +284,11 @@ impl DocumentWorkflow {
     pub(crate) fn cancel_continuation(&mut self) {
         self.flow.cancel_continuation();
     }
+    #[cfg(test)]
     pub(crate) fn take_continuation(&mut self) -> Option<PendingDocumentAction> {
         self.flow.take_continuation()
     }
+    #[cfg(test)]
     pub(crate) fn has_continuation(&self) -> bool {
         self.flow.has_continuation()
     }
@@ -296,6 +299,9 @@ impl DocumentWorkflow {
         let _ = self.flow.choose(dialog);
     }
     pub(crate) fn finish_dispatch(&mut self) {
+        if self.save_in_flight {
+            return;
+        }
         self.flow.finish_dispatch();
         if !self.flow.is_busy()
             && let Some(modal) = self.deferred_errors.pop_front()
@@ -316,6 +322,7 @@ impl DocumentWorkflow {
     }
     pub(crate) fn is_busy(&self, rename_active: bool, tool_picker_active: bool) -> bool {
         self.flow.is_busy()
+            || self.save_in_flight
             || rename_active
             || self.pending_export_dialog.is_some()
             || tool_picker_active

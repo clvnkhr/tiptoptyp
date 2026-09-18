@@ -1,7 +1,10 @@
 use super::*;
-use crate::git::editor::{
-    ChunkDiff,
-    actions::{self, Action},
+use crate::git::{
+    editor::ChunkDiff,
+    repository::{
+        Repository,
+        hunks::{self, Action},
+    },
 };
 
 impl EditorApp {
@@ -100,7 +103,7 @@ impl EditorApp {
             }
         };
         if action == Action::Revert {
-            let replacement = actions::revert(&source, &chunk.hunk).and_then(|text| {
+            let replacement = hunks::revert(&source, &chunk.hunk).and_then(|text| {
                 self.document
                     .project_canonical_change(
                         key,
@@ -132,7 +135,12 @@ impl EditorApp {
             if let Err(error) =
                 self.git_hunk_job
                     .start_and_repaint("git-hunk", context, move || {
-                        actions::change_index(&root, &chunk.path, &source, &chunk.hunk, action)
+                        Repository::new(&root).change_index(
+                            &chunk.path,
+                            &source,
+                            &chunk.hunk,
+                            action,
+                        )
                     })
             {
                 self.show_file_error(error);

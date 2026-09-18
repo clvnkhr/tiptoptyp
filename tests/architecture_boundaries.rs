@@ -4,6 +4,53 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[test]
+fn git_repository_execution_and_codecs_do_not_depend_on_views() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/git");
+    let mut paths = rust_files(&root.join("repository"));
+    paths.push(root.join("repository.rs"));
+    for path in paths {
+        let source = fs::read_to_string(&path).unwrap();
+        for forbidden in [
+            "egui",
+            "eframe",
+            "crate::app",
+            "crate::git::editor",
+            "super::editor",
+            "GitPanel",
+            "GitEditorState",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{} depends on {forbidden}",
+                path.display()
+            );
+        }
+    }
+    for path in [
+        root.with_extension("rs"),
+        root.join("editor.rs"),
+        root.join("editor/actions.rs"),
+    ] {
+        let source = fs::read_to_string(&path).unwrap();
+        let production = source.split("#[cfg(test)]\nmod tests").next().unwrap();
+        for forbidden in [
+            "Command::new",
+            "fn run_command",
+            "fn parse_status",
+            "fn parse_hunks",
+            "fn change_index",
+            "fn compare_buffer",
+        ] {
+            assert!(
+                !production.contains(forbidden),
+                "{} still owns {forbidden}",
+                path.display()
+            );
+        }
+    }
+}
+
 fn rust_files(root: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     for entry in fs::read_dir(root).unwrap() {

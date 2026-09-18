@@ -129,7 +129,8 @@ fn file_open_and_save_report_successful_actions() {
             .message
             .starts_with("Opened notes.txt in ")
     );
-    assert!(app.save_to(path));
+    assert!(app.save_to(path, &context));
+    app.finish_save_for_test(&context);
     assert!(
         app.notice
             .as_ref()
@@ -1963,15 +1964,17 @@ fn autosave_requires_a_known_disk_fingerprint() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("document.typ");
     std::fs::write(&path, "= Original").unwrap();
-    assert!(!disk_matches_fingerprint(&path, None));
-    assert!(disk_matches_fingerprint(
-        &path,
-        Some(fingerprint(b"= Original"))
-    ));
-    assert!(!disk_matches_fingerprint(
-        &path,
-        Some(fingerprint(b"= Different"))
-    ));
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    app.snapshot_scene = None;
+    app.document.replace_loaded_unprojected(
+        "= Edited".into(),
+        path.clone(),
+        DocumentKind::Typst,
+        None,
+    );
+    assert!(!app.save_to_with_intent(path.clone(), SaveIntent::Auto, &context));
+    assert_eq!(fs::read_to_string(path).unwrap(), "= Original");
 }
 
 #[test]
@@ -3500,7 +3503,7 @@ fn reordered_explorer_resizes_the_visible_neighbor_and_preserves_other_heights()
 
 #[test]
 fn gutter_marker_receives_clicks_beside_the_actual_text_editor() {
-    use crate::git::editor::{ChangeKind, Hunk, LineChange};
+    use crate::git::repository::diff::{ChangeKind, Hunk, LineChange};
     use egui_kittest::{Harness, kittest::Queryable as _};
     for (source, change, label) in [
         (
@@ -6045,7 +6048,7 @@ fn git_line_change_summary_keeps_all_change_categories_visible() {
     let context = egui::Context::default();
     let summary = EditorApp::git_line_change_summary(
         &context,
-        crate::git::editor::LineChangeCounts {
+        crate::git::repository::diff::LineChangeCounts {
             added: 12,
             modified: 3,
             deleted: 7,
@@ -6054,9 +6057,9 @@ fn git_line_change_summary_keeps_all_change_categories_visible() {
 
     assert_eq!(summary.text, "Git: +12 · ~3 · -7");
     for (section, kind) in [1, 3, 5].into_iter().zip([
-        crate::git::editor::ChangeKind::Added,
-        crate::git::editor::ChangeKind::Modified,
-        crate::git::editor::ChangeKind::Deleted,
+        crate::git::repository::diff::ChangeKind::Added,
+        crate::git::repository::diff::ChangeKind::Modified,
+        crate::git::repository::diff::ChangeKind::Deleted,
     ]) {
         assert_eq!(summary.sections[section].format.color, kind.color(&context));
     }
@@ -6434,7 +6437,8 @@ fn projected_application_save_autosave_and_backing_source_use_canonical_bytes() 
     assert!(canonical.contains("#mi(\"\\\\beta\")"));
     assert_eq!(app.preview_document_source().unwrap(), canonical);
     let path = directory.path().join("saved.typ");
-    assert!(app.save_to(path.clone()));
+    assert!(app.save_to(path.clone(), &context));
+    app.finish_save_for_test(&context);
     assert_eq!(fs::read_to_string(&path).unwrap(), canonical);
     assert_eq!(app.document.source(), &displayed);
     assert_eq!(
@@ -6466,7 +6470,7 @@ fn projected_application_save_autosave_and_backing_source_use_canonical_bytes() 
     app.settings.auto_save = true;
     app.schedule_autosave_if_needed();
     assert!(app.autosave_deadline.is_some());
-    assert!(!app.save_to_with_intent(path.clone(), SaveIntent::Auto));
+    assert!(!app.save_to_with_intent(path.clone(), SaveIntent::Auto, &context));
     assert!(app.sync_tinymist_change().is_err());
     assert!(app.preview_document_source().is_err());
     assert_eq!(fs::read_to_string(&path).unwrap(), canonical);
@@ -6478,7 +6482,8 @@ fn projected_application_save_autosave_and_backing_source_use_canonical_bytes() 
     assert!(!app.is_dirty());
     app.document
         .edit(CCursorRange::default(), |source| source.push('!'));
-    assert!(app.save_to_with_intent(path.clone(), SaveIntent::Auto));
+    assert!(app.save_to_with_intent(path.clone(), SaveIntent::Auto, &context));
+    app.finish_save_for_test(&context);
     assert_eq!(fs::read_to_string(&path).unwrap(), format!("{canonical}!"));
 }
 
@@ -6531,7 +6536,7 @@ fn projected_application_refused_save_cancels_close_without_creating_a_file() {
             description: "closing".into(),
         });
     let path = directory.path().join("refused.typ");
-    assert!(!app.save_to(path.clone()));
+    assert!(!app.save_to(path.clone(), &context));
     assert!(!path.exists());
     assert!(!app.document_workflow.has_continuation());
     assert!(app.is_dirty());

@@ -243,6 +243,10 @@ paths remains ongoing work, not an unchecked part of the profiling setup.
 
 ## Architecture regression probes
 
+The [background-save review](background-saves.md) records matched optimized
+synchronous/background dispatch measurements and the opt-in slow-storage probe.
+It separates foreground submission latency from total persistence time.
+
 See [the architecture performance review](architecture-performance.md) for
 matched baseline/fixed measurements, retained evidence, limitations, and the
 opt-in `architecture_cost_probe` command. Normal test runs skip its timing loop;

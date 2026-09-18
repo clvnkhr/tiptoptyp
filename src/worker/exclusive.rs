@@ -32,6 +32,15 @@ pub(crate) fn take_detached_completions() -> Vec<String> {
             .unwrap_or_else(|e| e.into_inner()),
     )
 }
+
+#[cfg(test)]
+pub(crate) fn take_matching_detached_completion(needle: &str) -> Option<String> {
+    let mut messages = DETACHED.get_or_init(Default::default).lock().unwrap();
+    let index = messages
+        .iter()
+        .position(|message| message.contains(needle))?;
+    Some(messages.remove(index))
+}
 /// Mutating operations retain a useful outcome even if their UI owner is gone.
 pub(crate) trait OperationSummary {
     fn completion_summary(&self) -> String;
@@ -193,10 +202,6 @@ mod tests {
                 .unwrap(),
             egui::ViewportId::ROOT
         );
-        assert!(
-            take_detached_completions()
-                .iter()
-                .any(|message| message.contains("exclusive-test-mutation completed"))
-        );
+        assert!(take_matching_detached_completion("exclusive-test-mutation completed").is_some());
     }
 }

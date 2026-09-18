@@ -244,8 +244,8 @@ does not include the viewer features in items 1, 118 or 163.
 
 187. [x] (A02) Add adversarial save-order tests before changing execution: edits during save, overlapping same-path requests, failed/uncertain writes, and close during completion. Assert that only the matching durable receipt can approve a close.
 188. [x] (A02; after 187) Wrap the existing core SaveRequest/SaveReceipt and durability outcomes in immutable worker inputs/results carrying canonical bytes, expected disk state, intent and continuation token. Do not duplicate core document identity or receipt validation. Adapt the existing save path without changing execution timing; test receipt identity and durability handling.
-189. [ ] (A02; after 188) Execute save disk work as protected background transactions. Recheck expected disk state inside the app-owned path lease, serialize same-path writes, and retain completion after owner closure. A controllable slow-writer test must leave UI dispatch non-blocking; do not claim atomicity against external writers.
-190. [ ] (A02; after 189) Route active manual save and parked-tab autosave through the same coordinator and remove duplicated write policy. Preserve manual-only formatting and reject stale receipts; test save/close continuations for both paths without automatic conflict merging.
+189. [x] (A02; after 188) Execute save disk work as protected background transactions. Recheck expected disk state inside the app-owned path lease, serialize same-path writes, and retain completion after owner closure. A controllable slow-writer test must leave UI dispatch non-blocking; do not claim atomicity against external writers.
+190. [x] (A02; after 189) Route active manual save and parked-tab autosave through the same coordinator and remove duplicated write policy. Preserve manual-only formatting and reject stale receipts; test save/close continuations for both paths without automatic conflict merging.
 
 191. [ ] (A03; after 184) Define versioned synchronization inputs and typed open/change/close/backing-update effects. Add command-log tests for edit, switch, close, preview-entry change and miTeX-mode change using current behavior as the contract.
 192. [ ] (A03; after 191) Extract canonical snapshot collection, open-URI tracking, private backing ownership and active/preview root selection into one synchronization coordinator. Keep filesystem and service IO in adapters; remove duplicate orchestration paths.
@@ -275,7 +275,7 @@ does not include the viewer features in items 1, 118 or 163.
 210. [x] (A09) Introduce a typed completion-edit transaction carrying source version, validated coordinate ranges, selection and one undo intent. Reuse core validation and miTeX preflight; test Unicode, CRLF, invalid ranges, stale replies and one-step undo while leaving typing/IME with TextEdit.
 211. [x] (A09; after 210) Extract the completion popup renderer behind read-only inputs and typed actions, without access to EditorApp or services. Add semantic acceptance/selection tests and check unchanged-frame allocations; do not add full-source copies or broaden this patch to every editor feature.
 
-212. [ ] (A10) Extract Git command execution and status/diff codecs behind a repository service handle. Preserve argument-array invocation and add disposable-repository coverage for quoted paths, new files, CRLF and missing final newlines; this is not the visual redesign in item 183.
+212. [x] (A10) Extract Git command execution and status/diff codecs behind a repository service handle. Preserve argument-array invocation and add disposable-repository coverage for quoted paths, new files, CRLF and missing final newlines; this is not the visual redesign in item 183.
 213. [x] (A10; independent of 212) Route hunk index mutations through the existing repository-root transaction lease and revalidate baselines under that lease. Share the transaction entry point with panel operations; do not postpone this correctness fix for a service extraction. Test overlap with panel operations, conflicts, partial staging and preservation of unrelated staged changes; retain protected completions.
 214. [ ] (A10; after 212 and 213) Make Git panel/gutter/popup views consume immutable state and emit typed actions only, removing service-to-UI dependencies. Test that rendering cannot execute Git and that checked hunk revert remains one editor undo; preserve item 115's controls and safety rules.
 
@@ -288,7 +288,54 @@ does not include the viewer features in items 1, 118 or 163.
 220. [x] (A12) Generate or validate runtime tool-version metadata from toolchain/manifest.tsv so constants and packaging cannot drift. Add a mismatch regression/build check; preserve resolution precedence without bundling new tools or retaining compatibility aliases.
 221. [x] (A12) Correct obsolete miTeX comments in src/lib.rs and add superseding current-state notes to ADR 0002 for per-window Tinymist, the separate Settings viewport and conditional CLI compilation. Cross-link the current ownership/module map without erasing historical decision context.
 
+= Git repository service boundary (2026-09-17)
+
+- Item 212: subprocess handling, status/diff codecs and hunk index transactions
+  now live in `src/git/repository.rs` and its `diff`/`hunks` modules. Panel and
+  editor workers use a borrowed Repository handle; UI labels and rendering stay
+  outside the service. No extra workers, queues, source copies or idle work.
+- Preserve argument arrays, literal pathspecs, bounded output, timeouts and the
+  shared mutation lease. Disposable-repository regressions cover quoted/Unicode
+  paths, new files, CRLF and missing final newlines, checking exact index bytes
+  and unchanged working files. Dependency checks prevent UI ownership leaking
+  back into the service.
+- Fixed nested-workspace result provenance: mutations retain the requesting
+  workspace separately from the canonical repository root. Direct and async
+  panel tests ensure successful commits clear their message without a spurious
+  refresh. Existing partial-stage, concurrency and one-undo revert tests pass.
+- All 52 focused Git tests, boundary checks, full Rust tests, strict Clippy,
+  formatting and all 13 xtask tests pass. No geometry changed; no screenshot or
+  new performance measurement is claimed. Details: `docs/architecture-followup.md`.
+- Architecture checklist: 16 of 38 complete, 22 remaining (including the
+  measurement-gated 217). Read-only Git views remain item 214.
+
+= Protected background saves (2026-09-17)
+
+- Items 189–190: active/manual/Save As/post-format and parked autosave now share
+  one admission/completion adapter and protected worker-side disk policy. Reuse
+  ExclusiveJob and the destination lease; no additional executor or payload queue.
+- Disk-baseline verification and atomic persistence share one lease. Conflicts
+  require fresh confirmation, uncertain writes cannot close documents, and late
+  receipts cannot overwrite newer text or release another close continuation.
+  Admitted writes and their outcomes survive owner closure.
+- Deterministic tests cover blocked storage with runnable UI dispatch, duplicate
+  admission, competing same-path writes, repeated conflicts, delayed Save As
+  formatting, newer edits, replaced documents and parked/reordered tab routing.
+- Matched optimized slow-storage probe: median foreground dispatch 21.792 ms
+  synchronous versus 0.0169 ms background. Total persistence did not improve;
+  this is a headless boundary measurement, not GUI FPS. Metadata normalization
+  and snapshot preparation remain foreground work. Raw samples, environment
+  and limitations: `docs/background-saves.md`.
+- Reactivation currently rekeys document epochs, so a save receipt arriving after
+  reactivation is conservatively rejected rather than falsely marking it clean.
+  Stable document ownership remains items 184–186. No external-writer atomicity
+  is claimed. Formatting, ordinary/profiling strict Clippy and full tests, and
+  all 13 xtask tests pass; no pixel layout changed.
+
 = Immutable save handoff (2026-09-17)
+
+This records the intermediate stage; items 189–190 above supersede its synchronous
+execution and pending-work notes.
 
 - Item 188: `src/save_transaction.rs` wraps the existing projection-aware request
   and receipt with expected disk state, save intent, durability and continuation

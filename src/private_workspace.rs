@@ -256,7 +256,18 @@ pub struct AtomicFileWriter;
 
 impl AtomicFileWriter {
     pub fn write(destination: impl AsRef<Path>, contents: &[u8]) -> io::Result<WriteDurability> {
+        Self::write_checked(destination, contents, || Ok(()))
+    }
+
+    /// Check and persist share the app-owned destination lease. External
+    /// processes are not locked by this lease and may still race the write.
+    pub(crate) fn write_checked(
+        destination: impl AsRef<Path>,
+        contents: &[u8],
+        check: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<WriteDurability> {
         crate::resource_lock::with_resource(destination.as_ref(), || {
+            check()?;
             atomic_write_with_staging_root(
                 destination.as_ref(),
                 contents,

@@ -5,6 +5,7 @@ mod git_actions;
 mod lifecycle;
 mod mitex_mode;
 mod raster_view;
+mod saves;
 mod tabs;
 mod workspace_view;
 use lifecycle::DocumentLifecycle;
@@ -744,7 +745,7 @@ enum AppPopup {
 #[derive(Debug, Clone)]
 enum AppPopupAction {
     GitHunk(
-        crate::git::editor::actions::Action,
+        crate::git::repository::hunks::Action,
         DocumentKey,
         crate::git::editor::ChunkDiff,
     ),
@@ -1161,6 +1162,8 @@ pub struct EditorApp {
     app_popup_blur_started: Option<Instant>,
     pending_app_popup_action: Option<AppPopupAction>,
     document_workflow: DocumentWorkflow,
+    save_job: crate::worker::ExclusiveJob<crate::save_io::SaveResult>,
+    pending_save: Option<saves::PendingSave>,
     rename_dialog: Option<RenameDialog>,
     rename_overlay_had_focus: bool,
     rename_overlay_suspended: bool,
@@ -1442,6 +1445,8 @@ impl EditorApp {
             app_popup_blur_started: None,
             pending_app_popup_action: None,
             document_workflow: DocumentWorkflow::default(),
+            save_job: Default::default(),
+            pending_save: None,
             rename_dialog: None,
             rename_overlay_had_focus: false,
             rename_overlay_suspended: false,
@@ -1715,6 +1720,9 @@ impl EditorApp {
         // process completion mailbox instead of being canceled on close.
         self.git = Default::default();
         self.git_editor = Default::default();
+        self.save_job = Default::default();
+        self.pending_save = None;
+        self.document_workflow.save_in_flight = false;
         self.asset_thumbnail_token.advance();
         self.asset_thumbnail_loader
             .cancel_before(self.asset_thumbnail_token);
@@ -2232,6 +2240,9 @@ impl EditorApp {
     }
 
     fn tick_autosave(&mut self, context: &egui::Context) {
+        if self.save_job.is_running() {
+            return;
+        }
         if self.snapshot_scene.is_some() {
             self.autosave_deadline = None;
             return;
@@ -2256,12 +2267,7 @@ impl EditorApp {
             return;
         };
 
-        if self.save_to_with_intent(path, SaveIntent::Auto) {
-            self.notice = Some(Notice {
-                message: "Saved automatically".to_owned(),
-                kind: NoticeKind::Success,
-            });
-        }
+        self.save_to_with_intent(path, SaveIntent::Auto, context);
     }
 
     fn editor_revision(&self) -> DocumentKey {
@@ -3109,9 +3115,7 @@ impl EditorApp {
             AppCommand::OpenInNewWindow => self.open_in_new_window_dialog(frame),
             AppCommand::ChangeWorkspaceRoot => self.open_workspace_chooser(),
             AppCommand::Save => {
-                if self.save_document(frame) {
-                    self.request_format_after_manual_save();
-                }
+                self.save_document(frame, context);
             }
             AppCommand::SaveAs => {
                 self.save_as(frame);
@@ -3938,12 +3942,12 @@ impl EditorApp {
         true
     }
 
-    fn save_document(&mut self, frame: Option<&eframe::Frame>) -> bool {
+    fn save_document(&mut self, frame: Option<&eframe::Frame>, context: &egui::Context) -> bool {
         if !self.document.kind().is_editable() {
             return true;
         }
         if let Some(path) = self.document.path().clone() {
-            self.save_to(path)
+            self.save_to(path, context)
         } else {
             self.save_as(frame)
         }
@@ -3980,219 +3984,6 @@ impl EditorApp {
             },
             dialog.save_file(),
         ));
-        false
-    }
-
-    fn save_to(&mut self, path: PathBuf) -> bool {
-        self.save_to_with_intent(path, SaveIntent::Explicit)
-    }
-
-    fn save_to_with_intent(&mut self, path: PathBuf, intent: SaveIntent) -> bool {
-        let started = Instant::now();
-        if self.path_open_in_another_tab(&canonical_or_absolute(&path)) {
-            self.show_file_error(
-                "This file is already open in another tab; switch to it before saving".into(),
-            );
-            return false;
-        }
-        // Snapshot scenes freely replace and manipulate the in-memory source
-        // to construct deterministic UI states. No capture path is allowed to
-        // persist those synthetic edits to the fixture supplied on the CLI.
-        if self.snapshot_scene.is_some() {
-            self.autosave_deadline = None;
-            return false;
-        }
-        let path_changed = self
-            .document
-            .path()
-            .as_ref()
-            .is_none_or(|current| !same_path(current, &path));
-        if !path_changed {
-            match intent {
-                SaveIntent::Explicit if !self.confirm_disk_unchanged(&path) => return false,
-                SaveIntent::ExplicitConfirmed { .. } => {}
-                SaveIntent::Auto
-                    if !disk_matches_fingerprint(&path, self.document.disk_fingerprint()) =>
-                {
-                    self.notice = Some(Notice {
-                        message: "Auto-save paused because the file changed on disk".to_owned(),
-                        kind: NoticeKind::Error,
-                    });
-                    return false;
-                }
-                _ => {}
-            }
-        }
-        let saved_kind = if path_changed {
-            crate::document::detect_document(&path, self.document.source().as_bytes())
-                .ok()
-                .filter(|kind| kind.is_editable())
-                .unwrap_or(DocumentKind::Text)
-        } else {
-            self.document.kind()
-        };
-        let save = match self
-            .document
-            .prepare_save(canonical_or_absolute(&path), saved_kind)
-        {
-            Ok(save) => save,
-            Err(error) => {
-                if intent != SaveIntent::Auto {
-                    self.document_workflow.cancel_continuation();
-                }
-                self.notice = Some(Notice {
-                    message: error.to_string(),
-                    kind: NoticeKind::Error,
-                });
-                return false;
-            }
-        };
-        let expected_disk = match intent {
-            SaveIntent::ExplicitConfirmed { observed } => {
-                observed.map_or(ExpectedDiskState::Missing, ExpectedDiskState::Fingerprint)
-            }
-            _ if path_changed => ExpectedDiskState::Unchecked,
-            _ => self
-                .document
-                .disk_fingerprint()
-                .map_or(ExpectedDiskState::Unchecked, ExpectedDiskState::Fingerprint),
-        };
-        let input = SaveInput::new(
-            save,
-            expected_disk,
-            intent,
-            self.document_workflow.continuation_token(),
-        );
-        // Admission above is unchanged. Lease-protected revalidation and worker
-        // dispatch are a separate step; this still executes synchronously.
-        let completion = input.execute_with(|input| atomic_write(input.path(), input.bytes()));
-        let intent = completion.intent;
-        match completion.result {
-            Ok(committed) => {
-                let durability = committed.durability;
-                let path = path.canonicalize().unwrap_or(path);
-                if !path.starts_with(&self.workspace_root)
-                    && let Some(parent) = path.parent()
-                {
-                    self.workspace_root = canonical_or_absolute(&discover_project_root(parent));
-                }
-                let continuation = match self.document_workflow.complete_save(
-                    completion.continuation,
-                    &mut self.document,
-                    committed.receipt,
-                    matches!(
-                        durability,
-                        tiptoptyp::save_transaction::WriteDurability::Synchronized
-                    ),
-                ) {
-                    Ok(continuation) => continuation,
-                    Err(error) => {
-                        self.show_file_error(error.to_owned());
-                        return false;
-                    }
-                };
-                self.external_file_change_notice = None;
-                if path_changed {
-                    self.preview.content.invalidate();
-                    self.reset_document_services();
-                    self.schedule_compile_now();
-                } else {
-                    self.refresh_workspace();
-                    if self.preview_processing_enabled() {
-                        // Any saved project file may be imported or read by
-                        // the designated entry, so refresh the CLI fallback.
-                        self.schedule_compile_now();
-                    }
-                }
-                self.autosave_deadline = None;
-                if let Some(path) = self.document.path().clone() {
-                    self.remember_open_document(&path);
-                }
-                self.schedule_project_index();
-                if let tiptoptyp::save_transaction::WriteDurability::Uncertain(error) = durability {
-                    // Bytes are saved, so mark this snapshot clean, but keep the
-                    // document open instead of silently completing a close.
-                    self.document_workflow.cancel_continuation();
-                    self.show_file_error(format!("Saved {}, but could not confirm disk durability: {error}. The document remains open.", path.display()));
-                    return false;
-                }
-                if let Some(mut action) = continuation {
-                    action.key = self.document.key();
-                    action.allow_discard = false;
-                    self.document_workflow.queue_action(action);
-                }
-                self.notice = Some(Notice {
-                    message: completed_action_label(
-                        if intent == SaveIntent::Auto {
-                            "Auto-saved"
-                        } else {
-                            "Saved"
-                        },
-                        &self.document.name(),
-                        started.elapsed(),
-                    ),
-                    kind: NoticeKind::Success,
-                });
-                true
-            }
-            Err(error) => {
-                match intent {
-                    SaveIntent::Explicit | SaveIntent::ExplicitConfirmed { .. } => {
-                        self.document_workflow.cancel_continuation();
-                        self.show_file_error(error);
-                    }
-                    SaveIntent::Auto => {
-                        self.notice = Some(Notice {
-                            message: format!("Auto-save failed: {error}"),
-                            kind: NoticeKind::Error,
-                        });
-                        self.autosave_deadline = Some(Instant::now() + AUTOSAVE_RETRY_DELAY);
-                    }
-                }
-                false
-            }
-        }
-    }
-
-    fn confirm_disk_unchanged(&mut self, path: &Path) -> bool {
-        let Some(expected) = self.document.disk_fingerprint() else {
-            return true;
-        };
-        let (description, observed_disk_fingerprint) = match fs::read(path) {
-            Ok(contents) if fingerprint(&contents) == expected => return true,
-            Ok(contents) => (
-                format!(
-                    "{} changed in another application. Overwrite those newer changes?",
-                    path.display()
-                ),
-                Some(fingerprint(&contents)),
-            ),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (
-                format!(
-                    "{} was deleted outside tiptoptyp. Create it again?",
-                    path.display()
-                ),
-                None,
-            ),
-            Err(error) => {
-                self.document_workflow.cancel_continuation();
-                self.show_file_error(format!(
-                    "Could not check {} before saving: {error}",
-                    path.display()
-                ));
-                return false;
-            }
-        };
-
-        self.document_workflow.set_modal(AppModal::Overwrite {
-            message: description,
-            path: path.to_path_buf(),
-            key: self.document.key(),
-            expected_disk_fingerprint: self.document.disk_fingerprint(),
-            observed_disk_fingerprint,
-        });
-        self.document_workflow.modal_had_focus = false;
-        self.document_workflow.modal_suspended = false;
         false
     }
 
@@ -4484,19 +4275,7 @@ impl EditorApp {
                 if typst && path.extension().is_none() {
                     path.set_extension("typ");
                 }
-                let saved = self.save_to(path);
-                if let Some(key) =
-                    save_as_format_handoff(saved, self.document.kind(), self.document.key())
-                {
-                    // Save As changes the document URI and restarts Tinymist.
-                    // Remember this exact saved revision and request formatting
-                    // only after the replacement LSP session has opened it.
-                    self.format_when_tinymist_ready = Some(key);
-                    self.notice = Some(Notice {
-                        message: "Saved; formatting when Tinymist is ready…".to_owned(),
-                        kind: NoticeKind::Info,
-                    });
-                }
+                self.save_to(path, context);
             }
         }
     }
@@ -4654,13 +4433,7 @@ impl EditorApp {
         match pending.action {
             DeferredDocumentAction::SaveThen(action) => {
                 self.document_workflow.continue_after_save(*action);
-                if self.save_document(frame)
-                    && let Some(mut action) = self.document_workflow.take_continuation()
-                {
-                    action.key = self.document.key();
-                    action.allow_discard = false;
-                    self.document_workflow.queue_action(action);
-                }
+                self.save_document(frame, context);
                 return;
             }
             DeferredDocumentAction::ForceSave {
@@ -4685,34 +4458,14 @@ impl EditorApp {
                     self.schedule_autosave_if_needed();
                     return;
                 }
-                let current_disk_fingerprint = match fs::read(&path) {
-                    Ok(contents) => Some(fingerprint(&contents)),
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-                    Err(error) => {
-                        self.document_workflow.cancel_continuation();
-                        self.show_file_error(format!(
-                            "Could not recheck {} before saving: {error}",
-                            path.display()
-                        ));
-                        return;
+                let intent = if key.revision != self.document.revision() {
+                    SaveIntent::Explicit
+                } else {
+                    SaveIntent::ExplicitConfirmed {
+                        observed: observed_disk_fingerprint,
                     }
                 };
-                let continue_after_save = self.document_workflow.has_continuation();
-                let saved = if key.revision != self.document.revision()
-                    || current_disk_fingerprint != observed_disk_fingerprint
-                {
-                    self.save_to_with_intent(path, SaveIntent::Explicit)
-                } else {
-                    self.save_to_with_intent(
-                        path,
-                        SaveIntent::ExplicitConfirmed {
-                            observed: current_disk_fingerprint,
-                        },
-                    )
-                };
-                if saved && !continue_after_save {
-                    self.request_format_after_manual_save();
-                }
+                self.submit_save(self.tabs.active_id(), path, intent, true, context);
                 return;
             }
             action => pending.action = action,
@@ -4950,6 +4703,9 @@ impl EditorApp {
     }
 
     fn poll_external_file_change(&mut self, context: &egui::Context) {
+        if self.save_job.is_running() {
+            return;
+        }
         if self.tabs.is_empty() {
             return;
         }
@@ -6560,7 +6316,7 @@ impl EditorApp {
         self.mark_edited();
         let saved_after_format = if save_after_format {
             if let Some(path) = self.document.path().clone() {
-                if !self.save_to_with_intent(path, SaveIntent::Explicit) {
+                if !self.save_to_with_intent(path, SaveIntent::Explicit, context) {
                     return;
                 }
                 true
@@ -6572,7 +6328,7 @@ impl EditorApp {
         };
         self.notice = Some(Notice {
             message: if saved_after_format {
-                "Formatted and saved with Tinymist".to_owned()
+                "Formatted with Tinymist; saving…".to_owned()
             } else {
                 "Formatted with Tinymist".to_owned()
             },
@@ -8104,7 +7860,7 @@ impl EditorApp {
         Some(line_column_at_char(self.document.source(), char_index))
     }
 
-    fn git_line_change_counts(&self) -> Option<crate::git::editor::LineChangeCounts> {
+    fn git_line_change_counts(&self) -> Option<crate::git::repository::diff::LineChangeCounts> {
         let path = self
             .document
             .path()
@@ -8117,9 +7873,9 @@ impl EditorApp {
 
     fn git_line_change_summary(
         context: &egui::Context,
-        counts: crate::git::editor::LineChangeCounts,
+        counts: crate::git::repository::diff::LineChangeCounts,
     ) -> egui::text::LayoutJob {
-        use crate::git::editor::ChangeKind;
+        use crate::git::repository::diff::ChangeKind;
         let mut job = egui::text::LayoutJob::default();
         let format = egui::TextFormat {
             font_id: egui::FontId::proportional(theme::TYPE.supporting),
@@ -8580,6 +8336,7 @@ impl EditorApp {
         }
         self.execute_pending_app_popup_action(&context, frame);
         self.poll_hunk_action();
+        self.poll_save(&context);
         self.tick_parked_autosave(&context);
         let drop_id = viewport_scoped_id(&context, "file-drop-target");
         context.data_mut(|data| data.remove::<FileDropTarget>(drop_id));
@@ -13764,18 +13521,6 @@ fn trim_file_history(history: &mut BTreeMap<String, String>, keep: &str) {
         };
         history.remove(&stale);
     }
-}
-
-fn disk_matches_fingerprint(path: &Path, expected: Option<u64>) -> bool {
-    let Some(expected) = expected else {
-        // Auto-save is deliberately non-interactive. If we do not know which
-        // disk contents the buffer came from, overwriting cannot be proven
-        // safe, so require an explicit save instead.
-        return false;
-    };
-    fs::read(path)
-        .map(|contents| fingerprint(&contents) == expected)
-        .unwrap_or(false)
 }
 
 fn reveal_label() -> &'static str {
