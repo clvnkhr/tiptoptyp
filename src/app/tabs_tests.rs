@@ -31,7 +31,7 @@ fn tab_highlight_contains_both_controls_and_vector_icons_share_a_centerline() {
     let app = fixture(&context, root.path());
     context
         .run_ui(Default::default(), |ui| {
-            let tab = tab_widget(ui, &app.document, true, true, 110.0);
+            let tab = tab_widget(ui, app.document(), true, true, 110.0);
             let preview = tab
                 .preview
                 .as_ref()
@@ -60,7 +60,7 @@ fn non_typst_tabs_have_no_preview_eye_and_fixed_widths_are_stable() {
     let context = egui::Context::default();
     let root = tempfile::tempdir().unwrap();
     let mut app = fixture(&context, root.path());
-    app.document.replace_loaded_unprojected(
+    app.document_mut().replace_loaded_unprojected(
         "notes".into(),
         root.path().join("notes.md"),
         DocumentKind::Text,
@@ -68,7 +68,7 @@ fn non_typst_tabs_have_no_preview_eye_and_fixed_widths_are_stable() {
     );
     context
         .run_ui(Default::default(), |ui| {
-            let tab = tab_widget(ui, &app.document, true, false, 140.0);
+            let tab = tab_widget(ui, app.document(), true, false, 140.0);
             assert!(tab.preview.is_none());
             assert!(tab.rect.contains_rect(tab.title.rect));
             assert!(tab.rect.contains_rect(tab.close.rect));
@@ -82,21 +82,22 @@ fn non_typst_tabs_have_no_preview_eye_and_fixed_widths_are_stable() {
 
 #[test]
 fn reordering_tabs_remaps_active_and_preview_without_changing_tab_identity() {
-    let mut tabs = Tabs::new(false);
-    tabs.parked = vec![None, None, None, None];
-    tabs.ids = vec![10, 20, 30, 40];
-    tabs.active = 1;
-    tabs.preview = 3;
+    let mut tabs = Tabs {
+        order: vec![10, 20, 30, 40],
+        active: Some(20),
+        preview: Some(40),
+        ..Default::default()
+    };
 
     assert!(tabs.reorder(1, 3));
-    assert_eq!(tabs.ids, vec![10, 30, 40, 20]);
-    assert_eq!(tabs.active, 3);
-    assert_eq!(tabs.preview, 2);
+    assert_eq!(tabs.ids().collect::<Vec<_>>(), vec![10, 30, 40, 20]);
+    assert_eq!(tabs.active_id(), Some(20));
+    assert_eq!(tabs.preview_id(), Some(40));
 
     assert!(tabs.reorder(2, 0));
-    assert_eq!(tabs.ids, vec![40, 10, 30, 20]);
-    assert_eq!(tabs.active, 3);
-    assert_eq!(tabs.preview, 0);
+    assert_eq!(tabs.ids().collect::<Vec<_>>(), vec![40, 10, 30, 20]);
+    assert_eq!(tabs.active_id(), Some(20));
+    assert_eq!(tabs.preview_id(), Some(40));
     assert!(!tabs.reorder(0, 0));
 }
 
@@ -107,7 +108,7 @@ fn stable_ids_resolve_the_same_documents_across_reorder() {
     let mut app = fixture(&context, root.path());
     let first = app.tabs.active_id().unwrap();
     app.append_tab(&context);
-    app.document.replace_loaded_unprojected(
+    app.document_mut().replace_loaded_unprojected(
         "second".into(),
         root.path().join("second.typ"),
         DocumentKind::Typst,
@@ -133,7 +134,7 @@ fn new_tabs_preserve_the_designated_preview_identity() {
 
     app.new_tab(&context);
     assert_eq!(app.tabs.preview_id(), Some(first));
-    app.document.replace_loaded_unprojected(
+    app.document_mut().replace_loaded_unprojected(
         "second".into(),
         root.path().join("second.typ"),
         DocumentKind::Typst,
@@ -167,16 +168,16 @@ fn vector_tab_controls_remain_named_and_do_not_select_a_different_tab() {
     let context = egui::Context::default();
     let mut app = fixture(&context, root.path());
     app.append_tab(&context);
-    app.tabs.preview = 1;
+    app.tabs.preview = app.tabs.id_at(1);
     let mut harness = Harness::builder()
         .with_size(Vec2::new(700.0, 200.0))
         .build_ui_state(|ui, app: &mut EditorApp| app.show_tabs(ui, None), app);
     harness.run_steps(3);
-    let active = harness.state().tabs.active;
+    let active = harness.state().tabs.active_id();
     harness.get_by_label("Preview first.typ").click();
     harness.run_steps(3);
-    assert_eq!(harness.state().tabs.preview, 0);
-    assert_eq!(harness.state().tabs.active, active);
+    assert_eq!(harness.state().tabs.preview_id(), Some(0));
+    assert_eq!(harness.state().tabs.active_id(), active);
     harness.get_by_label("Close first.typ");
 }
 
@@ -194,14 +195,14 @@ fn check_tab_drag(release_with_move: bool, narrow: bool) {
     let context = egui::Context::default();
     let mut app = fixture(&context, root.path());
     app.append_tab(&context);
-    app.document.replace_loaded_unprojected(
+    app.document_mut().replace_loaded_unprojected(
         "second".into(),
         root.path().join("second.typ"),
         DocumentKind::Typst,
         None,
     );
     app.append_tab(&context);
-    app.document.replace_loaded_unprojected(
+    app.document_mut().replace_loaded_unprojected(
         "third".into(),
         root.path().join("third.typ"),
         DocumentKind::Typst,
@@ -223,7 +224,7 @@ fn check_tab_drag(release_with_move: bool, narrow: bool) {
         .get_by_label(if narrow { "second.typ" } else { "first.typ" })
         .rect();
     let third = harness.get_by_label("third.typ").rect();
-    let ids = harness.state().tabs.ids.clone();
+    let ids = harness.state().tabs.ids().collect::<Vec<_>>();
     let (start, end) = if narrow {
         (third.center(), first.left_center() + Vec2::new(2.0, 0.0))
     } else {
@@ -239,7 +240,7 @@ fn check_tab_drag(release_with_move: bool, narrow: bool) {
         "the test must press a visible tab"
     );
     let active_id = harness.state().tabs.active_id();
-    let preview_id = ids[harness.state().tabs.preview];
+    let preview_id = harness.state().tabs.preview_id();
     if release_with_move {
         // Native backends can coalesce movement and a button event into one
         // frame; Harness::event normally gives every event its own frame.
@@ -293,7 +294,7 @@ fn check_tab_drag(release_with_move: bool, narrow: bool) {
     harness.run_steps(4);
 
     assert_eq!(
-        harness.state().tabs.ids,
+        harness.state().tabs.ids().collect::<Vec<_>>(),
         if narrow {
             vec![ids[0], ids[2], ids[1]]
         } else {
@@ -301,10 +302,7 @@ fn check_tab_drag(release_with_move: bool, narrow: bool) {
         }
     );
     assert_eq!(harness.state().tabs.active_id(), active_id);
-    assert_eq!(
-        harness.state().tabs.ids[harness.state().tabs.preview],
-        preview_id
-    );
+    assert_eq!(harness.state().tabs.preview_id(), preview_id);
     assert!(harness.state().tabs.tab_drag_source.is_none());
 }
 
@@ -313,7 +311,7 @@ fn last_tab_closes_to_an_empty_workspace_and_new_reuses_the_window() {
     let root = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
     let mut app = fixture(&context, root.path());
-    let old = app.document.key();
+    let old = app.document().key();
     let output = context.run_ui(Default::default(), |ui| app.finish_close_tab(ui.ctx()));
     assert!(!output.viewport_output.values().any(|v| {
         v.commands
@@ -322,7 +320,7 @@ fn last_tab_closes_to_an_empty_workspace_and_new_reuses_the_window() {
     }));
     output.drop_without_applying_deltas();
     assert!(app.tabs.is_empty());
-    assert_ne!(old, app.document.key());
+    assert_ne!(old, app.document().key());
     assert_eq!(app.workspace_root, root.path().canonicalize().unwrap());
     assert!(!app.is_dirty_for_close());
     assert!(!app.preview_visible());
@@ -335,7 +333,7 @@ fn last_tab_closes_to_an_empty_workspace_and_new_reuses_the_window() {
     }
     assert!(app.compile_deadline.is_none());
     assert!(!app.project_index_deadline.is_pending());
-    assert!(app.tinymist_generation.is_none());
+    assert!(app.tinymist_sync.generation.is_none());
     assert!(app.native_command_enabled(AppCommand::New));
     assert!(app.native_command_enabled(AppCommand::Open));
     for command in [
@@ -349,8 +347,8 @@ fn last_tab_closes_to_an_empty_workspace_and_new_reuses_the_window() {
     }
     app.new_tab(&context);
     assert_eq!(app.tabs.len(), 1);
-    assert!(app.document.kind().is_typst());
-    assert!(app.document.path().is_none());
+    assert!(app.document().kind().is_typst());
+    assert!(app.document().path().is_none());
 }
 
 #[test]
@@ -366,7 +364,7 @@ fn empty_workspace_open_failures_do_not_create_phantom_tabs() {
     assert!(app.open_tab_path(path.clone(), &context));
     assert_eq!(app.tabs.len(), 1);
     assert_eq!(
-        app.document.path().as_ref(),
+        app.document().path().as_ref(),
         Some(&path.canonicalize().unwrap())
     );
 }
@@ -379,12 +377,12 @@ fn assets_keep_typst_output_and_reject_late_results_after_closing() {
     let mut app = fixture(&context, root.path());
     app.snapshot_scene = None;
     app.preview.replace_asset(
-        ArtifactKey::unversioned(app.document.revision()),
+        ArtifactKey::unversioned(app.document().revision()),
         Some(Arc::from(b"typst output".as_slice())),
         Vec::new(),
     );
     app.append_tab(&context);
-    app.document.replace_loaded_unprojected(
+    app.document_mut().replace_loaded_unprojected(
         String::new(),
         root.path().join("reference.pdf"),
         DocumentKind::Pdf,
@@ -392,11 +390,6 @@ fn assets_keep_typst_output_and_reject_late_results_after_closing() {
     );
     app.clear_preview_for_document(true);
     let preview_key = app.preview.content.artifact_key();
-    let page = || PreviewPage {
-        size: [2, 2],
-        rgba: vec![255; 16],
-        links: Vec::new(),
-    };
     let token = app.asset_token;
     app.accept_asset_result(
         &context,
@@ -404,7 +397,18 @@ fn assets_keep_typst_output_and_reject_late_results_after_closing() {
             token,
             output: Ok(LoadedAsset::Pdf {
                 bytes: b"asset pdf".to_vec(),
-                pages: vec![page(), page()],
+                catalog: crate::pdf::PdfDocumentCatalog {
+                    pages: vec![
+                        crate::pdf::PdfPageMetadata {
+                            size: [2, 2],
+                            links: Vec::new(),
+                        },
+                        crate::pdf::PdfPageMetadata {
+                            size: [2, 2],
+                            links: Vec::new(),
+                        },
+                    ],
+                },
             }),
         },
     );
@@ -425,7 +429,11 @@ fn assets_keep_typst_output_and_reject_late_results_after_closing() {
         &context,
         AssetResult {
             token,
-            output: Ok(LoadedAsset::Image(page())),
+            output: Ok(LoadedAsset::Image(PreviewPage {
+                size: [2, 2],
+                rgba: vec![255; 16],
+                links: Vec::new(),
+            })),
         },
     );
     assert!(app.asset_preview.content.pages().is_empty());
@@ -474,7 +482,7 @@ fn empty_workspace_new_button_and_close_tab_workflow_are_reusable() {
     harness.get_by_label("New document").click();
     harness.run_steps(3);
     assert_eq!(harness.state().tabs.len(), 1);
-    assert!(harness.state().document.kind().is_typst());
+    assert!(harness.state().document().kind().is_typst());
 }
 
 #[test]
@@ -488,13 +496,13 @@ fn switching_requeues_a_revision_bound_raster_but_not_a_ready_interactive_previe
 
 fn fixture(context: &egui::Context, root: &Path) -> EditorApp {
     let mut app = EditorApp::dormant_for_tests(context, root.into());
-    app.document.replace_loaded_unprojected(
+    app.document_mut().replace_loaded_unprojected(
         "first".into(),
         root.join("first.typ"),
         DocumentKind::Typst,
         None,
     );
-    app.document.set_history_reset(false);
+    app.document_mut().set_history_reset(false);
     app
 }
 
@@ -506,13 +514,13 @@ fn save_completion_follows_a_parked_tab_id_after_reorder_not_the_active_slot() {
     app.snapshot_scene = None;
     let path = root.path().join("first.typ");
     fs::write(&path, "first").unwrap();
-    app.document.replace_loaded_unprojected(
+    app.document_mut().replace_loaded_unprojected(
         "first".into(),
         path.clone(),
         DocumentKind::Typst,
         Some(fingerprint(b"first")),
     );
-    app.document
+    app.document_mut()
         .edit(CCursorRange::default(), |source| source.push('!'));
     let saved_tab = app.tabs.active_id().unwrap();
     let (entered, ready) = std::sync::mpsc::channel();
@@ -527,13 +535,13 @@ fn save_completion_follows_a_parked_tab_id_after_reorder_not_the_active_slot() {
     ready.recv_timeout(Duration::from_secs(5)).unwrap();
     assert!(app.save_to(path.clone(), &context));
     app.append_tab(&context);
-    app.document.replace_unprojected_untitled("other tab");
+    app.document_mut().replace_unprojected_untitled("other tab");
     assert!(app.tabs.reorder(0, 1));
     release.send(()).unwrap();
     holder.join().unwrap();
     app.finish_save_for_test(&context);
     assert_eq!(fs::read_to_string(path).unwrap(), "first!");
-    assert_eq!(app.document.source(), "other tab");
+    assert_eq!(app.document().source(), "other tab");
     assert!(!app.document_for_tab(saved_tab).unwrap().is_dirty());
     assert!(app.manual_format_revision.is_none());
 }
@@ -614,13 +622,13 @@ fn tabs_preserve_unsaved_sources_undo_cursor_and_first_preview() {
     let context = egui::Context::default();
     let mut app = fixture(&context, root.path());
     let cursor = CCursorRange::one(CCursor::new(3));
-    app.document
+    app.document_mut()
         .edit(cursor, |source| source.push_str(" edited"));
     app.store_editor_cursor(&context, cursor);
-    let stale = app.document.key();
+    let stale = app.document().key();
     let first = app.tabs.active_id().unwrap();
     app.append_tab(&context);
-    app.document.replace_loaded_unprojected(
+    app.document_mut().replace_loaded_unprojected(
         "second".into(),
         root.path().join("second.typ"),
         DocumentKind::Typst,
@@ -630,14 +638,14 @@ fn tabs_preserve_unsaved_sources_undo_cursor_and_first_preview() {
     assert_eq!(app.preview_document_source().unwrap(), "first edited");
     let second = app.tabs.active_id().unwrap();
     app.activate_tab(first, &context);
-    assert_eq!(app.document.source(), "first edited");
+    assert_eq!(app.document().source(), "first edited");
     assert!(app.is_dirty());
-    assert_ne!(app.document.key(), stale);
+    assert_ne!(app.document().key(), stale);
     assert_eq!(app.editor_snapshot(&context).cursor.primary.index.0, 3);
     app.undo_editor(&context, false);
-    assert_eq!(app.document.source(), "first");
+    assert_eq!(app.document().source(), "first");
     app.activate_tab(second, &context);
-    assert_eq!(app.document.source(), "second");
+    assert_eq!(app.document().source(), "second");
     app.select_preview_tab(second, &context);
     app.activate_tab(first, &context);
     assert_eq!(app.preview_document_source().unwrap(), "second");
@@ -645,11 +653,113 @@ fn tabs_preserve_unsaved_sources_undo_cursor_and_first_preview() {
 }
 
 #[test]
+fn every_tab_record_keeps_its_document_state_across_switch_and_reorder() {
+    let root = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&context, root.path());
+    let first = app.tabs.active_id().unwrap();
+    let first_deadline = Instant::now() + Duration::from_secs(5);
+    app.set_active_autosave_deadline(Some(first_deadline));
+    app.document_mut()
+        .replace_unprojected_untitled("#let folded = {\n  1\n}\n");
+    app.prepare_editor_source_data();
+    let key = app.document().key();
+    let source = app.editor_data.source_snapshot();
+    let contexts = app.editor_data.context_regions();
+    app.folding_mut().prepare(key, source, &contexts);
+    assert!(!app.folding().regions.is_empty());
+    app.folding_mut().collapse_all();
+
+    app.append_tab(&context);
+    let second = app.tabs.active_id().unwrap();
+    let second_deadline = first_deadline + Duration::from_secs(1);
+    app.set_active_autosave_deadline(Some(second_deadline));
+    assert_eq!(app.tabs.records.len(), app.tabs.order.len());
+    assert!(app.tabs.records.contains_key(&first));
+    assert!(app.tabs.records.contains_key(&second));
+
+    assert!(app.tabs.reorder(1, 0));
+    app.activate_tab(first, &context);
+    assert_eq!(app.active_autosave_deadline(), Some(first_deadline));
+    assert!(app.folding().is_collapsed(0));
+    app.activate_tab(second, &context);
+    assert_eq!(app.active_autosave_deadline(), Some(second_deadline));
+    assert!(app.folding().regions.is_empty());
+    assert_eq!(app.tabs.records.len(), app.tabs.order.len());
+}
+
+#[test]
+fn repeated_tab_switches_do_not_start_window_services() {
+    let root = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&context, root.path());
+    let first = app.tabs.active_id().unwrap();
+    app.append_tab(&context);
+    let second = app.tabs.active_id().unwrap();
+
+    for _ in 0..20 {
+        app.activate_tab(first, &context);
+        app.activate_tab(second, &context);
+    }
+
+    assert!(app.tinymist_sync.generation.is_none());
+    assert!(!app.project_index_job.is_running());
+    assert!(!app.workspace_service.is_running());
+    assert_eq!(app.tabs.records.len(), 2);
+}
+
+#[test]
+#[ignore = "optimized local tab-switch and many-tab idle cost probe"]
+fn tab_store_cost_probe() {
+    use egui_kittest::Harness;
+    use std::time::Instant;
+
+    let root = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&context, root.path());
+    let first = app.tabs.active_id().unwrap();
+    app.append_tab(&context);
+    let second = app.tabs.active_id().unwrap();
+    for _ in 0..5 {
+        app.activate_tab(first, &context);
+        app.activate_tab(second, &context);
+    }
+    let started = Instant::now();
+    let (_, switch_bytes) = crate::test_allocations::allocated(|| {
+        for _ in 0..1_000 {
+            app.activate_tab(first, &context);
+            app.activate_tab(second, &context);
+        }
+    });
+    println!(
+        "tab_switch,2000,{},{}",
+        started.elapsed().as_nanos(),
+        switch_bytes
+    );
+
+    for _ in 0..98 {
+        app.append_tab(&context);
+    }
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(1_200.0, 70.0))
+        .build_ui_state(|ui, app: &mut EditorApp| app.show_tabs(ui, None), app);
+    harness.run_steps(5);
+    let started = Instant::now();
+    let (_, idle_bytes) = crate::test_allocations::allocated(|| harness.run_steps(100));
+    println!(
+        "tab_idle_100,100,{},{}",
+        started.elapsed().as_nanos(),
+        idle_bytes
+    );
+    assert!(harness.state().tinymist_sync.generation.is_none());
+}
+
+#[test]
 fn closing_checks_dirty_background_tabs_without_discarding_on_cancel() {
     let root = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
     let mut app = fixture(&context, root.path());
-    app.document
+    app.document_mut()
         .edit(CCursorRange::default(), |source| source.push('!'));
     app.append_tab(&context);
     assert!(!app.is_dirty());
@@ -657,7 +767,7 @@ fn closing_checks_dirty_background_tabs_without_discarding_on_cancel() {
     assert!(app.begin_process_close());
     let process_key = app.document_key();
     app.execute_pending_document_action(&context, None);
-    assert_eq!(app.tabs.active, 0);
+    assert_eq!(app.tabs.active_id(), Some(0));
     assert!(matches!(
         app.document_workflow.modal(),
         Some(AppModal::Unsaved { .. })
@@ -670,7 +780,7 @@ fn closing_checks_dirty_background_tabs_without_discarding_on_cancel() {
     assert_eq!(app.process_close_answer(), Some(false));
     app.finish_process_close(false);
     assert_eq!(app.tabs.len(), 2);
-    assert_eq!(app.document.source(), "first!");
+    assert_eq!(app.document().source(), "first!");
     assert!(app.tabs.approved.is_empty());
 }
 
@@ -681,14 +791,14 @@ fn closing_preview_tab_reselects_first_survivor_and_preserves_dirty_sibling() {
     let mut app = fixture(&context, root.path());
     let first = app.tabs.active_id().unwrap();
     app.append_tab(&context);
-    app.document.replace_unprojected_untitled("second");
-    app.document
+    app.document_mut().replace_unprojected_untitled("second");
+    app.document_mut()
         .edit(CCursorRange::default(), |source| source.push('!'));
     app.activate_tab(first, &context);
     app.finish_close_tab(&context);
     assert_eq!(app.tabs.len(), 1);
-    assert_eq!(app.tabs.preview, 0);
-    assert_eq!(app.document.source(), "second!");
+    assert_eq!(app.tabs.preview_id(), app.tabs.active_id());
+    assert_eq!(app.document().source(), "second!");
     assert!(app.is_dirty());
     assert_eq!(app.preview_document_source().unwrap(), "second!");
 }
@@ -700,7 +810,7 @@ fn tab_buttons_select_preview_and_close_the_named_tab() {
     let context = egui::Context::default();
     let mut app = fixture(&context, root.path());
     app.append_tab(&context);
-    app.document.replace_loaded_unprojected(
+    app.document_mut().replace_loaded_unprojected(
         "second".into(),
         root.path().join("second.typ"),
         DocumentKind::Typst,
@@ -718,15 +828,15 @@ fn tab_buttons_select_preview_and_close_the_named_tab() {
     harness.run_steps(3);
     harness.get_by_label("first.typ").click();
     harness.run_steps(3);
-    assert_eq!(harness.state().tabs.active, 0);
+    assert_eq!(harness.state().tabs.active_id(), Some(0));
     harness.get_by_label("Preview second.typ").click();
     harness.run_steps(3);
-    assert_eq!(harness.state().tabs.preview, 1);
-    assert_eq!(harness.state().tabs.active, 0);
+    assert_eq!(harness.state().tabs.preview_id(), Some(1));
+    assert_eq!(harness.state().tabs.active_id(), Some(0));
     harness.get_by_label("Close second.typ").click();
     harness.run_steps(3);
     assert_eq!(harness.state().tabs.len(), 1);
-    assert_eq!(harness.state().document.source(), "first");
+    assert_eq!(harness.state().document().source(), "first");
 }
 
 #[test]
@@ -740,25 +850,23 @@ fn idle_tab_strip_does_not_start_services_or_mutate_inactive_sources() {
     }
     let keys: Vec<_> = app
         .tabs
-        .parked
-        .iter()
-        .flatten()
+        .records
+        .values()
         .map(|tab| tab.document.key())
         .collect();
     let mut harness = Harness::builder()
         .with_size(Vec2::new(700.0, 70.0))
         .build_ui_state(|ui, app: &mut EditorApp| app.show_tabs(ui, None), app);
     harness.run_steps(10);
-    assert!(harness.state().tinymist_generation.is_none());
+    assert!(harness.state().tinymist_sync.generation.is_none());
     assert!(!harness.state().project_index_job.is_running());
-    assert!(!harness.state().workspace_scan.is_running());
+    assert!(!harness.state().workspace_service.is_running());
     assert_eq!(
         harness
             .state()
             .tabs
-            .parked
-            .iter()
-            .flatten()
+            .records
+            .values()
             .map(|tab| tab.document.key())
             .collect::<Vec<_>>(),
         keys
@@ -775,21 +883,21 @@ fn parked_autosave_checks_disk_and_never_overwrites_external_edits() {
     app.settings.auto_save = true;
     let path = root.path().join("first.typ");
     fs::write(&path, "first").unwrap();
-    app.document.replace_loaded_unprojected(
+    app.document_mut().replace_loaded_unprojected(
         "first".into(),
         path.clone(),
         DocumentKind::Typst,
         Some(fingerprint(b"first")),
     );
-    app.document
+    app.document_mut()
         .edit(CCursorRange::default(), |source| source.push('!'));
-    app.autosave_deadline = Some(Instant::now());
+    app.set_active_autosave_deadline(Some(Instant::now()));
     app.append_tab(&context);
     app.tick_parked_autosave(&context);
     app.finish_save_for_test(&context);
     assert_eq!(fs::read_to_string(&path).unwrap(), "first!");
-    assert!(!app.tabs.parked[0].as_ref().unwrap().document.is_dirty());
-    let tab = app.tabs.parked[0].as_mut().unwrap();
+    assert!(!app.tabs.records[&0].document.is_dirty());
+    let tab = app.tabs.records.get_mut(&0).unwrap();
     tab.document
         .edit(CCursorRange::default(), |source| source.push('?'));
     tab.autosave = Some(Instant::now());
@@ -798,7 +906,7 @@ fn parked_autosave_checks_disk_and_never_overwrites_external_edits() {
     app.tick_parked_autosave(&context);
     app.finish_save_for_test(&context);
     assert_eq!(fs::read_to_string(path).unwrap(), "external");
-    assert!(app.tabs.parked[0].as_ref().unwrap().document.is_dirty());
+    assert!(app.tabs.records[&0].document.is_dirty());
 }
 
 #[test]
@@ -806,10 +914,10 @@ fn all_dirty_tabs_must_be_approved_and_later_edits_revoke_window_close() {
     let root = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
     let mut app = fixture(&context, root.path());
-    app.document
+    app.document_mut()
         .edit(CCursorRange::default(), |source| source.push('!'));
     app.append_tab(&context);
-    app.document
+    app.document_mut()
         .edit(CCursorRange::default(), |source| source.push('!'));
     assert!(app.begin_process_close());
     for _ in 0..2 {
@@ -822,11 +930,12 @@ fn all_dirty_tabs_must_be_approved_and_later_edits_revoke_window_close() {
         app.execute_pending_document_action(&context, None);
     }
     assert_eq!(app.process_close_answer(), Some(true));
+    let active = app.tabs.active_id().unwrap();
     app.tabs
-        .parked
+        .records
         .iter_mut()
-        .flatten()
-        .next()
+        .find(|(id, _)| **id != active)
+        .map(|(_, tab)| tab)
         .unwrap()
         .document
         .edit(CCursorRange::default(), |source| source.push('?'));

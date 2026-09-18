@@ -24,6 +24,7 @@ mod font_preview;
 mod generic_highlight;
 mod git;
 mod highlight;
+mod index_jobs;
 mod launch;
 #[allow(unsafe_code)]
 mod native_menu;
@@ -33,6 +34,8 @@ mod native_window;
 mod open_requests;
 mod package_catalog;
 mod pdf;
+mod pdf_pages;
+mod pdf_residency;
 mod performance;
 mod presentation;
 mod preview;
@@ -47,9 +50,13 @@ mod search;
 mod settings;
 mod shortcuts;
 mod syntax_theme;
+#[cfg(test)]
+#[allow(unsafe_code)]
+mod test_allocations;
 mod tex_completion;
 mod theme;
 mod tinymist;
+mod tinymist_sync;
 mod toolchain;
 mod unicode_fonts;
 mod viewport_fonts;
@@ -58,6 +65,7 @@ mod windowing;
 mod worker;
 mod workflow;
 mod workspace;
+mod workspace_service;
 
 use eframe::egui;
 use launch::LaunchOptions;

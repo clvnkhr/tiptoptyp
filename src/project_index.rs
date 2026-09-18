@@ -121,11 +121,24 @@ impl ProjectIndex {
 /// downloading packages. Only literal local import/include paths are followed.
 /// `overrides` lets the currently edited document participate before it is
 /// saved to disk.
+#[cfg(test)]
 pub fn analyze_project(
     root: &Path,
     main: &Path,
     overrides: &BTreeMap<PathBuf, String>,
 ) -> ProjectIndex {
+    analyze_project_cancellable(root, main, overrides, || false).unwrap_or_default()
+}
+
+pub(crate) fn analyze_project_cancellable(
+    root: &Path,
+    main: &Path,
+    overrides: &BTreeMap<PathBuf, String>,
+    mut cancelled: impl FnMut() -> bool,
+) -> Option<ProjectIndex> {
+    if cancelled() {
+        return None;
+    }
     let mut paths = PathNormalizer::default();
     let root = paths.normalize(root);
     let main = paths.normalize(main);
@@ -134,7 +147,7 @@ pub fn analyze_project(
             .extension()
             .is_none_or(|extension| !extension.eq_ignore_ascii_case("typ"))
     {
-        return ProjectIndex::default();
+        return Some(ProjectIndex::default());
     }
 
     let mut index = ProjectIndex::default();
@@ -151,6 +164,9 @@ pub fn analyze_project(
     while visited.len() < MAX_PROJECT_FILES
         && let Some(path) = pending.pop()
     {
+        if cancelled() {
+            return None;
+        }
         if !visited.insert(path.clone()) {
             continue;
         }
@@ -167,14 +183,24 @@ pub fn analyze_project(
         if path != main {
             index.subfiles.push(path.clone());
         }
-        visit_source(&path, &source, &mut index, &mut packages, |target| {
-            let Some(resolved) = resolve_local_typst_path(&root, &path, target, &mut paths) else {
-                return;
-            };
-            if !visited.contains(&resolved) {
-                pending.push(resolved);
-            }
-        });
+        if !visit_source_cancellable(
+            &path,
+            &source,
+            &mut index,
+            &mut packages,
+            |target| {
+                let Some(resolved) = resolve_local_typst_path(&root, &path, target, &mut paths)
+                else {
+                    return;
+                };
+                if !visited.contains(&resolved) {
+                    pending.push(resolved);
+                }
+            },
+            &mut cancelled,
+        ) {
+            return None;
+        }
     }
 
     // Duplicate/cyclic pending entries do not mean that anything was omitted.
@@ -186,7 +212,7 @@ pub fn analyze_project(
     index.update_warning();
     index.subfiles.sort();
     index.packages = packages.into_iter().collect();
-    index
+    Some(index)
 }
 
 fn source_for<'a>(
@@ -200,13 +226,25 @@ fn source_for<'a>(
     }
 }
 
+#[cfg(test)]
 fn visit_source(
     path: &Path,
     source: &str,
     index: &mut ProjectIndex,
     packages: &mut BTreeSet<String>,
-    mut local_file: impl FnMut(&str),
+    local_file: impl FnMut(&str),
 ) {
+    let _ = visit_source_cancellable(path, source, index, packages, local_file, &mut || false);
+}
+
+fn visit_source_cancellable(
+    path: &Path,
+    source: &str,
+    index: &mut ProjectIndex,
+    packages: &mut BTreeSet<String>,
+    mut local_file: impl FnMut(&str),
+    cancelled: &mut impl FnMut() -> bool,
+) -> bool {
     let parsed = Source::detached(source);
     let lines = LineIndex::new(source);
     let mut visitor = ProjectVisitor {
@@ -216,21 +254,32 @@ fn visit_source(
         index,
         packages,
         local_file: &mut local_file,
+        cancelled,
+        nodes_since_check: 0,
     };
-    visitor.visit(LinkedNode::new(parsed.root()));
+    visitor.visit(LinkedNode::new(parsed.root()))
 }
 
-struct ProjectVisitor<'a, F> {
+struct ProjectVisitor<'a, F, C> {
     path: &'a Path,
     source: &'a str,
     lines: &'a LineIndex,
     index: &'a mut ProjectIndex,
     packages: &'a mut BTreeSet<String>,
     local_file: &'a mut F,
+    cancelled: &'a mut C,
+    nodes_since_check: usize,
 }
 
-impl<F: FnMut(&str)> ProjectVisitor<'_, F> {
-    fn visit(&mut self, node: LinkedNode<'_>) {
+impl<F: FnMut(&str), C: FnMut() -> bool> ProjectVisitor<'_, F, C> {
+    fn visit(&mut self, node: LinkedNode<'_>) -> bool {
+        self.nodes_since_check += 1;
+        if self.nodes_since_check >= 256 {
+            self.nodes_since_check = 0;
+            if (self.cancelled)() {
+                return false;
+            }
+        }
         match node.kind() {
             SyntaxKind::Heading => self.heading(&node),
             SyntaxKind::LetBinding => self.binding(&node),
@@ -240,8 +289,11 @@ impl<F: FnMut(&str)> ProjectVisitor<'_, F> {
             _ => {}
         }
         for child in node.children() {
-            self.visit(child);
+            if !self.visit(child) {
+                return false;
+            }
         }
+        true
     }
 
     fn heading(&mut self, node: &LinkedNode<'_>) {

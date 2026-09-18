@@ -54,6 +54,7 @@ impl EditorApp {
             && self.rename_dialog.is_none();
         if !visible && !retain {
             self.settings_window.lock().unwrap().suspend();
+            ChildViewHost::close(context, "tiptoptyp-settings");
             return;
         }
         if !visible
@@ -86,6 +87,20 @@ impl EditorApp {
                     target_os = "windows"
                 )),
             });
+        let preview_status = self.preview_status_snapshot();
+        let backend_label = if self.typst_preview_available() {
+            preview_status.backend_label()
+        } else {
+            match self.document().kind() {
+                DocumentKind::Pdf => "Rasterised PDF",
+                DocumentKind::Image => "Image",
+                DocumentKind::Text => "Text editor",
+                DocumentKind::Typst => unreachable!(),
+            }
+        };
+        let fallback_reason = preview_status.fallback_reason();
+        let requested_backend = preview_status.requested_backend;
+        let interactive_active = preview_status.native_ready;
         let input = SettingsWindowInput {
             visible,
             retain_when_closed: retain,
@@ -98,10 +113,10 @@ impl EditorApp {
             typst_tool: self.typst_tool.clone(),
             tinymist_tool: self.tinymist_tool.clone(),
             status: SettingsStatus {
-                backend_label: self.preview_backend_label(),
-                fallback_reason: self.preview_fallback_reason(),
-                requested_backend: self.preview.requested_backend,
-                interactive_active: self.interactive_preview_active(),
+                backend_label,
+                fallback_reason,
+                requested_backend,
+                interactive_active,
                 capabilities,
             },
             project_root: self.project_root(),

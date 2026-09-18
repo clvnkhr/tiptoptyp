@@ -19,11 +19,19 @@ jobs:
   rust:
     name: Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Linux remains useful portability signal while it is unsupported, but it
+    # must not block the macOS release path. Windows is intentionally absent
+    # until the project has a concrete support target for it.
+    continue-on-error: ${{ matrix.allow_failure }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: macos-latest
+            allow_failure: false
+          - os: ubuntu-latest
+            allow_failure: true
     steps:
       - uses: actions/checkout@v6
         with:

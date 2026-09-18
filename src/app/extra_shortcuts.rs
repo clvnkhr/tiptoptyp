@@ -111,7 +111,7 @@ impl EditorApp {
             A::RefreshWorkspace => self.refresh_workspace(),
             _ if self.tabs.is_empty() => return,
             A::ToggleTexMode if self.tex_mode_available() => {
-                self.set_tex_mode(self.document.config().is_none(), context);
+                self.set_tex_mode(self.document().config().is_none(), context);
             }
             A::UseTabForPreview => {
                 if let Some(id) = self.tabs.active_id() {
@@ -120,7 +120,7 @@ impl EditorApp {
             }
             A::ToggleFold | A::CollapseAll | A::ExpandAll => self.fold_shortcut(action, context),
             A::FindNext | A::FindPrevious | A::ReplaceOne | A::ReplaceAll
-                if self.document.kind().is_editable() =>
+                if self.document().kind().is_editable() =>
             {
                 if self.find_query.is_empty() {
                     self.open_find(matches!(action, A::ReplaceOne | A::ReplaceAll));
@@ -140,7 +140,7 @@ impl EditorApp {
                     self.open_find(true);
                 }
             }
-            A::ToggleFindCase | A::ToggleFindRegex if self.document.kind().is_editable() => {
+            A::ToggleFindCase | A::ToggleFindRegex if self.document().kind().is_editable() => {
                 self.find_visible = true;
                 if action == A::ToggleFindCase {
                     self.find_case_sensitive = !self.find_case_sensitive;
@@ -151,11 +151,11 @@ impl EditorApp {
             }
             A::PreviewPreviousPage | A::PreviewNextPage | A::PreviewFitWidth => {
                 if !self.preview_visible()
-                    || (!self.document.kind().preview_only() && self.interactive_preview_active())
+                    || (!self.document().kind().preview_only() && self.interactive_preview_active())
                 {
                     return;
                 }
-                let preview = if self.document.kind().preview_only() {
+                let preview = if self.document().kind().preview_only() {
                     &mut self.asset_preview
                 } else {
                     &mut self.preview
@@ -180,7 +180,7 @@ impl EditorApp {
     }
 
     fn fold_shortcut(&mut self, action: ShortcutAction, context: &egui::Context) {
-        if !self.document.kind().is_typst() || !self.settings.line_numbers {
+        if !self.document().kind().is_typst() || !self.settings.line_numbers {
             return;
         }
         if context.egui_wants_keyboard_input()
@@ -189,14 +189,13 @@ impl EditorApp {
             return;
         }
         self.prepare_editor_source_data();
-        self.folding.prepare(
-            self.document.key(),
-            self.editor_data.source_snapshot(),
-            &self.editor_data.context_regions(),
-        );
+        let key = self.document().key();
+        let source = self.editor_data.source_snapshot();
+        let contexts = self.editor_data.context_regions();
+        self.folding_mut().prepare(key, source, &contexts);
         let cursor = self.editor_snapshot(context).cursor.primary.index.0;
         let line = self
-            .document
+            .document()
             .source()
             .chars()
             .take(cursor)
@@ -204,24 +203,24 @@ impl EditorApp {
             .count();
         let target = match action {
             A::ToggleFold => {
-                let Some(region) = self.folding.region_at(line).cloned() else {
+                let Some(region) = self.folding().region_at(line).cloned() else {
                     return;
                 };
-                self.folding.toggle(region.line);
-                self.folding
+                self.folding_mut().toggle(region.line);
+                self.folding()
                     .is_collapsed(region.line)
                     .then_some(region.header)
             }
             A::CollapseAll => {
-                self.folding.collapse_all();
-                self.folding
+                self.folding_mut().collapse_all();
+                self.folding()
                     .regions
                     .iter()
                     .find(|r| r.line <= line && line < r.end_line)
                     .map(|r| r.header)
             }
             _ => {
-                self.folding.expand_all();
+                self.folding_mut().expand_all();
                 None
             }
         };
@@ -277,13 +276,13 @@ mod tests {
 
     fn app(context: &egui::Context, root: &Path) -> EditorApp {
         let mut app = EditorApp::dormant_for_tests(context, root.into());
-        app.document.replace_loaded_unprojected(
+        app.document_mut().replace_loaded_unprojected(
             "#let f(x) = {\n  α + x\n}\n".into(),
             root.join("first.typ"),
             DocumentKind::Typst,
             None,
         );
-        app.document.set_history_reset(false);
+        app.document_mut().set_history_reset(false);
         app
     }
 
@@ -310,7 +309,7 @@ mod tests {
         app.empty_workspace(&context);
         press(&mut app, &context, A::CollapseAll);
         assert!(app.tabs.is_empty());
-        assert!(app.folding.regions.is_empty());
+        assert!(app.folding().regions.is_empty());
     }
 
     #[test]
@@ -350,8 +349,8 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut app = app(&context, root.path());
         app.settings.line_numbers = true;
-        let key = app.document.key();
-        let source = app.document.source().clone();
+        let key = app.document().key();
+        let source = app.document().source().clone();
         let cursor = source[..source.find('α').unwrap()].chars().count();
         let mut state = egui::text_edit::TextEditState::default();
         state
@@ -359,14 +358,14 @@ mod tests {
             .set_char_range(Some(CCursorRange::one(CCursor::new(cursor))));
         state.store(&context, source_editor_id(&context));
         press(&mut app, &context, A::CollapseAll);
-        assert!(app.folding.is_collapsed(0));
+        assert!(app.folding().is_collapsed(0));
         assert!(app.pending_editor_selection.is_some());
         press(&mut app, &context, A::ExpandAll);
-        assert!(!app.folding.is_collapsed(0));
+        assert!(!app.folding().is_collapsed(0));
         press(&mut app, &context, A::ToggleFold);
-        assert!(app.folding.is_collapsed(0));
-        assert_eq!(app.document.key(), key);
-        assert_eq!(*app.document.source(), source);
+        assert!(app.folding().is_collapsed(0));
+        assert_eq!(app.document().key(), key);
+        assert_eq!(*app.document().source(), source);
     }
 
     #[test]
@@ -376,14 +375,14 @@ mod tests {
         let mut app = app(&context, root.path());
         app.find_query = "α".into();
         app.replacement = "β".into();
-        let source = app.document.source().clone();
+        let source = app.document().source().clone();
         press(&mut app, &context, A::ReplaceAll);
-        assert_eq!(*app.document.source(), source);
+        assert_eq!(*app.document().source(), source);
         assert!(app.find_visible && app.replace_visible);
         press(&mut app, &context, A::FindNext);
         assert!(app.pending_editor_selection.is_some());
         press(&mut app, &context, A::ReplaceAll);
-        assert_eq!(*app.document.source(), source.replace('α', "β"));
+        assert_eq!(*app.document().source(), source.replace('α', "β"));
     }
 
     #[test]
@@ -399,6 +398,7 @@ mod tests {
                 .map(|i| {
                     make_preview_texture(
                         &context,
+                        tiptoptyp_core::document::WindowSessionId::new(1),
                         key,
                         i,
                         PreviewPage {

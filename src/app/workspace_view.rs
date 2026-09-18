@@ -53,21 +53,17 @@ pub(super) fn content_view(
 
 impl EditorApp {
     pub(super) fn status_preview(&self) -> &PreviewController {
-        if self.document.kind().preview_only() && !self.typst_preview_available() {
+        if self.document().kind().preview_only() && !self.typst_preview_available() {
             &self.asset_preview
         } else {
             &self.preview
         }
     }
     pub(super) fn empty_workspace(&mut self, context: &egui::Context) {
-        let old = self.document.key();
-        self.document = DocumentSession::new(old.owner, "", DocumentKind::Text);
-        self.document.reactivate_after(old);
         self.stop_tinymist_session();
         self.tabs = self.tabs.empty_after();
-        let _ = self.compiler.pause(self.document.revision());
+        let _ = self.compiler.pause(self.document().revision());
         self.compile_deadline = None;
-        self.autosave_deadline = None;
         self.project_index_deadline.clear();
         self.project_index_job.supersede();
         self.project_index = ProjectIndex::default();
@@ -81,6 +77,7 @@ impl EditorApp {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             self.webview = None;
+            self.webview_applied = None;
             self.webview_url = None;
             self.webview_navigation = None;
             self.webview_reload_pending = false;
@@ -88,7 +85,6 @@ impl EditorApp {
         self.git_editor.clear_document();
         self.close_app_popup();
         self.search.clear();
-        self.folding = Default::default();
         self.pending_editor_selection = None;
         self.editor_attention = None;
         self.editor_completion = None;
@@ -125,10 +121,11 @@ impl EditorApp {
 
     pub(super) fn request_asset(&mut self, path: PathBuf) {
         self.asset_preview.status = PreviewStatus::Compiling;
-        self.asset_preview.dark = self.preview.dark && self.document.kind() != DocumentKind::Image;
-        if let Err(error) = self
-            .asset_loader
-            .request(self.asset_token, path, self.document.kind())
+        self.asset_preview.dark =
+            self.preview.dark && self.document().kind() != DocumentKind::Image;
+        if let Err(error) =
+            self.asset_loader
+                .request(self.asset_token, path, self.document().kind())
         {
             self.asset_preview.status = PreviewStatus::Error;
             self.notice = Some(Notice {
@@ -141,7 +138,7 @@ impl EditorApp {
     pub(super) fn show_asset_view(&mut self, ui: &mut egui::Ui) {
         let fresh = self
             .asset_preview
-            .raster_freshness(self.document.revision())
+            .raster_freshness(self.document().revision())
             == Some(RasterContentFreshness::Current);
         let target = ui
             .push_id(

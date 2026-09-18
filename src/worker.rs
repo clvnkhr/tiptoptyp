@@ -79,6 +79,7 @@ impl<T> Default for LatestJob<T> {
 }
 
 impl<T: Send + 'static> LatestJob<T> {
+    #[cfg(test)]
     pub(crate) fn start(
         &mut self,
         name: impl Into<String>,

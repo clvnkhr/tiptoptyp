@@ -107,6 +107,9 @@ pub(crate) fn show(ui: &mut egui::Ui, captures: &CaptureController) {
             context.send_viewport_cmd_to(owner_id, egui::ViewportCommand::Focus);
         }
     }
+    if !state.open {
+        ChildViewHost::close(&context, "window-logo-picker");
+    }
     context.data_mut(|data| data.insert_temp(state_id, state));
 }
 

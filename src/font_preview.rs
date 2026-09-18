@@ -60,6 +60,23 @@ fn state(context: &egui::Context) -> Arc<Mutex<Previews>> {
     })
 }
 
+pub(crate) fn dispose_viewport(context: &egui::Context, viewport: egui::ViewportId) -> usize {
+    let cache_id = egui::Id::new("font-preview-cache");
+    let Some(previews) = context.data(|data| data.get_temp::<Arc<Mutex<Previews>>>(cache_id))
+    else {
+        return 0;
+    };
+    let mut previews = previews.lock().unwrap();
+    let before = previews.slots.len();
+    previews.slots.retain(|(owner, _), _| *owner != viewport);
+    before - previews.slots.len()
+}
+
+#[cfg(test)]
+pub(crate) fn live_slot_count(context: &egui::Context) -> usize {
+    state(context).lock().unwrap().slots.len()
+}
+
 fn rasterize(request: &Request) -> Result<RasterizedSample, String> {
     let file = std::fs::File::open(&request.path).map_err(|e| e.to_string())?;
     if file.metadata().map_err(|e| e.to_string())?.len() > MAX_FONT_BYTES {
@@ -345,5 +362,8 @@ mod tests {
         assert_ne!(textures[0], textures[1]);
         assert_eq!(textures[0], textures[2]);
         assert_eq!(textures[1], textures[3]);
+        assert_eq!(live_slot_count(&context), 1);
+        assert_eq!(dispose_viewport(&context, egui::ViewportId::ROOT), 1);
+        assert_eq!(live_slot_count(&context), 0);
     }
 }

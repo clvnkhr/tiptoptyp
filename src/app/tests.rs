@@ -183,13 +183,14 @@ fn explicit_source_jump_does_not_reveal_the_previous_caret_fold() {
     let context = egui::Context::default();
     let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
     let source = "#let f() = {\n  αβ\n}\ntail Ω";
-    app.document = DocumentSession::new(app.document.key().owner, source, DocumentKind::Typst);
+    *app.document_mut() =
+        DocumentSession::new(app.document().key().owner, source, DocumentKind::Typst);
     app.settings.line_numbers = true;
     app.snapshot_scene = None;
     context
         .run_ui(Default::default(), |ui| app.show_editor(ui))
         .drop_without_applying_deltas();
-    app.folding.toggle(0);
+    app.folding_mut().toggle(0);
     let old = source[..source.find("αβ").unwrap()].chars().count();
     let target = source[..source.find("tail").unwrap()].chars().count();
     let id = source_editor_id(&context);
@@ -204,7 +205,7 @@ fn explicit_source_jump_does_not_reveal_the_previous_caret_fold() {
         context
             .run_ui(Default::default(), |ui| app.show_editor(ui))
             .drop_without_applying_deltas();
-        assert!(app.folding.is_collapsed(0));
+        assert!(app.folding().is_collapsed(0));
         let state = egui::text_edit::TextEditState::load(&context, id).unwrap();
         assert_eq!(state.cursor.char_range().unwrap().primary.index.0, target);
     }
@@ -213,7 +214,7 @@ fn explicit_source_jump_does_not_reveal_the_previous_caret_fold() {
         .run_ui(Default::default(), |ui| app.show_editor(ui))
         .drop_without_applying_deltas();
     assert!(
-        !app.folding.is_collapsed(0),
+        !app.folding().is_collapsed(0),
         "a jump into the fold reveals it"
     );
 }
@@ -239,8 +240,8 @@ fn dormant_host_rejects_document_jobs_but_delivers_commands_and_dialog_completio
         assert!(app.compile_deadline.is_none());
         assert!(!app.project_index_deadline.is_pending());
         assert!(!app.project_index_job.is_running());
-        assert!(!app.workspace_scan.is_running());
-        assert!(app.tinymist_generation.is_none());
+        assert!(!app.workspace_service.is_running());
+        assert!(app.tinymist_sync.generation.is_none());
     }
     app.pending_tool_picker = Some(PendingDialog::new(ToolPickerTarget::UiFont, async { None }));
     app.enqueue_native_menu_command(AppCommand::Settings);
@@ -268,7 +269,7 @@ fn dormant_host_rejects_document_jobs_but_delivers_commands_and_dialog_completio
         app.compile_deadline.is_none(),
         "resumption waits for queued replacement"
     );
-    assert!(app.tinymist_generation.is_none());
+    assert!(app.tinymist_sync.generation.is_none());
 }
 
 #[test]
@@ -289,7 +290,7 @@ fn dormant_host_does_not_replay_keyboard_input_from_the_closed_document() {
     let mut output = context.run_ui(raw, |ui| app.hidden_host_ui(ui.ctx(), Some(&frame)));
     output.textures_delta.clear();
     assert!(!app.needs_visible_window());
-    assert!(app.tinymist_generation.is_none());
+    assert!(app.tinymist_sync.generation.is_none());
     assert!(app.compile_deadline.is_none());
 }
 
@@ -1967,7 +1968,7 @@ fn autosave_requires_a_known_disk_fingerprint() {
     let context = egui::Context::default();
     let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
     app.snapshot_scene = None;
-    app.document.replace_loaded_unprojected(
+    app.document_mut().replace_loaded_unprojected(
         "= Edited".into(),
         path.clone(),
         DocumentKind::Typst,
@@ -6072,7 +6073,7 @@ fn tex_completion_is_local_and_applies_one_safe_edit() {
     let directory = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
     let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
-    app.document.edit(CCursorRange::default(), |source| {
+    app.document_mut().edit(CCursorRange::default(), |source| {
         *source = "#mi(`\\alp`)".into()
     });
     app.request_editor_completion(9, Rect::ZERO, true);
@@ -6084,7 +6085,7 @@ fn tex_completion_is_local_and_applies_one_safe_edit() {
         .position(|item| item.label == "\\alpha")
         .unwrap();
     app.apply_editor_completion(index, &context);
-    assert_eq!(app.document.source(), "#mi(`\\alpha`)");
+    assert_eq!(app.document().source(), "#mi(`\\alpha`)");
     assert!(completion_requested_after_events(&[egui::Event::Text(
         "\\".into()
     )]));
@@ -6098,7 +6099,7 @@ fn projected_application_toolbar_toggle_is_local_to_document() {
     let directory = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
     let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
-    app.document.replace_unprojected_untitled("");
+    app.document_mut().replace_unprojected_untitled("");
     let mut harness = Harness::builder()
         .with_size(Vec2::new(1200.0, 80.0))
         .build_ui_state(
@@ -6108,12 +6109,12 @@ fn projected_application_toolbar_toggle_is_local_to_document() {
     harness.run_steps(3);
     harness.get_by_label("miTeX").click();
     harness.run_steps(3);
-    assert!(harness.state().document.config().is_some());
+    assert!(harness.state().document().config().is_some());
     assert!(harness.state().pending_settings.is_none());
     assert!(!harness.state().settings.mitex_auto_enable);
     harness.get_by_label("miTeX").click();
     harness.run_steps(3);
-    assert!(harness.state().document.config().is_none());
+    assert!(harness.state().document().config().is_none());
     assert!(harness.state().pending_settings.is_none());
 }
 
@@ -6124,7 +6125,7 @@ fn projected_application_toolbar_order_and_right_alignment_survive_resizing() {
         let directory = tempfile::tempdir().unwrap();
         let context = egui::Context::default();
         let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
-        app.document.replace_unprojected_untitled("");
+        app.document_mut().replace_unprojected_untitled("");
         app.settings.titlebar_menus = true;
         let mut harness = Harness::builder()
             .with_size(Vec2::new(width, 80.0))
@@ -6176,20 +6177,20 @@ fn projected_application_toolbar_hides_incompatible_documents_but_keeps_active_t
     let context = egui::Context::default();
     let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
     for source in ["$ native $", "#let mi(x) = x", "#let unfinished = ("] {
-        app.document.replace_unprojected_untitled(source);
+        app.document_mut().replace_unprojected_untitled(source);
         assert!(!app.tex_mode_available(), "{source}");
     }
-    app.document.replace_unprojected_untitled("");
+    app.document_mut().replace_unprojected_untitled("");
     assert!(app.tex_mode_available());
     assert!(app.set_tex_mode(true, &context));
-    app.document.edit(CCursorRange::default(), |source| {
+    app.document_mut().edit(CCursorRange::default(), |source| {
         source.push_str("$unfinished")
     });
     assert!(
         app.tex_mode_available(),
         "active mode must remain visible during incomplete edits"
     );
-    app.document.replace_loaded_unprojected(
+    app.document_mut().replace_loaded_unprojected(
         "text".into(),
         directory.path().join("notes.txt"),
         DocumentKind::Text,
@@ -6203,18 +6204,18 @@ fn projected_application_capture_fixture_is_clean_repeatable_and_restorable() {
     let directory = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
     let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
-    let original = app.document.source().clone();
+    let original = app.document().source().clone();
     app.snapshot_scene = Some(UiSnapshotScene::MitexDollars);
     let mut qa = QaSession::default();
     qa.prepare(&mut app, &context);
-    assert!(app.document.config().is_some());
+    assert!(app.document().config().is_some());
     assert!(
-        !app.document.is_dirty(),
+        !app.document().is_dirty(),
         "screenshot-exit must not require an unsaved-file decision"
     );
-    let key = app.document.key();
+    let key = app.document().key();
     qa.prepare(&mut app, &context);
-    assert_eq!(app.document.key(), key);
+    assert_eq!(app.document().key(), key);
     // Switching scenes must not try interpreting native fixture math as TeX.
     let mut fixture = DocumentSession::new(
         tiptoptyp_core::document::WindowSessionId::new(2),
@@ -6222,9 +6223,9 @@ fn projected_application_capture_fixture_is_clean_repeatable_and_restorable() {
         DocumentKind::Typst,
     );
     fixture.replace_unprojected_untitled("$native$");
-    SceneDocument::capture(&fixture).restore(&mut app.document);
-    assert!(app.document.config().is_none());
-    assert_eq!(app.document.source(), "$native$");
+    SceneDocument::capture(&fixture).restore(app.document_mut());
+    assert!(app.document().config().is_none());
+    assert_eq!(app.document().source(), "$native$");
 }
 
 #[test]
@@ -6232,7 +6233,7 @@ fn projected_application_untitled_compile_uses_real_source_directory_in_both_mod
     let directory = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
     let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
-    app.document.replace_unprojected_untitled("");
+    app.document_mut().replace_unprojected_untitled("");
     let root = directory.path().canonicalize().unwrap();
     assert_eq!(app.preview_source_directory(), root);
     assert!(app.set_tex_mode(true, &context));
@@ -6245,12 +6246,12 @@ fn projected_application_settings_toggle_local_completion_and_block_save() {
     let directory = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
     let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
-    app.document.replace_unprojected_untitled("");
+    app.document_mut().replace_unprojected_untitled("");
     let mut settings = app.settings.clone();
     settings.mitex_auto_enable = true;
     app.apply_shared_settings(settings, &context);
-    assert!(app.document.config().is_some());
-    app.document.edit(CCursorRange::default(), |source| {
+    assert!(app.document().config().is_some());
+    app.document_mut().edit(CCursorRange::default(), |source| {
         *source = "$\\alp$\n$\n  \\beta\n$".into()
     });
     app.request_editor_completion(5, Rect::ZERO, true);
@@ -6262,7 +6263,7 @@ fn projected_application_settings_toggle_local_completion_and_block_save() {
         .position(|item| item.label == "\\alpha")
         .unwrap();
     app.apply_editor_completion(index, &context);
-    assert_eq!(app.document.source(), "$\\alpha$\n$\n  \\beta\n$");
+    assert_eq!(app.document().source(), "$\\alpha$\n$\n  \\beta\n$");
     let canonical = app.canonical_document_source().unwrap();
     assert!(canonical.contains("#mi(\"\\\\alpha\")"));
     assert!(canonical.contains("#mitex(\"\n  \\\\beta\n\")"));
@@ -6270,13 +6271,14 @@ fn projected_application_settings_toggle_local_completion_and_block_save() {
     settings.mitex_auto_enable = false;
     app.apply_shared_settings(settings, &context);
     assert!(
-        app.document.config().is_some(),
+        app.document().config().is_some(),
         "changing the preference must not disable an active document"
     );
     assert!(app.set_tex_mode(false, &context));
-    assert!(app.document.config().is_none());
-    assert_eq!(app.document.source(), &canonical);
-    app.document.replace_unprojected_untitled("$ native math $");
+    assert!(app.document().config().is_none());
+    assert_eq!(app.document().source(), &canonical);
+    app.document_mut()
+        .replace_unprojected_untitled("$ native math $");
     assert!(!app.set_tex_mode(true, &context));
     assert!(
         app.notice
@@ -6285,7 +6287,7 @@ fn projected_application_settings_toggle_local_completion_and_block_save() {
             .message
             .contains("native Typst math on line 1")
     );
-    assert!(app.document.config().is_none());
+    assert!(app.document().config().is_none());
 }
 
 #[test]
@@ -6293,9 +6295,9 @@ fn projected_application_index_and_file_link_navigation_use_canonical_lines() {
     let directory = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
     let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
-    app.document.replace_unprojected_untitled("");
+    app.document_mut().replace_unprojected_untitled("");
     assert!(app.set_tex_mode(true, &context));
-    app.document.edit(CCursorRange::default(), |source| {
+    app.document_mut().edit(CCursorRange::default(), |source| {
         *source = "$x$\n= Target\n".into()
     });
     let path = directory.path().join("main.typ");
@@ -6321,19 +6323,19 @@ fn projected_application_compiles_real_inline_and_block_output() {
     let directory = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
     let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
-    app.document.replace_unprojected_untitled("");
+    app.document_mut().replace_unprojected_untitled("");
     assert!(app.set_tex_mode(true, &context));
-    app.document.edit(CCursorRange::default(), |source| {
+    app.document_mut().edit(CCursorRange::default(), |source| {
         *source = "Inline $\\alpha+\\beta$.\n$\n  \\sum_{n=1}^{\\infty} \\frac{1}{n^2}=\\frac{\\pi^2}{6}\n$\n".into();
     });
     let path = directory.path().join("main.typ");
     let request = app
-        .document
+        .document()
         .prepare_save(path.clone(), DocumentKind::Typst)
         .unwrap();
     let canonical = request.source().to_owned();
     fs::write(&path, &canonical).unwrap();
-    app.document
+    app.document_mut()
         .record_save(request.committed(fingerprint(canonical.as_bytes())))
         .unwrap();
     let tool =
@@ -6353,7 +6355,7 @@ fn projected_application_compiles_real_inline_and_block_output() {
             .unwrap()
             .starts_with(b"%PDF")
     );
-    app.document
+    app.document_mut()
         .replace_loaded(
             fs::read_to_string(&path).unwrap(),
             path,
@@ -6361,15 +6363,15 @@ fn projected_application_compiles_real_inline_and_block_output() {
             None,
         )
         .unwrap();
-    assert!(app.document.source().contains("$\\alpha+\\beta$"));
-    assert!(app.document.source().contains("$\n  \\sum"));
+    assert!(app.document().source().contains("$\\alpha+\\beta$"));
+    assert!(app.document().source().contains("$\n  \\sum"));
     assert_eq!(app.canonical_document_source().unwrap(), canonical);
     let program = crate::toolchain::resolve_tool(
         crate::toolchain::ToolKind::Tinymist,
         &app.settings.tinymist,
     )
     .program;
-    let path = app.document.path().as_ref().unwrap();
+    let path = app.document().path().as_ref().unwrap();
     let generation = app
         .tinymist
         .start_workspace(
@@ -6417,8 +6419,9 @@ fn projected_application_compiles_real_inline_and_block_output() {
 fn projected_test_app(context: &egui::Context, directory: &Path) -> EditorApp {
     let mut app = EditorApp::dormant_for_tests(context, directory.to_owned());
     app.snapshot_scene = None;
-    app.document.replace_unprojected_untitled(PROJECTED_SOURCE);
-    app.document
+    app.document_mut()
+        .replace_unprojected_untitled(PROJECTED_SOURCE);
+    app.document_mut()
         .enable(tiptoptyp::mitex_projection::Config::default())
         .unwrap();
     app
@@ -6429,10 +6432,10 @@ fn projected_application_save_autosave_and_backing_source_use_canonical_bytes() 
     let directory = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
     let mut app = projected_test_app(&context, directory.path());
-    app.document.edit(CCursorRange::default(), |source| {
+    app.document_mut().edit(CCursorRange::default(), |source| {
         source.push_str("New $\\beta$")
     });
-    let displayed = app.document.source().clone();
+    let displayed = app.document().source().clone();
     let canonical = app.canonical_document_source().unwrap();
     assert!(displayed.contains("$\\alpha+😀$"));
     assert!(canonical.contains("#mi(`\\alpha+😀`)"));
@@ -6442,13 +6445,13 @@ fn projected_application_save_autosave_and_backing_source_use_canonical_bytes() 
     assert!(app.save_to(path.clone(), &context));
     app.finish_save_for_test(&context);
     assert_eq!(fs::read_to_string(&path).unwrap(), canonical);
-    assert_eq!(app.document.source(), &displayed);
+    assert_eq!(app.document().source(), &displayed);
     assert_eq!(
-        app.document.disk_fingerprint(),
+        app.document().disk_fingerprint(),
         Some(fingerprint(canonical.as_bytes()))
     );
     assert!(!app.is_dirty());
-    app.tinymist_unsaved_document = Some(
+    app.tinymist_sync.active_backing = Some(
         UnsavedTextDocument::create(
             directory.path(),
             directory.path(),
@@ -6459,30 +6462,31 @@ fn projected_application_save_autosave_and_backing_source_use_canonical_bytes() 
     );
     app.sync_tinymist_change().unwrap();
     let backing_path = app
-        .tinymist_unsaved_document
+        .tinymist_sync
+        .active_backing
         .as_ref()
         .unwrap()
         .path()
         .to_owned();
     assert_eq!(fs::read_to_string(&backing_path).unwrap(), canonical);
-    app.document.edit(CCursorRange::default(), |source| {
+    app.document_mut().edit(CCursorRange::default(), |source| {
         source.push_str("$unfinished")
     });
     assert!(app.is_dirty());
     app.settings.auto_save = true;
     app.schedule_autosave_if_needed();
-    assert!(app.autosave_deadline.is_some());
+    assert!(app.active_autosave_deadline().is_some());
     assert!(!app.save_to_with_intent(path.clone(), SaveIntent::Auto, &context));
     assert!(app.sync_tinymist_change().is_err());
     assert!(app.preview_document_source().is_err());
     assert_eq!(fs::read_to_string(&path).unwrap(), canonical);
     assert_eq!(fs::read_to_string(&backing_path).unwrap(), canonical);
-    assert!(app.document.source().ends_with("$unfinished"));
-    app.document
+    assert!(app.document().source().ends_with("$unfinished"));
+    app.document_mut()
         .history_step(false, CCursorRange::default())
         .unwrap();
     assert!(!app.is_dirty());
-    app.document
+    app.document_mut()
         .edit(CCursorRange::default(), |source| source.push('!'));
     assert!(app.save_to_with_intent(path.clone(), SaveIntent::Auto, &context));
     app.finish_save_for_test(&context);
@@ -6500,26 +6504,26 @@ fn projected_application_auto_enable_skips_incompatible_files_and_respects_manua
     fs::write(&native, "$native$").unwrap();
     fs::write(&compatible, PROJECTED_SOURCE).unwrap();
     assert!(app.load_path(native));
-    assert_eq!(app.document.source(), "$native$");
-    assert!(app.document.config().is_none());
+    assert_eq!(app.document().source(), "$native$");
+    assert!(app.document().config().is_none());
     assert!(!app.tex_mode_available());
     assert!(matches!(
         app.notice.as_ref().unwrap().kind,
         NoticeKind::Success
     ));
     assert!(app.load_path(compatible.clone()));
-    assert!(app.document.config().is_some());
+    assert!(app.document().config().is_some());
     assert!(app.set_tex_mode(false, &context));
     assert!(app.settings.mitex_auto_enable);
     let unchanged = app.settings.clone();
     app.apply_shared_settings(unchanged, &context);
     assert!(
-        app.document.config().is_none(),
+        app.document().config().is_none(),
         "manual off survives unrelated settings broadcasts"
     );
     app.settings.mitex_auto_enable = false;
     assert!(app.load_path(compatible));
-    assert!(app.document.config().is_none());
+    assert!(app.document().config().is_none());
     assert!(app.tex_mode_available());
 }
 
@@ -6528,12 +6532,12 @@ fn projected_application_refused_save_cancels_close_without_creating_a_file() {
     let directory = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
     let mut app = projected_test_app(&context, directory.path());
-    app.document
+    app.document_mut()
         .edit(CCursorRange::default(), |source| source.push('$'));
     app.document_workflow
         .continue_after_save(PendingDocumentAction {
             action: DeferredDocumentAction::CloseWindow,
-            key: app.document.key(),
+            key: app.document().key(),
             allow_discard: false,
             description: "closing".into(),
         });
@@ -6542,7 +6546,7 @@ fn projected_application_refused_save_cancels_close_without_creating_a_file() {
     assert!(!path.exists());
     assert!(!app.document_workflow.has_continuation());
     assert!(app.is_dirty());
-    assert!(app.document.source().ends_with('$'));
+    assert!(app.document().source().ends_with('$'));
 }
 
 #[test]
@@ -6550,15 +6554,15 @@ fn projected_application_remote_completion_uses_canonical_payload_and_one_undo_s
     let directory = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
     let mut app = projected_test_app(&context, directory.path());
-    let before = app.document.source().clone();
+    let before = app.document().source().clone();
     let editor_cursor = before[..before.find("tail").unwrap()].chars().count() + 4;
     let source_cursor = PROJECTED_SOURCE[..PROJECTED_SOURCE.find("tail").unwrap()]
         .chars()
         .count()
         + 4;
     let position = |cursor| lsp_position_at_scalar(PROJECTED_SOURCE, ScalarOffset::new(cursor));
-    app.tinymist_generation = Some(Generation(92));
-    app.tinymist_uri = Some("file:///completion.typ".into());
+    app.tinymist_sync.generation = Some(Generation(92));
+    app.tinymist_sync.current_uri = Some("file:///completion.typ".into());
     let item = CompletionItem {
         label: "longer tail".into(),
         detail: None,
@@ -6577,10 +6581,10 @@ fn projected_application_remote_completion_uses_canonical_payload_and_one_undo_s
         filter_text: None,
     };
     app.editor_completion = Some(EditorCompletionState {
-        key: app.document.key(),
+        key: app.document().key(),
         generation: Generation(92),
         uri: "file:///completion.typ".into(),
-        version: revision_as_i32(app.document.revision()),
+        version: revision_as_i32(app.document().revision()),
         request_token: 1,
         cursor: editor_cursor,
         source_cursor,
@@ -6595,7 +6599,7 @@ fn projected_application_remote_completion_uses_canonical_payload_and_one_undo_s
     });
     app.apply_editor_completion(0, &context);
     assert_eq!(
-        app.document.source(),
+        app.document().source(),
         &before.replace("tail", "longer tail")
     );
     assert_eq!(
@@ -6606,10 +6610,10 @@ fn projected_application_remote_completion_uses_canonical_payload_and_one_undo_s
         app.canonical_document_source().unwrap(),
         PROJECTED_SOURCE.replace("tail", "longer tail")
     );
-    app.document
+    app.document_mut()
         .history_step(false, CCursorRange::default())
         .unwrap();
-    assert_eq!(app.document.source(), &before);
+    assert_eq!(app.document().source(), &before);
 }
 
 #[test]
@@ -6617,12 +6621,12 @@ fn projected_application_formatting_maps_source_and_cursor_then_undoes_one_edit(
     let directory = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
     let mut app = projected_test_app(&context, directory.path());
-    app.tinymist_generation = Some(Generation(91));
-    app.tinymist_uri = Some("file:///format.typ".into());
-    let before = app.document.source().clone();
+    app.tinymist_sync.generation = Some(Generation(91));
+    app.tinymist_sync.current_uri = Some("file:///format.typ".into());
+    let before = app.document().source().clone();
     let cursor = before.chars().count();
     app.store_editor_cursor(&context, CCursorRange::one(CCursor::new(cursor)));
-    app.document.set_history_reset(false);
+    app.document_mut().set_history_reset(false);
     let start = PROJECTED_SOURCE[..PROJECTED_SOURCE.find("tail").unwrap()]
         .chars()
         .count();
@@ -6637,11 +6641,11 @@ fn projected_application_formatting_maps_source_and_cursor_then_undoes_one_edit(
         &context,
         Generation(91),
         "file:///format.typ",
-        revision_as_i32(app.document.revision()),
+        revision_as_i32(app.document().revision()),
         Some(vec![edit.clone()]),
     );
     assert_eq!(
-        app.document.source(),
+        app.document().source(),
         &before.replace("tail", "longer tail")
     );
     assert_eq!(
@@ -6652,12 +6656,12 @@ fn projected_application_formatting_maps_source_and_cursor_then_undoes_one_edit(
         app.editor_snapshot(&context).cursor.primary.index.0,
         cursor + 7
     );
-    app.document
+    app.document_mut()
         .history_step(false, CCursorRange::default())
         .unwrap();
-    assert_eq!(app.document.source(), &before);
+    assert_eq!(app.document().source(), &before);
     assert!(!app.is_dirty());
-    let key = app.document.key();
+    let key = app.document().key();
     app.receive_formatted_document(
         &context,
         Generation(91),
@@ -6665,7 +6669,7 @@ fn projected_application_formatting_maps_source_and_cursor_then_undoes_one_edit(
         revision_as_i32(key.revision - 1),
         Some(vec![edit]),
     );
-    assert_eq!(app.document.key(), key);
+    assert_eq!(app.document().key(), key);
 }
 
 #[test]
@@ -6674,8 +6678,8 @@ fn projected_application_diagnostics_and_preview_selection_map_canonical_unicode
     let context = egui::Context::default();
     let mut app = projected_test_app(&context, directory.path());
     let uri = "file:///diagnostics.typ";
-    app.tinymist_uri = Some(uri.into());
-    app.tinymist_preview_uri = Some(uri.into());
+    app.tinymist_sync.current_uri = Some(uri.into());
+    app.tinymist_sync.preview_uri = Some(uri.into());
     let canonical_cursor = PROJECTED_SOURCE[..PROJECTED_SOURCE.find("tail").unwrap()]
         .chars()
         .count();
@@ -6694,13 +6698,13 @@ fn projected_application_diagnostics_and_preview_selection_map_canonical_unicode
     };
     app.receive_tinymist_diagnostics(
         uri,
-        Some(revision_as_i32(app.document.revision())),
+        Some(revision_as_i32(app.document().revision())),
         vec![diagnostic.clone()],
     );
-    let cursor = app.document.source()[..app.document.source().find("tail").unwrap()]
+    let cursor = app.document().source()[..app.document().source().find("tail").unwrap()]
         .chars()
         .count();
-    let (line, column) = line_column_at_char(app.document.source(), cursor);
+    let (line, column) = line_column_at_char(app.document().source(), cursor);
     let location = app.preview.tinymist_diagnostics[0].location.unwrap();
     assert_eq!((location.line, location.column), (line, column));
     let name = app
@@ -6718,7 +6722,7 @@ fn projected_application_diagnostics_and_preview_selection_map_canonical_unicode
     assert_eq!((cli_location.line, cli_location.column), (line, column));
     app.apply_tinymist_selection(Some(&range));
     assert_eq!(app.pending_editor_selection, Some(cursor..cursor));
-    app.document
+    app.document_mut()
         .edit(CCursorRange::default(), |source| source.push('!'));
     app.mark_edited();
     assert!(app.preview.tinymist_diagnostics.is_empty());
@@ -6735,12 +6739,12 @@ fn block_enter_is_not_consumed_by_an_open_completion_popup() {
     let context = egui::Context::default();
     let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
     app.settings.auto_pair_delimiters = true;
-    app.document.edit(CCursorRange::default(), |source| {
+    app.document_mut().edit(CCursorRange::default(), |source| {
         *source = "#mi(`\\alp`)".into()
     });
     app.request_editor_completion(9, Rect::ZERO, true);
     assert!(!app.editor_completion.as_ref().unwrap().items.is_empty());
-    app.document
+    app.document_mut()
         .edit(CCursorRange::default(), |source| *source = "```tex".into());
     let id = source_editor_id(&context);
     let mut state = egui::text_edit::TextEditState::default();
@@ -6767,7 +6771,7 @@ fn block_enter_is_not_consumed_by_an_open_completion_popup() {
             },
         )
         .drop_without_applying_deltas();
-    assert_eq!(app.document.source(), "```tex");
+    assert_eq!(app.document().source(), "```tex");
 }
 
 #[test]
@@ -6777,7 +6781,7 @@ fn live_editor_pairs_fences_for_character_and_batched_text_events() {
     let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
     app.snapshot_scene = None;
     app.settings.auto_pair_delimiters = true;
-    app.document.replace_unprojected_untitled("");
+    app.document_mut().replace_unprojected_untitled("");
     let id = source_editor_id(&context);
     let frame = |app: &mut EditorApp, events| {
         context
@@ -6803,7 +6807,7 @@ fn live_editor_pairs_fences_for_character_and_batched_text_events() {
             "```".to_owned(),
         ),
     ] {
-        app.document.replace_unprojected_untitled("");
+        app.document_mut().replace_unprojected_untitled("");
         context.memory_mut(|memory| memory.request_focus(id));
         let mut state = egui::text_edit::TextEditState::load(&context, id).unwrap_or_default();
         state
@@ -6811,7 +6815,7 @@ fn live_editor_pairs_fences_for_character_and_batched_text_events() {
             .set_char_range(Some(CCursorRange::one(CCursor::new(0))));
         state.store(&context, id);
         frame(&mut app, events);
-        assert_eq!(app.document.source(), &expected);
+        assert_eq!(app.document().source(), &expected);
         context.memory_mut(|memory| memory.request_focus(id));
         let mut state = egui::text_edit::TextEditState::load(&context, id).unwrap();
         state
@@ -6828,7 +6832,7 @@ fn live_editor_pairs_fences_for_character_and_batched_text_events() {
                 modifiers: Modifiers::NONE,
             }],
         );
-        assert_eq!(app.document.source(), "```\n\n```");
+        assert_eq!(app.document().source(), "```\n\n```");
     }
 }
 
@@ -6839,7 +6843,7 @@ fn live_editor_pairs_a_fence_before_existing_document_content() {
     let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
     app.snapshot_scene = None;
     app.settings.auto_pair_delimiters = true;
-    app.document
+    app.document_mut()
         .replace_unprojected_untitled("before\n```tex\nafter\n```tex\n\\test=1\n```");
     let id = source_editor_id(&context);
     let frame = |app: &mut EditorApp, events| {
@@ -6873,7 +6877,7 @@ fn live_editor_pairs_a_fence_before_existing_document_content() {
         }],
     );
     assert_eq!(
-        app.document.source(),
+        app.document().source(),
         "before\n```tex\n\n```\nafter\n```tex\n\\test=1\n```"
     );
 }
@@ -6885,7 +6889,8 @@ fn live_editor_pairs_a_typed_fence_in_the_middle_of_a_document() {
     let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
     app.snapshot_scene = None;
     app.settings.auto_pair_delimiters = true;
-    app.document.replace_unprojected_untitled("before\n\nafter");
+    app.document_mut()
+        .replace_unprojected_untitled("before\n\nafter");
     let id = source_editor_id(&context);
     let frame = |app: &mut EditorApp, events| {
         context
@@ -6933,7 +6938,7 @@ fn live_editor_pairs_a_typed_fence_in_the_middle_of_a_document() {
             modifiers: Modifiers::NONE,
         }],
     );
-    assert_eq!(app.document.source(), "before\n```tex\n\n```\nafter");
+    assert_eq!(app.document().source(), "before\n```tex\n\n```\nafter");
 }
 
 #[test]

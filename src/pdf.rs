@@ -6,6 +6,7 @@ use quick_xml::{
     events::{BytesStart, Event},
 };
 use std::{
+    collections::BTreeMap,
     fs,
     io::{BufReader, Read},
     path::Path,
@@ -19,11 +20,24 @@ const PIPE_READER_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(250);
 /// viewer is vector-based. 144 DPI keeps the fallback crisp at 100% on a 2×
 /// display without making every incremental build excessively expensive.
 pub const PREVIEW_DPI: f32 = 144.0;
+const MAX_PDF_PAGES: usize = 10_000;
 #[derive(Debug)]
 pub struct PreviewPage {
     pub size: [usize; 2],
     pub rgba: Vec<u8>,
     pub links: Vec<PreviewLink>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PdfPageMetadata {
+    /// Page dimensions in the fallback preview's 144-DPI layout space.
+    pub(crate) size: [usize; 2],
+    pub(crate) links: Vec<PreviewLink>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PdfDocumentCatalog {
+    pub(crate) pages: Vec<PdfPageMetadata>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -33,21 +47,62 @@ pub struct PreviewLink {
     pub target: String,
 }
 
-/// Rasterize already-snapshotted PDF bytes for either a Typst build or a PDF
-/// opened directly from the project tree. The caller owns cancellation, which
-/// lets the compiler and the asset loader discard obsolete long documents.
-pub(crate) fn rasterize_pdf(
+/// Inspect page geometry separately from decoded pixels. This keeps long PDFs
+/// cheap to open and gives the viewport enough information to request only the
+/// pages it can display. Link extraction remains best-effort.
+pub(crate) fn inspect_pdf(
     pdf: &[u8],
     project_root: &Path,
     cancelled: impl FnMut() -> bool,
-) -> Result<Vec<PreviewPage>, String> {
-    rasterize_pdf_with_program(
-        pdf,
-        project_root,
-        Path::new("pdftoppm"),
-        PdfRasterMode::Document,
-        cancelled,
-    )
+) -> Result<PdfDocumentCatalog, String> {
+    inspect_pdf_with_program(pdf, project_root, Path::new("pdfinfo"), cancelled)
+}
+
+pub(crate) fn inspect_pdf_with_program(
+    pdf: &[u8],
+    project_root: &Path,
+    inspector: &Path,
+    mut cancelled: impl FnMut() -> bool,
+) -> Result<PdfDocumentCatalog, String> {
+    let private = PrivateWorkspace::open(project_root).map_err(|error| {
+        format!(
+            "Could not prepare private PDF-inspection storage in {}: {error}",
+            project_root.display()
+        )
+    })?;
+    let inspect_dir = private
+        .temp_dir("metadata-")
+        .map_err(|error| format!("Could not create a private PDF-inspection directory: {error}"))?;
+    let snapshot_path = inspect_dir.path().join("snapshot.pdf");
+    fs::write(&snapshot_path, pdf)
+        .map_err(|error| format!("Could not stage the PDF metadata snapshot: {error}"))?;
+    if cancelled() {
+        return Err("PDF inspection was superseded by a newer artifact".to_owned());
+    }
+    let output = Command::new(inspector)
+        .arg("-f")
+        .arg("1")
+        .arg("-l")
+        .arg(MAX_PDF_PAGES.to_string())
+        .arg("-box")
+        .arg(&snapshot_path)
+        .output()
+        .map_err(pdfinfo_command_error)?;
+    if cancelled() {
+        return Err("PDF inspection was superseded by a newer artifact".to_owned());
+    }
+    if !output.status.success() {
+        return Err(format!(
+            "PDF metadata inspection failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let mut catalog = parse_pdfinfo(&String::from_utf8_lossy(&output.stdout))?;
+    let mut links = extract_pdf_links(&snapshot_path, inspect_dir.path(), &mut cancelled);
+    for (index, page) in catalog.pages.iter_mut().enumerate() {
+        page.links = links.get_mut(index).map(std::mem::take).unwrap_or_default();
+    }
+    Ok(catalog)
 }
 
 /// Render only the first page of a PDF, capped to `max_dimension` pixels on
@@ -73,8 +128,15 @@ pub(crate) fn rasterize_pdf_first_page(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PdfRasterMode {
-    Document,
-    FirstPage { max_dimension: u32 },
+    FirstPage {
+        max_dimension: u32,
+    },
+    PageRange {
+        /// Inclusive, zero-based page range.
+        first: usize,
+        last: usize,
+        dpi: u32,
+    },
 }
 
 pub(crate) fn rasterize_pdf_with_program(
@@ -100,15 +162,6 @@ pub(crate) fn rasterize_pdf_with_program(
     let mut render_command = Command::new(rasterizer);
     render_command.arg("-png");
     match mode {
-        PdfRasterMode::Document => {
-            // Keep this argument order stable: release/testing wrappers may
-            // treat the final two arguments as the input and output paths.
-            render_command
-                .arg("-r")
-                .arg(PREVIEW_DPI.to_string())
-                .arg(&snapshot_path)
-                .arg(&page_prefix);
-        }
         PdfRasterMode::FirstPage { max_dimension } => {
             render_command
                 .arg("-f")
@@ -117,6 +170,20 @@ pub(crate) fn rasterize_pdf_with_program(
                 .arg("1")
                 .arg("-scale-to")
                 .arg(max_dimension.max(1).to_string())
+                .arg(&snapshot_path)
+                .arg(&page_prefix);
+        }
+        PdfRasterMode::PageRange { first, last, dpi } => {
+            if first > last {
+                return Err("The requested PDF page range is empty".to_owned());
+            }
+            render_command
+                .arg("-f")
+                .arg(first.saturating_add(1).to_string())
+                .arg("-l")
+                .arg(last.saturating_add(1).to_string())
+                .arg("-r")
+                .arg(dpi.max(1).to_string())
                 .arg(&snapshot_path)
                 .arg(&page_prefix);
         }
@@ -196,16 +263,8 @@ pub(crate) fn rasterize_pdf_with_program(
         return Err("The PDF renderer produced no preview pages".to_owned());
     }
 
-    // Link extraction is best-effort: raster rendering remains useful when an
-    // older/minimal Poppler installation lacks `pdftohtml`.
-    let mut page_links = match mode {
-        PdfRasterMode::Document => {
-            extract_pdf_links(&snapshot_path, render_dir.path(), &mut cancelled)
-        }
-        PdfRasterMode::FirstPage { .. } => Vec::new(),
-    };
     let mut pages = Vec::with_capacity(page_paths.len());
-    for (index, page_path) in page_paths.into_iter().enumerate() {
+    for page_path in page_paths {
         if cancelled() {
             return Err("Preview decoding was superseded by a newer edit".to_owned());
         }
@@ -218,14 +277,99 @@ pub(crate) fn rasterize_pdf_with_program(
         pages.push(PreviewPage {
             size: [width as usize, height as usize],
             rgba: decoded.into_raw(),
-            links: page_links
-                .get_mut(index)
-                .map(std::mem::take)
-                .unwrap_or_default(),
+            links: Vec::new(),
         });
     }
 
     Ok(pages)
+}
+
+fn parse_pdfinfo(output: &str) -> Result<PdfDocumentCatalog, String> {
+    let mut page_count = None;
+    let mut sizes = BTreeMap::<usize, [f32; 2]>::new();
+    let mut rotations = BTreeMap::<usize, i32>::new();
+    let mut generic_size = None;
+    let mut generic_rotation = 0;
+    for line in output.lines() {
+        let line = line.trim();
+        if let Some(value) = line.strip_prefix("Pages:") {
+            page_count = value.trim().parse::<usize>().ok();
+            continue;
+        }
+        if let Some((page, value)) = numbered_pdfinfo_value(line, "size:") {
+            if let Some(size) = parse_pdf_points(value) {
+                sizes.insert(page, size);
+            }
+            continue;
+        }
+        if let Some((page, value)) = numbered_pdfinfo_value(line, "rot:") {
+            if let Ok(rotation) = value.trim().parse::<i32>() {
+                rotations.insert(page, rotation);
+            }
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("Page size:") {
+            generic_size = parse_pdf_points(value);
+        } else if let Some(value) = line.strip_prefix("Page rot:") {
+            generic_rotation = value.trim().parse().unwrap_or(0);
+        }
+    }
+    let page_count = page_count.ok_or_else(|| "pdfinfo did not report a page count".to_owned())?;
+    if page_count == 0 {
+        return Err("The PDF contains no pages".to_owned());
+    }
+    if page_count > MAX_PDF_PAGES {
+        return Err(format!(
+            "The PDF contains {page_count} pages; the preview limit is {MAX_PDF_PAGES}"
+        ));
+    }
+    let fallback = generic_size
+        .or_else(|| sizes.values().next().copied())
+        .ok_or_else(|| "pdfinfo did not report page dimensions for the PDF preview".to_owned())?;
+    let pages = (0..page_count)
+        .map(|index| {
+            let page_number = index + 1;
+            let mut points = sizes.get(&page_number).copied().unwrap_or(fallback);
+            let rotation = rotations
+                .get(&page_number)
+                .copied()
+                .unwrap_or(generic_rotation)
+                .rem_euclid(360);
+            if rotation == 90 || rotation == 270 {
+                points.swap(0, 1);
+            }
+            PdfPageMetadata {
+                size: points_to_preview_pixels(points),
+                links: Vec::new(),
+            }
+        })
+        .collect();
+    Ok(PdfDocumentCatalog { pages })
+}
+
+fn numbered_pdfinfo_value<'a>(line: &'a str, field: &str) -> Option<(usize, &'a str)> {
+    let rest = line.strip_prefix("Page ")?;
+    let (number, value) = rest.split_once(field)?;
+    Some((number.trim().parse().ok()?, value))
+}
+
+fn parse_pdf_points(value: &str) -> Option<[f32; 2]> {
+    let mut fields = value.split_whitespace();
+    let width = fields.next()?.parse::<f32>().ok()?;
+    if fields.next()? != "x" {
+        return None;
+    }
+    let height = fields.next()?.parse::<f32>().ok()?;
+    (width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0)
+        .then_some([width, height])
+}
+
+fn points_to_preview_pixels([width, height]: [f32; 2]) -> [usize; 2] {
+    let scale = PREVIEW_DPI / 72.0;
+    [
+        (width * scale).round().max(1.0) as usize,
+        (height * scale).round().max(1.0) as usize,
+    ]
 }
 
 fn extract_pdf_links(
@@ -417,6 +561,15 @@ fn rasterizer_command_error(error: std::io::Error) -> String {
     }
 }
 
+fn pdfinfo_command_error(error: std::io::Error) -> String {
+    if error.kind() == std::io::ErrorKind::NotFound {
+        "Poppler was not found. Install `pdfinfo` (usually provided by the `poppler` package) and make sure it is on PATH."
+            .to_owned()
+    } else {
+        format!("Could not start `pdfinfo`: {error}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,9 +581,22 @@ mod tests {
         assert_eq!(preview_page_number(Path::new("preview.pdf")), u32::MAX);
     }
 
+    #[test]
+    fn pdfinfo_catalog_preserves_all_page_sizes_and_rotation_without_pixels() {
+        let catalog = parse_pdfinfo(
+            "Pages: 3\nPage    1 size: 612 x 792 pts\nPage    1 rot: 0\nPage    2 size: 300 x 500 pts\nPage    2 rot: 90\nPage    3 size: 400 x 200 pts\nPage    3 rot: 0\n",
+        )
+        .unwrap();
+        assert_eq!(catalog.pages.len(), 3);
+        assert_eq!(catalog.pages[0].size, [1224, 1584]);
+        assert_eq!(catalog.pages[1].size, [1000, 600]);
+        assert_eq!(catalog.pages[2].size, [800, 400]);
+        assert!(catalog.pages.iter().all(|page| page.links.is_empty()));
+    }
+
     #[cfg(unix)]
     #[test]
-    fn document_rasterization_preserves_snapshot_pixels_and_cancellation() {
+    fn page_range_rasterization_preserves_snapshot_pixels_and_cancellation() {
         use std::os::unix::fs::PermissionsExt;
         let project = tempfile::tempdir().unwrap();
         let bytes = b"%PDF-canonical-export-byte-fixture";
@@ -443,10 +609,11 @@ mod tests {
             &rasterizer,
             concat!(
                 "#!/bin/sh\n",
-                "[ \"$1\" = -png ] && [ \"$2\" = -r ] && [ \"$3\" = 144 ] || exit 21\n",
-                "cmp \"$4\" \"${0%/*}/expected.pdf\" || exit 22\n",
-                "cp \"${0%/*}/fixture.png\" \"$5-10.png\"\n",
-                "cp \"${0%/*}/fixture.png\" \"$5-2.png\"\n",
+                "[ \"$1\" = -png ] && [ \"$2\" = -f ] && [ \"$3\" = 2 ] || exit 21\n",
+                "[ \"$4\" = -l ] && [ \"$5\" = 3 ] && [ \"$6\" = -r ] && [ \"$7\" = 144 ] || exit 22\n",
+                "cmp \"$8\" \"${0%/*}/expected.pdf\" || exit 23\n",
+                "cp \"${0%/*}/fixture.png\" \"$9-3.png\"\n",
+                "cp \"${0%/*}/fixture.png\" \"$9-2.png\"\n",
             ),
         )
         .unwrap();
@@ -455,7 +622,11 @@ mod tests {
             bytes,
             project.path(),
             &rasterizer,
-            PdfRasterMode::Document,
+            PdfRasterMode::PageRange {
+                first: 1,
+                last: 2,
+                dpi: 144,
+            },
             || false,
         )
         .unwrap();
@@ -472,7 +643,11 @@ mod tests {
             bytes,
             project.path(),
             &rasterizer,
-            PdfRasterMode::Document,
+            PdfRasterMode::PageRange {
+                first: 1,
+                last: 2,
+                dpi: 144,
+            },
             || true,
         )
         .unwrap_err();

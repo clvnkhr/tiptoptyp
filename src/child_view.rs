@@ -1,5 +1,8 @@
 use eframe::egui::{self, Pos2, Rect, Vec2};
-use std::time::{Duration, Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    time::{Duration, Instant},
+};
 
 use crate::{screenshot::CaptureController, theme};
 
@@ -36,6 +39,7 @@ pub(crate) struct ChildViewSpec {
     active: bool,
     mouse_passthrough: bool,
     visible: Option<bool>,
+    dormant_host: bool,
 }
 
 impl ChildViewSpec {
@@ -59,6 +63,7 @@ impl ChildViewSpec {
             active: true,
             mouse_passthrough: false,
             visible: None,
+            dormant_host: false,
         }
     }
 
@@ -81,6 +86,7 @@ impl ChildViewSpec {
             active: true,
             mouse_passthrough: false,
             visible: None,
+            dormant_host: false,
         }
     }
 
@@ -101,6 +107,7 @@ impl ChildViewSpec {
             active: true,
             mouse_passthrough: false,
             visible: None,
+            dormant_host: false,
         }
     }
 
@@ -122,11 +129,17 @@ impl ChildViewSpec {
             active,
             mouse_passthrough: false,
             visible: None,
+            dormant_host: false,
         }
     }
 
     pub(crate) fn with_visible(mut self, visible: bool) -> Self {
         self.visible = Some(visible);
+        self
+    }
+
+    pub(crate) fn with_dormant_hosting(mut self, dormant_host: bool) -> Self {
+        self.dormant_host = dormant_host;
         self
     }
 
@@ -165,6 +178,89 @@ pub(crate) struct ChildViewInput {
 
 pub(crate) struct ChildViewHost;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChildViewLifecycle {
+    Visible,
+    TemporarilyHidden,
+    DurablyClosed,
+    DormantHosted,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LifecycleEntry {
+    owner: egui::ViewportId,
+    generation: u64,
+    state: ChildViewLifecycle,
+    dormant_host: bool,
+}
+
+#[derive(Clone, Default)]
+struct LifecycleRegistry {
+    entries: HashMap<egui::ViewportId, LifecycleEntry>,
+    dormant_owners: HashSet<egui::ViewportId>,
+}
+
+#[derive(Clone, Copy)]
+struct LifecycleToken {
+    id: egui::ViewportId,
+    generation: u64,
+}
+
+fn registry_id() -> egui::Id {
+    egui::Id::new("child-view-lifecycle-registry")
+}
+
+fn begin_lifecycle(
+    context: &egui::Context,
+    id: egui::ViewportId,
+    spec: ChildViewSpec,
+) -> Option<LifecycleToken> {
+    let owner = context.viewport_id();
+    context.data_mut(|data| {
+        let registry = data.get_temp_mut_or_default::<LifecycleRegistry>(registry_id());
+        let dormant = registry.dormant_owners.contains(&owner);
+        let state = if dormant {
+            if spec.dormant_host {
+                ChildViewLifecycle::DormantHosted
+            } else {
+                ChildViewLifecycle::DurablyClosed
+            }
+        } else if spec.visible == Some(false) {
+            ChildViewLifecycle::TemporarilyHidden
+        } else {
+            ChildViewLifecycle::Visible
+        };
+        let entry = registry.entries.entry(id).or_insert(LifecycleEntry {
+            owner,
+            generation: 1,
+            state,
+            dormant_host: spec.dormant_host,
+        });
+        entry.owner = owner;
+        entry.state = state;
+        entry.dormant_host = spec.dormant_host;
+        (state != ChildViewLifecycle::DurablyClosed).then_some(LifecycleToken {
+            id,
+            generation: entry.generation,
+        })
+    })
+}
+
+fn callback_is_live(context: &egui::Context, token: LifecycleToken) -> bool {
+    context.data(|data| {
+        data.get_temp::<LifecycleRegistry>(registry_id())
+            .and_then(|registry| registry.entries.get(&token.id).copied())
+            .is_some_and(|entry| {
+                entry.generation == token.generation
+                    && (matches!(
+                        entry.state,
+                        ChildViewLifecycle::Visible | ChildViewLifecycle::DormantHosted
+                    ) || (entry.state == ChildViewLifecycle::TemporarilyHidden
+                        && entry.dormant_host))
+            })
+    })
+}
+
 impl ChildViewHost {
     /// Independent child painting avoids an editor paint and a nested GL
     /// buffer swap for every child event. The caller owns input invalidation
@@ -177,10 +273,16 @@ impl ChildViewHost {
         style: &std::sync::Arc<egui::Style>,
         body: impl Fn(&mut egui::Ui, ChildViewInput) + Send + Sync + 'static,
     ) {
+        let id = scoped_child_viewport_id(context, spec.id_salt);
+        let Some(token) = begin_lifecycle(context, id, spec) else {
+            return;
+        };
         let captures = captures.clone();
         let style = style.clone();
-        let id = scoped_child_viewport_id(context, spec.id_salt);
         crate::viewport_fonts::show_deferred(context, id, spec.viewport(), move |ui, class| {
+            if !callback_is_live(ui.ctx(), token) {
+                return;
+            }
             let _span = crate::performance::span(spec.capture_target);
             captures.begin_viewport(ui.ctx(), spec.capture_target);
             ui.set_style(style.clone());
@@ -216,8 +318,14 @@ impl ChildViewHost {
                 | (ChildViewRole::Tooltip, FocusPolicy::InteractiveHandoff)
         ));
         let id = scoped_child_viewport_id(context, spec.id_salt);
+        let Some(token) = begin_lifecycle(context, id, spec) else {
+            return;
+        };
         let viewport = spec.viewport();
         crate::viewport_fonts::show_immediate(context, id, viewport, |ui, class| {
+            if !callback_is_live(ui.ctx(), token) {
+                return;
+            }
             let _span = crate::performance::span(spec.capture_target);
             captures.begin_viewport(ui.ctx(), spec.capture_target);
             ui.set_style(style.clone());
@@ -233,6 +341,80 @@ impl ChildViewHost {
             captures.end_glow_viewport(ui, spec.capture_target);
         });
     }
+
+    pub(crate) fn hide(context: &egui::Context, salt: &'static str) {
+        let id = scoped_child_viewport_id(context, salt);
+        if transition_lifecycle(context, id, ChildViewLifecycle::TemporarilyHidden, false) {
+            context.send_viewport_cmd_to(id, egui::ViewportCommand::Visible(false));
+        }
+    }
+
+    pub(crate) fn close(context: &egui::Context, salt: &'static str) {
+        let id = scoped_child_viewport_id(context, salt);
+        if transition_lifecycle(context, id, ChildViewLifecycle::DurablyClosed, true) {
+            context.send_viewport_cmd_to(id, egui::ViewportCommand::Close);
+            crate::font_preview::dispose_viewport(context, id);
+        }
+    }
+
+    pub(crate) fn dormant_owner(context: &egui::Context) {
+        let owner = context.viewport_id();
+        let closed = context.data_mut(|data| {
+            let registry = data.get_temp_mut_or_default::<LifecycleRegistry>(registry_id());
+            if !registry.dormant_owners.insert(owner) {
+                return Vec::new();
+            }
+            let mut closed = Vec::new();
+            for (id, entry) in &mut registry.entries {
+                if entry.owner != owner {
+                    continue;
+                }
+                if entry.dormant_host {
+                    entry.state = ChildViewLifecycle::DormantHosted;
+                } else {
+                    entry.state = ChildViewLifecycle::DurablyClosed;
+                    entry.generation = entry.generation.wrapping_add(1);
+                    closed.push(*id);
+                }
+            }
+            closed
+        });
+        for id in closed {
+            context.send_viewport_cmd_to(id, egui::ViewportCommand::Close);
+            crate::font_preview::dispose_viewport(context, id);
+        }
+    }
+
+    pub(crate) fn resume_owner(context: &egui::Context) {
+        let owner = context.viewport_id();
+        context.data_mut(|data| {
+            data.get_temp_mut_or_default::<LifecycleRegistry>(registry_id())
+                .dormant_owners
+                .remove(&owner);
+        });
+    }
+}
+
+fn transition_lifecycle(
+    context: &egui::Context,
+    id: egui::ViewportId,
+    state: ChildViewLifecycle,
+    invalidate_callbacks: bool,
+) -> bool {
+    context.data_mut(|data| {
+        let registry = data.get_temp_mut_or_default::<LifecycleRegistry>(registry_id());
+        let Some(entry) = registry.entries.get_mut(&id) else {
+            return false;
+        };
+        if entry.state == state {
+            return false;
+        }
+        entry.state = state;
+        if invalidate_callbacks {
+            entry.generation = entry.generation.wrapping_add(1);
+        }
+        true
+    })
 }
 
 fn sync_native_theme(context: &egui::Context, appearance: egui::Theme) {
@@ -494,5 +676,98 @@ mod tests {
         assert_eq!(inner, Vec2::new(800.0, 700.0));
         assert_eq!(minimum, Vec2::new(480.0, 360.0));
         assert_eq!(spec.focus, FocusPolicy::Preserve);
+    }
+
+    #[test]
+    fn hide_reopen_close_and_late_callbacks_have_distinct_lifecycles() {
+        let context = egui::Context::default();
+        let id = scoped_child_viewport_id(&context, "lifecycle");
+        let spec = ChildViewSpec::tooltip(
+            "lifecycle",
+            "Lifecycle",
+            Pos2::ZERO,
+            Vec2::splat(100.0),
+            true,
+            "lifecycle",
+        );
+        let first = begin_lifecycle(&context, id, spec).unwrap();
+        assert!(callback_is_live(&context, first));
+
+        ChildViewHost::hide(&context, "lifecycle");
+        assert!(!callback_is_live(&context, first));
+        let reopened = begin_lifecycle(&context, id, spec).unwrap();
+        assert!(callback_is_live(&context, reopened));
+        assert_eq!(first.generation, reopened.generation);
+
+        ChildViewHost::close(&context, "lifecycle");
+        assert!(!callback_is_live(&context, first));
+        assert!(!callback_is_live(&context, reopened));
+        let recreated = begin_lifecycle(&context, id, spec).unwrap();
+        assert!(callback_is_live(&context, recreated));
+        assert_ne!(reopened.generation, recreated.generation);
+    }
+
+    #[test]
+    fn dormant_owner_keeps_only_explicit_native_hosts_alive() {
+        let context = egui::Context::default();
+        let transient_id = scoped_child_viewport_id(&context, "transient");
+        let hosted_id = scoped_child_viewport_id(&context, "hosted");
+        let transient = begin_lifecycle(
+            &context,
+            transient_id,
+            ChildViewSpec::dismiss_on_blur(
+                "transient",
+                "Transient",
+                Pos2::ZERO,
+                Vec2::splat(20.0),
+                "transient",
+            ),
+        )
+        .unwrap();
+        let hosted = begin_lifecycle(
+            &context,
+            hosted_id,
+            ChildViewSpec::persistent(
+                "hosted",
+                "Hosted",
+                Vec2::splat(100.0),
+                Vec2::splat(50.0),
+                "hosted",
+            )
+            .with_dormant_hosting(true),
+        )
+        .unwrap();
+        ChildViewHost::dormant_owner(&context);
+        assert!(!callback_is_live(&context, transient));
+        assert!(callback_is_live(&context, hosted));
+        assert!(
+            begin_lifecycle(
+                &context,
+                transient_id,
+                ChildViewSpec::dismiss_on_blur(
+                    "transient",
+                    "Transient",
+                    Pos2::ZERO,
+                    Vec2::splat(20.0),
+                    "transient",
+                ),
+            )
+            .is_none()
+        );
+        ChildViewHost::resume_owner(&context);
+        assert!(
+            begin_lifecycle(
+                &context,
+                transient_id,
+                ChildViewSpec::dismiss_on_blur(
+                    "transient",
+                    "Transient",
+                    Pos2::ZERO,
+                    Vec2::splat(20.0),
+                    "transient",
+                ),
+            )
+            .is_some()
+        );
     }
 }

@@ -28,13 +28,13 @@ impl EditorApp {
         if matches!(action, Action::Next | Action::Previous) {
             self.navigate_hunk(context, action == Action::Previous);
         } else if let Some(chunk) = self.git_editor.chunk.clone() {
-            self.perform_hunk_action(context, action, self.document.key(), chunk);
+            self.perform_hunk_action(context, action, self.document().key(), chunk);
         } else {
             // Action shortcuts select the hunk under the caret, never an
             // arbitrary first change elsewhere in the document.
             let cursor = self.editor_snapshot(context).cursor.primary.index.0;
             let line = self
-                .document
+                .document()
                 .source()
                 .chars()
                 .take(cursor)
@@ -44,22 +44,22 @@ impl EditorApp {
                 h.changes.iter().any(|c| {
                     c.lines.contains(&line) || (c.lines.is_empty() && c.lines.start == line)
                 })
-            }) && let Some(path) = self.document.path().clone()
+            }) && let Some(path) = self.document().path().clone()
             {
                 self.git_editor.open_chunk(index, &path);
                 let chunk = self.git_editor.chunk.clone().unwrap();
-                self.perform_hunk_action(context, action, self.document.key(), chunk);
+                self.perform_hunk_action(context, action, self.document().key(), chunk);
             }
         }
     }
 
     fn navigate_hunk(&mut self, context: &egui::Context, previous: bool) {
-        let Some(path) = self.document.path().clone() else {
+        let Some(path) = self.document().path().clone() else {
             return;
         };
         let cursor = self.editor_snapshot(context).cursor.primary.index.0;
         let line = self
-            .document
+            .document()
             .source()
             .chars()
             .take(cursor)
@@ -86,7 +86,7 @@ impl EditorApp {
         if self.document_flow_busy() || self.git_hunk_job.is_running() {
             return;
         }
-        if key != self.document.key() || !self.git_editor.selection_is_current(key, &chunk) {
+        if key != self.document().key() || !self.git_editor.selection_is_current(key, &chunk) {
             self.show_file_error("This hunk is stale; reopen it before making changes".into());
             return;
         }
@@ -104,7 +104,7 @@ impl EditorApp {
         };
         if action == Action::Revert {
             let replacement = hunks::revert(&source, &chunk.hunk).and_then(|text| {
-                self.document
+                self.document()
                     .project_canonical_change(
                         key,
                         tiptoptyp_core::text::AppliedTextEdits {
@@ -117,7 +117,7 @@ impl EditorApp {
             match replacement {
                 Ok(replacement) => {
                     let cursor = self.editor_snapshot(context).cursor;
-                    self.document
+                    self.document_mut()
                         .edit(cursor, |source| *source = replacement.text);
                     self.search.clear();
                     self.mark_edited();

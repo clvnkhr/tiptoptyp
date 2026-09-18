@@ -10,9 +10,10 @@ impl EditorApp {
         let mut replace_one = false;
         let mut replace_all = false;
         let mut find_query_changed = false;
-        let search_revision = self.document.key();
+        let search_revision = self.document().key();
+        let source = self.tabs.current_record().document.source();
         let search_results = self.search.results(
-            self.document.source(),
+            source,
             search_revision,
             &self.find_query,
             self.find_case_sensitive,
@@ -132,12 +133,13 @@ impl EditorApp {
         replace_one: bool,
         replace_all: bool,
     ) {
-        let search_revision = self.document.key();
+        let search_revision = self.document().key();
         if find_previous {
+            let source = self.tabs.current_record().document.source();
             self.pending_editor_selection = self
                 .search
                 .previous(
-                    self.document.source(),
+                    source,
                     search_revision,
                     &self.find_query,
                     self.find_case_sensitive,
@@ -146,10 +148,11 @@ impl EditorApp {
                 .map(|matched| matched.char_range.clone());
         }
         if find_next {
+            let source = self.tabs.current_record().document.source();
             self.pending_editor_selection = self
                 .search
                 .next(
-                    self.document.source(),
+                    source,
                     search_revision,
                     &self.find_query,
                     self.find_case_sensitive,
@@ -158,16 +161,22 @@ impl EditorApp {
                 .map(|matched| matched.char_range.clone());
         }
         if replace_one {
-            let before = self.document.source().clone();
+            let before = self.document().source().clone();
             let snapshot = self.editor_snapshot(context);
-            let replaced = self.document.edit(snapshot.cursor, |source| {
-                self.search.replace_one(
+            let find_query = &self.find_query;
+            let replacement = &self.replacement;
+            let find_case_sensitive = self.find_case_sensitive;
+            let find_regex = self.find_regex;
+            let search = &mut self.search;
+            let document = &mut self.tabs.current_record_mut().document;
+            let replaced = document.edit(snapshot.cursor, |source| {
+                search.replace_one(
                     source,
                     search_revision,
-                    &self.find_query,
-                    &self.replacement,
-                    self.find_case_sensitive,
-                    self.find_regex,
+                    find_query,
+                    replacement,
+                    find_case_sensitive,
+                    find_regex,
                 )
             });
             if replaced {
@@ -175,25 +184,31 @@ impl EditorApp {
                     .search
                     .selected()
                     .map(|matched| matched.char_range.clone());
-                if *self.document.source() != before {
+                if *self.document().source() != before {
                     self.mark_edited();
                 }
             }
         }
         if replace_all {
-            let before = self.document.source().clone();
+            let before = self.document().source().clone();
             let snapshot = self.editor_snapshot(context);
-            let count = self.document.edit(snapshot.cursor, |source| {
-                self.search.replace_all(
+            let find_query = &self.find_query;
+            let replacement = &self.replacement;
+            let find_case_sensitive = self.find_case_sensitive;
+            let find_regex = self.find_regex;
+            let search = &mut self.search;
+            let document = &mut self.tabs.current_record_mut().document;
+            let count = document.edit(snapshot.cursor, |source| {
+                search.replace_all(
                     source,
                     search_revision,
-                    &self.find_query,
-                    &self.replacement,
-                    self.find_case_sensitive,
-                    self.find_regex,
+                    find_query,
+                    replacement,
+                    find_case_sensitive,
+                    find_regex,
                 )
             });
-            if count > 0 && *self.document.source() != before {
+            if count > 0 && *self.document().source() != before {
                 self.notice = Some(Notice {
                     message: format!("Replaced {count} matches"),
                     kind: NoticeKind::Success,
@@ -207,7 +222,7 @@ impl EditorApp {
         let _span = crate::performance::span("ui.source");
         offer_file_drop_target(ui, ui.max_rect(), FileDropTarget::Editor);
         ui.set_min_width(ui.available_width());
-        if self.document.reset_editor_history {
+        if self.document().reset_editor_history {
             let mut state =
                 egui::text_edit::TextEditState::load(ui.ctx(), source_editor_id(ui.ctx()))
                     .unwrap_or_default();
@@ -216,7 +231,7 @@ impl EditorApp {
                 .cursor
                 .set_char_range(Some(CCursorRange::one(CCursor::new(0))));
             state.store(ui.ctx(), source_editor_id(ui.ctx()));
-            self.document.set_history_reset(false);
+            self.document_mut().set_history_reset(false);
         }
         self.prepare_editor_data();
         let source_metrics = self.editor_data.source_metrics();
@@ -237,24 +252,25 @@ impl EditorApp {
         let line_wrap = sticky_context_snapshot || folding_snapshot || self.settings.line_wrap;
         let line_numbers =
             sticky_context_snapshot || folding_snapshot || self.settings.line_numbers;
-        let git_gutter = self.git_editor.has_gutter(self.document.path().as_deref());
+        let git_gutter = self
+            .git_editor
+            .has_gutter(self.document().path().as_deref());
         let line_number_width =
             line_numbers.then(|| line_number_column_width(ui, line_count, &theme::editor_font()));
         let gutter_width = editor_gutter_width(line_number_width, git_gutter);
         let dark_mode = ui.visuals().dark_mode;
-        let document_kind = self.document.kind();
+        let document_kind = self.document().kind();
         let contexts = if document_kind.is_typst() {
             self.editor_data.context_regions()
         } else {
             Arc::from([])
         };
-        self.folding.prepare(
-            self.document.key(),
-            self.editor_data.source_snapshot(),
-            &contexts,
-        );
+        let document_key = self.document().key();
+        let source_snapshot = self.editor_data.source_snapshot();
+        self.folding_mut()
+            .prepare(document_key, source_snapshot, &contexts);
         if !line_numbers {
-            self.folding.expand_all();
+            self.folding_mut().expand_all();
         }
         let fold_marker = ui.painter().layout_no_wrap(
             "...".into(),
@@ -262,9 +278,9 @@ impl EditorApp {
             ui.visuals().weak_text_color(),
         );
         let fold_marker_width = fold_marker.size().x + 8.0;
-        self.folding.set_marker_width(fold_marker_width);
-        let highlight_path = self.document.path().clone();
-        let asset_source_path = self.document.path().clone();
+        self.folding_mut().set_marker_width(fold_marker_width);
+        let highlight_path = self.document().path().clone();
+        let asset_source_path = self.document().path().clone();
         let asset_workspace_root = self.workspace_root.clone();
         let source_preview_trigger = self.settings.source_preview_trigger;
         let preview_jump_enabled = document_kind.is_typst() && self.interactive_preview_active();
@@ -272,11 +288,12 @@ impl EditorApp {
             && (sticky_context_snapshot || self.settings.sticky_context_rows);
         let snapshot_scroll_offset = source_editor_snapshot_scroll_offset(self.snapshot_scene);
         let (search_highlight_matches, selected_search_match) = if self.find_visible {
-            let document_key = self.document.key();
+            let document_key = self.document().key();
+            let source = self.tabs.current_record().document.source();
             let matches = self
                 .search
                 .results(
-                    self.document.source(),
+                    source,
                     document_key,
                     &self.find_query,
                     self.find_case_sensitive,
@@ -295,9 +312,9 @@ impl EditorApp {
         };
         let completion_edit_triggered = document_kind.is_typst()
             && ui.input(|input| completion_requested_after_events(&input.events));
-        if let Some(selection) = &self.pending_editor_selection {
-            self.folding.reveal(selection.start);
-            self.folding.reveal(selection.end);
+        if let Some(selection) = self.pending_editor_selection.clone() {
+            self.folding_mut().reveal(selection.start);
+            self.folding_mut().reveal(selection.end);
             // Install explicit destinations before TextEdit handles input and
             // scrolls. Its old caret may lie inside a still-collapsed region;
             // revealing that stale caret after layout changes the coordinates
@@ -316,7 +333,13 @@ impl EditorApp {
         let auto_pair_enabled = self.settings.auto_pair_delimiters && document_kind.is_typst();
         let auto_pair_syntax = &mut self.auto_pair_syntax;
         let highlighter = &mut self.highlighter;
-        let folding = &mut self.folding;
+        let active_tab = self
+            .tabs
+            .active_id()
+            .expect("editor requires an active tab");
+        let record = self.tabs.current_record_mut();
+        let document = &mut record.document;
+        let folding = &mut record.folding;
         let generic_highlighter = &mut self.generic_highlighter;
         let pending_selection = self.pending_editor_selection.take();
         let attention = self.editor_attention.and_then(|attention| {
@@ -351,12 +374,7 @@ impl EditorApp {
         };
 
         let scroll_area = egui::ScrollArea::new([!line_wrap, true])
-            .id_salt((
-                "source-editor-scroll",
-                self.tabs
-                    .active_id()
-                    .expect("editor requires an active tab"),
-            ))
+            .id_salt(("source-editor-scroll", active_tab))
             .auto_shrink([false, false]);
         let scroll_area = if let Some(offset) = snapshot_scroll_offset {
             scroll_area.vertical_scroll_offset(offset)
@@ -400,8 +418,8 @@ impl EditorApp {
                 };
                 folding.layout(ui.fonts_mut(|fonts| fonts.layout_job(job)))
             };
-            let document_before_edit = self.document.key();
-            let mut output = self.document.edit(snapshot_before_edit.cursor, |source| {
+            let document_before_edit = document.key();
+            let mut output = document.edit(snapshot_before_edit.cursor, |source| {
                 let mut buffer = ui.input(|input| {
                     crate::auto_pairs::PairingBuffer::new(
                         source,
@@ -424,9 +442,9 @@ impl EditorApp {
             });
             // A closer can move the caret without modifying the document.
             // Do not invalidate completions or schedule work for that movement.
-            changed = self.document.key() != document_before_edit;
+            changed = document.key() != document_before_edit;
             if changed {
-                self.editor_data.prepare_source(&self.document.snapshot());
+                self.editor_data.prepare_source(&document.snapshot());
             }
             if !changed && let Some(mut range) = output.state.cursor.char_range() {
                 let vertical = ui.input(|input| {
@@ -474,7 +492,7 @@ impl EditorApp {
             }
 
             if let Some(range) = pending_selection {
-                let len = self.document.source().chars().count();
+                let len = document.source().chars().count();
                 let range = range.start.min(len)..range.end.min(len);
                 let cursor_range =
                     CCursorRange::two(CCursor::new(range.start), CCursor::new(range.end));
@@ -508,7 +526,7 @@ impl EditorApp {
             paint_editor_line_backgrounds(
                 ui,
                 &output,
-                self.document.source(),
+                document.source(),
                 current_char,
                 attention,
                 &line_rows,
@@ -593,14 +611,14 @@ impl EditorApp {
             }
 
             let requested_caret = match tooltip_request {
-                Some(TooltipRequest::Caret { key, cursor }) if key == self.document.key() => {
+                Some(TooltipRequest::Caret { key, cursor }) if key == document.key() => {
                     Some(cursor)
                 }
                 _ => None,
             };
             if let Some(cursor) = requested_caret {
                 self.diagnostic_tooltip = None;
-                let line = scalar_position_at(self.document.source(), ScalarOffset::new(cursor))
+                let line = scalar_position_at(document.source(), ScalarOffset::new(cursor))
                     .0
                     .get() as usize
                     + 1;
@@ -650,7 +668,7 @@ impl EditorApp {
             {
                 let asset_target = asset_source_path.as_deref().and_then(|source_path| {
                     literal_asset_target_at(
-                        self.document.source(),
+                        document.source(),
                         char_index,
                         source_path,
                         &asset_workspace_root,
@@ -756,9 +774,8 @@ impl EditorApp {
                     .and_then(|char_index| editor_web_link_at(&mut self.editor_data, char_index));
                 let table = (document_kind.is_typst())
                     .then(|| {
-                        char_index.and_then(|char_index| {
-                            editable_table_at(self.document.source(), char_index)
-                        })
+                        char_index
+                            .and_then(|char_index| editable_table_at(document.source(), char_index))
                     })
                     .flatten();
                 popup_request = Some(match target {
@@ -909,7 +926,7 @@ impl EditorApp {
                 state
                     .cursor
                     .set_char_range(Some(CCursorRange::one(CCursor::new(
-                        self.document.source().chars().count(),
+                        self.document().source().chars().count(),
                     ))));
                 state.store(ui.ctx(), editor_id);
                 ui.ctx()
@@ -922,9 +939,9 @@ impl EditorApp {
         }
 
         if let Some(crate::git::editor::view::Action::OpenChunk(index)) = git_chunk_clicked
-            && let Some(path) = &self.document.path()
+            && let Some(path) = self.document().path().clone()
         {
-            self.git_editor.open_chunk(index, path);
+            self.git_editor.open_chunk(index, &path);
             if let Some(chunk) = self.git_editor.chunk.clone() {
                 let anchor = ui
                     .ctx()
@@ -945,7 +962,7 @@ impl EditorApp {
             self.mark_edited();
         }
         if let (Some(cursor), Some(anchor)) = (completion_cursor, completion_anchor) {
-            let key = self.document.key();
+            let key = self.document().key();
             self.last_editor_caret = Some(EditorCaretState {
                 key,
                 char_index: cursor,
@@ -954,36 +971,37 @@ impl EditorApp {
             if changed
                 && completion_edit_triggered
                 && let Some(mut previous) = previous_completion
-                && (previous.local || self.document.config().is_none())
+                && (previous.local || self.document().config().is_none())
                 && let Some(items) = crate::completion::rebase(
                     &previous.all_items,
                     &previous.source,
                     previous.cursor,
-                    self.document.source(),
+                    self.document().source(),
                     cursor,
                 )
             {
                 previous.all_items = items;
                 previous.items = crate::completion::filtered_for_source(
                     &previous.all_items,
-                    self.document.source(),
+                    self.document().source(),
                     cursor,
                 );
-                previous.source = self.document.source().clone();
+                previous.source = self.document().source().clone();
                 previous.cursor = cursor;
                 previous.source_cursor = cursor;
-                previous.version = revision_as_i32(self.document.revision());
-                previous.key = self.document.key();
+                previous.version = revision_as_i32(self.document().revision());
+                previous.key = self.document().key();
                 previous.selected = 0;
                 self.editor_completion = Some(previous);
             }
             let completion_still_current = self.editor_completion.as_ref().is_none_or(|state| {
                 state.cursor == cursor
-                    && state.version == revision_as_i32(self.document.revision())
-                    && state.key == self.document.key()
+                    && state.version == revision_as_i32(self.document().revision())
+                    && state.key == self.document().key()
                     && (state.local
-                        || (self.tinymist_generation == Some(state.generation)
-                            && self.tinymist_uri.as_deref() == Some(state.uri.as_str())))
+                        || (self.tinymist_sync.generation == Some(state.generation)
+                            && self.tinymist_sync.current_uri.as_deref()
+                                == Some(state.uri.as_str())))
             });
             if completion_still_current {
                 if let Some(state) = &mut self.editor_completion {

@@ -171,13 +171,143 @@ fn window_code_uses_stable_tab_accessors_instead_of_storage_slots() {
                 "{relative} accesses positional tab storage through {field}"
             );
         }
-        for forbidden in [".tabs.parked", ".tabs.ids[", ".tab_document("] {
+        for forbidden in [
+            ".tabs.parked",
+            ".tabs.records",
+            ".tabs.ids[",
+            ".tab_document(",
+        ] {
             assert!(
                 !compact.contains(forbidden),
                 "{relative} bypasses stable tab accessors through {forbidden}"
             );
         }
     }
+}
+
+#[test]
+fn tinymist_sync_policy_is_ui_process_and_thread_independent() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source = fs::read_to_string(root.join("src/tinymist_sync.rs")).unwrap();
+    let production = source.split("#[cfg(test)]").next().unwrap();
+    for forbidden in [
+        "egui",
+        "std::process",
+        "std::thread",
+        "std::fs",
+        "TinymistSidecar",
+        "EditorApp",
+    ] {
+        assert!(
+            !production.contains(forbidden),
+            "synchronization policy owns adapter dependency {forbidden}"
+        );
+    }
+    assert!(production.contains("enum Effect"));
+    assert!(production.contains("struct VersionedInput"));
+}
+
+#[test]
+fn preview_policy_has_one_transition_owner_and_views_consume_status() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let preview = fs::read_to_string(root.join("preview.rs")).unwrap();
+    let production = preview.split("#[cfg(test)]\nmod tests").next().unwrap();
+    assert!(production.contains("enum PreviewTransitionEvent"));
+    assert!(production.contains("enum PreviewEffect"));
+    assert!(production.contains("fn status_snapshot("));
+    for forbidden in ["TinymistSidecar", "egui::Context", "request_repaint_after("] {
+        assert!(
+            !production.contains(forbidden),
+            "preview policy owns adapter effect {forbidden}"
+        );
+    }
+
+    let app = fs::read_to_string(root.join("app.rs")).unwrap();
+    let view = app
+        .split("fn show_preview(&mut self")
+        .nth(1)
+        .unwrap()
+        .split("fn show_preview_header_controls")
+        .next()
+        .unwrap();
+    assert!(view.contains("preview_status_snapshot()"));
+    for forbidden in [
+        ".interactive_active(",
+        ".interactive_transitioning(",
+        ".should_attempt_interactive(",
+    ] {
+        assert!(
+            !view.contains(forbidden),
+            "preview view recalculates policy through {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn project_index_reads_use_the_specialized_bounded_runner() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let runner = fs::read_to_string(root.join("index_jobs.rs")).unwrap();
+    let production = runner.split("#[cfg(test)]").next().unwrap();
+    assert!(production.contains("const CONCURRENCY: usize = 2"));
+    assert!(production.contains("MAX_PENDING_BYTES"));
+    assert!(production.contains("analyze_project_cancellable"));
+    for forbidden in ["egui", "ExclusiveJob", "ProcessSupervisor", "Command::new"] {
+        assert!(
+            !production.contains(forbidden),
+            "bounded read runner acquired unrelated responsibility {forbidden}"
+        );
+    }
+    let app = fs::read_to_string(root.join("app.rs")).unwrap();
+    assert!(!app.contains("LatestJob<ProjectIndex>"));
+    assert!(!app.contains("move || Ok(analyze_project"));
+}
+
+#[test]
+fn workspace_snapshots_are_shared_and_notifications_replace_frame_polling() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let service = fs::read_to_string(root.join("workspace_service.rs")).unwrap();
+    let production = service.split("#[cfg(test)]").next().unwrap();
+    assert!(production.contains("Arc<WorkspaceSnapshot>"));
+    assert!(production.contains("EVENT_QUIET_PERIOD"));
+    assert!(production.contains("VERIFICATION_INTERVAL"));
+    assert!(production.contains("ModifyKind::Data"));
+    assert!(!production.contains("fs::read("));
+
+    let app = fs::read_to_string(root.join("app.rs")).unwrap();
+    assert!(!app.contains("WORKSPACE_REFRESH_INTERVAL"));
+    assert!(!app.contains("EXTERNAL_FILE_CHECK_INTERVAL"));
+    assert!(!app.contains("workspace_scan: LatestJob"));
+}
+
+#[test]
+fn child_resources_follow_explicit_lifecycle_and_native_properties_are_diffed() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let child = fs::read_to_string(root.join("child_view.rs")).unwrap();
+    for required in [
+        "TemporarilyHidden",
+        "DurablyClosed",
+        "DormantHosted",
+        "callback_is_live",
+        "dispose_viewport",
+    ] {
+        assert!(
+            child.contains(required),
+            "missing child lifecycle {required}"
+        );
+    }
+    let native = fs::read_to_string(root.join("app/native_views.rs")).unwrap();
+    assert!(native.contains("webview_property_diff"));
+    assert!(native.contains("webview_applied"));
+    let stable_setters = native
+        .split("let diff = webview_property_diff")
+        .nth(1)
+        .unwrap()
+        .split("if self.preview.tinymist_state.is_ready()")
+        .next()
+        .unwrap();
+    assert!(stable_setters.contains("if diff.background"));
+    assert!(stable_setters.contains("if diff.bounds"));
+    assert!(stable_setters.contains("if diff.visible"));
 }
 
 #[test]
@@ -252,6 +382,43 @@ fn pdf_service_is_shared_without_compiler_or_view_ownership() {
         assert!(
             !compiler.contains(forbidden),
             "compiler still owns {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn pdf_pixels_are_viewport_requested_and_process_budgeted() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let compiler = fs::read_to_string(root.join("compiler.rs")).unwrap();
+    assert!(compiler.contains("PdfDocumentCatalog"));
+    assert!(!compiler.contains("Vec<PreviewPage>"));
+    assert!(!compiler.contains("PdfRasterMode"));
+
+    let pages = fs::read_to_string(root.join("pdf_pages.rs")).unwrap();
+    for required in [
+        "MAX_PAGES_PER_REQUEST",
+        "ADJACENT_PAGE_PREFETCH",
+        "PdfRasterMode::PageRange",
+        "latest_token",
+        "bounded_prefetch_range",
+    ] {
+        assert!(
+            pages.contains(required),
+            "missing PDF demand rule {required}"
+        );
+    }
+
+    let residency = fs::read_to_string(root.join("pdf_residency.rs")).unwrap();
+    for required in [
+        "DECODED_PIXEL_BUDGET",
+        "TEXTURE_BUDGET",
+        "static BUDGET",
+        "set_owner_visible",
+        "oversized",
+    ] {
+        assert!(
+            residency.contains(required),
+            "missing PDF residency rule {required}"
         );
     }
 }

@@ -538,6 +538,7 @@ impl SettingsWindow {
             input.visible = false;
             input.retain_when_closed = true;
         }
+        ChildViewHost::hide(context, "tiptoptyp-settings");
         Self::show_registered(shared, context, captures);
         true
     }
@@ -575,7 +576,8 @@ impl SettingsWindow {
             METRICS.chrome.settings_min_size,
             "settings",
         )
-        .with_visible(visible);
+        .with_visible(visible)
+        .with_dormant_hosting(true);
         let parent = context.viewport_id();
         let shared = shared.clone();
         let child_captures = captures.clone();

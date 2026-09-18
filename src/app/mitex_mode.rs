@@ -3,10 +3,10 @@ use super::*;
 
 impl EditorApp {
     pub(super) fn tex_mode_available(&mut self) -> bool {
-        if self.document.config().is_some() {
+        if self.document().config().is_some() {
             return true;
         }
-        if !self.document.kind().is_typst() {
+        if !self.document().kind().is_typst() {
             return false;
         }
         self.prepare_editor_source_data();
@@ -23,7 +23,7 @@ impl EditorApp {
             tiptoptyp::mitex_projection::Error::NativeMath { byte },
         ) = error
         {
-            let line = self.document.source()[..byte.min(self.document.source().len())]
+            let line = self.document().source()[..byte.min(self.document().source().len())]
                 .bytes()
                 .filter(|&b| b == b'\n')
                 .count()
@@ -43,7 +43,8 @@ impl EditorApp {
         if !self.tex_mode_available() {
             return false;
         }
-        match self.document.enable(self.tex_config()) {
+        let config = self.tex_config();
+        match self.document_mut().enable(config) {
             Ok(_) => true,
             Err(error) => {
                 self.tex_error(error);
@@ -52,14 +53,15 @@ impl EditorApp {
         }
     }
     pub(super) fn set_tex_mode(&mut self, enabled: bool, context: &egui::Context) -> bool {
-        if enabled == self.document.config().is_some() {
+        if enabled == self.document().config().is_some() {
             return true;
         }
         let cursor = self.editor_snapshot(context).cursor;
         let result = if enabled {
-            self.document.enable(self.tex_config())
+            let config = self.tex_config();
+            self.document_mut().enable(config)
         } else {
-            self.document.disable()
+            self.document_mut().disable()
         };
         let map = match result {
             Ok(Some(map)) => map,
@@ -87,7 +89,7 @@ impl EditorApp {
             h_pos: cursor.h_pos,
         }));
         state.store(context, source_editor_id(context));
-        self.document.set_history_reset(false);
+        self.document_mut().set_history_reset(false);
         self.pending_editor_selection = None;
         self.editor_attention = None;
         self.search.clear();

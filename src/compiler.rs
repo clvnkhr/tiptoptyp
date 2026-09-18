@@ -15,7 +15,7 @@ use std::{
 };
 
 use crate::{
-    pdf::{PdfRasterMode, PreviewPage, rasterize_pdf_with_program},
+    pdf::{PdfDocumentCatalog, inspect_pdf_with_program},
     process::finish_reader_with_timeout,
 };
 
@@ -106,9 +106,9 @@ pub enum CompileEvent {
     Started,
     Failed(String),
     Artifact(CompileArtifact),
-    Rasterized {
+    Catalog {
         key: ArtifactKey,
-        pages: Vec<PreviewPage>,
+        catalog: PdfDocumentCatalog,
     },
     RasterFailed {
         key: ArtifactKey,
@@ -643,7 +643,7 @@ fn finish_settled_completion(
             completion.rasterize,
             shutdown,
             latest_revision,
-            Path::new("pdftoppm"),
+            Path::new("pdfinfo"),
             results,
             context,
         );
@@ -675,7 +675,7 @@ fn publish_compiled_artifact(
     rasterize: bool,
     shutdown: &AtomicBool,
     latest_revision: &AtomicU64,
-    rasterizer: &Path,
+    inspector: &Path,
     results: &Sender<CompileResult>,
     context: &crate::worker::RepaintTarget,
 ) {
@@ -717,17 +717,10 @@ fn publish_compiled_artifact(
         return;
     }
 
-    let event = match rasterize_pdf_with_program(
-        &pdf,
-        project_root,
-        rasterizer,
-        PdfRasterMode::Document,
-        || {
-            shutdown.load(Ordering::Acquire)
-                || latest_revision.load(Ordering::Acquire) != key.revision
-        },
-    ) {
-        Ok(pages) => CompileEvent::Rasterized { key, pages },
+    let event = match inspect_pdf_with_program(&pdf, project_root, inspector, || {
+        shutdown.load(Ordering::Acquire) || latest_revision.load(Ordering::Acquire) != key.revision
+    }) {
+        Ok(catalog) => CompileEvent::Catalog { key, catalog },
         Err(error) => CompileEvent::RasterFailed { key, error },
     };
     send_result(
@@ -889,7 +882,7 @@ mod tests {
     }
 
     #[test]
-    fn successful_artifact_is_published_before_missing_rasterizer_failure() {
+    fn successful_artifact_is_published_before_missing_metadata_failure() {
         let project = tempfile::tempdir().unwrap();
         let pdf_path = project.path().join("compiled.pdf");
         let expected = b"%PDF-exact-artifact\0bytes";
@@ -910,7 +903,7 @@ mod tests {
             true,
             &shutdown,
             &latest_revision,
-            &project.path().join("missing-pdftoppm"),
+            &project.path().join("missing-pdfinfo"),
             &result_tx,
             &crate::worker::RepaintTarget::test(),
         );
@@ -932,30 +925,26 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_new_artifact_can_recover_after_a_rasterizer_failure() {
+    fn a_new_artifact_can_recover_after_a_metadata_failure() {
         use std::os::unix::fs::PermissionsExt;
 
         let project = tempfile::tempdir().unwrap();
         let pdf_path = project.path().join("compiled.pdf");
         fs::write(&pdf_path, b"%PDF-stable-snapshot").unwrap();
-        let fixture_path = project.path().join("fixture.png");
-        image::RgbaImage::from_pixel(2, 1, image::Rgba([12, 34, 56, 255]))
-            .save(&fixture_path)
-            .unwrap();
-        let rasterizer = project.path().join("fake-pdftoppm");
+        let inspector = project.path().join("fake-pdfinfo");
         fs::write(
-            &rasterizer,
-            "#!/bin/sh\ncp \"${0%/*}/fixture.png\" \"${5}-1.png\"\n",
+            &inspector,
+            "#!/bin/sh\nprintf 'Pages: 1\\nPage 1 size: 1 x 0.5 pts\\n'\n",
         )
         .unwrap();
-        fs::set_permissions(&rasterizer, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&inspector, fs::Permissions::from_mode(0o700)).unwrap();
 
         let (result_tx, result_rx) = mpsc::channel();
         let shutdown = AtomicBool::new(false);
         let latest_revision = AtomicU64::new(7);
         for (generation, program) in [
-            (11, project.path().join("missing-pdftoppm")),
-            (12, rasterizer),
+            (11, project.path().join("missing-pdfinfo")),
+            (12, inspector),
         ] {
             publish_compiled_artifact(
                 &pdf_path,
@@ -991,10 +980,10 @@ mod tests {
         ));
         assert!(matches!(
             &results[3].event,
-            CompileEvent::Rasterized { key, pages }
+            CompileEvent::Catalog { key, catalog }
                 if key.generation == 12
-                    && pages.len() == 1
-                    && pages[0].size == [2, 1]
+                    && catalog.pages.len() == 1
+                    && catalog.pages[0].size == [2, 1]
         ));
     }
 
@@ -1100,11 +1089,11 @@ mod tests {
             CompileEvent::Artifact(artifact) if artifact.pdf.starts_with(b"%PDF")
         ));
         let first_raster = wait_for_revision(&compiler, 1, |event| {
-            matches!(event, CompileEvent::Rasterized { .. })
+            matches!(event, CompileEvent::Catalog { .. })
         });
         assert!(matches!(
             first_raster.event,
-            CompileEvent::Rasterized { pages, .. } if pages.len() == 1
+            CompileEvent::Catalog { catalog, .. } if catalog.pages.len() == 1
         ));
 
         compiler.request(request(2, "#let broken =")).unwrap();
@@ -1120,11 +1109,11 @@ mod tests {
             .request(request(3, "= Recovered\n#pagebreak()\n= Page two"))
             .unwrap();
         let recovered = wait_for_revision(&compiler, 3, |event| {
-            matches!(event, CompileEvent::Rasterized { .. })
+            matches!(event, CompileEvent::Catalog { .. })
         });
         assert!(matches!(
             recovered.event,
-            CompileEvent::Rasterized { pages, .. } if pages.len() == 2
+            CompileEvent::Catalog { catalog, .. } if catalog.pages.len() == 2
         ));
     }
 

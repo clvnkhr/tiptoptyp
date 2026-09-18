@@ -1,14 +1,14 @@
-//! Tabs park document state, never an EditorApp or background service. Exactly
-//! one slot is active; the first slot is the initial preview source.
+//! Tabs own stable identity and ordered document records, never an EditorApp or
+//! background service. The first tab is the initial preview source.
 use super::*;
 mod trace;
 
-pub(super) struct ParkedTab {
+pub(super) struct TabRecord {
     pub(super) document: DocumentSession,
-    folding: crate::folding::Folding,
-    editor: Option<egui::text_edit::TextEditState>,
-    autosave: Option<Instant>,
-    workspace: PathBuf,
+    pub(super) folding: crate::folding::Folding,
+    pub(super) editor: Option<egui::text_edit::TextEditState>,
+    pub(super) autosave: Option<Instant>,
+    pub(super) workspace: PathBuf,
 }
 
 #[cfg(test)]
@@ -16,12 +16,13 @@ pub(super) struct ParkedTab {
 mod tests;
 
 pub(super) struct Tabs {
-    parked: Vec<Option<ParkedTab>>,
-    active: usize,
-    preview: usize,
+    records: BTreeMap<u64, TabRecord>,
+    order: Vec<u64>,
+    active: Option<u64>,
+    preview: Option<u64>,
     preview_explicit: bool,
-    ids: Vec<u64>,
     next_id: u64,
+    empty_record: TabRecord,
     pub(super) approved: Vec<(u64, DocumentKey)>,
     advance_close: bool,
     pub(super) process_close_key: Option<DocumentKey>,
@@ -33,19 +34,25 @@ pub(super) struct Tabs {
     drag_trace: trace::Trace,
     #[cfg(target_os = "macos")]
     native_drag_guard: Option<crate::native_window::TitlebarDragGuard>,
-    pub(super) open_uris: std::collections::BTreeSet<String>,
-    unsaved: BTreeMap<u64, UnsavedTextDocument>,
 }
 
 impl Default for Tabs {
     fn default() -> Self {
+        let owner = tiptoptyp_core::document::WindowSessionId::new(0);
         Self {
-            parked: vec![None],
-            active: 0,
-            preview: 0,
+            records: BTreeMap::new(),
+            order: Vec::new(),
+            active: None,
+            preview: None,
             preview_explicit: false,
-            ids: vec![0],
-            next_id: 1,
+            next_id: 0,
+            empty_record: TabRecord {
+                document: DocumentSession::new(owner, "", DocumentKind::Text),
+                folding: Default::default(),
+                editor: None,
+                autosave: None,
+                workspace: PathBuf::new(),
+            },
             approved: Vec::new(),
             advance_close: false,
             process_close_key: None,
@@ -57,8 +64,6 @@ impl Default for Tabs {
             drag_trace: trace::Trace::default(),
             #[cfg(target_os = "macos")]
             native_drag_guard: None,
-            open_uris: Default::default(),
-            unsaved: Default::default(),
         }
     }
 }
@@ -96,56 +101,110 @@ impl Tabs {
     pub(super) fn trace_native_drag(&mut self, context: &egui::Context) {
         self.drag_trace.native_drag(context);
     }
-    pub(super) fn new(preview_explicit: bool) -> Self {
-        Self {
-            preview_explicit,
-            ..Self::default()
-        }
+    pub(super) fn new(
+        preview_explicit: bool,
+        document: DocumentSession,
+        workspace: PathBuf,
+    ) -> Self {
+        let mut tabs = Self::default();
+        let id = tabs.next_id;
+        tabs.next_id += 1;
+        tabs.records.insert(
+            id,
+            TabRecord {
+                document,
+                folding: Default::default(),
+                editor: None,
+                autosave: None,
+                workspace,
+            },
+        );
+        tabs.order.push(id);
+        tabs.active = Some(id);
+        tabs.preview = Some(id);
+        tabs.preview_explicit = preview_explicit;
+        tabs
     }
     pub(super) fn len(&self) -> usize {
-        self.parked.len()
+        self.order.len()
     }
     pub(super) fn is_empty(&self) -> bool {
-        self.parked.is_empty()
+        self.order.is_empty()
     }
     pub(super) fn empty_after(&self) -> Self {
+        let owner = self.active_record().map_or_else(
+            || self.empty_record.document.key().owner,
+            |record| record.document.key().owner,
+        );
         Self {
-            parked: Vec::new(),
-            ids: Vec::new(),
+            records: BTreeMap::new(),
+            order: Vec::new(),
+            active: None,
+            preview: None,
             next_id: self.next_id,
+            empty_record: TabRecord {
+                document: DocumentSession::new(owner, "", DocumentKind::Text),
+                folding: Default::default(),
+                editor: None,
+                autosave: None,
+                workspace: PathBuf::new(),
+            },
             preview_explicit: true,
             ..Self::default()
         }
     }
-    fn open_first(&mut self) {
+    fn open_first(&mut self, workspace: PathBuf) {
         assert!(self.is_empty());
-        self.parked.push(None);
-        self.ids.push(self.next_id);
+        let id = self.next_id;
         self.next_id += 1;
-        self.active = 0;
-        self.preview = 0;
+        let owner = self.empty_record.document.key().owner;
+        self.records.insert(
+            id,
+            TabRecord {
+                document: DocumentSession::new(owner, "", DocumentKind::Typst),
+                folding: Default::default(),
+                editor: None,
+                autosave: None,
+                workspace,
+            },
+        );
+        self.order.push(id);
+        self.active = Some(id);
+        self.preview = Some(id);
         self.preview_explicit = true;
     }
+    fn active_record(&self) -> Option<&TabRecord> {
+        self.active.and_then(|id| self.records.get(&id))
+    }
+    pub(super) fn current_record(&self) -> &TabRecord {
+        self.active_record().unwrap_or(&self.empty_record)
+    }
+    pub(super) fn current_record_mut(&mut self) -> &mut TabRecord {
+        let Some(id) = self.active else {
+            return &mut self.empty_record;
+        };
+        self.records.get_mut(&id).expect("active tab record")
+    }
     pub(super) fn active_id(&self) -> Option<u64> {
-        self.ids.get(self.active).copied()
+        self.active
     }
     pub(super) fn preview_id(&self) -> Option<u64> {
-        self.ids.get(self.preview).copied()
+        self.preview
     }
     pub(super) fn active_index(&self) -> Option<usize> {
-        self.active_id().map(|_| self.active)
+        self.active.and_then(|id| self.index_of(id))
     }
     pub(super) fn ids(&self) -> impl ExactSizeIterator<Item = u64> + '_ {
-        self.ids.iter().copied()
+        self.order.iter().copied()
     }
     pub(super) fn uses_designated_preview(&self) -> bool {
         self.len() > 1 || self.preview_explicit
     }
     pub(super) fn id_at(&self, index: usize) -> Option<u64> {
-        self.ids.get(index).copied()
+        self.order.get(index).copied()
     }
     pub(super) fn index_of(&self, id: u64) -> Option<usize> {
-        self.ids.iter().position(|&value| value == id)
+        self.order.iter().position(|&value| value == id)
     }
 
     pub(super) fn claims_window_drag(&self, pointer: Option<Pos2>, primary_down: bool) -> bool {
@@ -163,21 +222,12 @@ impl Tabs {
             return false;
         }
 
-        let parked = self.parked.remove(from);
-        self.parked.insert(to, parked);
-        let id = self.ids.remove(from);
-        self.ids.insert(to, id);
-        self.active = moved_index(self.active, from, to);
-        self.preview = moved_index(self.preview, from, to);
+        let id = self.order.remove(from);
+        self.order.insert(to, id);
         true
     }
     fn refresh_autosave(&mut self) {
-        self.next_autosave = self
-            .parked
-            .iter()
-            .flatten()
-            .filter_map(|tab| tab.autosave)
-            .min();
+        self.next_autosave = self.records.values().filter_map(|tab| tab.autosave).min();
     }
 }
 
@@ -215,6 +265,31 @@ pub(super) fn consume_window_close(
 }
 
 impl EditorApp {
+    pub(super) fn document(&self) -> &DocumentSession {
+        &self.tabs.current_record().document
+    }
+
+    pub(super) fn document_mut(&mut self) -> &mut DocumentSession {
+        &mut self.tabs.current_record_mut().document
+    }
+
+    pub(super) fn folding(&self) -> &crate::folding::Folding {
+        &self.tabs.current_record().folding
+    }
+
+    pub(super) fn folding_mut(&mut self) -> &mut crate::folding::Folding {
+        &mut self.tabs.current_record_mut().folding
+    }
+
+    pub(super) fn active_autosave_deadline(&self) -> Option<Instant> {
+        self.tabs.current_record().autosave
+    }
+
+    pub(super) fn set_active_autosave_deadline(&mut self, deadline: Option<Instant>) {
+        self.tabs.current_record_mut().autosave = deadline;
+        self.tabs.refresh_autosave();
+    }
+
     pub(super) fn collect_tab_sources(
         &self,
         overrides: &mut BTreeMap<PathBuf, String>,
@@ -248,19 +323,21 @@ impl EditorApp {
     }
     pub(super) fn prepare_tabs_fixture(&mut self, context: &egui::Context) {
         self.append_tab(context);
-        self.document.replace_loaded_unprojected(
+        let methods_path = self.workspace_root.join("methods.typ");
+        self.document_mut().replace_loaded_unprojected(
             "= Methods\n\nDraft notes for the next section.\n".into(),
-            self.workspace_root.join("methods.typ"),
+            methods_path,
             DocumentKind::Typst,
             None,
         );
-        self.document.edit(CCursorRange::default(), |source| {
+        self.document_mut().edit(CCursorRange::default(), |source| {
             source.push_str("\nAn unsaved revision.\n")
         });
         self.append_tab(context);
-        self.document.replace_loaded_unprojected(
+        let notes_path = self.workspace_root.join("notes.md");
+        self.document_mut().replace_loaded_unprojected(
             "# Research notes\n".into(),
-            self.workspace_root.join("notes.md"),
+            notes_path,
             DocumentKind::Text,
             None,
         );
@@ -275,7 +352,7 @@ impl EditorApp {
         kind: DocumentKind,
     ) {
         self.append_tab(context);
-        self.document
+        self.document_mut()
             .replace_loaded_unprojected(String::new(), path.clone(), kind, None);
         self.clear_preview_for_document(true);
         self.request_asset(path);
@@ -287,18 +364,8 @@ impl EditorApp {
         })
     }
     fn document_at_index(&self, index: usize) -> Option<&DocumentSession> {
-        if index >= self.tabs.len() {
-            return None;
-        }
-        if index == self.tabs.active {
-            Some(&self.document)
-        } else {
-            self.tabs
-                .parked
-                .get(index)?
-                .as_ref()
-                .map(|tab| &tab.document)
-        }
+        let id = self.tabs.id_at(index)?;
+        self.tabs.records.get(&id).map(|tab| &tab.document)
     }
     pub(super) fn tab_preview_document(&self) -> Option<&DocumentSession> {
         self.document_for_tab(self.tabs.preview_id()?)
@@ -307,50 +374,34 @@ impl EditorApp {
         self.document_at_index(self.tabs.index_of(id)?)
     }
     pub(super) fn document_for_tab_mut(&mut self, id: u64) -> Option<&mut DocumentSession> {
-        let index = self.tabs.index_of(id)?;
-        if index == self.tabs.active {
-            Some(&mut self.document)
-        } else {
-            self.tabs.parked[index]
-                .as_mut()
-                .map(|tab| &mut tab.document)
-        }
+        self.tabs.index_of(id)?;
+        self.tabs.records.get_mut(&id).map(|tab| &mut tab.document)
     }
     pub(super) fn set_tab_autosave(&mut self, id: u64, deadline: Option<Instant>) {
-        let Some(index) = self.tabs.index_of(id) else {
+        if self.tabs.index_of(id).is_none() {
             return;
-        };
-        if index == self.tabs.active {
-            self.autosave_deadline = deadline;
-        } else if let Some(tab) = &mut self.tabs.parked[index] {
+        }
+        if let Some(tab) = self.tabs.records.get_mut(&id) {
             tab.autosave = deadline;
         }
         self.tabs.refresh_autosave();
     }
     pub(super) fn tab_preview_root(&self) -> &Path {
-        let Some(id) = self.tabs.preview_id() else {
-            return &self.workspace_root;
-        };
-        if self
-            .document_for_tab(id)
-            .is_none_or(|document| !document.kind().is_typst())
-        {
-            return &self.workspace_root;
-        }
-        self.tab_workspace(id).unwrap_or(&self.workspace_root)
+        let preview = self.tabs.preview_id().and_then(|id| {
+            let document = self.document_for_tab(id)?;
+            let root = self.tab_workspace(id)?;
+            Some((root, document.kind().is_typst()))
+        });
+        crate::tinymist_sync::preview_root(&self.workspace_root, preview)
     }
     fn tab_workspace(&self, id: u64) -> Option<&Path> {
-        let index = self.tabs.index_of(id)?;
-        if Some(id) == self.tabs.active_id() {
-            Some(&self.workspace_root)
-        } else {
-            self.tabs.parked[index]
-                .as_ref()
-                .map(|tab| tab.workspace.as_path())
-        }
+        self.tabs
+            .records
+            .get(&id)
+            .map(|tab| tab.workspace.as_path())
     }
     pub(super) fn untitled_tab_path(&self, id: u64) -> PathBuf {
-        if let Some(backing) = self.tabs.unsaved.get(&id) {
+        if let Some(backing) = self.tinymist_sync.tab_backings.get(&id) {
             return backing.path().into();
         }
         self.tab_workspace(id)
@@ -369,7 +420,7 @@ impl EditorApp {
             if !document.kind().is_typst() || document.path().is_some() {
                 continue;
             }
-            if self.tabs.unsaved.contains_key(&id) {
+            if self.tinymist_sync.tab_backings.contains_key(&id) {
                 continue;
             }
             let source = document.canonical_snapshot().map_err(|e| e.to_string())?;
@@ -381,17 +432,17 @@ impl EditorApp {
                 source.source(),
             )
             .map_err(|e| e.to_string())?;
-            self.tabs.unsaved.insert(id, backing);
+            self.tinymist_sync.tab_backings.insert(id, backing);
         }
         Ok(())
     }
 
     pub(super) fn sync_parked_tinymist(&mut self) {
-        let Some(generation) = self.tinymist_generation else {
+        if self.tinymist_sync.generation.is_none() {
             return;
-        };
-        for index in 0..self.tabs.len() {
-            let id = self.tabs.id_at(index).unwrap();
+        }
+        let mut inputs = Vec::new();
+        for id in self.tabs.ids() {
             if Some(id) == self.tabs.active_id() {
                 continue;
             }
@@ -403,41 +454,22 @@ impl EditorApp {
                 .path()
                 .clone()
                 .unwrap_or_else(|| self.untitled_tab_path(id));
-            let Ok(source) = document.canonical_snapshot() else {
-                continue;
-            };
-            let Ok(document) = TextDocument::from_path(
-                &path,
-                revision_as_i32(self.document.revision()),
-                source.source(),
-            ) else {
-                continue;
-            };
-            if self.tabs.open_uris.contains(&document.uri) {
-                continue;
-            }
-            let uri = document.uri.clone();
-            if self.tinymist.did_open(generation, document).is_ok() {
-                self.tabs.open_uris.insert(uri);
+            if let Ok(input) = crate::tinymist_sync::collect(document, &path) {
+                inputs.push(input);
             }
         }
-    }
-
-    pub(super) fn update_active_tab_backing(&self, source: &str) -> Result<(), String> {
-        if let Some(backing) = self
-            .tabs
-            .active_id()
-            .and_then(|id| self.tabs.unsaved.get(&id))
-        {
-            backing
-                .update_backing_source(source)
-                .map_err(|e| e.to_string())?;
+        for input in inputs {
+            let batch = self.tinymist_sync.open_background(input);
+            let _ = self.apply_tinymist_sync_batch(batch);
         }
-        Ok(())
     }
 
     pub(super) fn rename_parked_tab(&mut self, old: &Path, new: &Path) {
-        for tab in self.tabs.parked.iter_mut().flatten() {
+        let active = self.tabs.active;
+        for (id, tab) in &mut self.tabs.records {
+            if Some(*id) == active {
+                continue;
+            }
             if tab.document.path().as_deref() == Some(old) {
                 let kind = parked_rename_kind(&tab.document, new);
                 // Renaming through Explorer must update the parked buffer,
@@ -447,11 +479,13 @@ impl EditorApp {
                     .expect("parked rename preflight");
             }
         }
-        if let Ok(uri) = crate::tinymist::path_to_file_uri(old) {
-            self.tabs.open_uris.remove(&uri);
-            if let Some(generation) = self.tinymist_generation {
-                let _ = self.tinymist.did_close(generation, uri);
-            }
+        if let Ok(uri) = crate::tinymist::path_to_file_uri(old)
+            && let Some(effect) = self.tinymist_sync.close_uri(&uri)
+        {
+            let _ = self.apply_tinymist_sync_batch(crate::tinymist_sync::Batch {
+                source: String::new(),
+                effects: vec![effect],
+            });
         }
         self.sync_parked_tinymist();
     }
@@ -462,10 +496,12 @@ impl EditorApp {
         }
         for tab in self
             .tabs
-            .parked
+            .records
             .iter()
-            .flatten()
-            .filter(|tab| tab.document.path().as_deref() == Some(old))
+            .filter(|(id, tab)| {
+                Some(**id) != self.tabs.active && tab.document.path().as_deref() == Some(old)
+            })
+            .map(|(_, tab)| tab)
         {
             tab.document
                 .can_rename(parked_rename_kind(&tab.document, new))
@@ -477,7 +513,11 @@ impl EditorApp {
     pub(super) fn reschedule_parked_autosave(&mut self) {
         let deadline =
             Instant::now() + Duration::from_millis(self.settings.auto_save_delay_ms.max(100));
-        for tab in self.tabs.parked.iter_mut().flatten() {
+        let active = self.tabs.active;
+        for (id, tab) in &mut self.tabs.records {
+            if Some(*id) == active {
+                continue;
+            }
             tab.autosave = (self.settings.auto_save
                 && tab.document.path().is_some()
                 && tab.document.is_dirty())
@@ -486,34 +526,40 @@ impl EditorApp {
         self.tabs.refresh_autosave();
     }
 
-    fn park_with(&mut self, mut incoming: ParkedTab, context: &egui::Context) -> ParkedTab {
-        if let Some(backing) = self.tinymist_unsaved_document.take() {
-            let id = self
-                .tabs
-                .active_id()
-                .expect("parking requires an active tab");
-            self.tabs.unsaved.insert(id, backing);
+    fn activate_record(&mut self, id: u64, context: &egui::Context) {
+        let previous = self.document().key();
+        let previous_id = self.tabs.active;
+        if let Some(backing) = self.tinymist_sync.active_backing.take()
+            && let Some(previous_id) = previous_id
+        {
+            self.tinymist_sync.tab_backings.insert(previous_id, backing);
         }
+        let outgoing_editor =
+            egui::text_edit::TextEditState::load(context, source_editor_id(context));
+        let current_workspace = self.workspace_root.clone();
+        if let Some(previous_id) = previous_id
+            && let Some(previous_record) = self.tabs.records.get_mut(&previous_id)
+        {
+            previous_record.editor = outgoing_editor;
+            previous_record.workspace = current_workspace;
+        }
+
+        let incoming = self.tabs.records.get_mut(&id).expect("target tab record");
         let old_key = incoming.document.key();
-        incoming.document.reactivate_after(self.document.key());
+        incoming.document.reactivate_after(previous);
         incoming.folding.rekey(old_key, incoming.document.key());
+        let new_key = incoming.document.key();
+        let incoming_editor = incoming.editor.take().unwrap_or_default();
+        let incoming_workspace = incoming.workspace.clone();
         // Close approvals survive a pure view switch, never an intervening edit.
         for (_, key) in &mut self.tabs.approved {
             if *key == old_key {
-                *key = incoming.document.key();
+                *key = new_key;
             }
         }
-        let outgoing = ParkedTab {
-            document: std::mem::replace(&mut self.document, incoming.document),
-            folding: std::mem::replace(&mut self.folding, incoming.folding),
-            editor: egui::text_edit::TextEditState::load(context, source_editor_id(context)),
-            autosave: std::mem::replace(&mut self.autosave_deadline, incoming.autosave),
-            workspace: std::mem::replace(&mut self.workspace_root, incoming.workspace),
-        };
-        incoming
-            .editor
-            .unwrap_or_default()
-            .store(context, source_editor_id(context));
+        self.tabs.active = Some(id);
+        self.workspace_root = incoming_workspace;
+        incoming_editor.store(context, source_editor_id(context));
         self.pending_editor_selection = None;
         self.editor_attention = None;
         self.last_editor_caret = None;
@@ -523,30 +569,34 @@ impl EditorApp {
         self.close_app_popup();
         self.search.clear();
         self.document_workflow.revoke_close();
-        outgoing
     }
 
     fn append_tab(&mut self, context: &egui::Context) {
-        let incoming = ParkedTab {
-            document: DocumentSession::new(self.document.key().owner, "", DocumentKind::Typst),
-            folding: Default::default(),
-            editor: None,
-            autosave: None,
-            workspace: self.workspace_root.clone(),
-        };
-        let old = self.park_with(incoming, context);
-        self.tabs.parked[self.tabs.active] = Some(old);
-        self.tabs.active = self.tabs.len();
-        self.tabs.parked.push(None);
-        self.tabs.ids.push(self.tabs.next_id);
+        let id = self.tabs.next_id;
         self.tabs.next_id += 1;
+        self.tabs.records.insert(
+            id,
+            TabRecord {
+                document: DocumentSession::new(
+                    self.document().key().owner,
+                    "",
+                    DocumentKind::Typst,
+                ),
+                folding: Default::default(),
+                editor: None,
+                autosave: None,
+                workspace: self.workspace_root.clone(),
+            },
+        );
+        self.tabs.order.push(id);
+        self.activate_record(id, context);
         self.tabs.reveal_active = true;
         self.tabs.refresh_autosave();
     }
 
     pub(super) fn new_tab(&mut self, context: &egui::Context) {
         if self.tabs.is_empty() {
-            self.tabs.open_first();
+            self.tabs.open_first(self.workspace_root.clone());
         } else if self.lifecycle.allows_document_work() {
             self.append_tab(context);
         }
@@ -556,7 +606,7 @@ impl EditorApp {
     pub(super) fn open_tab_path(&mut self, path: PathBuf, context: &egui::Context) -> bool {
         let path = canonical_or_absolute(&path);
         if self.tabs.is_empty() {
-            self.tabs.open_first();
+            self.tabs.open_first(self.workspace_root.clone());
             if self.load_path(path) {
                 return true;
             }
@@ -572,7 +622,7 @@ impl EditorApp {
             return true;
         }
         let replace_welcome =
-            self.tabs.len() == 1 && self.document.path().is_none() && !self.is_dirty();
+            self.tabs.len() == 1 && self.document().path().is_none() && !self.is_dirty();
         if replace_welcome || !self.lifecycle.allows_document_work() {
             return self.load_path(path);
         }
@@ -588,37 +638,32 @@ impl EditorApp {
     }
 
     pub(super) fn activate_tab(&mut self, id: u64, context: &egui::Context) {
-        let Some(index) = self.tabs.index_of(id) else {
+        if self.tabs.index_of(id).is_none() {
             return;
-        };
+        }
         if Some(id) == self.tabs.active_id() {
             return;
         }
-        let incoming = self.tabs.parked[index]
-            .take()
-            .expect("inactive tab owns its document");
         let preserve_preview = self.typst_preview_available();
-        let workspace_changed = incoming.workspace != self.workspace_root;
-        let outgoing = self.park_with(incoming, context);
-        self.tabs.parked[self.tabs.active] = Some(outgoing);
-        self.tabs.active = index;
+        let workspace_changed = self.tabs.records[&id].workspace != self.workspace_root;
+        self.activate_record(id, context);
         self.tabs.reveal_active = true;
         self.tabs.refresh_autosave();
         self.clear_preview_for_document(preserve_preview);
         self.git_editor.clear_document();
         if workspace_changed {
             self.reset_document_services();
-        } else if let Some(path) = self.document.path().clone() {
-            if self.tinymist_generation.is_some() {
-                self.reopen_tinymist_current_document(&path, self.document.kind());
+        } else if let Some(path) = self.document().path().clone() {
+            if self.tinymist_sync.generation.is_some() {
+                self.reopen_tinymist_current_document(&path, self.document().kind());
             } else {
                 self.restart_tinymist();
             }
         } else {
             self.restart_tinymist_preserving_preview();
         }
-        if self.document.kind().preview_only()
-            && let Some(path) = self.document.path().clone()
+        if self.document().kind().preview_only()
+            && let Some(path) = self.document().path().clone()
         {
             self.request_asset(path);
         }
@@ -642,31 +687,28 @@ impl EditorApp {
 
     fn remove_parked_tab(&mut self, id: u64) {
         let index = self.tabs.index_of(id).expect("removed tab must exist");
-        assert_ne!(index, self.tabs.active);
+        assert_ne!(Some(id), self.tabs.active);
         if let Some(document) = self.document_for_tab(id) {
             let path = document
                 .path()
                 .clone()
                 .unwrap_or_else(|| self.untitled_tab_path(id));
-            if let Ok(uri) = crate::tinymist::path_to_file_uri(&path) {
-                self.tabs.open_uris.remove(&uri);
-                if let Some(generation) = self.tinymist_generation {
-                    let _ = self.tinymist.did_close(generation, uri);
-                }
+            if let Ok(uri) = crate::tinymist::path_to_file_uri(&path)
+                && let Some(effect) = self.tinymist_sync.close_uri(&uri)
+            {
+                let _ = self.apply_tinymist_sync_batch(crate::tinymist_sync::Batch {
+                    source: String::new(),
+                    effects: vec![effect],
+                });
             }
         }
-        let removed = self.tabs.ids.remove(index);
+        let removed = self.tabs.order.remove(index);
         debug_assert_eq!(removed, id);
-        self.tabs.unsaved.remove(&id);
-        self.tabs.parked.remove(index);
+        self.tinymist_sync.tab_backings.remove(&id);
+        self.tabs.records.remove(&id);
         self.tabs.approved.retain(|(approved, _)| *approved != id);
-        if self.tabs.active > index {
-            self.tabs.active -= 1;
-        }
-        if self.tabs.preview > index {
-            self.tabs.preview -= 1;
-        } else if self.tabs.preview == index {
-            self.tabs.preview = 0;
+        if self.tabs.preview == Some(id) {
+            self.tabs.preview = self.tabs.order.first().copied();
         }
         self.tabs.refresh_autosave();
     }
@@ -700,20 +742,14 @@ impl EditorApp {
         self.remove_parked_tab(closing);
         if changed_preview {
             self.tabs.preview_explicit = true;
-            self.restart_tinymist_preserving_preview();
+            self.restart_tinymist_for_preview_entry();
             self.schedule_compile_now();
         }
     }
 
     pub(super) fn tabs_close_approved(&self) -> bool {
-        self.tabs.parked.iter().enumerate().all(|(i, tab)| {
-            tab.as_ref().is_none_or(|tab| {
-                !tab.document.is_dirty()
-                    || self
-                        .tabs
-                        .approved
-                        .contains(&(self.tabs.ids[i], tab.document.key()))
-            })
+        self.tabs.records.iter().all(|(id, tab)| {
+            !tab.document.is_dirty() || self.tabs.approved.contains(&(*id, tab.document.key()))
         })
     }
 
@@ -722,7 +758,7 @@ impl EditorApp {
             .tabs
             .active_id()
             .expect("approval requires an active tab");
-        self.tabs.approved.push((id, self.document.key()));
+        self.tabs.approved.push((id, self.document().key()));
         self.tabs.advance_close = true;
     }
 
@@ -738,14 +774,15 @@ impl EditorApp {
         if let Some(id) = unapproved {
             self.activate_tab(id, context);
             self.document_workflow.queue_replacement(
-                self.document.key(),
+                self.document().key(),
                 self.is_dirty(),
-                &self.document.name(),
+                &self.document().name(),
                 DeferredDocumentAction::CloseWindow,
                 "closing this window",
             );
         } else {
-            self.document_workflow.allow_close_for(self.document.key());
+            self.document_workflow
+                .allow_close_for(self.document().key());
             if !self.process_close_pending {
                 context.send_viewport_cmd(egui::ViewportCommand::Close);
             }
@@ -762,9 +799,9 @@ impl EditorApp {
         {
             return;
         }
-        self.tabs.preview = self.tabs.index_of(id).unwrap();
+        self.tabs.preview = Some(id);
         self.tabs.preview_explicit = true;
-        self.restart_tinymist_preserving_preview();
+        self.restart_tinymist_for_preview_entry();
         self.schedule_compile_now();
         self.schedule_project_index();
         context.request_repaint();
@@ -908,7 +945,7 @@ impl EditorApp {
             {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                 outcome = "no-drop-target";
-                if let Some(from) = self.tabs.ids.iter().position(|id| *id == source)
+                if let Some(from) = self.tabs.order.iter().position(|id| *id == source)
                     && let Some(mut insertion) = tab_drop_index(&tab_rects, pointer)
                 {
                     if insertion > from {
@@ -926,7 +963,7 @@ impl EditorApp {
         if trace_sample {
             self.tabs.drag_trace.record(ui.ctx(), format!(
                 "source={source_before:?} pressed_tab={pressed_tab:?} outcome={outcome} strip={tab_viewport:?} native_drag_suppressed={} tab_count={} order={:?} widgets(first16)={trace_widgets}",
-                self.tabs.native_drag_suppressed(), self.tabs.len(), &self.tabs.ids[..self.tabs.ids.len().min(16)]));
+                self.tabs.native_drag_suppressed(), self.tabs.len(), &self.tabs.order[..self.tabs.order.len().min(16)]));
         }
         if !primary_down {
             self.tabs.tab_drag_source = None;
@@ -947,7 +984,7 @@ impl EditorApp {
             self.select_preview_tab(id, ui.ctx());
         } else if let Some(id) = rename {
             self.activate_tab(id, ui.ctx());
-            if let Some(path) = self.document.path().clone() {
+            if let Some(path) = self.document().path().clone() {
                 self.begin_rename(path);
             } else {
                 self.save_as(frame);
@@ -972,31 +1009,23 @@ impl EditorApp {
         if self.document_flow_busy() || self.process_close_pending {
             return;
         }
-        let candidate = self
-            .tabs
-            .parked
-            .iter_mut()
-            .enumerate()
-            .find_map(|(index, slot)| {
-                let tab = slot.as_mut()?;
-                if tab.autosave.is_none_or(|deadline| deadline > now) {
-                    return None;
-                }
-                tab.autosave = None;
-                (tab.document.is_dirty())
-                    .then(|| tab.document.path().clone())
-                    .flatten()
-                    .map(|path| (index, path))
-            });
+        let active = self.tabs.active;
+        let candidate = self.tabs.records.iter_mut().find_map(|(id, tab)| {
+            if Some(*id) == active {
+                return None;
+            }
+            if tab.autosave.is_none_or(|deadline| deadline > now) {
+                return None;
+            }
+            tab.autosave = None;
+            (tab.document.is_dirty())
+                .then(|| tab.document.path().clone())
+                .flatten()
+                .map(|path| (*id, path))
+        });
         self.tabs.refresh_autosave();
-        if let Some((index, path)) = candidate {
-            self.submit_save(
-                self.tabs.id_at(index).unwrap(),
-                path,
-                SaveIntent::Auto,
-                false,
-                context,
-            );
+        if let Some((id, path)) = candidate {
+            self.submit_save(id, path, SaveIntent::Auto, false, context);
         }
     }
 }
@@ -1028,18 +1057,6 @@ fn tab_title_width(name: &str, available_width: f32, fixed_width: bool, compatib
         + METRICS.toolbar.title_padding)
         .clamp(54.0, 200.0)
         .min((available_width - controls_width - TAB_ITEM_SPACING).max(24.0))
-}
-
-fn moved_index(index: usize, from: usize, to: usize) -> usize {
-    if index == from {
-        to
-    } else if from < to && (from..=to).contains(&index) {
-        index - 1
-    } else if to < from && (to..=from).contains(&index) {
-        index + 1
-    } else {
-        index
-    }
 }
 
 fn tab_drop_index(tab_rects: &[(u64, Rect)], pointer: Pos2) -> Option<usize> {

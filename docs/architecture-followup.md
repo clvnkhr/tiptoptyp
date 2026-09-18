@@ -1,5 +1,248 @@
 # Architecture follow-up — 2026-09-17
 
+## Bounded PDF page residency (198–200, completed 2026-09-18)
+
+PDF inspection now produces a lightweight all-page catalog of 144-DPI layout
+dimensions and normalized links. Decoded RGBA buffers and uploaded egui textures
+are separate resident resources keyed by artifact generation, page, requested
+DPI and appearance revision. On artifact replacement, the current catalog and
+pixels remain visible until the first valid page for the replacement arrives.
+Results from an old artifact or appearance are rejected; canonical PDF bytes
+remain the unchanged export source.
+
+The fallback view computes its intersecting page range from scroll geometry,
+prefetches one page on either side and caps each request at 12 pages. Requests
+are latest-wins, and Poppler is polled for cancellation during rendering and
+between page decodes. Typst and opened-asset previews have independent workers
+because both panes can be visible together. Offscreen pages retain lightweight
+geometry but do not construct image widgets or require resident pixels.
+
+Decoded pixels and estimated GPU texture bytes are accounted process-wide at
+96 MiB and 192 MiB respectively. Eviction coordinates visibility across window
+owners and prefers the least-recently-visible nonvisible page. The evicted owner
+is repainted so its UI thread drops the actual texture handle. A page larger
+than either budget evicts all other pages and is admitted alone; this preserves
+usability while preventing multiple oversized pages from accumulating.
+
+Deterministic tests cover metadata and rotation parsing, visible-range and
+prefetch bounds, supersession, artifact/theme rejection, replacement retention,
+cross-window visible-page preference, oversized pages and 1/20/100-page bounded
+residency. An architecture guard prevents decoded-page ownership from returning
+to the compiler. The inspected fresh Catppuccin Latte `main` framebuffer showed
+the fallback page populated, aligned and unclipped; it does not prove native
+webview composition.
+
+The matched opt-in accounting probe ran on Apple M2 Max, arm64 macOS 14.6.1,
+Rust 1.96.0:
+
+```sh
+cargo test --release optimized_pdf_residency_probe -- --ignored --nocapture
+```
+
+With synthetic pages costing 8 MiB decoded plus 8 MiB texture each, the former
+all-page model retained 16/320/1600 MiB for 1/20/100 pages. The bounded model's
+cold/warm, idle/scroll/zoom sequence retained 8/24/24 MiB (1/3/3 pages). Its
+local operation timings were 311834/42/0/10083/49625 ns for one page,
+13125/84/0/2583/17375 ns for 20 pages, and
+7875/41/42/7500/12667 ns for 100 pages. These measure the matched optimized
+accounting workload, not Poppler execution, GPU allocation or end-to-end frame
+time. The deterministic byte bounds—not nanosecond thresholds—are the maintained
+performance contract.
+
+## Child/native resource lifecycle (215–217, completed 2026-09-18)
+
+The child-view host now records explicit `Visible`, `TemporarilyHidden`,
+`DurablyClosed` and `DormantHosted` states per owner viewport. Hiding retains a
+surface and its generation; durable close increments the generation so an old
+deferred callback is inert. A dormant document owner closes transient children
+but keeps only surfaces explicitly marked as native hosts (currently Settings),
+and normal document painting resumes the owner. Existing scroll dismissal and
+keyboard-focus state tests remain; new tests cover hide/reopen, durable
+recreation, dormant hosting and stale callbacks.
+
+Durable close removes every font-sample slot owned by that viewport, dropping
+its private atlas textures and canceled/latest job state. The existing bounded
+four-sample slot cache remains for temporarily hidden/reopened pickers. The
+font test now measures one live slot before close and zero afterward, so repeated
+open/preview/close cycles return to baseline rather than accumulating viewport
+keys.
+
+Native-preview tracing showed the same clipped geometry on two consecutive
+frames:
+
+```text
+egui=(1038.7,30.0)-(1672.0,958.2)
+native=(934.8,27.0)-(1504.8,862.4)
+viewport=(0.0,0.0)-(1680.0,982.2)
+```
+
+The prior adapter issued background, bounds and visibility setters every frame.
+The deterministic trace model therefore counts 300 native calls across 100
+unchanged frames. Applied-state diffing now emits all three only at creation,
+zero across those 100 stable frames, bounds alone after a move, and all three
+after native recreation. The cache is invalidated when the Wry view is dropped,
+its native parent changes, preview fallback occurs or the workspace empties;
+changed scale/geometry naturally changes `NativeRect`. The fresh `main` viewport
+capture was inspected for clipping/alignment, but—as documented—it is not proof
+of native child composition; the retained bounds trace is the native geometry
+evidence.
+
+## Shared workspace observation (208–209, completed 2026-09-18)
+
+`src/workspace_service.rs` owns one recursive native filesystem observer and one
+immutable snapshot stream per canonical workspace root. Windows sharing a root
+receive the same `Arc<WorkspaceSnapshot>`; each `WorkspaceTree` still owns its
+generation, and Explorer selection, expansion, search and section state remain
+window-local. Removing one subscriber leaves the shared root and other windows
+alive; the observer shuts down when its final owner closes.
+
+Events are accumulated for a 120 ms quiet period. Data/metadata changes notify
+interested windows without rescanning the tree; create, remove and rename events
+coalesce into one structural scan. Access events and `.git`, `target` and
+`.tiptoptyp` paths are ignored so observing the app's own reads/private outputs
+cannot create a feedback loop. A 30-second verification scan is the conservative
+fallback for a missed native event. Active-file verification checks length and
+modification metadata first and reads/hash-compares content only after metadata
+changes or a concrete event. Atomic-save/create, delete and rename classification
+and missed-event manual verification have deterministic tests.
+
+The two-window test records one initial scan serial for both subscribers and
+pointer-identical snapshot storage: one tree scan, zero workspace file-content
+reads and one shared snapshot allocation. Closing the first window and refreshing
+after a new file produces one later serial for the remaining window. The old
+Explorer two-second scan, active-file one-second full read and their repaint
+timers are removed. Language indexing and Git retain their separate models and
+refresh triggers; no generic filesystem model was introduced.
+
+## Bounded project-index reads (204–206, completed 2026-09-18)
+
+`src/index_jobs.rs` is a deliberately specialized process-wide runner for
+project indexing. Two workers serve all windows. The FIFO queue keeps at most
+one pending request per window/source key, replaces superseded payloads in
+place, caps each request at 32 MiB and total pending source payload at 64 MiB,
+and records pending bytes before admission. It has no generic task API,
+priority system, mutation path or protocol ownership.
+
+Active work receives an atomic cancellation token. The literal-only indexer
+checks it between files and every 256 syntax nodes, so a superseded large file
+cannot monopolize a worker indefinitely. Completions carry owner, source key
+and request identity; stale/closed-owner results are discarded, and a
+successful send wakes only the requesting viewport. The previous 50 ms UI
+polling repaint was removed. Queue tests show 100 same-key submissions retain
+one pending payload, FIFO fairness across owners, bounded byte admission, and
+owner closure canceling active/pending work. The existing completeness and
+literal dependency tests remain unchanged.
+
+The opt-in optimized comparison used a 2,000-section in-memory override, four
+windows and 100 requests on Apple M2 Max, arm64 macOS 14.6.1, Rust 1.96.0:
+
+```sh
+cargo test --release index_jobs::tests::profile_repeated_multi_window_indexing -- --ignored --exact --nocapture
+```
+
+The former per-request spawning model started 100 threads and completed in
+193,145,208 ns; the bounded path used two shared workers, coalesced replacements
+and delivered all four latest results in 11,337,750 ns. This is a local matched
+synthetic indexing workload, not a cross-platform GUI latency guarantee. It
+does establish the intended concurrency and supersession behavior without a
+timing threshold in normal tests.
+
+## Preview transition ownership (194–196, completed 2026-09-18)
+
+`PreviewController` now applies typed transition events to the existing
+connection, recovery and content models and returns adapter effects for service
+restart/stop, refresh mode, raster scheduling and bounded repaint deadlines.
+There is no second retry counter or parallel connection state. `EditorApp`
+performs those effects, while native views, texture handles, sidecar calls and
+egui repaint APIs remain in their platform/UI adapters.
+
+Service failures, recovery ticks, explicit restarts, preview-entry changes,
+pause changes, stop and render requests use this path. A failure emits each
+cleanup/repaint/render effect once; a duplicate terminal event emits nothing,
+the fifth consecutive failure schedules one raster fallback, and exhausted or
+inactive recovery emits no idle repaint. Tests also cover retained late
+readiness, pause/restart, export rendering during recovery and entry changes.
+
+Preview and settings rendering now consume one read-only status snapshot that
+separates the requested and effective backend, native readiness/transition,
+whether native creation should be attempted, and canonical artifact
+availability. Fallback text is allocated only when a caller asks for it. An
+architecture guard prevents the view from invoking the lower-level policy
+queries and prevents the transition owner from acquiring sidecar or egui
+effect APIs. The transition and snapshot paths are constant-time, add no
+worker, queue, texture copy or periodic wake, and therefore have no material
+disabled-mode or idle performance cost.
+
+## Versioned Tinymist synchronization (191–193, completed 2026-09-18)
+
+`src/tinymist_sync.rs` is now the window-owned synchronization policy. It owns
+the active generation, current and designated-preview URIs, open URI set, and
+private backing guards for active and tabbed unsaved documents. Inputs pair a
+full `DocumentKey`, LSP version, URI and canonical source. Transitions emit typed
+Open, Change, Close and UpdateBacking effects; `EditorApp` remains the adapter
+that writes backing files and calls the existing `TinymistSidecar`.
+
+Startup, editing, tab switches, post-initialize current-document admission,
+parked-document opening, rename/close and shutdown use the same transition/effect
+boundary. Canonical snapshot collection and compatible preview-root selection
+are policy helpers. This also fixes parked opens using the active document's
+revision: each parked input now carries its own document key/version.
+
+Formatting, hover and completion results pass a shared generation + current URI
++ revision admission check before mutation. Pure command-log tests cover start,
+edit, switch, preview-entry replacement, close, backing update and miTeX source
+changes. Additional tests reject stale generation/URI/version independently and
+show ordinary and projected documents retain separate display/canonical source
+domains. The existing `mitex_document` tests continue to assert that ordinary
+documents perform zero projection encodes.
+
+An architecture boundary prevents UI, process, thread, sidecar and filesystem
+effect APIs from entering the coordinator. When Tinymist and private backings
+have no source consumer, the edit path still returns before collecting or
+copying canonical source, so this refactor adds no disabled-mode typing cost,
+worker, queue or repaint loop. The existing command-line limitation is retained:
+imported subfiles absent from editor overrides are compiled from disk.
+
+## Stable document records (185–186, completed 2026-09-18)
+
+The tab model now keeps every open document in a `BTreeMap<u64, TabRecord>`
+keyed by the existing stable tab identity, with a separate `Vec<u64>` defining
+display order and optional active/preview IDs. The previous active hole,
+parallel identity vector and positional remapping are gone. Reordering changes
+only the order list. An empty workspace has no open record and uses a private
+empty presentation record until New/Open creates a real tab.
+
+Each record owns `DocumentSession`, folding, saved egui editor state, workspace
+and autosave deadline for its full lifetime. A switch leaves both records in the
+store, saves/restores only widget state and the active workspace, and rekeys the
+incoming document/folding state against the outgoing document key. This retains
+the existing late-result rejection contract without moving Tinymist, compiler,
+indexing, Git, native views or texture resources out of the window owner.
+Production code reaches the store through stable accessors; an architecture
+test rejects direct map access outside `tabs.rs`.
+
+Focused tests preserve the existing identity, preview, undo/selection, dirty
+close, empty-workspace, save-completion and late-asset-result contracts. Added
+tests verify store/order membership, per-record folding and autosave retention,
+and that repeated activation starts no Tinymist, project-index or workspace-scan
+job.
+
+The opt-in optimized probe was run on Apple M2 Max, arm64 macOS 14.6.1, Rust
+1.96.0:
+
+```sh
+cargo test --release app::tabs::tests::tab_store_cost_probe -- --ignored --nocapture
+```
+
+It measured 2,000 alternating switches at 894,042 ns and 732,072 requested
+allocation bytes (about 366 bytes/switch), and 100 egui tab-strip frames with
+100 tabs at 126,145,666 ns and 237,217,300 requested bytes. The allocator is a
+test-only thread-local observer over the system allocator. These figures isolate
+tab activation and egui tab-strip layout; they do not measure GPU memory,
+process RSS or composed desktop frames. No timing threshold runs in normal CI.
+The new ownership model introduces no worker, queue, filesystem work, service
+start or repaint loop.
+
 This batch addresses todos 187, 197, 203, 210 and 211. It preserves the previous
 working-tree changes and does not change save execution timing, process/thread
 ownership, PDF quality, or the visual popup layout.

@@ -14,7 +14,7 @@ use std::{
 
 use crate::{
     document::DocumentKind,
-    pdf::{PreviewPage, rasterize_pdf, rasterize_pdf_first_page},
+    pdf::{PdfDocumentCatalog, PreviewPage, inspect_pdf, rasterize_pdf_first_page},
     private_workspace::project_root_for_path,
 };
 
@@ -45,7 +45,7 @@ pub enum LoadedAsset {
     Image(PreviewPage),
     Pdf {
         bytes: Vec<u8>,
-        pages: Vec<PreviewPage>,
+        catalog: PdfDocumentCatalog,
     },
 }
 
@@ -534,8 +534,8 @@ fn load_pdf(path: &Path, mut cancelled: impl FnMut() -> bool) -> Result<LoadedAs
             path.display()
         )
     })?;
-    let pages = rasterize_pdf(&bytes, &project_root, &mut cancelled)?;
-    Ok(LoadedAsset::Pdf { bytes, pages })
+    let catalog = inspect_pdf(&bytes, &project_root, &mut cancelled)?;
+    Ok(LoadedAsset::Pdf { bytes, catalog })
 }
 
 #[cfg(test)]

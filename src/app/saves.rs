@@ -190,8 +190,8 @@ impl EditorApp {
                                 pending.path.display()
                             ),
                             path: pending.path,
-                            key: self.document.key(),
-                            expected_disk_fingerprint: self.document.disk_fingerprint(),
+                            key: self.document().key(),
+                            expected_disk_fingerprint: self.document().disk_fingerprint(),
                             observed_disk_fingerprint: match observed {
                                 ExpectedDiskState::Fingerprint(value) => Some(value),
                                 _ => None,
@@ -216,9 +216,10 @@ impl EditorApp {
         };
         let synchronized = matches!(committed.durability, WriteDurability::Synchronized);
         let continuation = if active {
+            let document = &mut self.tabs.current_record_mut().document;
             self.document_workflow.complete_save(
                 result.completion.continuation,
-                &mut self.document,
+                document,
                 committed.receipt,
                 synchronized,
             )
@@ -250,6 +251,7 @@ impl EditorApp {
         self.set_tab_autosave(pending.tab, deadline);
         if active {
             self.external_file_change_notice = None;
+            self.external_file_stamp = external_file_stamp(&pending.path).ok();
             if pending.path_changed {
                 if !pending.path.starts_with(&self.workspace_root)
                     && let Some(parent) = pending.path.parent()
@@ -282,7 +284,7 @@ impl EditorApp {
             return;
         }
         if let Some(mut action) = continuation {
-            action.key = self.document.key();
+            action.key = self.document().key();
             action.allow_discard = false;
             self.document_workflow.queue_action(action);
         }
@@ -302,10 +304,10 @@ impl EditorApp {
             ),
             kind: NoticeKind::Success,
         });
-        if active && unchanged && pending.format_after && self.document.kind().is_typst() {
+        if active && unchanged && pending.format_after && self.document().kind().is_typst() {
             if pending.path_changed {
                 self.format_when_tinymist_ready =
-                    save_as_format_handoff(true, self.document.kind(), self.document.key());
+                    save_as_format_handoff(true, self.document().kind(), self.document().key());
             } else {
                 self.request_format_after_manual_save();
             }
@@ -350,19 +352,19 @@ mod tests {
         let context = egui::Context::default();
         let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
         app.snapshot_scene = None;
-        app.document.replace_loaded_unprojected(
+        app.document_mut().replace_loaded_unprojected(
             "old".into(),
             path.clone(),
             DocumentKind::Text,
             Some(fingerprint(b"old")),
         );
-        app.document.edit(CCursorRange::default(), |source| {
+        app.document_mut().edit(CCursorRange::default(), |source| {
             *source = "submitted".into()
         });
         app.document_workflow
             .continue_after_save(PendingDocumentAction {
                 action: DeferredDocumentAction::CloseWindow,
-                key: app.document.key(),
+                key: app.document().key(),
                 allow_discard: false,
                 description: "closing".into(),
             });
@@ -374,7 +376,7 @@ mod tests {
         );
         app.document_workflow.finish_dispatch();
         assert!(app.document_workflow.has_continuation());
-        app.document
+        app.document_mut()
             .edit(CCursorRange::default(), |source| source.push_str(" newer"));
         app.poll_save(&context);
         assert_eq!(fs::read_to_string(&path).unwrap(), "old");
@@ -382,8 +384,8 @@ mod tests {
         holder.join().unwrap();
         app.finish_save_for_test(&context);
         assert_eq!(fs::read_to_string(path).unwrap(), "submitted");
-        assert_eq!(app.document.source(), "submitted newer");
-        assert!(app.document.is_dirty());
+        assert_eq!(app.document().source(), "submitted newer");
+        assert!(app.document().is_dirty());
         assert!(!app.document_workflow.has_continuation());
         assert!(app.document_workflow.take_action().is_none());
         assert!(app.manual_format_revision.is_none());
@@ -397,19 +399,19 @@ mod tests {
         let context = egui::Context::default();
         let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
         app.snapshot_scene = None;
-        app.document.replace_loaded_unprojected(
+        app.document_mut().replace_loaded_unprojected(
             "old".into(),
             path.clone(),
             DocumentKind::Text,
             Some(fingerprint(b"old")),
         );
-        app.document.edit(CCursorRange::default(), |source| {
+        app.document_mut().edit(CCursorRange::default(), |source| {
             *source = "submitted".into()
         });
         app.document_workflow
             .continue_after_save(PendingDocumentAction {
                 action: DeferredDocumentAction::CloseTab,
-                key: app.document.key(),
+                key: app.document().key(),
                 allow_discard: false,
                 description: "closing".into(),
             });
@@ -460,17 +462,17 @@ mod tests {
         let context = egui::Context::default();
         let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
         app.snapshot_scene = None;
-        app.document.replace_unprojected_untitled("hello");
+        app.document_mut().replace_unprojected_untitled("hello");
         let (release, holder) = hold_destination(path.clone());
         assert!(app.save_to(path.clone(), &context));
         assert!(app.format_when_tinymist_ready.is_none());
-        assert!(app.document.path().is_none());
+        assert!(app.document().path().is_none());
         release.send(()).unwrap();
         holder.join().unwrap();
         app.finish_save_for_test(&context);
-        assert_eq!(app.format_when_tinymist_ready, Some(app.document.key()));
+        assert_eq!(app.format_when_tinymist_ready, Some(app.document().key()));
         app.format_when_tinymist_ready = None;
-        app.document
+        app.document_mut()
             .edit(CCursorRange::default(), |source| source.push('!'));
         assert!(app.save_to_with_intent(path, SaveIntent::Auto, &context));
         app.finish_save_for_test(&context);
@@ -486,7 +488,7 @@ mod tests {
         let context = egui::Context::default();
         let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
         app.snapshot_scene = None;
-        app.document.replace_loaded_unprojected(
+        app.document_mut().replace_loaded_unprojected(
             "submitted".into(),
             path.clone(),
             DocumentKind::Text,
@@ -494,8 +496,9 @@ mod tests {
         );
         let (release, holder) = hold_destination(path.clone());
         assert!(app.save_to(path.clone(), &context));
-        app.document.replace_unprojected_untitled("replacement");
-        let key = app.document.key();
+        app.document_mut()
+            .replace_unprojected_untitled("replacement");
+        let key = app.document().key();
         app.document_workflow
             .continue_after_save(PendingDocumentAction {
                 action: DeferredDocumentAction::CloseWindow,
@@ -507,9 +510,9 @@ mod tests {
         holder.join().unwrap();
         app.finish_save_for_test(&context);
         assert_eq!(fs::read_to_string(path).unwrap(), "submitted");
-        assert_eq!(app.document.source(), "replacement");
-        assert_eq!(app.document.key(), key);
-        assert!(app.document.path().is_none());
+        assert_eq!(app.document().source(), "replacement");
+        assert_eq!(app.document().key(), key);
+        assert!(app.document().path().is_none());
         assert!(app.document_workflow.has_continuation());
         assert!(app.document_workflow.take_action().is_none());
     }

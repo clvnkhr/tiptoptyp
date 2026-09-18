@@ -4,6 +4,7 @@ use std::{
     ffi::{OsStr, OsString},
     fs, io,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 /// Workspace mutations require a target resolved through its owning root.
@@ -199,12 +200,16 @@ impl WorkspaceSnapshot {
 /// explicit refresh. This keeps filesystem traversal out of egui's frame loop.
 #[derive(Debug, Clone)]
 pub struct WorkspaceTree {
-    snapshot: WorkspaceSnapshot,
+    snapshot: Arc<WorkspaceSnapshot>,
     generation: u64,
 }
 
 impl WorkspaceTree {
     pub fn from_snapshot(snapshot: WorkspaceSnapshot) -> Self {
+        Self::from_shared(Arc::new(snapshot))
+    }
+
+    pub fn from_shared(snapshot: Arc<WorkspaceSnapshot>) -> Self {
         Self {
             snapshot,
             generation: 0,
@@ -226,7 +231,12 @@ impl WorkspaceTree {
 
     /// Apply a completed background scan, incrementing the visible generation
     /// only when the tree structure changed.
+    #[cfg(test)]
     pub fn apply_snapshot(&mut self, next: WorkspaceSnapshot) -> bool {
+        self.apply_shared(Arc::new(next))
+    }
+
+    pub fn apply_shared(&mut self, next: Arc<WorkspaceSnapshot>) -> bool {
         if next.root != self.snapshot.root || next.nodes == self.snapshot.nodes {
             return false;
         }

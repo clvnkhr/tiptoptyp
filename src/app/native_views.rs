@@ -1,6 +1,31 @@
 //! Owned child-window views and native preview composition.
 use super::*;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct WebviewAppliedState {
+    bounds: NativeRect,
+    background: Color32,
+    visible: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WebviewPropertyDiff {
+    bounds: bool,
+    background: bool,
+    visible: bool,
+}
+
+fn webview_property_diff(
+    previous: Option<WebviewAppliedState>,
+    next: WebviewAppliedState,
+) -> WebviewPropertyDiff {
+    WebviewPropertyDiff {
+        bounds: previous.is_none_or(|previous| previous.bounds != next.bounds),
+        background: previous.is_none_or(|previous| previous.background != next.background),
+        visible: previous.is_none_or(|previous| previous.visible != next.visible),
+    }
+}
+
 impl EditorApp {
     pub(super) fn show_package_manager_window(&mut self, context: &egui::Context) {
         if !self.packages_visible
@@ -171,13 +196,13 @@ impl EditorApp {
             Some(TableEditorUiAction::Apply) => {
                 let mut dialog = self.table_editor.take().expect("table editor exists");
                 match prepare_table_source_edit(
-                    self.document.source(),
-                    self.document.key(),
+                    self.document().source(),
+                    self.document().key(),
                     &dialog,
                 ) {
                     Ok(edit) => {
                         let snapshot = self.editor_snapshot(context);
-                        self.document.edit(snapshot.cursor, |source| {
+                        self.document_mut().edit(snapshot.cursor, |source| {
                             source.replace_range(edit.byte_range, &edit.replacement)
                         });
                         self.pending_editor_selection = Some(edit.cursor..edit.cursor);
@@ -565,7 +590,7 @@ impl EditorApp {
                             self.restart_tinymist_preserving_preview();
                             self.schedule_compile_now();
                         }
-                        if self.document.path().as_ref() == Some(&path) {
+                        if self.document().path().as_ref() == Some(&path) {
                             self.reset_untitled_document();
                         }
                         self.refresh_workspace();
@@ -582,14 +607,14 @@ impl EditorApp {
             (AppModal::Unsaved { pending, .. }, AppModalChoice::Primary) => {
                 self.document_workflow.queue_action(PendingDocumentAction {
                     action: DeferredDocumentAction::SaveThen(Box::new(pending)),
-                    key: self.document.key(),
+                    key: self.document().key(),
                     allow_discard: true,
                     description: "saving the current document".to_owned(),
                 });
             }
             (AppModal::Unsaved { mut pending, .. }, AppModalChoice::Secondary) => {
                 self.document_workflow.cancel_continuation();
-                pending.key = self.document.key();
+                pending.key = self.document().key();
                 pending.allow_discard = true;
                 self.document_workflow.queue_action(pending);
             }
@@ -614,7 +639,7 @@ impl EditorApp {
                         expected_disk_fingerprint,
                         observed_disk_fingerprint,
                     },
-                    key: self.document.key(),
+                    key: self.document().key(),
                     allow_discard: true,
                     description: "overwriting the current file".to_owned(),
                 });
@@ -970,7 +995,7 @@ impl EditorApp {
         };
         let theme = context.theme();
         let style = context.style_of(theme);
-        let rename_path = self.document.path().clone();
+        let rename_path = self.document().path().clone();
         let (anchor, desired_size) = match &popup {
             AppPopup::File { anchor } => (*anchor, command_popup_size(CommandMenu::File, &style)),
             AppPopup::Edit { anchor } => (*anchor, command_popup_size(CommandMenu::Edit, &style)),
@@ -987,7 +1012,7 @@ impl EditorApp {
                 editor_context_menu_size(
                     link.is_some(),
                     table.is_some(),
-                    self.document.kind().is_typst(),
+                    self.document().kind().is_typst(),
                     &style,
                 ),
             ),
@@ -1018,9 +1043,10 @@ impl EditorApp {
         let (can_undo, can_redo) = self.editor_history_availability(context);
         let shortcuts = self.settings.effective_shortcuts();
         let has_selection = self.selected_editor_chars(context).is_some();
-        let can_format = self.document.kind().is_typst();
+        let can_format = self.document().kind().is_typst();
         let can_export_pdf = self.typst_preview_available();
-        let can_sync_preview = self.document.kind().is_typst() && self.interactive_preview_active();
+        let can_sync_preview =
+            self.document().kind().is_typst() && self.interactive_preview_active();
         let mut close = false;
         let mut action = None;
         let mut had_focus = self.app_popup_had_focus;
@@ -1107,7 +1133,7 @@ impl EditorApp {
                                 AppPopup::View { .. } => {
                                     show_view_popup_ui(
                                         ui,
-                                        self.document.kind().is_typst(),
+                                        self.document().kind().is_typst(),
                                         &shortcuts,
                                         &mut action,
                                     );
@@ -1166,7 +1192,7 @@ impl EditorApp {
                                     ) {
                                         action = Some(AppPopupAction::GitHunk(
                                             selected,
-                                            self.document.key(),
+                                            self.document().key(),
                                             chunk.clone(),
                                         ));
                                     }
@@ -1234,6 +1260,11 @@ impl EditorApp {
                 native_rect.height().max(1.0) as f64,
             )
             .into(),
+        };
+        let next_applied = WebviewAppliedState {
+            bounds: native_rect,
+            background,
+            visible,
         };
         if self.webview.is_none() {
             let focused = context.input(|input| input.viewport().focused);
@@ -1323,6 +1354,7 @@ impl EditorApp {
                     self.webview_url = Some(url.clone());
                     self.webview_reload_pending = false;
                     self.webview_navigation = Some(shared_navigation);
+                    self.webview_applied = Some(next_applied);
                     self.preview.webview_state =
                         ServiceState::Ready("Tinymist vector frontend is embedded".to_owned());
                 }
@@ -1349,20 +1381,36 @@ impl EditorApp {
             self.webview_reload_pending = false;
         }
         if let Some(webview) = &self.webview {
-            let _ = webview.set_background_color((
-                background.r(),
-                background.g(),
-                background.b(),
-                background.a(),
-            ));
-            if let Err(error) = webview.set_bounds(bounds) {
+            let diff = webview_property_diff(self.webview_applied, next_applied);
+            if diff.background {
+                let _ = webview.set_background_color((
+                    background.r(),
+                    background.g(),
+                    background.b(),
+                    background.a(),
+                ));
+            }
+            if diff.bounds
+                && let Err(error) = webview.set_bounds(bounds)
+            {
                 self.fail_local_webview(format!("Could not position the vector preview: {error}"));
                 return false;
             }
-            if let Err(error) = webview.set_visible(visible) {
+            if diff.visible
+                && let Err(error) = webview.set_visible(visible)
+            {
                 self.fail_local_webview(format!("Could not show the vector preview: {error}"));
                 return false;
             }
+            if std::env::var_os("TIPTOPTYP_UI_TRACE").is_some()
+                && (diff.bounds || diff.background || diff.visible)
+            {
+                eprintln!(
+                    "ui.preview.properties bounds={} background={} visible={}",
+                    diff.bounds, diff.background, diff.visible
+                );
+            }
+            self.webview_applied = Some(next_applied);
         }
         if self.preview.tinymist_state.is_ready() {
             self.preview.webview_state =
@@ -1385,12 +1433,71 @@ impl EditorApp {
     }
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    pub(super) fn hide_webview(&self) {
+    pub(super) fn hide_webview(&mut self) {
+        if self.webview_applied.is_some_and(|applied| !applied.visible) {
+            return;
+        }
         if let Some(webview) = &self.webview {
             let _ = webview.set_visible(false);
+            if let Some(applied) = &mut self.webview_applied {
+                applied.visible = false;
+            }
         }
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    pub(super) fn hide_webview(&self) {}
+    pub(super) fn hide_webview(&mut self) {}
+}
+
+#[cfg(test)]
+mod property_tests {
+    use super::*;
+
+    fn rect(left: f32) -> NativeRect {
+        ViewportTransform::new([0.0, 0.0], 1.0)
+            .unwrap()
+            .to_native(EguiRect::new([left, 0.0], [left + 100.0, 100.0]).unwrap())
+            .unwrap()
+    }
+
+    #[test]
+    fn stable_frames_emit_no_native_property_updates_and_recreation_invalidates_all() {
+        let state = WebviewAppliedState {
+            bounds: rect(0.0),
+            background: Color32::BLACK,
+            visible: true,
+        };
+        let first = webview_property_diff(None, state);
+        assert_eq!(
+            first,
+            WebviewPropertyDiff {
+                bounds: true,
+                background: true,
+                visible: true,
+            }
+        );
+        for _ in 0..100 {
+            assert_eq!(
+                webview_property_diff(Some(state), state),
+                WebviewPropertyDiff {
+                    bounds: false,
+                    background: false,
+                    visible: false,
+                }
+            );
+        }
+        let moved = WebviewAppliedState {
+            bounds: rect(1.0),
+            ..state
+        };
+        assert_eq!(
+            webview_property_diff(Some(state), moved),
+            WebviewPropertyDiff {
+                bounds: true,
+                background: false,
+                visible: false,
+            }
+        );
+        assert_eq!(webview_property_diff(None, moved), first);
+    }
 }

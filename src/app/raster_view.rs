@@ -165,6 +165,11 @@ pub(super) fn show_pages(
                     ),
                     geometry.size,
                 );
+                if !rect.expand(PAGE_GAP).intersects(ui.clip_rect())
+                    && requested_page != Some(geometry.index)
+                {
+                    continue;
+                }
                 let shadow_rect = rect
                     .translate(Vec2::new(0.0, METRICS.preview.shadow_offset_y))
                     .expand(METRICS.preview.shadow_expand);
@@ -181,14 +186,20 @@ pub(super) fn show_pages(
                     Stroke::new(METRICS.preview.page_border_width, page_theme.border),
                     StrokeKind::Outside,
                 );
-                ui.put(
-                    rect,
-                    egui::Image::new(&page.texture)
-                        .fit_to_exact_size(geometry.size)
-                        .alt_text(format!("PDF page {}", geometry.index + 1)),
-                );
+                if let Some(resident) = page
+                    .resident
+                    .as_ref()
+                    .filter(|resident| resident.is_usable())
+                {
+                    ui.put(
+                        rect,
+                        egui::Image::new(&resident.texture)
+                            .fit_to_exact_size(geometry.size)
+                            .alt_text(format!("PDF page {}", geometry.index + 1)),
+                    );
+                }
                 for (link_index, link) in page.links.iter().enumerate() {
-                    if !raster_is_current {
+                    if !raster_is_current || page.resident.is_none() {
                         continue;
                     }
                     let [left, top, right, bottom] = link.rect;
@@ -230,6 +241,13 @@ pub(super) fn show_pages(
         output.state.offset.y,
         output.inner_rect.height(),
     );
+    if let Some(range) = visible_page_range(
+        &geometries,
+        output.state.offset.y,
+        output.inner_rect.height(),
+    ) {
+        preview.set_page_demand(range);
+    }
     clicked_link
 }
 
