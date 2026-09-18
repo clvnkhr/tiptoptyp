@@ -185,6 +185,10 @@ impl Tabs {
         };
         self.records.get_mut(&id).expect("active tab record")
     }
+    pub(super) fn document_mut(&mut self, id: u64) -> Option<&mut DocumentSession> {
+        self.index_of(id)?;
+        self.records.get_mut(&id).map(|tab| &mut tab.document)
+    }
     pub(super) fn active_id(&self) -> Option<u64> {
         self.active
     }
@@ -372,10 +376,6 @@ impl EditorApp {
     }
     pub(super) fn document_for_tab(&self, id: u64) -> Option<&DocumentSession> {
         self.document_at_index(self.tabs.index_of(id)?)
-    }
-    pub(super) fn document_for_tab_mut(&mut self, id: u64) -> Option<&mut DocumentSession> {
-        self.tabs.index_of(id)?;
-        self.tabs.records.get_mut(&id).map(|tab| &mut tab.document)
     }
     pub(super) fn set_tab_autosave(&mut self, id: u64, deadline: Option<Instant>) {
         if self.tabs.index_of(id).is_none() {

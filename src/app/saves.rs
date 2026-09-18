@@ -219,23 +219,21 @@ impl EditorApp {
             }
         };
         let synchronized = matches!(committed.durability, WriteDurability::Synchronized);
-        let continuation = if active {
-            let document = &mut self.tabs.current_record_mut().document;
-            self.document_workflow.complete_save(
-                result.completion.continuation,
-                document,
-                committed.receipt,
-                synchronized,
-            )
-        } else {
-            if token_matches {
-                self.document_workflow.cancel_continuation();
-            }
-            self.document_for_tab_mut(pending.tab)
-                .unwrap()
-                .record_save(committed.receipt)
-                .map(|_| None)
-        };
+        if !active && token_matches {
+            self.document_workflow.cancel_continuation();
+        }
+        // Both active and parked receipts update their stable tab, never an
+        // active slot. Only the active owner may release a window continuation.
+        let document = self
+            .tabs
+            .document_mut(pending.tab)
+            .expect("validated save owner");
+        let continuation = self.document_workflow.complete_save(
+            result.completion.continuation,
+            document,
+            committed.receipt,
+            active && synchronized,
+        );
         let continuation = match continuation {
             Ok(action) => action,
             Err(error) => {
@@ -246,13 +244,15 @@ impl EditorApp {
                 return;
             }
         };
-        let dirty = self
-            .document_for_tab(pending.tab)
-            .is_some_and(|doc| doc.is_dirty());
+        let dirty = document.is_dirty();
         let deadline = (dirty && self.settings.auto_save).then(|| {
             Instant::now() + Duration::from_millis(self.settings.auto_save_delay_ms.max(100))
         });
         self.set_tab_autosave(pending.tab, deadline);
+        if active {
+            self.external_file_change_notice = None;
+            self.external_file_stamp = external_file_stamp(&pending.path).ok();
+        }
         if pending.path_changed {
             let previous_workspace = self
                 .tab_workspace(pending.tab)
@@ -269,7 +269,11 @@ impl EditorApp {
                     .unwrap_or(previous_workspace)
             };
             self.set_tab_workspace(pending.tab, workspace.clone());
-            if !active {
+            if active {
+                self.workspace_root = workspace;
+                self.preview.content.invalidate();
+                self.reset_document_services();
+            } else {
                 if let Ok(uri) = crate::tinymist::path_to_file_uri(&pending.previous_sync_path)
                     && let Some(effect) = self.tinymist_sync.close_uri(&uri)
                 {
@@ -286,21 +290,8 @@ impl EditorApp {
                     self.sync_parked_tinymist();
                 }
             }
-            if !active {
-                self.remember_open_document(&pending.path);
-            }
         }
-        if active {
-            self.external_file_change_notice = None;
-            self.external_file_stamp = external_file_stamp(&pending.path).ok();
-            if pending.path_changed {
-                self.workspace_root = self
-                    .tab_workspace(pending.tab)
-                    .map(Path::to_path_buf)
-                    .unwrap_or_else(|| self.workspace_root.clone());
-                self.preview.content.invalidate();
-                self.reset_document_services();
-            }
+        if active || pending.path_changed {
             self.remember_open_document(&pending.path);
         }
         self.refresh_workspace();
@@ -370,6 +361,64 @@ impl EditorApp {
 mod tests {
     use super::*;
     use std::sync::mpsc;
+
+    #[test]
+    fn uncertain_receipt_records_saved_bytes_but_never_releases_close_or_format() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("uncertain.typ");
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        app.document_mut()
+            .replace_unprojected_untitled("saved bytes");
+        let tab = app.tabs.active_id().unwrap();
+        let key = app.document().key();
+        app.document_workflow
+            .continue_after_save(PendingDocumentAction {
+                action: DeferredDocumentAction::CloseWindow,
+                key,
+                allow_discard: false,
+                description: "closing".into(),
+            });
+        let input = SaveInput::new(
+            app.document()
+                .prepare_save(path.clone(), DocumentKind::Typst)
+                .unwrap(),
+            ExpectedDiskState::Missing,
+            SaveIntent::Explicit,
+            app.document_workflow.continuation_token(),
+        );
+        // Real committed bytes/receipt, with only directory-sync confirmation
+        // replaced by a deterministic uncertain outcome.
+        let mut result = crate::save_io::execute(input);
+        result.completion.result.as_mut().unwrap().durability =
+            WriteDurability::Uncertain("injected directory sync failure".into());
+        app.pending_save = Some(PendingSave {
+            tab,
+            key,
+            path: path.clone(),
+            previous_sync_path: app.tinymist_document_path(),
+            path_changed: true,
+            format_after: true,
+            started: Instant::now(),
+        });
+        app.save_job
+            .start_and_repaint("uncertain save", &context, || Ok(result))
+            .unwrap();
+        app.finish_save_for_test(&context);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "saved bytes");
+        assert_eq!(app.document().path().as_ref(), Some(&path));
+        assert!(!app.document().is_dirty());
+        assert!(!app.document_workflow.has_continuation());
+        assert!(app.document_workflow.take_action().is_none());
+        assert!(app.format_when_tinymist_ready.is_none());
+        assert!(
+            app.notice
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("durability is uncertain")
+        );
+    }
 
     fn hold_destination(path: PathBuf) -> (mpsc::Sender<()>, std::thread::JoinHandle<()>) {
         let (entered, ready) = mpsc::channel();

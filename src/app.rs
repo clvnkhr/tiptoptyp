@@ -2,17 +2,18 @@ mod completion_popup;
 mod navigation;
 use navigation::EditorSelection;
 mod explorer_view;
+use explorer_view::git_command_opens_explorer;
 #[cfg(test)]
 use explorer_view::{
     EXPLORER_SECTION_MIN_BODY_HEIGHT, explorer_section, explorer_section_body_height,
     explorer_section_state_id, workspace_asset_hover_rect, workspace_entry_color,
     workspace_entry_label, workspace_entry_resolved_color,
 };
+#[cfg(test)]
 use explorer_view::{
     ExplorerSectionLayout, ExplorerSectionsSpec, add_workspace_nodes,
-    available_explorer_section_body_height, explorer_section_layout_id,
-    explorer_section_open_states, explorer_section_query_matches, git_command_opens_explorer,
-    normalize_explorer_query, open_matching_workspace_ancestors, set_explorer_section_open,
+    available_explorer_section_body_height, explorer_section_open_states,
+    explorer_section_query_matches, normalize_explorer_query, set_explorer_section_open,
     show_explorer_sections, show_project_index_section, workspace_node_matches_query,
     workspace_tree_state_id,
 };
@@ -67,9 +68,12 @@ use eframe::egui::{
     Sense, Stroke, StrokeKind, TextureOptions, Vec2,
     text::{CCursor, CCursorRange},
 };
-use egui_ltreeview::{Action as TreeAction, TreeView, TreeViewState};
+#[cfg(test)]
+use egui_ltreeview::{TreeView, TreeViewState};
 use rfd::AsyncFileDialog;
 
+#[cfg(test)]
+use crate::explorer::ExplorerSection;
 #[cfg(test)]
 use crate::project_index::analyze_project;
 use crate::{
@@ -91,7 +95,7 @@ use crate::{
         EditableTable, PreviewAssetKind, SourceEdit, StickyContextQuery, StickyContextRow,
         editable_table_at,
     },
-    explorer::{ExplorerOrder, ExplorerPanelState, ExplorerSection},
+    explorer::{ExplorerOrder, ExplorerPanelState},
     font_catalog::{FontCatalog, FontFamily, ignored_workspace_directory, is_font_path},
     generic_highlight::GenericSyntaxHighlighter,
     highlight::SyntaxHighlighter,
@@ -1096,7 +1100,6 @@ pub struct EditorApp {
 
     view_mode: ViewMode,
     explorer: ExplorerPanelState,
-    focus_explorer_search: bool,
     problems_visible: bool,
     settings_visible: bool,
     settings_open_requested: bool,
@@ -1133,7 +1136,6 @@ pub struct EditorApp {
     // The default Git section should be visible even if an older session
     // persisted it as collapsed. Opening Git from the command menu uses the
     // same one-shot reveal, preserving subsequent user choice.
-    git_explorer_reveal: bool,
     git_editor: crate::git::editor::GitEditorState,
     git_hunk_job: crate::worker::ExclusiveJob<String>,
     workspace_chooser_visible: bool,
@@ -1394,7 +1396,6 @@ impl EditorApp {
             settings_window: Arc::default(),
             retain_settings_viewport: false,
             shortcut_editor_visible: false,
-            focus_explorer_search: false,
             shortcut_query: String::new(),
             shortcut_capture: None,
             shortcut_notice: None,
@@ -1422,7 +1423,6 @@ impl EditorApp {
             capabilities,
             workspace_root,
             git: crate::git::GitPanel::default(),
-            git_explorer_reveal: true,
             git_editor: crate::git::editor::GitEditorState::default(),
             git_hunk_job: Default::default(),
             workspace_chooser_visible: false,
@@ -3310,7 +3310,7 @@ impl EditorApp {
                 let opens_explorer = git_command_opens_explorer(self.git.visible);
                 if self.git.visible {
                     self.git.visible = false;
-                    self.git_explorer_reveal = false;
+                    self.explorer.set_git_reveal(false);
                 } else {
                     self.git.open(context, &self.workspace_root);
                     if opens_explorer {
@@ -3319,7 +3319,7 @@ impl EditorApp {
                         // invoking View > Git cannot produce an invisible
                         // state when Explorer was previously closed.
                         self.explorer.open();
-                        self.git_explorer_reveal = true;
+                        self.explorer.set_git_reveal(true);
                     }
                 }
             }
@@ -6847,12 +6847,7 @@ impl EditorApp {
 
     fn show_workspace(&mut self, ui: &mut egui::Ui) {
         let _span = crate::performance::span("ui.explorer");
-        offer_file_drop_target(
-            ui,
-            ui.max_rect(),
-            FileDropTarget::Folder(self.workspace_root.clone()),
-        );
-        let root = if self.snapshot_scene.is_some() {
+        let label = if self.snapshot_scene.is_some() {
             "Theme gallery workspace".to_owned()
         } else {
             self.workspace
@@ -6860,288 +6855,42 @@ impl EditorApp {
                 .map(|workspace| workspace.root().display().to_string())
                 .unwrap_or_else(|| self.project_root().display().to_string())
         };
-        let generation = self.workspace.as_ref().map(WorkspaceTree::generation);
-        theme::panel_header(ui, "workspace-header", |ui| {
-            let action_width = METRICS.explorer.header_refresh_width;
-            let actions_width = action_width + ui.spacing().item_spacing.x;
-            let path_width = (ui.available_width() - actions_width).max(1.0);
-            let max_chars = approximate_char_capacity(path_width, theme::TYPE.supporting);
-            let response = ui.add_sized(
-                [path_width, METRICS.explorer.header_row_height],
-                egui::Label::new(
-                    RichText::new(tail_elide(&root, max_chars))
-                        .color(ui.visuals().weak_text_color()),
-                )
-                .truncate()
-                .sense(Sense::click()),
-            );
-            let mut hover = generation.map_or_else(
-                || format!("{root}\nDouble-click to change workspace root"),
-                |generation| {
-                    format!(
-                        "{root}\nFilesystem snapshot generation {generation}\nDouble-click to change workspace root"
-                    )
-                },
-            );
-            if let Some(warning) = self.project_index.warning() {
-                hover.push_str("\nSome Explorer entries could not be discovered.\n");
-                hover.push_str(warning);
-            }
-            if native_hover_text(response, hover).double_clicked() {
-                self.open_workspace_chooser();
-            }
-            if icon_button(ui, UiIcon::Refresh, "Refresh filesystem").clicked() {
-                self.refresh_workspace();
-            }
-        });
-        theme::panel_header(ui, "workspace-search-header", |ui| {
-            let show_clear = !self.explorer.query().is_empty();
-            let clear_width = if show_clear {
-                METRICS.icon.button_size.x + ui.spacing().item_spacing.x
-            } else {
-                0.0
-            };
-            let search = ui.add_sized(
-                [
-                    (ui.available_width() - clear_width).max(1.0),
-                    METRICS.explorer.header_row_height,
-                ],
-                egui::TextEdit::singleline(self.explorer.query_mut())
-                    .id_salt("explorer-search")
-                    .hint_text("Search Explorer"),
-            );
-            if std::mem::take(&mut self.focus_explorer_search) {
-                search.request_focus();
-            }
-            if show_clear && icon_button(ui, UiIcon::Close, "Clear Explorer search").clicked() {
-                self.explorer.query_mut().clear();
-            }
-        });
-
-        // A tree row can be much wider than the pane. Keep the body width in a
-        // clipped child UI so it becomes scrollable content instead of feeding
-        // back into `PanelState` and growing the resizable explorer each frame.
-        let mut content_ui = clipped_panel_content_ui(ui, "workspace-clipped-content");
-        let ui = &mut content_ui;
-        ui.spacing_mut().item_spacing.y = METRICS.explorer.section_gap;
-
-        let snapshot = self.workspace.as_ref().map(WorkspaceTree::snapshot);
-        let project_root = snapshot.map_or(self.workspace_root.as_path(), |snapshot| {
-            snapshot.root.as_path()
-        });
-        let preview_path = self.designated_preview_path();
-        let project_index = &self.project_index;
-        let active = snapshot.as_ref().and_then(|snapshot| {
-            self.document().path().as_ref().and_then(|path| {
-                path.strip_prefix(&snapshot.root)
-                    .ok()
-                    .and_then(|relative| snapshot.find(relative))
-                    .map(|node| node.path.clone())
-            })
-        });
-        let preview = snapshot
-            .as_ref()
-            .and_then(|snapshot| {
-                preview_path.as_ref().and_then(|path| {
-                    path.strip_prefix(&snapshot.root)
-                        .ok()
-                        .and_then(|relative| snapshot.find(relative))
-                        .map(|node| node.path.clone())
-                })
-            })
-            .or(preview_path);
-        let mut open_path = None;
-        let mut popup_request = None;
-        let context = ui.ctx().clone();
-        let explorer_query = normalize_explorer_query(self.explorer.query());
-        let filter_active = !explorer_query.is_empty();
-        let mut section_defaults = if filter_active {
-            explorer_section_query_matches(snapshot, project_index, &explorer_query)
-        } else {
-            std::array::from_fn(|index| ExplorerSection::ALL[index].default_open())
-        };
-        let git_in_explorer = self.git.visible;
-        section_defaults[ExplorerSection::Git.index()] = git_in_explorer;
-        if !git_in_explorer {
-            // Keep the hidden section genuinely collapsed. Merely removing
-            // it from the height budget still lets a persisted open state
-            // render an empty body and consume a frame of layout.
-            set_explorer_section_open(ui, "workspace-git", false);
-        }
-        if git_in_explorer && self.git_explorer_reveal {
-            // `CollapsingState` survives across frames, so a Git panel that
-            // was previously closed can otherwise remain visually hidden when
-            // the user opens Git from the command menu. Reveal it once, then
-            // let the user control the section normally.
-            set_explorer_section_open(ui, "workspace-git", true);
-            self.git_explorer_reveal = false;
-        }
-        let mut open_sections = explorer_section_open_states(ui, filter_active, section_defaults);
-        if !git_in_explorer {
-            // A persisted open state must not reserve space for a hidden Git
-            // section after the panel has been closed.
-            open_sections[ExplorerSection::Git.index()] = false;
-        }
-        let open_section_count = open_sections.iter().filter(|is_open| **is_open).count();
-        let section_frame_height = theme::explorer_section_frame(ui.style())
-            .total_margin()
-            .sum()
-            .y;
-        let section_body_budget = available_explorer_section_body_height(
-            ui.available_height(),
-            open_section_count,
-            section_frame_height,
-        ) * open_section_count as f32;
-        let section_layout_id = explorer_section_layout_id(ui);
-        let mut section_layout = ui.ctx().data_mut(|data| {
-            data.get_temp::<ExplorerSectionLayout>(section_layout_id)
-                .unwrap_or_default()
-        });
-        let section_body_heights = section_layout.body_heights(open_sections, section_body_budget);
-        let order = self.settings.explorer_order;
-        let mut open_package_manager = false;
-        let mut index_target = None;
-        let mut git_output = None;
-        let git_dirty = self.document().is_dirty();
-        let section_resize = show_explorer_sections(
+        let preview = self.designated_preview_path();
+        let dirty = self.document().is_dirty();
+        let output = explorer_view::show(
             ui,
-            ExplorerSectionsSpec {
-                order,
-                defaults: section_defaults,
-                heights: section_body_heights,
-                open: open_sections,
-                filtered: filter_active,
-                git_visible: git_in_explorer,
+            explorer_view::Input {
+                root: &self.workspace_root,
+                label: &label,
+                generation: self.workspace.as_ref().map(WorkspaceTree::generation),
+                snapshot: self.workspace.as_ref().map(WorkspaceTree::snapshot),
+                index: &self.project_index,
+                active: self.tabs.current_record().document.path().as_deref(),
+                preview: preview.as_deref(),
+                statuses: &self.git_editor.statuses,
+                error: self.workspace_error.as_deref(),
+                order: self.settings.explorer_order,
+                git_visible: self.git.visible,
             },
-            |ui, section| match section {
-                ExplorerSection::Files => {
-                    if let Some(snapshot) = &snapshot {
-                        // A scan generation describes fresh filesystem data, not a
-                        // new UI. Keeping it out of the identity preserves opened
-                        // folders, selection, and the surrounding ScrollArea's
-                        // offset when a file open triggers a background rescan.
-                        let tree_id = workspace_tree_state_id(ui, &snapshot.root, filter_active);
-                        let mut tree_state = TreeViewState::load(ui, tree_id).unwrap_or_default();
-                        if filter_active {
-                            open_matching_workspace_ancestors(
-                                &mut tree_state,
-                                &snapshot.nodes,
-                                &explorer_query,
-                            );
-                        }
-                        if let Some(active) = &active {
-                            // Keep the document shown in the editor selected so the
-                            // entire explorer row gets the same kind of tint as the
-                            // editor's active line.
-                            tree_state.set_one_selected(active.clone());
-                        }
-                        let tree = TreeView::new(tree_id)
-                            .allow_multi_selection(false)
-                            .fallback_context_menu(|ui, selected: &Vec<PathBuf>| {
-                                let Some(path) = selected.first().cloned() else {
-                                    ui.close();
-                                    return;
-                                };
-                                let is_file = path
-                                    .strip_prefix(&snapshot.root)
-                                    .ok()
-                                    .and_then(|relative| snapshot.find(relative))
-                                    .is_some_and(WorkspaceNode::is_file);
-                                let anchor = ui
-                                    .ctx()
-                                    .pointer_latest_pos()
-                                    .unwrap_or_else(|| ui.min_rect().left_top());
-                                popup_request = Some(AppPopup::Workspace {
-                                    anchor,
-                                    path,
-                                    is_file,
-                                });
-                                ui.close();
-                            });
-                        let (_, actions) = ui
-                            .scope(|ui| {
-                                theme::apply_active_row_selection(ui);
-                                tree.show_state(ui, &mut tree_state, |builder| {
-                                    add_workspace_nodes(
-                                        builder,
-                                        &snapshot.nodes,
-                                        active.as_deref(),
-                                        preview.as_deref(),
-                                        &context,
-                                        &explorer_query,
-                                        &self.git_editor.statuses,
-                                    );
-                                })
-                            })
-                            .inner;
-                        tree_state.store(ui, tree_id);
-                        for action in actions {
-                            if let TreeAction::Activate(activate) = action {
-                                open_path = activate.selected.into_iter().find(|path| {
-                                    path.strip_prefix(&snapshot.root)
-                                        .ok()
-                                        .and_then(|relative| snapshot.find(relative))
-                                        .is_some_and(WorkspaceNode::is_file)
-                                });
-                            }
-                        }
-                        if filter_active
-                            && !snapshot
-                                .nodes
-                                .iter()
-                                .any(|node| workspace_node_matches_query(node, &explorer_query))
-                        {
-                            ui.label(RichText::new("No matching files").weak());
-                        }
-                    } else {
-                        ui.label(RichText::new("No project folder").weak());
-                    }
-                    if let Some(error) = &self.workspace_error {
-                        ui.colored_label(error_color(ui.ctx()), error);
-                    }
-                }
-                ExplorerSection::Git => {
-                    git_output = Some(self.git.show(ui, git_dirty));
-                }
-                _ => {
-                    let outcome = show_project_index_section(
-                        ui,
-                        section,
-                        project_root,
-                        project_index,
-                        &explorer_query,
-                    );
-                    open_package_manager |= outcome.open_package_manager;
-                    if outcome.target.is_some() {
-                        index_target = outcome.target;
-                    }
-                }
-            },
+            &mut self.explorer,
+            |ui| self.git.show(ui, dirty),
         );
-
-        if let Some(output) = git_output {
-            self.git.apply_view_output(ui.ctx(), output);
+        if output.change_root {
+            self.open_workspace_chooser();
         }
-
-        if open_package_manager {
-            self.open_package_manager(ui.ctx());
+        if output.refresh {
+            self.refresh_workspace();
         }
-
-        if let Some((section, delta)) = section_resize
-            && section_layout.resize_after(
-                open_sections,
-                section_body_budget,
-                order,
-                section,
-                delta,
-            )
-        {
-            ui.ctx()
-                .data_mut(|data| data.insert_temp(section_layout_id, section_layout));
+        if output.repaint {
             ui.ctx().request_repaint();
         }
-
-        if let Some(path) = open_path
+        if let Some(git) = output.git {
+            self.git.apply_view_output(ui.ctx(), git);
+        }
+        if output.packages {
+            self.open_package_manager(ui.ctx());
+        }
+        if let Some(path) = output.open
             && self
                 .document()
                 .path()
@@ -7153,7 +6902,7 @@ impl EditorApp {
                 "opening another project file",
             );
         }
-        if let Some((path, line)) = index_target {
+        if let Some((path, line)) = output.index_target {
             self.navigate_file_location(
                 path,
                 None,
@@ -7161,8 +6910,12 @@ impl EditorApp {
                 "opening a project index entry",
             );
         }
-        if let Some(popup) = popup_request {
-            self.open_app_popup(popup);
+        if let Some(menu) = output.context_menu {
+            self.open_app_popup(AppPopup::Workspace {
+                anchor: menu.anchor,
+                path: menu.path,
+                is_file: menu.is_file,
+            });
         }
     }
 

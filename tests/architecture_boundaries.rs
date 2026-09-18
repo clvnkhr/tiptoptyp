@@ -25,6 +25,29 @@ fn extracted_leaf_views_have_explicit_dependencies_and_no_app_or_worker_access()
 }
 
 #[test]
+fn explorer_painting_cannot_start_workspace_or_git_effects() {
+    let source = include_str!("../src/app/explorer_view.rs");
+    for forbidden in [
+        "WorkspaceTree",
+        "GitPanel",
+        "request_workspace_scan",
+        "refresh_workspace",
+        "apply_view_output",
+        "open_package_manager(",
+        "navigate_file_location",
+        "request_document_replacement",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "Explorer painting owns {forbidden}"
+        );
+    }
+    let app = include_str!("../src/app.rs");
+    assert!(!app.contains("focus_explorer_search:"));
+    assert!(!app.contains("git_explorer_reveal:"));
+}
+
+#[test]
 fn git_repository_execution_and_codecs_do_not_depend_on_views() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/git");
     let mut paths = rust_files(&root.join("repository"));

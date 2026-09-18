@@ -225,6 +225,8 @@ pub(crate) struct ExplorerPanelState {
     restore_pending: bool,
     startup_pending: bool,
     query: String,
+    focus_search: bool,
+    reveal_git: bool,
 }
 impl Default for ExplorerPanelState {
     fn default() -> Self {
@@ -234,10 +236,24 @@ impl Default for ExplorerPanelState {
             restore_pending: false,
             startup_pending: true,
             query: String::new(),
+            focus_search: false,
+            reveal_git: true,
         }
     }
 }
 impl ExplorerPanelState {
+    pub(crate) fn focus_search(&mut self) {
+        self.focus_search = true;
+    }
+    pub(crate) fn take_search_focus(&mut self) -> bool {
+        std::mem::take(&mut self.focus_search)
+    }
+    pub(crate) fn set_git_reveal(&mut self, reveal: bool) {
+        self.reveal_git = reveal;
+    }
+    pub(crate) fn take_git_reveal(&mut self) -> bool {
+        std::mem::take(&mut self.reveal_git)
+    }
     pub(crate) fn startup_width(&mut self, persisted: f32, default: f32) -> Option<f32> {
         if std::mem::take(&mut self.startup_pending)
             && (!persisted.is_finite() || persisted < EXPLORER_MIN_WIDTH)
@@ -291,6 +307,22 @@ impl ExplorerPanelState {
 #[cfg(test)]
 mod panel_tests {
     use super::*;
+
+    #[test]
+    fn presentation_requests_are_owner_local_and_consumed_once() {
+        let mut first = ExplorerPanelState::default();
+        let mut second = ExplorerPanelState::default();
+        first.focus_search();
+        assert!(first.take_search_focus());
+        assert!(!first.take_search_focus());
+        assert!(!second.take_search_focus());
+        assert!(first.take_git_reveal());
+        assert!(!first.take_git_reveal());
+        assert!(second.take_git_reveal());
+        first.set_git_reveal(true);
+        first.set_git_reveal(false);
+        assert!(!first.take_git_reveal());
+    }
 
     #[test]
     fn startup_repairs_tiny_persisted_sizes_without_overwriting_valid_sizes() {

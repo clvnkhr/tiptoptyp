@@ -561,9 +561,27 @@ fn save_completion_follows_a_parked_tab_id_after_reorder_not_the_active_slot() {
         })
     });
     ready.recv_timeout(Duration::from_secs(5)).unwrap();
+    app.document_workflow
+        .continue_after_save(PendingDocumentAction {
+            action: DeferredDocumentAction::CloseTab,
+            key: app.document().key(),
+            allow_discard: false,
+            description: "closing saved tab".into(),
+        });
     assert!(app.save_to(path.clone(), &context));
     app.append_tab(&context);
     app.document_mut().replace_unprojected_untitled("other tab");
+    let old_continuation = app.document_workflow.continuation_token();
+    app.document_workflow.cancel_continuation();
+    app.document_workflow
+        .continue_after_save(PendingDocumentAction {
+            action: DeferredDocumentAction::CloseWindow,
+            key: app.document().key(),
+            allow_discard: false,
+            description: "new active-tab close".into(),
+        });
+    let new_continuation = app.document_workflow.continuation_token();
+    assert_ne!(new_continuation, old_continuation);
     assert!(app.tabs.reorder(0, 1));
     release.send(()).unwrap();
     holder.join().unwrap();
@@ -572,6 +590,8 @@ fn save_completion_follows_a_parked_tab_id_after_reorder_not_the_active_slot() {
     assert_eq!(app.document().source(), "other tab");
     assert!(!app.document_for_tab(saved_tab).unwrap().is_dirty());
     assert!(app.manual_format_revision.is_none());
+    assert_eq!(app.document_workflow.continuation_token(), new_continuation);
+    assert!(app.document_workflow.take_action().is_none());
 }
 
 #[test]

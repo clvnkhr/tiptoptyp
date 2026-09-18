@@ -106,7 +106,7 @@ impl EditorApp {
             }),
             A::ExplorerSearch => {
                 self.explorer.open();
-                self.focus_explorer_search = true;
+                self.explorer.focus_search();
             }
             A::RefreshWorkspace => self.refresh_workspace(),
             _ if self.tabs.is_empty() => return,
@@ -294,7 +294,7 @@ mod tests {
         app.explorer.hide();
         press(&mut app, &context, A::ExplorerSearch);
         assert!(app.explorer.panel_visible());
-        assert!(app.focus_explorer_search);
+        assert!(app.explorer.take_search_focus());
         press(&mut app, &context, A::KeyboardShortcuts);
         assert!(app.shortcut_editor_visible);
         app.process_close_pending = true;

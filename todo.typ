@@ -48,15 +48,48 @@ the extra branch runs only for a pending selection. No timing speedup is claimed
 Verification: failing-before/passing-after Find-open focus regression, all 13
 navigation-filter tests, Find focus-retention test, 1,061 full-suite test executions
 (16 opt-in tests ignored), 13 xtask tests, formatting and strict all-target Clippy
-pass. Native WebView delivery remains unverified; steps 238–240 are not started.
+pass. Native WebView delivery remains unverified; subsequent steps are tracked below.
 
-238. [ ] Narrow Explorer ownership to explicit tree/index/selection inputs and
+238. [x] Narrow Explorer ownership to explicit tree/index/selection inputs and
 typed actions, with watcher effects outside painting. Remove full EditorApp access
 from the view and relocate its corresponding presentation state.
+`explorer_view::show` now receives borrowed tree/index/active/preview/status inputs,
+the existing Explorer panel state, and a Git-only paint callback. Its bounded
+output returns navigation, context-menu, refresh, workspace-picker, package and
+Git actions. The app applies effects after painting; no tree/index snapshot is
+cloned, and path selection borrows snapshot entries. Search focus and Git reveal
+are consumed by ExplorerPanelState instead of separate EditorApp flags. Tree IDs,
+clipping, section persistence, filtering and resize behavior remain unchanged.
+Tests exercise the view without EditorApp, click an index destination, verify no
+hidden Git painting, and check owner-local one-shot presentation requests.
+Architecture checks reject app/worker/watcher/effect access from the view.
+Accounting: app.rs 12,647 → 12,400 (−247); Explorer view +322, panel implementation
++16: +91 non-test source lines for the explicit boundary, not a code-size win.
+Tests +92 including the dependency rule. No new workers, source copies or idle
+repaints; unchanged drawing/geometry does not require a new framebuffer capture.
 
-239. [ ] Thin save completion around existing receipts: consolidate active/parked
+239. [x] Thin save completion around existing receipts: consolidate active/parked
 identity and continuations without weakening disk leases or durability. Cover
 same-path, Save As, close and stale results; require net-negative production code.
+Active and parked receipts use one stable-tab document lookup and the existing
+workflow receipt gate. Only an active synchronized save may release its matching
+continuation; parked completions cannot consume a newer active-tab close request.
+Workspace assignment and history handling no longer repeat across active/parked
+branches. The disk transaction, lease, conflict checks and receipt format are
+unchanged. Uncertain durability still records committed bytes but never closes
+or formats the document. Existing real-file tests cover same-path, Save As,
+reordered parked tabs, conflict reconfirmation and stale owner/revision results;
+expanded tests cover newer continuation isolation and an injected uncertain
+confirmation on a real disk-write receipt. Net production change: −9 lines;
+test change: +78 lines. Effects are still completion-driven; no extra worker,
+source serialization or periodic repaint was added. No timing speedup is claimed.
+
+Steps 238–239 verification: 30 focused Explorer tests, 27 focused save tests
+(2 opt-in tests ignored), all 1,065 full-suite test executions (16 opt-in tests
+ignored), all 13 xtask tests, formatting and strict all-target Clippy pass.
+The extraction preserves rendering algorithms and service scheduling; no material
+performance impact is expected, and no matched native timing measurement or
+visual verification is claimed. Step 237's native focus acceptance remains open.
 
 240. [ ] Inventory preview connection/content/visibility/generation writers and
 remove duplicate policy from receive/restart adapters using existing controllers.

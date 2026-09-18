@@ -2,6 +2,59 @@ use super::completion_popup::completion_popup_position;
 use super::*;
 
 #[test]
+fn explorer_view_returns_navigation_without_effects_and_does_not_paint_hidden_git() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let root = Path::new("/workspace");
+    let path = root.join("main.typ");
+    let index = ProjectIndex {
+        outline: vec![crate::project_index::OutlineEntry {
+            path: path.clone(),
+            line: 7,
+            level: 1,
+            title: "Destination".into(),
+        }],
+        ..Default::default()
+    };
+    let statuses = crate::git::editor::FileStatuses::default();
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(320.0, 700.0))
+        .build_ui_state(
+            |ui, state: &mut (ExplorerPanelState, Option<(PathBuf, usize)>)| {
+                let output = explorer_view::show(
+                    ui,
+                    explorer_view::Input {
+                        root,
+                        label: "/workspace",
+                        generation: Some(1),
+                        snapshot: None,
+                        index: &index,
+                        active: Some(&path),
+                        preview: Some(&path),
+                        statuses: &statuses,
+                        error: None,
+                        order: ExplorerOrder::default(),
+                        git_visible: false,
+                    },
+                    &mut state.0,
+                    |_| panic!("hidden Git must not be painted"),
+                );
+                if output.index_target.is_some() {
+                    state.1 = output.index_target;
+                }
+                assert!(!output.refresh && !output.change_root && !output.repaint);
+                assert!(output.open.is_none() && output.git.is_none());
+            },
+            (ExplorerPanelState::default(), None),
+        );
+    harness.run();
+    assert!(harness.state().1.is_none());
+    harness.get_by_label("Destination").click();
+    harness.run();
+    assert_eq!(harness.state().1, Some((path.clone(), 7)));
+    assert_eq!(index.outline[0].path, path, "painting borrows its index");
+}
+
+#[test]
 fn source_navigation_takes_editor_focus_even_with_find_open() {
     let directory = tempfile::tempdir().unwrap();
     let context = egui::Context::default();

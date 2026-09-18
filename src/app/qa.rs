@@ -326,7 +326,7 @@ impl QaSession {
                 }
                 prepare_git_panel_capture(context, &mut app.explorer);
                 app.view_mode = ViewMode::Code;
-                app.git_explorer_reveal = true;
+                app.explorer.set_git_reveal(true);
             }
             UiSnapshotScene::AssetPreview => {}
             UiSnapshotScene::SettingsFontPicker => {
