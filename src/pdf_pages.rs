@@ -193,13 +193,7 @@ fn worker_loop(
             },
             cancelled,
         )
-        .map(|pages| {
-            pages
-                .into_iter()
-                .enumerate()
-                .map(|(offset, page)| (request.key.first + offset, page))
-                .collect()
-        });
+        .and_then(|pages| index_rendered_pages(request.key.first, request.key.last, pages));
         if latest_token.load(Ordering::Acquire) == request.token
             && results
                 .send(PdfPageResult {
@@ -212,6 +206,27 @@ fn worker_loop(
             repaint.request_repaint();
         }
     }
+}
+
+fn index_rendered_pages(
+    first: usize,
+    last: usize,
+    pages: Vec<PreviewPage>,
+) -> Result<Vec<(usize, PreviewPage)>, String> {
+    let expected = last.saturating_sub(first).saturating_add(1);
+    if pages.len() != expected {
+        return Err(format!(
+            "PDF renderer returned {} pages for requested range {}-{} ({expected} expected)",
+            pages.len(),
+            first.saturating_add(1),
+            last.saturating_add(1),
+        ));
+    }
+    Ok(pages
+        .into_iter()
+        .enumerate()
+        .map(|(offset, page)| (first + offset, page))
+        .collect())
 }
 
 fn take_latest(mut request: Request, requests: &LatestReceiver<Request>) -> Request {
@@ -249,6 +264,14 @@ pub(crate) fn bounded_prefetch_range(
 mod tests {
     use super::*;
 
+    fn page() -> PreviewPage {
+        PreviewPage {
+            size: [1, 1],
+            rgba: vec![0, 0, 0, 255],
+            links: Vec::new(),
+        }
+    }
+
     #[test]
     fn prefetch_is_adjacent_clamped_and_bounded() {
         assert_eq!(bounded_prefetch_range(0..=0, 100), Some(0..=1));
@@ -256,5 +279,18 @@ mod tests {
         assert_eq!(bounded_prefetch_range(9..=9, 10), Some(8..=9));
         let range = bounded_prefetch_range(10..=40, 100).unwrap();
         assert_eq!(range.end() - range.start() + 1, MAX_PAGES_PER_REQUEST);
+    }
+
+    #[test]
+    fn incomplete_render_output_cannot_shift_page_identities() {
+        assert!(index_rendered_pages(4, 6, vec![page(), page()]).is_err());
+        let indexed = index_rendered_pages(4, 6, vec![page(), page(), page()]).unwrap();
+        assert_eq!(
+            indexed
+                .into_iter()
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>(),
+            vec![4, 5, 6]
+        );
     }
 }

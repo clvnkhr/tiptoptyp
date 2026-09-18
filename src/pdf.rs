@@ -8,7 +8,7 @@ use quick_xml::{
 use std::{
     collections::BTreeMap,
     fs,
-    io::{BufReader, Read},
+    io::{BufReader, Read, Seek, SeekFrom},
     path::Path,
     process::{Command, Stdio},
     thread,
@@ -16,6 +16,8 @@ use std::{
 };
 
 const PIPE_READER_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(250);
+const PDFINFO_TIMEOUT: Duration = Duration::from_secs(60);
+const PDFINFO_OUTPUT_LIMIT: u64 = 4 * 1024 * 1024;
 /// Resolution used only by the native recovery viewer. The primary Tinymist
 /// viewer is vector-based. 144 DPI keeps the fallback crisp at 100% on a 2×
 /// display without making every incremental build excessively expensive.
@@ -79,25 +81,66 @@ pub(crate) fn inspect_pdf_with_program(
     if cancelled() {
         return Err("PDF inspection was superseded by a newer artifact".to_owned());
     }
-    let output = Command::new(inspector)
+    let mut stdout = tempfile::tempfile()
+        .map_err(|error| format!("Could not create PDF metadata output storage: {error}"))?;
+    let mut stderr = tempfile::tempfile()
+        .map_err(|error| format!("Could not create PDF metadata error storage: {error}"))?;
+    let child = Command::new(inspector)
         .arg("-f")
         .arg("1")
         .arg("-l")
         .arg(MAX_PDF_PAGES.to_string())
         .arg("-box")
         .arg(&snapshot_path)
-        .output()
+        .stdin(Stdio::null())
+        .stdout(stdout.try_clone().map_err(|error| error.to_string())?)
+        .stderr(stderr.try_clone().map_err(|error| error.to_string())?)
+        .spawn()
         .map_err(pdfinfo_command_error)?;
-    if cancelled() {
-        return Err("PDF inspection was superseded by a newer artifact".to_owned());
-    }
-    if !output.status.success() {
+    let status = crate::process::wait(child, PDFINFO_TIMEOUT, || {
+        if cancelled() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "PDF inspection superseded",
+            ));
+        }
+        if stdout.metadata()?.len() > PDFINFO_OUTPUT_LIMIT
+            || stderr.metadata()?.len() > PDFINFO_OUTPUT_LIMIT
+        {
+            return Err(std::io::Error::other(
+                "PDF metadata output exceeds the 4 MiB limit",
+            ));
+        }
+        Ok(())
+    })
+    .map_err(|error| match error.kind() {
+        std::io::ErrorKind::Interrupted => {
+            "PDF inspection was superseded by a newer artifact".to_owned()
+        }
+        std::io::ErrorKind::TimedOut => "PDF metadata inspection timed out".to_owned(),
+        _ => format!("Could not wait for PDF metadata inspection: {error}"),
+    })?;
+    let read_output = |file: &mut fs::File| -> Result<Vec<u8>, String> {
+        file.seek(SeekFrom::Start(0))
+            .map_err(|error| error.to_string())?;
+        let mut bytes = Vec::new();
+        file.take(PDFINFO_OUTPUT_LIMIT + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|error| error.to_string())?;
+        if bytes.len() as u64 > PDFINFO_OUTPUT_LIMIT {
+            return Err("PDF metadata output exceeds the 4 MiB limit".to_owned());
+        }
+        Ok(bytes)
+    };
+    let output = read_output(&mut stdout)?;
+    let errors = read_output(&mut stderr)?;
+    if !status.success() {
         return Err(format!(
             "PDF metadata inspection failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            String::from_utf8_lossy(&errors).trim()
         ));
     }
-    let mut catalog = parse_pdfinfo(&String::from_utf8_lossy(&output.stdout))?;
+    let mut catalog = parse_pdfinfo(&String::from_utf8_lossy(&output))?;
     let mut links = extract_pdf_links(&snapshot_path, inspect_dir.path(), &mut cancelled);
     for (index, page) in catalog.pages.iter_mut().enumerate() {
         page.links = links.get_mut(index).map(std::mem::take).unwrap_or_default();
@@ -592,6 +635,35 @@ mod tests {
         assert_eq!(catalog.pages[1].size, [1000, 600]);
         assert_eq!(catalog.pages[2].size, [800, 400]);
         assert!(catalog.pages.iter().all(|page| page.links.is_empty()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pdfinfo_process_is_cancelled_and_reaped() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let project = tempfile::tempdir().unwrap();
+        let inspector = project.path().join("slow-pdfinfo");
+        fs::write(&inspector, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        fs::set_permissions(&inspector, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut polls = 0;
+        let started = Instant::now();
+        let error = inspect_pdf_with_program(
+            b"%PDF-cancellation-fixture",
+            project.path(),
+            &inspector,
+            || {
+                polls += 1;
+                polls > 1
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.contains("superseded"), "{error}");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "cancelled pdfinfo was not reaped promptly"
+        );
     }
 
     #[cfg(unix)]

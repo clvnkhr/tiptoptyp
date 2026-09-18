@@ -1,5 +1,45 @@
 use super::completion_popup::completion_popup_position;
 use super::*;
+
+#[test]
+fn mac_word_navigation_after_source_jump_reaches_text_edit() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    context.set_os(egui::os::OperatingSystem::Mac);
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    app.snapshot_scene = None;
+    app.document_mut()
+        .replace_unprojected_untitled("alpha beta gamma");
+    app.pending_editor_selection = Some(0..0);
+    for _ in 0..2 {
+        context
+            .run_ui(Default::default(), |ui| app.show_editor(ui))
+            .drop_without_applying_deltas();
+    }
+    context
+        .run_ui(
+            egui::RawInput {
+                events: vec![
+                    egui::Event::ModifiersChanged(Modifiers::ALT),
+                    egui::Event::Key {
+                        key: egui::Key::ArrowRight,
+                        physical_key: Some(egui::Key::ArrowRight),
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Modifiers::ALT,
+                    },
+                ],
+                ..Default::default()
+            },
+            |ui| {
+                app.handle_shortcuts(ui.ctx(), None);
+                app.show_editor(ui);
+            },
+        )
+        .drop_without_applying_deltas();
+    let state = egui::text_edit::TextEditState::load(&context, source_editor_id(&context)).unwrap();
+    assert_eq!(state.cursor.char_range().unwrap().primary.index.0, 5);
+}
 use crate::asset::AssetThumbnailResult;
 use crate::completion_edit::{
     CompletionApplication, SnippetExpansion, expand_lsp_snippet, prepare_completion_application,
@@ -201,14 +241,23 @@ fn explicit_source_jump_does_not_reveal_the_previous_caret_fold() {
     state.store(&context, id);
     // This is the same queued source selection used by preview/file links.
     app.pending_editor_selection = Some(target..target);
+    let mut requested_native_focus = false;
     for _ in 0..2 {
-        context
-            .run_ui(Default::default(), |ui| app.show_editor(ui))
-            .drop_without_applying_deltas();
+        let output = context.run_ui(Default::default(), |ui| app.show_editor(ui));
+        requested_native_focus |= output.viewport_output[&egui::ViewportId::ROOT]
+            .commands
+            .iter()
+            .any(|command| matches!(command, egui::ViewportCommand::Focus));
+        output.drop_without_applying_deltas();
         assert!(app.folding().is_collapsed(0));
         let state = egui::text_edit::TextEditState::load(&context, id).unwrap();
         assert_eq!(state.cursor.char_range().unwrap().primary.index.0, target);
     }
+    assert!(
+        requested_native_focus,
+        "source navigation must reclaim keyboard ownership from the native preview"
+    );
+    assert_eq!(context.memory(|memory| memory.focused()), Some(id));
     app.pending_editor_selection = Some(old..old);
     context
         .run_ui(Default::default(), |ui| app.show_editor(ui))
@@ -217,6 +266,53 @@ fn explicit_source_jump_does_not_reveal_the_previous_caret_fold() {
         !app.folding().is_collapsed(0),
         "a jump into the fold reveals it"
     );
+}
+
+#[test]
+fn retained_tooltip_survives_lifecycle_cleanup_after_leaving_source_token() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    context.set_embed_viewports(false);
+    let app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    let id = native_hover_tooltip_id(&context);
+    context.data_mut(|data| {
+        data.insert_temp(
+            id,
+            HoverTooltipOverlay {
+                origin: Rect::from_min_size(Pos2::ZERO, Vec2::splat(20.0)),
+                anchor: Pos2::new(0.0, 30.0),
+                detail: Arc::from("Retained documentation"),
+                opacity: 1.0,
+            },
+        )
+    });
+    let output = context.run_ui(Default::default(), |ui| {
+        ChildViewHost::show_deferred(
+            ui.ctx(),
+            &app.captures,
+            ChildViewSpec::tooltip(
+                "diagnostic-tooltip-overlay",
+                "tooltip",
+                Pos2::new(0.0, 30.0),
+                Vec2::new(200.0, 100.0),
+                false,
+                "diagnostic",
+            ),
+            ui.ctx().theme(),
+            ui.style(),
+            |_, _| {},
+        );
+        assert!(app.editor_hover.is_none());
+        app.reconcile_child_view_lifecycles(ui.ctx());
+    });
+    let child = scoped_child_viewport_id(&context, "diagnostic-tooltip-overlay");
+    assert!(
+        !output.viewport_output[&child]
+            .commands
+            .iter()
+            .any(|command| matches!(command, egui::ViewportCommand::Close))
+    );
+    output.drop_without_applying_deltas();
 }
 
 #[test]
@@ -3205,7 +3301,7 @@ fn explorer_search_covers_every_project_index_section() {
 }
 
 #[test]
-fn partial_project_index_warning_is_visible_and_disappears_after_recovery() {
+fn partial_project_index_does_not_add_a_persistent_warning_row() {
     use egui_kittest::{Harness, kittest::Queryable as _};
     let project = tempfile::tempdir().unwrap();
     let main = project.path().join("main.typ");
@@ -3214,7 +3310,6 @@ fn partial_project_index_warning_is_visible_and_disappears_after_recovery() {
     let mut harness = Harness::builder()
         .with_size(Vec2::new(200.0, 300.0))
         .build_ui(|ui| {
-            show_project_index_warning(ui, &partial);
             show_project_index_section(
                 ui,
                 ExplorerSection::Contents,
@@ -3224,19 +3319,8 @@ fn partial_project_index_warning_is_visible_and_disappears_after_recovery() {
             );
         });
     harness.run();
-    harness.get_by_label(&warning);
-    harness.get_by_label("No matches");
-    let rect = harness.get_by_label(&warning).rect();
-    assert!(
-        rect.width() <= 200.0,
-        "warning must wrap within the Explorer"
-    );
-    drop(harness);
-    std::fs::write(&main, "= Recovered\n").unwrap();
-    let complete = analyze_project(project.path(), &main, &BTreeMap::new());
-    let mut harness = Harness::builder().build_ui(|ui| show_project_index_warning(ui, &complete));
-    harness.run();
     assert!(harness.query_by_label(&warning).is_none());
+    harness.get_by_label("No matches");
 }
 
 #[test]
@@ -3690,34 +3774,39 @@ fn view_mode_controls_are_only_enabled_for_typst_documents() {
 fn tooltip_bridge_keeps_pointer_transitively_connected_to_the_card() {
     let origin = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(10.0, 10.0));
     let card = Rect::from_min_max(Pos2::new(30.0, 0.0), Pos2::new(80.0, 30.0));
-    assert!(tooltip_region_contains(origin.center(), origin, card));
-    assert!(tooltip_region_contains(Pos2::new(20.0, 0.0), origin, card));
-    assert!(tooltip_region_contains(Pos2::new(20.0, 10.0), origin, card));
-    assert!(tooltip_region_contains(Pos2::new(45.0, 15.0), origin, card));
-    assert!(!tooltip_region_contains(
-        Pos2::new(90.0, 15.0),
+    let geometry = TooltipGeometry {
+        identity: 1,
         origin,
-        card
-    ));
-    assert!(!tooltip_region_contains(
-        Pos2::new(20.0, 25.0),
-        origin,
-        card
-    ));
+        card,
+        handoff_apex: origin.center(),
+        pointer_inside_viewport: false,
+        handoff_until: 0.0,
+    };
+    assert!(tooltip_region_contains(origin.center(), geometry));
+    assert!(tooltip_region_contains(Pos2::new(20.0, 5.0), geometry));
+    assert!(tooltip_region_contains(Pos2::new(20.0, 15.0), geometry));
+    assert!(tooltip_region_contains(Pos2::new(45.0, 15.0), geometry));
+    assert!(!tooltip_region_contains(Pos2::new(90.0, 15.0), geometry));
+    assert!(!tooltip_region_contains(Pos2::new(20.0, 25.0), geometry));
 }
 
 #[test]
 fn tooltip_bridge_ends_at_the_bottom_edge_of_a_lower_card() {
     let origin = Rect::from_min_max(Pos2::new(30.0, 0.0), Pos2::new(50.0, 10.0));
     let card = Rect::from_min_max(Pos2::new(0.0, 30.0), Pos2::new(80.0, 60.0));
-
-    assert!(tooltip_region_contains(Pos2::new(40.0, 20.0), origin, card));
-    assert!(tooltip_region_contains(Pos2::new(40.0, 45.0), origin, card));
-    assert!(!tooltip_region_contains(
-        Pos2::new(40.0, 60.1),
+    let geometry = TooltipGeometry {
+        identity: 1,
         origin,
-        card
-    ));
+        card,
+        handoff_apex: Pos2::new(40.0, 5.0),
+        pointer_inside_viewport: false,
+        handoff_until: 0.0,
+    };
+
+    assert!(tooltip_region_contains(Pos2::new(5.0, 29.0), geometry));
+    assert!(tooltip_region_contains(Pos2::new(75.0, 29.0), geometry));
+    assert!(tooltip_region_contains(Pos2::new(40.0, 45.0), geometry));
+    assert!(!tooltip_region_contains(Pos2::new(40.0, 60.1), geometry));
 }
 
 #[test]
@@ -3943,11 +4032,12 @@ fn tooltip_handoff_blocks_competing_hover_targets_until_focus_changes() {
         identity: 1,
         origin: Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(10.0, 10.0)),
         card: Rect::from_min_max(Pos2::new(30.0, 0.0), Pos2::new(80.0, 30.0)),
+        handoff_apex: Pos2::new(5.0, 5.0),
         pointer_inside_viewport: false,
         handoff_until: 0.0,
     };
     assert!(tooltip_handoff_is_active(
-        Some(Pos2::new(20.0, 0.0)),
+        Some(Pos2::new(20.0, 5.0)),
         0.0,
         Some(geometry),
         None,
@@ -3996,6 +4086,7 @@ fn tooltip_handoff_keeps_competing_targets_blocked_across_the_child_viewport() {
         // The handoff envelope includes the transparent native viewport;
         // its painted card can be smaller after content-aware shrinking.
         card: Rect::from_min_max(Pos2::new(10.0, 50.0), Pos2::new(220.0, 140.0)),
+        handoff_apex: Pos2::new(25.0, 20.0),
         pointer_inside_viewport: false,
         handoff_until: 0.0,
     };
@@ -4015,6 +4106,7 @@ fn tooltip_handoff_grace_survives_a_transient_pointer_gap() {
         identity: 3,
         origin: Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(10.0, 10.0)),
         card: Rect::from_min_max(Pos2::new(30.0, 0.0), Pos2::new(80.0, 30.0)),
+        handoff_apex: Pos2::new(5.0, 5.0),
         pointer_inside_viewport: false,
         handoff_until: 1.3,
     };
@@ -4039,6 +4131,7 @@ fn tooltip_child_pointer_ownership_survives_missing_root_pointer_events() {
         identity: 4,
         origin: Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(10.0, 10.0)),
         card: Rect::from_min_max(Pos2::new(30.0, 0.0), Pos2::new(80.0, 30.0)),
+        handoff_apex: Pos2::new(5.0, 5.0),
         pointer_inside_viewport: true,
         handoff_until: 0.5,
     };
@@ -6637,6 +6730,7 @@ fn projected_application_formatting_maps_source_and_cursor_then_undoes_one_edit(
         },
         new_text: "longer tail".into(),
     };
+    app.format_request_key = Some(app.document().key());
     app.receive_formatted_document(
         &context,
         Generation(91),
@@ -6662,11 +6756,25 @@ fn projected_application_formatting_maps_source_and_cursor_then_undoes_one_edit(
     assert_eq!(app.document().source(), &before);
     assert!(!app.is_dirty());
     let key = app.document().key();
+    app.format_request_key = Some(key);
     app.receive_formatted_document(
         &context,
         Generation(91),
         "file:///format.typ",
         revision_as_i32(key.revision - 1),
+        Some(vec![edit.clone()]),
+    );
+    assert_eq!(app.document().key(), key);
+
+    app.format_request_key = Some(DocumentKey {
+        epoch: key.epoch.wrapping_add(1),
+        ..key
+    });
+    app.receive_formatted_document(
+        &context,
+        Generation(91),
+        "file:///format.typ",
+        revision_as_i32(key.revision),
         Some(vec![edit]),
     );
     assert_eq!(app.document().key(), key);

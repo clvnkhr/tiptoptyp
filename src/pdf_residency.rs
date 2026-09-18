@@ -59,6 +59,7 @@ impl Budget {
         decoded_bytes: usize,
         texture_bytes: usize,
         repaint: RepaintTarget,
+        visible: bool,
     ) -> (u64, Arc<AtomicBool>, Vec<RepaintTarget>) {
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1).max(1);
@@ -72,7 +73,7 @@ impl Budget {
                 owner,
                 decoded_bytes,
                 texture_bytes,
-                visible: false,
+                visible,
                 touched: self.clock,
                 alive: alive.clone(),
                 repaint,
@@ -162,11 +163,12 @@ pub(crate) fn admit(
     decoded_bytes: usize,
     texture_bytes: usize,
     repaint: RepaintTarget,
+    visible: bool,
 ) -> ResidencyLease {
     let (id, alive, wake) = BUDGET
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
-        .admit(owner, decoded_bytes, texture_bytes, repaint);
+        .admit(owner, decoded_bytes, texture_bytes, repaint, visible);
     for repaint in wake {
         repaint.request_repaint();
     }
@@ -190,9 +192,15 @@ mod tests {
         budget: &mut Budget,
         owner: WindowSessionId,
         bytes: usize,
+        visible: bool,
     ) -> (u64, Arc<AtomicBool>) {
-        let (id, alive, _) =
-            budget.admit(owner, bytes, bytes, crate::worker::RepaintTarget::test());
+        let (id, alive, _) = budget.admit(
+            owner,
+            bytes,
+            bytes,
+            crate::worker::RepaintTarget::test(),
+            visible,
+        );
         (id, alive)
     }
 
@@ -203,7 +211,7 @@ mod tests {
             let mut budget = Budget::new(page_bytes * 3, page_bytes * 4);
             let owner = WindowSessionId::new(1);
             for _ in 0..pages {
-                admit_page(&mut budget, owner, page_bytes);
+                admit_page(&mut budget, owner, page_bytes, false);
             }
             assert!(budget.entries.len() <= 3, "{pages}-page fixture");
             assert!(budget.decoded_bytes <= page_bytes * 3);
@@ -216,10 +224,10 @@ mod tests {
         let mut budget = Budget::new(20, 20);
         let first_owner = WindowSessionId::new(1);
         let second_owner = WindowSessionId::new(2);
-        let (visible_id, visible_alive) = admit_page(&mut budget, first_owner, 10);
+        let (visible_id, visible_alive) = admit_page(&mut budget, first_owner, 10, true);
         budget.set_owner_visible(first_owner, &HashSet::from([visible_id]));
-        let (_, hidden_alive) = admit_page(&mut budget, second_owner, 10);
-        let (_, newest_alive) = admit_page(&mut budget, second_owner, 10);
+        let (_, hidden_alive) = admit_page(&mut budget, second_owner, 10, false);
+        let (_, newest_alive) = admit_page(&mut budget, second_owner, 10, false);
         assert!(visible_alive.load(Ordering::Acquire));
         assert!(!hidden_alive.load(Ordering::Acquire));
         assert!(newest_alive.load(Ordering::Acquire));
@@ -229,8 +237,8 @@ mod tests {
     fn an_oversized_page_is_admitted_alone() {
         let mut budget = Budget::new(10, 10);
         let owner = WindowSessionId::new(1);
-        let (_, old) = admit_page(&mut budget, owner, 5);
-        let (_, oversized) = admit_page(&mut budget, owner, 25);
+        let (_, old) = admit_page(&mut budget, owner, 5, false);
+        let (_, oversized) = admit_page(&mut budget, owner, 25, true);
         assert!(!old.load(Ordering::Acquire));
         assert!(oversized.load(Ordering::Acquire));
         assert_eq!(budget.entries.len(), 1);
@@ -254,7 +262,7 @@ mod tests {
             let cold_started = Instant::now();
             let mut budget = Budget::new(page_bytes * 3, page_bytes * 4);
             for _ in 0..pages.min(3) {
-                admit_page(&mut budget, owner, page_bytes);
+                admit_page(&mut budget, owner, page_bytes, false);
             }
             let cold_ns = cold_started.elapsed().as_nanos();
             let ids = budget.entries.keys().copied().collect::<HashSet<_>>();
@@ -281,7 +289,7 @@ mod tests {
                 budget.remove(id);
             }
             for _ in 0..pages.min(3) {
-                admit_page(&mut budget, owner, page_bytes);
+                admit_page(&mut budget, owner, page_bytes, false);
             }
             let zoom_ns = zoom_started.elapsed().as_nanos();
             println!(
@@ -291,5 +299,18 @@ mod tests {
                 budget.texture_bytes
             );
         }
+    }
+
+    #[test]
+    fn visible_page_admitted_last_survives_an_over_budget_batch() {
+        let mut budget = Budget::new(20, 20);
+        let owner = WindowSessionId::new(1);
+        let (_, first_prefetch) = admit_page(&mut budget, owner, 10, false);
+        let (_, second_prefetch) = admit_page(&mut budget, owner, 10, false);
+        let (_, visible) = admit_page(&mut budget, owner, 10, true);
+
+        assert!(visible.load(Ordering::Acquire));
+        assert!(!first_prefetch.load(Ordering::Acquire));
+        assert!(second_prefetch.load(Ordering::Acquire));
     }
 }

@@ -30,7 +30,10 @@ fn range(field: &str) -> Result<Range<usize>, String> {
     } else {
         start.saturating_sub(1)
     };
-    Ok(start..start + count)
+    let end = start
+        .checked_add(count)
+        .ok_or_else(|| "Hunk range is too large".to_owned())?;
+    Ok(start..end)
 }
 
 fn edit(hunk: &Hunk) -> Result<Edit, String> {
@@ -76,6 +79,9 @@ fn edit(hunk: &Hunk) -> Result<Edit, String> {
     // Context lines must not sweep unrelated index edits into this action.
     let a: Vec<_> = before.split_inclusive('\n').collect();
     let b: Vec<_> = after.split_inclusive('\n').collect();
+    if a.len() != old.len() || b.len() != new.len() {
+        return Err("Hunk line counts do not match its header".to_owned());
+    }
     let prefix = a.iter().zip(&b).take_while(|(a, b)| a == b).count();
     let suffix = a[prefix..]
         .iter()
@@ -497,6 +503,20 @@ mod tests {
             if !after.is_empty() {
                 assert!(revert("stale", &hunks[0]).is_err());
             }
+        }
+    }
+
+    #[test]
+    fn malformed_hunk_ranges_are_rejected_without_panicking() {
+        for text in [
+            "@@ -18446744073709551615,2 +1,1 @@\n-old\n+new\n",
+            "@@ -1,1 +1,99 @@\n-old\n+new\n",
+        ] {
+            let hunk = Hunk {
+                text: text.to_owned(),
+                changes: Vec::new(),
+            };
+            assert!(revert("new\n", &hunk).is_err());
         }
     }
 

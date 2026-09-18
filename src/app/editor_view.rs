@@ -500,6 +500,20 @@ impl EditorApp {
                 current_char = Some(range.end);
                 output.state.clone().store(ui.ctx(), output.response.id);
                 if !self.find_visible {
+                    #[cfg(any(target_os = "macos", target_os = "windows"))]
+                    if let Some(webview) = self.webview.as_ref()
+                        && let Err(error) = webview.focus_parent()
+                    {
+                        self.notice = Some(Notice {
+                            message: format!("Could not focus the source editor: {error}"),
+                            kind: NoticeKind::Error,
+                        });
+                    }
+                    // A Tinymist source jump originates in the native preview
+                    // child. Move native keyboard ownership back to the root
+                    // before focusing TextEdit, otherwise macOS continues to
+                    // deliver Option+Arrow word navigation to the WebView.
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
                     output.response.request_focus();
                 }
                 let cursor_rect = output
@@ -667,8 +681,7 @@ impl EditorApp {
                 && let Some((char_index, pointer)) = hover_position
             {
                 let asset_target = asset_source_path.as_deref().and_then(|source_path| {
-                    literal_asset_target_at(
-                        document.source(),
+                    self.editor_data.literal_asset_target_at(
                         char_index,
                         source_path,
                         &asset_workspace_root,

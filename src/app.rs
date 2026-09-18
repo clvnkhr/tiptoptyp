@@ -63,7 +63,7 @@ use crate::{
     editor_data::{EditorDerivedData, FontArgumentTarget, LineDiagnostic},
     editor_features::{
         EditableTable, PreviewAssetKind, SourceEdit, StickyContextQuery, StickyContextRow,
-        editable_table_at, literal_asset_target_at,
+        editable_table_at,
     },
     explorer::{ExplorerOrder, ExplorerPanelState, ExplorerSection},
     font_catalog::{FontCatalog, FontFamily, ignored_workspace_directory, is_font_path},
@@ -511,6 +511,7 @@ enum PreviewZoomAction {
 
 #[derive(Debug, Clone)]
 struct EditorHoverState {
+    key: DocumentKey,
     range: Range<usize>,
     request_token: u64,
     uri: String,
@@ -1173,6 +1174,7 @@ pub struct EditorApp {
     next_editor_completion_token: u64,
     last_editor_caret: Option<EditorCaretState>,
     manual_format_revision: Option<u64>,
+    format_request_key: Option<DocumentKey>,
     format_when_tinymist_ready: Option<DocumentKey>,
     diagnostic_tooltip: Option<DiagnosticTooltipOverlay>,
     app_popup: Option<AppPopup>,
@@ -1216,6 +1218,8 @@ pub struct EditorApp {
     webview_applied: Option<native_views::WebviewAppliedState>,
     web_link_sender: mpsc::Sender<String>,
     web_link_receiver: mpsc::Receiver<String>,
+    browser_launch: Option<mpsc::Receiver<Result<String, String>>>,
+    browser_repaint: crate::worker::RepaintTarget,
 }
 
 impl EditorApp {
@@ -1462,6 +1466,7 @@ impl EditorApp {
             next_editor_completion_token: 1,
             last_editor_caret: None,
             manual_format_revision: None,
+            format_request_key: None,
             format_when_tinymist_ready: None,
             diagnostic_tooltip: None,
             app_popup: None,
@@ -1502,6 +1507,8 @@ impl EditorApp {
             webview_applied: None,
             web_link_sender,
             web_link_receiver,
+            browser_launch: None,
+            browser_repaint: crate::worker::RepaintTarget::new(context, viewport),
         };
 
         if let Some(error) = initial_theme_error {
@@ -2228,6 +2235,7 @@ impl EditorApp {
             return;
         }
         self.manual_format_revision = None;
+        self.format_request_key = None;
         self.format_when_tinymist_ready = None;
         self.tooltip_request = None;
         self.notice = None;
@@ -2474,20 +2482,38 @@ impl EditorApp {
                 continue;
             }
             match result.output {
-                Ok(pages) => {
+                Ok(mut pages) => {
                     let dark = preview.dark;
-                    let residents = pages
-                        .into_iter()
-                        .map(|(index, page)| {
-                            let size = page.size;
-                            (
+                    // Admit speculative neighbours first and visible pages
+                    // last. If this batch crosses the process-wide budget,
+                    // eviction keeps the pixels the user can actually see.
+                    pages.sort_by_key(|(index, _)| preview.page_is_demanded(*index));
+                    let mut residents = Vec::with_capacity(pages.len());
+                    for (index, page) in pages {
+                        let size = page.size;
+                        let visible = preview.page_is_demanded(index);
+                        let resident = make_preview_resident(
+                            context,
+                            owner,
+                            PreviewResidentInput {
+                                request: result.key,
                                 index,
-                                make_preview_resident(
-                                    context, owner, result.key, index, size, page.rgba, dark,
-                                ),
-                            )
-                        })
-                        .collect();
+                                size,
+                                rgba: page.rgba,
+                                dark,
+                                visible,
+                            },
+                        );
+                        // Admission can evict an earlier page in this same
+                        // result. Drop its decoded bytes and texture now rather
+                        // than retaining the whole over-budget batch until the
+                        // next frame.
+                        residents.retain(|(_, resident): &(usize, ResidentPreviewTexture)| {
+                            resident.lease.is_resident()
+                        });
+                        preview.prune_evicted_pages();
+                        residents.push((index, resident));
+                    }
                     preview.accept_page_residents(result.key, residents);
                 }
                 Err(error) => {
@@ -2840,6 +2866,7 @@ impl EditorApp {
 
     fn clear_preview_for_document(&mut self, preserve_designated_preview: bool) {
         self.manual_format_revision = None;
+        self.format_request_key = None;
         self.format_when_tinymist_ready = None;
         self.external_file_change_notice = None;
         self.external_file_stamp = self
@@ -4977,6 +5004,7 @@ impl EditorApp {
                 }
                 PreviewEffect::DiscardLanguageRequests => {
                     self.manual_format_revision = None;
+                    self.format_request_key = None;
                     self.format_when_tinymist_ready = None;
                     self.editor_completion = None;
                 }
@@ -5007,6 +5035,7 @@ impl EditorApp {
             return;
         }
         self.manual_format_revision = None;
+        self.format_request_key = None;
         self.editor_completion = None;
         let start_preview = self.tinymist_session_requested();
         self.preview.tinymist_preview_enabled = start_preview;
@@ -5419,14 +5448,24 @@ impl EditorApp {
                     contents,
                     ..
                 } => {
-                    let current = self.tinymist_sync.accepts_reply(
-                        crate::tinymist_sync::ReplyIdentity {
-                            generation,
-                            uri: &uri,
-                            version,
-                        },
-                        self.document().key(),
-                    );
+                    let current_key = self.document().key();
+                    let request_key = self.editor_hover.as_ref().and_then(|hover| {
+                        (hover.request_token == request_token
+                            && hover.version == version
+                            && hover.uri == uri)
+                            .then_some(hover.key)
+                    });
+                    let current = request_key.is_some_and(|key| {
+                        self.tinymist_sync.accepts_reply(
+                            crate::tinymist_sync::ReplyIdentity {
+                                generation,
+                                uri: &uri,
+                                version,
+                                key,
+                            },
+                            current_key,
+                        )
+                    });
                     if current
                         && let Some(hover) = &mut self.editor_hover
                         && hover.request_token == request_token
@@ -5490,6 +5529,7 @@ impl EditorApp {
                 TinymistEvent::Error { stage, message, .. } => {
                     if stage == "formatting" {
                         self.manual_format_revision = None;
+                        self.format_request_key = None;
                         self.notice = Some(Notice {
                             message: format!("Formatting failed: {message}"),
                             kind: NoticeKind::Error,
@@ -5508,8 +5548,29 @@ impl EditorApp {
     }
 
     fn receive_web_links(&mut self) {
+        if let Some(receiver) = &self.browser_launch {
+            match receiver.try_recv() {
+                Ok(result) => {
+                    self.browser_launch = None;
+                    self.notice = Some(match result {
+                        Ok(target) => external_link_opened_notice(&target),
+                        Err(message) => Notice {
+                            message,
+                            kind: NoticeKind::Error,
+                        },
+                    });
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.browser_launch = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        let mut handled = std::collections::HashSet::new();
         while let Ok(target) = self.web_link_receiver.try_recv() {
-            self.handle_web_link(&target);
+            if handled.insert(target.clone()) {
+                self.handle_web_link(&target);
+            }
         }
     }
 
@@ -5578,11 +5639,29 @@ impl EditorApp {
     }
 
     fn open_external_link(&mut self, target: &str) {
-        match open_in_system_browser(target) {
-            Ok(()) => self.notice = Some(external_link_opened_notice(target)),
+        if self.browser_launch.is_some() {
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        let target = target.to_owned();
+        let repaint = self.browser_repaint.clone();
+        match std::thread::Builder::new()
+            .name("tiptoptyp-browser-launch".into())
+            .spawn(move || {
+                let result = open_in_system_browser(&target).map(|()| target);
+                let _ = sender.send(result);
+                repaint.request_repaint();
+            }) {
+            Ok(_) => {
+                self.browser_launch = Some(receiver);
+                self.notice = Some(Notice {
+                    message: "Opening link in your browser…".into(),
+                    kind: NoticeKind::Info,
+                });
+            }
             Err(error) => {
                 self.notice = Some(Notice {
-                    message: error,
+                    message: format!("Could not start browser launcher: {error}"),
                     kind: NoticeKind::Error,
                 });
             }
@@ -6322,10 +6401,12 @@ impl EditorApp {
     fn request_format_document(&mut self) {
         if !self.document().kind().is_typst() {
             self.manual_format_revision = None;
+            self.format_request_key = None;
             return;
         }
         if !self.preview.connection.is_ready() {
             self.manual_format_revision = None;
+            self.format_request_key = None;
             self.notice = Some(Notice {
                 message: "Tinymist is still starting; try formatting again in a moment".to_owned(),
                 kind: NoticeKind::Info,
@@ -6337,6 +6418,7 @@ impl EditorApp {
             self.tinymist_sync.current_uri.clone(),
         ) else {
             self.manual_format_revision = None;
+            self.format_request_key = None;
             self.notice = Some(Notice {
                 message: "Tinymist is still starting; try formatting again in a moment".to_owned(),
                 kind: NoticeKind::Info,
@@ -6347,6 +6429,7 @@ impl EditorApp {
         // compilation was paused before requesting this exact buffer version.
         if let Err(error) = self.sync_tinymist_change() {
             self.manual_format_revision = None;
+            self.format_request_key = None;
             self.notice = Some(Notice {
                 message: format!("Could not prepare the document for formatting: {error}"),
                 kind: NoticeKind::Error,
@@ -6359,6 +6442,7 @@ impl EditorApp {
             revision_as_i32(self.document().revision()),
         ) {
             Ok(()) => {
+                self.format_request_key = Some(self.document().key());
                 self.notice = Some(Notice {
                     message: "Formatting with Tinymist…".to_owned(),
                     kind: NoticeKind::Info,
@@ -6366,6 +6450,7 @@ impl EditorApp {
             }
             Err(error) => {
                 self.manual_format_revision = None;
+                self.format_request_key = None;
                 self.notice = Some(Notice {
                     message: format!("Could not request formatting: {error}"),
                     kind: NoticeKind::Error,
@@ -6389,16 +6474,21 @@ impl EditorApp {
         version: i32,
         edits: Option<Vec<LspTextEdit>>,
     ) {
+        let Some(request_key) = self.format_request_key else {
+            return;
+        };
         if !self.tinymist_sync.accepts_reply(
             crate::tinymist_sync::ReplyIdentity {
                 generation,
                 uri,
                 version,
+                key: request_key,
             },
             self.document().key(),
         ) {
             return;
         }
+        self.format_request_key = None;
         let Some(edits) = edits else {
             self.manual_format_revision = None;
             self.notice = Some(Notice {
@@ -6857,7 +6947,7 @@ impl EditorApp {
                 .truncate()
                 .sense(Sense::click()),
             );
-            let hover = generation.map_or_else(
+            let mut hover = generation.map_or_else(
                 || format!("{root}\nDouble-click to change workspace root"),
                 |generation| {
                     format!(
@@ -6865,6 +6955,10 @@ impl EditorApp {
                     )
                 },
             );
+            if let Some(warning) = self.project_index.warning() {
+                hover.push_str("\nSome Explorer entries could not be discovered.\n");
+                hover.push_str(warning);
+            }
             if native_hover_text(response, hover).double_clicked() {
                 self.open_workspace_chooser();
             }
@@ -6909,7 +7003,6 @@ impl EditorApp {
         });
         let preview_path = self.designated_preview_path();
         let project_index = &self.project_index;
-        show_project_index_warning(ui, project_index);
         let active = snapshot.as_ref().and_then(|snapshot| {
             self.document().path().as_ref().and_then(|path| {
                 path.strip_prefix(&snapshot.root)
@@ -7224,8 +7317,10 @@ impl EditorApp {
     }
 
     fn update_editor_hover(&mut self, ui: &mut egui::Ui, hovered: Option<(Range<usize>, Rect)>) {
+        let timing_id = native_hover_tooltip_id(ui.ctx()).with("semantic-hover-timing");
         let Some((range, rect)) = hovered else {
             self.editor_hover = None;
+            reset_hover_timing(ui.ctx(), timing_id);
             return;
         };
         // A different hover target may lie under the pointer while it travels
@@ -7249,6 +7344,7 @@ impl EditorApp {
             let request_token = self.next_editor_hover_token;
             self.next_editor_hover_token = self.next_editor_hover_token.wrapping_add(1).max(1);
             self.editor_hover = Some(EditorHoverState {
+                key: self.document().key(),
                 range: range.clone(),
                 request_token,
                 uri: uri.clone(),
@@ -7266,10 +7362,7 @@ impl EditorApp {
         let opacity = if self.tooltip_request.is_some() {
             Some(1.0)
         } else {
-            hover_opacity(
-                &response,
-                native_hover_tooltip_id(ui.ctx()).with("semantic-hover-timing"),
-            )
+            hover_opacity(&response, timing_id)
         };
 
         let should_request = hover_request_ready(
@@ -7499,11 +7592,16 @@ impl EditorApp {
         } = response;
         let document_revision = self.document().revision();
         let document_key = self.document().key();
+        let request_key = self
+            .editor_completion
+            .as_ref()
+            .map_or(document_key, |completion| completion.key);
         let sync_current = self.tinymist_sync.accepts_reply(
             crate::tinymist_sync::ReplyIdentity {
                 generation,
                 uri: &uri,
                 version,
+                key: request_key,
             },
             document_key,
         );
@@ -8587,7 +8685,14 @@ impl EditorApp {
         }
         if self.explorer.panel_visible() {
             let panel_id = explorer_panel_id(&context);
-            if let Some(width) = self.explorer.take_restored_width()
+            let persisted_width = egui::PanelState::load(&context, panel_id)
+                .map_or(METRICS.chrome.explorer_default_width, |state| {
+                    state.size().x
+                });
+            let startup_width = self
+                .explorer
+                .startup_width(persisted_width, METRICS.chrome.explorer_default_width);
+            if let Some(width) = startup_width.or_else(|| self.explorer.take_restored_width())
                 && let Some(state) = egui::PanelState::load(&context, panel_id)
             {
                 let outer_rect = explorer_width_restored_rect(state.outer_rect, width);
@@ -8681,6 +8786,9 @@ impl EditorApp {
     }
 
     fn reconcile_child_view_lifecycles(&self, context: &egui::Context) {
+        let overlay_id = native_hover_tooltip_id(context);
+        let retained_hover =
+            context.data(|data| data.get_temp::<HoverTooltipOverlay>(overlay_id).is_some());
         for (visible, salt) in [
             (self.shortcut_editor_visible, "tiptoptyp-shortcuts"),
             (self.typst_overrides_visible, "tiptoptyp-typst-overrides"),
@@ -8688,7 +8796,7 @@ impl EditorApp {
             (self.app_popup.is_some(), "tiptoptyp-popup-overlay"),
             (self.asset_hover.is_some(), "asset-hover-overlay"),
             (
-                self.diagnostic_tooltip.is_some() || self.editor_hover.is_some(),
+                self.diagnostic_tooltip.is_some() || retained_hover,
                 "diagnostic-tooltip-overlay",
             ),
         ] {
@@ -8732,7 +8840,18 @@ fn make_preview_texture(
         dpi: crate::pdf::PREVIEW_DPI as u32,
         appearance_revision: 1,
     };
-    let resident = make_preview_resident(context, owner, request, index, size, rgba, dark);
+    let resident = make_preview_resident(
+        context,
+        owner,
+        PreviewResidentInput {
+            request,
+            index,
+            size,
+            rgba,
+            dark,
+            visible: true,
+        },
+    );
     PreviewTexture {
         size,
         links,
@@ -8740,15 +8859,28 @@ fn make_preview_texture(
     }
 }
 
-fn make_preview_resident(
-    context: &egui::Context,
-    owner: tiptoptyp_core::document::WindowSessionId,
+struct PreviewResidentInput {
     request: RasterPageRequestKey,
     index: usize,
     size: [usize; 2],
     rgba: Vec<u8>,
     dark: bool,
+    visible: bool,
+}
+
+fn make_preview_resident(
+    context: &egui::Context,
+    owner: tiptoptyp_core::document::WindowSessionId,
+    input: PreviewResidentInput,
 ) -> ResidentPreviewTexture {
+    let PreviewResidentInput {
+        request,
+        index,
+        size,
+        rgba,
+        dark,
+        visible,
+    } = input;
     let key = request.page_key(index);
     let rgba: Arc<[u8]> = rgba.into();
     let pixels = if dark {
@@ -8769,6 +8901,7 @@ fn make_preview_resident(
         rgba.len(),
         pixels.len(),
         crate::worker::RepaintTarget::current(context),
+        visible,
     );
     ResidentPreviewTexture {
         key,
@@ -10420,12 +10553,6 @@ struct ExplorerProjectSectionOutcome {
     target: Option<(PathBuf, usize)>,
 }
 
-fn show_project_index_warning(ui: &mut egui::Ui, index: &ProjectIndex) {
-    if let Some(warning) = index.warning() {
-        ui.add(egui::Label::new(RichText::new(warning).color(ui.visuals().warn_fg_color)).wrap());
-    }
-}
-
 fn show_project_index_section(
     ui: &mut egui::Ui,
     section: ExplorerSection,
@@ -11342,9 +11469,15 @@ fn open_in_system_browser(target: &str) -> Result<(), String> {
         .spawn();
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let result = std::process::Command::new("xdg-open").arg(target).spawn();
-    result
-        .map(|_| ())
-        .map_err(|error| format!("Could not open the link in the system browser: {error}"))
+    let child = result
+        .map_err(|error| format!("Could not open the link in the system browser: {error}"))?;
+    let status = crate::process::wait(child, Duration::from_secs(15), || Ok(()))
+        .map_err(|error| format!("Browser launcher failed: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("Browser launcher exited with {status}"))
+    }
 }
 
 fn external_link_opened_notice(target: &str) -> Notice {

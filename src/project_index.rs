@@ -112,6 +112,26 @@ impl ProjectIndex {
         }
         self.completeness.warning = (!reasons.is_empty())
             .then(|| format!("Partial project index · {}", reasons.join(" · ")));
+        if let Some(warning) = &mut self.completeness.warning {
+            for dependency in self.unresolved_dependencies.iter().take(8) {
+                warning.push_str(&format!(
+                    "\n{}:{}: {}",
+                    dependency.path.display(),
+                    dependency.line,
+                    dependency.expression.chars().take(240).collect::<String>()
+                ));
+            }
+            if !self.unresolved_dependencies.is_empty() {
+                warning.push_str("\nExplorer can follow literal paths, such as #include \"chapter.typ\", but cannot evaluate these expressions. Keep computed paths if intentional; compilation still resolves them. Entries from those files may be absent from Explorer.");
+            }
+            for failure in self.completeness.unreadable_files.iter().take(8) {
+                warning.push_str(&format!(
+                    "\nCould not read {}: {}. Check that the file exists and is readable.",
+                    failure.path.display(),
+                    failure.kind
+                ));
+            }
+        }
     }
 }
 
@@ -553,10 +573,16 @@ mod tests {
                 },
             ]
         );
-        assert_eq!(
-            index.warning(),
-            Some("Partial project index · unreadable files: 2 · dynamic dependencies: 1")
+        let warning = index.warning().unwrap();
+        assert!(
+            warning.starts_with(
+                "Partial project index · unreadable files: 2 · dynamic dependencies: 1"
+            )
         );
+        assert!(warning.contains("main.typ:5:"));
+        assert!(warning.contains("include target"));
+        assert!(warning.contains("Keep computed paths if intentional"));
+        assert!(warning.contains("missing.typ"));
         let overrides = BTreeMap::from([
             (missing, "= Unsaved\n".to_owned()),
             (invalid, "= Recovered\n".to_owned()),

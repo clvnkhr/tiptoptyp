@@ -6,6 +6,7 @@ pub(super) struct PendingSave {
     pub tab: u64,
     pub key: DocumentKey,
     path: PathBuf,
+    previous_sync_path: PathBuf,
     path_changed: bool,
     format_after: bool,
     started: Instant,
@@ -62,6 +63,7 @@ impl EditorApp {
             .path()
             .as_ref()
             .is_none_or(|current| !same_path(current, &path));
+        let previous_path = document.path().clone();
         let expected = match intent {
             SaveIntent::ExplicitConfirmed { observed } => {
                 observed.map_or(ExpectedDiskState::Missing, ExpectedDiskState::Fingerprint)
@@ -87,6 +89,7 @@ impl EditorApp {
             document.kind()
         };
         let key = document.key();
+        let previous_sync_path = previous_path.unwrap_or_else(|| self.untitled_tab_path(tab));
         let request = match document.prepare_save(path.clone(), kind) {
             Ok(request) => request,
             Err(error) => {
@@ -123,6 +126,7 @@ impl EditorApp {
             tab,
             key,
             path,
+            previous_sync_path,
             path_changed,
             format_after: format_after && continuation.is_none(),
             started,
@@ -249,15 +253,51 @@ impl EditorApp {
             Instant::now() + Duration::from_millis(self.settings.auto_save_delay_ms.max(100))
         });
         self.set_tab_autosave(pending.tab, deadline);
+        if pending.path_changed {
+            let previous_workspace = self
+                .tab_workspace(pending.tab)
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| self.workspace_root.clone());
+            let workspace = if pending.path.starts_with(&previous_workspace) {
+                previous_workspace
+            } else {
+                pending
+                    .path
+                    .parent()
+                    .map(discover_project_root)
+                    .map(|root| canonical_or_absolute(&root))
+                    .unwrap_or(previous_workspace)
+            };
+            self.set_tab_workspace(pending.tab, workspace.clone());
+            if !active {
+                if let Ok(uri) = crate::tinymist::path_to_file_uri(&pending.previous_sync_path)
+                    && let Some(effect) = self.tinymist_sync.close_uri(&uri)
+                {
+                    let _ = self.apply_tinymist_sync_batch(crate::tinymist_sync::Batch {
+                        source: String::new(),
+                        effects: vec![effect],
+                    });
+                }
+                self.tinymist_sync.tab_backings.remove(&pending.tab);
+                if self.tabs.preview_id() == Some(pending.tab) {
+                    self.restart_tinymist_for_preview_entry();
+                    self.schedule_compile_now();
+                } else {
+                    self.sync_parked_tinymist();
+                }
+            }
+            if !active {
+                self.remember_open_document(&pending.path);
+            }
+        }
         if active {
             self.external_file_change_notice = None;
             self.external_file_stamp = external_file_stamp(&pending.path).ok();
             if pending.path_changed {
-                if !pending.path.starts_with(&self.workspace_root)
-                    && let Some(parent) = pending.path.parent()
-                {
-                    self.workspace_root = canonical_or_absolute(&discover_project_root(parent));
-                }
+                self.workspace_root = self
+                    .tab_workspace(pending.tab)
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| self.workspace_root.clone());
                 self.preview.content.invalidate();
                 self.reset_document_services();
             }

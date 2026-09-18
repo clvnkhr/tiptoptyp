@@ -188,7 +188,7 @@ mod tests {
 /// temporarily constrained by a narrow viewport, but retaining that transient
 /// constraint would make a later normal-sized window reopen with a nearly
 /// invisible Explorer.
-pub(crate) const EXPLORER_MIN_WIDTH: f32 = 96.0;
+pub(crate) const EXPLORER_MIN_WIDTH: f32 = 160.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExplorerPanelPhase {
@@ -223,6 +223,7 @@ pub(crate) struct ExplorerPanelState {
     phase: ExplorerPanelPhase,
     width: Option<f32>,
     restore_pending: bool,
+    startup_pending: bool,
     query: String,
 }
 impl Default for ExplorerPanelState {
@@ -231,11 +232,21 @@ impl Default for ExplorerPanelState {
             phase: ExplorerPanelPhase::Open,
             width: None,
             restore_pending: false,
+            startup_pending: true,
             query: String::new(),
         }
     }
 }
 impl ExplorerPanelState {
+    pub(crate) fn startup_width(&mut self, persisted: f32, default: f32) -> Option<f32> {
+        if std::mem::take(&mut self.startup_pending)
+            && (!persisted.is_finite() || persisted < EXPLORER_MIN_WIDTH)
+        {
+            Some(default)
+        } else {
+            None
+        }
+    }
     pub(crate) fn open(&mut self) {
         self.restore_pending |= !self.phase.panel_visible();
         self.phase = ExplorerPanelPhase::Open;
@@ -280,6 +291,17 @@ impl ExplorerPanelState {
 #[cfg(test)]
 mod panel_tests {
     use super::*;
+
+    #[test]
+    fn startup_repairs_tiny_persisted_sizes_without_overwriting_valid_sizes() {
+        for width in [12.0, 96.0, f32::NAN] {
+            let mut state = ExplorerPanelState::default();
+            assert_eq!(state.startup_width(width, 230.0), Some(230.0));
+            assert_eq!(state.startup_width(100.0, 230.0), None);
+        }
+        let mut state = ExplorerPanelState::default();
+        assert_eq!(state.startup_width(310.0, 230.0), None);
+    }
     #[test]
     fn closing_frames_cannot_replace_saved_width_and_every_open_path_restores_it() {
         let mut state = ExplorerPanelState::default();

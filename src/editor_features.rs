@@ -54,6 +54,7 @@ pub(crate) struct LiteralAssetTarget {
 /// previewable, and the resolved path must remain below `workspace_root`.
 /// Typst-style leading-slash paths are resolved from the workspace root;
 /// other paths are resolved from the current source file's directory.
+#[cfg(test)]
 pub(crate) fn literal_asset_target_at(
     source: &str,
     char_cursor: usize,
@@ -66,7 +67,7 @@ pub(crate) fn literal_asset_target_at(
     find_literal_asset(&root, source, cursor, source_path, workspace_root)
 }
 
-fn find_literal_asset(
+pub(crate) fn find_literal_asset(
     node: &LinkedNode<'_>,
     source: &str,
     cursor: usize,

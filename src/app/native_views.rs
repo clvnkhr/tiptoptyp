@@ -767,6 +767,16 @@ impl EditorApp {
             data.get_temp::<TooltipGeometry>(geometry_id)
                 .filter(|geometry| geometry.identity == identity)
         });
+        let handoff_apex = previous.map_or_else(
+            || {
+                context
+                    .pointer_hover_pos()
+                    .or_else(|| context.pointer_latest_pos())
+                    .filter(|pointer| hover.origin.contains(*pointer))
+                    .unwrap_or_else(|| hover.origin.center())
+            },
+            |geometry| geometry.handoff_apex,
+        );
         context.data_mut(|data| {
             data.insert_temp(
                 geometry_id,
@@ -774,6 +784,7 @@ impl EditorApp {
                     identity,
                     origin: hover.origin,
                     card: root_local_card,
+                    handoff_apex,
                     pointer_inside_viewport: previous
                         .is_some_and(|geometry| geometry.pointer_inside_viewport),
                     handoff_until: previous.map_or_else(

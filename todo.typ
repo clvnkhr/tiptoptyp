@@ -289,6 +289,10 @@ does not include the viewer features in items 1, 118 or 163.
 221. [x] (A12) Correct obsolete miTeX comments in src/lib.rs and add superseding current-state notes to ADR 0002 for per-window Tinymist, the separate Settings viewport and conditional CLI compilation. Cross-link the current ownership/module map without erasing historical decision context.
 222. [ ] refactor to allow for a tex engine
 223. [ ] prove out typst-compatible binaries like calepin
+224. [x] Audit the completed architecture refactors at their ownership and asynchronous-result boundaries. Fix rejected-work admission destroying valid jobs, stale workspace/Tinymist results, PDF process/page/residency errors, parked Save As rebinding, incomplete capability reporting and malformed Git-hunk arithmetic. Add focused regressions and retain bounded, event-driven resource use.
+225. [x] Restore reliable interactive tooltip handoff and preview-to-source keyboard focus. Use a fixed safe triangle from the opening cursor position to the popup's complete facing edge, never classify motion inside it as moving away, and do not restart hover delay because of a slow frame. After a Tinymist source jump, return native focus from the preview child to the editor so macOS Option+Left/Right word navigation works.
+226. [x] Correct the incomplete fixes in 225: keep retained tooltip overlays alive when the source hover disappears, prevent unrelated controls from clearing shared hover timers, restore the native first responder with WebView focus_parent, and reuse revision-cached syntax for asset hover instead of parsing the document on every pointer frame. Add lifecycle, timer-ownership and syntax-reuse regressions.
+227. [x] Repair undersized persisted Explorer widths on startup: restore the 230-point default when below the 160-point usable minimum, preserve valid saved widths and normal reopen behavior. Move partial project-index details into the workspace-header tooltip instead of showing a persistent warning row. The details describe potentially missing Explorer entries, not compilation failures. Add startup-size and warning-visibility regressions; no background jobs or repaint loops added.
 
 = Bounded PDF page residency (2026-09-18)
 
@@ -1623,3 +1627,67 @@ Only deferred items 1, 2, and 26 remain unchecked.
   precede this pure extraction; fake-server and both real-Tinymist tests pass.
 - Verification: formatting, normal and profiling-feature Clippy and full test
   suites, plus all 13 xtask tests and xtask formatting pass.
+
+= Architecture correctness audit (2026-09-18)
+
+- Item 224: audited the refactored document, save, Tinymist, preview/PDF,
+  project-index, workspace, capability and Git boundaries for stale identity,
+  cancellation, rejected admission, cross-window ownership, process cleanup,
+  bounded residency and malformed external input.
+- Project-index admission is now transactional: an over-budget replacement
+  leaves the previous queued or active request usable. Workspace subscriptions
+  carry a generation, count unique window owners, reject out-of-root events and
+  report both watcher-construction and watch-registration failures.
+- Tinymist hover, completion and formatting acceptance now includes the complete
+  document key, so reopening the same URI at the same LSP version cannot admit a
+  prior document's reply. Explicit URI closure clears preview ownership. A Save
+  As receipt that finishes after its tab is parked now rebinds that tab's
+  workspace and language-service path without changing the active tab; renaming
+  a parked preview tab restarts the designated preview.
+- PDF metadata inspection is cancellable, timed out, reaped and bounded to 4 MiB
+  per output stream. Incomplete Poppler page batches are rejected rather than
+  shifted onto the wrong page numbers. Visible pages are admitted after
+  speculative neighbours and evicted same-batch textures are dropped promptly.
+  Raster capability reporting now requires both `pdfinfo` and `pdftoppm`.
+- Git hunk ranges use checked arithmetic and must match the parsed body before an
+  edit is constructed. Malformed external diff text therefore returns an error
+  instead of panicking or applying a mis-sized range.
+- Resource impact: the new checks run only on requests, results or filesystem
+  events. They add no repaint loop, polling worker or steady-state document copy;
+  PDF changes reduce transient over-budget retention. Verification passed strict
+  formatting and Clippy, 1,045 normal tests with 16 opt-in tests ignored, and all
+  13 xtask tests. These are behavioral fixes, so no framebuffer or native bounds
+  capture was required.
+
+= Tooltip handoff and source-jump focus regression (2026-09-18)
+
+Item 226 supersedes the completion claims below: the first pass did not resolve
+the user's native interaction failures. Lifecycle cleanup still closed retained
+semantic popup viewports after leaving the token. Non-hovered controls erased
+another control's shared timer. Window activation did not restore the native
+first responder from WebKit. Asset hover also reparsed the full document on each
+pointer frame. These paths are now corrected, with regressions for actual
+lifecycle cleanup, shared timer ownership and one syntax rebuild across 100
+pointer positions. Native end-to-end interaction and stall timings have not been
+measured in this follow-up; automated results alone do not establish them.
+
+- Item 225: the popup handoff route now starts at the pointer position captured
+  when the card opens and expands to both corners of the card's facing edge.
+  The independent direction-based dismissal check first excludes this complete
+  safe triangle, eliminating the race where one policy retained the popup while
+  the other dismissed it. Entering the native child still expands and scrolls
+  the full content; leaving the child or moving away outside the route dismisses.
+- Hover timing no longer treats a frame gap over 180 ms as proof that the cursor
+  left a widget. Current egui hover state resets the timer on a real observed
+  exit, while delayed or event-driven frames retain the original deadline. This
+  adds no animation, polling loop or per-frame allocation.
+- A queued source selection now asks the document viewport to reclaim native
+  focus before focusing TextEdit. This returns Option+Left/Right and other macOS
+  editor key handling after a Tinymist preview click instead of leaving those
+  events owned by the preview WebView.
+- Verification: all 28 focused tooltip tests, both hover-timing regressions and
+  the source-navigation focus regression pass; strict formatting and Clippy,
+  1,047 normal tests with 16
+  opt-in tests ignored, all 13 xtask tests and a `todo.typ` compile pass. The
+  interaction is protected by deterministic geometry/state tests; no visual
+  styling or native-view bounds changed, so no framebuffer capture was needed.

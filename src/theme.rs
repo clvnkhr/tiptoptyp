@@ -1075,7 +1075,6 @@ pub struct ProblemsMetrics {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MotionTokens {
     pub editor_attention: Duration,
-    pub hover_reset_gap: Duration,
     pub hover_poll: Duration,
     pub animation_frame: Duration,
 }
@@ -1261,7 +1260,6 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
     },
     motion: MotionTokens {
         editor_attention: Duration::from_millis(260),
-        hover_reset_gap: Duration::from_millis(180),
         hover_poll: Duration::from_millis(32),
         animation_frame: Duration::from_millis(16),
     },
@@ -2224,7 +2222,6 @@ mod tests {
     #[test]
     fn motion_values_preserve_attention_and_hover_animation_cadence() {
         assert_eq!(METRICS.motion.editor_attention, Duration::from_millis(260));
-        assert_eq!(METRICS.motion.hover_reset_gap, Duration::from_millis(180));
         assert_eq!(METRICS.motion.animation_frame, Duration::from_millis(16));
     }
 

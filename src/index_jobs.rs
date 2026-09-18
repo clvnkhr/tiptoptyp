@@ -104,6 +104,20 @@ impl Queue {
                 job.bytes
             ));
         }
+        let replaced_bytes = self
+            .pending
+            .get(&job.key)
+            .map_or(0, |replaced| replaced.bytes);
+        let projected_bytes = self
+            .pending_bytes
+            .saturating_sub(replaced_bytes)
+            .saturating_add(job.bytes);
+        if projected_bytes > MAX_PENDING_BYTES {
+            return Err(format!(
+                "project index queue is full ({} byte limit)",
+                MAX_PENDING_BYTES
+            ));
+        }
         if let Some(active) = self.active.get(&job.key) {
             active.cancelled.store(true, Ordering::Release);
         }
@@ -113,16 +127,39 @@ impl Queue {
         } else {
             self.order.push_back(job.key.clone());
         }
-        if self.pending_bytes.saturating_add(job.bytes) > MAX_PENDING_BYTES {
-            self.order.retain(|key| key != &job.key);
+        self.pending_bytes = self.pending_bytes.saturating_add(job.bytes);
+        self.pending.insert(job.key.clone(), job);
+        Ok(())
+    }
+
+    /// Atomically replace all queued/running work for one window. Admission is
+    /// checked before any existing work is cancelled, so a rejected request
+    /// cannot destroy the last usable index update for that window.
+    fn replace_owner(&mut self, job: Job) -> Result<(), String> {
+        if job.bytes > MAX_REQUEST_BYTES {
+            return Err(format!(
+                "project index input is too large ({} bytes; limit {MAX_REQUEST_BYTES})",
+                job.bytes
+            ));
+        }
+        let reclaimable = self
+            .pending
+            .iter()
+            .filter(|(key, _)| key.owner == job.key.owner)
+            .map(|(_, pending)| pending.bytes)
+            .sum::<usize>();
+        let projected_bytes = self
+            .pending_bytes
+            .saturating_sub(reclaimable)
+            .saturating_add(job.bytes);
+        if projected_bytes > MAX_PENDING_BYTES {
             return Err(format!(
                 "project index queue is full ({} byte limit)",
                 MAX_PENDING_BYTES
             ));
         }
-        self.pending_bytes = self.pending_bytes.saturating_add(job.bytes);
-        self.pending.insert(job.key.clone(), job);
-        Ok(())
+        self.cancel_owner(job.key.owner);
+        self.push(job)
     }
 
     fn pop(&mut self) -> Option<Job> {
@@ -181,7 +218,7 @@ impl Runner {
 
     fn submit(&self, job: Job) -> Result<(), String> {
         let (queue, ready) = &*self.queue;
-        queue.lock().unwrap().push(job)?;
+        queue.lock().unwrap().replace_owner(job)?;
         ready.notify_one();
         Ok(())
     }
@@ -267,11 +304,10 @@ impl ProjectIndexClient {
         input: ProjectIndexInput,
         repaint: RepaintTarget,
     ) -> Result<(), String> {
-        RUNNER.cancel_owner(self.owner);
         let source = input.main.clone();
         let request = self.next_request.fetch_add(1, Ordering::Relaxed);
         let bytes = input.payload_bytes();
-        if let Err(error) = RUNNER.submit(Job {
+        RUNNER.submit(Job {
             key: JobKey {
                 owner: self.owner,
                 source: source.clone(),
@@ -282,11 +318,7 @@ impl ProjectIndexClient {
             cancelled: Arc::new(AtomicBool::new(false)),
             completion: self.completion_tx.clone(),
             repaint,
-        }) {
-            self.pending = false;
-            self.latest_source = None;
-            return Err(error);
-        }
+        })?;
         self.latest_source = Some(source);
         self.latest_request = request;
         self.pending = true;
@@ -403,6 +435,51 @@ mod tests {
         assert!(error.contains("too large"));
         assert!(queue.pending.is_empty());
         assert!(queue.active.is_empty());
+    }
+
+    #[test]
+    fn rejected_same_key_replacement_preserves_the_queued_job() {
+        let mut queue = Queue::default();
+        queue.push(job(1, "main.typ", 1, 1)).unwrap();
+        queue
+            .push(job(2, "other.typ", 2, MAX_REQUEST_BYTES))
+            .unwrap();
+        queue
+            .push(job(
+                3,
+                "third.typ",
+                3,
+                MAX_PENDING_BYTES - MAX_REQUEST_BYTES - 1,
+            ))
+            .unwrap();
+
+        assert!(queue.push(job(1, "main.typ", 4, 2)).is_err());
+        assert_eq!(
+            queue.pending[&JobKey {
+                owner: WindowSessionId::new(1),
+                source: PathBuf::from("main.typ"),
+            }]
+                .request,
+            1
+        );
+        assert_eq!(queue.pending_bytes, MAX_PENDING_BYTES);
+    }
+
+    #[test]
+    fn rejected_owner_replacement_does_not_cancel_active_work() {
+        let mut queue = Queue::default();
+        queue.push(job(1, "main.typ", 1, 1)).unwrap();
+        let active = queue.pop().unwrap().cancelled;
+        queue
+            .push(job(2, "other.typ", 2, MAX_REQUEST_BYTES))
+            .unwrap();
+        queue
+            .push(job(3, "third.typ", 3, MAX_REQUEST_BYTES))
+            .unwrap();
+
+        assert!(queue.replace_owner(job(1, "main.typ", 4, 1)).is_err());
+        assert!(!active.load(Ordering::Acquire));
+        assert_eq!(queue.pending_bytes, MAX_PENDING_BYTES);
     }
 
     #[test]

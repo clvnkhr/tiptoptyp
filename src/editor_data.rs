@@ -221,6 +221,23 @@ impl EditorDerivedData {
         }
     }
 
+    pub(crate) fn literal_asset_target_at(
+        &mut self,
+        cursor: usize,
+        source_path: &std::path::Path,
+        workspace_root: &std::path::Path,
+    ) -> Option<crate::editor_features::LiteralAssetTarget> {
+        self.prepare_syntax();
+        let byte = *self.char_starts.get(cursor)?;
+        crate::editor_features::find_literal_asset(
+            &typst_syntax::LinkedNode::new(self.parsed_source.root()),
+            &self.source_snapshot,
+            byte,
+            source_path,
+            workspace_root,
+        )
+    }
+
     pub(crate) fn tex_completions(
         &mut self,
         cursor: usize,
@@ -639,6 +656,24 @@ fn hover_leaf_range(leaf: &LinkedNode<'_>, cursor: usize) -> Option<Range<usize>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn asset_hover_reuses_syntax_across_pointer_moves() {
+        let source = "α text\n".repeat(1000);
+        let mut data = EditorDerivedData::default();
+        data.prepare_source(&DocumentSnapshot::fixture(revision(1), &source));
+        for cursor in 0..100 {
+            assert!(
+                data.literal_asset_target_at(
+                    cursor,
+                    Path::new("/project/main.typ"),
+                    Path::new("/project")
+                )
+                .is_none()
+            );
+        }
+        assert_eq!(data.syntax_rebuilds, 1);
+    }
     use crate::diagnostics::DiagnosticLocation;
 
     #[test]

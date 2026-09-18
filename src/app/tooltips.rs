@@ -121,6 +121,10 @@ pub(super) struct TooltipGeometry {
     pub(super) identity: u64,
     pub(super) origin: Rect,
     pub(super) card: Rect,
+    /// Root-local pointer position at the moment the tooltip opened. Keep this
+    /// fixed while the cursor crosses the native-view gap: moving the apex
+    /// with the cursor would make the safe triangle collapse underneath it.
+    pub(super) handoff_apex: Pos2,
     pub(super) pointer_inside_viewport: bool,
     pub(super) handoff_until: f64,
 }
@@ -155,7 +159,6 @@ pub(super) struct HoverRuntimeConfig {
 pub(super) struct HoverTimingState {
     pub(super) widget: egui::Id,
     pub(super) started: f64,
-    pub(super) last_seen: f64,
 }
 
 pub(super) fn native_hover_tooltip_id(context: &egui::Context) -> egui::Id {
@@ -339,7 +342,7 @@ pub(super) fn native_tooltip_handoff_active(context: &egui::Context, emit_trace:
                 .filter(|(identity, _)| *identity == current.identity)
                 .map(|(_, position)| position);
             if !current.pointer_inside_viewport
-                && tooltip_pointer_moved_away(previous, pointer, current.origin, current.card)
+                && tooltip_pointer_moved_away(previous, pointer, current)
             {
                 let mut dismissed = TooltipInteractionState::new(current.identity);
                 dismissed.dismissed = true;
@@ -368,8 +371,7 @@ pub(super) fn native_tooltip_handoff_active(context: &egui::Context, emit_trace:
         && geometry.handoff_until > now
         && !geometry.pointer_inside_viewport
         && !interaction.is_some_and(|state| state.focused || state.focus_requested)
-        && !pointer
-            .is_some_and(|pointer| tooltip_region_contains(pointer, geometry.origin, geometry.card))
+        && !pointer.is_some_and(|pointer| tooltip_region_contains(pointer, geometry))
     {
         // A pointer leaving the route may not generate another repaint. Make
         // the grace deadline self-expiring so the tooltip cannot linger
@@ -431,9 +433,7 @@ pub(super) fn tooltip_handoff_is_active(
     geometry.is_some_and(|geometry| {
         geometry.handoff_until > now
             || geometry.pointer_inside_viewport
-            || pointer.is_some_and(|pointer| {
-                tooltip_region_contains(pointer, geometry.origin, geometry.card)
-            })
+            || pointer.is_some_and(|pointer| tooltip_region_contains(pointer, geometry))
     })
 }
 
@@ -452,9 +452,7 @@ pub(super) fn refresh_tooltip_root_geometry(
     // Pointer ownership transfers between native viewports. Once the cursor
     // enters the child, the root reports no pointer; only the child may clear
     // `pointer_inside_viewport`. The root owns route/deadline updates only.
-    if pointer
-        .is_some_and(|pointer| tooltip_region_contains(pointer, geometry.origin, geometry.card))
-    {
+    if pointer.is_some_and(|pointer| tooltip_region_contains(pointer, geometry)) {
         geometry.handoff_until = tooltip_handoff_deadline(now);
     }
     geometry
@@ -660,9 +658,14 @@ pub(super) fn hover_text_with_id(
 
 pub(super) fn hover_opacity(response: &egui::Response, timing_id: egui::Id) -> Option<f32> {
     if !response.hovered() || update_hover_scroll(&response.ctx) {
-        response
-            .ctx
-            .data_mut(|data| data.remove::<HoverTimingState>(timing_id));
+        response.ctx.data_mut(|data| {
+            if data
+                .get_temp::<HoverTimingState>(timing_id)
+                .is_some_and(|state| state.widget == response.id)
+            {
+                data.remove::<HoverTimingState>(timing_id);
+            }
+        });
         return None;
     }
     let force_id = viewport_scoped_id(&response.ctx, "force-pointer-tooltip");
@@ -674,28 +677,14 @@ pub(super) fn hover_opacity(response: &egui::Response, timing_id: egui::Id) -> O
     }
     let now = response.ctx.input(|input| input.time);
     let config = hover_runtime_config(&response.ctx);
-    let mut state = response.ctx.data(|data| {
-        data.get_temp::<HoverTimingState>(timing_id)
-            .unwrap_or(HoverTimingState {
-                widget: response.id,
-                started: now,
-                last_seen: now,
-            })
-    });
-    // A missed frame means the pointer left this widget; begin a fresh wait
-    // instead of flashing a previously armed tooltip back immediately.
-    if state.widget != response.id
-        || Duration::from_secs_f64((now - state.last_seen).max(0.0))
-            > METRICS.motion.hover_reset_gap
-    {
-        state = HoverTimingState {
-            widget: response.id,
-            started: now,
-            last_seen: now,
-        };
-    } else {
-        state.last_seen = now;
-    }
+    let previous = response
+        .ctx
+        .data(|data| data.get_temp::<HoverTimingState>(timing_id));
+    let state = hover_timing_for_widget(previous, response.id, now);
+    // `response.hovered()` is the source of truth. A slow or event-driven frame
+    // gap does not mean the pointer left the widget, and restarting here can
+    // postpone the tooltip forever under load. The non-hovered path above
+    // removes this state on an observed exit.
     response
         .ctx
         .data_mut(|data| data.insert_temp(timing_id, state));
@@ -708,6 +697,23 @@ pub(super) fn hover_opacity(response: &egui::Response, timing_id: egui::Id) -> O
         return None;
     }
     Some(1.0)
+}
+
+pub(super) fn reset_hover_timing(context: &egui::Context, timing_id: egui::Id) {
+    context.data_mut(|data| data.remove::<HoverTimingState>(timing_id));
+}
+
+pub(super) fn hover_timing_for_widget(
+    previous: Option<HoverTimingState>,
+    widget: egui::Id,
+    now: f64,
+) -> HoverTimingState {
+    previous
+        .filter(|state| state.widget == widget)
+        .unwrap_or(HoverTimingState {
+            widget,
+            started: now,
+        })
 }
 
 /// Scroll input belongs to a viewport. In particular, scrolling a native
@@ -752,15 +758,13 @@ pub(super) fn source_scroll_changed(context: &egui::Context, offset: Vec2) -> bo
 pub(super) fn tooltip_pointer_moved_away(
     previous: Option<Pos2>,
     pointer: Option<Pos2>,
-    origin: Rect,
-    card: Rect,
+    geometry: TooltipGeometry,
 ) -> bool {
     let (Some(previous), Some(pointer)) = (previous, pointer) else {
         return false;
     };
-    !origin.contains(pointer)
-        && !card.contains(pointer)
-        && card.distance_to_pos(pointer) > card.distance_to_pos(previous) + 1.0
+    !tooltip_region_contains(pointer, geometry)
+        && geometry.card.distance_to_pos(pointer) > geometry.card.distance_to_pos(previous) + 1.0
 }
 
 pub(super) fn hover_request_ready(
@@ -967,6 +971,16 @@ pub(super) fn show_native_tooltip_card(
         data.get_temp::<TooltipGeometry>(geometry_id)
             .filter(|geometry| geometry.identity == identity)
     });
+    let handoff_apex = previous.map_or_else(
+        || {
+            context
+                .pointer_hover_pos()
+                .or_else(|| context.pointer_latest_pos())
+                .filter(|pointer| origin.contains(*pointer))
+                .unwrap_or_else(|| origin.center())
+        },
+        |geometry| geometry.handoff_apex,
+    );
     context.data_mut(|data| {
         data.insert_temp(
             geometry_id,
@@ -974,6 +988,7 @@ pub(super) fn show_native_tooltip_card(
                 identity,
                 origin,
                 card: root_local_card,
+                handoff_apex,
                 // The child viewport exclusively owns this bit. The root has
                 // no pointer while the cursor is over a native child and must
                 // preserve the child's last observation across paint passes.
@@ -1022,7 +1037,11 @@ pub(super) fn show_native_tooltip_card(
             } else {
                 input.focused
             };
-            let dismiss_requested = input.escape_pressed;
+            if interaction.dismissed {
+                return;
+            }
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(egui::Id::new("tooltip-link-activated"), false));
             let frame = if interaction.focused {
                 tooltip_frame.stroke(Stroke::new(
                     1.0,
@@ -1041,6 +1060,11 @@ pub(super) fn show_native_tooltip_card(
                 );
             });
             let card_rect = frame_response.response.rect;
+            let dismiss_requested = input.escape_pressed
+                || ui.ctx().data(|data| {
+                    data.get_temp::<bool>(egui::Id::new("tooltip-link-activated"))
+                        .unwrap_or(false)
+                });
             let pointer_inside_viewport = ui.rect_contains_pointer(ui.max_rect());
             let pointer_inside_card = ui.rect_contains_pointer(card_rect);
             let popup_interacted =
@@ -1069,7 +1093,7 @@ pub(super) fn show_native_tooltip_card(
                 interaction,
                 pointer_inside_viewport,
             );
-            if popup_interacted {
+            if popup_interacted && !dismiss_requested {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
             }
         },
@@ -1523,6 +1547,9 @@ pub(super) fn show_markdown_inline(
                 )
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
             if response.clicked() && link_sender.send(target.clone()).is_ok() {
+                ui.ctx().data_mut(|data| {
+                    data.insert_temp(egui::Id::new("tooltip-link-activated"), true)
+                });
                 let parent = ui
                     .input(|input| input.viewport().parent)
                     .unwrap_or(ui.ctx().viewport_id());
@@ -1697,54 +1724,50 @@ pub(super) fn marker_is_closed(chars: &[char], start: usize, marker: char, lengt
     })
 }
 
-pub(super) fn tooltip_region_contains(pointer: Pos2, origin: Rect, card: Rect) -> bool {
+pub(super) fn tooltip_region_contains(pointer: Pos2, geometry: TooltipGeometry) -> bool {
+    let TooltipGeometry {
+        origin,
+        card,
+        handoff_apex,
+        ..
+    } = geometry;
     if origin.contains(pointer) || card.contains(pointer) {
         return true;
     }
 
-    // Use the straight corridor between the facing edges. The old triangular
-    // bridge aimed at the card's center, which excluded perfectly natural
-    // paths to the card's top or bottom edge and made the popup vanish during
-    // the handoff.
-    if card.left() >= origin.right() {
-        let gap = card.left() - origin.right();
-        if gap <= f32::EPSILON || pointer.x < origin.right() || pointer.x > card.left() {
-            return false;
-        }
-        let t = ((pointer.x - origin.right()) / gap).clamp(0.0, 1.0);
-        let top = egui::lerp(origin.top()..=card.top(), t);
-        let bottom = egui::lerp(origin.bottom()..=card.bottom(), t);
-        pointer.y >= top && pointer.y <= bottom
+    // Protect every straight path from the pointer that opened the popup to
+    // the complete facing edge of the card. This is deliberately a triangle,
+    // not a narrow center line or a trapezoid based on the token bounds: the
+    // user's intent starts at their cursor and may target either corner.
+    let (first, second) = if card.left() >= origin.right() {
+        (card.left_top(), card.left_bottom())
     } else if card.right() <= origin.left() {
-        let gap = origin.left() - card.right();
-        if gap <= f32::EPSILON || pointer.x < card.right() || pointer.x > origin.left() {
-            return false;
-        }
-        let t = ((origin.left() - pointer.x) / gap).clamp(0.0, 1.0);
-        let top = egui::lerp(card.top()..=origin.top(), t);
-        let bottom = egui::lerp(card.bottom()..=origin.bottom(), t);
-        pointer.y >= top && pointer.y <= bottom
+        (card.right_top(), card.right_bottom())
     } else if card.top() >= origin.bottom() {
-        let gap = card.top() - origin.bottom();
-        if gap <= f32::EPSILON || pointer.y < origin.bottom() || pointer.y > card.top() {
-            return false;
-        }
-        let t = ((pointer.y - origin.bottom()) / gap).clamp(0.0, 1.0);
-        let left = egui::lerp(origin.left()..=card.left(), t);
-        let right = egui::lerp(origin.right()..=card.right(), t);
-        pointer.x >= left && pointer.x <= right
+        (card.left_top(), card.right_top())
     } else if card.bottom() <= origin.top() {
-        let gap = origin.top() - card.bottom();
-        if gap <= f32::EPSILON || pointer.y < card.bottom() || pointer.y > origin.top() {
-            return false;
-        }
-        let t = ((origin.top() - pointer.y) / gap).clamp(0.0, 1.0);
-        let left = egui::lerp(card.left()..=origin.left(), t);
-        let right = egui::lerp(card.right()..=origin.right(), t);
-        pointer.x >= left && pointer.x <= right
+        (card.left_bottom(), card.right_bottom())
     } else {
-        false
-    }
+        return false;
+    };
+    point_in_triangle(pointer, handoff_apex, first, second)
+}
+
+fn point_in_triangle(point: Pos2, first: Pos2, second: Pos2, third: Pos2) -> bool {
+    let cross = |start: Pos2, end: Pos2, point: Pos2| {
+        let edge = end - start;
+        let offset = point - start;
+        edge.x * offset.y - edge.y * offset.x
+    };
+    let signs = [
+        cross(first, second, point),
+        cross(second, third, point),
+        cross(third, first, point),
+    ];
+    let epsilon = 0.01;
+    let has_negative = signs.iter().any(|value| *value < -epsilon);
+    let has_positive = signs.iter().any(|value| *value > epsilon);
+    !(has_negative && has_positive)
 }
 
 pub(super) fn tooltip_identity(origin: Rect, detail: &str) -> u64 {

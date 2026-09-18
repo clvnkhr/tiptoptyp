@@ -547,6 +547,51 @@ fn save_completion_follows_a_parked_tab_id_after_reorder_not_the_active_slot() {
 }
 
 #[test]
+fn parked_save_as_rebinds_its_workspace_and_tinymist_path() {
+    let old_root = tempfile::tempdir().unwrap();
+    let new_root = tempfile::tempdir().unwrap();
+    fs::create_dir(new_root.path().join(".git")).unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&context, old_root.path());
+    app.snapshot_scene = None;
+    app.document_mut().replace_unprojected_untitled("draft");
+    let saved_tab = app.tabs.active_id().unwrap();
+    let path = new_root.path().join("saved.typ");
+    let old_sync_path = app.untitled_tab_path(saved_tab);
+    let (entered, ready) = std::sync::mpsc::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    let locked_path = path.clone();
+    let holder = std::thread::spawn(move || {
+        crate::resource_lock::with_resource(&locked_path, || {
+            entered.send(()).unwrap();
+            let _ = wait.recv();
+        })
+    });
+    ready.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(app.save_to(path.clone(), &context));
+    app.append_tab(&context);
+    app.tabs.preview = app.tabs.active_id();
+    let active_workspace = app.workspace_root.clone();
+    release.send(()).unwrap();
+    holder.join().unwrap();
+    app.finish_save_for_test(&context);
+
+    assert_eq!(
+        app.document_for_tab(saved_tab).unwrap().path().as_ref(),
+        Some(&path)
+    );
+    assert_eq!(
+        app.tab_workspace(saved_tab),
+        Some(new_root.path().canonicalize().unwrap().as_path())
+    );
+    assert_eq!(app.workspace_root, active_workspace);
+    assert!(!app.tinymist_sync.tab_backings.contains_key(&saved_tab));
+    if let Ok(uri) = crate::tinymist::path_to_file_uri(&old_sync_path) {
+        assert!(!app.tinymist_sync.open_uris.contains(&uri));
+    }
+}
+
+#[test]
 fn close_window_shortcut_is_not_consumed_as_close_tab() {
     for (action, closes_window) in [
         (ShortcutAction::CloseWindow, true),

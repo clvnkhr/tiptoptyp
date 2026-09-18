@@ -543,6 +543,12 @@ impl PreviewController {
         }
     }
 
+    pub(crate) fn page_is_demanded(&self, page: usize) -> bool {
+        self.page_demand
+            .as_ref()
+            .is_some_and(|demand| demand.contains(&page))
+    }
+
     pub(crate) fn raster_request_key(&self) -> Option<RasterPageRequestKey> {
         self.content.pdf()?;
         let artifact = self.content.artifact_key()?;

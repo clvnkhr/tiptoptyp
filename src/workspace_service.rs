@@ -1,6 +1,6 @@
 //! Shared immutable workspace snapshots and coalesced filesystem observation.
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{Arc, LazyLock, Mutex, mpsc},
     thread,
@@ -46,8 +46,14 @@ pub(crate) enum WorkspaceEvent {
 }
 
 struct Subscriber {
-    events: mpsc::Sender<WorkspaceEvent>,
+    events: mpsc::Sender<RoutedWorkspaceEvent>,
     repaint: RepaintTarget,
+    subscription: u64,
+}
+
+struct RoutedWorkspaceEvent {
+    subscription: u64,
+    event: WorkspaceEvent,
 }
 
 enum RootCommand {
@@ -64,7 +70,7 @@ enum RootCommand {
 #[derive(Clone)]
 struct RootHandle {
     commands: mpsc::Sender<RootCommand>,
-    subscribers: usize,
+    owners: HashSet<WindowSessionId>,
 }
 
 #[derive(Default)]
@@ -77,15 +83,27 @@ impl Service {
         &mut self,
         root: PathBuf,
         owner: WindowSessionId,
-        subscriber: Subscriber,
+        mut subscriber: Subscriber,
     ) -> Result<(), String> {
         if let Some(handle) = self.roots.get_mut(&root) {
-            handle
-                .commands
-                .send(RootCommand::Subscribe { owner, subscriber })
-                .map_err(|_| "workspace observer stopped unexpectedly".to_owned())?;
-            handle.subscribers += 1;
-            return Ok(());
+            let command = RootCommand::Subscribe { owner, subscriber };
+            match handle.commands.send(command) {
+                Ok(()) => {
+                    handle.owners.insert(owner);
+                    return Ok(());
+                }
+                Err(error) => {
+                    let RootCommand::Subscribe {
+                        subscriber: recovered,
+                        ..
+                    } = error.0
+                    else {
+                        unreachable!("only subscribe commands are sent here")
+                    };
+                    subscriber = recovered;
+                }
+            }
+            self.roots.remove(&root);
         }
         let (commands, receiver) = mpsc::channel();
         let thread_commands = commands.clone();
@@ -98,7 +116,7 @@ impl Service {
             root,
             RootHandle {
                 commands,
-                subscribers: 1,
+                owners: HashSet::from([owner]),
             },
         );
         Ok(())
@@ -107,9 +125,10 @@ impl Service {
     fn unsubscribe(&mut self, root: &Path, owner: WindowSessionId) {
         let mut remove = false;
         if let Some(handle) = self.roots.get_mut(root) {
-            let _ = handle.commands.send(RootCommand::Unsubscribe(owner));
-            handle.subscribers = handle.subscribers.saturating_sub(1);
-            remove = handle.subscribers == 0;
+            if handle.owners.remove(&owner) {
+                let _ = handle.commands.send(RootCommand::Unsubscribe(owner));
+            }
+            remove = handle.owners.is_empty();
             if remove {
                 let _ = handle.commands.send(RootCommand::Shutdown);
             }
@@ -136,21 +155,23 @@ fn root_worker(
     first_subscriber: Subscriber,
 ) {
     let watcher_commands = commands.clone();
-    let mut watcher = notify::recommended_watcher(move |event| {
+    let watcher = notify::recommended_watcher(move |event| {
         let _ = watcher_commands.send(RootCommand::Notification(event));
     });
-    if let Ok(watcher) = &mut watcher {
-        let _ = watcher.watch(&root, RecursiveMode::Recursive);
-    }
+    let (mut _watcher, watch_error) = match watcher {
+        Ok(mut watcher) => match watcher.watch(&root, RecursiveMode::Recursive) {
+            Ok(()) => (Some(watcher), None),
+            Err(error) => (None, Some(format!("Could not watch workspace: {error}"))),
+        },
+        Err(error) => (None, Some(format!("Could not watch workspace: {error}"))),
+    };
 
     let mut subscribers = HashMap::from([(first_owner, first_subscriber)]);
     let mut snapshot = None::<Arc<WorkspaceSnapshot>>;
     let mut scan_serial = 0_u64;
     scan_and_publish(&root, &mut snapshot, &mut scan_serial, &subscribers, true);
-    if let Err(error) = &watcher {
-        publish(&subscribers, || {
-            WorkspaceEvent::Error(format!("Could not watch workspace: {error}"))
-        });
+    if let Some(error) = watch_error {
+        publish(&subscribers, || WorkspaceEvent::Error(error.clone()));
     }
 
     let mut changed_paths = BTreeSet::new();
@@ -164,9 +185,12 @@ fn root_worker(
         match receiver.recv_timeout(timeout) {
             Ok(RootCommand::Subscribe { owner, subscriber }) => {
                 if let Some(snapshot) = snapshot.clone() {
-                    let _ = subscriber.events.send(WorkspaceEvent::Snapshot {
-                        snapshot,
-                        scan_serial,
+                    let _ = subscriber.events.send(RoutedWorkspaceEvent {
+                        subscription: subscriber.subscription,
+                        event: WorkspaceEvent::Snapshot {
+                            snapshot,
+                            scan_serial,
+                        },
                     });
                     subscriber.repaint.request_repaint();
                 }
@@ -222,7 +246,9 @@ fn root_worker(
 }
 
 fn observed_path(root: &Path, path: &Path) -> bool {
-    let relative = path.strip_prefix(root).unwrap_or(path);
+    let Ok(relative) = path.strip_prefix(root) else {
+        return false;
+    };
     !relative.components().any(|component| {
         matches!(
             component.as_os_str().to_str(),
@@ -266,7 +292,14 @@ fn scan_and_publish(
 
 fn publish(subscribers: &HashMap<WindowSessionId, Subscriber>, event: impl Fn() -> WorkspaceEvent) {
     for subscriber in subscribers.values() {
-        if subscriber.events.send(event()).is_ok() {
+        if subscriber
+            .events
+            .send(RoutedWorkspaceEvent {
+                subscription: subscriber.subscription,
+                event: event(),
+            })
+            .is_ok()
+        {
             subscriber.repaint.request_repaint();
         }
     }
@@ -276,8 +309,9 @@ pub(crate) struct WorkspaceClient {
     owner: WindowSessionId,
     repaint: RepaintTarget,
     root: Option<PathBuf>,
-    sender: mpsc::Sender<WorkspaceEvent>,
-    events: mpsc::Receiver<WorkspaceEvent>,
+    subscription: u64,
+    sender: mpsc::Sender<RoutedWorkspaceEvent>,
+    events: mpsc::Receiver<RoutedWorkspaceEvent>,
 }
 
 impl WorkspaceClient {
@@ -287,6 +321,7 @@ impl WorkspaceClient {
             owner,
             repaint,
             root: None,
+            subscription: 0,
             sender,
             events,
         }
@@ -301,12 +336,14 @@ impl WorkspaceClient {
             return Ok(());
         }
         self.unsubscribe();
+        let subscription = self.subscription;
         SERVICE.lock().unwrap().subscribe(
             root.clone(),
             self.owner,
             Subscriber {
                 events: self.sender.clone(),
                 repaint: self.repaint.clone(),
+                subscription,
             },
         )?;
         self.root = Some(root);
@@ -324,13 +361,22 @@ impl WorkspaceClient {
     }
 
     pub(crate) fn poll(&self) -> Option<WorkspaceEvent> {
-        self.events.try_recv().ok()
+        loop {
+            match self.events.try_recv() {
+                Ok(routed) if self.root.is_some() && routed.subscription == self.subscription => {
+                    return Some(routed.event);
+                }
+                Ok(_) => continue,
+                Err(_) => return None,
+            }
+        }
     }
 
     pub(crate) fn unsubscribe(&mut self) {
         if let Some(root) = self.root.take() {
             SERVICE.lock().unwrap().unsubscribe(&root, self.owner);
         }
+        self.subscription = self.subscription.wrapping_add(1).max(1);
         while self.events.try_recv().is_ok() {}
     }
 
@@ -400,5 +446,45 @@ mod tests {
         ] {
             assert_eq!(event_impact(&kind), EventImpact::Structure);
         }
+    }
+
+    #[test]
+    fn stale_subscription_events_are_discarded_after_root_switch() {
+        let mut client = WorkspaceClient::new(WindowSessionId::new(83), RepaintTarget::test());
+        client.root = Some(PathBuf::from("/new-root"));
+        client.subscription = 7;
+        client
+            .sender
+            .send(RoutedWorkspaceEvent {
+                subscription: 6,
+                event: WorkspaceEvent::Error("old root".to_owned()),
+            })
+            .unwrap();
+        client
+            .sender
+            .send(RoutedWorkspaceEvent {
+                subscription: 7,
+                event: WorkspaceEvent::Error("current root".to_owned()),
+            })
+            .unwrap();
+
+        assert!(matches!(
+            client.poll(),
+            Some(WorkspaceEvent::Error(error)) if error == "current root"
+        ));
+        assert!(client.poll().is_none());
+        client.root = None;
+    }
+
+    #[test]
+    fn paths_outside_the_watched_root_are_not_observed() {
+        assert!(!observed_path(
+            Path::new("/workspace"),
+            Path::new("/unrelated/main.typ")
+        ));
+        assert!(observed_path(
+            Path::new("/workspace"),
+            Path::new("/workspace/main.typ")
+        ));
     }
 }

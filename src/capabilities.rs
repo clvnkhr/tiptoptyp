@@ -10,6 +10,7 @@ use crate::{
 };
 
 const RASTERIZER: &str = "pdftoppm";
+const PDF_INSPECTOR: &str = "pdfinfo";
 const LINK_EXTRACTOR: &str = "pdftohtml";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,6 +37,7 @@ pub(crate) struct CapabilityInputs {
 #[derive(Debug)]
 pub(crate) struct CapabilityCache {
     rasterizer: PathProgramResolution,
+    pdf_inspector: PathProgramResolution,
     link_extractor: PathProgramResolution,
     cached: Option<(CapabilityInputs, CapabilitySnapshot)>,
     #[cfg(test)]
@@ -50,6 +52,7 @@ impl CapabilityCache {
     fn discover_with(mut resolve: impl FnMut(&'static str) -> PathProgramResolution) -> Self {
         Self {
             rasterizer: resolve(RASTERIZER),
+            pdf_inspector: resolve(PDF_INSPECTOR),
             link_extractor: resolve(LINK_EXTRACTOR),
             cached: None,
             #[cfg(test)]
@@ -69,6 +72,7 @@ impl CapabilityCache {
 
     fn refresh_with(&mut self, mut resolve: impl FnMut(&'static str) -> PathProgramResolution) {
         self.rasterizer = resolve(RASTERIZER);
+        self.pdf_inspector = resolve(PDF_INSPECTOR);
         self.link_extractor = resolve(LINK_EXTRACTOR);
         self.invalidate();
     }
@@ -80,7 +84,12 @@ impl CapabilityCache {
             return snapshot.clone();
         }
 
-        let snapshot = derive_snapshot(&inputs, &self.rasterizer, &self.link_extractor);
+        let snapshot = derive_snapshot(
+            &inputs,
+            &self.rasterizer,
+            &self.pdf_inspector,
+            &self.link_extractor,
+        );
         #[cfg(test)]
         {
             self.derivations += 1;
@@ -93,6 +102,7 @@ impl CapabilityCache {
 fn derive_snapshot(
     inputs: &CapabilityInputs,
     rasterizer: &PathProgramResolution,
+    pdf_inspector: &PathProgramResolution,
     link_extractor: &PathProgramResolution,
 ) -> CapabilitySnapshot {
     CapabilitySnapshot {
@@ -116,13 +126,24 @@ fn derive_snapshot(
             "PDF generation",
             inputs.pdf_generation.clone(),
         ),
-        rasterization: require_path_program(
+        rasterization: require_pdf_preview_programs(
             rasterizer,
-            "PDF rasterization",
+            pdf_inspector,
             inputs.rasterization.clone(),
         ),
         link_extraction: path_program_state(link_extractor, "PDF link extraction"),
     }
+}
+
+fn require_pdf_preview_programs(
+    rasterizer: &PathProgramResolution,
+    inspector: &PathProgramResolution,
+    available_state: ServiceState,
+) -> ServiceState {
+    if !inspector.is_available() {
+        return missing_path_program(inspector, "PDF page inspection");
+    }
+    require_path_program(rasterizer, "PDF rasterization", available_state)
 }
 
 fn require_tool(
@@ -206,6 +227,9 @@ mod tests {
     fn partial_availability_is_reported_per_capability() {
         let mut cache = CapabilityCache::discover_with(|binary| match binary {
             RASTERIZER => PathProgramResolution::from_program(binary, None),
+            PDF_INSPECTOR => {
+                PathProgramResolution::from_program(binary, Some(PathBuf::from("/tools/pdfinfo")))
+            }
             LINK_EXTRACTOR => {
                 PathProgramResolution::from_program(binary, Some(PathBuf::from("/tools/pdftohtml")))
             }
@@ -239,26 +263,40 @@ mod tests {
             )
         };
         let mut cache = CapabilityCache::discover_with(resolver);
-        assert_eq!(probes.get(), 2);
+        assert_eq!(probes.get(), 3);
 
         let current = inputs();
         assert!(cache.snapshot(current.clone()).editing.is_ready());
         assert!(cache.snapshot(current.clone()).editing.is_ready());
         assert_eq!(cache.derivations, 1);
-        assert_eq!(probes.get(), 2, "render-time reads must not probe PATH");
+        assert_eq!(probes.get(), 3, "render-time reads must not probe PATH");
 
         cache.invalidate();
         cache.snapshot(current.clone());
         assert_eq!(cache.derivations, 2);
         assert_eq!(
             probes.get(),
-            2,
+            3,
             "preference invalidation is derivation-only"
         );
 
         cache.refresh_with(resolver);
-        assert_eq!(probes.get(), 4, "explicit refresh re-probes optional tools");
+        assert_eq!(probes.get(), 6, "explicit refresh re-probes optional tools");
         cache.snapshot(current);
         assert_eq!(cache.derivations, 3);
+    }
+
+    #[test]
+    fn rasterization_requires_page_inspection_as_well_as_pixel_rendering() {
+        let mut cache = CapabilityCache::discover_with(|binary| {
+            PathProgramResolution::from_program(
+                binary,
+                (binary != PDF_INSPECTOR).then(|| PathBuf::from(format!("/tools/{binary}"))),
+            )
+        });
+
+        let snapshot = cache.snapshot(inputs());
+        assert!(matches!(snapshot.rasterization, ServiceState::Failed(_)));
+        assert!(snapshot.rasterization.detail().contains("pdfinfo"));
     }
 }

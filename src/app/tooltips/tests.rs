@@ -2,6 +2,29 @@ use super::*;
 use egui_kittest::{Harness, kittest::Queryable as _};
 
 #[test]
+fn unrelated_controls_cannot_reset_the_hovered_controls_shared_timer() {
+    let timing = egui::Id::new("shared-hover-timing");
+    let mut harness = Harness::builder().build_ui(|ui| {
+        install_hover_runtime_config(ui.ctx(), Duration::ZERO);
+        let target = ui.button("Target");
+        hover_opacity(&target, timing);
+        let other = ui.button("Other");
+        hover_opacity(&other, timing);
+        if target.hovered() {
+            assert_eq!(
+                ui.ctx().data(|data| {
+                    data.get_temp::<HoverTimingState>(timing)
+                        .map(|state| state.widget)
+                }),
+                Some(target.id)
+            );
+        }
+    });
+    harness.get_by_label("Target").hover();
+    harness.run();
+}
+
+#[test]
 fn tooltip_server_request_waits_for_delay_and_is_sent_once() {
     assert!(!hover_request_ready(false, true, true, false));
     assert!(hover_request_ready(true, true, true, false));
@@ -64,43 +87,81 @@ fn tooltip_delay_finishes_at_full_opacity_and_settles() {
 fn tooltip_pointer_away_dismisses_but_toward_inside_and_transient_gaps_do_not() {
     let origin = Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::splat(20.0));
     let card = Rect::from_min_size(Pos2::new(10.0, 50.0), Vec2::new(200.0, 100.0));
+    let geometry = TooltipGeometry {
+        identity: 1,
+        origin,
+        card,
+        handoff_apex: Pos2::new(20.0, 20.0),
+        pointer_inside_viewport: false,
+        handoff_until: 0.0,
+    };
     let point = |x, y| Some(Pos2::new(x, y));
     assert!(tooltip_pointer_moved_away(
         point(20.0, 20.0),
         point(20.0, 0.0),
-        origin,
-        card
+        geometry,
     ));
-    assert!(tooltip_pointer_moved_away(
+    assert!(!tooltip_pointer_moved_away(
         point(20.0, 45.0),
         point(20.0, 35.0),
-        origin,
-        card
+        geometry,
     ));
     assert!(!tooltip_pointer_moved_away(
         point(20.0, 20.0),
         point(20.0, 40.0),
-        origin,
-        card
+        geometry,
     ));
     assert!(!tooltip_pointer_moved_away(
         point(20.0, 40.0),
         point(20.0, 60.0),
-        origin,
-        card
+        geometry,
     ));
     assert!(!tooltip_pointer_moved_away(
         point(20.0, 60.0),
         point(150.0, 90.0),
-        origin,
-        card
+        geometry,
     ));
     assert!(!tooltip_pointer_moved_away(
         point(20.0, 20.0),
         None,
-        origin,
-        card
+        geometry,
     ));
+}
+
+#[test]
+fn hover_timing_survives_a_slow_frame_while_the_same_widget_remains_hovered() {
+    let widget = egui::Id::new("hover-target");
+    let state = HoverTimingState {
+        widget,
+        started: 1.0,
+    };
+    let retained = hover_timing_for_widget(Some(state), widget, 2.0);
+    assert_eq!(retained.started, 1.0);
+    assert_eq!(
+        hover_timing_for_widget(Some(state), egui::Id::new("other"), 2.0).started,
+        2.0
+    );
+}
+
+#[test]
+fn hover_timing_starts_fresh_after_an_observed_exit() {
+    let context = egui::Context::default();
+    let timing_id = egui::Id::new("semantic-hover-timing");
+    context.data_mut(|data| {
+        data.insert_temp(
+            timing_id,
+            HoverTimingState {
+                widget: egui::Id::new("target"),
+                started: 1.0,
+            },
+        );
+    });
+    reset_hover_timing(&context, timing_id);
+    assert!(
+        context
+            .data(|data| data.get_temp::<HoverTimingState>(timing_id))
+            .is_none()
+    );
 }
 
 #[test]
@@ -310,6 +371,7 @@ fn tooltip_child_scroll_does_not_wake_parent_but_leaving_dismisses() {
                 identity: 42,
                 origin: Rect::ZERO,
                 card: Rect::EVERYTHING,
+                handoff_apex: Pos2::ZERO,
                 pointer_inside_viewport: true,
                 handoff_until: 0.0,
             },

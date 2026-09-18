@@ -97,6 +97,9 @@ pub(crate) struct ReplyIdentity<'a> {
     pub(crate) generation: Generation,
     pub(crate) uri: &'a str,
     pub(crate) version: i32,
+    /// Identity captured when the request was sent. URI and LSP version are
+    /// insufficient when a file is closed and reopened at the same revision.
+    pub(crate) key: DocumentKey,
 }
 
 #[derive(Default)]
@@ -269,6 +272,9 @@ impl Coordinator {
         if self.current_uri.as_deref() == Some(uri) {
             self.current_open = false;
         }
+        if self.preview_uri.as_deref() == Some(uri) {
+            self.preview_uri = None;
+        }
         Some(Effect::Close {
             generation,
             uri: uri.to_owned(),
@@ -314,6 +320,7 @@ impl Coordinator {
         self.generation == Some(reply.generation)
             && self.current_uri.as_deref() == Some(reply.uri)
             && reply.version == revision_as_i32(current.revision)
+            && reply.key == current
     }
 
     pub(crate) fn backing(&self, target: BackingTarget) -> Option<&UnsavedTextDocument> {
@@ -380,6 +387,20 @@ mod tests {
     }
 
     #[test]
+    fn explicitly_closed_preview_uri_is_not_closed_again_on_shutdown() {
+        let generation = Generation(8);
+        let mut sync = Coordinator::default();
+        sync.begin(
+            generation,
+            "file:///main.typ".into(),
+            input(1, 1, 1, "file:///main.typ", "= Main"),
+        );
+        assert!(sync.close_uri("file:///main.typ").is_some());
+        assert!(sync.preview_uri.is_none());
+        assert!(sync.stop_effects().is_empty());
+    }
+
+    #[test]
     fn projection_mode_change_is_a_canonical_versioned_change() {
         let generation = Generation(9);
         let mut sync = Coordinator::default();
@@ -433,6 +454,7 @@ mod tests {
             generation,
             uri: &current.uri,
             version: 8,
+            key: current.key,
         };
         assert!(sync.accepts_reply(accepted, current.key));
         assert!(!sync.accepts_reply(
@@ -452,6 +474,16 @@ mod tests {
         assert!(!sync.accepts_reply(
             ReplyIdentity {
                 version: 7,
+                ..accepted
+            },
+            current.key
+        ));
+        assert!(!sync.accepts_reply(
+            ReplyIdentity {
+                key: DocumentKey {
+                    epoch: current.key.epoch + 1,
+                    ..current.key
+                },
                 ..accepted
             },
             current.key

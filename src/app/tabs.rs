@@ -394,11 +394,17 @@ impl EditorApp {
         });
         crate::tinymist_sync::preview_root(&self.workspace_root, preview)
     }
-    fn tab_workspace(&self, id: u64) -> Option<&Path> {
+    pub(super) fn tab_workspace(&self, id: u64) -> Option<&Path> {
         self.tabs
             .records
             .get(&id)
             .map(|tab| tab.workspace.as_path())
+    }
+
+    pub(super) fn set_tab_workspace(&mut self, id: u64, workspace: PathBuf) {
+        if let Some(record) = self.tabs.records.get_mut(&id) {
+            record.workspace = workspace;
+        }
     }
     pub(super) fn untitled_tab_path(&self, id: u64) -> PathBuf {
         if let Some(backing) = self.tinymist_sync.tab_backings.get(&id) {
@@ -466,11 +472,13 @@ impl EditorApp {
 
     pub(super) fn rename_parked_tab(&mut self, old: &Path, new: &Path) {
         let active = self.tabs.active;
+        let mut renamed_preview = false;
         for (id, tab) in &mut self.tabs.records {
             if Some(*id) == active {
                 continue;
             }
             if tab.document.path().as_deref() == Some(old) {
+                renamed_preview |= self.tabs.preview == Some(*id);
                 let kind = parked_rename_kind(&tab.document, new);
                 // Renaming through Explorer must update the parked buffer,
                 // not leave it autosaving back to the old filename.
@@ -487,7 +495,12 @@ impl EditorApp {
                 effects: vec![effect],
             });
         }
-        self.sync_parked_tinymist();
+        if renamed_preview {
+            self.restart_tinymist_for_preview_entry();
+            self.schedule_compile_now();
+        } else {
+            self.sync_parked_tinymist();
+        }
     }
 
     pub(super) fn preflight_parked_rename(&self, old: &Path, new: &Path) -> Result<(), String> {
