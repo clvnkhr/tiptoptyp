@@ -5,6 +5,26 @@ use std::{
 };
 
 #[test]
+fn extracted_leaf_views_have_explicit_dependencies_and_no_app_or_worker_access() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/app");
+    for name in ["explorer_view.rs", "package_browser.rs", "popup_layout.rs"] {
+        let source = fs::read_to_string(root.join(name)).unwrap();
+        for forbidden in [
+            "super::*",
+            "EditorApp",
+            "std::fs",
+            "std::process",
+            "std::thread",
+            "LatestJob",
+            "ExclusiveJob",
+            "request_repaint",
+        ] {
+            assert!(!source.contains(forbidden), "{name} depends on {forbidden}");
+        }
+    }
+}
+
+#[test]
 fn git_repository_execution_and_codecs_do_not_depend_on_views() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/git");
     let mut paths = rust_files(&root.join("repository"));

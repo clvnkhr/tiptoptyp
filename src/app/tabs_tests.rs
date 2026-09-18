@@ -162,6 +162,34 @@ fn new_tabs_preserve_the_designated_preview_identity() {
 }
 
 #[test]
+fn new_tab_does_not_restart_or_schedule_the_pinned_preview() {
+    let root = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&context, root.path());
+    app.lifecycle = DocumentLifecycle::Active;
+    app.tinymist_sync.generation = Some(crate::tinymist::Generation(42));
+    app.preview.status = PreviewStatus::Ready(Duration::from_millis(123));
+    app.compile_deadline = None;
+    let preview = app.tabs.preview_id();
+    app.new_tab(&context);
+    assert_eq!(app.tabs.preview_id(), preview);
+    assert_eq!(
+        app.tinymist_sync.generation,
+        Some(crate::tinymist::Generation(42))
+    );
+    assert_eq!(
+        app.preview.status,
+        PreviewStatus::Ready(Duration::from_millis(123))
+    );
+    assert!(app.compile_deadline.is_none());
+    assert_eq!(app.preview_document_source().unwrap(), "first");
+    assert!(
+        app.tinymist_document_path().is_file(),
+        "new unsaved tab retains a real LSP backing"
+    );
+}
+
+#[test]
 fn vector_tab_controls_remain_named_and_do_not_select_a_different_tab() {
     use egui_kittest::{Harness, kittest::Queryable as _};
     let root = tempfile::tempdir().unwrap();

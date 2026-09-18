@@ -159,6 +159,31 @@ Git decorations refresh automatically and after refreshing the Explorer.
 
 ## Package
 
+### Identify or replace a development build
+
+Settings → Status and `./target/release/tiptoptyp --version` show the package
+version and compiled build ID (Git revision, dirty marker, Unix build timestamp).
+The timestamp refreshes when Cargo reruns the build script; an unchanged cached
+build keeps its ID. This identifies builds, rather than preventing old copies
+from launching. The executable does not invoke Git at runtime.
+
+Quit the running app before replacing it. For a completely clean local build:
+
+```sh
+cargo clean
+cargo build --release
+./target/release/tiptoptyp --version
+./target/release/tiptoptyp
+```
+
+`cargo clean` removes Cargo artifacts, not installed/copied `.app` bundles or
+running processes. The standalone runner has a separate build directory:
+`cargo clean --manifest-path xtask/Cargo.toml` cleans that too, if needed.
+Neither command removes your documents or preferences. Usually `cargo build
+--release` alone is sufficient; cleaning forces all dependencies to rebuild.
+
+### Build a native package
+
 Install the official cargo-packager CLI, then build a native package:
 
 ```sh

@@ -217,6 +217,10 @@ impl AppShell {
                     if !self.command_available(context, command) {
                         continue;
                     }
+                    if command == AppCommand::Settings {
+                        self.primary.borrow_mut().open_global_settings(context);
+                        continue;
+                    }
                     // With no document windows, the clean retained root is
                     // itself the next new window; no invisible parent UI pass
                     // is needed to instantiate a secondary viewport.
@@ -255,7 +259,13 @@ impl AppShell {
                 && self.secondary.is_empty()
                 && self.primary.borrow().can_reuse_for_external_open()
             {
-                self.primary.borrow_mut().open_external_path(path);
+                if path.is_dir() {
+                    self.primary
+                        .borrow_mut()
+                        .reuse_dormant_window(EditorWindowRequest::Open(path));
+                } else {
+                    self.primary.borrow_mut().open_external_path(path);
+                }
                 self.show_primary(context);
                 reused_primary = true;
             } else {
@@ -374,6 +384,16 @@ impl AppShell {
         for window in &mut self.secondary {
             window.editor.queue_settings(settings.clone());
             context.request_repaint_of(window.viewport_id());
+        }
+    }
+
+    fn collect_settings_requests(&mut self, context: &egui::Context) {
+        let mut requested = self.primary.borrow_mut().take_settings_open_request();
+        for window in &self.secondary {
+            requested |= window.editor.borrow_mut().take_settings_open_request();
+        }
+        if requested {
+            self.primary.borrow_mut().open_global_settings(context);
         }
     }
 
@@ -692,6 +712,7 @@ impl eframe::App for AppShell {
         // This path must neither paint nor consume the previous frame's input.
         self.primary.apply_settings(context);
         self.collect_secondary_events();
+        self.collect_settings_requests(context);
         self.refresh_active_window(context);
         self.dispatch_process_requests(context);
         self.guard_process_close(context);
@@ -733,9 +754,7 @@ impl eframe::App for AppShell {
         let _span = crate::performance::span("ui.shell.pass");
         crate::performance::tick(ui.ctx(), || !self.captures.has_pending());
         let context = ui.ctx().clone();
-        if crate::performance::take_no_window_request() {
-            self.retire_primary_window(&context);
-        }
+        let profile_close_requested = crate::performance::take_no_window_request();
         self.advance_capture_batch(&context);
         let primary_close_requested = context.input(|input| input.viewport().close_requested());
         if self.primary_visible {
@@ -756,7 +775,14 @@ impl eframe::App for AppShell {
             &mut self.primary.borrow_mut(),
         );
         let primary_was_visible = self.primary_visible;
-        self.finish_primary_window_close(&context, primary_close_requested);
+        if profile_close_requested {
+            // Exercise the same end-of-frame transition as a native close.
+            // Retiring before the owner's UI pass skips retained-surface
+            // registration and can detach the current macOS CGL view.
+            self.retire_primary_window(&context);
+        } else {
+            self.finish_primary_window_close(&context, primary_close_requested);
+        }
         if primary_was_visible && !self.primary_visible {
             // Register (but do not show) Settings on the last visible pass,
             // so the no-window logic path can reveal this existing viewport.
@@ -765,6 +791,7 @@ impl eframe::App for AppShell {
                 .register_dormant_settings(&context, Some(frame));
         }
         self.open_pending_windows(&context);
+        self.collect_settings_requests(&context);
         self.show_secondary_windows(&context);
         self.poll_process_close(&context);
         self.update_native_menu(&context);
@@ -862,10 +889,7 @@ const fn command_reveals_primary(command: AppCommand) -> bool {
 const fn command_available_without_document(command: AppCommand) -> bool {
     matches!(
         command,
-        AppCommand::Open
-            | AppCommand::Settings
-            | AppCommand::NewWindow
-            | AppCommand::OpenInNewWindow
+        AppCommand::Settings | AppCommand::NewWindow | AppCommand::OpenInNewWindow
     )
 }
 
@@ -1058,6 +1082,32 @@ mod tests {
             1,
             "native command must be consumed once"
         );
+        // Settings is the exception to document-local command ownership.
+        // Requests from either secondary must address the same root child.
+        let settings =
+            crate::child_view::child_viewport_id(egui::ViewportId::ROOT, "tiptoptyp-settings");
+        for owner in [1, 2] {
+            shell.active = ActiveSession::Secondary(owner);
+            sender
+                .send(NativeMenuRequest::Command(AppCommand::Settings))
+                .unwrap();
+            let output = context.run_ui(egui::RawInput::default(), |ui| {
+                shell.dispatch_process_requests(ui.ctx());
+                shell.primary.borrow_mut().hidden_host_ui(ui.ctx(), None);
+            });
+            assert_eq!(
+                output.viewport_output[&settings].builder.visible,
+                Some(true)
+            );
+            for secondary in [1, 2] {
+                let child = crate::child_view::child_viewport_id(
+                    document_viewport_id(secondary),
+                    "tiptoptyp-settings",
+                );
+                assert!(!output.viewport_output.contains_key(&child));
+            }
+            output.drop_without_applying_deltas();
+        }
     }
 
     #[test]
@@ -1088,6 +1138,7 @@ mod tests {
         let raw = egui::RawInput::default();
         for command in [
             AppCommand::New,
+            AppCommand::Open,
             AppCommand::Copy,
             AppCommand::Paste,
             AppCommand::Save,
@@ -1132,7 +1183,7 @@ mod tests {
         shell.primary.borrow_mut().finish_window_close();
         shell.primary_visible = false;
         menu_sender
-            .send(NativeMenuRequest::Command(AppCommand::Open))
+            .send(NativeMenuRequest::Command(AppCommand::OpenInNewWindow))
             .unwrap();
         // Test routing without launching a native picker in the headless suite.
         let _ = context.run_logic(&raw, |ctx| shell.dispatch_process_requests(ctx));
@@ -1193,7 +1244,6 @@ mod tests {
     fn no_window_state_keeps_creation_and_settings_but_not_document_commands() {
         for command in [
             AppCommand::NewWindow,
-            AppCommand::Open,
             AppCommand::OpenInNewWindow,
             AppCommand::Settings,
         ] {
@@ -1201,6 +1251,7 @@ mod tests {
         }
         for command in [
             AppCommand::New,
+            AppCommand::Open,
             AppCommand::Save,
             AppCommand::SaveAs,
             AppCommand::Copy,

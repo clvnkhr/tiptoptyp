@@ -5,6 +5,103 @@
 #show "[x]": box(stroke: 1pt, height: 0.8em, width: 0.8em, fill: green, [#set align(center);x])
 = running todo list
 
+== Postmortem extraction plan (18 September 2026)
+
+236. [x] Extract cohesive leaf views with explicit imports: Explorer rendering,
+popup/menu geometry and package browser. Delete original copies; record root and
+total production line changes. Preserve behavior without adding state or workers.
+Implemented in `src/app/explorer_view.rs`, `package_browser.rs` and
+`popup_layout.rs`. The original definitions are deleted. Relative to the
+working-tree snapshot before this extraction, app.rs is 14,033 → 12,840 lines
+(−1,193); app.rs plus these modules is 14,102 (+69 lines of module/import and
+formatting overhead). This is relocation, not a code-size or performance win.
+Existing test-only helpers move unchanged; the separate architecture boundary
+test adds 20 lines. Explorer ownership/effects in show_workspace remain for 238.
+No runtime scheduling, allocations, repaint policy or native bounds changed.
+Verification: all 28 focused Explorer tests, 1,058 full-suite test executions
+(16 opt-in tests ignored), 13 xtask tests, formatting and strict all-target Clippy
+pass. No screenshot or timing claim is needed for unchanged rendering and work;
+native navigation acceptance remains explicitly part of 237, not this extraction.
+
+237. [ ] Consolidate Problems, index and preview navigation/focus handoff after
+reproducing the native failure. Test document/range routing and secondary owners;
+do not equate helper tests with verified native word-navigation behavior.
+
+238. [ ] Narrow Explorer ownership to explicit tree/index/selection inputs and
+typed actions, with watcher effects outside painting. Remove full EditorApp access
+from the view and relocate its corresponding presentation state.
+
+239. [ ] Thin save completion around existing receipts: consolidate active/parked
+identity and continuations without weakening disk leases or durability. Cover
+same-path, Save As, close and stale results; require net-negative production code.
+
+240. [ ] Inventory preview connection/content/visibility/generation writers and
+remove duplicate policy from receive/restart adapters using existing controllers.
+Keep one policy owner, no extra retry state, per-frame copies or repaint loops.
+Work sequentially; report accounting and regression evidence per extraction.
+
+== Regression execution follow-up (18 September 2026)
+
+228. [x] Fix the no-document retained-host Settings panic at
+`src/app/settings_view.rs:98`: preview unavailability does not imply a non-Typst
+document, because an empty tab store retains a Typst placeholder. Reproduced
+without manual input using `RUST_BACKTRACE=1 cargo xtask profile --scenario
+no-window --warmup 5 --seconds 5 --sampler none --skip-build` on d3ca9886.
+The actual hidden-host UI regression reproduced this panic before the fix and
+now covers hidden/visible Settings and resumption. Empty hosts report “No
+document”; New Window, Open in New Window and Settings remain available, while
+plain New/Open and document actions are disabled. Command-dispatch regressions
+cover reopening. Native close/reopen and the Open in New Window picker were
+exercised in an isolated app; file selection in that picker was not completed
+because the automation clipboard operation timed out. The native no-window
+runner also exposed an early-close CGL failure in its own transition: it now
+closes after the owner UI pass, registering the retained Settings surface just
+like a native close, and completes without panic. No polling or repaint loop
+was added. Evidence and remaining limitations: `regression-results.typ`.
+
+229. [ ] Restore a reliable native hover profiling capture: the `hover` scenario
+timed out before readiness after 120 seconds on the same optimized build while
+main, Settings and multi-window scenarios completed. Diagnose capture/event
+delivery before interpreting this as an application hang; preserve the timeout
+log and validate actual popup entry/scroll separately from helper tests.
+
+== Existing tasks
+
+231. [x] Use one app-wide Settings viewport owned by the retained process host.
+Route secondary-window and native-menu requests there, raise it on repeated
+requests, retain it when hidden, and remove per-document toolbar toggle coloring.
+Keep preference broadcasts to all documents. Add secondary-owner, fixed-viewport
+and native-command routing regressions; native multi-window reopening exercised.
+
+232. [x] Let Open and Open in New Window select a file or folder. Folder selections
+create an independent workspace with no open tabs and do not replace the current
+document. Explicit folder launches ignore last-file history. Test remembered-file
+suppression, empty tab state and no Tinymist start; inspect a native folder launch.
+
+233. [x] Do not restart or schedule the designated preview when Cmd+N adds an
+editor tab. Preserve preview ownership and service generation, register only the
+new untitled LSP document with real backing, and keep its Git/editor state local.
+Add a generation/status/deadline regression; native Cmd+N preserved the existing
+WebView endpoint and rendered document.
+
+234. [ ] Isolate the transient oddly shaped large-window flash reported when
+opening Settings with multiple main windows. Duplicate Settings ownership is
+fixed in 231, but steady-state native observations/framebuffers cannot certify
+that a short-lived flash is gone. Keep this separate from singleton acceptance.
+
+235. [x] Take over manual checklist cases 4, 7, 8 and 9 with disposable-file and
+deterministic stale-result tests. Record user passes for 1–3 without requiring
+another manual run. See regression-results.typ for exact test evidence and
+native-interaction limits; do not mark unobserved dialogs or timing races as
+native passes.
+
+230. [x] Identify executable builds in Settings → Status and `--version` / `-V`
+using package version, Git revision, dirty state and a build-time Unix timestamp.
+Refresh metadata on source/assets/Git changes, handle builds without Git, and
+keep all identification work out of runtime frame paths. Deterministic QA
+captures use a fixed label. Add a CLI regression that exits before GUI startup
+and document clean builds versus separately installed app bundles in README.
+
 Keep this list as the source of truth. Every task has a permanent number and
 `[ ]` (open, partial, unverified, or deferred) or `[x]` (completed). Never remove
 completed tasks or renumber existing tasks; append new tasks with the next

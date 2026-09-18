@@ -2,12 +2,18 @@
 #set page(paper: "a4", margin: 19mm)
 #set text(size: 10.5pt)
 #set par(leading: 0.55em)
-#let check(title, body) = block(breakable: false, above: 0.85em)[
-  #box(width: 8pt, height: 8pt, stroke: 0.6pt) #h(3pt) *#title*
+#let check(title, body, passed: false) = block(breakable: false, above: 0.85em)[
+  #box(width: 8pt, height: 8pt, stroke: 0.6pt, fill: if passed { green.lighten(70%) } else { none })[#if passed { text(size: 8pt)[✓] }] #h(3pt) *#title*
   #linebreak() #body
 ]
 
 = Quick regression check
+
+*Latest results:* you passed 1–3. Checks 4, 7, 8 and 9 are now developer-owned:
+they are exercised with disposable-file and deterministic race tests, not more
+manual tasks for you. Check 5 exposed duplicate Settings windows and a transient
+flash; check 6 prompted folder-opening support; check 10 exposed an unnecessary
+preview restart on New. Fix verification is recorded in `regression-results.typ`.
 
 *Ten checks. Start with 1–6 (roughly 5–10 minutes); 7–10 cover additional
 refactor risks. Stop at the first failure.*
@@ -20,29 +26,33 @@ or app-name lookup that could launch an old bundle. Record the build/commit.
 Do not risk unsaved work in real documents.
 
 #check("1. Hover → popup → scroll → link", [
+  *Passed by user.*
   Hover two different symbols. Move diagonally onto a card and scroll inside it;
   move away. Reopen it and scroll the editor. Finally click a harmless tooltip
   link once.
   *Pass:* hovers appear reliably, entering the card works, moving away/editor
   scrolling dismisses it, scrolling stays smooth, and the link opens promptly
   in exactly one browser tab. No need to keep repeating a flaky failure.
-])
+], passed: true)
 
 #check("2. Preview → source → keyboard", [
+  *Passed by user.*
   Click preview text to jump to source. Try Option+Left/Right, Cmd+Left/Right,
   then Shift+Option+Right; type a character and undo.
   *Pass:* word/line movement and selection work immediately in the source editor;
   the edit and undo affect the right text. Cmd+A alone is not a pass.
-])
+], passed: true)
 
 #check("3. Tabs and Explorer", [
+  *Passed by user.*
   Open the second file, drag its tab past the first, and switch back.
   Set a comfortable Explorer width; toggle Cmd+1 off/on and resize the window.
   *Pass:* the tab moves, not the whole window; text/caret and the chosen preview
   stay with their files; Explorer does not become a tiny strip.
-])
+], passed: true)
 
 #check("4. Save and cancel a close", [
+  *Developer-owned; skipped by user. Do not repeat manually.*
   Edit and save the disposable file, then reopen it to confirm the text survived.
   With autosave temporarily off, make another edit, close the tab and choose Cancel.
   *Pass:* the saved edit is present; Cancel keeps the tab and unsaved edit intact.
@@ -50,17 +60,20 @@ Do not risk unsaved work in real documents.
 ])
 
 #check("5. Multiple-window independence and Settings", [
+  *User found duplicate Settings windows and a transient window flash.*
   Open different files from the same workspace in two windows. Open and narrow
   Settings, then alternate between editors: type/undo, Find and Save.
   Close one window; edit the survivor and check that its preview updates.
   *Pass:* commands affect only the focused document, Settings stays usable,
   and closing one window does not break the other's editing or preview.
-  No noticeable sluggishness or focus stealing.
+  No noticeable sluggishness or focus stealing. Settings is one app-wide window;
+  its toolbar buttons do not use toggle highlighting.
 ])
 
 #check("6. Close and reopen", [
   Close the disposable tabs: the last tab should leave an empty workspace.
-  Then close all document windows and use File > New Window or File > Open.
+  Then close all document windows and use File > New Window or File > Open in New Window.
+  Selecting a folder opens an empty workspace rooted at that folder.
   *Pass:* no panic; a usable window returns with a sensible Explorer width,
   working editor and preview. Document-only menu actions are disabled when
   no applicable document exists.
@@ -70,6 +83,7 @@ Do not risk unsaved work in real documents.
 == Four additional refactor checks
 
 #check("7. Background-tab autosave", [
+  *Developer-owned; skipped by user. Do not repeat manually.*
   With autosave enabled, make distinct edits in saved disposable files A and B,
   switching to B before A's delay expires. Wait beyond the delay, then inspect
   both files on disk or close and reopen them.
@@ -78,6 +92,7 @@ Do not risk unsaved work in real documents.
 ])
 
 #check("8. External-edit conflict", [
+  *Developer-owned; skipped by user. Do not repeat manually.*
   Temporarily disable autosave. Make an unsaved edit in a disposable file, then
   change and save that same file in another editor. Return and attempt Save.
   *Pass:* the app reports the conflict and preserves local work; it does not
@@ -86,6 +101,7 @@ Do not risk unsaved work in real documents.
 ])
 
 #check("9. Late results must not cross tabs", [
+  *Developer-owned; skipped by user. Do not repeat manually.*
   Request completion or hover in a large document, immediately switch to a
   different tab and type. Wait briefly for the original request to finish.
   *Pass:* no old popup, diagnostic or text replacement appears in the new tab;
@@ -94,10 +110,12 @@ Do not risk unsaved work in real documents.
 ])
 
 #check("10. Preview ownership across source and asset tabs", [
+  *User found Cmd+N refreshing the existing preview.*
   Choose Typst file A for preview using its eye. Switch to file B, then open a
   PDF or image tab; scroll/zoom that asset and return to A.
   *Pass:* the chosen preview remains A. The asset occupies the code pane and its
   controls affect only that asset, not A's preview. Returning restores A's editor.
+  Cmd+N adds a tab without restarting or refreshing A's preview.
 ])
 
 == Only when that area changed

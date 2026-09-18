@@ -4461,7 +4461,7 @@ fn explicit_launch_targets_override_workspace_history() {
         resolve_initial_workspace(&settings, Some(&explicit), directory.path()),
         InitialWorkspace {
             root: explicit.clone(),
-            document: Some(main.canonicalize().unwrap()),
+            document: None,
         }
     );
     assert_eq!(
@@ -4471,6 +4471,34 @@ fn explicit_launch_targets_override_workspace_history() {
             document: Some(chapter.canonicalize().unwrap()),
         }
     );
+}
+
+#[test]
+fn folder_window_starts_empty_even_with_a_remembered_document() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("remembered.typ");
+    fs::write(&path, "= Do not reopen").unwrap();
+    let root_path = root.path().canonicalize().unwrap();
+    let mut settings = AppSettings::default();
+    settings
+        .last_opened_files
+        .insert(root_path.display().to_string(), path.display().to_string());
+    let context = egui::Context::default();
+    let mut app = EditorApp::new_secondary(
+        &context,
+        egui::ViewportId::from_hash_of("folder-window"),
+        EditorWindowRequest::Open(root_path.clone()),
+        settings,
+        CaptureController::disabled_for_tests(),
+    );
+    assert_eq!(app.workspace_root, root_path);
+    assert!(app.tabs.is_empty());
+    assert!(app.compile_deadline.is_none());
+    assert!(app.tinymist_sync.generation.is_none());
+    app.restart_tinymist();
+    assert!(app.tinymist_sync.generation.is_none());
+    app.new_tab(&context);
+    assert_eq!(app.tabs.len(), 1);
 }
 
 #[test]
@@ -7142,6 +7170,82 @@ fn bracket_settings_controls_change_each_palette_and_can_be_disabled() {
     assert!(harness.state().enabled);
     assert_eq!(harness.state().palettes[0], BracketPalette::Orchid);
 }
+#[test]
+fn settings_is_root_owned_and_secondary_requests_never_create_a_viewport() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    context.set_embed_viewports(false);
+    let mut root = EditorApp::dormant_for_tests(&context, directory.path().into());
+    let child = crate::child_view::child_viewport_id(egui::ViewportId::ROOT, "tiptoptyp-settings");
+    for id in [1, 2] {
+        let owner = egui::ViewportId::from_hash_of(id);
+        let mut secondary =
+            EditorApp::dormant_window_for_tests(&context, directory.path().into(), owner);
+        secondary.toggle_settings();
+        assert!(!secondary.settings_visible);
+        assert!(secondary.take_settings_open_request());
+        assert!(
+            !secondary.take_settings_open_request(),
+            "request is drained once"
+        );
+        let mut raw = egui::RawInput {
+            viewport_id: owner,
+            ..Default::default()
+        };
+        raw.viewports.insert(owner, Default::default());
+        let output = context.run_ui(raw, |ui| secondary.show_settings_window(ui.ctx(), None));
+        assert!(
+            !output
+                .viewport_output
+                .contains_key(&crate::child_view::child_viewport_id(
+                    owner,
+                    "tiptoptyp-settings"
+                ))
+        );
+        output.drop_without_applying_deltas();
+        let output = context.run_ui(egui::RawInput::default(), |ui| {
+            root.open_global_settings(ui.ctx());
+            root.show_settings_window(ui.ctx(), None);
+        });
+        assert!(
+            root.settings_visible,
+            "opening again raises, rather than toggles off"
+        );
+        assert_eq!(output.viewport_output[&child].builder.visible, Some(true));
+        output.drop_without_applying_deltas();
+    }
+}
+
+#[test]
+fn closed_last_document_can_render_hidden_host_and_reopen_settings() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    context.set_embed_viewports(false);
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    let frame = eframe::Frame::_new_kittest();
+    app.request_window_resume();
+    assert!(app.lifecycle.activate());
+    app.finish_window_close();
+    assert!(app.tabs.is_empty());
+    assert_eq!(app.document().kind(), DocumentKind::Typst);
+    for visible in [false, true, false] {
+        app.settings_visible = visible;
+        context
+            .run_ui(egui::RawInput::default(), |ui| {
+                app.hidden_host_ui(ui.ctx(), Some(&frame));
+            })
+            .drop_without_applying_deltas();
+        assert!(!app.needs_visible_window());
+    }
+    app.request_window_resume();
+    assert!(app.lifecycle.activate());
+    context
+        .run_ui(egui::RawInput::default(), |ui| {
+            app.show_settings_window(ui.ctx(), Some(&frame));
+        })
+        .drop_without_applying_deltas();
+}
+
 #[test]
 fn dormant_settings_surface_survives_document_resume_and_close() {
     let directory = tempfile::tempdir().unwrap();

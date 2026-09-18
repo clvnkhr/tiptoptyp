@@ -43,6 +43,11 @@ impl EditorApp {
         context: &egui::Context,
         frame: Option<&eframe::Frame>,
     ) {
+        // App-wide preferences have one stable native owner, including when
+        // the root document is closed. Secondary documents never create one.
+        if !self.window_host.is_root() {
+            return;
+        }
         use super::{settings_panel::SettingsStatus, settings_window::SettingsWindowInput};
         self.consume_settings_actions(context, frame);
         // The dormant host's surface must survive the first resumed frame,
@@ -88,14 +93,19 @@ impl EditorApp {
                 )),
             });
         let preview_status = self.preview_status_snapshot();
-        let backend_label = if self.typst_preview_available() {
+        // A closed macOS document leaves a clean Typst placeholder in the
+        // retained process host, but no tab or preview. Settings must still
+        // be constructible there (including its initially hidden surface).
+        let backend_label = if self.tabs.is_empty() {
+            "No document"
+        } else if self.typst_preview_available() {
             preview_status.backend_label()
         } else {
             match self.document().kind() {
                 DocumentKind::Pdf => "Rasterised PDF",
                 DocumentKind::Image => "Image",
                 DocumentKind::Text => "Text editor",
-                DocumentKind::Typst => unreachable!(),
+                DocumentKind::Typst => preview_status.backend_label(),
             }
         };
         let fallback_reason = preview_status.fallback_reason();

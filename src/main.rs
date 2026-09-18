@@ -6,6 +6,7 @@ mod app;
 mod app_icon;
 mod asset;
 mod auto_pairs;
+mod build_info;
 mod capabilities;
 mod child_view;
 mod compiler;
@@ -77,6 +78,13 @@ use tiptoptyp::themes::{
 use windowing::AppShell;
 
 fn main() -> eframe::Result {
+    if std::env::args_os()
+        .skip(1)
+        .any(|arg| arg == "--version" || arg == "-V")
+    {
+        println!("{}", build_info::VERSION);
+        return Ok(());
+    }
     let profile = performance::Session::from_env()
         .map_err(|error| eframe::Error::AppCreation(std::io::Error::other(error).into()))?;
     let result = run(profile.persistence_path());

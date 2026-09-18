@@ -738,6 +738,11 @@ impl SettingsPanel<'_> {
                 ui.add_space(theme::SPACE.small);
                 ui.separator();
                 settings_heading(ui, SettingsSection::Status);
+                ui.add(egui::Label::new(if deterministic_settings {
+                    "tiptoptyp (deterministic QA build)"
+                } else {
+                    crate::build_info::VERSION
+                }).wrap());
                 settings_target_anchor(
                     ui,
                     SettingsTarget::ToolchainStatus,

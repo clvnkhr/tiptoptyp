@@ -1,4 +1,28 @@
 mod completion_popup;
+mod explorer_view;
+#[cfg(test)]
+use explorer_view::{
+    EXPLORER_SECTION_MIN_BODY_HEIGHT, explorer_section, explorer_section_body_height,
+    explorer_section_state_id, workspace_asset_hover_rect, workspace_entry_color,
+    workspace_entry_label, workspace_entry_resolved_color,
+};
+use explorer_view::{
+    ExplorerSectionLayout, ExplorerSectionsSpec, add_workspace_nodes,
+    available_explorer_section_body_height, explorer_section_layout_id,
+    explorer_section_open_states, explorer_section_query_matches, git_command_opens_explorer,
+    normalize_explorer_query, open_matching_workspace_ancestors, set_explorer_section_open,
+    show_explorer_sections, show_project_index_section, workspace_node_matches_query,
+    workspace_tree_state_id,
+};
+mod popup_layout;
+#[cfg(test)]
+use popup_layout::app_popup_scroll_id;
+use popup_layout::{
+    clamp_popup_above_anchor, clamp_popup_anchor, command_popup_size, editor_context_menu_size,
+    show_popup_contents, status_log_popup_size, workspace_context_menu_size,
+};
+mod package_browser;
+use package_browser::{PackageBrowserAction, PackageFilter, show_package_browser_ui};
 mod editor_view;
 mod extra_shortcuts;
 mod git_actions;
@@ -41,7 +65,7 @@ use eframe::egui::{
     Sense, Stroke, StrokeKind, TextureOptions, Vec2,
     text::{CCursor, CCursorRange},
 };
-use egui_ltreeview::{Action as TreeAction, NodeBuilder, TreeView, TreeViewBuilder, TreeViewState};
+use egui_ltreeview::{Action as TreeAction, TreeView, TreeViewState};
 use rfd::AsyncFileDialog;
 
 #[cfg(test)]
@@ -74,7 +98,7 @@ use crate::{
         AppCommand, CommandMenu, CommandRequirement, NativeMenuCommandQueue, command_spec,
         command_specs, consume_shortcut,
     },
-    package_catalog::{PackageCatalogLoad, PackageRecord, PackageRootKind, PackageRoots},
+    package_catalog::{PackageCatalogLoad, PackageRoots},
     pdf::PreviewPage,
     pdf_pages::{PdfPageLoader, PdfSurface, RasterPageRequestKey},
     presentation::{
@@ -780,36 +804,6 @@ enum AppPopupAction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PackageFilter {
-    All,
-    Installed,
-    Available,
-    Updates,
-}
-
-impl PackageFilter {
-    const ALL: [Self; 4] = [Self::All, Self::Installed, Self::Available, Self::Updates];
-
-    const fn label(self) -> &'static str {
-        match self {
-            Self::All => "All",
-            Self::Installed => "Installed",
-            Self::Available => "Available",
-            Self::Updates => "Updates",
-        }
-    }
-
-    fn allows(self, package: &PackageRecord) -> bool {
-        match self {
-            Self::All => true,
-            Self::Installed => package.is_installed(),
-            Self::Available => package.latest_available.is_some(),
-            Self::Updates => package.has_update(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SettingsSection {
     Appearance,
     Editor,
@@ -1103,6 +1097,7 @@ pub struct EditorApp {
     focus_explorer_search: bool,
     problems_visible: bool,
     settings_visible: bool,
+    settings_open_requested: bool,
     settings_window: Arc<std::sync::Mutex<SettingsWindow>>,
     retain_settings_viewport: bool,
     shortcut_editor_visible: bool,
@@ -1288,6 +1283,8 @@ impl EditorApp {
         let working_directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let initial_workspace =
             resolve_initial_workspace(&settings, initial_path.as_deref(), &working_directory);
+        let open_empty_workspace =
+            snapshot_scene.is_none() && initial_path.as_ref().is_some_and(|path| path.is_dir());
         let workspace_root = initial_workspace.root;
         let initial_document = initial_workspace.document;
         if invalid_initial_path.is_none() {
@@ -1391,6 +1388,7 @@ impl EditorApp {
             explorer: ExplorerPanelState::default(),
             problems_visible: false,
             settings_visible: false,
+            settings_open_requested: false,
             settings_window: Arc::default(),
             retain_settings_viewport: false,
             shortcut_editor_visible: false,
@@ -1524,7 +1522,10 @@ impl EditorApp {
             });
         }
 
-        if let Some(path) = initial_document {
+        if open_empty_workspace {
+            app.empty_workspace(context);
+            app.refresh_workspace();
+        } else if let Some(path) = initial_document {
             if !app.load_path(path) {
                 app.reset_document_services();
                 app.schedule_compile_now();
@@ -1576,7 +1577,7 @@ impl EditorApp {
         if let Some(workspace_root) = untitled_workspace {
             app.workspace_root = canonical_or_absolute(&workspace_root);
             app.remember_workspace(&app.workspace_root.clone());
-            app.reset_untitled_document();
+            app.new_tab(context);
             app.refresh_workspace();
         }
         app
@@ -1778,6 +1779,11 @@ impl EditorApp {
                 self.remember_workspace(&self.workspace_root.clone());
                 self.reset_untitled_document();
             }
+            EditorWindowRequest::Open(path) if path.is_dir() => {
+                self.workspace_root = canonical_or_absolute(&path);
+                self.remember_workspace(&self.workspace_root.clone());
+                self.tabs = self.tabs.empty_after();
+            }
             EditorWindowRequest::Open(path) => self.open_external_path(path),
         }
     }
@@ -1805,6 +1811,9 @@ impl EditorApp {
         self.consume_settings_actions(context, frame);
         let was_visible = self.settings_visible;
         self.process_native_menu_commands(context, frame);
+        if self.window_host.is_root() && self.take_settings_open_request() {
+            self.open_global_settings(context);
+        }
         if was_visible != self.settings_visible {
             let child = scoped_child_viewport_id(context, "tiptoptyp-settings");
             context
@@ -3428,7 +3437,24 @@ impl EditorApp {
     }
 
     fn toggle_settings(&mut self) {
-        self.set_settings_visible(!self.settings_visible);
+        self.settings_open_requested = true;
+        self.close_app_popup();
+    }
+
+    pub(crate) fn take_settings_open_request(&mut self) -> bool {
+        std::mem::take(&mut self.settings_open_requested)
+    }
+
+    pub(crate) fn open_global_settings(&mut self, context: &egui::Context) {
+        self.retain_settings_viewport = true;
+        self.set_settings_visible(true);
+        let child =
+            crate::child_view::child_viewport_id(egui::ViewportId::ROOT, "tiptoptyp-settings");
+        context.send_viewport_cmd_to(child, egui::ViewportCommand::Visible(true));
+        context.send_viewport_cmd_to(child, egui::ViewportCommand::Minimized(false));
+        context.send_viewport_cmd_to(child, egui::ViewportCommand::Focus);
+        context.request_repaint_of(egui::ViewportId::ROOT);
+        context.request_repaint_of(child);
     }
 
     fn open_app_popup(&mut self, popup: AppPopup) {
@@ -3807,6 +3833,8 @@ impl EditorApp {
     }
 
     fn reset_untitled_document(&mut self) {
+        let preserve_preview =
+            self.tabs.len() > 1 && self.tabs.active_id() != self.tabs.preview_id();
         let record = self.tabs.current_record_mut();
         reset_untitled_buffer(&mut record.document, &mut record.autosave);
         if self.settings.mitex_auto_enable {
@@ -3815,10 +3843,20 @@ impl EditorApp {
         }
         self.pending_editor_selection = None;
         self.editor_attention = None;
-        self.clear_preview_for_document(
-            self.tabs.len() > 1 && self.tabs.active_id() != self.tabs.preview_id(),
-        );
+        self.clear_preview_for_document(preserve_preview);
         self.search.clear();
+        if preserve_preview {
+            // A new editor tab must not restart the pinned preview's services.
+            if let Err(error) = self.prepare_tab_backings() {
+                self.show_file_error(error);
+                return;
+            }
+            let path = self.tinymist_document_path();
+            self.reopen_tinymist_current_document(&path, DocumentKind::Typst);
+            self.git_editor.clear_document();
+            self.git_editor.request_refresh();
+            return;
+        }
         self.reset_document_services();
         self.schedule_compile_now();
     }
@@ -3969,7 +4007,7 @@ impl EditorApp {
             )
             .add_filter("Typst documents", &["typ"])
             .add_filter("PDF documents", &["pdf"])
-            .set_title("Open document in new window");
+            .set_title("Open document or folder in new window");
         if let Some(directory) = self.current_directory() {
             dialog = dialog.set_directory(directory);
         }
@@ -3978,7 +4016,7 @@ impl EditorApp {
                 target: DocumentDialogTarget::OpenFileInNewWindow,
                 key: self.document().key(),
             },
-            dialog.pick_file(),
+            dialog.pick_file_or_folder(),
         ));
     }
 
@@ -4015,7 +4053,7 @@ impl EditorApp {
                 target: DocumentDialogTarget::OpenFile,
                 key: self.document().key(),
             },
-            dialog.pick_file(),
+            dialog.pick_file_or_folder(),
         ));
     }
 
@@ -4405,6 +4443,16 @@ impl EditorApp {
             return;
         };
         let mut path = file.path().to_path_buf();
+        if path.is_dir()
+            && matches!(
+                target,
+                DocumentDialogTarget::OpenFile | DocumentDialogTarget::OpenFileInNewWindow
+            )
+        {
+            self.pending_window_requests
+                .push_back(EditorWindowRequest::Open(path));
+            return;
+        }
         match target {
             DocumentDialogTarget::OpenFile => {
                 if self.document().epoch() != key.epoch {
@@ -5031,7 +5079,7 @@ impl EditorApp {
     }
 
     fn restart_tinymist_with_handoff(&mut self, preserve_preview: bool) {
-        if !self.lifecycle.allows_document_work() {
+        if !self.lifecycle.allows_document_work() || self.tabs.is_empty() {
             return;
         }
         self.manual_format_revision = None;
@@ -6122,10 +6170,7 @@ impl EditorApp {
                     ui.ctx().request_repaint();
                 }
                 if native_hover_text(
-                    ui.selectable_label(
-                        self.settings_visible,
-                        if compact { "Set" } else { "Settings" },
-                    ),
+                    ui.selectable_label(false, if compact { "Set" } else { "Settings" }),
                     "Open Settings in a separate window",
                 )
                 .clicked()
@@ -8396,6 +8441,7 @@ impl EditorApp {
 
     pub(crate) fn has_shell_work(&self) -> bool {
         self.has_settings_update()
+            || self.settings_open_requested
             || !self.pending_window_requests.is_empty()
             || !self.workspace_history_removals.is_empty()
             || self.process_close_answer().is_some()
@@ -9916,917 +9962,6 @@ fn offer_folder_row_drop(ui: &egui::Ui, row: Rect, directory: &Path) {
         Pos2::new(ui.clip_rect().right(), row.bottom()),
     );
     offer_file_drop_target(ui, rect, FileDropTarget::Folder(directory.to_path_buf()));
-}
-
-fn add_workspace_nodes(
-    builder: &mut TreeViewBuilder<'_, PathBuf>,
-    nodes: &[WorkspaceNode],
-    active: Option<&Path>,
-    preview: Option<&Path>,
-    context: &egui::Context,
-    query: &str,
-    git: &crate::git::editor::FileStatuses,
-) {
-    for node in nodes {
-        if !workspace_node_matches_query(node, query) {
-            continue;
-        }
-        let is_active = active.is_some_and(|path| path == node.path);
-        let is_preview = preview.is_some_and(|path| path == node.path);
-        let label = node.display_name().into_owned();
-        let git_status = git.get(&node.path);
-        if node.is_directory() {
-            let color = workspace_entry_color(&node.path, true, false, context);
-            let drop_directory = node.path.clone();
-            let open = builder.node(
-                NodeBuilder::dir(node.path.clone())
-                    .default_open(active.is_some_and(|path| path.starts_with(&node.path)))
-                    .icon(|ui| paint_tree_icon(ui, true))
-                    .label_ui(move |ui| {
-                        let color = workspace_entry_resolved_color(
-                            color,
-                            is_active,
-                            ui.visuals().strong_text_color(),
-                        );
-                        let text = RichText::new(&label).color(color);
-                        let response = ui.add(workspace_entry_label(text, is_active));
-                        offer_folder_row_drop(ui, response.rect, &drop_directory);
-                    }),
-            );
-            if open {
-                add_workspace_nodes(
-                    builder,
-                    &node.children,
-                    active,
-                    preview,
-                    context,
-                    query,
-                    git,
-                );
-            }
-            builder.close_dir();
-        } else if node.is_file() {
-            let color = workspace_entry_color(&node.path, false, false, context);
-            let hover_path = node.path.clone();
-            let hover_kind = crate::document::preview_kind_for_path(&hover_path);
-            builder.node(
-                NodeBuilder::leaf(node.path.clone())
-                    .icon(|ui| paint_tree_icon(ui, false))
-                    .label_ui(move |ui| {
-                        let row = ui.horizontal(|ui| {
-                            let color = workspace_entry_resolved_color(
-                                color,
-                                is_active,
-                                ui.visuals().strong_text_color(),
-                            );
-                            let text = RichText::new(&label).color(color);
-                            ui.add(workspace_entry_label(text, is_active));
-                            if let Some(status) = git_status {
-                                ui.add(egui::Label::new(
-                                    RichText::new(status.letter())
-                                        .monospace()
-                                        .strong()
-                                        .color(status.color(context)),
-                                ))
-                                .on_hover_text(status.description());
-                            }
-                            if is_preview {
-                                let blue = theme::palette(ui.ctx()).accent;
-                                native_hover_text(
-                                    static_icon(ui, UiIcon::Eye, blue),
-                                    "Used for preview",
-                                );
-                            }
-                        });
-                        if let Some(parent) = hover_path.parent() {
-                            offer_folder_row_drop(ui, row.response.rect, parent);
-                        }
-                        if let Some(kind) = hover_kind {
-                            let hover_rect =
-                                workspace_asset_hover_rect(row.response.rect, ui.clip_rect());
-                            let hover_response = ui.interact(
-                                hover_rect,
-                                ui.id().with(("asset-row-hover", &hover_path)),
-                                Sense::hover(),
-                            );
-                            offer_asset_hover(
-                                &hover_response,
-                                hover_rect,
-                                hover_path.clone(),
-                                kind,
-                                TooltipPlacement::Right,
-                            );
-                        }
-                    }),
-            );
-        } else if node.is_symlink() {
-            let color = workspace_entry_color(&node.path, false, true, context);
-            builder.node(
-                NodeBuilder::leaf(node.path.clone())
-                    .icon(|ui| paint_tree_icon(ui, false))
-                    .label_ui(move |ui| {
-                        let color = workspace_entry_resolved_color(
-                            color,
-                            is_active,
-                            ui.visuals().strong_text_color(),
-                        );
-                        let text = RichText::new(format!("{label} (link)")).color(color);
-                        ui.add(workspace_entry_label(text, is_active));
-                    }),
-            );
-        }
-    }
-}
-
-fn normalize_explorer_query(query: &str) -> String {
-    query.trim().to_lowercase()
-}
-
-fn explorer_text_matches_query(text: &str, normalized_query: &str) -> bool {
-    normalized_query.is_empty() || text.to_lowercase().contains(normalized_query)
-}
-
-fn explorer_path_matches_query(path: &Path, normalized_query: &str) -> bool {
-    explorer_text_matches_query(&path.to_string_lossy(), normalized_query)
-}
-
-fn workspace_node_self_matches_query(node: &WorkspaceNode, normalized_query: &str) -> bool {
-    explorer_text_matches_query(&node.display_name(), normalized_query)
-        || explorer_path_matches_query(&node.relative_path, normalized_query)
-}
-
-fn workspace_node_matches_query(node: &WorkspaceNode, normalized_query: &str) -> bool {
-    workspace_node_self_matches_query(node, normalized_query)
-        || node
-            .children
-            .iter()
-            .any(|child| workspace_node_matches_query(child, normalized_query))
-}
-
-fn open_matching_workspace_ancestors(
-    state: &mut TreeViewState<PathBuf>,
-    nodes: &[WorkspaceNode],
-    normalized_query: &str,
-) {
-    for node in nodes.iter().filter(|node| node.is_directory()) {
-        if workspace_node_matches_query(node, normalized_query) {
-            state.set_openness(node.path.clone(), true);
-            open_matching_workspace_ancestors(state, &node.children, normalized_query);
-        }
-    }
-}
-
-fn outline_entry_matches_query(
-    entry: &crate::project_index::OutlineEntry,
-    normalized_query: &str,
-) -> bool {
-    explorer_text_matches_query(&entry.title, normalized_query)
-        || explorer_path_matches_query(&entry.path, normalized_query)
-        || explorer_text_matches_query(&entry.line.to_string(), normalized_query)
-}
-
-fn symbol_entry_matches_query(
-    entry: &crate::project_index::SymbolEntry,
-    normalized_query: &str,
-) -> bool {
-    explorer_text_matches_query(&entry.name, normalized_query)
-        || explorer_text_matches_query(entry.kind.label(), normalized_query)
-        || explorer_path_matches_query(&entry.path, normalized_query)
-        || explorer_text_matches_query(&entry.line.to_string(), normalized_query)
-}
-
-fn reference_entry_matches_query(
-    entry: &crate::project_index::ReferenceEntry,
-    normalized_query: &str,
-) -> bool {
-    explorer_text_matches_query(&entry.label, normalized_query)
-        || explorer_path_matches_query(&entry.path, normalized_query)
-        || explorer_text_matches_query(&entry.line.to_string(), normalized_query)
-}
-
-fn explorer_section_query_matches(
-    snapshot: Option<&WorkspaceSnapshot>,
-    index: &ProjectIndex,
-    normalized_query: &str,
-) -> [bool; ExplorerSection::ALL.len()] {
-    let mut matches = [
-        snapshot.is_some_and(|snapshot| {
-            snapshot
-                .nodes
-                .iter()
-                .any(|node| workspace_node_matches_query(node, normalized_query))
-        }),
-        false, // Git actions are not searchable, but keep the section slot stable.
-        index
-            .outline
-            .iter()
-            .any(|entry| outline_entry_matches_query(entry, normalized_query)),
-        index
-            .subfiles
-            .iter()
-            .any(|path| explorer_path_matches_query(path, normalized_query)),
-        index
-            .symbols
-            .iter()
-            .any(|entry| symbol_entry_matches_query(entry, normalized_query)),
-        index
-            .packages
-            .iter()
-            .any(|package| explorer_text_matches_query(package, normalized_query)),
-        index
-            .tags
-            .iter()
-            .any(|entry| reference_entry_matches_query(entry, normalized_query)),
-        index
-            .references
-            .iter()
-            .any(|entry| reference_entry_matches_query(entry, normalized_query)),
-    ];
-    if !matches.into_iter().any(|matched| matched) {
-        // Keep one result surface visible so an empty search has a clear
-        // outcome instead of presenting closed section headers.
-        matches[0] = true;
-    }
-    matches
-}
-
-fn workspace_entry_label(text: RichText, is_active: bool) -> egui::Label {
-    let text = if is_active {
-        // Emphasize weight, not size: Explorer inherits its local UI text
-        // size, which need not match the editor's content-font size.
-        text.family(theme::strong_ui_font().family).strong()
-    } else {
-        text
-    };
-    theme::nonselectable_label(text)
-}
-
-fn workspace_asset_hover_rect(row: Rect, visible_panel: Rect) -> Rect {
-    Rect::from_min_max(
-        row.left_top(),
-        Pos2::new(visible_panel.right().max(row.left()), row.bottom()),
-    )
-}
-
-fn workspace_entry_resolved_color(
-    category_color: Color32,
-    is_active: bool,
-    strong_text_color: Color32,
-) -> Color32 {
-    if is_active {
-        strong_text_color
-    } else {
-        category_color
-    }
-}
-
-fn workspace_entry_color(
-    path: &Path,
-    directory: bool,
-    symlink: bool,
-    context: &egui::Context,
-) -> Color32 {
-    if directory {
-        return theme::palette(context).accent;
-    }
-    if symlink {
-        return theme::syntax_palette(context).comment;
-    }
-    let syntax = theme::syntax_palette(context);
-    let extension = path.extension().and_then(|extension| extension.to_str());
-    if extension_matches(extension, &["typ"]) {
-        return syntax.keyword;
-    }
-    if extension_matches(
-        extension,
-        &[
-            "pdf", "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tif", "tiff",
-        ],
-    ) {
-        return theme::palette(context).info;
-    }
-    if extension_matches(
-        extension,
-        &[
-            "txt", "md", "markdown", "json", "jsonc", "toml", "yaml", "yml", "xml", "html", "htm",
-            "css", "scss", "js", "jsx", "ts", "tsx", "rs", "py", "rb", "go", "java", "c", "h",
-            "cc", "cpp", "hpp", "sh", "bash", "zsh", "fish", "sql", "csv", "tsv", "ini", "cfg",
-            "conf", "log", "tex", "bib",
-        ],
-    ) {
-        return syntax.plain;
-    }
-    syntax.comment
-}
-
-fn extension_matches(extension: Option<&str>, expected: &[&str]) -> bool {
-    extension.is_some_and(|extension| {
-        expected
-            .iter()
-            .any(|candidate| extension.eq_ignore_ascii_case(candidate))
-    })
-}
-
-const EXPLORER_SECTION_MIN_BODY_HEIGHT: f32 = 44.0;
-const EXPLORER_SECTION_RESIZE_HANDLE_HEIGHT: f32 = 5.0;
-
-#[derive(Clone, Debug, PartialEq)]
-struct ExplorerSectionLayout {
-    weights: [f32; ExplorerSection::ALL.len()],
-}
-
-impl Default for ExplorerSectionLayout {
-    fn default() -> Self {
-        Self {
-            weights: [1.0; ExplorerSection::ALL.len()],
-        }
-    }
-}
-
-impl ExplorerSectionLayout {
-    fn body_heights(
-        &self,
-        open: [bool; ExplorerSection::ALL.len()],
-        available: f32,
-    ) -> [f32; ExplorerSection::ALL.len()] {
-        let mut heights = [0.0; ExplorerSection::ALL.len()];
-        let open_count = open.iter().filter(|is_open| **is_open).count();
-        if open_count == 0 {
-            return heights;
-        }
-
-        let available = available.max(0.0);
-        let minimum = EXPLORER_SECTION_MIN_BODY_HEIGHT.min(available / open_count as f32);
-        let remainder = (available - minimum * open_count as f32).max(0.0);
-        let weight_sum = self
-            .weights
-            .iter()
-            .zip(open)
-            .filter_map(|(weight, is_open)| {
-                is_open.then_some(if weight.is_finite() && *weight > 0.0 {
-                    *weight
-                } else {
-                    1.0
-                })
-            })
-            .sum::<f32>()
-            .max(f32::EPSILON);
-
-        for (index, is_open) in open.into_iter().enumerate() {
-            if is_open {
-                let weight = self.weights[index];
-                let weight = if weight.is_finite() && weight > 0.0 {
-                    weight
-                } else {
-                    1.0
-                };
-                heights[index] = minimum + remainder * weight / weight_sum;
-            }
-        }
-        heights
-    }
-
-    fn resize_after(
-        &mut self,
-        open: [bool; ExplorerSection::ALL.len()],
-        available: f32,
-        order: ExplorerOrder,
-        upper: ExplorerSection,
-        requested_delta: f32,
-    ) -> bool {
-        if !requested_delta.is_finite() || requested_delta.abs() <= f32::EPSILON {
-            return false;
-        }
-        let Some(lower) = order.next_open(open, upper) else {
-            return false;
-        };
-        let upper_index = upper.index();
-        let lower_index = lower.index();
-        let mut heights = self.body_heights(open, available);
-        let open_count = open.iter().filter(|is_open| **is_open).count();
-        let minimum =
-            EXPLORER_SECTION_MIN_BODY_HEIGHT.min(available.max(0.0) / open_count.max(1) as f32);
-        let applied_delta = requested_delta.clamp(
-            minimum - heights[upper_index],
-            heights[lower_index] - minimum,
-        );
-        if applied_delta.abs() <= f32::EPSILON {
-            return false;
-        }
-        heights[upper_index] += applied_delta;
-        heights[lower_index] -= applied_delta;
-
-        // Store relative preferences. Recomputing from these weights lets the
-        // split scale with the panel while retaining the user's proportions.
-        for (index, is_open) in open.into_iter().enumerate() {
-            if is_open {
-                self.weights[index] = (heights[index] - minimum).max(f32::EPSILON);
-            }
-        }
-        true
-    }
-}
-
-fn explorer_section_open_states(
-    ui: &egui::Ui,
-    filtered: bool,
-    defaults: [bool; ExplorerSection::ALL.len()],
-) -> [bool; ExplorerSection::ALL.len()] {
-    std::array::from_fn(|index| {
-        let id_salt = ExplorerSection::ALL[index].id();
-        if filtered {
-            return defaults[index];
-        }
-        egui::collapsing_header::CollapsingState::load_with_default_open(
-            ui.ctx(),
-            explorer_section_state_id(ui, id_salt, false),
-            defaults[index],
-        )
-        .is_open()
-    })
-}
-
-fn git_command_opens_explorer(git_visible: bool) -> bool {
-    !git_visible
-}
-
-fn set_explorer_section_open(ui: &egui::Ui, id_salt: &'static str, open: bool) {
-    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
-        ui.ctx(),
-        explorer_section_state_id(ui, id_salt, false),
-        open,
-    );
-    if state.is_open() != open {
-        state.set_open(open);
-        state.store(ui.ctx());
-    }
-}
-
-fn explorer_section_layout_id(ui: &egui::Ui) -> egui::Id {
-    ui.make_persistent_id("explorer-section-layout")
-}
-
-fn explorer_section_state_id(ui: &egui::Ui, id_salt: &'static str, filtered: bool) -> egui::Id {
-    ui.make_persistent_id(("explorer-section", id_salt, filtered))
-}
-
-fn workspace_tree_state_id(ui: &egui::Ui, root: &Path, filtered: bool) -> egui::Id {
-    ui.make_persistent_id(("workspace-tree", root, filtered))
-}
-
-#[cfg(test)]
-fn explorer_section_body_height(ui: &egui::Ui) -> f32 {
-    let defaults = std::array::from_fn(|index| ExplorerSection::ALL[index].default_open());
-    let open_sections = explorer_section_open_states(ui, false, defaults)
-        .into_iter()
-        .filter(|is_open| *is_open)
-        .count();
-    let frame_height = theme::explorer_section_frame(ui.style())
-        .total_margin()
-        .sum()
-        .y;
-    available_explorer_section_body_height(ui.available_height(), open_sections, frame_height)
-}
-
-fn available_explorer_section_body_height(
-    available_height: f32,
-    open_sections: usize,
-    frame_height: f32,
-) -> f32 {
-    if open_sections == 0 {
-        return 0.0;
-    }
-    let section_count = ExplorerSection::ALL.len() as f32;
-    let reserved_headers = section_count * (METRICS.explorer.section_header_height + frame_height);
-    let reserved_gaps = (section_count - 1.0).max(0.0) * METRICS.explorer.section_gap;
-    ((available_height - reserved_headers - reserved_gaps) / open_sections as f32).max(0.0)
-}
-
-#[cfg(test)]
-fn explorer_section(
-    ui: &mut egui::Ui,
-    id_salt: &'static str,
-    title: &'static str,
-    default_open: bool,
-    body_height: f32,
-    add_body: impl FnOnce(&mut egui::Ui),
-) {
-    let _ = explorer_section_resizable(
-        ui,
-        ExplorerSectionRenderSpec {
-            id_salt,
-            title,
-            default_open,
-            body_height,
-            show_resize_handle: false,
-            filtered: false,
-        },
-        add_body,
-    );
-}
-
-struct ExplorerSectionsSpec {
-    order: ExplorerOrder,
-    defaults: [bool; 8],
-    heights: [f32; 8],
-    open: [bool; 8],
-    filtered: bool,
-    git_visible: bool,
-}
-
-fn show_explorer_sections(
-    ui: &mut egui::Ui,
-    spec: ExplorerSectionsSpec,
-    mut add_body: impl FnMut(&mut egui::Ui, ExplorerSection),
-) -> Option<(ExplorerSection, f32)> {
-    let mut resize = None;
-    for section in spec.order.sections() {
-        if section == ExplorerSection::Git && !spec.git_visible {
-            continue;
-        }
-        let index = section.index();
-        let delta = explorer_section_resizable(
-            ui,
-            ExplorerSectionRenderSpec {
-                id_salt: section.id(),
-                title: section.title(),
-                default_open: spec.defaults[index],
-                body_height: spec.heights[index],
-                show_resize_handle: spec.order.next_open(spec.open, section).is_some(),
-                filtered: spec.filtered,
-            },
-            |ui| add_body(ui, section),
-        );
-        if delta.abs() > f32::EPSILON {
-            resize = Some((section, delta));
-        }
-    }
-    resize
-}
-
-#[derive(Debug, Clone, Copy)]
-struct ExplorerSectionRenderSpec {
-    id_salt: &'static str,
-    title: &'static str,
-    default_open: bool,
-    body_height: f32,
-    show_resize_handle: bool,
-    filtered: bool,
-}
-
-fn explorer_section_resizable(
-    ui: &mut egui::Ui,
-    spec: ExplorerSectionRenderSpec,
-    add_body: impl FnOnce(&mut egui::Ui),
-) -> f32 {
-    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
-        ui.ctx(),
-        explorer_section_state_id(ui, spec.id_salt, spec.filtered),
-        spec.default_open,
-    );
-    if spec.filtered {
-        // Filtered results are transient and should always expose the sections
-        // that contain matches without mutating the user's normal open state.
-        state.set_open(spec.default_open);
-    }
-    let mut resize_delta = 0.0;
-    theme::explorer_section_frame(ui.style()).show(ui, |ui| {
-        ui.set_width(ui.available_width().max(0.0));
-        ui.spacing_mut().item_spacing.y = 0.0;
-        let mut title_clicked = false;
-        let mut header = state.show_header(ui, |ui| {
-            let response = ui.add_sized(
-                [
-                    ui.available_width().max(0.0),
-                    METRICS.explorer.section_header_height,
-                ],
-                egui::Button::new((RichText::new(spec.title).strong(), egui::Atom::grow()))
-                    .frame(false),
-            );
-            title_clicked = response.clicked();
-        });
-        if title_clicked {
-            header.toggle();
-        }
-        header.body_unindented(|ui| {
-            let handle_height = if spec.show_resize_handle {
-                EXPLORER_SECTION_RESIZE_HANDLE_HEIGHT.min(spec.body_height.max(0.0))
-            } else {
-                0.0
-            };
-            egui::ScrollArea::both()
-                .id_salt((spec.id_salt, "scroll", spec.filtered))
-                .max_width(ui.available_width().max(0.0))
-                .max_height((spec.body_height - handle_height).max(0.0))
-                .min_scrolled_width(0.0)
-                .min_scrolled_height(0.0)
-                .auto_shrink([false, false])
-                .show(ui, add_body);
-            if handle_height > 0.0 {
-                let (rect, response) = ui.allocate_exact_size(
-                    Vec2::new(ui.available_width().max(0.0), handle_height),
-                    Sense::drag(),
-                );
-                let response = response.on_hover_cursor(egui::CursorIcon::ResizeVertical);
-                let stroke = if response.hovered() || response.dragged() {
-                    Stroke::new(1.5, ui.visuals().widgets.hovered.fg_stroke.color)
-                } else {
-                    ui.visuals().widgets.noninteractive.bg_stroke
-                };
-                ui.painter().line_segment(
-                    [
-                        Pos2::new(rect.left(), rect.center().y),
-                        Pos2::new(rect.right(), rect.center().y),
-                    ],
-                    stroke,
-                );
-                resize_delta = response.drag_delta().y;
-            }
-        });
-    });
-    resize_delta
-}
-
-#[derive(Default)]
-struct ExplorerProjectSectionOutcome {
-    open_package_manager: bool,
-    target: Option<(PathBuf, usize)>,
-}
-
-fn show_project_index_section(
-    ui: &mut egui::Ui,
-    section: ExplorerSection,
-    root: &Path,
-    index: &ProjectIndex,
-    query: &str,
-) -> ExplorerProjectSectionOutcome {
-    let mut outcome = ExplorerProjectSectionOutcome::default();
-    let filtered = !query.is_empty();
-    match section {
-        ExplorerSection::Contents => {
-            let mut entries = index
-                .outline
-                .iter()
-                .filter(|entry| outline_entry_matches_query(entry, query))
-                .peekable();
-            if entries.peek().is_none() {
-                ui.label(
-                    RichText::new(if filtered {
-                        "No matches"
-                    } else {
-                        "No headings"
-                    })
-                    .size(theme::TYPE.supporting)
-                    .weak(),
-                );
-                return outcome;
-            }
-            for entry in entries {
-                let indent = entry
-                    .level
-                    .saturating_sub(1)
-                    .min(METRICS.explorer.outline_max_depth) as f32
-                    * METRICS.explorer.outline_indent;
-                let response =
-                    explorer_index_row(ui, &entry.title, Some(&entry.line.to_string()), indent);
-                if response.clicked() {
-                    outcome.target = Some((entry.path.clone(), entry.line));
-                }
-            }
-        }
-        ExplorerSection::Subfiles => {
-            let mut paths = index
-                .subfiles
-                .iter()
-                .filter(|path| explorer_path_matches_query(path, query))
-                .peekable();
-            if paths.peek().is_none() {
-                ui.label(
-                    RichText::new(if filtered {
-                        "No matches"
-                    } else {
-                        "No included files"
-                    })
-                    .size(theme::TYPE.supporting)
-                    .weak(),
-                );
-                return outcome;
-            }
-            for path in paths {
-                let label = project_relative_path(root, path);
-                let response = explorer_index_row(ui, &label, None, 0.0);
-                if native_hover_text(response, path.display().to_string()).clicked() {
-                    outcome.target = Some((path.clone(), 1));
-                }
-            }
-        }
-        ExplorerSection::Symbols => {
-            let mut symbols = index
-                .symbols
-                .iter()
-                .filter(|entry| symbol_entry_matches_query(entry, query))
-                .peekable();
-            if symbols.peek().is_none() {
-                ui.label(
-                    RichText::new(if filtered {
-                        "No matches"
-                    } else {
-                        "No definitions or functions"
-                    })
-                    .size(theme::TYPE.supporting)
-                    .weak(),
-                );
-                return outcome;
-            }
-            for symbol in symbols {
-                let kind = symbol.kind.label();
-                let location = format!(
-                    "{}:{} · {kind}",
-                    project_relative_path(root, &symbol.path),
-                    symbol.line
-                );
-                let response = explorer_index_row(ui, &symbol.name, Some(kind), 0.0);
-                if native_hover_text(response, location).clicked() {
-                    outcome.target = Some((symbol.path.clone(), symbol.line));
-                }
-            }
-        }
-        ExplorerSection::Packages => {
-            if ui.button("Browse packages…").clicked() {
-                outcome.open_package_manager = true;
-            }
-            ui.separator();
-            let mut packages = index
-                .packages
-                .iter()
-                .filter(|package| explorer_text_matches_query(package, query))
-                .peekable();
-            if packages.peek().is_none() {
-                ui.label(
-                    RichText::new(if filtered {
-                        "No matches"
-                    } else {
-                        "No packages"
-                    })
-                    .size(theme::TYPE.supporting)
-                    .weak(),
-                );
-            } else {
-                for package in packages {
-                    explorer_index_row(ui, package, None, 0.0);
-                }
-            }
-        }
-        ExplorerSection::Tags | ExplorerSection::References => {
-            let entries = if section == ExplorerSection::Tags {
-                &index.tags
-            } else {
-                &index.references
-            };
-            let mut references = entries
-                .iter()
-                .filter(|entry| reference_entry_matches_query(entry, query))
-                .peekable();
-            if references.peek().is_none() {
-                ui.label(
-                    RichText::new(if filtered {
-                        "No matches"
-                    } else if section == ExplorerSection::Tags {
-                        "No tags"
-                    } else {
-                        "No references"
-                    })
-                    .size(theme::TYPE.supporting)
-                    .weak(),
-                );
-                return outcome;
-            }
-            for reference in references {
-                let location = format!(
-                    "{}:{}",
-                    project_relative_path(root, &reference.path),
-                    reference.line
-                );
-                let response = explorer_index_row(
-                    ui,
-                    &reference.label,
-                    Some(&reference.line.to_string()),
-                    0.0,
-                );
-                if native_hover_text(response, location).clicked() {
-                    outcome.target = Some((reference.path.clone(), reference.line));
-                }
-            }
-        }
-        ExplorerSection::Files | ExplorerSection::Git => unreachable!("not a project index panel"),
-    }
-    outcome
-}
-
-fn project_relative_path(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .display()
-        .to_string()
-}
-
-fn explorer_index_row(
-    ui: &mut egui::Ui,
-    label: &str,
-    detail: Option<&str>,
-    indent: f32,
-) -> egui::Response {
-    let size = Vec2::new(ui.available_width().max(1.0), METRICS.explorer.row_height);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
-    });
-    let visuals = ui.style().interact(&response);
-    if response.hovered() || response.has_focus() {
-        ui.painter()
-            .rect_filled(rect, theme::RADIUS.row as f32, visuals.weak_bg_fill);
-    }
-
-    let painter = ui.painter().with_clip_rect(rect);
-    let font = theme::supporting_font();
-    let left = rect.left() + theme::SPACE.small + indent;
-    let show_detail = detail.is_some() && rect.width() >= METRICS.explorer.detail_breakpoint;
-    let detail_width = if show_detail {
-        METRICS.explorer.detail_width
-    } else {
-        0.0
-    };
-    let label_clip = Rect::from_min_max(
-        Pos2::new(left, rect.top()),
-        Pos2::new(
-            (rect.right() - detail_width - theme::SPACE.small).max(left),
-            rect.bottom(),
-        ),
-    );
-    painter.with_clip_rect(label_clip).text(
-        Pos2::new(left, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        font.clone(),
-        visuals.fg_stroke.color,
-    );
-    if show_detail {
-        painter.text(
-            Pos2::new(rect.right() - theme::SPACE.small, rect.center().y),
-            egui::Align2::RIGHT_CENTER,
-            detail.unwrap_or_default(),
-            font,
-            ui.visuals().weak_text_color(),
-        );
-    }
-    response
-}
-
-fn paint_tree_icon(ui: &mut egui::Ui, folder: bool) {
-    let rect = ui.available_rect_before_wrap().shrink(theme::SPACE.tight);
-    let size = METRICS.explorer.tree_icon_size.min(rect.size());
-    let rect = Rect::from_center_size(rect.center(), size);
-    let color = ui.visuals().widgets.noninteractive.fg_stroke.color;
-    let stroke = Stroke::new(METRICS.explorer.tree_icon_stroke, color);
-    if folder {
-        let body = Rect::from_min_max(
-            Pos2::new(rect.left(), rect.top() + 3.0),
-            Pos2::new(rect.right(), rect.bottom()),
-        );
-        ui.painter()
-            .rect_stroke(body, 1.5, stroke, StrokeKind::Inside);
-        ui.painter().line_segment(
-            [
-                Pos2::new(rect.left() + 1.5, rect.top() + 3.0),
-                Pos2::new(rect.left() + 4.5, rect.top()),
-            ],
-            stroke,
-        );
-        ui.painter().line_segment(
-            [
-                Pos2::new(rect.left() + 4.5, rect.top()),
-                Pos2::new(rect.left() + 8.0, rect.top() + 3.0),
-            ],
-            stroke,
-        );
-    } else {
-        ui.painter()
-            .rect_stroke(rect, 1.2, stroke, StrokeKind::Inside);
-        ui.painter().line_segment(
-            [
-                Pos2::new(rect.left() + 3.0, rect.top() + 4.0),
-                Pos2::new(rect.right() - 3.0, rect.top() + 4.0),
-            ],
-            stroke,
-        );
-        ui.painter().line_segment(
-            [
-                Pos2::new(rect.left() + 3.0, rect.top() + 7.0),
-                Pos2::new(rect.right() - 3.0, rect.top() + 7.0),
-            ],
-            stroke,
-        );
-    }
 }
 
 fn icon_button(ui: &mut egui::Ui, icon: UiIcon, tooltip: &str) -> egui::Response {
@@ -12857,13 +11992,6 @@ fn show_workspace_popup_ui(
     }
 }
 
-fn clamp_popup_anchor(anchor: Pos2, popup_size: Vec2, viewport_size: Vec2) -> Pos2 {
-    let margin = METRICS.popup.viewport_edge;
-    let max_x = (viewport_size.x - popup_size.x - margin).max(margin);
-    let max_y = (viewport_size.y - popup_size.y - margin).max(margin);
-    Pos2::new(anchor.x.clamp(margin, max_x), anchor.y.clamp(margin, max_y))
-}
-
 fn workspace_snapshot_font_files(snapshot: &WorkspaceSnapshot) -> Vec<PathBuf> {
     fn collect(nodes: &[WorkspaceNode], files: &mut Vec<PathBuf>) {
         for node in nodes {
@@ -12881,81 +12009,6 @@ fn workspace_snapshot_font_files(snapshot: &WorkspaceSnapshot) -> Vec<PathBuf> {
     collect(&snapshot.nodes, &mut files);
     files.sort();
     files
-}
-
-fn app_popup_scroll_id(generation: u64) -> egui::Id {
-    egui::Id::new(("app-popup-scroll", generation))
-}
-
-fn show_popup_contents<R>(
-    ui: &mut egui::Ui,
-    size: Vec2,
-    generation: u64,
-    body: impl FnOnce(&mut egui::Ui) -> R,
-) -> egui::scroll_area::ScrollAreaOutput<R> {
-    // Areas remember their last size. Explicitly update both dimensions so
-    // opening a taller menu cannot inherit the previous menu's scroll bounds.
-    ui.set_width(size.x);
-    ui.set_height(size.y);
-    egui::ScrollArea::vertical()
-        .id_salt(app_popup_scroll_id(generation))
-        .max_height(size.y)
-        .show(ui, body)
-}
-
-fn clamp_popup_above_anchor(anchor: Pos2, popup_size: Vec2, viewport_size: Vec2) -> Pos2 {
-    clamp_popup_anchor(
-        Pos2::new(anchor.x, anchor.y - popup_size.y),
-        popup_size,
-        viewport_size,
-    )
-}
-
-fn status_log_popup_size(entry_count: usize) -> Vec2 {
-    let content_height = 44.0 + entry_count.min(9) as f32 * STATUS_LOG_ROW_HEIGHT;
-    Vec2::new(
-        METRICS.menu.status_log_size.x,
-        content_height.clamp(92.0, METRICS.menu.status_log_size.y),
-    )
-}
-
-fn editor_context_menu_size(
-    has_link: bool,
-    can_edit_table: bool,
-    can_format: bool,
-    style: &egui::Style,
-) -> Vec2 {
-    let extra = usize::from(has_link) + usize::from(can_edit_table) + usize::from(can_format);
-    menu_popup_size(METRICS.menu.editor_width, 8 + extra, 1 + extra, style)
-}
-
-fn command_popup_size(menu: CommandMenu, style: &egui::Style) -> Vec2 {
-    let specs = command_specs(menu).collect::<Vec<_>>();
-    let separators = specs
-        .windows(2)
-        .filter(|pair| pair[0].section != pair[1].section)
-        .count();
-    menu_popup_size(330.0, specs.len(), separators, style)
-}
-
-fn menu_popup_size(width: f32, rows: usize, separators: usize, style: &egui::Style) -> Vec2 {
-    let spacing = theme::SPACE.small;
-    let rows = rows as f32 * (METRICS.menu.row_height + spacing);
-    let separators = separators as f32 * (theme::SPACE.control + spacing);
-    Vec2::new(
-        width,
-        rows + separators + theme::menu_card_frame(style).total_margin().sum().y + 2.0,
-    )
-}
-
-fn workspace_context_menu_size(is_file: bool, style: &egui::Style) -> Vec2 {
-    // A file has three copy actions where a directory has one.
-    menu_popup_size(
-        METRICS.menu.workspace_width,
-        if is_file { 9 } else { 7 },
-        1,
-        style,
-    )
 }
 
 const fn workspace_copy_kind_label(kind: WorkspaceCopyKind) -> &'static str {
@@ -13454,200 +12507,6 @@ fn show_status_log_popup_ui(ui: &mut egui::Ui, entries: &VecDeque<StatusLogEntry
     }
 }
 
-#[derive(Default)]
-struct PackageBrowserAction {
-    copied: Option<String>,
-    open_link: Option<String>,
-    uninstall: Option<crate::package_catalog::PackageInstallation>,
-}
-
-fn show_package_browser_ui(
-    ui: &mut egui::Ui,
-    query: &mut String,
-    filter: &mut PackageFilter,
-    load: Option<&PackageCatalogLoad>,
-    loading: bool,
-    action: &mut PackageBrowserAction,
-) {
-    ui.horizontal(|ui| {
-        ui.add(
-            egui::TextEdit::singleline(query)
-                .hint_text("Search package names, descriptions, authors, or versions")
-                .desired_width(f32::INFINITY),
-        );
-    });
-    ui.horizontal_wrapped(|ui| {
-        theme::apply_compact_control_spacing(ui);
-        for choice in PackageFilter::ALL {
-            ui.selectable_value(filter, choice, choice.label());
-        }
-        if loading {
-            ui.spinner();
-            ui.label("Refreshing local and published packages…");
-        }
-    });
-    ui.separator();
-
-    let Some(load) = load else {
-        ui.vertical_centered(|ui| {
-            ui.add_space(theme::SPACE.content);
-            if loading {
-                ui.spinner();
-                ui.label("Inspecting Typst package directories and registry…");
-            } else {
-                ui.label(RichText::new("No package catalog has been loaded").weak());
-            }
-        });
-        return;
-    };
-
-    if let Some(error) = &load.official_index_error {
-        ui.colored_label(
-            warning_color(ui.ctx()),
-            format!("Published registry unavailable: {error}. Local packages are still shown."),
-        );
-    }
-    if !load.warnings.is_empty() {
-        egui::CollapsingHeader::new(format!(
-            "{} local package scan warning{}",
-            load.warnings.len(),
-            if load.warnings.len() == 1 { "" } else { "s" }
-        ))
-        .show(ui, |ui| {
-            for warning in &load.warnings {
-                ui.label(format!("{}: {}", warning.path.display(), warning.message));
-            }
-        });
-    }
-
-    let packages = load
-        .catalog
-        .filtered(query)
-        .into_iter()
-        .filter(|package| filter.allows(package))
-        .collect::<Vec<_>>();
-    ui.label(
-        RichText::new(format!(
-            "{} package{}",
-            packages.len(),
-            if packages.len() == 1 { "" } else { "s" }
-        ))
-        .size(theme::TYPE.supporting)
-        .weak(),
-    );
-    egui::ScrollArea::vertical()
-        .id_salt("package-catalog-scroll")
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            for package in packages {
-                let version = package
-                    .latest_available
-                    .or_else(|| package.latest_installed());
-                let release = package.display_release();
-                egui::Frame::group(ui.style()).show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.horizontal_wrapped(|ui| {
-                        let identity = version.map_or_else(
-                            || format!("@{}/{}", package.namespace, package.name),
-                            |version| format!("@{}/{}:{version}", package.namespace, package.name),
-                        );
-                        ui.label(RichText::new(&identity).monospace().strong());
-                        if package.is_installed() {
-                            ui.label(RichText::new("Installed").color(success_color(ui.ctx())));
-                        }
-                        if package.latest_available.is_some() {
-                            ui.label(RichText::new("Published").weak());
-                        }
-                        if package.has_update() {
-                            ui.label(
-                                RichText::new("Update available").color(warning_color(ui.ctx())),
-                            );
-                        }
-                        if let Some(website) = release.and_then(|release| {
-                            release
-                                .metadata
-                                .homepage
-                                .as_deref()
-                                .or(release.metadata.repository.as_deref())
-                        }) && ui.button("Website").clicked()
-                        {
-                            action.open_link = Some(website.to_owned());
-                        }
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui
-                                .add_enabled(version.is_some(), egui::Button::new("Copy import"))
-                                .clicked()
-                                && let Some(version) = version
-                            {
-                                action.copied = Some(format!(
-                                    "#import \"@{}/{}:{version}\": *",
-                                    package.namespace, package.name
-                                ));
-                            }
-                        });
-                    });
-                    if let Some(description) =
-                        release.and_then(|release| release.metadata.description.as_deref())
-                    {
-                        ui.label(description);
-                    }
-                    if let Some(installed) = package.latest_installed() {
-                        ui.label(
-                            RichText::new(format!("Latest local version: {installed}"))
-                                .size(theme::TYPE.supporting)
-                                .weak(),
-                        );
-                    }
-                    for local_release in package.installed_releases() {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(
-                                RichText::new(format!("Installed {}", local_release.version))
-                                    .monospace()
-                                    .strong(),
-                            );
-                            if local_release.available {
-                                ui.label(RichText::new("Published release").weak());
-                            }
-                        });
-                        for installation in &local_release.installations {
-                            if ui
-                                .add_enabled(
-                                    !loading,
-                                    egui::Button::new(format!(
-                                        "Uninstall {}…",
-                                        local_release.version
-                                    )),
-                                )
-                                .clicked()
-                            {
-                                action.uninstall = Some(installation.clone());
-                            }
-                            let root_kind = match installation.root.kind {
-                                PackageRootKind::Data => "data",
-                                PackageRootKind::Cache => "cache",
-                            };
-                            let root_kind = if installation.root.custom {
-                                format!("custom {root_kind}")
-                            } else {
-                                root_kind.to_owned()
-                            };
-                            ui.label(
-                                RichText::new(format!(
-                                    "{root_kind}: {}",
-                                    installation.package_path.display()
-                                ))
-                                .size(theme::TYPE.supporting)
-                                .monospace()
-                                .weak(),
-                            );
-                        }
-                    }
-                });
-                ui.add_space(theme::SPACE.tight);
-            }
-        });
-}
-
 fn settings_heading(ui: &mut egui::Ui, section: SettingsSection) {
     ui.heading(section.title());
 }
@@ -13887,7 +12746,8 @@ fn resolve_initial_workspace(
     };
 
     let document = explicit_file.map(canonical_or_absolute).or_else(|| {
-        (initial_path.is_none() || explicit_directory.is_some())
+        initial_path
+            .is_none()
             .then(|| remembered_document(settings, &root))
             .flatten()
     });
