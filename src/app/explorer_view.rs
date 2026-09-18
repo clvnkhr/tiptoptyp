@@ -36,7 +36,8 @@ pub(super) struct ContextMenu {
 }
 
 /// Bounded output: painting cannot start scans, navigation or Git operations.
-pub(super) struct Output<G> {
+#[derive(Default)]
+pub(super) struct Output {
     pub change_root: bool,
     pub refresh: bool,
     pub repaint: bool,
@@ -44,24 +45,22 @@ pub(super) struct Output<G> {
     pub open: Option<PathBuf>,
     pub index_target: Option<(PathBuf, usize)>,
     pub context_menu: Option<ContextMenu>,
-    pub git: Option<G>,
+    pub git: Option<crate::git::view::Output>,
 }
 
-pub(super) fn show<G>(
+pub(super) fn show(
     ui: &mut egui::Ui,
     input: Input<'_>,
     state: &mut ExplorerPanelState,
-    mut show_git: impl FnMut(&mut egui::Ui) -> G,
-) -> Output<G> {
+    mut show_git: impl FnMut(&mut egui::Ui) -> crate::git::view::Output,
+) -> Output {
     offer_file_drop_target(
         ui,
         ui.max_rect(),
         FileDropTarget::Folder(input.root.to_owned()),
     );
     let label = input.label;
-    let mut change_root = false;
-    let mut refresh = false;
-    let mut repaint = false;
+    let mut output = Output::default();
     theme::panel_header(ui, "workspace-header", |ui| {
         let action_width = METRICS.explorer.header_refresh_width;
         let actions_width = action_width + ui.spacing().item_spacing.x;
@@ -89,10 +88,10 @@ pub(super) fn show<G>(
             hover.push_str(warning);
         }
         if native_hover_text(response, hover).double_clicked() {
-            change_root = true;
+            output.change_root = true;
         }
         if icon_button(ui, UiIcon::Refresh, "Refresh filesystem").clicked() {
-            refresh = true;
+            output.refresh = true;
         }
     });
     theme::panel_header(ui, "workspace-search-header", |ui| {
@@ -130,27 +129,21 @@ pub(super) fn show<G>(
     let project_root = snapshot.map_or(input.root, |snapshot| snapshot.root.as_path());
     let preview_path = input.preview;
     let project_index = input.index;
-    let active = snapshot.as_ref().and_then(|snapshot| {
-        input.active.and_then(|path| {
+    let find_node = |path: &Path| {
+        snapshot.and_then(|snapshot| {
             path.strip_prefix(&snapshot.root)
                 .ok()
                 .and_then(|relative| snapshot.find(relative))
-                .map(|node| node.path.as_path())
         })
-    });
-    let preview = snapshot
-        .as_ref()
-        .and_then(|snapshot| {
-            preview_path.and_then(|path| {
-                path.strip_prefix(&snapshot.root)
-                    .ok()
-                    .and_then(|relative| snapshot.find(relative))
-                    .map(|node| node.path.as_path())
-            })
-        })
+    };
+    let active = input
+        .active
+        .and_then(find_node)
+        .map(|node| node.path.as_path());
+    let preview = preview_path
+        .and_then(find_node)
+        .map(|node| node.path.as_path())
         .or(preview_path);
-    let mut open_path = None;
-    let mut popup_request = None;
     let context = ui.ctx().clone();
     let explorer_query = normalize_explorer_query(state.query());
     let filter_active = !explorer_query.is_empty();
@@ -197,9 +190,6 @@ pub(super) fn show<G>(
     });
     let section_body_heights = section_layout.body_heights(open_sections, section_body_budget);
     let order = input.order;
-    let mut open_package_manager = false;
-    let mut index_target = None;
-    let mut git_output = None;
     let section_resize = show_explorer_sections(
         ui,
         ExplorerSectionsSpec {
@@ -239,16 +229,12 @@ pub(super) fn show<G>(
                                 ui.close();
                                 return;
                             };
-                            let is_file = path
-                                .strip_prefix(&snapshot.root)
-                                .ok()
-                                .and_then(|relative| snapshot.find(relative))
-                                .is_some_and(WorkspaceNode::is_file);
+                            let is_file = find_node(&path).is_some_and(WorkspaceNode::is_file);
                             let anchor = ui
                                 .ctx()
                                 .pointer_latest_pos()
                                 .unwrap_or_else(|| ui.min_rect().left_top());
-                            popup_request = Some(ContextMenu {
+                            output.context_menu = Some(ContextMenu {
                                 anchor,
                                 path,
                                 is_file,
@@ -274,12 +260,10 @@ pub(super) fn show<G>(
                     tree_state.store(ui, tree_id);
                     for action in actions {
                         if let TreeAction::Activate(activate) = action {
-                            open_path = activate.selected.into_iter().find(|path| {
-                                path.strip_prefix(&snapshot.root)
-                                    .ok()
-                                    .and_then(|relative| snapshot.find(relative))
-                                    .is_some_and(WorkspaceNode::is_file)
-                            });
+                            output.open = activate
+                                .selected
+                                .into_iter()
+                                .find(|path| find_node(path).is_some_and(WorkspaceNode::is_file));
                         }
                     }
                     if filter_active
@@ -298,7 +282,7 @@ pub(super) fn show<G>(
                 }
             }
             ExplorerSection::Git => {
-                git_output = Some(show_git(ui));
+                output.git = Some(show_git(ui));
             }
             _ => {
                 let outcome = show_project_index_section(
@@ -308,9 +292,9 @@ pub(super) fn show<G>(
                     project_index,
                     &explorer_query,
                 );
-                open_package_manager |= outcome.open_package_manager;
+                output.packages |= outcome.open_package_manager;
                 if outcome.target.is_some() {
-                    index_target = outcome.target;
+                    output.index_target = outcome.target;
                 }
             }
         },
@@ -321,19 +305,10 @@ pub(super) fn show<G>(
     {
         ui.ctx()
             .data_mut(|data| data.insert_temp(section_layout_id, section_layout));
-        repaint = true;
+        output.repaint = true;
     }
 
-    Output {
-        change_root,
-        refresh,
-        repaint,
-        packages: open_package_manager,
-        open: open_path,
-        index_target,
-        context_menu: popup_request,
-        git: git_output,
-    }
+    output
 }
 
 pub(super) fn add_workspace_nodes(
@@ -987,26 +962,15 @@ pub(super) fn show_project_index_section(
 ) -> ExplorerProjectSectionOutcome {
     let mut outcome = ExplorerProjectSectionOutcome::default();
     let filtered = !query.is_empty();
+    let mut shown = false;
     match section {
         ExplorerSection::Contents => {
-            let mut entries = index
+            let entries = index
                 .outline
                 .iter()
-                .filter(|entry| outline_entry_matches_query(entry, query))
-                .peekable();
-            if entries.peek().is_none() {
-                ui.label(
-                    RichText::new(if filtered {
-                        "No matches"
-                    } else {
-                        "No headings"
-                    })
-                    .size(theme::TYPE.supporting)
-                    .weak(),
-                );
-                return outcome;
-            }
+                .filter(|entry| outline_entry_matches_query(entry, query));
             for entry in entries {
+                shown = true;
                 let indent = entry
                     .level
                     .saturating_sub(1)
@@ -1020,24 +984,12 @@ pub(super) fn show_project_index_section(
             }
         }
         ExplorerSection::Subfiles => {
-            let mut paths = index
+            let paths = index
                 .subfiles
                 .iter()
-                .filter(|path| explorer_path_matches_query(path, query))
-                .peekable();
-            if paths.peek().is_none() {
-                ui.label(
-                    RichText::new(if filtered {
-                        "No matches"
-                    } else {
-                        "No included files"
-                    })
-                    .size(theme::TYPE.supporting)
-                    .weak(),
-                );
-                return outcome;
-            }
+                .filter(|path| explorer_path_matches_query(path, query));
             for path in paths {
+                shown = true;
                 let label = project_relative_path(root, path);
                 let response = explorer_index_row(ui, &label, None, 0.0);
                 if native_hover_text(response, path.display().to_string()).clicked() {
@@ -1046,24 +998,12 @@ pub(super) fn show_project_index_section(
             }
         }
         ExplorerSection::Symbols => {
-            let mut symbols = index
+            let symbols = index
                 .symbols
                 .iter()
-                .filter(|entry| symbol_entry_matches_query(entry, query))
-                .peekable();
-            if symbols.peek().is_none() {
-                ui.label(
-                    RichText::new(if filtered {
-                        "No matches"
-                    } else {
-                        "No definitions or functions"
-                    })
-                    .size(theme::TYPE.supporting)
-                    .weak(),
-                );
-                return outcome;
-            }
+                .filter(|entry| symbol_entry_matches_query(entry, query));
             for symbol in symbols {
+                shown = true;
                 let kind = symbol.kind.label();
                 let location = format!(
                     "{}:{} · {kind}",
@@ -1081,25 +1021,13 @@ pub(super) fn show_project_index_section(
                 outcome.open_package_manager = true;
             }
             ui.separator();
-            let mut packages = index
+            for package in index
                 .packages
                 .iter()
                 .filter(|package| explorer_text_matches_query(package, query))
-                .peekable();
-            if packages.peek().is_none() {
-                ui.label(
-                    RichText::new(if filtered {
-                        "No matches"
-                    } else {
-                        "No packages"
-                    })
-                    .size(theme::TYPE.supporting)
-                    .weak(),
-                );
-            } else {
-                for package in packages {
-                    explorer_index_row(ui, package, None, 0.0);
-                }
+            {
+                shown = true;
+                explorer_index_row(ui, package, None, 0.0);
             }
         }
         ExplorerSection::Tags | ExplorerSection::References => {
@@ -1108,25 +1036,11 @@ pub(super) fn show_project_index_section(
             } else {
                 &index.references
             };
-            let mut references = entries
+            let references = entries
                 .iter()
-                .filter(|entry| reference_entry_matches_query(entry, query))
-                .peekable();
-            if references.peek().is_none() {
-                ui.label(
-                    RichText::new(if filtered {
-                        "No matches"
-                    } else if section == ExplorerSection::Tags {
-                        "No tags"
-                    } else {
-                        "No references"
-                    })
-                    .size(theme::TYPE.supporting)
-                    .weak(),
-                );
-                return outcome;
-            }
+                .filter(|entry| reference_entry_matches_query(entry, query));
             for reference in references {
+                shown = true;
                 let location = format!(
                     "{}:{}",
                     project_relative_path(root, &reference.path),
@@ -1144,6 +1058,24 @@ pub(super) fn show_project_index_section(
             }
         }
         ExplorerSection::Files | ExplorerSection::Git => unreachable!("not a project index panel"),
+    }
+    if !shown {
+        let empty = if filtered {
+            "No matches"
+        } else {
+            match section {
+                ExplorerSection::Contents => "No headings",
+                ExplorerSection::Subfiles => "No included files",
+                ExplorerSection::Symbols => "No definitions or functions",
+                ExplorerSection::Packages => "No packages",
+                ExplorerSection::Tags => "No tags",
+                ExplorerSection::References => "No references",
+                ExplorerSection::Files | ExplorerSection::Git => {
+                    unreachable!("not a project index panel")
+                }
+            }
+        };
+        ui.label(RichText::new(empty).size(theme::TYPE.supporting).weak());
     }
     outcome
 }

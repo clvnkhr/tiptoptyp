@@ -270,7 +270,7 @@ pub(crate) struct PreviewController {
     pub(crate) requested_zoom: Option<f32>,
     pub(crate) requested_page: Option<usize>,
     pub(crate) dark: bool,
-    pub(crate) was_visible: bool,
+    was_visible: bool,
     pending_catalog: Option<(ArtifactKey, PdfDocumentCatalog)>,
     page_demand: Option<RangeInclusive<usize>>,
     last_page_request: Option<RasterPageRequestKey>,
@@ -278,6 +278,81 @@ pub(crate) struct PreviewController {
 }
 
 impl PreviewController {
+    /// Readiness is admitted by both the attempt and connection owners before
+    /// it may reset recovery or change user-visible status.
+    pub(crate) fn initialized(&mut self, generation: crate::tinymist::Generation) -> bool {
+        if !self.recovery.accepts(generation) || !self.connection.initialized(generation) {
+            return false;
+        }
+        self.tinymist_state = if self.tinymist_preview_enabled {
+            ServiceState::Starting("Starting Tinymist preview server".to_owned())
+        } else {
+            self.recovery.recovered(generation);
+            ServiceState::Ready("Tinymist LSP is ready".to_owned())
+        };
+        true
+    }
+
+    pub(crate) fn preview_ready(
+        &mut self,
+        generation: crate::tinymist::Generation,
+        url: &str,
+        reusing_webview: bool,
+    ) -> Result<bool, &'static str> {
+        if !self.tinymist_preview_enabled
+            || !self.recovery.accepts(generation)
+            || !self.connection.is_ready_for(generation)
+        {
+            return Ok(false);
+        }
+        let endpoint = url::Url::parse(url).map_err(|_| "Invalid preview endpoint")?;
+        if !self.connection.connect(generation, endpoint) {
+            return Ok(false);
+        }
+        self.recovery.recovered(generation);
+        self.tinymist_state = ServiceState::Ready("LSP and preview server are ready".to_owned());
+        if matches!(self.status, PreviewStatus::Waiting) {
+            self.status = PreviewStatus::Ready(Duration::ZERO);
+        }
+        self.webview_state = ServiceState::Starting(if reusing_webview {
+            "Loading the pinned entry in the existing preview".to_owned()
+        } else {
+            "Embedding the vector preview".to_owned()
+        });
+        Ok(true)
+    }
+
+    pub(crate) fn visibility_changed(
+        &mut self,
+        visible: bool,
+        requested: bool,
+    ) -> PreviewTransition {
+        let became_visible = !std::mem::replace(&mut self.was_visible, visible) && visible;
+        let mut transition = if self.tinymist_preview_enabled != requested {
+            self.transition(PreviewTransitionEvent::Restart {
+                preserve_surface: false,
+            })
+        } else {
+            PreviewTransition {
+                handled: true,
+                effects: Vec::new(),
+            }
+        };
+        if became_visible {
+            transition.effects.push(PreviewEffect::ScheduleRaster);
+        }
+        transition
+    }
+
+    pub(crate) fn suspend_document(&mut self, reason: &str) {
+        self.tinymist_preview_enabled = false;
+        self.was_visible = false;
+        self.recovery.reset();
+        self.connection.suspend(false);
+        self.tinymist_state = ServiceState::Disabled(reason.to_owned());
+        self.webview_state = ServiceState::Disabled(reason.to_owned());
+    }
+
     pub(crate) fn transition(&mut self, event: PreviewTransitionEvent<'_>) -> PreviewTransition {
         use tiptoptyp_core::recovery::Failure;
         let effects = match event {
@@ -953,6 +1028,154 @@ pub fn dark_preview_rgba(rgba: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejected_ready_notifications_never_reset_the_five_attempt_budget() {
+        use crate::tinymist::{Generation, TinymistEvent};
+        let mut preview = PreviewController::new(false, PreviewPreference::Interactive);
+        preview.tinymist_preview_enabled = true;
+        let mut now = Instant::now();
+        for attempt in 1..=5 {
+            let generation = Generation(attempt);
+            preview.recovery.started(generation);
+            preview.connection.start(generation);
+            assert_eq!(
+                preview.preview_ready(generation, "http://127.0.0.1:1234", false),
+                Ok(false),
+                "not initialized"
+            );
+            assert!(preview.initialized(generation));
+            assert!(!preview.initialized(generation), "duplicate initialization");
+            assert_eq!(
+                preview.preview_ready(Generation(0), "not a URL", false),
+                Ok(false),
+                "stale event"
+            );
+            let message = preview
+                .preview_ready(generation, "not a URL", false)
+                .unwrap_err();
+            assert!(preview.connection.endpoint().is_none());
+            let failure = TinymistEvent::Error {
+                generation,
+                stage: "preview",
+                message: message.into(),
+                fatal: false,
+            };
+            let transition = preview.transition(PreviewTransitionEvent::Failure(&failure, now));
+            assert_eq!(
+                transition.effects.contains(&PreviewEffect::ScheduleRaster),
+                attempt == 5
+            );
+            assert!(
+                preview
+                    .transition(PreviewTransitionEvent::Failure(&failure, now))
+                    .effects
+                    .is_empty()
+            );
+            if attempt < 5 {
+                now += tiptoptyp_core::recovery::RETRY_DELAY;
+                assert_eq!(
+                    preview
+                        .transition(PreviewTransitionEvent::RecoveryTick(now))
+                        .effects,
+                    vec![PreviewEffect::RestartService {
+                        preserve_surface: true
+                    }]
+                );
+            }
+        }
+        assert!(
+            preview
+                .tinymist_state
+                .detail()
+                .contains("Five consecutive failures")
+        );
+    }
+
+    #[test]
+    fn readiness_is_generation_owned_and_lsp_only_never_embeds_a_preview() {
+        use crate::tinymist::Generation;
+        let mut preview = PreviewController::new(false, PreviewPreference::Interactive);
+        preview.tinymist_preview_enabled = true;
+        preview.recovery.started(Generation(1));
+        preview.connection.start(Generation(1));
+        assert!(preview.initialized(Generation(1)));
+        assert_eq!(
+            preview.preview_ready(Generation(1), "http://127.0.0.1:1234", false),
+            Ok(true)
+        );
+        let endpoint = preview.connection.endpoint().cloned();
+        preview.connection.suspend(true);
+        preview.recovery.started(Generation(2));
+        preview.connection.start(Generation(2));
+        assert_eq!(preview.connection.endpoint(), endpoint.as_ref());
+        assert_eq!(
+            preview.preview_ready(Generation(1), "http://127.0.0.1:4321", true),
+            Ok(false)
+        );
+        assert!(!preview.initialized(Generation(1)));
+        assert!(preview.initialized(Generation(2)));
+        // Equal URL does not mean equal server: this still admits a handoff.
+        assert_eq!(
+            preview.preview_ready(Generation(2), "http://127.0.0.1:1234", true),
+            Ok(true)
+        );
+        assert!(preview.webview_state.detail().contains("existing preview"));
+        preview.suspend_document("No tab is open");
+        assert!(preview.connection.endpoint().is_none());
+        assert_eq!(
+            preview.preview_ready(Generation(2), "http://127.0.0.1:1234", true),
+            Ok(false)
+        );
+        preview.tinymist_preview_enabled = false;
+        preview.recovery.started(Generation(3));
+        preview.connection.start(Generation(3));
+        assert!(preview.initialized(Generation(3)));
+        assert_eq!(
+            preview.preview_ready(Generation(3), "http://127.0.0.1:1234", false),
+            Ok(false)
+        );
+        assert_eq!(preview.tinymist_state.detail(), "Tinymist LSP is ready");
+        assert!(preview.connection.endpoint().is_none());
+    }
+
+    #[test]
+    fn unchanged_visibility_has_no_effects_or_repaint_requests() {
+        let mut preview = PreviewController::new(false, PreviewPreference::Interactive);
+        assert!(preview.visibility_changed(false, false).effects.is_empty());
+        assert_eq!(
+            preview.visibility_changed(true, true).effects,
+            vec![
+                PreviewEffect::RestartService {
+                    preserve_surface: false
+                },
+                PreviewEffect::ScheduleRaster,
+            ]
+        );
+        // The restart adapter installs the requested service configuration.
+        preview.tinymist_preview_enabled = true;
+        for _ in 0..100 {
+            assert!(preview.visibility_changed(true, true).effects.is_empty());
+        }
+        assert_eq!(
+            preview.visibility_changed(false, false).effects,
+            vec![PreviewEffect::RestartService {
+                preserve_surface: false
+            }]
+        );
+        preview.tinymist_preview_enabled = false;
+        for _ in 0..100 {
+            assert!(preview.visibility_changed(false, false).effects.is_empty());
+        }
+        preview.tinymist_preview_enabled = true;
+        preview.suspend_document("No document window is open");
+        for _ in 0..100 {
+            assert!(
+                preview.visibility_changed(false, false).effects.is_empty(),
+                "a suspended document must not repeatedly request restarts"
+            );
+        }
+    }
 
     #[test]
     fn interactive_compile_timing_uses_one_matching_cycle_and_ignores_duplicate_reports() {

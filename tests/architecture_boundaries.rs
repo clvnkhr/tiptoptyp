@@ -5,6 +5,26 @@ use std::{
 };
 
 #[test]
+fn native_preview_teardown_and_readiness_have_single_owners() {
+    for source in [
+        include_str!("../src/app.rs"),
+        include_str!("../src/app/workspace_view.rs"),
+    ] {
+        assert!(!source.contains("self.webview = None"));
+        assert!(!source.contains("self.preview.connection.initialized("));
+        assert!(!source.contains("self.preview.connection.connect("));
+        assert!(!source.contains("self.preview.recovery.recovered("));
+        assert!(!source.contains("self.preview.was_visible"));
+    }
+    assert_eq!(
+        include_str!("../src/app/native_views.rs")
+            .matches("self.webview = None")
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn extracted_leaf_views_have_explicit_dependencies_and_no_app_or_worker_access() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/app");
     for name in ["explorer_view.rs", "package_browser.rs", "popup_layout.rs"] {
@@ -518,7 +538,13 @@ fn viewport_creation_and_font_installation_stay_in_rendering_adapters() {
 #[test]
 fn focused_ui_modules_cannot_take_the_whole_application_or_run_its_services() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/app");
-    for name in ["settings_panel.rs", "tooltips.rs", "completion_popup.rs"] {
+    for name in [
+        "settings_panel.rs",
+        "settings_controls.rs",
+        "icons.rs",
+        "tooltips.rs",
+        "completion_popup.rs",
+    ] {
         let source = fs::read_to_string(root.join(name)).unwrap();
         let production = source.split("#[cfg(test)]").next().unwrap();
         let compact: String = production.chars().filter(|c| !c.is_whitespace()).collect();

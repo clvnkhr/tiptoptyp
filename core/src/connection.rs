@@ -56,6 +56,9 @@ impl<G: Copy + Eq, E> Connection<G, E> {
     pub fn is_ready(&self) -> bool {
         matches!(self.phase, Phase::Ready(_))
     }
+    pub fn is_ready_for(&self, generation: G) -> bool {
+        matches!(self.phase, Phase::Ready(g) if g == generation)
+    }
 }
 
 #[cfg(test)]

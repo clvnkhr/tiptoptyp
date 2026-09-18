@@ -1,5 +1,29 @@
 use super::completion_popup::completion_popup_position;
+use super::settings_controls::*;
 use super::*;
+use crate::{
+    builtin_themes, settings::ToolPreference, syntax_theme::TypstStyleOverrides,
+    toolchain::ToolOrigin,
+};
+
+#[test]
+fn file_navigation_to_untitled_backing_reuses_the_editor() {
+    let root = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+    app.document_mut()
+        .replace_unprojected_untitled("first\nsecond");
+    let path = app.tinymist_document_path();
+    app.navigate_file_location(path, None, Some((2, 1)), "index entry");
+    assert!(
+        app.document_workflow.take_action().is_none(),
+        "private backing is not another document"
+    );
+    assert_eq!(
+        app.pending_editor_selection,
+        Some(EditorSelection::Focus(6..6))
+    );
+}
 
 #[test]
 fn explorer_view_returns_navigation_without_effects_and_does_not_paint_hidden_git() {
@@ -3529,6 +3553,35 @@ fn explorer_search_covers_every_project_index_section() {
 }
 
 #[test]
+fn explorer_project_sections_preserve_empty_and_filtered_messages() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let index = ProjectIndex::default();
+    for (section, empty) in [
+        (ExplorerSection::Contents, "No headings"),
+        (ExplorerSection::Subfiles, "No included files"),
+        (ExplorerSection::Symbols, "No definitions or functions"),
+        (ExplorerSection::Packages, "No packages"),
+        (ExplorerSection::Tags, "No tags"),
+        (ExplorerSection::References, "No references"),
+    ] {
+        for query in ["", "missing"] {
+            let mut harness = Harness::builder().build_ui(|ui| {
+                show_project_index_section(ui, section, Path::new("."), &index, query);
+            });
+            harness.run();
+            harness.get_by_label(if query.is_empty() {
+                empty
+            } else {
+                "No matches"
+            });
+            if section == ExplorerSection::Packages {
+                harness.get_by_label("Browse packages…");
+            }
+        }
+    }
+}
+
+#[test]
 fn partial_project_index_does_not_add_a_persistent_warning_row() {
     use egui_kittest::{Harness, kittest::Queryable as _};
     let project = tempfile::tempdir().unwrap();
@@ -5083,6 +5136,25 @@ fn modified_shortcuts_win_over_their_generic_variants() {
         },),
         Some(AppCommand::FindReplace)
     );
+}
+
+#[test]
+fn opening_documents_preserves_an_existing_dialog_in_both_destinations() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+    for new_window in [false, true] {
+        app.document_workflow.start_dialog(PendingDialog::new(
+            DocumentDialogRequest {
+                target: DocumentDialogTarget::OpenFolder,
+                key: app.document().key(),
+            },
+            std::future::pending(),
+        ));
+        app.start_open_dialog(None, new_window);
+        assert!(app.document_workflow.has_dialog());
+        assert!(app.notice.is_none(), "must not attempt native parenting");
+    }
 }
 
 #[test]

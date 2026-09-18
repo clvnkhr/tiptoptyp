@@ -536,62 +536,73 @@ fn fixture(context: &egui::Context, root: &Path) -> EditorApp {
 
 #[test]
 fn save_completion_follows_a_parked_tab_id_after_reorder_not_the_active_slot() {
-    let root = tempfile::tempdir().unwrap();
-    let context = egui::Context::default();
-    let mut app = fixture(&context, root.path());
-    app.snapshot_scene = None;
-    let path = root.path().join("first.typ");
-    fs::write(&path, "first").unwrap();
-    app.document_mut().replace_loaded_unprojected(
-        "first".into(),
-        path.clone(),
-        DocumentKind::Typst,
-        Some(fingerprint(b"first")),
-    );
-    app.document_mut()
-        .edit(CCursorRange::default(), |source| source.push('!'));
-    let saved_tab = app.tabs.active_id().unwrap();
-    let (entered, ready) = std::sync::mpsc::channel();
-    let (release, wait) = std::sync::mpsc::channel();
-    let locked_path = path.clone();
-    let holder = std::thread::spawn(move || {
-        crate::resource_lock::with_resource(&locked_path, || {
-            entered.send(()).unwrap();
-            let _ = wait.recv();
-        })
-    });
-    ready.recv_timeout(Duration::from_secs(5)).unwrap();
-    app.document_workflow
-        .continue_after_save(PendingDocumentAction {
-            action: DeferredDocumentAction::CloseTab,
-            key: app.document().key(),
-            allow_discard: false,
-            description: "closing saved tab".into(),
+    for install_new_close in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = fixture(&context, root.path());
+        app.snapshot_scene = None;
+        let path = root.path().join("first.typ");
+        fs::write(&path, "first").unwrap();
+        app.document_mut().replace_loaded_unprojected(
+            "first".into(),
+            path.clone(),
+            DocumentKind::Typst,
+            Some(fingerprint(b"first")),
+        );
+        app.document_mut()
+            .edit(CCursorRange::default(), |source| source.push('!'));
+        let saved_tab = app.tabs.active_id().unwrap();
+        let (entered, ready) = std::sync::mpsc::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        let locked_path = path.clone();
+        let holder = std::thread::spawn(move || {
+            crate::resource_lock::with_resource(&locked_path, || {
+                entered.send(()).unwrap();
+                let _ = wait.recv();
+            })
         });
-    assert!(app.save_to(path.clone(), &context));
-    app.append_tab(&context);
-    app.document_mut().replace_unprojected_untitled("other tab");
-    let old_continuation = app.document_workflow.continuation_token();
-    app.document_workflow.cancel_continuation();
-    app.document_workflow
-        .continue_after_save(PendingDocumentAction {
-            action: DeferredDocumentAction::CloseWindow,
-            key: app.document().key(),
-            allow_discard: false,
-            description: "new active-tab close".into(),
-        });
-    let new_continuation = app.document_workflow.continuation_token();
-    assert_ne!(new_continuation, old_continuation);
-    assert!(app.tabs.reorder(0, 1));
-    release.send(()).unwrap();
-    holder.join().unwrap();
-    app.finish_save_for_test(&context);
-    assert_eq!(fs::read_to_string(path).unwrap(), "first!");
-    assert_eq!(app.document().source(), "other tab");
-    assert!(!app.document_for_tab(saved_tab).unwrap().is_dirty());
-    assert!(app.manual_format_revision.is_none());
-    assert_eq!(app.document_workflow.continuation_token(), new_continuation);
-    assert!(app.document_workflow.take_action().is_none());
+        ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        app.document_workflow
+            .continue_after_save(PendingDocumentAction {
+                action: DeferredDocumentAction::CloseTab,
+                key: app.document().key(),
+                allow_discard: false,
+                description: "closing saved tab".into(),
+            });
+        assert!(app.save_to(path.clone(), &context));
+        app.append_tab(&context);
+        app.document_mut().replace_unprojected_untitled("other tab");
+        let old_continuation = app.document_workflow.continuation_token();
+        if install_new_close {
+            app.document_workflow.cancel_continuation();
+            app.document_workflow
+                .continue_after_save(PendingDocumentAction {
+                    action: DeferredDocumentAction::CloseWindow,
+                    key: app.document().key(),
+                    allow_discard: false,
+                    description: "new active-tab close".into(),
+                });
+            assert_ne!(app.document_workflow.continuation_token(), old_continuation);
+        }
+        let expected_continuation = if install_new_close {
+            app.document_workflow.continuation_token()
+        } else {
+            None
+        };
+        assert!(app.tabs.reorder(0, 1));
+        release.send(()).unwrap();
+        holder.join().unwrap();
+        app.finish_save_for_test(&context);
+        assert_eq!(fs::read_to_string(path).unwrap(), "first!");
+        assert_eq!(app.document().source(), "other tab");
+        assert!(!app.document_for_tab(saved_tab).unwrap().is_dirty());
+        assert!(app.manual_format_revision.is_none());
+        assert_eq!(
+            app.document_workflow.continuation_token(),
+            expected_continuation
+        );
+        assert!(app.document_workflow.take_action().is_none());
+    }
 }
 
 #[test]

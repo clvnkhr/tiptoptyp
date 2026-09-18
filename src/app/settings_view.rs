@@ -1,4 +1,5 @@
 //! Settings and appearance controls.
+use super::settings_controls::{fallback_notice, show_typst_override_editor};
 use super::*;
 
 impl EditorApp {

@@ -67,21 +67,11 @@ impl EditorApp {
         self.project_index_deadline.clear();
         self.project_index_job.supersede();
         self.project_index = ProjectIndex::default();
-        self.preview.recovery.reset();
-        self.preview.connection.suspend(false);
-        self.preview.tinymist_state = ServiceState::Disabled("No tab is open".into());
-        self.preview.webview_state = ServiceState::Disabled("No tab is open".into());
+        self.preview.suspend_document("No tab is open");
         self.preview.status = PreviewStatus::Ready(Duration::ZERO);
         self.clear_preview_for_document(false);
         self.hide_webview();
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        {
-            self.webview = None;
-            self.webview_applied = None;
-            self.webview_url = None;
-            self.webview_navigation = None;
-            self.webview_reload_pending = false;
-        }
+        self.discard_webview();
         self.git_editor.clear_document();
         self.close_app_popup();
         self.search.clear();

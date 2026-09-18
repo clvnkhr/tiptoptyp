@@ -5,6 +5,7 @@ use tiptoptyp::save_transaction::WriteDurability;
 pub(super) struct PendingSave {
     pub tab: u64,
     pub key: DocumentKey,
+    continuation: Option<tiptoptyp_core::workflow::SaveContinuationToken>,
     path: PathBuf,
     previous_sync_path: PathBuf,
     path_changed: bool,
@@ -125,6 +126,7 @@ impl EditorApp {
         self.pending_save = Some(PendingSave {
             tab,
             key,
+            continuation,
             path,
             previous_sync_path,
             path_changed,
@@ -158,8 +160,14 @@ impl EditorApp {
         let result = match result {
             Ok(result) => result,
             Err(error) => {
-                self.document_workflow.cancel_continuation();
-                self.show_file_error(error);
+                if pending.continuation == self.document_workflow.continuation_token() {
+                    self.show_file_error(error);
+                } else {
+                    self.notice = Some(Notice {
+                        message: error,
+                        kind: NoticeKind::Error,
+                    });
+                }
                 return;
             }
         };
@@ -363,6 +371,46 @@ mod tests {
     use std::sync::mpsc;
 
     #[test]
+    fn failed_save_worker_does_not_cancel_a_newer_close_request() {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        app.pending_save = Some(PendingSave {
+            continuation: None,
+            tab: app.tabs.active_id().unwrap(),
+            key: app.document().key(),
+            path: root.path().join("failed.typ"),
+            previous_sync_path: app.tinymist_document_path(),
+            path_changed: true,
+            format_after: false,
+            started: Instant::now(),
+        });
+        app.save_job
+            .start_and_repaint("failed save worker", &context, || {
+                Err("worker failed".into())
+            })
+            .unwrap();
+        app.document_workflow
+            .continue_after_save(PendingDocumentAction {
+                action: DeferredDocumentAction::CloseWindow,
+                key: app.document().key(),
+                allow_discard: false,
+                description: "new close".into(),
+            });
+        let token = app.document_workflow.continuation_token();
+        app.finish_save_for_test(&context);
+        assert_eq!(app.document_workflow.continuation_token(), token);
+        assert!(app.document_workflow.take_action().is_none());
+        assert!(
+            app.notice
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("worker failed")
+        );
+    }
+
+    #[test]
     fn uncertain_receipt_records_saved_bytes_but_never_releases_close_or_format() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("uncertain.typ");
@@ -395,6 +443,7 @@ mod tests {
         app.pending_save = Some(PendingSave {
             tab,
             key,
+            continuation: app.document_workflow.continuation_token(),
             path: path.clone(),
             previous_sync_path: app.tinymist_document_path(),
             path_changed: true,

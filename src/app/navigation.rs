@@ -31,24 +31,23 @@ impl EditorSelection {
 }
 
 impl EditorApp {
+    fn is_current_source_path(&self, path: &Path) -> bool {
+        self.document().path().as_deref().map_or_else(
+            || same_path(&self.tinymist_document_path(), path),
+            |current| same_path(current, path),
+        )
+    }
+
     pub(super) fn diagnostic_targets_current_document(&self, diagnostic: &Diagnostic) -> bool {
         match &diagnostic.source {
             DiagnosticSource::Main => self.current_is_preview_document(),
             DiagnosticSource::File(path) => {
                 if self.document().config().is_some() && !path.is_absolute() {
-                    return self.diagnostic_target_path(diagnostic).is_some_and(|path| {
-                        self.document()
-                            .path()
-                            .as_ref()
-                            .is_some_and(|current| same_path(current, &path))
-                    });
+                    return self
+                        .diagnostic_target_path(diagnostic)
+                        .is_some_and(|path| self.is_current_source_path(&path));
                 }
-                self.document()
-                    .path()
-                    .as_ref()
-                    .is_some_and(|current| same_path(current, path))
-                    || (self.document().path().is_none()
-                        && same_path(&self.tinymist_document_path(), path))
+                self.is_current_source_path(path)
             }
             DiagnosticSource::Global => false,
         }
@@ -101,12 +100,7 @@ impl EditorApp {
         source_position: Option<(usize, usize)>,
         description: &str,
     ) {
-        if self
-            .document()
-            .path()
-            .as_ref()
-            .is_some_and(|current| same_path(current, &path))
-        {
+        if self.is_current_source_path(&path) {
             self.apply_file_link_location(page, source_position);
         } else {
             self.request_document_replacement(
@@ -165,15 +159,7 @@ impl EditorApp {
         let Ok(path) = url.to_file_path() else {
             return;
         };
-        let virtual_untitled =
-            self.document().path().is_none() && path == self.tinymist_document_path();
-        let same_document = virtual_untitled
-            || self
-                .document()
-                .path()
-                .as_ref()
-                .is_some_and(|current| same_path(current, &path));
-        if !same_document {
+        if !self.is_current_source_path(&path) {
             if path
                 .extension()
                 .is_none_or(|extension| !extension.eq_ignore_ascii_case("typ"))

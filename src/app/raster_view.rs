@@ -1,6 +1,16 @@
 //! Shared raster controls and painting; each pane supplies independent state.
 use super::*;
 
+pub(super) fn request_zoom(preview: &mut PreviewController, action: PreviewZoomAction) {
+    let zoom = match action {
+        PreviewZoomAction::In => preview.zoom * METRICS.preview.zoom_step,
+        PreviewZoomAction::Out => preview.zoom / METRICS.preview.zoom_step,
+        PreviewZoomAction::Reset => 1.0,
+    };
+    preview.requested_zoom = Some(zoom.clamp(MIN_PREVIEW_ZOOM, MAX_PREVIEW_ZOOM));
+    preview.fit_width = false;
+}
+
 pub(super) fn show_controls(
     ui: &mut egui::Ui,
     preview: &mut PreviewController,
@@ -44,18 +54,10 @@ pub(super) fn show_controls(
         if header_width >= METRICS.preview.header_zoom_min_width {
             ui.separator();
             if icon_button(ui, UiIcon::ZoomOut, "Zoom out").clicked() {
-                preview.requested_zoom = Some(
-                    (preview.zoom / METRICS.preview.zoom_step)
-                        .clamp(MIN_PREVIEW_ZOOM, MAX_PREVIEW_ZOOM),
-                );
-                preview.fit_width = false;
+                request_zoom(preview, PreviewZoomAction::Out);
             }
             if icon_button(ui, UiIcon::ZoomIn, "Zoom in").clicked() {
-                preview.requested_zoom = Some(
-                    (preview.zoom * METRICS.preview.zoom_step)
-                        .clamp(MIN_PREVIEW_ZOOM, MAX_PREVIEW_ZOOM),
-                );
-                preview.fit_width = false;
+                request_zoom(preview, PreviewZoomAction::In);
             }
             if header_width >= METRICS.preview.header_percent_min_width {
                 ui.label(format!("{:.0}%", preview.zoom * 100.0));
@@ -258,6 +260,26 @@ fn page_canvas_width(viewport_width: f32, widest_page: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zoom_actions_clamp_and_leave_fit_mode_without_applying_early() {
+        let mut preview = PreviewController::new(false, PreviewPreference::default());
+        for (zoom, action, expected) in [
+            (MAX_PREVIEW_ZOOM, PreviewZoomAction::In, MAX_PREVIEW_ZOOM),
+            (MIN_PREVIEW_ZOOM, PreviewZoomAction::Out, MIN_PREVIEW_ZOOM),
+            (2.0, PreviewZoomAction::Reset, 1.0),
+            (1.0, PreviewZoomAction::In, METRICS.preview.zoom_step),
+            (1.0, PreviewZoomAction::Out, 1.0 / METRICS.preview.zoom_step),
+        ] {
+            preview.zoom = zoom;
+            preview.fit_width = true;
+            preview.requested_zoom = Some(3.0);
+            request_zoom(&mut preview, action);
+            assert_eq!(preview.requested_zoom, Some(expected));
+            assert!(!preview.fit_width);
+            assert_eq!(preview.zoom, zoom, "painting still owns zoom application");
+        }
+    }
 
     #[test]
     fn fitted_page_preserves_both_margins_without_horizontal_overflow() {

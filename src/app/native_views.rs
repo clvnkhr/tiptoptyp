@@ -27,6 +27,19 @@ fn webview_property_diff(
 }
 
 impl EditorApp {
+    /// Native objects stay on the owning UI thread; discard their cached
+    /// presentation identity together so a recreated view cannot inherit it.
+    pub(super) fn discard_webview(&mut self) {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            self.webview = None;
+            self.webview_applied = None;
+            self.webview_url = None;
+            self.webview_navigation = None;
+            self.webview_reload_pending = false;
+        }
+    }
+
     pub(super) fn show_package_manager_window(&mut self, context: &egui::Context) {
         if !self.packages_visible
             || self.document_workflow.modal().is_some()

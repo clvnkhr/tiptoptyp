@@ -91,10 +91,98 @@ The extraction preserves rendering algorithms and service scheduling; no materia
 performance impact is expected, and no matched native timing measurement or
 visual verification is claimed. Step 237's native focus acceptance remains open.
 
-240. [ ] Inventory preview connection/content/visibility/generation writers and
+240. [x] Inventory preview connection/content/visibility/generation writers and
 remove duplicate policy from receive/restart adapters using existing controllers.
 Keep one policy owner, no extra retry state, per-frame copies or repaint loops.
 Work sequentially; report accounting and regression evidence per extraction.
+Implemented readiness and visibility policy in the existing PreviewController;
+native view/cache teardown now has one UI-thread implementation. Removed duplicate
+Starting-event initialization, no-document status/connection cleanup, and the
+redundant session-request predicate. Invalid preview endpoints no longer reset
+recovery before admission: they use the existing one-second retry/five-failure
+fallback policy. No new executor, counter, polling or source-copy path. Inventory,
+remaining adapter responsibilities, accounting and limitations are recorded in
+`docs/preview-ownership.md`. app.rs −59 lines; total production +22 for the explicit
+admission boundary and suspension fix; tests +179. This is not a code-size win.
+The final audit also reproduced stale preview-enabled state after suspension:
+later visibility checks repeatedly requested restart. Suspension now clears that
+flag and visibility memory; the regression verifies 100 subsequent checks emit
+no effects. No spontaneous repaint loop or measured speedup is claimed.
+Verification: 18 focused preview tests; audit baseline of 14 navigation,
+30 Explorer and 27 save tests (2 opt-in saves ignored); final full suite
+1,069 passed (16 opt-in tests ignored), 13 xtask tests, formatting and strict
+all-target Clippy pass. No native composition or focus validation was performed.
+
+241. [x] Audit extraction steps 1–4 before changing preview ownership. Review
+Explorer identity/clipping/state and post-paint effects, search versus navigation
+focus, and active/parked save identity, durability and continuation isolation.
+No introduced regression found in the reviewed paths. Expand the parked receipt
+test to cover both matching old-close cancellation and newer-close preservation.
+The preview admission bug fixed in 240 was present before these extractions.
+Keep step 237's native WebView focus verification open; automated UI assertions
+are not a claim of native end-to-end validation.
+
+242. [x] Audit the extraction implementations for incorrect edge paths and
+remove redundant code rather than relocate it. This follow-up found two holes
+missed by 241: file/index navigation treated an untitled backing path as another
+document, and a failed save worker could cancel a newer close continuation.
+Both were reproduced with failing tests before fixing. Share current-source
+identity across navigation routes; retain the submitting continuation token for
+worker failures that have no completion receipt. A stale failure remains visible
+as a notice without cancelling the newer workflow.
+Simplify Explorer painting: one concrete action output instead of parallel locals
+and an unused generic parameter, one snapshot lookup, and one empty-state renderer
+instead of repeated iterator probes and labels. Preserve borrowed inputs, row
+identity, clipping and post-paint effects. Add semantic coverage for all six index
+sections with empty and filtered results, including the package browse control.
+Relative to the start of this cleanup, production code is 74 lines smaller
+(Explorer −68, navigation −14, save safety +8); regression tests add 89 lines,
+so total Rust source grows by 15. No changes are hidden as file moves.
+No material runtime performance impact is expected: no new workers, repaint
+requests, per-frame document copies or index collections. No native performance
+measurement or visual/focus verification is claimed; item 237 remains open.
+Verification: 1,072 full-suite tests passed (16 opt-in tests ignored), all 13
+xtask tests passed, and formatting, strict all-target Clippy and diff whitespace
+checks passed on macOS. Both bug regressions were also run individually.
+
+243. [x] Apply deletion-first cleanup from postpostmortem section 4. Merge the
+two document-open setup paths while preserving their titles, Images-filter
+difference, native parent, initial directory, request key and destination.
+Keep existing-dialog admission before native parenting. Share raster zoom
+effects between keyboard and toolbar, including bounds, reset and leaving
+fit-width mode; keep painting responsible for applying the requested zoom.
+Delete the unused title-wrapper parameter and forwarding method; use the
+existing false defaults for menu availability instead of restating each flag.
+No new controller, state, worker, allocation path or repaint request. Shortcut
+focus/admission and distinct preview-generation gates remain separate.
+Tests cover both open destinations retaining an existing dialog and zoom
+bounds/reset/deferred application; existing menu and shortcut tests retain
+the integration coverage. Native dialogs were not opened or visually verified.
+No material performance impact is expected from this on-demand deduplication.
+Accounting against this task's starting worktree: app.rs 12,341 → 12,279 (−62),
+raster production +2, tests +39: production −60 and total Rust −21. No file moves.
+Verification: 1,074 full-suite tests pass (16 opt-in tests ignored), 13 xtask
+tests pass, and formatting, strict all-target Clippy and whitespace checks pass.
+
+244. [x] Split cohesive presentation helpers out of app.rs without another
+controller or a generic helpers module. `app/icons.rs` owns vector icon kinds,
+painting, button hit targets and geometry. `app/settings_controls.rs` owns
+borrowed font/weight selectors, syntax overrides, tool preferences and status
+controls. Settings renderers import their controls directly from that sibling;
+neither new module receives EditorApp or starts services. Extend the existing
+dependency guard to both modules. Keep lifecycle/save/preview orchestration
+unchanged rather than merely redistribute methods with app-wide access.
+Moved bodies match their originals after ignoring visibility and rustfmt
+whitespace/trailing commas. No control geometry, IDs, drawing, scheduling,
+allocation algorithm or repaint behavior changed; no material performance impact
+is expected, and no fresh screenshot is required or claimed for this relocation.
+Accounting against the pre-split worktree: app.rs 12,279 → 11,318 (−961);
+new icons 320 and Settings controls 672 lines. Including caller/test imports and
+the expanded guard, total Rust grows by 46 lines. This is organization, not
+deletion or an ownership rewrite of the remaining coordinator.
+Verification: focused icon (4), Settings (47), font-weight (3) and syntax-override
+(3) tests pass; full suite 1,074 passed with 16 opt-in tests ignored; all 13 xtask
+tests, formatting, strict all-target Clippy and whitespace checks pass.
 
 == Regression execution follow-up (18 September 2026)
 

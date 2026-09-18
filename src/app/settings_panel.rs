@@ -1,11 +1,13 @@
 //! Settings renderer: borrowed presentation inputs and explicit application actions.
 //! This module cannot access the document, worker handles, or EditorApp.
+use super::settings_controls::{
+    FontPickerSelection, color_theme_choice_label, fallback_notice, settings_inline_value,
+    settings_value_row, show_font_family_picker, show_font_weight_control,
+    show_service_status_chip, show_status_chip, show_tool_status_chip, tool_preference_editor,
+};
 use super::{
-    FontPickerSelection, SettingsSection, SettingsTarget, ToolPickerTarget,
-    color_theme_choice_label, fallback_notice, settings_heading, settings_hover_text,
-    settings_inline_value, settings_search_results, settings_target_anchor, settings_value_row,
-    show_font_family_picker, show_font_weight_control, show_service_status_chip, show_status_chip,
-    show_tool_status_chip, success_color, theme_label, tool_preference_editor,
+    SettingsSection, SettingsTarget, ToolPickerTarget, settings_heading, settings_hover_text,
+    settings_search_results, settings_target_anchor, success_color, theme_label,
 };
 use crate::{
     builtin_themes,
@@ -1052,9 +1054,10 @@ pub(super) fn show_bracket_controls(
 
 #[cfg(test)]
 mod tests {
+    use super::super::settings_controls::settings_status_has_detail;
     use super::super::{
         HoverTooltipOverlay, install_hover_runtime_config, settings_hover_tooltip_id,
-        settings_status_has_detail, show_local_tooltip_card,
+        show_local_tooltip_card,
     };
     use super::*;
     use egui::{Color32, Pos2};

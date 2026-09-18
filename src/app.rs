@@ -1,5 +1,10 @@
+mod icons;
+use icons::{UiIcon, icon_button, icon_button_enabled, paint_ui_icon, static_icon};
+#[cfg(test)]
+use icons::{closed_eye_icon_geometry, eye_icon_geometry, refresh_icon_geometry};
 mod completion_popup;
 mod navigation;
+mod settings_controls;
 use navigation::EditorSelection;
 mod explorer_view;
 use explorer_view::git_command_opens_explorer;
@@ -78,7 +83,6 @@ use crate::explorer::ExplorerSection;
 use crate::project_index::analyze_project;
 use crate::{
     asset::{AssetLoader, AssetThumbnailLoader, LoadedAsset},
-    builtin_themes,
     capabilities::CapabilityCache,
     child_view::{
         ChildViewHost, ChildViewSpec, POPUP_BLUR_GRACE, popup_focus_should_close,
@@ -124,21 +128,20 @@ use crate::{
     search::SearchSession,
     settings::{
         AppSettings, ColorThemeChoice, DEFAULT_UI_FONT_WEIGHT, DEFAULT_UI_SCALE_PERCENT,
-        DocumentTheme, PreviewPreference, SourcePreviewTrigger, ToolMode, ToolPreference,
-        normalize_workspace_root,
+        DocumentTheme, PreviewPreference, SourcePreviewTrigger, normalize_workspace_root,
     },
     shortcuts::{
         ShortcutAction, ShortcutBindings, ShortcutChord, ShortcutPlatform, consume_shortcut_action,
     },
     sublime_theme::{self, ImportedTheme, Rgba},
-    syntax_theme::{ResolvedTypstStyles, TypstStyleOverride, TypstStyleOverrides, TypstSyntaxRole},
+    syntax_theme::{ResolvedTypstStyles, TypstSyntaxRole},
     theme::{self, METRICS},
     tinymist::{
         CompletionItem, DiagnosticSeverity as TinymistDiagnosticSeverity, Generation, InvertColors,
         PreviewRefresh, TextDocument, TinymistConfig, TinymistDiagnostic, TinymistEvent,
         TinymistSidecar, UnsavedTextDocument,
     },
-    toolchain::{ToolKind, ToolOrigin, ToolResolution, resolve_tool},
+    toolchain::{ToolKind, ToolResolution, resolve_tool},
     worker::{LatestJob, LatestJobPoll},
     workflow::{
         AppModal, AppModalChoice, DeferredDocumentAction, DialogPoll, DocumentDialogRequest,
@@ -467,24 +470,6 @@ struct PreviewNavigationContext {
 enum PreviewNavigationAction {
     Embed,
     Dispatch(String),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum UiIcon {
-    Check,
-    Close,
-    Down,
-    FitWidth,
-    Next,
-    Previous,
-    Refresh,
-    Eye,
-    EyeClosed,
-    Up,
-    Warning,
-    Waiting,
-    ZoomIn,
-    ZoomOut,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1731,18 +1716,8 @@ impl EditorApp {
         self.tabs = tabs::Tabs::default();
         let _ = self.compiler.pause(self.document().revision());
         self.stop_tinymist_session();
-        self.preview.recovery.reset();
-        self.preview.connection.suspend(false);
-        self.preview.tinymist_state = ServiceState::Disabled("No document window is open".into());
-        self.preview.webview_state = ServiceState::Disabled("No document window is open".into());
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        {
-            self.webview = None;
-            self.webview_applied = None;
-            self.webview_url = None;
-            self.webview_navigation = None;
-            self.webview_reload_pending = false;
-        }
+        self.preview.suspend_document("No document window is open");
+        self.discard_webview();
         self.compile_deadline = None;
         self.project_index_deadline.clear();
         self.project_index_job.supersede();
@@ -3125,28 +3100,10 @@ impl EditorApp {
             } else {
                 &mut self.preview
             };
-            match context.input_mut_for(shortcut_viewport, |input| {
+            if let Some(action) = context.input_mut_for(shortcut_viewport, |input| {
                 consume_preview_zoom_shortcut(input, &shortcuts)
             }) {
-                Some(PreviewZoomAction::In) => {
-                    preview.requested_zoom = Some(
-                        (preview.zoom * METRICS.preview.zoom_step)
-                            .clamp(MIN_PREVIEW_ZOOM, MAX_PREVIEW_ZOOM),
-                    );
-                    preview.fit_width = false;
-                }
-                Some(PreviewZoomAction::Out) => {
-                    preview.requested_zoom = Some(
-                        (preview.zoom / METRICS.preview.zoom_step)
-                            .clamp(MIN_PREVIEW_ZOOM, MAX_PREVIEW_ZOOM),
-                    );
-                    preview.fit_width = false;
-                }
-                Some(PreviewZoomAction::Reset) => {
-                    preview.requested_zoom = Some(1.0);
-                    preview.fit_width = false;
-                }
-                None => {}
+                raster_view::request_zoom(preview, action);
             }
         }
 
@@ -3292,7 +3249,7 @@ impl EditorApp {
                     });
             }
             AppCommand::Open => self.open_dialog(),
-            AppCommand::OpenInNewWindow => self.open_in_new_window_dialog(frame),
+            AppCommand::OpenInNewWindow => self.start_open_dialog(frame, true),
             AppCommand::ChangeWorkspaceRoot => self.open_workspace_chooser(),
             AppCommand::Save => {
                 self.save_document(frame, context);
@@ -3991,7 +3948,7 @@ impl EditorApp {
         );
     }
 
-    fn open_in_new_window_dialog(&mut self, frame: Option<&eframe::Frame>) {
+    fn start_open_dialog(&mut self, frame: Option<&eframe::Frame>, new_window: bool) {
         if self.document_workflow.has_dialog() {
             return;
         }
@@ -4008,51 +3965,27 @@ impl EditorApp {
                 ],
             )
             .add_filter("Typst documents", &["typ"])
-            .add_filter("PDF documents", &["pdf"])
-            .set_title("Open document or folder in new window");
-        if let Some(directory) = self.current_directory() {
-            dialog = dialog.set_directory(directory);
-        }
-        self.document_workflow.start_dialog(PendingDialog::new(
-            DocumentDialogRequest {
-                target: DocumentDialogTarget::OpenFileInNewWindow,
-                key: self.document().key(),
-            },
-            dialog.pick_file_or_folder(),
-        ));
-    }
-
-    fn start_open_dialog(&mut self, frame: Option<&eframe::Frame>) {
-        if self.document_workflow.has_dialog() {
-            return;
-        }
-        let Some(dialog) = self.native_file_dialog(frame) else {
-            return;
+            .add_filter("PDF documents", &["pdf"]);
+        let target = if new_window {
+            dialog = dialog.set_title("Open document or folder in new window");
+            DocumentDialogTarget::OpenFileInNewWindow
+        } else {
+            dialog = dialog
+                .add_filter(
+                    "Images",
+                    &[
+                        "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tif", "tiff",
+                    ],
+                )
+                .set_title("Open document");
+            DocumentDialogTarget::OpenFile
         };
-        let mut dialog = dialog
-            .add_filter(
-                "Supported documents",
-                &[
-                    "typ", "pdf", "txt", "md", "rs", "toml", "json", "yaml", "yml", "xml", "html",
-                    "css", "js", "ts", "py", "c", "cpp", "h", "png", "jpg", "jpeg", "gif", "webp",
-                    "bmp", "ico", "tif", "tiff",
-                ],
-            )
-            .add_filter("Typst documents", &["typ"])
-            .add_filter("PDF documents", &["pdf"])
-            .add_filter(
-                "Images",
-                &[
-                    "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tif", "tiff",
-                ],
-            )
-            .set_title("Open document");
         if let Some(directory) = self.current_directory() {
             dialog = dialog.set_directory(directory);
         }
         self.document_workflow.start_dialog(PendingDialog::new(
             DocumentDialogRequest {
-                target: DocumentDialogTarget::OpenFile,
+                target,
                 key: self.document().key(),
             },
             dialog.pick_file_or_folder(),
@@ -4728,7 +4661,7 @@ impl EditorApp {
                     kind: NoticeKind::Success,
                 });
             }
-            DeferredDocumentAction::OpenFileDialog => self.start_open_dialog(frame),
+            DeferredDocumentAction::OpenFileDialog => self.start_open_dialog(frame, false),
             DeferredDocumentAction::OpenFolderDialog => self.start_open_folder_dialog(frame),
             DeferredDocumentAction::CloseWindow => {
                 self.approve_tab_window_close();
@@ -5087,7 +5020,7 @@ impl EditorApp {
         self.manual_format_revision = None;
         self.format_request_key = None;
         self.editor_completion = None;
-        let start_preview = self.tinymist_session_requested();
+        let start_preview = self.interactive_preview_requested();
         self.preview.tinymist_preview_enabled = start_preview;
         self.stop_tinymist_session_io();
         #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -5107,10 +5040,7 @@ impl EditorApp {
         {
             self.webview_reload_pending = false;
             if !retain_preview_surface {
-                self.webview = None;
-                self.webview_applied = None;
-                self.webview_url = None;
-                self.webview_navigation = None;
+                self.discard_webview();
             }
         }
         if !self.document().kind().is_typst() && self.designated_preview_path().is_none() {
@@ -5374,26 +5304,10 @@ impl EditorApp {
                             .compile_status(generation, path, status, received);
                     }
                 }
-                TinymistEvent::Starting { .. } => {
-                    self.editor_completion = None;
-                    self.preview.tinymist_state =
-                        ServiceState::Starting("Launching Tinymist LSP".to_owned());
-                }
                 TinymistEvent::Initialized { generation } => {
-                    if !self.preview.recovery.accepts(generation) {
+                    if !self.preview.initialized(generation) {
                         continue;
                     }
-                    if !self.preview.connection.initialized(generation) {
-                        continue;
-                    }
-                    if !self.preview.tinymist_preview_enabled {
-                        self.preview.recovery.recovered(generation);
-                    }
-                    self.preview.tinymist_state = if self.preview.tinymist_preview_enabled {
-                        ServiceState::Starting("Starting Tinymist preview server".to_owned())
-                    } else {
-                        ServiceState::Ready("Tinymist LSP is ready".to_owned())
-                    };
                     if !self.tinymist_sync.current_open
                         && self.tinymist_sync.generation == Some(generation)
                     {
@@ -5422,43 +5336,34 @@ impl EditorApp {
                     }
                 }
                 TinymistEvent::PreviewReady { generation, url } => {
-                    if !self.preview.recovery.recovered(generation) {
-                        continue;
-                    }
-                    self.preview.tinymist_state =
-                        ServiceState::Ready("LSP and preview server are ready".to_owned());
-                    if self.preview.tinymist_preview_enabled {
-                        let Ok(endpoint) = url::Url::parse(&url) else {
-                            self.preview.webview_state =
-                                ServiceState::Failed("Invalid preview endpoint".to_owned());
-                            continue;
-                        };
-                        if !self.preview.connection.connect(generation, endpoint) {
-                            continue;
+                    #[cfg(any(target_os = "macos", target_os = "windows"))]
+                    let reusing_webview = self.webview.is_some();
+                    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+                    let reusing_webview = false;
+                    match self
+                        .preview
+                        .preview_ready(generation, &url, reusing_webview)
+                    {
+                        Ok(true) => {
+                            // A replacement server can reuse its predecessor's URL.
+                            // Only an accepted endpoint may request this navigation.
+                            #[cfg(any(target_os = "macos", target_os = "windows"))]
+                            {
+                                self.webview_reload_pending = reusing_webview;
+                            }
                         }
-                        if matches!(self.preview.status, PreviewStatus::Waiting) {
-                            self.preview.status = PreviewStatus::Ready(Duration::ZERO);
+                        Err(message) => {
+                            self.handle_tinymist_failure(
+                                &TinymistEvent::Error {
+                                    generation,
+                                    stage: "preview",
+                                    message: message.to_owned(),
+                                    fatal: false,
+                                },
+                                context,
+                            );
                         }
-                        #[cfg(any(target_os = "macos", target_os = "windows"))]
-                        let reusing_webview = {
-                            let reusing = self.webview.is_some();
-                            // A replacement server can receive the same local
-                            // URL as its predecessor. URL equality therefore
-                            // cannot prove that the retained WebView is showing
-                            // the new pinned entry; force one navigation for
-                            // every ready event when the surface is reused.
-                            self.webview_reload_pending = reusing;
-                            reusing
-                        };
-                        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-                        let reusing_webview = false;
-                        self.preview.webview_state = if reusing_webview {
-                            ServiceState::Starting(
-                                "Loading the pinned entry in the existing preview".to_owned(),
-                            )
-                        } else {
-                            ServiceState::Starting("Embedding the vector preview".to_owned())
-                        };
+                        Ok(false) => {}
                     }
                 }
                 TinymistEvent::ShowDocument {
@@ -5795,10 +5700,6 @@ impl EditorApp {
         self.preview_status_snapshot().interactive_requested
     }
 
-    fn tinymist_session_requested(&self) -> bool {
-        self.preview_status_snapshot().interactive_requested
-    }
-
     fn preview_processing_enabled(&self) -> bool {
         self.typst_preview_available()
             && (self.document_workflow.pending_export.is_some() || self.raster_preview_required())
@@ -5814,11 +5715,7 @@ impl EditorApp {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn fail_local_webview(&mut self, message: String) {
         let raster_was_required = self.raster_preview_required();
-        self.webview = None;
-        self.webview_applied = None;
-        self.webview_url = None;
-        self.webview_reload_pending = false;
-        self.webview_navigation = None;
+        self.discard_webview();
         self.preview.webview_state = ServiceState::Failed(message);
         let raster_is_required = self.raster_preview_required();
         if raster_fallback_compile_needed(
@@ -5836,22 +5733,13 @@ impl EditorApp {
 
     fn sync_preview_visibility(&mut self) {
         let visible = self.preview_visible();
-        let became_visible = !self.preview.was_visible && visible;
-        self.preview.was_visible = visible;
-
         if !visible {
             self.hide_webview();
         }
-
-        if self.preview.tinymist_preview_enabled != self.tinymist_session_requested() {
-            self.restart_tinymist();
-        }
-        if became_visible {
-            let transition = self
-                .preview
-                .transition(PreviewTransitionEvent::RenderRequested);
-            self.apply_preview_transition(transition, None);
-        }
+        let transition = self
+            .preview
+            .visibility_changed(visible, self.interactive_preview_requested());
+        self.apply_preview_transition(transition, None);
     }
 
     fn receive_tinymist_diagnostics(
@@ -6114,19 +6002,10 @@ impl EditorApp {
                 // Lay out the title last so it gets precisely the space left
                 // between the menus and the right-aligned control group.
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    self.show_document_title(ui, frame, compact);
+                    self.show_tabs(ui, frame);
                 });
             });
         });
-    }
-
-    fn show_document_title(
-        &mut self,
-        ui: &mut egui::Ui,
-        frame: Option<&eframe::Frame>,
-        _compact: bool,
-    ) {
-        self.show_tabs(ui, frame);
     }
 
     fn show_file_menu(&mut self, ui: &mut egui::Ui) {
@@ -7981,11 +7860,7 @@ impl EditorApp {
         if changed {
             // A recreated native viewport needs a fresh child WKWebView. The
             // Tinymist process and preview URL remain owned by this session.
-            self.webview = None;
-            self.webview_applied = None;
-            self.webview_url = None;
-            self.webview_reload_pending = false;
-            self.webview_navigation = None;
+            self.discard_webview();
             self.preview.webview_state =
                 ServiceState::Starting("Attaching preview to this document window".to_owned());
         }
@@ -9524,304 +9399,6 @@ fn offer_folder_row_drop(ui: &egui::Ui, row: Rect, directory: &Path) {
     offer_file_drop_target(ui, rect, FileDropTarget::Folder(directory.to_path_buf()));
 }
 
-fn icon_button(ui: &mut egui::Ui, icon: UiIcon, tooltip: &str) -> egui::Response {
-    icon_button_enabled(ui, true, icon, tooltip)
-}
-
-fn icon_button_enabled(
-    ui: &mut egui::Ui,
-    enabled: bool,
-    icon: UiIcon,
-    tooltip: &str,
-) -> egui::Response {
-    let response = native_hover_text(
-        ui.add_enabled(
-            enabled,
-            egui::Button::new("").min_size(METRICS.icon.button_size),
-        ),
-        tooltip,
-    );
-    let color = ui.style().interact(&response).fg_stroke.color;
-    paint_ui_icon(
-        ui.painter(),
-        response.rect.shrink(METRICS.icon.button_icon_shrink),
-        icon,
-        color,
-    );
-    response
-}
-
-fn static_icon(ui: &mut egui::Ui, icon: UiIcon, color: Color32) -> egui::Response {
-    let (rect, response) =
-        ui.allocate_exact_size(Vec2::splat(METRICS.icon.static_size), Sense::hover());
-    paint_ui_icon(
-        ui.painter(),
-        rect.shrink(METRICS.icon.static_shrink),
-        icon,
-        color,
-    );
-    response
-}
-
-struct RefreshIconGeometry {
-    arc: Vec<Pos2>,
-    shaft: [Pos2; 2],
-    wing: [Pos2; 2],
-}
-
-fn refresh_icon_geometry(rect: Rect) -> RefreshIconGeometry {
-    let center = rect.center();
-    let radius = rect.width().min(rect.height()) * 0.34;
-    let start_angle = 0.55_f32;
-    let end_angle = 5.55_f32;
-    let arc = (0..=20)
-        .map(|index| {
-            let angle = start_angle + (end_angle - start_angle) * index as f32 / 20.0;
-            center + Vec2::new(angle.cos(), angle.sin()) * radius
-        })
-        .collect::<Vec<_>>();
-    let junction = *arc.last().expect("refresh arc has an endpoint");
-    let tangent = Vec2::new(-end_angle.sin(), end_angle.cos()).normalized();
-    let radial = Vec2::new(end_angle.cos(), end_angle.sin()).normalized();
-    let tip = junction + tangent * 2.1;
-    let outer_corner = tip - tangent * 2.2 + radial * 1.5;
-    RefreshIconGeometry {
-        arc,
-        shaft: [junction, tip],
-        wing: [tip, outer_corner],
-    }
-}
-
-struct EyeIconGeometry {
-    upper: [Pos2; 4],
-    lower: [Pos2; 4],
-    pupil_radius: f32,
-}
-
-fn eye_icon_geometry(rect: Rect) -> EyeIconGeometry {
-    let center = rect.center();
-    let half_width = rect.width() * 0.44;
-    let control_lift = rect.height() * 0.34;
-    let control_inset = half_width * 0.48;
-    let left = Pos2::new(center.x - half_width, center.y);
-    let right = Pos2::new(center.x + half_width, center.y);
-    EyeIconGeometry {
-        upper: [
-            left,
-            Pos2::new(center.x - control_inset, center.y - control_lift),
-            Pos2::new(center.x + control_inset, center.y - control_lift),
-            right,
-        ],
-        lower: [
-            left,
-            Pos2::new(center.x - control_inset, center.y + control_lift),
-            Pos2::new(center.x + control_inset, center.y + control_lift),
-            right,
-        ],
-        pupil_radius: rect.width().min(rect.height()) * 0.11,
-    }
-}
-
-fn closed_eye_icon_geometry(rect: Rect) -> ([Pos2; 4], [[Pos2; 2]; 3]) {
-    // Center the visible lid + lashes, not the (otherwise invisible) full eye.
-    let shift = rect.height() * (0.34 * 0.75 + 0.16) * 0.5;
-    let lid = eye_icon_geometry(rect.translate(Vec2::new(0.0, -shift))).lower;
-    let lashes = [0.2_f32, 0.5, 0.8].map(|t| {
-        let s = 1.0 - t;
-        let root = (lid[0].to_vec2() * s.powi(3)
-            + lid[1].to_vec2() * (3.0 * s * s * t)
-            + lid[2].to_vec2() * (3.0 * s * t * t)
-            + lid[3].to_vec2() * t.powi(3))
-        .to_pos2();
-        [
-            root,
-            root + Vec2::new((t - 0.5) * rect.width() * 0.35, rect.height() * 0.16),
-        ]
-    });
-    (lid, lashes)
-}
-
-fn paint_ui_icon(painter: &egui::Painter, rect: Rect, icon: UiIcon, color: Color32) {
-    let center = rect.center();
-    let stroke = Stroke::new(METRICS.icon.stroke_width, color);
-    match icon {
-        UiIcon::Check => {
-            painter.line_segment(
-                [
-                    Pos2::new(rect.left() + rect.width() * 0.12, center.y),
-                    Pos2::new(rect.left() + rect.width() * 0.42, rect.bottom() - 2.0),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(rect.left() + rect.width() * 0.42, rect.bottom() - 2.0),
-                    Pos2::new(rect.right() - 1.0, rect.top() + 2.0),
-                ],
-                stroke,
-            );
-        }
-        UiIcon::Close => {
-            painter.line_segment([rect.left_top(), rect.right_bottom()], stroke);
-            painter.line_segment([rect.right_top(), rect.left_bottom()], stroke);
-        }
-        UiIcon::Up | UiIcon::Previous => {
-            let (a, b, c) = if icon == UiIcon::Up {
-                (
-                    Pos2::new(rect.left() + 1.0, rect.bottom() - 2.0),
-                    Pos2::new(center.x, rect.top() + 2.0),
-                    Pos2::new(rect.right() - 1.0, rect.bottom() - 2.0),
-                )
-            } else {
-                (
-                    Pos2::new(rect.right() - 2.0, rect.top() + 1.0),
-                    Pos2::new(rect.left() + 2.0, center.y),
-                    Pos2::new(rect.right() - 2.0, rect.bottom() - 1.0),
-                )
-            };
-            painter.line_segment([a, b], stroke);
-            painter.line_segment([b, c], stroke);
-        }
-        UiIcon::Down | UiIcon::Next => {
-            let (a, b, c) = if icon == UiIcon::Down {
-                (
-                    Pos2::new(rect.left() + 1.0, rect.top() + 2.0),
-                    Pos2::new(center.x, rect.bottom() - 2.0),
-                    Pos2::new(rect.right() - 1.0, rect.top() + 2.0),
-                )
-            } else {
-                (
-                    Pos2::new(rect.left() + 2.0, rect.top() + 1.0),
-                    Pos2::new(rect.right() - 2.0, center.y),
-                    Pos2::new(rect.left() + 2.0, rect.bottom() - 1.0),
-                )
-            };
-            painter.line_segment([a, b], stroke);
-            painter.line_segment([b, c], stroke);
-        }
-        UiIcon::Refresh => {
-            // Continue the arc into one side of the arrowhead, then place its
-            // outer wing beyond the circle. This keeps the small glyph open
-            // instead of layering a large chevron over its own body.
-            let geometry = refresh_icon_geometry(rect);
-            painter.add(egui::Shape::line(geometry.arc, stroke));
-            painter.line_segment(geometry.shaft, stroke);
-            painter.line_segment(geometry.wing, stroke);
-        }
-        UiIcon::Waiting => {
-            painter.circle_stroke(center, rect.width().min(rect.height()) * 0.36, stroke);
-        }
-        UiIcon::Eye => {
-            let geometry = eye_icon_geometry(rect);
-            painter.add(egui::Shape::CubicBezier(
-                egui::epaint::CubicBezierShape::from_points_stroke(
-                    geometry.upper,
-                    false,
-                    Color32::TRANSPARENT,
-                    stroke,
-                ),
-            ));
-            painter.add(egui::Shape::CubicBezier(
-                egui::epaint::CubicBezierShape::from_points_stroke(
-                    geometry.lower,
-                    false,
-                    Color32::TRANSPARENT,
-                    stroke,
-                ),
-            ));
-            painter.circle_filled(center, geometry.pupil_radius, color);
-        }
-        UiIcon::EyeClosed => {
-            let (lid, lashes) = closed_eye_icon_geometry(rect);
-            painter.add(egui::Shape::CubicBezier(
-                egui::epaint::CubicBezierShape::from_points_stroke(
-                    lid,
-                    false,
-                    Color32::TRANSPARENT,
-                    stroke,
-                ),
-            ));
-            for lash in lashes {
-                painter.line_segment(lash, stroke);
-            }
-        }
-        UiIcon::ZoomIn | UiIcon::ZoomOut => {
-            painter.line_segment(
-                [
-                    Pos2::new(rect.left() + 1.0, center.y),
-                    Pos2::new(rect.right() - 1.0, center.y),
-                ],
-                stroke,
-            );
-            if icon == UiIcon::ZoomIn {
-                painter.line_segment(
-                    [
-                        Pos2::new(center.x, rect.top() + 1.0),
-                        Pos2::new(center.x, rect.bottom() - 1.0),
-                    ],
-                    stroke,
-                );
-            }
-        }
-        UiIcon::FitWidth => {
-            painter.line_segment(
-                [
-                    Pos2::new(rect.left(), rect.top()),
-                    Pos2::new(rect.left(), rect.bottom()),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(rect.right(), rect.top()),
-                    Pos2::new(rect.right(), rect.bottom()),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(rect.left() + 3.0, center.y),
-                    Pos2::new(rect.right() - 3.0, center.y),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(rect.left() + 3.0, center.y),
-                    Pos2::new(rect.left() + 6.0, center.y - 3.0),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(rect.right() - 3.0, center.y),
-                    Pos2::new(rect.right() - 6.0, center.y - 3.0),
-                ],
-                stroke,
-            );
-        }
-        UiIcon::Warning => {
-            painter.add(egui::Shape::convex_polygon(
-                vec![
-                    Pos2::new(center.x, rect.top()),
-                    rect.right_bottom(),
-                    rect.left_bottom(),
-                ],
-                Color32::TRANSPARENT,
-                stroke,
-            ));
-            painter.line_segment(
-                [
-                    Pos2::new(center.x, rect.top() + 4.0),
-                    Pos2::new(center.x, rect.bottom() - 4.0),
-                ],
-                stroke,
-            );
-            painter.circle_filled(Pos2::new(center.x, rect.bottom() - 2.0), 1.0, color);
-        }
-    }
-}
-
 fn clipped_panel_content_ui(ui: &mut egui::Ui, id_salt: &'static str) -> egui::Ui {
     let viewport = ui.available_rect_before_wrap();
     let clip_rect = ui.clip_rect().intersect(viewport);
@@ -10292,654 +9869,6 @@ fn utc_timestamp_from_unix_seconds(seconds: u64) -> String {
         (seconds / 60) % 60,
         seconds % 60
     )
-}
-
-fn color_theme_choice_label(choice: &ColorThemeChoice) -> String {
-    match choice {
-        ColorThemeChoice::Builtin(id) => builtin_themes::find(id)
-            .map_or_else(|| format!("Unknown · {id}"), |theme| theme.name.to_owned()),
-        ColorThemeChoice::Sublime(path) => Path::new(path)
-            .file_stem()
-            .and_then(|name| name.to_str())
-            .filter(|name| !name.is_empty())
-            .map_or_else(
-                || "Imported Sublime theme".to_owned(),
-                |name| name.to_owned(),
-            ),
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum FontPickerSelection {
-    Default,
-    Editor,
-    Family {
-        name: String,
-        path: String,
-        face_index: u32,
-    },
-}
-
-fn show_font_family_picker(
-    ui: &mut egui::Ui,
-    id: &'static str,
-    catalog: &FontCatalog,
-    selected_path: Option<&str>,
-    selected_family: Option<&str>,
-    default_label: &'static str,
-    offer_editor_font: bool,
-) -> Option<FontPickerSelection> {
-    let selected_text = selected_family
-        .map(str::to_owned)
-        .or_else(|| {
-            selected_path.and_then(|path| {
-                Path::new(path)
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .map(str::to_owned)
-            })
-        })
-        .unwrap_or_else(|| default_label.to_owned());
-    let mut selection = None;
-    egui::ComboBox::from_id_salt(id)
-        .width(190.0)
-        .height(350.0)
-        .selected_text(selected_text)
-        .show_ui(ui, |ui| {
-            let query_id = ui.id().with("font-search");
-            let mut query = ui
-                .ctx()
-                .data(|data| data.get_temp::<String>(query_id).unwrap_or_default());
-            ui.add(egui::TextEdit::singleline(&mut query).hint_text("Search fonts"));
-            ui.ctx()
-                .data_mut(|data| data.insert_temp(query_id, query.clone()));
-            if offer_editor_font {
-                if ui
-                    .selectable_label(
-                        selected_path.is_none() && default_label == "System UI",
-                        "System UI",
-                    )
-                    .clicked()
-                {
-                    selection = Some(FontPickerSelection::Default);
-                }
-                if ui
-                    .selectable_label(
-                        selected_path.is_none() && default_label == "Editor font",
-                        "Editor font",
-                    )
-                    .clicked()
-                {
-                    selection = Some(FontPickerSelection::Editor);
-                }
-            } else if ui
-                .selectable_label(selected_path.is_none(), default_label)
-                .clicked()
-            {
-                selection = Some(FontPickerSelection::Default);
-            }
-            let mut previous_origin = None;
-            for family in catalog
-                .families()
-                .iter()
-                .filter(|family| crate::completion::fuzzy_score(&family.name, &query).is_some())
-            {
-                if previous_origin != Some(family.origin) {
-                    ui.separator();
-                    ui.label(RichText::new(family.origin.label()).strong());
-                    previous_origin = Some(family.origin);
-                }
-                let is_selected = selected_family
-                    .is_some_and(|selected| selected.eq_ignore_ascii_case(&family.name))
-                    && selected_path.is_some_and(|path| family.contains_path(Path::new(path)));
-                let response = ui
-                    .selectable_label(is_selected, &family.name)
-                    .on_hover_ui(|ui| {
-                        ui.label(&family.name);
-                        crate::font_preview::show(ui, id, family);
-                    });
-                if response.clicked()
-                    && let Some(face) = family.primary_face()
-                {
-                    selection = Some(FontPickerSelection::Family {
-                        name: family.name.clone(),
-                        path: face.path.display().to_string(),
-                        face_index: face.index,
-                    });
-                }
-            }
-        });
-    selection
-}
-
-fn update_staged_font_weight(
-    committed: &mut u16,
-    staged: &mut Option<u16>,
-    displayed: u16,
-    changed: bool,
-    pointer_down: bool,
-    drag_stopped: bool,
-) {
-    if drag_stopped {
-        *committed = if changed {
-            displayed
-        } else {
-            staged.take().unwrap_or(displayed)
-        };
-        *staged = None;
-    } else if changed && pointer_down {
-        *staged = Some(displayed);
-    } else if changed {
-        *committed = displayed;
-        *staged = None;
-    }
-}
-
-fn show_font_weight_control(
-    ui: &mut egui::Ui,
-    id_salt: impl std::hash::Hash + std::fmt::Debug,
-    weight: &mut u16,
-    staged_weight: &mut Option<u16>,
-    support: Option<&theme::FontWeightSupport>,
-) {
-    let Some(support) = support else {
-        ui.label(RichText::new("Static weight").weak());
-        return;
-    };
-    ui.label(RichText::new("Weight").strong());
-    match support {
-        theme::FontWeightSupport::Continuous { min, max, .. } => {
-            *weight = (*weight).clamp(*min, *max);
-            let mut displayed = staged_weight.unwrap_or(*weight).clamp(*min, *max);
-            let response = ui.add_sized(
-                [
-                    METRICS.settings.ui_font_weight_width,
-                    ui.spacing().interact_size.y,
-                ],
-                egui::Slider::new(&mut displayed, *min..=*max)
-                    .clamping(egui::SliderClamping::Always),
-            );
-            update_staged_font_weight(
-                weight,
-                staged_weight,
-                displayed,
-                response.changed(),
-                response.is_pointer_button_down_on() || response.dragged(),
-                response.drag_stopped(),
-            );
-        }
-        theme::FontWeightSupport::Discrete { values, .. } => {
-            *staged_weight = None;
-            *weight = support.clamp(*weight);
-            ui.push_id(id_salt, |ui| {
-                egui::ComboBox::from_id_salt("font-weight")
-                    .selected_text(weight.to_string())
-                    .show_ui(ui, |ui| {
-                        for value in values {
-                            ui.selectable_value(weight, *value, value.to_string());
-                        }
-                    });
-            });
-        }
-    }
-    if ui.small_button("Reset").clicked() {
-        *weight = support.default_weight();
-        *staged_weight = None;
-    }
-}
-
-fn show_typst_override_editor(
-    ui: &mut egui::Ui,
-    overrides: &mut TypstStyleOverrides,
-    palette: theme::SyntaxPalette,
-    syntect_theme: &syntect::highlighting::Theme,
-    weight_support: &theme::FontWeightSupport,
-) {
-    for group in ["Markup", "Math", "Code", "Diagnostics"] {
-        ui.label(RichText::new(group).strong());
-        egui::Grid::new(("typst-override-grid", group))
-            .num_columns(9)
-            .striped(true)
-            .spacing(egui::vec2(theme::SPACE.control, theme::SPACE.tight))
-            .show(ui, |ui| {
-                ui.add_sized(
-                    [
-                        METRICS.settings.override_role_width,
-                        METRICS.settings.override_row_height,
-                    ],
-                    egui::Label::new(RichText::new("Syntax").size(theme::TYPE.supporting).weak()),
-                );
-                for (label, width) in [
-                    ("Foreground", METRICS.settings.override_color_width),
-                    ("Background", METRICS.settings.override_color_width),
-                    ("Weight", METRICS.settings.override_weight_width),
-                    ("Italic", METRICS.settings.override_decoration_width),
-                    ("Underline", METRICS.settings.override_decoration_width),
-                    ("Strike", METRICS.settings.override_decoration_width),
-                ] {
-                    ui.add_sized(
-                        [width, METRICS.settings.override_row_height],
-                        egui::Label::new(RichText::new(label).size(theme::TYPE.supporting).weak())
-                            .truncate(),
-                    );
-                }
-                ui.add_sized(
-                    [
-                        METRICS.settings.override_sample_width,
-                        METRICS.settings.override_row_height,
-                    ],
-                    egui::Label::new(
-                        RichText::new("Live sample")
-                            .size(theme::TYPE.supporting)
-                            .weak(),
-                    ),
-                );
-                ui.add_sized(
-                    [
-                        METRICS.settings.override_reset_width,
-                        METRICS.settings.override_row_height,
-                    ],
-                    egui::Label::new(""),
-                );
-                ui.end_row();
-
-                for role in TypstSyntaxRole::ALL
-                    .into_iter()
-                    .filter(|role| role.group() == group)
-                {
-                    let inherited = ResolvedTypstStyles::resolve_style(
-                        role,
-                        palette,
-                        Some(syntect_theme),
-                        None,
-                    );
-                    let mut style_override = overrides.get(role).cloned().unwrap_or_default();
-                    ui.add_sized(
-                        [
-                            METRICS.settings.override_role_width,
-                            METRICS.settings.override_row_height,
-                        ],
-                        egui::Label::new(role.label()).truncate(),
-                    );
-                    optional_color_override(
-                        ui,
-                        (role, "foreground"),
-                        &mut style_override.foreground,
-                        inherited.foreground,
-                    );
-                    optional_color_override(
-                        ui,
-                        (role, "background"),
-                        &mut style_override.background,
-                        inherited.background,
-                    );
-                    optional_weight_override(
-                        ui,
-                        (role, "weight"),
-                        &mut style_override.weight,
-                        inherited.weight,
-                        weight_support,
-                    );
-                    optional_bool_override(ui, (role, "italic"), "I", &mut style_override.italic);
-                    optional_bool_override(
-                        ui,
-                        (role, "underline"),
-                        "U",
-                        &mut style_override.underline,
-                    );
-                    optional_bool_override(
-                        ui,
-                        (role, "strike"),
-                        "S",
-                        &mut style_override.strikethrough,
-                    );
-
-                    let resolved = ResolvedTypstStyles::resolve_style(
-                        role,
-                        palette,
-                        Some(syntect_theme),
-                        Some(&style_override),
-                    );
-                    let mut sample = egui::text::LayoutJob::default();
-                    sample.append(role.sample(), 0.0, resolved.text_format());
-                    ui.add_sized(
-                        [
-                            METRICS.settings.override_sample_width,
-                            METRICS.settings.override_row_height,
-                        ],
-                        egui::Label::new(sample).truncate(),
-                    );
-
-                    if ui
-                        .add_sized(
-                            [
-                                METRICS.settings.override_reset_width,
-                                METRICS.settings.override_row_height,
-                            ],
-                            egui::Button::new("Reset"),
-                        )
-                        .clicked()
-                    {
-                        style_override = TypstStyleOverride::default();
-                    }
-                    overrides.set(role, style_override);
-                    ui.end_row();
-                }
-            });
-        ui.add_space(theme::SPACE.small);
-    }
-}
-
-fn optional_color_override(
-    ui: &mut egui::Ui,
-    id: impl std::hash::Hash + std::fmt::Debug,
-    value: &mut Option<Rgba>,
-    inherited: Color32,
-) {
-    ui.push_id(id, |ui| {
-        ui.allocate_ui_with_layout(
-            egui::vec2(
-                METRICS.settings.override_color_width,
-                METRICS.settings.override_row_height,
-            ),
-            Layout::left_to_right(Align::Center),
-            |ui| {
-                theme::apply_compact_control_spacing(ui);
-                let mut color = value.map_or(inherited, color_from_rgba);
-                let response = ui.color_edit_button_srgba(&mut color);
-                if response.changed() {
-                    *value = Some(rgba_from_color(color));
-                }
-            },
-        );
-    });
-}
-
-fn optional_bool_override(
-    ui: &mut egui::Ui,
-    id: impl std::hash::Hash + std::fmt::Debug,
-    label: &str,
-    value: &mut Option<bool>,
-) {
-    let state = typst_override_state(*value);
-    if ui
-        .push_id(id, |ui| {
-            typst_overrides_hover_text(
-                ui.add_sized(
-                    [
-                        METRICS.settings.override_decoration_width,
-                        METRICS.settings.override_row_height,
-                    ],
-                    egui::Button::new(format!("{label} {state}")),
-                ),
-                typst_override_toggle_tooltip(label, *value),
-            )
-        })
-        .inner
-        .clicked()
-    {
-        *value = next_typst_override_state(*value);
-    }
-}
-
-fn optional_weight_override(
-    ui: &mut egui::Ui,
-    id: impl std::hash::Hash + std::fmt::Debug,
-    value: &mut Option<u16>,
-    inherited: u16,
-    support: &theme::FontWeightSupport,
-) {
-    ui.push_id(id, |ui| {
-        ui.allocate_ui_with_layout(
-            egui::vec2(
-                METRICS.settings.override_weight_width,
-                METRICS.settings.override_row_height,
-            ),
-            Layout::left_to_right(Align::Center),
-            |ui| {
-                egui::ComboBox::from_id_salt("value")
-                    .width(METRICS.settings.override_weight_width)
-                    .selected_text(
-                        value.map_or_else(|| format!("inherit · {inherited}"), |it| it.to_string()),
-                    )
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(value, None, format!("Inherit · {inherited}"));
-                        match support {
-                            theme::FontWeightSupport::Continuous { min, max, .. } => {
-                                for weight in theme::EDITOR_FONT_WEIGHTS
-                                    .into_iter()
-                                    .filter(|weight| weight >= min && weight <= max)
-                                {
-                                    ui.selectable_value(value, Some(weight), weight.to_string());
-                                }
-                            }
-                            theme::FontWeightSupport::Discrete { values, .. } => {
-                                for weight in values {
-                                    ui.selectable_value(value, Some(*weight), weight.to_string());
-                                }
-                            }
-                        }
-                    });
-            },
-        );
-    });
-}
-
-fn typst_override_state(value: Option<bool>) -> &'static str {
-    match value {
-        None => "inherit",
-        Some(true) => "on",
-        Some(false) => "off",
-    }
-}
-
-fn next_typst_override_state(value: Option<bool>) -> Option<bool> {
-    match value {
-        None => Some(true),
-        Some(true) => Some(false),
-        Some(false) => None,
-    }
-}
-
-fn typst_override_toggle_tooltip(label: &str, value: Option<bool>) -> String {
-    format!("{label}: {}; click to cycle", typst_override_state(value))
-}
-
-fn rgba_from_color(color: Color32) -> Rgba {
-    let [red, green, blue, alpha] = color.to_srgba_unmultiplied();
-    Rgba::from_rgba(red, green, blue, alpha)
-}
-
-fn color_from_rgba(color: Rgba) -> Color32 {
-    Color32::from_rgba_unmultiplied(color.r, color.g, color.b, color.a)
-}
-
-fn settings_value_row(ui: &mut egui::Ui, name: &str, value: &str) {
-    ui.horizontal_wrapped(|ui| {
-        settings_inline_value(ui, name, value);
-    });
-}
-
-fn settings_inline_value(ui: &mut egui::Ui, name: &str, value: &str) {
-    ui.label(RichText::new(format!("{name}:")).weak());
-    ui.label(value);
-}
-
-fn tool_preference_editor(
-    ui: &mut egui::Ui,
-    label: &str,
-    preference: &mut ToolPreference,
-    resolution: &ToolResolution,
-    deterministic_snapshot: bool,
-) -> bool {
-    let mut browse = false;
-    ui.push_id(label, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(label).strong());
-            for mode in ToolMode::ALL {
-                ui.selectable_value(&mut preference.mode, mode, mode.label());
-            }
-            ui.separator();
-            let (origin_label, color, full_path) = if deterministic_snapshot {
-                (
-                    "Bundled",
-                    success_color(ui.ctx()),
-                    format!(
-                        "<packaged>/{} {}",
-                        resolution.kind.binary_name(),
-                        resolution.kind.bundled_version()
-                    ),
-                )
-            } else {
-                let color = match resolution.origin {
-                    ToolOrigin::Bundled | ToolOrigin::Custom => success_color(ui.ctx()),
-                    ToolOrigin::Environment | ToolOrigin::Path => warning_color(ui.ctx()),
-                    ToolOrigin::Missing => error_color(ui.ctx()),
-                };
-                (
-                    resolution.origin.label(),
-                    color,
-                    resolution.program.display().to_string(),
-                )
-            };
-            ui.label(
-                RichText::new(origin_label)
-                    .size(theme::TYPE.supporting)
-                    .strong()
-                    .color(color),
-            );
-            let path_width = ui
-                .available_width()
-                .max(METRICS.settings.tool_path_min_width);
-            let path_chars = approximate_char_capacity(
-                path_width,
-                METRICS.settings.tool_path_estimated_font_size,
-            );
-            let visible_path = tail_elide(&full_path, path_chars);
-            let elided = visible_path != full_path;
-            let path = ui.add_sized(
-                [path_width, METRICS.settings.tool_path_row_height],
-                egui::Label::new(
-                    RichText::new(visible_path)
-                        .size(theme::TYPE.supporting)
-                        .monospace(),
-                )
-                .truncate(),
-            );
-            if elided
-                || path
-                    .intrinsic_size()
-                    .is_some_and(|size| size.x > path.rect.width())
-            {
-                settings_hover_text(path, full_path);
-            }
-        });
-        if preference.mode == ToolMode::Custom {
-            ui.horizontal_wrapped(|ui| {
-                let path_width =
-                    (ui.available_width() - METRICS.settings.tool_custom_label_reserve).clamp(
-                        METRICS.settings.tool_custom_min_width,
-                        METRICS.settings.tool_custom_max_width,
-                    );
-                ui.add(
-                    egui::TextEdit::singleline(&mut preference.custom_path)
-                        .hint_text("/absolute/path/to/executable")
-                        .desired_width(path_width),
-                );
-                browse |= ui.button("Browse…").clicked();
-            });
-        }
-    });
-    browse
-}
-
-fn fallback_notice(ui: &mut egui::Ui, label: &str, reason: &str) {
-    let color = warning_color(ui.ctx());
-    ui.group(|ui| {
-        ui.label(
-            RichText::new(label)
-                .size(theme::TYPE.supporting)
-                .strong()
-                .color(color),
-        );
-        ui.label(reason);
-    });
-}
-
-fn show_tool_status_chip(ui: &mut egui::Ui, name: &str, resolution: &ToolResolution) {
-    let color = match resolution.origin {
-        ToolOrigin::Bundled | ToolOrigin::Custom => success_color(ui.ctx()),
-        ToolOrigin::Environment | ToolOrigin::Path => warning_color(ui.ctx()),
-        ToolOrigin::Missing => error_color(ui.ctx()),
-    };
-    show_status_chip(
-        ui,
-        name,
-        resolution.origin.label(),
-        &resolution.detail(),
-        color,
-    );
-}
-
-fn show_service_status_chip(ui: &mut egui::Ui, name: &str, state: &ServiceState) {
-    let color = match state {
-        ServiceState::Ready(_) => success_color(ui.ctx()),
-        ServiceState::Starting(_) => info_color(ui.ctx()),
-        ServiceState::Degraded(_) => warning_color(ui.ctx()),
-        ServiceState::Failed(_) => error_color(ui.ctx()),
-        ServiceState::Disabled(_) | ServiceState::Unsupported(_) => neutral_color(ui.ctx()),
-    };
-    show_status_chip(ui, name, state.label(), state.detail(), color);
-}
-
-fn show_status_chip(ui: &mut egui::Ui, name: &str, status: &str, detail: &str, color: Color32) {
-    let show_detail = settings_status_has_detail(name, status, detail);
-    let name = RichText::new(name).strong();
-    let status = RichText::new(status)
-        .size(theme::TYPE.supporting)
-        .strong()
-        .color(color);
-    let text_size = |text: RichText| {
-        egui::WidgetText::from(text)
-            .into_galley(
-                ui,
-                Some(egui::TextWrapMode::Extend),
-                f32::INFINITY,
-                egui::TextStyle::Body,
-            )
-            .size()
-    };
-    let name_size = text_size(name.clone());
-    let status_size = text_size(status.clone());
-    let frame = theme::status_chip_frame(ui.style());
-    let size = Vec2::new(
-        name_size.x + ui.spacing().item_spacing.x + status_size.x,
-        name_size.y.max(status_size.y),
-    ) + frame.total_margin().sum();
-    let response = ui
-        .allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), |ui| {
-            frame
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Label::new(name).extend());
-                        ui.add(egui::Label::new(status).extend());
-                    });
-                })
-                .response
-        })
-        .inner;
-    if show_detail {
-        settings_hover_text(response, detail);
-    }
-}
-
-fn settings_status_has_detail(name: &str, status: &str, detail: &str) -> bool {
-    let detail = detail.trim().trim_end_matches('.');
-    !detail.is_empty()
-        && !detail.eq_ignore_ascii_case(status)
-        && !detail.eq_ignore_ascii_case(name)
-        && !detail.eq_ignore_ascii_case(&format!("{name} {status}"))
-        && !detail.eq_ignore_ascii_case(&format!("{name}: {status}"))
 }
 
 fn non_preview_fallback_details_for(
@@ -11420,13 +10349,9 @@ fn show_file_popup_ui(
         ui,
         CommandMenu::File,
         CommandAvailability {
-            empty_workspace: false,
-            can_undo: false,
-            can_redo: false,
             saved_document: rename_path.is_some(),
-            typst_document: false,
             typst_preview,
-            interactive_preview: false,
+            ..Default::default()
         },
         shortcuts,
         action,
@@ -11446,13 +10371,11 @@ fn show_edit_popup_ui(
         ui,
         CommandMenu::Edit,
         CommandAvailability {
-            empty_workspace: false,
             can_undo,
             can_redo,
-            saved_document: false,
             typst_document: can_format,
-            typst_preview: false,
             interactive_preview: can_sync_preview,
+            ..Default::default()
         },
         shortcuts,
         action,
@@ -11469,13 +10392,8 @@ fn show_view_popup_ui(
         ui,
         CommandMenu::View,
         CommandAvailability {
-            empty_workspace: false,
-            can_undo: false,
-            can_redo: false,
-            saved_document: false,
             typst_document,
-            typst_preview: false,
-            interactive_preview: false,
+            ..Default::default()
         },
         shortcuts,
         action,
