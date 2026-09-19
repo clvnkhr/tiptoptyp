@@ -4,263 +4,7 @@
 #show "[ ]": box(stroke: 1pt, height: 0.8em, width: 0.8em)
 #show "[x]": box(stroke: 1pt, height: 0.8em, width: 0.8em, fill: green, [#set align(center);x])
 = running todo list
-
-== Postmortem extraction plan (18 September 2026)
-
-236. [x] Extract cohesive leaf views with explicit imports: Explorer rendering,
-popup/menu geometry and package browser. Delete original copies; record root and
-total production line changes. Preserve behavior without adding state or workers.
-Implemented in `src/app/explorer_view.rs`, `package_browser.rs` and
-`popup_layout.rs`. The original definitions are deleted. Relative to the
-working-tree snapshot before this extraction, app.rs is 14,033 → 12,840 lines
-(−1,193); app.rs plus these modules is 14,102 (+69 lines of module/import and
-formatting overhead). This is relocation, not a code-size or performance win.
-Existing test-only helpers move unchanged; the separate architecture boundary
-test adds 20 lines. Explorer ownership/effects in show_workspace remain for 238.
-No runtime scheduling, allocations, repaint policy or native bounds changed.
-Verification: all 28 focused Explorer tests, 1,058 full-suite test executions
-(16 opt-in tests ignored), 13 xtask tests, formatting and strict all-target Clippy
-pass. No screenshot or timing claim is needed for unchanged rendering and work;
-native navigation acceptance remains explicitly part of 237, not this extraction.
-
-237. [ ] Consolidate Problems, index and preview navigation/focus handoff after
-reproducing the native failure. Test document/range routing and secondary owners;
-do not equate helper tests with verified native word-navigation behavior.
-Implementation: `src/app/navigation.rs` owns destination conversion, diagnostic
-targeting, current-file/deferred routing and source-range handoff. File links and
-Explorer entries share routing; Problems retain already-mapped editor coordinates,
-while canonical file/LSP positions still use the miTeX mapping. Existing document
-workflow epoch checks and native-parent → viewport → TextEdit focus order remain.
-Reproduced a concrete focus failure before fixing it: with Find open, a source
-jump moved the caret but left Find focused. The existing pending selection now
-distinguishes Search (retain focus) from Focus (source/editor navigation), rather
-than introducing a separate focus flag. Find stays open after navigation.
-Regression coverage exercises all three entry points in root and secondary
-viewports, Option/Cmd Left/Right, owner-only one-shot focus and Find focus retention.
-This is deterministic UI coverage, not an observed macOS WebView first-responder
-handoff; leave the item open for that native acceptance check.
-Accounting versus the preceding leaf-extraction commit: app.rs 12,840 → 12,647
-(−193); navigation module 226 lines; other production adapters +3, for +36 total
-non-test lines. Tests +181. The added selection intent fixes a demonstrated
-correctness gap; it is not claimed as a net-negative consolidation. No workers,
-repaint loops, per-frame source copies or native geometry changes are introduced;
-the extra branch runs only for a pending selection. No timing speedup is claimed.
-Verification: failing-before/passing-after Find-open focus regression, all 13
-navigation-filter tests, Find focus-retention test, 1,061 full-suite test executions
-(16 opt-in tests ignored), 13 xtask tests, formatting and strict all-target Clippy
-pass. Native WebView delivery remains unverified; subsequent steps are tracked below.
-
-238. [x] Narrow Explorer ownership to explicit tree/index/selection inputs and
-typed actions, with watcher effects outside painting. Remove full EditorApp access
-from the view and relocate its corresponding presentation state.
-`explorer_view::show` now receives borrowed tree/index/active/preview/status inputs,
-the existing Explorer panel state, and a Git-only paint callback. Its bounded
-output returns navigation, context-menu, refresh, workspace-picker, package and
-Git actions. The app applies effects after painting; no tree/index snapshot is
-cloned, and path selection borrows snapshot entries. Search focus and Git reveal
-are consumed by ExplorerPanelState instead of separate EditorApp flags. Tree IDs,
-clipping, section persistence, filtering and resize behavior remain unchanged.
-Tests exercise the view without EditorApp, click an index destination, verify no
-hidden Git painting, and check owner-local one-shot presentation requests.
-Architecture checks reject app/worker/watcher/effect access from the view.
-Accounting: app.rs 12,647 → 12,400 (−247); Explorer view +322, panel implementation
-+16: +91 non-test source lines for the explicit boundary, not a code-size win.
-Tests +92 including the dependency rule. No new workers, source copies or idle
-repaints; unchanged drawing/geometry does not require a new framebuffer capture.
-
-239. [x] Thin save completion around existing receipts: consolidate active/parked
-identity and continuations without weakening disk leases or durability. Cover
-same-path, Save As, close and stale results; require net-negative production code.
-Active and parked receipts use one stable-tab document lookup and the existing
-workflow receipt gate. Only an active synchronized save may release its matching
-continuation; parked completions cannot consume a newer active-tab close request.
-Workspace assignment and history handling no longer repeat across active/parked
-branches. The disk transaction, lease, conflict checks and receipt format are
-unchanged. Uncertain durability still records committed bytes but never closes
-or formats the document. Existing real-file tests cover same-path, Save As,
-reordered parked tabs, conflict reconfirmation and stale owner/revision results;
-expanded tests cover newer continuation isolation and an injected uncertain
-confirmation on a real disk-write receipt. Net production change: −9 lines;
-test change: +78 lines. Effects are still completion-driven; no extra worker,
-source serialization or periodic repaint was added. No timing speedup is claimed.
-
-Steps 238–239 verification: 30 focused Explorer tests, 27 focused save tests
-(2 opt-in tests ignored), all 1,065 full-suite test executions (16 opt-in tests
-ignored), all 13 xtask tests, formatting and strict all-target Clippy pass.
-The extraction preserves rendering algorithms and service scheduling; no material
-performance impact is expected, and no matched native timing measurement or
-visual verification is claimed. Step 237's native focus acceptance remains open.
-
-240. [x] Inventory preview connection/content/visibility/generation writers and
-remove duplicate policy from receive/restart adapters using existing controllers.
-Keep one policy owner, no extra retry state, per-frame copies or repaint loops.
-Work sequentially; report accounting and regression evidence per extraction.
-Implemented readiness and visibility policy in the existing PreviewController;
-native view/cache teardown now has one UI-thread implementation. Removed duplicate
-Starting-event initialization, no-document status/connection cleanup, and the
-redundant session-request predicate. Invalid preview endpoints no longer reset
-recovery before admission: they use the existing one-second retry/five-failure
-fallback policy. No new executor, counter, polling or source-copy path. Inventory,
-remaining adapter responsibilities, accounting and limitations are recorded in
-`docs/preview-ownership.md`. app.rs −59 lines; total production +22 for the explicit
-admission boundary and suspension fix; tests +179. This is not a code-size win.
-The final audit also reproduced stale preview-enabled state after suspension:
-later visibility checks repeatedly requested restart. Suspension now clears that
-flag and visibility memory; the regression verifies 100 subsequent checks emit
-no effects. No spontaneous repaint loop or measured speedup is claimed.
-Verification: 18 focused preview tests; audit baseline of 14 navigation,
-30 Explorer and 27 save tests (2 opt-in saves ignored); final full suite
-1,069 passed (16 opt-in tests ignored), 13 xtask tests, formatting and strict
-all-target Clippy pass. No native composition or focus validation was performed.
-
-241. [x] Audit extraction steps 1–4 before changing preview ownership. Review
-Explorer identity/clipping/state and post-paint effects, search versus navigation
-focus, and active/parked save identity, durability and continuation isolation.
-No introduced regression found in the reviewed paths. Expand the parked receipt
-test to cover both matching old-close cancellation and newer-close preservation.
-The preview admission bug fixed in 240 was present before these extractions.
-Keep step 237's native WebView focus verification open; automated UI assertions
-are not a claim of native end-to-end validation.
-
-242. [x] Audit the extraction implementations for incorrect edge paths and
-remove redundant code rather than relocate it. This follow-up found two holes
-missed by 241: file/index navigation treated an untitled backing path as another
-document, and a failed save worker could cancel a newer close continuation.
-Both were reproduced with failing tests before fixing. Share current-source
-identity across navigation routes; retain the submitting continuation token for
-worker failures that have no completion receipt. A stale failure remains visible
-as a notice without cancelling the newer workflow.
-Simplify Explorer painting: one concrete action output instead of parallel locals
-and an unused generic parameter, one snapshot lookup, and one empty-state renderer
-instead of repeated iterator probes and labels. Preserve borrowed inputs, row
-identity, clipping and post-paint effects. Add semantic coverage for all six index
-sections with empty and filtered results, including the package browse control.
-Relative to the start of this cleanup, production code is 74 lines smaller
-(Explorer −68, navigation −14, save safety +8); regression tests add 89 lines,
-so total Rust source grows by 15. No changes are hidden as file moves.
-No material runtime performance impact is expected: no new workers, repaint
-requests, per-frame document copies or index collections. No native performance
-measurement or visual/focus verification is claimed; item 237 remains open.
-Verification: 1,072 full-suite tests passed (16 opt-in tests ignored), all 13
-xtask tests passed, and formatting, strict all-target Clippy and diff whitespace
-checks passed on macOS. Both bug regressions were also run individually.
-
-243. [x] Apply deletion-first cleanup from postpostmortem section 4. Merge the
-two document-open setup paths while preserving their titles, Images-filter
-difference, native parent, initial directory, request key and destination.
-Keep existing-dialog admission before native parenting. Share raster zoom
-effects between keyboard and toolbar, including bounds, reset and leaving
-fit-width mode; keep painting responsible for applying the requested zoom.
-Delete the unused title-wrapper parameter and forwarding method; use the
-existing false defaults for menu availability instead of restating each flag.
-No new controller, state, worker, allocation path or repaint request. Shortcut
-focus/admission and distinct preview-generation gates remain separate.
-Tests cover both open destinations retaining an existing dialog and zoom
-bounds/reset/deferred application; existing menu and shortcut tests retain
-the integration coverage. Native dialogs were not opened or visually verified.
-No material performance impact is expected from this on-demand deduplication.
-Accounting against this task's starting worktree: app.rs 12,341 → 12,279 (−62),
-raster production +2, tests +39: production −60 and total Rust −21. No file moves.
-Verification: 1,074 full-suite tests pass (16 opt-in tests ignored), 13 xtask
-tests pass, and formatting, strict all-target Clippy and whitespace checks pass.
-
-244. [x] Split cohesive presentation helpers out of app.rs without another
-controller or a generic helpers module. `app/icons.rs` owns vector icon kinds,
-painting, button hit targets and geometry. `app/settings_controls.rs` owns
-borrowed font/weight selectors, syntax overrides, tool preferences and status
-controls. Settings renderers import their controls directly from that sibling;
-neither new module receives EditorApp or starts services. Extend the existing
-dependency guard to both modules. Keep lifecycle/save/preview orchestration
-unchanged rather than merely redistribute methods with app-wide access.
-Moved bodies match their originals after ignoring visibility and rustfmt
-whitespace/trailing commas. No control geometry, IDs, drawing, scheduling,
-allocation algorithm or repaint behavior changed; no material performance impact
-is expected, and no fresh screenshot is required or claimed for this relocation.
-Accounting against the pre-split worktree: app.rs 12,279 → 11,318 (−961);
-new icons 320 and Settings controls 672 lines. Including caller/test imports and
-the expanded guard, total Rust grows by 46 lines. This is organization, not
-deletion or an ownership rewrite of the remaining coordinator.
-Verification: focused icon (4), Settings (47), font-weight (3) and syntax-override
-(3) tests pass; full suite 1,074 passed with 16 opt-in tests ignored; all 13 xtask
-tests, formatting, strict all-target Clippy and whitespace checks pass.
-
-245. [x] Add dependency licensing and supply-chain checks to CI and packaging.
-`cargo-deny` now checks advisories, bans, licenses and sources using `deny.toml`;
-the current transitive advisory exceptions are explicit and documented in that
-file, while duplicate versions remain warnings. `cargo-about` now runs from the
-packaging hook using `about.toml` and `about.hbs`. `THIRD_PARTY_NOTICES` is
-generated as a distributed package resource from the cargo-about output plus
-the maintained theme attributions, complete pinned Typst/Tinymist notices and
-complete embedded-font OFL texts. `docs/theme-sources.md` is now the actual
-palette attribution/license source rather than a link-only inventory. CI
-validates cargo-deny and cargo-about generation; an explicit `generate-notices`
-xtask command reproduces the aggregate locally. The generated notice is plain
-text and currently 12,892 lines. No application runtime path, worker, repaint
-or performance-sensitive code changed. Local validation: cargo-deny advisories,
-bans, licenses and sources pass (duplicate-version warnings remain), 1,074
-normal tests pass, 13 xtask tests pass, formatting and strict Clippy pass.
-
-== Regression execution follow-up (18 September 2026)
-
-228. [x] Fix the no-document retained-host Settings panic at
-`src/app/settings_view.rs:98`: preview unavailability does not imply a non-Typst
-document, because an empty tab store retains a Typst placeholder. Reproduced
-without manual input using `RUST_BACKTRACE=1 cargo xtask profile --scenario
-no-window --warmup 5 --seconds 5 --sampler none --skip-build` on d3ca9886.
-The actual hidden-host UI regression reproduced this panic before the fix and
-now covers hidden/visible Settings and resumption. Empty hosts report “No
-document”; New Window, Open in New Window and Settings remain available, while
-plain New/Open and document actions are disabled. Command-dispatch regressions
-cover reopening. Native close/reopen and the Open in New Window picker were
-exercised in an isolated app; file selection in that picker was not completed
-because the automation clipboard operation timed out. The native no-window
-runner also exposed an early-close CGL failure in its own transition: it now
-closes after the owner UI pass, registering the retained Settings surface just
-like a native close, and completes without panic. No polling or repaint loop
-was added. Evidence and remaining limitations: `regression-results.typ`.
-
-229. [ ] Restore a reliable native hover profiling capture: the `hover` scenario
-timed out before readiness after 120 seconds on the same optimized build while
-main, Settings and multi-window scenarios completed. Diagnose capture/event
-delivery before interpreting this as an application hang; preserve the timeout
-log and validate actual popup entry/scroll separately from helper tests.
-
 == Existing tasks
-
-231. [x] Use one app-wide Settings viewport owned by the retained process host.
-Route secondary-window and native-menu requests there, raise it on repeated
-requests, retain it when hidden, and remove per-document toolbar toggle coloring.
-Keep preference broadcasts to all documents. Add secondary-owner, fixed-viewport
-and native-command routing regressions; native multi-window reopening exercised.
-
-232. [x] Let Open and Open in New Window select a file or folder. Folder selections
-create an independent workspace with no open tabs and do not replace the current
-document. Explicit folder launches ignore last-file history. Test remembered-file
-suppression, empty tab state and no Tinymist start; inspect a native folder launch.
-
-233. [x] Do not restart or schedule the designated preview when Cmd+N adds an
-editor tab. Preserve preview ownership and service generation, register only the
-new untitled LSP document with real backing, and keep its Git/editor state local.
-Add a generation/status/deadline regression; native Cmd+N preserved the existing
-WebView endpoint and rendered document.
-
-234. [ ] Isolate the transient oddly shaped large-window flash reported when
-opening Settings with multiple main windows. Duplicate Settings ownership is
-fixed in 231, but steady-state native observations/framebuffers cannot certify
-that a short-lived flash is gone. Keep this separate from singleton acceptance.
-
-235. [x] Take over manual checklist cases 4, 7, 8 and 9 with disposable-file and
-deterministic stale-result tests. Record user passes for 1–3 without requiring
-another manual run. See regression-results.typ for exact test evidence and
-native-interaction limits; do not mark unobserved dialogs or timing races as
-native passes.
-
-230. [x] Identify executable builds in Settings → Status and `--version` / `-V`
-using package version, Git revision, dirty state and a build-time Unix timestamp.
-Refresh metadata on source/assets/Git changes, handle builds without Git, and
-keep all identification work out of runtime frame paths. Deterministic QA
-captures use a fixed label. Add a CLI regression that exits before GUI startup
-and document clean builds versus separately installed app bundles in README.
 
 Keep this list as the source of truth. Every task has a permanent number and
 `[ ]` (open, partial, unverified, or deferred) or `[x]` (completed). Never remove
@@ -551,6 +295,412 @@ does not include the viewer features in items 1, 118 or 163.
 226. [x] Correct the incomplete fixes in 225: keep retained tooltip overlays alive when the source hover disappears, prevent unrelated controls from clearing shared hover timers, restore the native first responder with WebView focus_parent, and reuse revision-cached syntax for asset hover instead of parsing the document on every pointer frame. Add lifecycle, timer-ownership and syntax-reuse regressions.
 227. [x] Repair undersized persisted Explorer widths on startup: restore the 230-point default when below the 160-point usable minimum, preserve valid saved widths and normal reopen behavior. Move partial project-index details into the workspace-header tooltip instead of showing a persistent warning row. The details describe potentially missing Explorer entries, not compilation failures. Add startup-size and warning-visibility regressions; no background jobs or repaint loops added.
 
+== Regression and acceptance follow-up (18 September 2026)
+
+228. [x] Fix the no-document retained-host Settings panic at
+`src/app/settings_view.rs:98`: preview unavailability does not imply a non-Typst
+document, because an empty tab store retains a Typst placeholder. Reproduced
+without manual input using `RUST_BACKTRACE=1 cargo xtask profile --scenario
+no-window --warmup 5 --seconds 5 --sampler none --skip-build` on d3ca9886.
+The actual hidden-host UI regression reproduced this panic before the fix and
+now covers hidden/visible Settings and resumption. Empty hosts report “No
+document”; New Window, Open in New Window and Settings remain available, while
+plain New/Open and document actions are disabled. Command-dispatch regressions
+cover reopening. Native close/reopen and the Open in New Window picker were
+exercised in an isolated app; file selection in that picker was not completed
+because the automation clipboard operation timed out. The native no-window
+runner also exposed an early-close CGL failure in its own transition: it now
+closes after the owner UI pass, registering the retained Settings surface just
+like a native close, and completes without panic. No polling or repaint loop
+was added. Evidence and remaining limitations: `regression-results.typ`.
+
+229. [ ] Restore a reliable native hover profiling capture: the `hover` scenario
+timed out before readiness after 120 seconds on the same optimized build while
+main, Settings and multi-window scenarios completed. Diagnose capture/event
+delivery before interpreting this as an application hang; preserve the timeout
+log and validate actual popup entry/scroll separately from helper tests.
+
+230. [x] Identify executable builds in Settings → Status and `--version` / `-V`
+using package version, Git revision, dirty state and a build-time Unix timestamp.
+Refresh metadata on source/assets/Git changes, handle builds without Git, and
+keep all identification work out of runtime frame paths. Deterministic QA
+captures use a fixed label. Add a CLI regression that exits before GUI startup
+and document clean builds versus separately installed app bundles in README.
+
+231. [x] Use one app-wide Settings viewport owned by the retained process host.
+Route secondary-window and native-menu requests there, raise it on repeated
+requests, retain it when hidden, and remove per-document toolbar toggle coloring.
+Keep preference broadcasts to all documents. Add secondary-owner, fixed-viewport
+and native-command routing regressions; native multi-window reopening exercised.
+
+232. [x] Let Open and Open in New Window select a file or folder. Folder selections
+create an independent workspace with no open tabs and do not replace the current
+document. Explicit folder launches ignore last-file history. Test remembered-file
+suppression, empty tab state and no Tinymist start; inspect a native folder launch.
+
+233. [x] Do not restart or schedule the designated preview when Cmd+N adds an
+editor tab. Preserve preview ownership and service generation, register only the
+new untitled LSP document with real backing, and keep its Git/editor state local.
+Add a generation/status/deadline regression; native Cmd+N preserved the existing
+WebView endpoint and rendered document.
+
+234. [ ] Isolate the transient oddly shaped large-window flash reported when
+opening Settings with multiple main windows. Duplicate Settings ownership is
+fixed in 231, but steady-state native observations/framebuffers cannot certify
+that a short-lived flash is gone. Keep this separate from singleton acceptance.
+
+235. [x] Take over manual checklist cases 4, 7, 8 and 9 with disposable-file and
+deterministic stale-result tests. Record user passes for 1–3 without requiring
+another manual run. See regression-results.typ for exact test evidence and
+native-interaction limits; do not mark unobserved dialogs or timing races as
+native passes.
+
+== Postmortem extraction plan (18 September 2026)
+
+236. [x] Extract cohesive leaf views with explicit imports: Explorer rendering,
+popup/menu geometry and package browser. Delete original copies; record root and
+total production line changes. Preserve behavior without adding state or workers.
+Implemented in `src/app/explorer_view.rs`, `package_browser.rs` and
+`popup_layout.rs`. The original definitions are deleted. Relative to the
+working-tree snapshot before this extraction, app.rs is 14,033 → 12,840 lines
+(−1,193); app.rs plus these modules is 14,102 (+69 lines of module/import and
+formatting overhead). This is relocation, not a code-size or performance win.
+Existing test-only helpers move unchanged; the separate architecture boundary
+test adds 20 lines. Explorer ownership/effects in show_workspace remain for 238.
+No runtime scheduling, allocations, repaint policy or native bounds changed.
+Verification: all 28 focused Explorer tests, 1,058 full-suite test executions
+(16 opt-in tests ignored), 13 xtask tests, formatting and strict all-target Clippy
+pass. No screenshot or timing claim is needed for unchanged rendering and work;
+native navigation acceptance remains explicitly part of 237, not this extraction.
+
+237. [ ] Consolidate Problems, index and preview navigation/focus handoff after
+reproducing the native failure. Test document/range routing and secondary owners;
+do not equate helper tests with verified native word-navigation behavior.
+Implementation: `src/app/navigation.rs` owns destination conversion, diagnostic
+targeting, current-file/deferred routing and source-range handoff. File links and
+Explorer entries share routing; Problems retain already-mapped editor coordinates,
+while canonical file/LSP positions still use the miTeX mapping. Existing document
+workflow epoch checks and native-parent → viewport → TextEdit focus order remain.
+Reproduced a concrete focus failure before fixing it: with Find open, a source
+jump moved the caret but left Find focused. The existing pending selection now
+distinguishes Search (retain focus) from Focus (source/editor navigation), rather
+than introducing a separate focus flag. Find stays open after navigation.
+Regression coverage exercises all three entry points in root and secondary
+viewports, Option/Cmd Left/Right, owner-only one-shot focus and Find focus retention.
+This is deterministic UI coverage, not an observed macOS WebView first-responder
+handoff; leave the item open for that native acceptance check.
+Accounting versus the preceding leaf-extraction commit: app.rs 12,840 → 12,647
+(−193); navigation module 226 lines; other production adapters +3, for +36 total
+non-test lines. Tests +181. The added selection intent fixes a demonstrated
+correctness gap; it is not claimed as a net-negative consolidation. No workers,
+repaint loops, per-frame source copies or native geometry changes are introduced;
+the extra branch runs only for a pending selection. No timing speedup is claimed.
+Verification: failing-before/passing-after Find-open focus regression, all 13
+navigation-filter tests, Find focus-retention test, 1,061 full-suite test executions
+(16 opt-in tests ignored), 13 xtask tests, formatting and strict all-target Clippy
+pass. Native WebView delivery remains unverified; subsequent steps are tracked below.
+
+238. [x] Narrow Explorer ownership to explicit tree/index/selection inputs and
+typed actions, with watcher effects outside painting. Remove full EditorApp access
+from the view and relocate its corresponding presentation state.
+`explorer_view::show` now receives borrowed tree/index/active/preview/status inputs,
+the existing Explorer panel state, and a Git-only paint callback. Its bounded
+output returns navigation, context-menu, refresh, workspace-picker, package and
+Git actions. The app applies effects after painting; no tree/index snapshot is
+cloned, and path selection borrows snapshot entries. Search focus and Git reveal
+are consumed by ExplorerPanelState instead of separate EditorApp flags. Tree IDs,
+clipping, section persistence, filtering and resize behavior remain unchanged.
+Tests exercise the view without EditorApp, click an index destination, verify no
+hidden Git painting, and check owner-local one-shot presentation requests.
+Architecture checks reject app/worker/watcher/effect access from the view.
+Accounting: app.rs 12,647 → 12,400 (−247); Explorer view +322, panel implementation
++16: +91 non-test source lines for the explicit boundary, not a code-size win.
+Tests +92 including the dependency rule. No new workers, source copies or idle
+repaints; unchanged drawing/geometry does not require a new framebuffer capture.
+
+239. [x] Thin save completion around existing receipts: consolidate active/parked
+identity and continuations without weakening disk leases or durability. Cover
+same-path, Save As, close and stale results; require net-negative production code.
+Active and parked receipts use one stable-tab document lookup and the existing
+workflow receipt gate. Only an active synchronized save may release its matching
+continuation; parked completions cannot consume a newer active-tab close request.
+Workspace assignment and history handling no longer repeat across active/parked
+branches. The disk transaction, lease, conflict checks and receipt format are
+unchanged. Uncertain durability still records committed bytes but never closes
+or formats the document. Existing real-file tests cover same-path, Save As,
+reordered parked tabs, conflict reconfirmation and stale owner/revision results;
+expanded tests cover newer continuation isolation and an injected uncertain
+confirmation on a real disk-write receipt. Net production change: −9 lines;
+test change: +78 lines. Effects are still completion-driven; no extra worker,
+source serialization or periodic repaint was added. No timing speedup is claimed.
+
+Steps 238–239 verification: 30 focused Explorer tests, 27 focused save tests
+(2 opt-in tests ignored), all 1,065 full-suite test executions (16 opt-in tests
+ignored), all 13 xtask tests, formatting and strict all-target Clippy pass.
+The extraction preserves rendering algorithms and service scheduling; no material
+performance impact is expected, and no matched native timing measurement or
+visual verification is claimed. Step 237's native focus acceptance remains open.
+
+240. [x] Inventory preview connection/content/visibility/generation writers and
+remove duplicate policy from receive/restart adapters using existing controllers.
+Keep one policy owner, no extra retry state, per-frame copies or repaint loops.
+Work sequentially; report accounting and regression evidence per extraction.
+Implemented readiness and visibility policy in the existing PreviewController;
+native view/cache teardown now has one UI-thread implementation. Removed duplicate
+Starting-event initialization, no-document status/connection cleanup, and the
+redundant session-request predicate. Invalid preview endpoints no longer reset
+recovery before admission: they use the existing one-second retry/five-failure
+fallback policy. No new executor, counter, polling or source-copy path. Inventory,
+remaining adapter responsibilities, accounting and limitations are recorded in
+`docs/preview-ownership.md`. app.rs −59 lines; total production +22 for the explicit
+admission boundary and suspension fix; tests +179. This is not a code-size win.
+The final audit also reproduced stale preview-enabled state after suspension:
+later visibility checks repeatedly requested restart. Suspension now clears that
+flag and visibility memory; the regression verifies 100 subsequent checks emit
+no effects. No spontaneous repaint loop or measured speedup is claimed.
+Verification: 18 focused preview tests; audit baseline of 14 navigation,
+30 Explorer and 27 save tests (2 opt-in saves ignored); final full suite
+1,069 passed (16 opt-in tests ignored), 13 xtask tests, formatting and strict
+all-target Clippy pass. No native composition or focus validation was performed.
+
+241. [x] Audit extraction steps 1–4 before changing preview ownership. Review
+Explorer identity/clipping/state and post-paint effects, search versus navigation
+focus, and active/parked save identity, durability and continuation isolation.
+No introduced regression found in the reviewed paths. Expand the parked receipt
+test to cover both matching old-close cancellation and newer-close preservation.
+The preview admission bug fixed in 240 was present before these extractions.
+Keep step 237's native WebView focus verification open; automated UI assertions
+are not a claim of native end-to-end validation.
+
+242. [x] Audit the extraction implementations for incorrect edge paths and
+remove redundant code rather than relocate it. This follow-up found two holes
+missed by 241: file/index navigation treated an untitled backing path as another
+document, and a failed save worker could cancel a newer close continuation.
+Both were reproduced with failing tests before fixing. Share current-source
+identity across navigation routes; retain the submitting continuation token for
+worker failures that have no completion receipt. A stale failure remains visible
+as a notice without cancelling the newer workflow.
+Simplify Explorer painting: one concrete action output instead of parallel locals
+and an unused generic parameter, one snapshot lookup, and one empty-state renderer
+instead of repeated iterator probes and labels. Preserve borrowed inputs, row
+identity, clipping and post-paint effects. Add semantic coverage for all six index
+sections with empty and filtered results, including the package browse control.
+Relative to the start of this cleanup, production code is 74 lines smaller
+(Explorer −68, navigation −14, save safety +8); regression tests add 89 lines,
+so total Rust source grows by 15. No changes are hidden as file moves.
+No material runtime performance impact is expected: no new workers, repaint
+requests, per-frame document copies or index collections. No native performance
+measurement or visual/focus verification is claimed; item 237 remains open.
+Verification: 1,072 full-suite tests passed (16 opt-in tests ignored), all 13
+xtask tests passed, and formatting, strict all-target Clippy and diff whitespace
+checks passed on macOS. Both bug regressions were also run individually.
+
+243. [x] Apply deletion-first cleanup from postpostmortem section 4. Merge the
+two document-open setup paths while preserving their titles, Images-filter
+difference, native parent, initial directory, request key and destination.
+Keep existing-dialog admission before native parenting. Share raster zoom
+effects between keyboard and toolbar, including bounds, reset and leaving
+fit-width mode; keep painting responsible for applying the requested zoom.
+Delete the unused title-wrapper parameter and forwarding method; use the
+existing false defaults for menu availability instead of restating each flag.
+No new controller, state, worker, allocation path or repaint request. Shortcut
+focus/admission and distinct preview-generation gates remain separate.
+Tests cover both open destinations retaining an existing dialog and zoom
+bounds/reset/deferred application; existing menu and shortcut tests retain
+the integration coverage. Native dialogs were not opened or visually verified.
+No material performance impact is expected from this on-demand deduplication.
+Accounting against this task's starting worktree: app.rs 12,341 → 12,279 (−62),
+raster production +2, tests +39: production −60 and total Rust −21. No file moves.
+Verification: 1,074 full-suite tests pass (16 opt-in tests ignored), 13 xtask
+tests pass, and formatting, strict all-target Clippy and whitespace checks pass.
+
+244. [x] Split cohesive presentation helpers out of app.rs without another
+controller or a generic helpers module. `app/icons.rs` owns vector icon kinds,
+painting, button hit targets and geometry. `app/settings_controls.rs` owns
+borrowed font/weight selectors, syntax overrides, tool preferences and status
+controls. Settings renderers import their controls directly from that sibling;
+neither new module receives EditorApp or starts services. Extend the existing
+dependency guard to both modules. Keep lifecycle/save/preview orchestration
+unchanged rather than merely redistribute methods with app-wide access.
+Moved bodies match their originals after ignoring visibility and rustfmt
+whitespace/trailing commas. No control geometry, IDs, drawing, scheduling,
+allocation algorithm or repaint behavior changed; no material performance impact
+is expected, and no fresh screenshot is required or claimed for this relocation.
+Accounting against the pre-split worktree: app.rs 12,279 → 11,318 (−961);
+new icons 320 and Settings controls 672 lines. Including caller/test imports and
+the expanded guard, total Rust grows by 46 lines. This is organization, not
+deletion or an ownership rewrite of the remaining coordinator.
+Verification: focused icon (4), Settings (47), font-weight (3) and syntax-override
+(3) tests pass; full suite 1,074 passed with 16 opt-in tests ignored; all 13 xtask
+tests, formatting, strict all-target Clippy and whitespace checks pass.
+
+245. [x] Add dependency licensing and supply-chain checks to CI and packaging.
+`cargo-deny` now checks advisories, bans, licenses and sources using `deny.toml`;
+the current transitive advisory exceptions are explicit and documented in that
+file, while duplicate versions remain warnings. `cargo-about` now runs from the
+packaging hook using `about.toml` and `about.hbs`. `THIRD_PARTY_NOTICES` is
+generated as a distributed package resource from the cargo-about output plus
+the maintained theme attributions, complete pinned Typst/Tinymist notices and
+complete embedded-font OFL texts. `docs/theme-sources.md` is now the actual
+palette attribution/license source rather than a link-only inventory. CI
+validates cargo-deny and cargo-about generation; an explicit `generate-notices`
+xtask command reproduces the aggregate locally. The generated notice is plain
+text and currently 12,892 lines. No application runtime path, worker, repaint
+or performance-sensitive code changed. Local validation: cargo-deny advisories,
+bans, licenses and sources pass (duplicate-version warnings remain), 1,074
+normal tests pass, 13 xtask tests pass, formatting and strict Clippy pass.
+
+= Architecture next steps after the walkthrough (20 September 2026)
+
+The walkthrough identifies unfinished integration work, not a reason to replace
+the architecture again. Preserve stable tab/document identities, durable save
+receipts, bounded workers/residency, shared workspace observation and versioned
+Tinymist synchronization. Items 222–223 remain separate product investigations;
+session restoration and cross-window tab transfer are not prerequisites here.
+
+*Acceptance gates already tracked:* finish developer-owned native hover diagnosis
+in 229, preview-to-editor keyboard handoff in 237 and multi-window Settings flash
+verification in 234. Do not duplicate or close these on the strength of unit tests.
+Characterization and unrelated cleanup below can proceed independently; changes
+to those native paths must include the corresponding reproduction. Record an
+unavailable desktop or input-delivery limitation explicitly rather than handing
+another long manual checklist to the user.
+
+*Rules for every implementation item:* name the duplicated decision or excessive
+access being removed before editing. Keep each item independently reviewable and
+record its focused tests plus the required formatting, Clippy, application and
+xtask checks. Count app.rs, its affected module family, all Rust, identified tests
+and the non-test remainder against that item's starting revision. Count actual
+test blocks, not everything following a test module. Relocation is not deletion;
+justify production growth by a specific safety or ownership benefit. No target
+line count, generic event bus, new executor or wholesale UI rewrite is required.
+Keep native UI effects on their owning thread and avoid per-frame copies, extra
+idle repaints or duplicated background work. Performance-sensitive changes need
+matched optimized before/after workloads; unchanged leaf moves need no invented
+speedup claim. Screenshots are required only when pixels are material.
+
+246. [ ] Establish a current ownership and duplication map for the remaining
+EditorApp integration. Inspect fields and writers in app.rs and its child impls;
+record document-local, window-local and app-wide ownership, external effects and
+existing service owners. Identify concrete duplicate branches for 248–254 and
+baseline their line counts. Acceptance: every proposed extraction below has
+named callers, a proposed narrow boundary and a behavior test; mark unjustified
+candidates deferred with evidence rather than building abstractions to fill a
+quota. Keep this as one concise maintained map, not another historical essay.
+
+247. [ ] Characterize command admission before consolidating handlers. Add a
+table-driven matrix for commands shared by menus, shortcuts and toolbar actions:
+focused editor versus Find/Settings, completion consuming a key, busy file flow,
+empty workspace, root/secondary window and no document window. Acceptance:
+assert the intended enabled state, destination owner and exactly-once effect;
+preserve macOS no-window New Window/Open in New Window versus disabled New/Open.
+Use existing command types and deterministic UI/state tests. Depends on 246.
+
+248. [ ] Consolidate the first small batch of identical command effects found
+in handle_shortcuts, execute_app_command and extra_shortcuts. Route shared
+document/view commands through existing command execution; keep text-widget key
+consumption, modifier precedence and native delivery in their adapters. Do not
+force commands with different semantics into one branch. Acceptance: delete the
+named duplicate branches, pass 247's matrix and show a net production reduction
+for this batch without new dispatch queues or per-frame command allocations.
+Depends on 247; repeat further batches only when the first demonstrates value.
+
+249. [ ] Narrow Settings shortcut-editor presentation to explicit inputs/state
+and returned actions. Inspect the remaining root helpers and settings_view;
+move only shortcut query/capture/notice rendering and its local presentation
+state to a cohesive existing Settings home. Keep settings persistence, font
+jobs and application-wide broadcast with their current owners. Acceptance:
+render/test the editor without EditorApp; capture, cancel, conflict and reset
+work; a change reaches both main windows through the singleton Settings owner.
+No cloning the whole settings object on every paint or extra font scans.
+Depends on 246; do not redo the controls extraction completed in 244.
+
+250. [ ] Give Find/Replace presentation a narrow boundary around the existing
+SearchSession. Separate query/control rendering from document mutation and
+navigation; remove its need for unrestricted EditorApp access. Acceptance:
+Find retains focus while searching, a source jump restores editor focus, tab
+switching cannot apply a stale replacement, and replace-all remains one undo
+operation with correct Unicode ranges. Reuse existing search caches and dirty
+keys; repeated unchanged frames must not rescan the document. Depends on 246;
+native source-jump acceptance remains in 237.
+
+251. [ ] Consolidate one structured-edit path, starting with formatting result
+application. Trace its existing document-key and canonical/display checks;
+share an existing validated edit primitive only where semantics match, retaining
+format-specific admission. Do not turn completion transactions into a universal
+framework. Acceptance: stale/reopened-document and out-of-order replies are
+rejected, Unicode and miTeX ranges remain correct, accepted edits have one undo
+step, and ordinary Typst incurs no projection or extra source copy. Delete the
+replaced mutation path. Depends on 246; expand to other edit kinds only in
+separately scoped follow-ups justified by actual duplication.
+
+252. [ ] Consolidate semantic-hover invalidation and dismissal ownership after
+229's reproduction. Inventory cursor departure, safe-triangle handoff, scroll,
+tab/document switch and native child closure; remove competing writers of the
+same hover lifetime while retaining full document/request identity checks.
+Acceptance: deterministic event-sequence tests plus actual native popup entry,
+scroll and exit; one dismissal cannot close a newer popup, and pointer movement
+over unchanged text does not reparse it. Retain bounded content/caches and measure
+the matched hover-then-scroll workload. Depends on 246 and diagnosis in 229;
+do not merge unrelated control-tooltip and semantic-hover policies blindly.
+
+253. [ ] Narrow native-preview resource ownership for one child-view kind.
+Use 246's writer map to select the existing view handle, applied-property cache
+and teardown paths that must change together. Make their lifecycle operations
+explicit and delete bypass setters; leave readiness/retry policy in the existing
+PreviewController. Acceptance: hide/show, replacement, close and repeated teardown
+release once, unchanged properties cause no native setters, and stale owners
+cannot reposition a replacement view. Preserve UI-thread ownership and verify
+native geometry/composition when affected. Do not bundle every preview flag into
+a second controller. Depends on 246 and relevant native gates 234/237.
+
+254. [ ] Consolidate one duplicated document-transition sequence across new,
+open and tab activation, selected from 246's map. Reuse DocumentLifecycle, stable
+tab records and current save continuations; separate shared mutation order from
+entry-point-specific prompts and preview policy. Acceptance: dirty/cancel,
+parked Save As, last-tab empty workspace, folder open and pinned preview cases
+pass; creating an unrelated tab neither restarts nor refreshes that preview.
+Delete the selected duplicate sequence without weakening receipt/generation
+checks or cloning document state. Keep further transition families separate.
+
+255. [ ] Add executable dependency protection for the narrowed boundaries in
+249–254. Prefer module visibility and narrow parameter types; extend existing
+architecture tests only for dependencies Rust visibility cannot express.
+Acceptance: the extracted presentation code cannot obtain EditorApp or launch
+services, and tests instantiate it independently. Explain any remaining child
+impl's app-wide access in the ownership map. Avoid brittle exact source/line-count
+assertions; source-string checks supplement behavioral tests, not replace them.
+Depends on the completed extraction items, not deferred candidates.
+
+256. [ ] Add one bounded cross-owner regression scenario combining two windows,
+multiple tabs, a pinned preview, an in-flight save and a late language-service
+reply. Use existing injectable jobs/event delivery to control completion order.
+Acceptance: closing/switching one owner cannot apply its result to another,
+release another owner's resource or terminate the macOS app at last-window
+close; singleton Settings survives and updates live windows. Keep the automated
+state scenario separate from the native close/reopen smoke test. No sleeps as
+correctness assertions and no new production coordination framework.
+
+257. [ ] Measure the integrated endpoint using the existing profiling runner.
+Record baseline before performance-sensitive implementations, then repeat the
+same optimized build profile, fixture, theme, viewport, warmup and workload.
+Cover idle one/two windows, Settings interaction, hover then scroll, rapid tab
+switching and PDF residency pressure; separate cold startup and cache hits/misses.
+Acceptance: retain metadata, CPU samples where supported, repaint/job/cache counts
+and memory/resource observations; investigate material regressions rather than
+claiming speed from LOC changes. Explain sampling noise and unavailable GPU/native
+measurements. Keep captures opt-in, bounded and free of document contents.
+
+258. [ ] Close the architecture follow-up with a current-state documentation
+pass and evidence ledger. Update the ownership map and superseding notes in
+architecture-followup, background-saves, preview-ownership and affected ADRs;
+correct outdated CI/platform descriptions without rewriting historical results.
+Acceptance: report actual root/family/total/test line deltas, removed duplicate
+decisions, remaining app-wide access and results from 256–257. Keep 229, 234 and
+237 open if native acceptance is still missing. Recommend additional work only
+for demonstrated remaining coupling, defects or measured cost; explicitly state
+which proposed extractions were deferred and why. No declaration that the whole
+architecture is finished merely because files became smaller.
 = Bounded PDF page residency (2026-09-18)
 
 - Items 198–200: PDF inspection now publishes a page catalog containing only
