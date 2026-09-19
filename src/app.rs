@@ -275,10 +275,6 @@ fn preview_visible_for(document_kind: DocumentKind, view_mode: ViewMode, designa
         || (typst_preview_available_for(document_kind, designated) && view_mode.shows_preview())
 }
 
-const fn view_mode_controls_enabled(document_kind: DocumentKind) -> bool {
-    matches!(document_kind, DocumentKind::Typst)
-}
-
 #[cfg(test)]
 const fn raster_preview_required_for(
     interactive_requested: bool,
@@ -5871,7 +5867,7 @@ impl EditorApp {
 
             let toolbar_width = ui.available_width();
             let compact = toolbar_width < METRICS.toolbar.compact_breakpoint;
-            let view_mode_enabled = view_mode_controls_enabled(self.document().kind());
+            let view_mode_enabled = self.native_command_enabled(AppCommand::Code);
             if compact {
                 theme::apply_dense_toolbar_spacing(ui);
             }
@@ -5881,18 +5877,19 @@ impl EditorApp {
             }
             crate::window_logo::show(ui, &self.captures);
             if self.settings.titlebar_menus {
-                self.show_file_menu(ui);
-                self.show_edit_menu(ui);
-                self.show_view_menu(ui);
+                self.show_titlebar_menus(ui);
                 ui.separator();
             }
 
             let tex_available = self.tex_mode_available();
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if native_hover_text(
-                    ui.selectable_label(
-                        self.problems_visible,
-                        if compact { "!" } else { "Problems" },
+                    ui.add_enabled(
+                        self.native_command_enabled(AppCommand::Problems),
+                        egui::Button::selectable(
+                            self.problems_visible,
+                            if compact { "!" } else { "Problems" },
+                        ),
                     ),
                     shortcut_tooltip(
                         "Toggle compiler diagnostics",
@@ -5902,33 +5899,37 @@ impl EditorApp {
                 )
                 .clicked()
                 {
-                    self.problems_visible = !self.problems_visible;
+                    self.execute_app_command(AppCommand::Problems, ui.ctx(), frame);
                 }
                 ui.add_enabled_ui(view_mode_enabled, |ui| {
-                    native_hover_text(
-                        ui.selectable_value(
-                            &mut self.view_mode,
+                    for (mode, command, hint) in [
+                        (
                             ViewMode::Preview,
-                            if compact { "P" } else { "Preview" },
+                            AppCommand::Preview,
+                            "Preview (Typst documents only)",
                         ),
-                        "Preview (Typst documents only)",
-                    );
-                    native_hover_text(
-                        ui.selectable_value(
-                            &mut self.view_mode,
+                        (
                             ViewMode::Split,
-                            if compact { "S" } else { "Split" },
+                            AppCommand::Split,
+                            "Split (Typst documents only)",
                         ),
-                        "Split (Typst documents only)",
-                    );
-                    native_hover_text(
-                        ui.selectable_value(
-                            &mut self.view_mode,
+                        (
                             ViewMode::Code,
-                            if compact { "C" } else { "Code" },
+                            AppCommand::Code,
+                            "Code (Typst documents only)",
                         ),
-                        "Code (Typst documents only)",
-                    );
+                    ] {
+                        let title = command_spec(command).title;
+                        let label = if compact { &title[..1] } else { title };
+                        if native_hover_text(
+                            ui.selectable_label(self.view_mode == mode, label),
+                            hint,
+                        )
+                        .clicked()
+                        {
+                            self.execute_app_command(command, ui.ctx(), frame);
+                        }
+                    }
                 });
                 let explorer_label = if compact { "Files" } else { "Explorer" };
                 if native_hover_text(
@@ -5937,8 +5938,7 @@ impl EditorApp {
                 )
                 .clicked()
                 {
-                    self.explorer.toggle();
-                    ui.ctx().request_repaint();
+                    self.execute_app_command(AppCommand::Explorer, ui.ctx(), frame);
                 }
                 if native_hover_text(
                     ui.selectable_label(false, if compact { "Set" } else { "Settings" }),
@@ -5946,7 +5946,7 @@ impl EditorApp {
                 )
                 .clicked()
                 {
-                    self.toggle_settings();
+                    self.execute_app_command(AppCommand::Settings, ui.ctx(), frame);
                 }
 
                 ui.separator();
@@ -5981,7 +5981,7 @@ impl EditorApp {
                 )
                 .clicked()
                 {
-                    self.toggle_find();
+                    self.execute_app_command(AppCommand::Find, ui.ctx(), frame);
                 }
 
                 if tex_available {
@@ -6008,43 +6008,31 @@ impl EditorApp {
         });
     }
 
-    fn show_file_menu(&mut self, ui: &mut egui::Ui) {
-        let selected = matches!(self.app_popup, Some(AppPopup::File { .. }));
-        let response = ui.selectable_label(selected, "File");
-        if response.clicked() {
-            if selected {
-                self.close_app_popup();
-            } else {
-                self.open_app_popup(AppPopup::File {
-                    anchor: response.rect.left_bottom(),
-                });
+    fn show_titlebar_menus(&mut self, ui: &mut egui::Ui) {
+        for (menu, label) in [
+            (CommandMenu::File, "File"),
+            (CommandMenu::Edit, "Edit"),
+            (CommandMenu::View, "View"),
+        ] {
+            let selected = matches!(
+                (menu, &self.app_popup),
+                (CommandMenu::File, Some(AppPopup::File { .. }))
+                    | (CommandMenu::Edit, Some(AppPopup::Edit { .. }))
+                    | (CommandMenu::View, Some(AppPopup::View { .. }))
+            );
+            let response = ui.selectable_label(selected, label);
+            if !response.clicked() {
+                continue;
             }
-        }
-    }
-
-    fn show_edit_menu(&mut self, ui: &mut egui::Ui) {
-        let selected = matches!(self.app_popup, Some(AppPopup::Edit { .. }));
-        let response = ui.selectable_label(selected, "Edit");
-        if response.clicked() {
             if selected {
                 self.close_app_popup();
             } else {
-                self.open_app_popup(AppPopup::Edit {
-                    anchor: response.rect.left_bottom(),
-                });
-            }
-        }
-    }
-
-    fn show_view_menu(&mut self, ui: &mut egui::Ui) {
-        let selected = matches!(self.app_popup, Some(AppPopup::View { .. }));
-        let response = ui.selectable_label(selected, "View");
-        if response.clicked() {
-            if selected {
-                self.close_app_popup();
-            } else {
-                self.open_app_popup(AppPopup::View {
-                    anchor: response.rect.left_bottom(),
+                let anchor = response.rect.left_bottom();
+                self.open_app_popup(match menu {
+                    CommandMenu::File => AppPopup::File { anchor },
+                    CommandMenu::Edit => AppPopup::Edit { anchor },
+                    CommandMenu::View => AppPopup::View { anchor },
+                    CommandMenu::Application => unreachable!("not a title-bar menu"),
                 });
             }
         }
@@ -11314,5 +11302,7 @@ fn preserve_workspace_snapshot_for_open(
         && path.starts_with(workspace_root)
 }
 
+#[cfg(test)]
+mod command_tests;
 #[cfg(test)]
 mod tests;

@@ -579,7 +579,7 @@ idle repaints or duplicated background work. Performance-sensitive changes need
 matched optimized before/after workloads; unchanged leaf moves need no invented
 speedup claim. Screenshots are required only when pixels are material.
 
-246. [ ] Establish a current ownership and duplication map for the remaining
+246. [x] Establish a current ownership and duplication map for the remaining
 EditorApp integration. Inspect fields and writers in app.rs and its child impls;
 record document-local, window-local and app-wide ownership, external effects and
 existing service owners. Identify concrete duplicate branches for 248–254 and
@@ -588,7 +588,7 @@ named callers, a proposed narrow boundary and a behavior test; mark unjustified
 candidates deferred with evidence rather than building abstractions to fill a
 quota. Keep this as one concise maintained map, not another historical essay.
 
-247. [ ] Characterize command admission before consolidating handlers. Add a
+247. [x] Characterize command admission before consolidating handlers. Add a
 table-driven matrix for commands shared by menus, shortcuts and toolbar actions:
 focused editor versus Find/Settings, completion consuming a key, busy file flow,
 empty workspace, root/secondary window and no document window. Acceptance:
@@ -596,7 +596,7 @@ assert the intended enabled state, destination owner and exactly-once effect;
 preserve macOS no-window New Window/Open in New Window versus disabled New/Open.
 Use existing command types and deterministic UI/state tests. Depends on 246.
 
-248. [ ] Consolidate the first small batch of identical command effects found
+248. [x] Consolidate the first small batch of identical command effects found
 in handle_shortcuts, execute_app_command and extra_shortcuts. Route shared
 document/view commands through existing command execution; keep text-widget key
 consumption, modifier precedence and native delivery in their adapters. Do not
@@ -624,7 +624,8 @@ operation with correct Unicode ranges. Reuse existing search caches and dirty
 keys; repeated unchanged frames must not rescan the document. Depends on 246;
 native source-jump acceptance remains in 237.
 
-251. [ ] Consolidate one structured-edit path, starting with formatting result
+251. [ ] (Deferred after 246's review; rationale in the work diary.)
+Consolidate one structured-edit path, starting with formatting result
 application. Trace its existing document-key and canonical/display checks;
 share an existing validated edit primitive only where semantics match, retaining
 format-specific admission. Do not turn completion transactions into a universal
@@ -644,7 +645,8 @@ over unchanged text does not reparse it. Retain bounded content/caches and measu
 the matched hover-then-scroll workload. Depends on 246 and diagnosis in 229;
 do not merge unrelated control-tooltip and semantic-hover policies blindly.
 
-253. [ ] Narrow native-preview resource ownership for one child-view kind.
+253. [ ] (Deferred after 246's review; rationale in the work diary.)
+Narrow native-preview resource ownership for one child-view kind.
 Use 246's writer map to select the existing view handle, applied-property cache
 and teardown paths that must change together. Make their lifecycle operations
 explicit and delete bypass setters; leave readiness/retry policy in the existing
@@ -2098,3 +2100,56 @@ measured in this follow-up; automated results alone do not establish them.
   opt-in tests ignored, all 13 xtask tests and a `todo.typ` compile pass. The
   interaction is protected by deterministic geometry/state tests; no visual
   styling or native-view bounds changed, so no framebuffer capture was needed.
+
+= Architecture ownership and command consolidation (20 September 2026)
+
+- Item 246: added the current owner/writer/effect map in `docs/app-ownership.md`,
+  with concrete callers, proposed boundaries, tests and baselines for 248–254.
+  The starting revision is `722763a`; app.rs has 11,318 lines and EditorApp has
+  128 field declarations. Inspection found that keyboard/native-menu commands
+  already share execution. Extra shortcuts retain distinct focus, folding,
+  search and raster policies. The actual initial duplication is in title-bar
+  controls and File/Edit/View popup-button handling.
+- Review decisions from 246: defer 251's proposed shared formatting/completion
+  transaction because formatting already uses canonical edit validation and has
+  distinct cursor/manual-save sequencing. Defer 253's new native resource wrapper
+  because teardown/property diffing already have single owners; first demonstrate
+  an invalid lifecycle caused by the remaining reload-intent writers. Both stay
+  unchecked. The map records their existing regression coverage and the evidence
+  required to resume. Items 229, 234 and 237 remain open native acceptance gaps.
+- Item 247: five characterization tests passed before production edits. They
+  cover actual toolbar clicks, native menu queue consumption and shortcuts in
+  root/secondary owners, busy file-flow rejection, empty workspaces, document
+  kind, editor/Find selection, completion owning Escape, capture owning the next
+  key and menu switching/toggle-off. Existing shell/Settings tests cover focused
+  child editing, singleton requests and no-window command routing. This stage
+  adds 376 test-file lines and two test-module registration lines.
+- Item 248: Find, Settings, Explorer, Problems and Code/Split/Preview toolbar
+  actions now use the existing command execution path. One fixed-size loop
+  renders the three view controls, and one title-bar menu implementation replaces
+  three copies. Added compact-layout coverage, giving 56 owner/route/control
+  combinations, alongside 40 file-flow/document-admission combinations.
+  Further availability coverage reproduced an existing defect: empty workspaces
+  enabled Problems and view controls that command execution rejected. They now
+  share admission. The regression failed before the fix and passed afterward;
+  tests cover actual enabled controls for empty, Typst, text, PDF and image tabs.
+  This replaces the old kind-only helper and its eight-line test.
+- Accounting at 247's checkpoint: app.rs 11,320; app family 35,287 total /
+  11,009 identified tests / 24,278 remainder; all Rust 95,502 / 33,318 / 62,184.
+  Item 248 removes 12 production lines and adds 52 net test lines from that
+  checkpoint. Final app.rs is 11,308 (−10 from the initial revision, including
+  the two new test-registration lines). Final app family is 35,327 / 11,061 /
+  24,266, compared with 34,909 / 10,633 / 24,276 initially. All Rust is 95,542 /
+  33,370 / 62,172, compared with 95,124 / 32,942 / 62,182 initially: total +418,
+  identified tests +428, remainder −10. Field count stays 128. The map documents
+  the counting method, including actual test-block boundaries and its limits.
+- Verification on arm64 macOS 14.6.1, Rust 1.96.0: all six focused command-matrix
+  tests, 1,079 full-suite test executions (16 opt-in tests ignored), all 13 xtask
+  tests, formatting and strict all-target Clippy pass. Full-suite output is in
+  `/tmp/tiptoptyp-246-248.WhTXO0/full-tests.log`. Tests exercise existing child and
+  shell routing; no new native focus, flash or hover acceptance is claimed.
+- Resource impact: the small loops use fixed stack arrays and borrowed static
+  labels; effects dispatch only on actions. No worker, source copy, cache, disk
+  operation or repaint schedule was added. No material performance change is
+  expected or timing speedup claimed. Semantic controls/state coverage is
+  sufficient for this change; native bounds and rendering geometry are unchanged.

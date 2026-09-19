@@ -4044,14 +4044,6 @@ fn view_modes_have_the_requested_panel_matrix() {
 }
 
 #[test]
-fn view_mode_controls_are_only_enabled_for_typst_documents() {
-    assert!(view_mode_controls_enabled(DocumentKind::Typst));
-    for kind in [DocumentKind::Text, DocumentKind::Image, DocumentKind::Pdf] {
-        assert!(!view_mode_controls_enabled(kind));
-    }
-}
-
-#[test]
 fn tooltip_bridge_keeps_pointer_transitively_connected_to_the_card() {
     let origin = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(10.0, 10.0));
     let card = Rect::from_min_max(Pos2::new(30.0, 0.0), Pos2::new(80.0, 30.0));
