@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
 description = "A fast, native Typst editor with live PDF preview"
+publish = false
 repository = "https://github.com/calvinkhor/tiptoptyp"
 
 [features]
@@ -82,6 +83,7 @@ icons = [
 before-packaging-command = "cargo run --manifest-path xtask/Cargo.toml -- package-build"
 external-binaries = ["toolchain/bin/typst", "toolchain/bin/tinymist"]
 resources = [
+    { src = "THIRD_PARTY_NOTICES", target = "THIRD_PARTY_NOTICES" },
     { src = "toolchain/licenses", target = "licenses" },
     { src = "assets/fonts/notosanssymbols/OFL.txt", target = "licenses/NotoSansSymbols-OFL.txt" },
     { src = "assets/fonts/notosansmath/OFL.txt", target = "licenses/NotoSansMath-OFL.txt" },

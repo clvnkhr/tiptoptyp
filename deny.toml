@@ -1,0 +1,47 @@
+[advisories]
+version = 2
+# These are transitive advisories in the current GUI/toolchain dependency graph.
+# Keep the IDs explicit so a newly introduced advisory still fails this check;
+# remove each exception when its upstream dependency can be upgraded without
+# breaking the pinned platform stack.
+ignore = [
+    "RUSTSEC-2025-0141", # bincode is pulled by the native GUI stack
+    "RUSTSEC-2024-0370", # proc-macro-error is pulled by a transitive macro
+    "RUSTSEC-2026-0194", # quick-xml 0.38 remains under syntect's plist path
+    "RUSTSEC-2026-0195", # same transitive quick-xml 0.38 path
+    "RUSTSEC-2026-0285", # rustls is pulled by the pinned ureq 2.x tool fetcher
+]
+
+[licenses]
+version = 2
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSL-1.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "OFL-1.1",
+    "Unicode-3.0",
+    "Ubuntu-font-1.0",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "warn"
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

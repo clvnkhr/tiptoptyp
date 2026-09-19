@@ -41,6 +41,12 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libegl1-mesa-dev libgtk-3-dev
       - name: Install Rust
         run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: Dependency policy
+        run: cargo +1.95.0 deny check
       - name: Formatting
         run: cargo +1.95.0 fmt --all -- --check
       - name: Clippy
@@ -65,6 +71,12 @@ jobs:
           persist-credentials: false
       - name: Install Rust
         run: rustup toolchain install 1.95.0 --profile minimal
+      - name: Install cargo-about
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+      - name: Validate dependency notice generation
+        run: cargo about generate --manifest-path Cargo.toml about.hbs > "$RUNNER_TEMP/THIRD_PARTY_RUST_NOTICES"
       - name: Install Poppler
         run: brew install poppler
       - name: Fetch hash-verified pinned sidecars

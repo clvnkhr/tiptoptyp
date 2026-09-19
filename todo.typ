@@ -184,6 +184,22 @@ Verification: focused icon (4), Settings (47), font-weight (3) and syntax-overri
 (3) tests pass; full suite 1,074 passed with 16 opt-in tests ignored; all 13 xtask
 tests, formatting, strict all-target Clippy and whitespace checks pass.
 
+245. [x] Add dependency licensing and supply-chain checks to CI and packaging.
+`cargo-deny` now checks advisories, bans, licenses and sources using `deny.toml`;
+the current transitive advisory exceptions are explicit and documented in that
+file, while duplicate versions remain warnings. `cargo-about` now runs from the
+packaging hook using `about.toml` and `about.hbs`. `THIRD_PARTY_NOTICES` is
+generated as a distributed package resource from the cargo-about output plus
+the maintained theme attributions, complete pinned Typst/Tinymist notices and
+complete embedded-font OFL texts. `docs/theme-sources.md` is now the actual
+palette attribution/license source rather than a link-only inventory. CI
+validates cargo-deny and cargo-about generation; an explicit `generate-notices`
+xtask command reproduces the aggregate locally. The generated notice is plain
+text and currently 12,892 lines. No application runtime path, worker, repaint
+or performance-sensitive code changed. Local validation: cargo-deny advisories,
+bans, licenses and sources pass (duplicate-version warnings remain), 1,074
+normal tests pass, 13 xtask tests pass, formatting and strict Clippy pass.
+
 == Regression execution follow-up (18 September 2026)
 
 228. [x] Fix the no-document retained-host Settings panic at
