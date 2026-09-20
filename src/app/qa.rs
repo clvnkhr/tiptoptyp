@@ -395,8 +395,8 @@ impl QaSession {
                 app.preview.tinymist_diagnostics.clear();
                 app.mark_diagnostics_changed();
                 app.problems_visible = false;
-                app.find_visible = false;
-                app.replace_visible = false;
+                app.find_bar.visible = false;
+                app.find_bar.replace_visible = false;
             }
             UiSnapshotScene::MitexDollars => {
                 if app.document().config().is_none() {
@@ -465,8 +465,8 @@ impl QaSession {
                 app.notice = None;
                 app.view_mode = ViewMode::Code;
                 app.problems_visible = false;
-                app.find_visible = false;
-                app.replace_visible = false;
+                app.find_bar.visible = false;
+                app.find_bar.replace_visible = false;
                 if prepare_sticky_context_snapshot_document(app.document_mut()) {
                     app.prepare_editor_source_data();
                 }
@@ -698,10 +698,10 @@ impl QaSession {
             }
             UiSnapshotScene::FindReplace => {
                 app.notice = None;
-                app.find_visible = true;
-                app.replace_visible = true;
-                app.find_query = "Typst".to_owned();
-                app.replacement = "tiptoptyp".to_owned();
+                app.find_bar.visible = true;
+                app.find_bar.replace_visible = true;
+                app.find_bar.query = "Typst".to_owned();
+                app.find_bar.replacement = "tiptoptyp".to_owned();
             }
             UiSnapshotScene::PreviewCompiling => {
                 app.preview.status = PreviewStatus::Compiling;
@@ -729,11 +729,11 @@ impl QaSession {
         app.typst_overrides_visible = false;
         app.workspace_chooser_visible = false;
         app.problems_visible = false;
-        app.find_visible = false;
-        app.replace_visible = false;
+        app.find_bar.visible = false;
+        app.find_bar.replace_visible = false;
         app.view_mode = ViewMode::Split;
-        app.search.clear();
-        app.focus_find = false;
+        app.find_bar.search.clear();
+        app.find_bar.focus = false;
         app.pending_editor_selection = None;
         app.diagnostic_tooltip = None;
         app.close_app_popup();

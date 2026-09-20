@@ -18,7 +18,7 @@ fn fixture(context: &egui::Context, root: &Path, owner: egui::ViewportId) -> Edi
     app.document_mut()
         .replace_unprojected_untitled("alpha beta");
     app.document_mut().set_history_reset(false);
-    app.find_visible = false;
+    app.find_bar.visible = false;
     app.problems_visible = false;
     app.explorer.open();
     app.view_mode = ViewMode::Split;
@@ -106,7 +106,7 @@ fn command_toolbar_menu_and_shortcut_effects_agree_once_per_owner() {
                     harness.step();
                     let app = harness.state();
                     assert_eq!(
-                        app.find_visible,
+                        app.find_bar.visible,
                         command == AppCommand::Find,
                         "{route:?} {command:?}"
                     );
@@ -250,7 +250,7 @@ fn command_admission_covers_empty_workspace_busy_file_flow_and_document_kind() {
                 assert_eq!(app.document().key(), key);
                 assert_eq!(app.tabs.is_empty(), empty);
                 assert_eq!(app.document_workflow.has_dialog(), busy);
-                assert!(!app.find_visible);
+                assert!(!app.find_bar.visible);
                 assert_eq!(app.view_mode, ViewMode::Split);
                 assert!(app.compile_deadline.is_none());
             }
@@ -265,9 +265,9 @@ fn command_select_all_obeys_source_or_find_focus() {
             let root = tempfile::tempdir().unwrap();
             let context = egui::Context::default();
             let mut app = fixture(&context, root.path(), egui::ViewportId::ROOT);
-            app.find_query = "beta".into();
-            app.find_visible = find;
-            app.focus_find = find;
+            app.find_bar.query = "beta".into();
+            app.find_bar.visible = find;
+            app.find_bar.focus = find;
             if !find {
                 app.pending_editor_selection = Some(EditorSelection::Focus(0..0));
             }
@@ -324,7 +324,7 @@ fn command_completion_and_capture_consume_keys_before_global_actions() {
     let root = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
     let mut app = fixture(&context, root.path(), egui::ViewportId::ROOT);
-    app.find_visible = true;
+    app.find_bar.visible = true;
     app.document_mut()
         .replace_unprojected_untitled("#mi(`\\alp`)");
     app.request_editor_completion(9, Rect::ZERO, true);
@@ -341,11 +341,11 @@ fn command_completion_and_capture_consume_keys_before_global_actions() {
         .drop_without_applying_deltas();
     assert!(app.editor_completion.is_none());
     assert!(
-        app.find_visible,
+        app.find_bar.visible,
         "completion dismiss owns Escape before Find"
     );
 
-    app.shortcut_capture = Some(ShortcutAction::Find);
+    app.shortcut_editor.capture = Some(ShortcutAction::Find);
     let raw = egui::RawInput {
         events: vec![key_event(
             app.settings
@@ -358,7 +358,7 @@ fn command_completion_and_capture_consume_keys_before_global_actions() {
     context
         .run_ui(raw, |ui| app.handle_shortcuts(ui.ctx(), None))
         .drop_without_applying_deltas();
-    assert!(app.shortcut_capture.is_none());
+    assert!(app.shortcut_editor.capture.is_none());
     assert!(
         app.explorer.panel_visible(),
         "captured chord must not execute Explorer"

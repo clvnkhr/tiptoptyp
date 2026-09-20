@@ -85,8 +85,8 @@ fn source_navigation_takes_editor_focus_even_with_find_open() {
     let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
     app.document_mut()
         .replace_unprojected_untitled("alpha beta gamma");
-    app.find_visible = true;
-    app.focus_find = true;
+    app.find_bar.visible = true;
+    app.find_bar.focus = true;
     context
         .run_ui(Default::default(), |ui| {
             app.show_find_bar(ui);
@@ -101,7 +101,34 @@ fn source_navigation_takes_editor_focus_even_with_find_open() {
         })
         .drop_without_applying_deltas();
     assert!(context.memory(|memory| memory.has_focus(source_editor_id(&context))));
-    assert!(app.find_visible, "navigation should not close the Find bar");
+    assert!(
+        app.find_bar.visible,
+        "navigation should not close the Find bar"
+    );
+}
+
+#[test]
+fn document_transition_reset_clears_shared_editor_transients() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    app.document_mut()
+        .replace_unprojected_untitled("alpha beta");
+    let key = app.document().key();
+    let source = app.document().source().clone();
+    app.find_bar.search.next(&source, key, "alpha", true, false);
+    app.pending_editor_selection = Some(EditorSelection::Focus(0..0));
+    app.editor_attention = Some(EditorAttention {
+        char_index: 0,
+        started: Instant::now(),
+    });
+    assert!(app.find_bar.search.selected().is_some());
+
+    app.reset_transient_editor_state();
+
+    assert!(app.pending_editor_selection.is_none());
+    assert!(app.editor_attention.is_none());
+    assert!(app.find_bar.search.selected().is_none());
 }
 
 #[test]
@@ -162,8 +189,8 @@ fn navigation_entry_points_focus_only_their_owner_and_keep_mac_arrow_shortcuts()
             app.document_mut()
                 .rename(path.clone(), DocumentKind::Typst)
                 .unwrap();
-            app.find_visible = true;
-            app.focus_find = true;
+            app.find_bar.visible = true;
+            app.find_bar.focus = true;
             let raw = || {
                 let mut input = egui::RawInput {
                     viewport_id: owner,
@@ -264,9 +291,9 @@ fn find_selection_preserves_find_focus_and_does_not_activate_native_window() {
     let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
     app.document_mut()
         .replace_unprojected_untitled("alpha beta alpha");
-    app.find_visible = true;
-    app.focus_find = true;
-    app.find_query = "alpha".into();
+    app.find_bar.visible = true;
+    app.find_bar.focus = true;
+    app.find_bar.query = "alpha".into();
     context
         .run_ui(Default::default(), |ui| {
             app.show_find_bar(ui);

@@ -155,6 +155,7 @@ impl EditorApp {
         let style = context.style_of(appearance);
         let captures = self.captures.clone();
         let mut close_requested = false;
+        let mut editor_action = None;
         // The editor owns its own native viewport so shortcut capture and
         // text editing cannot be trapped inside the Settings surface.
         let spec = ChildViewSpec::persistent(
@@ -208,25 +209,60 @@ impl EditorApp {
             egui::CentralPanel::default()
                 .frame(theme::settings_content_frame(ui.style()))
                 .show(ui, |ui| {
-                    show_shortcut_editor_contents(
+                    editor_action = shortcut_editor::show(
                         ui,
-                        &mut self.shortcut_query,
-                        &mut self.shortcut_capture,
-                        &mut self.shortcut_notice,
-                        &mut self.pending_settings,
-                        &self.settings,
+                        &mut self.shortcut_editor,
+                        shortcut_editor::ShortcutEditorInput {
+                            settings: &self.settings,
+                            pending_settings: self.pending_settings.as_ref(),
+                        },
                     );
                 });
         });
+        if let Some(action) = editor_action {
+            self.apply_shortcut_editor_action(action, context);
+        }
         if close_requested {
             self.shortcut_editor_visible = false;
-            self.shortcut_capture = None;
+            self.shortcut_editor.capture = None;
             let target = if self.settings_visible {
                 scoped_child_viewport_id(context, "tiptoptyp-settings")
             } else {
                 context.viewport_id()
             };
             context.send_viewport_cmd_to(target, egui::ViewportCommand::Focus);
+        }
+    }
+
+    fn apply_shortcut_editor_action(
+        &mut self,
+        action: shortcut_editor::ShortcutEditorAction,
+        context: &egui::Context,
+    ) {
+        match action {
+            shortcut_editor::ShortcutEditorAction::BeginCapture(action) => {
+                self.shortcut_editor.capture = Some(action);
+                self.shortcut_editor.notice = None;
+            }
+            shortcut_editor::ShortcutEditorAction::Disable(action) => {
+                let mut edited = self.settings_snapshot();
+                edited.shortcut_overrides.set(action, None);
+                self.shortcut_editor.capture = None;
+                self.shortcut_editor.notice = Some(format!("Disabled {}", action.label()));
+                self.queue_settings(edited, context);
+            }
+            shortcut_editor::ShortcutEditorAction::Reset(action) => {
+                let mut edited = self.settings_snapshot();
+                edited.shortcut_overrides.reset(action);
+                self.shortcut_editor.notice = Some(format!("Restored {}", action.label()));
+                self.queue_settings(edited, context);
+            }
+            shortcut_editor::ShortcutEditorAction::ResetAll => {
+                let mut edited = self.settings_snapshot();
+                edited.shortcut_overrides.reset_all();
+                self.shortcut_editor.notice = Some("Restored all default shortcuts".to_owned());
+                self.queue_settings(edited, context);
+            }
         }
     }
 

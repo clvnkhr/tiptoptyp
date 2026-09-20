@@ -33,6 +33,7 @@ mod package_browser;
 use package_browser::{PackageBrowserAction, PackageFilter, show_package_browser_ui};
 mod editor_view;
 mod extra_shortcuts;
+mod find_bar;
 mod git_actions;
 mod lifecycle;
 mod mitex_mode;
@@ -45,8 +46,11 @@ mod native_views;
 mod settings_panel;
 mod settings_view;
 mod settings_window;
+mod shortcut_editor;
 mod tooltips;
+use find_bar::FindBarState;
 use settings_window::SettingsWindow;
+use shortcut_editor::ShortcutEditorState;
 use tooltips::*;
 mod qa;
 use qa::{QaSession, source_editor_snapshot_scroll_offset};
@@ -125,7 +129,6 @@ use crate::{
     },
     project_index::ProjectIndex,
     screenshot::{CaptureController, CaptureThemeProfile, UiCaptureStep, UiSnapshotScene},
-    search::SearchSession,
     settings::{
         AppSettings, ColorThemeChoice, DEFAULT_UI_FONT_WEIGHT, DEFAULT_UI_SCALE_PERCENT,
         DocumentTheme, PreviewPreference, SourcePreviewTrigger, normalize_workspace_root,
@@ -507,6 +510,7 @@ struct EditorAttention {
     started: Instant,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FindStep {
     Next,
@@ -1087,9 +1091,7 @@ pub struct EditorApp {
     settings_window: Arc<std::sync::Mutex<SettingsWindow>>,
     retain_settings_viewport: bool,
     shortcut_editor_visible: bool,
-    shortcut_query: String,
-    shortcut_capture: Option<ShortcutAction>,
-    shortcut_notice: Option<String>,
+    shortcut_editor: ShortcutEditorState,
     pending_widget_paste: Option<PendingWidgetPaste>,
     typst_overrides_visible: bool,
     typst_overrides_dark: bool,
@@ -1137,14 +1139,7 @@ pub struct EditorApp {
     queued_native_menu_commands: NativeMenuCommandQueue,
     queued_open_requests: VecDeque<PathBuf>,
 
-    find_visible: bool,
-    replace_visible: bool,
-    find_query: String,
-    replacement: String,
-    search: SearchSession,
-    find_case_sensitive: bool,
-    find_regex: bool,
-    focus_find: bool,
+    find_bar: FindBarState,
     pending_editor_selection: Option<EditorSelection>,
     editor_attention: Option<EditorAttention>,
     editor_hover: Option<EditorHoverState>,
@@ -1377,9 +1372,7 @@ impl EditorApp {
             settings_window: Arc::default(),
             retain_settings_viewport: false,
             shortcut_editor_visible: false,
-            shortcut_query: String::new(),
-            shortcut_capture: None,
-            shortcut_notice: None,
+            shortcut_editor: ShortcutEditorState::default(),
             pending_widget_paste: None,
             typst_overrides_visible: false,
             typst_overrides_dark: active_theme.dark_mode,
@@ -1430,14 +1423,10 @@ impl EditorApp {
             pending_window_requests: VecDeque::new(),
             queued_native_menu_commands: NativeMenuCommandQueue::default(),
             queued_open_requests: VecDeque::new(),
-            find_visible: false,
-            replace_visible: false,
-            find_query: String::new(),
-            replacement: String::new(),
-            search: SearchSession::default(),
-            find_case_sensitive: true,
-            find_regex: false,
-            focus_find: false,
+            find_bar: FindBarState {
+                case_sensitive: true,
+                ..Default::default()
+            },
             pending_editor_selection: None,
             editor_attention: None,
             editor_hover: None,
@@ -3077,15 +3066,15 @@ impl EditorApp {
         {
             self.dismiss_keyboard_tooltip(context);
         }
-        if self.find_visible
+        if self.find_bar.visible
             && shortcut_viewport == context.viewport_id()
             && context.input_mut_for(shortcut_viewport, |input| {
                 input.consume_key(Modifiers::NONE, egui::Key::Escape)
             })
         {
-            self.find_visible = false;
-            self.replace_visible = false;
-            self.search.clear();
+            self.find_bar.visible = false;
+            self.find_bar.replace_visible = false;
+            self.find_bar.search.clear();
         }
 
         if self.preview_visible()
@@ -3165,7 +3154,7 @@ impl EditorApp {
         context: &egui::Context,
         viewport: egui::ViewportId,
     ) -> bool {
-        let Some(action) = self.shortcut_capture else {
+        let Some(action) = self.shortcut_editor.capture else {
             return false;
         };
         let event = context.input_mut_for(viewport, take_shortcut_capture_event);
@@ -3178,12 +3167,12 @@ impl EditorApp {
             .clone()
             .unwrap_or_else(|| self.settings.clone());
         if key == egui::Key::Escape {
-            self.shortcut_capture = None;
-            self.shortcut_notice = Some("Shortcut capture canceled".to_owned());
+            self.shortcut_editor.capture = None;
+            self.shortcut_editor.notice = Some("Shortcut capture canceled".to_owned());
         } else if key == egui::Key::Backspace && !modifiers.any() {
             edited.shortcut_overrides.set(action, None);
-            self.shortcut_capture = None;
-            self.shortcut_notice = Some(format!("Disabled {}", action.label()));
+            self.shortcut_editor.capture = None;
+            self.shortcut_editor.notice = Some(format!("Disabled {}", action.label()));
         } else {
             match ShortcutChord::from_egui(
                 KeyboardShortcut::new(modifiers, key),
@@ -3195,8 +3184,8 @@ impl EditorApp {
                         chord,
                         ShortcutPlatform::current(),
                     );
-                    self.shortcut_capture = None;
-                    self.shortcut_notice = Some(displaced.map_or_else(
+                    self.shortcut_editor.capture = None;
+                    self.shortcut_editor.notice = Some(displaced.map_or_else(
                         || format!("Changed {}", action.label()),
                         |displaced| {
                             format!(
@@ -3207,7 +3196,7 @@ impl EditorApp {
                         },
                     ));
                 }
-                Err(error) => self.shortcut_notice = Some(error.to_string()),
+                Err(error) => self.shortcut_editor.notice = Some(error.to_string()),
             }
         }
         self.queue_settings(edited, context);
@@ -3431,19 +3420,19 @@ impl EditorApp {
 
     fn open_find(&mut self, replace: bool) {
         self.editor_completion = None;
-        self.find_visible = true;
-        self.replace_visible |= replace;
-        self.focus_find = true;
+        self.find_bar.visible = true;
+        self.find_bar.replace_visible |= replace;
+        self.find_bar.focus = true;
         if !self.view_mode.shows_code() {
             self.view_mode = ViewMode::Split;
         }
     }
 
     fn toggle_find(&mut self) {
-        if self.find_visible {
-            self.find_visible = false;
-            self.replace_visible = false;
-            self.search.clear();
+        if self.find_bar.visible {
+            self.find_bar.visible = false;
+            self.find_bar.replace_visible = false;
+            self.find_bar.search.clear();
         } else {
             self.open_find(false);
         }
@@ -3796,10 +3785,8 @@ impl EditorApp {
             self.document_mut().replace_unprojected_untitled("");
             self.activate_preferred_tex();
         }
-        self.pending_editor_selection = None;
-        self.editor_attention = None;
+        self.reset_transient_editor_state();
         self.clear_preview_for_document(preserve_preview);
-        self.search.clear();
         if preserve_preview {
             // A new editor tab must not restart the pinned preview's services.
             if let Err(error) = self.prepare_tab_backings() {
@@ -4041,11 +4028,9 @@ impl EditorApp {
         self.remember_workspace(&workspace_root);
 
         self.set_active_autosave_deadline(None);
-        self.pending_editor_selection = None;
-        self.editor_attention = None;
+        self.reset_transient_editor_state();
         self.remember_open_document(&path);
         self.clear_preview_for_document(keep_designated_preview);
-        self.search.clear();
         if !preserve_workspace_snapshot {
             self.reset_document_services();
         } else if keep_designated_preview {
@@ -4091,6 +4076,15 @@ impl EditorApp {
         self.git.request_refresh();
         self.git_editor.request_refresh();
         true
+    }
+
+    /// Clear transient editor/search state shared by a document transition.
+    /// Service restart, preview retention and tab rekeying intentionally stay
+    /// with their entry points because those policies are not interchangeable.
+    fn reset_transient_editor_state(&mut self) {
+        self.pending_editor_selection = None;
+        self.editor_attention = None;
+        self.find_bar.search.clear();
     }
 
     fn save_document(&mut self, frame: Option<&eframe::Frame>, context: &egui::Context) -> bool {
@@ -6058,7 +6052,7 @@ impl EditorApp {
         let editor_id = source_editor_id(context);
         context.memory_mut(|memory| memory.request_focus(editor_id));
         if changed {
-            self.search.clear();
+            self.find_bar.search.clear();
             self.mark_edited();
         }
     }
@@ -6123,7 +6117,7 @@ impl EditorApp {
             state.store(context, editor_id);
         }
         context.memory_mut(|memory| memory.request_focus(editor_id));
-        self.search.clear();
+        self.find_bar.search.clear();
         self.mark_edited();
     }
 
@@ -6179,7 +6173,7 @@ impl EditorApp {
         }
         let cursor = self.editor_snapshot(context).cursor;
         self.document_mut().edit(cursor, |buffer| *buffer = source);
-        self.search.clear();
+        self.find_bar.search.clear();
         self.mark_edited();
         let cursor = if selection.is_some() {
             CCursorRange::two(
@@ -6340,7 +6334,7 @@ impl EditorApp {
             .edit(cursor, |source| *source = formatted);
         self.store_editor_cursor(context, mapped_cursor);
         self.document_mut().set_history_reset(false);
-        self.search.clear();
+        self.find_bar.search.clear();
         self.manual_format_revision = None;
         self.mark_edited();
         let saved_after_format = if save_after_format {
@@ -6622,7 +6616,7 @@ impl EditorApp {
             source.replace_range(target.value_range, &replacement)
         });
         self.pending_editor_selection = Some(EditorSelection::Focus(selection_end..selection_end));
-        self.search.clear();
+        self.find_bar.search.clear();
         self.mark_edited();
         self.notice = Some(Notice {
             message: format!("Set document font to {family}"),
@@ -7226,7 +7220,7 @@ impl EditorApp {
             }
         };
         self.pending_editor_selection = Some(EditorSelection::Focus(selection));
-        self.search.clear();
+        self.find_bar.search.clear();
         self.editor_completion = None;
         self.mark_edited();
         self.notice = Some(Notice {
@@ -9800,6 +9794,7 @@ fn ui_scale_factor(percent: u16) -> f32 {
     f32::from(percent.clamp(75, 150)) / f32::from(DEFAULT_UI_SCALE_PERCENT)
 }
 
+#[cfg(test)]
 fn find_step_for_enter(enter_pressed: bool, shift: bool) -> Option<FindStep> {
     enter_pressed.then_some(if shift {
         FindStep::Previous
@@ -10989,127 +10984,6 @@ fn settings_target_anchor(
         );
         ui.scroll_to_rect(rect, Some(Align::Min));
     }
-}
-
-fn show_shortcut_editor_contents(
-    ui: &mut egui::Ui,
-    query: &mut String,
-    capture: &mut Option<ShortcutAction>,
-    notice: &mut Option<String>,
-    pending_settings: &mut Option<AppSettings>,
-    settings: &AppSettings,
-) {
-    let mut edited = pending_settings.clone().unwrap_or_else(|| settings.clone());
-    ui.horizontal(|ui| {
-        ui.add(
-            egui::TextEdit::singleline(query)
-                .hint_text("Search actions or groups")
-                .desired_width(f32::INFINITY),
-        );
-        if ui.button("Reset all").clicked() {
-            edited.shortcut_overrides.reset_all();
-            *notice = Some("Restored all default shortcuts".to_owned());
-        }
-    });
-    if let Some(action) = *capture {
-        ui.colored_label(
-            ui.visuals().selection.stroke.color,
-            format!(
-                "Press the new shortcut for {} · Backspace disables · Esc cancels",
-                action.label()
-            ),
-        );
-    } else if let Some(message) = notice.as_deref() {
-        ui.label(RichText::new(message).weak());
-    }
-    ui.separator();
-
-    let terms = query
-        .split_whitespace()
-        .map(str::to_lowercase)
-        .collect::<Vec<_>>();
-    let bindings = edited.effective_shortcuts();
-    if !bindings.conflicts().is_empty() {
-        ui.colored_label(
-            ui.visuals().warn_fg_color,
-            format!(
-                "{} saved shortcut conflict{} could not be activated",
-                bindings.conflicts().len(),
-                if bindings.conflicts().len() == 1 {
-                    ""
-                } else {
-                    "s"
-                }
-            ),
-        );
-    }
-    egui::ScrollArea::vertical()
-        .id_salt("shortcut-editor-scroll")
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            let mut group = None;
-            let mut shown = 0usize;
-            for action in ShortcutAction::ALL {
-                let haystack =
-                    format!("{} {} {}", action.group(), action.label(), action.id()).to_lowercase();
-                if !terms.iter().all(|term| haystack.contains(term)) {
-                    continue;
-                }
-                if group != Some(action.group()) {
-                    if group.is_some() {
-                        ui.separator();
-                    }
-                    ui.label(RichText::new(action.group()).strong());
-                    group = Some(action.group());
-                }
-                shown += 1;
-                ui.horizontal(|ui| {
-                    let controls_width = 290.0;
-                    let label_width = (ui.available_width() - controls_width).max(100.0);
-                    ui.add_sized(
-                        [label_width, METRICS.menu.row_height],
-                        egui::Label::new(action.label()),
-                    );
-                    ui.add_sized(
-                        [100.0, METRICS.menu.row_height],
-                        egui::Label::new(
-                            RichText::new(
-                                bindings
-                                    .display(action)
-                                    .unwrap_or_else(|| "Unassigned".to_owned()),
-                            )
-                            .monospace(),
-                        ),
-                    );
-                    if ui
-                        .selectable_label(*capture == Some(action), "Change")
-                        .clicked()
-                    {
-                        *capture = Some(action);
-                        *notice = None;
-                    }
-                    if ui.button("Disable").clicked() {
-                        edited.shortcut_overrides.set(action, None);
-                        *capture = None;
-                        *notice = Some(format!("Disabled {}", action.label()));
-                    }
-                    if ui
-                        .add_enabled(
-                            edited.shortcut_overrides.get(action).is_some(),
-                            egui::Button::new("Reset"),
-                        )
-                        .clicked()
-                    {
-                        edited.shortcut_overrides.reset(action);
-                        *notice = Some(format!("Restored {}", action.label()));
-                    }
-                });
-            }
-            if shown == 0 {
-                ui.label(RichText::new("No shortcut actions found").weak());
-            }
-        });
-    *pending_settings = (edited != *settings).then_some(edited);
 }
 
 fn consume_preview_zoom_shortcut(

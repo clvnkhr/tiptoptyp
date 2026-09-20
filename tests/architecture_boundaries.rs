@@ -45,6 +45,26 @@ fn extracted_leaf_views_have_explicit_dependencies_and_no_app_or_worker_access()
 }
 
 #[test]
+fn extracted_find_and_shortcut_views_are_presentation_only() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/app");
+    for name in ["find_bar.rs", "shortcut_editor.rs"] {
+        let source = fs::read_to_string(root.join(name)).unwrap();
+        for forbidden in [
+            "EditorApp",
+            "LatestJob",
+            "ExclusiveJob",
+            "std::fs",
+            "std::process",
+            "std::thread",
+            "request_repaint",
+            "Command::new",
+        ] {
+            assert!(!source.contains(forbidden), "{name} owns {forbidden}");
+        }
+    }
+}
+
+#[test]
 fn explorer_painting_cannot_start_workspace_or_git_effects() {
     let source = include_str!("../src/app/explorer_view.rs");
     for forbidden in [

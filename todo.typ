@@ -605,7 +605,7 @@ named duplicate branches, pass 247's matrix and show a net production reduction
 for this batch without new dispatch queues or per-frame command allocations.
 Depends on 247; repeat further batches only when the first demonstrates value.
 
-249. [ ] Narrow Settings shortcut-editor presentation to explicit inputs/state
+249. [x] Narrow Settings shortcut-editor presentation to explicit inputs/state
 and returned actions. Inspect the remaining root helpers and settings_view;
 move only shortcut query/capture/notice rendering and its local presentation
 state to a cohesive existing Settings home. Keep settings persistence, font
@@ -615,7 +615,7 @@ work; a change reaches both main windows through the singleton Settings owner.
 No cloning the whole settings object on every paint or extra font scans.
 Depends on 246; do not redo the controls extraction completed in 244.
 
-250. [ ] Give Find/Replace presentation a narrow boundary around the existing
+250. [x] Give Find/Replace presentation a narrow boundary around the existing
 SearchSession. Separate query/control rendering from document mutation and
 navigation; remove its need for unrestricted EditorApp access. Acceptance:
 Find retains focus while searching, a source jump restores editor focus, tab
@@ -656,7 +656,7 @@ cannot reposition a replacement view. Preserve UI-thread ownership and verify
 native geometry/composition when affected. Do not bundle every preview flag into
 a second controller. Depends on 246 and relevant native gates 234/237.
 
-254. [ ] Consolidate one duplicated document-transition sequence across new,
+254. [x] Consolidate one duplicated document-transition sequence across new,
 open and tab activation, selected from 246's map. Reuse DocumentLifecycle, stable
 tab records and current save continuations; separate shared mutation order from
 entry-point-specific prompts and preview policy. Acceptance: dirty/cancel,
@@ -665,7 +665,7 @@ pass; creating an unrelated tab neither restarts nor refreshes that preview.
 Delete the selected duplicate sequence without weakening receipt/generation
 checks or cloning document state. Keep further transition families separate.
 
-255. [ ] Add executable dependency protection for the narrowed boundaries in
+255. [x] Add executable dependency protection for the narrowed boundaries in
 249–254. Prefer module visibility and narrow parameter types; extend existing
 architecture tests only for dependencies Rust visibility cannot express.
 Acceptance: the extracted presentation code cannot obtain EditorApp or launch
@@ -2153,3 +2153,53 @@ measured in this follow-up; automated results alone do not establish them.
   operation or repaint schedule was added. No material performance change is
   expected or timing speedup claimed. Semantic controls/state coverage is
   sufficient for this change; native bounds and rendering geometry are unchanged.
+
+= Architecture presentation-boundary extraction (20 September 2026)
+
+- Item 249: moved shortcut query/capture/notice state and rendering into
+  `src/app/shortcut_editor.rs`. The child paints an `AppSettings` snapshot and
+  returns typed `BeginCapture`, `Disable`, `Reset` and `ResetAll` actions;
+  `EditorApp` alone applies persistence, conflict resolution and capture
+  events. This removes the old per-frame full-settings clone and keeps the
+  singleton settings owner responsible for propagation to every window.
+- Item 250: moved Find/Replace controls and their existing `SearchSession`
+  cache into `src/app/find_bar.rs`. The bar owns only query/control state and
+  returns navigation/replacement intents; document edits, dirty state, undo
+  grouping, selection and focus remain in `EditorApp`. Search results remain
+  revision-keyed, so unchanged frames reuse the existing compiled query/cache.
+- Both presentation modules render in isolation in deterministic context tests.
+  Existing shortcut, Find focus, Unicode replacement, source-jump and command
+  routing tests continue to exercise the application boundary. The old
+  unrestricted shortcut helper and Find UI body were deleted; no second search
+  cache, worker, repaint loop, document copy or font scan was introduced.
+- The extraction adds explicit state/action types and tests but moves code
+  rather than claiming a runtime speedup. It reduces `app.rs` and leaves
+  document mutation on its current owner. Against the 248 checkpoint,
+  `app.rs` is 11,182 lines (−126), the app family is 35,009 (−318), and all
+  Rust under `src`, `core`, `tests` and `xtask` is 95,614 (+72). The increase
+  is the explicit action/state tests and architecture guard; production code
+  in the app family shrank. `cargo test --no-fail-fast` passes (including 902
+  main-binary tests and 63 library tests, with only the existing opt-in tests
+  ignored), strict Clippy, formatting, the architecture suite and all 13
+  xtask tests pass. No screenshot was needed: these are ownership/state and
+  behavior changes, not a visual contract change.
+
+= Architecture transition and dependency guards (20 September 2026)
+
+- Item 254: introduced one `reset_transient_editor_state` helper for the
+  exact state shared by New, Open and tab activation: pending editor selection,
+  editor attention and SearchSession navigation. It deliberately does not
+  absorb preview retention, Tinymist restart/reopen policy, tab rekeying,
+  dirty prompts or asset loading. A deterministic regression proves all three
+  transient states clear together; existing tab/open/preview tests retain the
+  caller-specific policy coverage.
+- Item 255: added an architecture-boundary test that keeps `find_bar.rs` and
+  `shortcut_editor.rs` presentation-only: they cannot name the application
+  owner, launch workers/processes, touch the filesystem or request repaints.
+  Both modules also render in isolation from borrowed state in their own
+  deterministic tests, so the boundary is behavioral as well as source-level.
+- Resource impact: this batch removes repeated assignments and adds no new
+  allocation in ordinary frames, worker, service, or repaint path. Find still
+  uses the existing revision-keyed cache; the shortcut editor computes its
+  bindings from the already supplied snapshot and only clones settings on an
+  actual edit action. The changes claim no cross-platform timing improvement.

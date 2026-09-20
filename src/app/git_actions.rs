@@ -119,7 +119,7 @@ impl EditorApp {
                     let cursor = self.editor_snapshot(context).cursor;
                     self.document_mut()
                         .edit(cursor, |source| *source = replacement.text);
-                    self.search.clear();
+                    self.find_bar.search.clear();
                     self.mark_edited();
                     self.close_app_popup();
                     self.git_editor.chunk = None;

@@ -74,13 +74,13 @@ impl EditorApp {
         self.discard_webview();
         self.git_editor.clear_document();
         self.close_app_popup();
-        self.search.clear();
+        self.find_bar.search.clear();
         self.pending_editor_selection = None;
         self.editor_attention = None;
         self.editor_completion = None;
         self.last_editor_caret = None;
-        self.find_visible = false;
-        self.replace_visible = false;
+        self.find_bar.visible = false;
+        self.find_bar.replace_visible = false;
         self.document_workflow.revoke_close();
         let editor_id = source_editor_id(context);
         context.memory_mut(|memory| memory.surrender_focus(editor_id));

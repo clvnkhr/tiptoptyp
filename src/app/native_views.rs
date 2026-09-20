@@ -220,7 +220,7 @@ impl EditorApp {
                         });
                         self.pending_editor_selection =
                             Some(EditorSelection::Focus(edit.cursor..edit.cursor));
-                        self.search.clear();
+                        self.find_bar.search.clear();
                         self.mark_edited();
                         self.notice = Some(Notice {
                             message: "Updated table".to_owned(),

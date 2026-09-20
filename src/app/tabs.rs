@@ -573,14 +573,12 @@ impl EditorApp {
         self.tabs.active = Some(id);
         self.workspace_root = incoming_workspace;
         incoming_editor.store(context, source_editor_id(context));
-        self.pending_editor_selection = None;
-        self.editor_attention = None;
+        self.reset_transient_editor_state();
         self.last_editor_caret = None;
         self.editor_completion = None;
         self.editor_hover = None;
         self.tooltip_request = None;
         self.close_app_popup();
-        self.search.clear();
         self.document_workflow.revoke_close();
     }
 

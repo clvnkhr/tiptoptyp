@@ -5,124 +5,16 @@ use eframe::egui::text::{ByteIndex, LayoutJob, LayoutSection};
 
 impl EditorApp {
     pub(super) fn show_find_bar(&mut self, ui: &mut egui::Ui) {
-        let mut find_next = false;
-        let mut find_previous = false;
-        let mut replace_one = false;
-        let mut replace_all = false;
-        let mut find_query_changed = false;
-        let search_revision = self.document().key();
         let source = self.tabs.current_record().document.source();
-        let search_results = self.search.results(
-            source,
-            search_revision,
-            &self.find_query,
-            self.find_case_sensitive,
-            self.find_regex,
+        let document_key = self.document().key();
+        let actions = find_bar::show(ui, &mut self.find_bar, source, document_key);
+        self.apply_find_actions(
+            ui.ctx(),
+            actions.previous,
+            actions.next,
+            actions.replace_one,
+            actions.replace_all,
         );
-        let match_status = search_results.error().map_or_else(
-            || format!("{} matches", search_results.len()),
-            |_| "Invalid pattern".to_owned(),
-        );
-
-        ui.horizontal_wrapped(|ui| {
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut self.find_query)
-                    .id_salt("find-query")
-                    .hint_text("Find")
-                    .desired_width(METRICS.editor.find_field_width),
-            );
-            if self.focus_find {
-                response.request_focus();
-                self.focus_find = false;
-            }
-            if response.changed() {
-                self.search.clear();
-                find_query_changed = true;
-            }
-            if response.lost_focus()
-                && let Some(step) = ui.input(|input| {
-                    find_step_for_enter(input.key_pressed(egui::Key::Enter), input.modifiers.shift)
-                })
-            {
-                match step {
-                    FindStep::Next => find_next = true,
-                    FindStep::Previous => find_previous = true,
-                }
-                // Single-line TextEdit relinquishes focus on Enter. Return it
-                // immediately so repeated Enter/Shift+Enter keeps navigating.
-                response.request_focus();
-            }
-            ui.label(
-                RichText::new(match_status)
-                    .size(theme::TYPE.supporting)
-                    .weak(),
-            );
-            let case_label = if self.find_case_sensitive { "Aa" } else { "aa" };
-            if native_hover_text(
-                ui.selectable_label(self.find_case_sensitive, case_label),
-                if self.find_case_sensitive {
-                    "Case-sensitive matching"
-                } else {
-                    "Case-insensitive matching"
-                },
-            )
-            .clicked()
-            {
-                self.find_case_sensitive = !self.find_case_sensitive;
-                self.search.clear();
-            }
-            let regex_button = native_hover_text(
-                ui.selectable_label(self.find_regex, ".*"),
-                "Regular expression mode. Supports ., *, +, ?, [], ^, $, \\d, \\w, and \\s.",
-            );
-            regex_button.context_menu(|ui| {
-                ui.label(RichText::new("Regular expressions").strong());
-                ui.label(".  any character");
-                ui.label("*  zero or more · +  one or more");
-                ui.label("?  optional · ^  start · $  end");
-                ui.label("[abc] [a-z] [^0-9]  character classes");
-                ui.label("\\d digit · \\w word · \\s whitespace");
-                ui.label("Replacement text is literal; capture expansion is not supported.");
-            });
-            if regex_button.clicked() {
-                self.find_regex = !self.find_regex;
-                self.search.clear();
-            }
-            if ui
-                .selectable_label(self.replace_visible, "Replace")
-                .on_hover_text("Show or hide replace fields")
-                .clicked()
-            {
-                self.replace_visible = !self.replace_visible;
-            }
-            find_previous |= icon_button(ui, UiIcon::Up, "Previous match · Shift+Enter").clicked();
-            find_next |= icon_button(ui, UiIcon::Down, "Next match · Enter").clicked();
-            if icon_button(ui, UiIcon::Close, "Close · Esc").clicked() {
-                self.find_visible = false;
-                self.replace_visible = false;
-                self.search.clear();
-            }
-        });
-
-        if self.replace_visible {
-            ui.horizontal(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.replacement)
-                        .hint_text("Replace")
-                        .desired_width(METRICS.editor.find_field_width),
-                );
-                replace_one |= ui.button("Replace").clicked();
-                replace_all |= ui.button("All").clicked();
-            });
-        }
-
-        // A changed query starts at its first result. This keeps the editor in
-        // sync with the field while typing instead of waiting for Enter.
-        if find_query_changed {
-            find_next = true;
-        }
-
-        self.apply_find_actions(ui.ctx(), find_previous, find_next, replace_one, replace_all);
     }
 
     pub(super) fn apply_find_actions(
@@ -137,37 +29,39 @@ impl EditorApp {
         if find_previous {
             let source = self.tabs.current_record().document.source();
             self.pending_editor_selection = self
+                .find_bar
                 .search
                 .previous(
                     source,
                     search_revision,
-                    &self.find_query,
-                    self.find_case_sensitive,
-                    self.find_regex,
+                    &self.find_bar.query,
+                    self.find_bar.case_sensitive,
+                    self.find_bar.regex,
                 )
                 .map(|matched| EditorSelection::Search(matched.char_range.clone()));
         }
         if find_next {
             let source = self.tabs.current_record().document.source();
             self.pending_editor_selection = self
+                .find_bar
                 .search
                 .next(
                     source,
                     search_revision,
-                    &self.find_query,
-                    self.find_case_sensitive,
-                    self.find_regex,
+                    &self.find_bar.query,
+                    self.find_bar.case_sensitive,
+                    self.find_bar.regex,
                 )
                 .map(|matched| EditorSelection::Search(matched.char_range.clone()));
         }
         if replace_one {
             let before = self.document().source().clone();
             let snapshot = self.editor_snapshot(context);
-            let find_query = &self.find_query;
-            let replacement = &self.replacement;
-            let find_case_sensitive = self.find_case_sensitive;
-            let find_regex = self.find_regex;
-            let search = &mut self.search;
+            let find_query = &self.find_bar.query;
+            let replacement = &self.find_bar.replacement;
+            let find_case_sensitive = self.find_bar.case_sensitive;
+            let find_regex = self.find_bar.regex;
+            let search = &mut self.find_bar.search;
             let document = &mut self.tabs.current_record_mut().document;
             let replaced = document.edit(snapshot.cursor, |source| {
                 search.replace_one(
@@ -181,6 +75,7 @@ impl EditorApp {
             });
             if replaced {
                 self.pending_editor_selection = self
+                    .find_bar
                     .search
                     .selected()
                     .map(|matched| EditorSelection::Search(matched.char_range.clone()));
@@ -192,11 +87,11 @@ impl EditorApp {
         if replace_all {
             let before = self.document().source().clone();
             let snapshot = self.editor_snapshot(context);
-            let find_query = &self.find_query;
-            let replacement = &self.replacement;
-            let find_case_sensitive = self.find_case_sensitive;
-            let find_regex = self.find_regex;
-            let search = &mut self.search;
+            let find_query = &self.find_bar.query;
+            let replacement = &self.find_bar.replacement;
+            let find_case_sensitive = self.find_bar.case_sensitive;
+            let find_regex = self.find_bar.regex;
+            let search = &mut self.find_bar.search;
             let document = &mut self.tabs.current_record_mut().document;
             let count = document.edit(snapshot.cursor, |source| {
                 search.replace_all(
@@ -287,22 +182,24 @@ impl EditorApp {
         let sticky_context_enabled = document_kind.is_typst()
             && (sticky_context_snapshot || self.settings.sticky_context_rows);
         let snapshot_scroll_offset = source_editor_snapshot_scroll_offset(self.snapshot_scene);
-        let (search_highlight_matches, selected_search_match) = if self.find_visible {
+        let (search_highlight_matches, selected_search_match) = if self.find_bar.visible {
             let document_key = self.document().key();
             let source = self.tabs.current_record().document.source();
             let matches = self
+                .find_bar
                 .search
                 .results(
                     source,
                     document_key,
-                    &self.find_query,
-                    self.find_case_sensitive,
-                    self.find_regex,
+                    &self.find_bar.query,
+                    self.find_bar.case_sensitive,
+                    self.find_bar.regex,
                 )
                 .iter()
                 .map(|matched| matched.byte_range.clone())
                 .collect::<Vec<_>>();
             let selected = self
+                .find_bar
                 .search
                 .selected()
                 .map(|matched| matched.byte_range.clone());
@@ -973,7 +870,7 @@ impl EditorApp {
             None
         };
         if changed {
-            self.search.clear();
+            self.find_bar.search.clear();
             self.mark_edited();
         }
         if let (Some(cursor), Some(anchor)) = (completion_cursor, completion_anchor) {
@@ -1070,7 +967,7 @@ impl EditorApp {
 
         // Paint Find/Replace after the sticky rows so it remains the topmost
         // editor overlay without reserving any layout space below it.
-        if self.find_visible {
+        if self.find_bar.visible {
             let context = ui.ctx().clone();
             let overlay_width = (scroll_output.inner_rect.width() - 4.0 * theme::SPACE.content)
                 .clamp(1.0, METRICS.editor.find_overlay_max_width);

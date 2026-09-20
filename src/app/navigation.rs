@@ -204,7 +204,7 @@ impl EditorApp {
             started: Instant::now(),
         });
         self.pending_editor_selection = Some(EditorSelection::Focus(range));
-        self.focus_find = false;
+        self.find_bar.focus = false;
         if self.document().kind().is_typst() {
             self.view_mode = ViewMode::Split;
         }

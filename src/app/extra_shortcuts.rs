@@ -65,7 +65,7 @@ impl EditorApp {
         };
         if action == A::KeyboardShortcuts {
             self.shortcut_editor_visible = !self.shortcut_editor_visible;
-            self.shortcut_capture = None;
+            self.shortcut_editor.capture = None;
             context.request_repaint();
             return;
         }
@@ -122,10 +122,10 @@ impl EditorApp {
             A::FindNext | A::FindPrevious | A::ReplaceOne | A::ReplaceAll
                 if self.document().kind().is_editable() =>
             {
-                if self.find_query.is_empty() {
+                if self.find_bar.query.is_empty() {
                     self.open_find(matches!(action, A::ReplaceOne | A::ReplaceAll));
                 } else if !matches!(action, A::ReplaceOne | A::ReplaceAll)
-                    || (self.find_visible && self.replace_visible)
+                    || (self.find_bar.visible && self.find_bar.replace_visible)
                 {
                     self.apply_find_actions(
                         context,
@@ -141,13 +141,13 @@ impl EditorApp {
                 }
             }
             A::ToggleFindCase | A::ToggleFindRegex if self.document().kind().is_editable() => {
-                self.find_visible = true;
+                self.find_bar.visible = true;
                 if action == A::ToggleFindCase {
-                    self.find_case_sensitive = !self.find_case_sensitive;
+                    self.find_bar.case_sensitive = !self.find_bar.case_sensitive;
                 } else {
-                    self.find_regex = !self.find_regex;
+                    self.find_bar.regex = !self.find_bar.regex;
                 }
-                self.search.clear();
+                self.find_bar.search.clear();
             }
             A::PreviewPreviousPage | A::PreviewNextPage | A::PreviewFitWidth => {
                 if !self.preview_visible()
@@ -373,12 +373,12 @@ mod tests {
         let context = egui::Context::default();
         let root = tempfile::tempdir().unwrap();
         let mut app = app(&context, root.path());
-        app.find_query = "α".into();
-        app.replacement = "β".into();
+        app.find_bar.query = "α".into();
+        app.find_bar.replacement = "β".into();
         let source = app.document().source().clone();
         press(&mut app, &context, A::ReplaceAll);
         assert_eq!(*app.document().source(), source);
-        assert!(app.find_visible && app.replace_visible);
+        assert!(app.find_bar.visible && app.find_bar.replace_visible);
         press(&mut app, &context, A::FindNext);
         assert!(app.pending_editor_selection.is_some());
         press(&mut app, &context, A::ReplaceAll);

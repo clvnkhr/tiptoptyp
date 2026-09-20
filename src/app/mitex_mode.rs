@@ -92,7 +92,7 @@ impl EditorApp {
         self.document_mut().set_history_reset(false);
         self.pending_editor_selection = None;
         self.editor_attention = None;
-        self.search.clear();
+        self.find_bar.search.clear();
         self.mark_edited();
         self.prepare_editor_source_data();
         self.reset_document_services();
