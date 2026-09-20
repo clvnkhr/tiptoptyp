@@ -314,11 +314,12 @@ closes after the owner UI pass, registering the retained Settings surface just
 like a native close, and completes without panic. No polling or repaint loop
 was added. Evidence and remaining limitations: `regression-results.typ`.
 
-229. [ ] Restore a reliable native hover profiling capture: the `hover` scenario
-timed out before readiness after 120 seconds on the same optimized build while
-main, Settings and multi-window scenarios completed. Diagnose capture/event
-delivery before interpreting this as an application hang; preserve the timeout
-log and validate actual popup entry/scroll separately from helper tests.
+229. [x] Restore a reliable native hover profiling capture. The `hover` scenario
+now completes a deterministic popup entry run on the committed optimized build;
+the earlier 120-second readiness failure was a child-viewport lifecycle race,
+not an application workload hang. The retained invalid timeout artifact and
+current valid endpoint are recorded in `docs/performance.md`; the separate
+`hover-scroll` workload validates wheel dismissal and pointer-away behavior.
 
 230. [x] Identify executable builds in Settings → Status and `--version` / `-V`
 using package version, Git revision, dirty state and a build-time Unix timestamp.

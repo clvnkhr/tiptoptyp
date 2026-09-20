@@ -273,7 +273,7 @@ optimized profiling binary (`target/profiling/tiptoptyp`, SHA-256
 `260b0ea36dd5763df5a5e4f774ab259027998c014473bb44327be5f4b24c7a0b`), the
 Catppuccin Latte theme, isolated fixtures, and sampler `none` unless noted. The
 repaired hover and tabs rows use the current optimized binary, SHA-256
-`828d3d52a7a28fce63f1f32c3aac7f337d1d73445ac7bdbbd7f7aa650541f78c`; they are
+`6c65927befcadfea2bc4aa557356babbeec40b8a655a7d2f867dc2bf104d8d7d`; they are
 endpoint validation, not a before/after performance comparison.
 The active input rows use the rebuilt optimized binary, SHA-256
 `9b4ae2ba1c500c5c1c80a8cfb22e0c37858cc118ad167dbdbd7ddc77aecdd742`.
@@ -288,15 +288,15 @@ summary, logs, CPU readings, and initial viewport framebuffer.
 | Settings settled | `.tiptoptyp/profiles/1789891583728-65502-settings-0` | 5s / 5s | Complete; settled idle had no instrumented spans or repaint requests |
 | Settings CPU sample | `.tiptoptyp/profiles/1789891627456-66109-settings-0` | 1s / 2s | Complete; `/usr/bin/sample` artifact retained, no wall-time scope calls |
 | 40-page PDF residency | `.tiptoptyp/profiles/1789891570117-65164-pdf-0` | 0s / 1s | Complete; startup/raster admission captured `ui.editor.pass` and a bounded repaint |
-| deterministic function tooltip | `.tiptoptyp/profiles/1789894830846-81006-hover-0` | 0s / 1s | Complete after item 259; four diagnostic child paints and bounded root repaint requests |
-| deterministic three-tab workload | `.tiptoptyp/profiles/1789894840618-81492-tabs-0` | 0s / 1s | Complete after item 259; one bounded root repaint request and clean deadline shutdown |
+| deterministic function tooltip | `.tiptoptyp/profiles/1789897889628-3518-hover-0` | 0s / 1s | Complete after items 229/259; four diagnostic child paints and bounded root repaint requests |
+| deterministic three-tab workload | `.tiptoptyp/profiles/1789897920800-3976-tabs-0` | 0s / 1s | Complete after item 259; one bounded root repaint request and clean deadline shutdown |
 | active hover then scroll | `.tiptoptyp/profiles/1789897269887-97329-hover-scroll-0` | 0s / 2s | Complete after items 257/260; four phases and 10 injected events; cache counters retained |
 | active tab selection | `.tiptoptyp/profiles/1789897355143-97793-tabs-switch-0` | 0s / 2s | Complete after items 257/260; seven phases and 10 injected events; one bounded highlight miss |
 
 Earlier attempts remain retained as invalid history: hover
 (`1789891376923-64483-hover-0`) never reached readiness, while tabs
 (`1789891511578-64829-tabs-0`) reached measurement but exceeded shutdown. Item
-259 fixed both causes: deterministic tooltip scenes now survive child-view
+229/259 fixed both causes: deterministic tooltip scenes now survive child-view
 lifecycle cleanup, and the profiler hands its deadline close back to the event
 loop and outer screenshot wrapper. The current endpoint rows above are valid
 captures. The active rows are deliberately not comparable to the idle rows:
