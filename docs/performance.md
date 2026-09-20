@@ -58,6 +58,8 @@ repository status/indexing needs a separate, controlled repository workload.
 | `fonts` | Settings font picker open, deterministic sample font |
 | `hover` | Function-hover native popup above the editor |
 | `large` | 5,000 Unicode comment lines and 100 definitions, over 300 KB of source; short rendered PDF |
+| `tabs` | Three deterministic tabs with the first tab retained as the designated preview |
+| `pdf` | A deterministic 40-page A6 PDF opened through the asset-preview path |
 | `no-window` | Capture the small document, then close it through the retained-root lifecycle before warmup; no document windows remain |
 | `multi-window` | The small isolated document opened in four independent document sessions; three secondary native windows are created once before warmup |
 
@@ -69,6 +71,14 @@ case isolates source scaling; it does not establish preview scaling.
 QA helpers remain active (including deterministic font-picker fixture setup);
 use the samples to distinguish fixture overhead and confirm suspected production
 hot paths in an ordinary app launch before changing them.
+
+For active interaction runs, use `tabs` for repeated tab selection/reordering,
+`hover` for hover-then-scroll dismissal, and `pdf` for scrolling through the
+multi-page asset preview. Start the runner, wait for its readiness message, then
+perform one fixed sequence during the measured interval; write that sequence and
+whether the run was a cache hit or miss beside the artifacts. The runner does
+not synthesize pointer or wheel input into an idle run, so an unattended profile
+cannot honestly claim to measure hover scrolling or rapid tab switching.
 
 The `no-window` scenario sets `TIPTOPTYP_PROFILE_NO_WINDOW=1` for the profiling
 build. It performs one document-close transition after capture, not repeated
@@ -242,6 +252,43 @@ record before/after evidence using this workflow. Investigating individual hot
 paths remains ongoing work, not an unchecked part of the profiling setup.
 
 ## Architecture regression probes
+
+### Integrated endpoint evidence — 2026-09-20
+
+The following runs were collected on Apple arm64 macOS with the same optimized
+profiling binary (`target/profiling/tiptoptyp`, SHA-256
+`260b0ea36dd5763df5a5e4f774ab259027998c014473bb44327be5f4b24c7a0b`), the
+Catppuccin Latte theme, isolated fixtures, and sampler `none` unless noted.
+The retained directories are Git-ignored and contain the exact metadata,
+summary, logs, CPU readings, and initial viewport framebuffer.
+
+| Workload | Artifact | Warmup / measure | Result |
+| --- | --- | ---: | --- |
+| one-window idle | `.tiptoptyp/profiles/1789891323533-63744-main-0` | 5s / 5s | Complete; no instrumented spans or repaint requests |
+| four-owner idle | `.tiptoptyp/profiles/1789891342485-64050-multi-window-0` | 5s / 5s | Complete; no secondary repaint requests or instrumented spans |
+| Settings startup/interaction window | `.tiptoptyp/profiles/1789891263205-61209-settings-0` | 0s / 1s | Complete; 8 Settings/UI calls and 101 spinner repaint requests during active startup |
+| Settings settled | `.tiptoptyp/profiles/1789891583728-65502-settings-0` | 5s / 5s | Complete; settled idle had no instrumented spans or repaint requests |
+| Settings CPU sample | `.tiptoptyp/profiles/1789891627456-66109-settings-0` | 1s / 2s | Complete; `/usr/bin/sample` artifact retained, no wall-time scope calls |
+| 40-page PDF residency | `.tiptoptyp/profiles/1789891570117-65164-pdf-0` | 0s / 1s | Complete; startup/raster admission captured `ui.editor.pass` and a bounded repaint |
+
+Two attempted active endpoints were not accepted as measurements. The existing
+`hover` scene (`1789891376923-64483-hover-0`) stayed at roughly one CPU core
+without writing `ready`; the same failure is present in the older retained hover
+artifact, so it is a scene-readiness problem rather than a performance result.
+The new `tabs` scene (`1789891511578-64829-tabs-0`) reached measurement but
+exceeded the runner's post-measurement shutdown deadline; its empty summary is
+invalid. These findings leave hover-then-scroll and rapid-tab-switching as
+explicit follow-up work, rather than silently reporting zero cost.
+
+The `cpu-before.txt`/`cpu-after.txt` values are process snapshots around the
+measurement window, not a portable CPU score; the successful runs used different
+startup/cache phases and must not be ranked by those values. No GPU memory,
+texture residency, WebKit, Tinymist, Typst or Poppler child-process samples were
+captured by this runner. The PDF run proves the fixture and summary path, not a
+whole-system GPU budget. Future before/after work must preserve the same binary
+provenance, fixture, warmup, interaction sequence and sampler. The remaining
+architecture work is therefore documented as evidence collection with known
+gates, not a claim that the refactor improved runtime performance.
 
 The [background-save review](background-saves.md) records matched optimized
 synchronous/background dispatch measurements and the opt-in slow-storage probe.

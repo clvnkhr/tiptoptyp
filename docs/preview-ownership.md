@@ -70,3 +70,14 @@ preview controller +75, core connection +3, native adapter +13, workspace adapte
 −10: **+22 production lines overall**, including the readiness and suspension fixes.
 Tests grow by 179 lines. This is policy consolidation and a correctness fix, not
 a total-source reduction or measured speedup.
+
+## Current architecture follow-up (2026-09-20)
+
+Items 249–256 did not move preview decoding, native handles or Tinymist
+readiness into a new owner. The cross-owner regression keeps a designated
+preview in one window while another tab becomes active, admits a locked save,
+and delivers a stale language-service reply; the reply is rejected by the
+existing document/generation identity checks. This protects preview and save
+boundaries without adding a worker or repaint path. Native preview/editor focus
+acceptance remains the open item 237, and the profiling evidence does not claim
+GPU texture or WebKit memory measurements; see [`performance.md`](performance.md).

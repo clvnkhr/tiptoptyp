@@ -505,3 +505,22 @@ the same small order vector. Rendering already visited that vector and now
 carries the ID it read instead of a position; there is no additional frame
 scan, source clone, service start or repaint. No speedup or new native profile
 is claimed.
+
+## Follow-up state after items 249–258 (2026-09-20)
+
+The presentation-boundary work moved shortcut and Find/Replace state into
+explicit leaf modules, while the shared document-transition reset remains in
+the window owner. Item 256 now has a bounded two-owner regression combining
+multiple tabs, a designated preview, an in-flight locked save, a late
+language-service reply and root-owned Settings. The test calls the real reply
+identity adapter and does not introduce another event bus or worker policy.
+
+Current physical counts and profiling evidence are maintained in
+[`docs/app-ownership.md`](app-ownership.md) and
+[`docs/performance.md`](performance.md). The current optimized profiling
+endpoint has valid one-window, multi-window, Settings and 40-page PDF runs,
+but the hover scene fails before readiness and the tab scene exceeds shutdown
+watchdog time; neither is treated as a performance result. Items 229, 234 and
+237 remain native acceptance gates. Proposed transaction/resource-wrapper
+extractions 251 and 253 remain deferred because review found no justified
+duplicate policy to remove without weakening the existing owners.

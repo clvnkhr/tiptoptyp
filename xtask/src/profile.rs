@@ -9,7 +9,7 @@ use std::{
 };
 
 const HELP: &str = "Usage: cargo xtask profile [options]
-  --scenario main|settings|find|fonts|large|hover|no-window|multi-window  (default settings)
+  --scenario main|settings|find|fonts|hover|large|tabs|pdf|no-window|multi-window  (default settings)
   --warmup SECONDS       0..300, after initial capture (default 3)
   --seconds SECONDS      1..300 (default 10)
   --sampler auto|none|sample|perf  (auto: sample on macOS, none elsewhere)
@@ -74,6 +74,8 @@ fn seconds(value: &str, minimum: u64) -> Result<u64, String> {
 fn scenario_scene(scenario: &str) -> Option<&'static str> {
     match scenario {
         "main" | "large" | "no-window" | "multi-window" => Some("main"),
+        "tabs" => Some("tabs"),
+        "pdf" => Some("tabs-pdf"),
         "settings" => Some("settings-window"),
         "find" => Some("find-replace"),
         "fonts" => Some("settings-font-picker"),
@@ -290,6 +292,15 @@ fn apply_frame_pointers(command: &mut Command) {
 }
 
 fn fixture(scenario: &str) -> String {
+    if scenario == "pdf" {
+        let mut source = "#set page(paper: \"a6\", margin: 8pt)\n".to_owned();
+        for page in 1..=40 {
+            source.push_str(&format!(
+                "= Residency page {page}\n\nA bounded PDF residency profiling fixture.\n\n#pagebreak()\n"
+            ));
+        }
+        return source;
+    }
     if scenario != "large" {
         return include_str!("../../docs/ui-snapshots/theme-fixture.typ").to_owned();
     }
@@ -545,6 +556,8 @@ mod tests {
         );
         assert_eq!(scenario_scene("no-window"), Some("main"));
         assert_eq!(scenario_scene("multi-window"), Some("main"));
+        assert_eq!(scenario_scene("tabs"), Some("tabs"));
+        assert_eq!(scenario_scene("pdf"), Some("tabs-pdf"));
         let preserved = Options::parse(&args(&["--binary", "baseline/tiptoptyp"])).unwrap();
         assert!(preserved.skip_build);
         assert_eq!(preserved.binary, Some(PathBuf::from("baseline/tiptoptyp")));
@@ -588,6 +601,9 @@ mod tests {
                 .count(),
             100
         );
+        let pdf = fixture("pdf");
+        assert_eq!(pdf, fixture("pdf"));
+        assert_eq!(pdf.matches("#pagebreak()").count(), 40);
         assert_eq!(fixture("settings"), fixture("main"));
     }
 

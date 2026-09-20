@@ -693,7 +693,7 @@ and memory/resource observations; investigate material regressions rather than
 claiming speed from LOC changes. Explain sampling noise and unavailable GPU/native
 measurements. Keep captures opt-in, bounded and free of document contents.
 
-258. [ ] Close the architecture follow-up with a current-state documentation
+258. [x] Close the architecture follow-up with a current-state documentation
 pass and evidence ledger. Update the ownership map and superseding notes in
 architecture-followup, background-saves, preview-ownership and affected ADRs;
 correct outdated CI/platform descriptions without rewriting historical results.
@@ -703,6 +703,15 @@ decisions, remaining app-wide access and results from 256–257. Keep 229, 234 a
 for demonstrated remaining coupling, defects or measured cost; explicitly state
 which proposed extractions were deferred and why. No declaration that the whole
 architecture is finished merely because files became smaller.
+
+259. [ ] Make the profiling runner's active-workload endpoint deterministic.
+Keep pointer/wheel/tab sequences explicit and opt-in, but fix the hover scene's
+readiness hang and the tabs scene's post-measurement shutdown timeout before
+accepting hover-then-scroll or rapid-tab-switching numbers. Acceptance: a
+bounded scripted workload records its phase boundaries, cache-hit/miss state,
+repaint/job/cache counters and native-sampler metadata without logging document
+contents; failed startup or teardown stays an invalid run. Do not synthesize
+input into idle scenarios or loosen the watchdog.
 = Bounded PDF page residency (2026-09-18)
 
 - Items 198–200: PDF inspection now publishes a page catalog containing only
@@ -2203,6 +2212,38 @@ measured in this follow-up; automated results alone do not establish them.
   uses the existing revision-keyed cache; the shortcut editor computes its
   bindings from the already supplied snapshot and only clones settings on an
   actual edit action. The changes claim no cross-platform timing improvement.
+
+= Integrated profiling evidence and runner coverage (20 September 2026)
+
+- Item 257 is intentionally left open: the existing profiler was exercised with
+  the current optimized profiling binary and matched Catppuccin Latte fixtures,
+  and item 258 records the valid evidence, but two active endpoints are not yet
+  trustworthy. `main` and `multi-window` completed 5s warmup/5s measurement
+  runs with no idle spans or repaint requests; Settings produced an active
+  0s/1s startup run with 8 Settings/UI calls and 101 spinner repaint requests,
+  plus a settled 5s/5s run. A 40-page PDF scenario completed and retained its
+  summary. A sampler-backed Settings run also completed with `/usr/bin/sample`.
+- The new profiling runner scenarios are `tabs` (three tabs with the first
+  designated preview) and `pdf` (a reproducible 40-page A6 source opened through
+  the asset-preview path). Their fixtures are deterministic and bounded, and
+  xtask tests cover scenario parsing and reproducibility. The PDFs, screenshots,
+  CPU readings and summaries remain under the ignored `.tiptoptyp/profiles/`
+  evidence directories; no document contents are logged by the recorder.
+- The existing `hover` scene never wrote `ready` and consumed roughly one CPU
+  core until its owned process was stopped; an older retained hover attempt has
+  the same failure. The new `tabs` scene reached measurement but exceeded the
+  runner's shutdown watchdog, leaving an empty invalid summary. These are
+  actionable runner/scene defects, not zero-cost measurements, and become item
+  259. No GPU, texture, WebKit, Typst, Tinymist or Poppler child-process memory
+  measurement is claimed. CPU before/after files are process snapshots, not
+  portable benchmark scores.
+- Item 258 is complete as a documentation/evidence pass: `docs/performance.md`
+  now describes the active workload protocol, records the exact valid and invalid
+  run IDs, binary hash, warmup/measurement conditions and sampling limitations;
+  `docs/app-ownership.md` contains the cross-owner result from 256. Historical
+  architecture notes were not rewritten. Items 229, 234 and 237 remain open for
+  native acceptance, and 259 is the only new recommendation because the failed
+  profiling endpoints demonstrate it is needed.
 
 = Cross-owner architecture regression (20 September 2026)
 

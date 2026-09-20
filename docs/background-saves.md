@@ -109,3 +109,14 @@ Executable SHA-256:
 `01311770bbb517612bfabfb6af132d61f49e3d74b6e31794d466f06a91ea3d5d`.
 The probe is ignored in ordinary test runs; channel-controlled regression tests
 assert ordering and bounded admission instead of flaky performance thresholds.
+
+## Cross-owner follow-up (2026-09-20)
+
+The bounded item-256 shell regression now holds the existing canonical resource
+lease around an admitted save while switching document owners and tabs. The
+save is completed only after the lease is released, so the scenario checks the
+real `ExclusiveJob`/receipt path without adding a second executor or queue.
+Late language-service data is checked separately by document identity; it cannot
+release, overwrite or otherwise mutate another owner's save state. This is
+ownership evidence, not a new save timing claim; the integrated measurements
+and their CPU/GPU limitations are recorded in [`performance.md`](performance.md).
