@@ -2333,4 +2333,7 @@ portable whole-system resource score.
   events over seven phases. Their repaint counts are intentionally much higher
   than idle rows because the script requests frames while active; they are only
   valid for repeated comparisons with the same schedule. Item 257 remains open
-  for native sampler and GPU/process-resource observations.
+  for GPU observation. A sampler-backed hover run completed, but `/usr/bin/sample`
+  perturbed the schedule after its anchor phase; it is valid stack evidence but
+  not a phase-complete active comparison. The new Unix resource artifacts do
+  include the app, Tinymist and Typst process-group RSS/VSZ snapshots.

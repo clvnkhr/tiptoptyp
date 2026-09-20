@@ -294,6 +294,10 @@ loop and outer screenshot wrapper. The current endpoint rows above are valid
 captures. The active rows are deliberately not comparable to the idle rows:
 they request frames during a bounded scripted interaction and should only be
 compared with repeated runs using the same phase schedule.
+Native sampling can perturb that schedule: a 0s-warmup/2s `hover-scroll` run
+with `/usr/bin/sample` completed, but recorded only its initial anchor phase.
+Use sampler-free runs when validating that every active phase executes; retain
+sampler-backed runs for stack evidence and process-resource snapshots.
 
 The `cpu-before.txt`/`cpu-after.txt` values are process snapshots around the
 measurement window, not a portable CPU score; the successful runs used different
