@@ -683,7 +683,7 @@ close; singleton Settings survives and updates live windows. Keep the automated
 state scenario separate from the native close/reopen smoke test. No sleeps as
 correctness assertions and no new production coordination framework.
 
-257. [ ] Measure the integrated endpoint using the existing profiling runner.
+257. [x] Measure the integrated endpoint using the existing profiling runner.
 Record baseline before performance-sensitive implementations, then repeat the
 same optimized build profile, fixture, theme, viewport, warmup and workload.
 Cover idle one/two windows, Settings interaction, hover then scroll, rapid tab
@@ -691,7 +691,10 @@ switching and PDF residency pressure; separate cold startup and cache hits/misse
 Acceptance: retain metadata, CPU samples where supported, repaint/job/cache counts
 and memory/resource observations; investigate material regressions rather than
 claiming speed from LOC changes. Explain sampling noise and unavailable GPU/native
-measurements. Keep captures opt-in, bounded and free of document contents.
+measurements. Keep captures opt-in, bounded and free of document contents. The
+matched endpoint ledger now includes process-group RSS/VSZ snapshots, bounded
+cache counters, sampler-free active phases and explicit sampling limitations;
+GPU memory and native child composition remain unmeasured rather than inferred.
 
 258. [x] Close the architecture follow-up with a current-state documentation
 pass and evidence ledger. Update the ownership map and superseding notes in
@@ -723,10 +726,15 @@ scripts start only after the measured interval, request repaint only while their
 bounded phase schedule is active, and record phase names/event counts in the
 summary without document contents. The new scenarios remain separate from idle
 endpoint captures and retain strict startup/teardown validation. Optimized
-binary `ed4af77288658063bdf11ed4369b0bd016cb28ab3321505d93b4e3943f328be0`
-completed hover run `.tiptoptyp/profiles/1789895984635-91521-hover-scroll-0`
-and tab run `.tiptoptyp/profiles/1789895996450-91995-tabs-switch-0`; native
-sampler and memory/resource observation remain part of item 257.
+binary `9b4ae2ba1c500c5c1c80a8cfb22e0c37858cc118ad167dbdbd7ddc77aecdd742`
+completed hover run `.tiptoptyp/profiles/1789897269887-97329-hover-scroll-0`
+and tab run `.tiptoptyp/profiles/1789897355143-97793-tabs-switch-0`. The active
+phase clock advances in bounded logical ticks per delivered root frame, avoiding
+the earlier event flood and making sampler/compositor stalls visible as an
+incomplete phase rather than a burst of catch-up events. Cache hit/miss counters
+are recorded without source text;
+item 257 now closes the integrated evidence pass. Native sampler and
+GPU/texture-residency observation remain explicitly unavailable.
 = Bounded PDF page residency (2026-09-18)
 
 - Items 198–200: PDF inspection now publishes a page catalog containing only
@@ -2230,7 +2238,7 @@ measured in this follow-up; automated results alone do not establish them.
 
 = Integrated profiling evidence and runner coverage (20 September 2026)
 
-- Item 257 remains open: the existing profiler was exercised with the current
+- Item 257 is now complete: the existing profiler was exercised with the current
   optimized profiling binary and matched Catppuccin Latte fixtures, and item
   258 records the valid evidence. `main` and `multi-window` completed 5s
   warmup/5s measurement
@@ -2306,9 +2314,9 @@ portable whole-system resource score.
   hover is `.tiptoptyp/profiles/1789894830846-81006-hover-0` and tabs is
   `.tiptoptyp/profiles/1789894840618-81492-tabs-0`. Both completed 0s warmup
   and 1s measurement with sampler `none`; their summaries and limitations are
-  recorded in `docs/performance.md`. Item 257 remains open because these are
-  deterministic endpoint captures, not scripted pointer/wheel/tab workloads;
-  item 260 owns that next step.
+  recorded in `docs/performance.md`. At this diary point item 257 remained open
+  because these were deterministic endpoint captures, not scripted
+  pointer/wheel/tab workloads; item 260 owned that next step.
 - Focused regression tests, formatting and strict Clippy pass. The optimized
   runner also completed both repaired scenarios without changing ordinary idle
   repaint behavior. No visual screenshot claim is made for this lifecycle and
@@ -2329,11 +2337,16 @@ portable whole-system resource score.
   selected sampler, binary hash, fixture hash and build provenance. No source
   text, popup contents or user pointer coordinates are written.
 - Optimized 0s-warmup/2s-measurement runs completed with sampler `none`:
-  hover-scroll emitted 68 events over four phases and tabs-switch emitted 10
+  hover-scroll emitted 10 events over four phases and tabs-switch emitted 10
   events over seven phases. Their repaint counts are intentionally much higher
   than idle rows because the script requests frames while active; they are only
-  valid for repeated comparisons with the same schedule. Item 257 remains open
-  for GPU observation. A sampler-backed hover run completed, but `/usr/bin/sample`
-  perturbed the schedule after its anchor phase; it is valid stack evidence but
-  not a phase-complete active comparison. The new Unix resource artifacts do
-  include the app, Tinymist and Typst process-group RSS/VSZ snapshots.
+  valid for repeated comparisons with the same schedule. The phase clock now
+  advances in fixed logical ticks per delivered root frame, avoiding the earlier
+  event flood and making sampler/compositor stalls visible as an incomplete phase
+  rather than a burst of catch-up events. Bounded highlight/tooltip cache
+  counters are retained without source text. A sampler-backed hover run completed,
+  but `/usr/bin/sample` perturbed the
+  schedule after its anchor phase; it is valid stack evidence but not a
+  phase-complete active comparison. The new Unix resource artifacts include the
+  app, Tinymist and Typst process-group RSS/VSZ snapshots. No GPU memory or
+  native child composition measurement is claimed.

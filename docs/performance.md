@@ -81,6 +81,9 @@ For active interaction runs, use `hover-scroll` for hover-then-scroll dismissal
 and `tabs-switch` for repeatable tab selection. These scenarios inject only
 bounded egui pointer/wheel events after measurement begins; `summary.json`
 records phase names, event counts and repaint locations without source contents.
+The phase clock advances in fixed 64ms logical ticks per delivered root frame,
+so a stall cannot create a burst of catch-up events; an incomplete phase remains
+visible in the phase ledger instead of being mistaken for a completed workload.
 Use `tabs` for manual tab reordering and `pdf` for manual scrolling through the
 multi-page asset preview. The active scripts remain separate from idle runs, so
 an unattended idle profile still protects idle repaint behavior.
@@ -145,6 +148,11 @@ aggregation and writes once on exit. This adds measurement overhead when enabled
 compare like builds and corroborate hot paths with a native sampler. In ordinary
 builds spans/ticks compile to no-ops; a profiling build without
 `TIPTOPTYP_PROFILE_DIR` does not start a session or take timing samples.
+
+`counters` records bounded event counts such as highlight and tooltip cache hits
+and misses. Counter labels share the same 64-label bound as spans; excess labels
+are reported in `dropped_counters`. These counts describe recorder-admitted
+events, not allocations or GPU work.
 
 `root_repaint_requests` counts the source file/line locations reported by egui
 on measured root passes. It includes delayed requests, not just requests for an
@@ -268,7 +276,7 @@ repaired hover and tabs rows use the current optimized binary, SHA-256
 `828d3d52a7a28fce63f1f32c3aac7f337d1d73445ac7bdbbd7f7aa650541f78c`; they are
 endpoint validation, not a before/after performance comparison.
 The active input rows use the rebuilt optimized binary, SHA-256
-`ed4af77288658063bdf11ed4369b0bd016cb28ab3321505d93b4e3943f328be0`.
+`9b4ae2ba1c500c5c1c80a8cfb22e0c37858cc118ad167dbdbd7ddc77aecdd742`.
 The retained directories are Git-ignored and contain the exact metadata,
 summary, logs, CPU readings, and initial viewport framebuffer.
 
@@ -282,8 +290,8 @@ summary, logs, CPU readings, and initial viewport framebuffer.
 | 40-page PDF residency | `.tiptoptyp/profiles/1789891570117-65164-pdf-0` | 0s / 1s | Complete; startup/raster admission captured `ui.editor.pass` and a bounded repaint |
 | deterministic function tooltip | `.tiptoptyp/profiles/1789894830846-81006-hover-0` | 0s / 1s | Complete after item 259; four diagnostic child paints and bounded root repaint requests |
 | deterministic three-tab workload | `.tiptoptyp/profiles/1789894840618-81492-tabs-0` | 0s / 1s | Complete after item 259; one bounded root repaint request and clean deadline shutdown |
-| active hover then scroll | `.tiptoptyp/profiles/1789895984635-91521-hover-scroll-0` | 0s / 2s | Complete after item 260; four phases and 68 injected events |
-| active tab selection | `.tiptoptyp/profiles/1789895996450-91995-tabs-switch-0` | 0s / 2s | Complete after item 260; seven phases and 10 injected events |
+| active hover then scroll | `.tiptoptyp/profiles/1789897269887-97329-hover-scroll-0` | 0s / 2s | Complete after items 257/260; four phases and 10 injected events; cache counters retained |
+| active tab selection | `.tiptoptyp/profiles/1789897355143-97793-tabs-switch-0` | 0s / 2s | Complete after items 257/260; seven phases and 10 injected events; one bounded highlight miss |
 
 Earlier attempts remain retained as invalid history: hover
 (`1789891376923-64483-hover-0`) never reached readiness, while tabs

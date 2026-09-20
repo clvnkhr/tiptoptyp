@@ -210,6 +210,12 @@ impl Session {
             complete: measured == recorder.duration,
             measured_seconds: measured.as_secs_f64(),
             dropped_scopes: stats.dropped_scopes,
+            dropped_counters: stats.dropped_counters,
+            counters: stats
+                .counters
+                .iter()
+                .map(|(&name, &count)| CounterReport { name, count })
+                .collect(),
             input: recorder.input.map(ProfileInputKind::as_str),
             input_phases,
             root_repaint_requests: stats
@@ -283,7 +289,10 @@ struct Recorder {
 
 #[derive(Default)]
 struct InputState {
+    frames: u64,
     phase: Option<u8>,
+    phase_event_sent: bool,
+    last_event_ms: Option<u64>,
     phases: Vec<InputPhaseReport>,
 }
 
@@ -329,33 +338,38 @@ pub(crate) fn inject_profile_input(
     if now < begin {
         return;
     }
-    let elapsed_ms = now
-        .saturating_duration_since(begin)
-        .as_millis()
-        .min(u64::MAX as u128) as u64;
-    let Some(phase) = input_phase(kind, elapsed_ms) else {
-        return;
-    };
     let mut state = recorder
         .input_state
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    let changed = state.phase != Some(phase.index);
-    if changed {
+    // Use a logical 64ms tick rather than wall-clock time. Native profiling
+    // samplers and compositor scheduling can pause the event loop; the active
+    // workload must still have deterministic, bounded phase transitions.
+    let elapsed_ms = state.frames.saturating_mul(64);
+    state.frames = state.frames.saturating_add(1);
+    let Some(phase) = input_phase(kind, elapsed_ms) else {
+        return;
+    };
+    if state.phase != Some(phase.index) {
         state.phase = Some(phase.index);
+        state.phase_event_sent = false;
         state.phases.push(InputPhaseReport {
             name: phase.name,
             start_ms: phase.start_ms,
             events: 0,
         });
     }
+    let one_shot_event_due = !state.phase_event_sent;
+    let wheel_event_due = state
+        .last_event_ms
+        .is_none_or(|last| elapsed_ms.saturating_sub(last) >= 16);
     let anchor = egui::Pos2::new(420.0, 120.0);
     let mut events = Vec::new();
     match (kind, phase.index) {
-        (ProfileInputKind::HoverScroll, 0) if changed => {
+        (ProfileInputKind::HoverScroll, 0) if one_shot_event_due => {
             events.push(egui::Event::PointerMoved(anchor));
         }
-        (ProfileInputKind::HoverScroll, 2) => {
+        (ProfileInputKind::HoverScroll, 2) if wheel_event_due => {
             events.push(egui::Event::MouseWheel {
                 unit: egui::MouseWheelUnit::Point,
                 delta: egui::vec2(0.0, -240.0),
@@ -363,15 +377,15 @@ pub(crate) fn inject_profile_input(
                 phase: egui::TouchPhase::Move,
             });
         }
-        (ProfileInputKind::HoverScroll, 3) if changed => {
+        (ProfileInputKind::HoverScroll, 3) if one_shot_event_due => {
             events.push(egui::Event::PointerMoved(egui::Pos2::new(12.0, anchor.y)));
         }
-        (ProfileInputKind::TabsSwitch, 0) if changed => {
+        (ProfileInputKind::TabsSwitch, 0) if one_shot_event_due => {
             if let Some(position) = tab_centers[0] {
                 events.push(egui::Event::PointerMoved(position));
             }
         }
-        (ProfileInputKind::TabsSwitch, 1) if changed => {
+        (ProfileInputKind::TabsSwitch, 1) if one_shot_event_due => {
             if let Some(position) = tab_centers[1] {
                 events.push(egui::Event::PointerMoved(position));
                 events.push(egui::Event::PointerButton {
@@ -382,7 +396,7 @@ pub(crate) fn inject_profile_input(
                 });
             }
         }
-        (ProfileInputKind::TabsSwitch, 2) if changed => {
+        (ProfileInputKind::TabsSwitch, 2) if one_shot_event_due => {
             if let Some(position) = tab_centers[1] {
                 events.push(egui::Event::PointerButton {
                     pos: position,
@@ -392,7 +406,7 @@ pub(crate) fn inject_profile_input(
                 });
             }
         }
-        (ProfileInputKind::TabsSwitch, 3) if changed => {
+        (ProfileInputKind::TabsSwitch, 3) if one_shot_event_due => {
             if let Some(position) = tab_centers[2] {
                 events.push(egui::Event::PointerMoved(position));
                 events.push(egui::Event::PointerButton {
@@ -403,7 +417,7 @@ pub(crate) fn inject_profile_input(
                 });
             }
         }
-        (ProfileInputKind::TabsSwitch, 4) if changed => {
+        (ProfileInputKind::TabsSwitch, 4) if one_shot_event_due => {
             if let Some(position) = tab_centers[2] {
                 events.push(egui::Event::PointerButton {
                     pos: position,
@@ -413,7 +427,7 @@ pub(crate) fn inject_profile_input(
                 });
             }
         }
-        (ProfileInputKind::TabsSwitch, 5) if changed => {
+        (ProfileInputKind::TabsSwitch, 5) if one_shot_event_due => {
             if let Some(position) = tab_centers[0] {
                 events.push(egui::Event::PointerMoved(position));
                 events.push(egui::Event::PointerButton {
@@ -424,7 +438,7 @@ pub(crate) fn inject_profile_input(
                 });
             }
         }
-        (ProfileInputKind::TabsSwitch, 6) if changed => {
+        (ProfileInputKind::TabsSwitch, 6) if one_shot_event_due => {
             if let Some(position) = tab_centers[0] {
                 events.push(egui::Event::PointerButton {
                     pos: position,
@@ -441,8 +455,14 @@ pub(crate) fn inject_profile_input(
     if let Some(last) = state.phases.last_mut() {
         last.events += event_count;
     }
+    if event_count > 0 {
+        state.last_event_ms = Some(elapsed_ms);
+        if phase.index != 2 {
+            state.phase_event_sent = true;
+        }
+    }
     drop(state);
-    context.request_repaint_of(egui::ViewportId::ROOT);
+    context.request_repaint_after(Duration::from_millis(16));
 }
 
 impl Recorder {
@@ -557,6 +577,21 @@ pub(crate) fn span(name: &'static str) -> Span {
     Span { name, start }
 }
 
+#[inline]
+pub(crate) fn counter(name: &'static str) {
+    let Some(recorder) = RECORDER.get() else {
+        return;
+    };
+    let now = Instant::now();
+    if recorder.admits(now, now) {
+        recorder
+            .stats
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .observe_counter(name);
+    }
+}
+
 impl Drop for Span {
     fn drop(&mut self) {
         let Some(start) = self.start else {
@@ -580,6 +615,8 @@ struct Statistics {
     dropped_repaint_locations: u64,
     scopes: BTreeMap<&'static str, Distribution>,
     dropped_scopes: u64,
+    counters: BTreeMap<&'static str, u64>,
+    dropped_counters: u64,
 }
 impl Statistics {
     fn observe_repaint(&mut self, secondary: bool, file: &'static str, line: u32) {
@@ -601,6 +638,14 @@ impl Statistics {
             return;
         }
         self.scopes.entry(name).or_default().observe(elapsed);
+    }
+
+    fn observe_counter(&mut self, name: &'static str) {
+        if self.counters.len() == MAX_SCOPES && !self.counters.contains_key(name) {
+            self.dropped_counters += 1;
+            return;
+        }
+        *self.counters.entry(name).or_default() += 1;
     }
 }
 
@@ -662,6 +707,8 @@ struct Report {
     measured_seconds: f64,
     dropped_scopes: u64,
     scopes: Vec<ScopeReport>,
+    dropped_counters: u64,
+    counters: Vec<CounterReport>,
     input: Option<&'static str>,
     input_phases: Vec<InputPhaseReport>,
 }
@@ -671,6 +718,12 @@ struct InputPhaseReport {
     name: &'static str,
     start_ms: u64,
     events: u64,
+}
+
+#[derive(Serialize)]
+struct CounterReport {
+    name: &'static str,
+    count: u64,
 }
 
 #[derive(Serialize)]
@@ -721,6 +774,17 @@ mod tests {
         assert_eq!(stats.repaint_requests.len(), MAX_SCOPES);
         assert_eq!(stats.repaint_requests[&(true, "source.rs", 0)], 2);
         assert_eq!(stats.dropped_repaint_locations, 36);
+    }
+
+    #[test]
+    fn named_counters_keep_counting_known_keys() {
+        let mut stats = Statistics::default();
+        stats.observe_counter("counter.hit");
+        stats.observe_counter("counter.hit");
+        stats.observe_counter("counter.miss");
+        assert_eq!(stats.counters["counter.hit"], 2);
+        assert_eq!(stats.counters["counter.miss"], 1);
+        assert_eq!(stats.dropped_counters, 0);
     }
     #[test]
     fn measurement_excludes_startup_warmup_and_boundary_crossing_work() {

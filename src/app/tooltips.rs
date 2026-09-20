@@ -1199,8 +1199,10 @@ fn cached_tooltip_markdown(context: &egui::Context, markdown: &str) -> Arc<Parse
     if let Some(cached) = context.data(|data| data.get_temp::<Arc<ParsedTooltipMarkdown>>(id))
         && cached.source == markdown
     {
+        crate::performance::counter("tooltip.markdown.cache_hit");
         return cached;
     }
+    crate::performance::counter("tooltip.markdown.cache_miss");
     let _span = crate::performance::span("tooltip.markdown.parse");
     let parsed = Arc::new(ParsedTooltipMarkdown {
         source: markdown.to_owned(),
@@ -1429,8 +1431,10 @@ pub(super) fn cached_tooltip_code_job(
             .find(|entry| entry.matches(source, token, dark_mode, &editor_font, &colors))
             .map(|entry| entry.job.clone())
     }) {
+        crate::performance::counter("tooltip.code.cache_hit");
         return job;
     }
+    crate::performance::counter("tooltip.code.cache_miss");
     let job = tooltip_code_job(
         highlighter,
         typst_highlighter,

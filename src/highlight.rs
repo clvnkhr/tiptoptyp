@@ -114,8 +114,11 @@ impl SyntaxHighlighter {
             && self.cached_syntect_revision == syntect_revision
             && self.cached_code_mode == code_mode
         {
+            crate::performance::counter("highlight.cache_hit");
             return self.cached_job.clone();
         }
+
+        crate::performance::counter("highlight.cache_miss");
 
         let _rebuild = crate::performance::span("highlight.rebuild");
 

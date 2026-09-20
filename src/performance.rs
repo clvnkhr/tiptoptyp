@@ -5,7 +5,7 @@
 mod recording;
 #[cfg(feature = "profiling")]
 pub(crate) use recording::{
-    Session, inject_profile_input, secondary_repaints, span, take_multi_window_request,
+    Session, counter, inject_profile_input, secondary_repaints, span, take_multi_window_request,
     take_no_window_request, take_profile_close_request, tick,
 };
 
@@ -58,6 +58,10 @@ pub(crate) fn take_multi_window_request() -> bool {
 #[cfg(not(feature = "profiling"))]
 #[inline(always)]
 pub(crate) fn secondary_repaints(_context: &eframe::egui::Context) {}
+
+#[cfg(not(feature = "profiling"))]
+#[inline(always)]
+pub(crate) fn counter(_name: &'static str) {}
 
 #[cfg(test)]
 mod tests {
