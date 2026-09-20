@@ -5,8 +5,8 @@
 mod recording;
 #[cfg(feature = "profiling")]
 pub(crate) use recording::{
-    Session, secondary_repaints, span, take_multi_window_request, take_no_window_request,
-    take_profile_close_request, tick,
+    Session, inject_profile_input, secondary_repaints, span, take_multi_window_request,
+    take_no_window_request, take_profile_close_request, tick,
 };
 
 #[cfg(not(feature = "profiling"))]

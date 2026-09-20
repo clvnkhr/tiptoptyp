@@ -226,6 +226,15 @@ impl Tabs {
         }) || (self.tab_drag_active && primary_down)
     }
 
+    #[cfg(feature = "profiling")]
+    pub(super) fn profile_tab_centers(&self) -> [Option<Pos2>; 3] {
+        let mut centers = [None; 3];
+        for (index, rect) in self.tab_drag_rects.iter().take(3).enumerate() {
+            centers[index] = Some(rect.center());
+        }
+        centers
+    }
+
     /// Move one tab to another position without changing which document is
     /// active or which document drives the preview.
     pub(super) fn reorder(&mut self, from: usize, to: usize) -> bool {

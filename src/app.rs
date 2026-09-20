@@ -7864,6 +7864,11 @@ impl EditorApp {
             || self.process_close_answer().is_some()
     }
 
+    #[cfg(feature = "profiling")]
+    pub(crate) fn profile_tab_centers(&self) -> [Option<Pos2>; 3] {
+        self.tabs.profile_tab_centers()
+    }
+
     pub(crate) fn shell_signal(&self) -> (u64, bool, bool) {
         (
             self.document().key().epoch,

@@ -715,11 +715,18 @@ invalid pre-fix artifacts are recorded in `docs/performance.md`. Input phases
 remain separate in item 260; no idle scenario synthesizes input and the
 watchdog remains strict.
 
-260. [ ] Add explicit, opt-in active profiling phases for hover-then-scroll and
-rapid tab switching. Record phase boundaries, cache-hit/miss state,
-repaint/job/cache counters and native-sampler metadata without logging document
-contents. Keep these scripted inputs separate from idle endpoint captures;
-failed startup or teardown remains invalid.
+260. [x] Add explicit, opt-in active profiling phases for hover-then-scroll and
+rapid tab switching. `hover-scroll` injects one anchor move, a bounded popup
+settle, repeated wheel events and a pointer-away event; `tabs-switch` clicks the
+second, third and first rendered tab through the real tab-strip geometry. Both
+scripts start only after the measured interval, request repaint only while their
+bounded phase schedule is active, and record phase names/event counts in the
+summary without document contents. The new scenarios remain separate from idle
+endpoint captures and retain strict startup/teardown validation. Optimized
+binary `ed4af77288658063bdf11ed4369b0bd016cb28ab3321505d93b4e3943f328be0`
+completed hover run `.tiptoptyp/profiles/1789895984635-91521-hover-scroll-0`
+and tab run `.tiptoptyp/profiles/1789895996450-91995-tabs-switch-0`; native
+sampler and memory/resource observation remain part of item 257.
 = Bounded PDF page residency (2026-09-18)
 
 - Items 198–200: PDF inspection now publishes a page catalog containing only
@@ -2305,3 +2312,24 @@ measured in this follow-up; automated results alone do not establish them.
   runner also completed both repaired scenarios without changing ordinary idle
   repaint behavior. No visual screenshot claim is made for this lifecycle and
   profiling-infrastructure fix.
+
+= Active profiling input phases (20 September 2026)
+
+- Item 260 is complete. The runner now accepts `hover-scroll` and `tabs-switch`
+  scenarios in addition to the idle endpoint scenes. `AppShell::raw_input_hook`
+  is the only injection boundary; ordinary builds compile the hook to an inline
+  no-op, and ordinary profiling scenarios have no input plan. Hover phases use
+  the deterministic tooltip anchor and wheel dismissal path. Tab phases use the
+  previous frame's real tab-strip centers, so a geometry failure cannot silently
+  click an arbitrary screen coordinate.
+- The recorder stores a bounded phase ledger in `summary.json`: input kind,
+  phase start offsets and generated event counts. It retains existing repaint
+  call-site aggregation and scope summaries, while runner metadata retains the
+  selected sampler, binary hash, fixture hash and build provenance. No source
+  text, popup contents or user pointer coordinates are written.
+- Optimized 0s-warmup/2s-measurement runs completed with sampler `none`:
+  hover-scroll emitted 68 events over four phases and tabs-switch emitted 10
+  events over seven phases. Their repaint counts are intentionally much higher
+  than idle rows because the script requests frames while active; they are only
+  valid for repeated comparisons with the same schedule. Item 257 remains open
+  for native sampler and GPU/process-resource observations.

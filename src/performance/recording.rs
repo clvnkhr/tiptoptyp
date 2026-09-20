@@ -16,6 +16,119 @@ const MAX_SCOPES: usize = 64;
 const CLOSE_GRACE: Duration = Duration::from_secs(2);
 static RECORDER: OnceLock<Recorder> = OnceLock::new();
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProfileInputKind {
+    HoverScroll,
+    TabsSwitch,
+}
+
+impl ProfileInputKind {
+    fn parse(value: Option<&str>) -> Result<Option<Self>, String> {
+        match value {
+            None => Ok(None),
+            Some("hover-scroll") => Ok(Some(Self::HoverScroll)),
+            Some("tabs-switch") => Ok(Some(Self::TabsSwitch)),
+            Some(value) => Err(format!(
+                "TIPTOPTYP_PROFILE_INPUT must be hover-scroll or tabs-switch, got {value:?}"
+            )),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::HoverScroll => "hover-scroll",
+            Self::TabsSwitch => "tabs-switch",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct InputPhase {
+    index: u8,
+    name: &'static str,
+    start_ms: u64,
+    end_ms: u64,
+}
+
+fn input_phase(kind: ProfileInputKind, elapsed_ms: u64) -> Option<InputPhase> {
+    match kind {
+        ProfileInputKind::HoverScroll => [
+            InputPhase {
+                index: 0,
+                name: "hover-anchor",
+                start_ms: 0,
+                end_ms: 250,
+            },
+            InputPhase {
+                index: 1,
+                name: "popup-settle",
+                start_ms: 250,
+                end_ms: 450,
+            },
+            InputPhase {
+                index: 2,
+                name: "scroll",
+                start_ms: 450,
+                end_ms: 1_000,
+            },
+            InputPhase {
+                index: 3,
+                name: "move-away",
+                start_ms: 1_000,
+                end_ms: 1_150,
+            },
+        ]
+        .into_iter()
+        .find(|phase| (phase.start_ms..phase.end_ms).contains(&elapsed_ms)),
+        ProfileInputKind::TabsSwitch => [
+            InputPhase {
+                index: 0,
+                name: "move-first",
+                start_ms: 0,
+                end_ms: 120,
+            },
+            InputPhase {
+                index: 1,
+                name: "press-second",
+                start_ms: 120,
+                end_ms: 220,
+            },
+            InputPhase {
+                index: 2,
+                name: "release-second",
+                start_ms: 220,
+                end_ms: 320,
+            },
+            InputPhase {
+                index: 3,
+                name: "press-third",
+                start_ms: 320,
+                end_ms: 420,
+            },
+            InputPhase {
+                index: 4,
+                name: "release-third",
+                start_ms: 420,
+                end_ms: 520,
+            },
+            InputPhase {
+                index: 5,
+                name: "press-first",
+                start_ms: 520,
+                end_ms: 620,
+            },
+            InputPhase {
+                index: 6,
+                name: "release-first",
+                start_ms: 620,
+                end_ms: 720,
+            },
+        ]
+        .into_iter()
+        .find(|phase| (phase.start_ms..phase.end_ms).contains(&elapsed_ms)),
+    }
+}
+
 pub(crate) struct Session(Option<File>);
 
 impl Session {
@@ -30,6 +143,11 @@ impl Session {
         };
         let warmup = seconds("TIPTOPTYP_PROFILE_WARMUP", 3, 0)?;
         let duration = seconds("TIPTOPTYP_PROFILE_SECONDS", 10, 1)?;
+        let input = ProfileInputKind::parse(
+            std::env::var_os("TIPTOPTYP_PROFILE_INPUT")
+                .as_deref()
+                .and_then(|value| value.to_str()),
+        )?;
         if !directory.is_dir() || directory.join("ready").exists() {
             return Err("profile directory must exist and must not contain an earlier run".into());
         }
@@ -54,6 +172,8 @@ impl Session {
                 open_documents: AtomicBool::new(
                     std::env::var("TIPTOPTYP_PROFILE_MULTI_WINDOW").as_deref() == Ok("1"),
                 ),
+                input,
+                input_state: Mutex::default(),
             })
             .map_err(|_| "only one profiling session is allowed per process")?;
         Ok(Self(Some(output)))
@@ -79,11 +199,19 @@ impl Session {
             .stats
             .lock()
             .unwrap_or_else(|error| error.into_inner());
+        let input_phases = recorder
+            .input_state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .phases
+            .clone();
         let report = Report {
             schema_version: 1,
             complete: measured == recorder.duration,
             measured_seconds: measured.as_secs_f64(),
             dropped_scopes: stats.dropped_scopes,
+            input: recorder.input.map(ProfileInputKind::as_str),
+            input_phases,
             root_repaint_requests: stats
                 .repaint_requests
                 .iter()
@@ -149,6 +277,14 @@ struct Recorder {
     close_document: AtomicBool,
     close_requested: AtomicBool,
     open_documents: AtomicBool,
+    input: Option<ProfileInputKind>,
+    input_state: Mutex<InputState>,
+}
+
+#[derive(Default)]
+struct InputState {
+    phase: Option<u8>,
+    phases: Vec<InputPhaseReport>,
 }
 
 /// One bounded setup action, never a synthetic repaint/interaction loop.
@@ -172,6 +308,141 @@ pub(crate) fn take_profile_close_request() -> bool {
     RECORDER
         .get()
         .is_some_and(|recorder| recorder.close_requested.swap(false, Ordering::Relaxed))
+}
+
+pub(crate) fn inject_profile_input(
+    context: &egui::Context,
+    raw_input: &mut egui::RawInput,
+    tab_centers: [Option<egui::Pos2>; 3],
+) {
+    let Some(recorder) = RECORDER.get() else {
+        return;
+    };
+    let Some(kind) = recorder.input else {
+        return;
+    };
+    let Some(origin) = recorder.window.get() else {
+        return;
+    };
+    let begin = *origin + recorder.warmup;
+    let now = Instant::now();
+    if now < begin {
+        return;
+    }
+    let elapsed_ms = now
+        .saturating_duration_since(begin)
+        .as_millis()
+        .min(u64::MAX as u128) as u64;
+    let Some(phase) = input_phase(kind, elapsed_ms) else {
+        return;
+    };
+    let mut state = recorder
+        .input_state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let changed = state.phase != Some(phase.index);
+    if changed {
+        state.phase = Some(phase.index);
+        state.phases.push(InputPhaseReport {
+            name: phase.name,
+            start_ms: phase.start_ms,
+            events: 0,
+        });
+    }
+    let anchor = egui::Pos2::new(420.0, 120.0);
+    let mut events = Vec::new();
+    match (kind, phase.index) {
+        (ProfileInputKind::HoverScroll, 0) if changed => {
+            events.push(egui::Event::PointerMoved(anchor));
+        }
+        (ProfileInputKind::HoverScroll, 2) => {
+            events.push(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, -240.0),
+                modifiers: egui::Modifiers::NONE,
+                phase: egui::TouchPhase::Move,
+            });
+        }
+        (ProfileInputKind::HoverScroll, 3) if changed => {
+            events.push(egui::Event::PointerMoved(egui::Pos2::new(12.0, anchor.y)));
+        }
+        (ProfileInputKind::TabsSwitch, 0) if changed => {
+            if let Some(position) = tab_centers[0] {
+                events.push(egui::Event::PointerMoved(position));
+            }
+        }
+        (ProfileInputKind::TabsSwitch, 1) if changed => {
+            if let Some(position) = tab_centers[1] {
+                events.push(egui::Event::PointerMoved(position));
+                events.push(egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+        }
+        (ProfileInputKind::TabsSwitch, 2) if changed => {
+            if let Some(position) = tab_centers[1] {
+                events.push(egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+        }
+        (ProfileInputKind::TabsSwitch, 3) if changed => {
+            if let Some(position) = tab_centers[2] {
+                events.push(egui::Event::PointerMoved(position));
+                events.push(egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+        }
+        (ProfileInputKind::TabsSwitch, 4) if changed => {
+            if let Some(position) = tab_centers[2] {
+                events.push(egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+        }
+        (ProfileInputKind::TabsSwitch, 5) if changed => {
+            if let Some(position) = tab_centers[0] {
+                events.push(egui::Event::PointerMoved(position));
+                events.push(egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+        }
+        (ProfileInputKind::TabsSwitch, 6) if changed => {
+            if let Some(position) = tab_centers[0] {
+                events.push(egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+        }
+        _ => {}
+    }
+    let event_count = events.len() as u64;
+    raw_input.events.extend(events);
+    if let Some(last) = state.phases.last_mut() {
+        last.events += event_count;
+    }
+    drop(state);
+    context.request_repaint_of(egui::ViewportId::ROOT);
 }
 
 impl Recorder {
@@ -391,6 +662,15 @@ struct Report {
     measured_seconds: f64,
     dropped_scopes: u64,
     scopes: Vec<ScopeReport>,
+    input: Option<&'static str>,
+    input_phases: Vec<InputPhaseReport>,
+}
+
+#[derive(Clone, Serialize)]
+struct InputPhaseReport {
+    name: &'static str,
+    start_ms: u64,
+    events: u64,
 }
 
 #[derive(Serialize)]
@@ -413,6 +693,24 @@ struct ScopeReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn active_profile_phases_are_bounded_and_named() {
+        assert_eq!(ProfileInputKind::parse(None).unwrap(), None);
+        assert_eq!(
+            ProfileInputKind::parse(Some("hover-scroll")).unwrap(),
+            Some(ProfileInputKind::HoverScroll)
+        );
+        assert!(ProfileInputKind::parse(Some("unknown")).is_err());
+        assert_eq!(
+            input_phase(ProfileInputKind::HoverScroll, 450)
+                .unwrap()
+                .name,
+            "scroll"
+        );
+        assert!(input_phase(ProfileInputKind::TabsSwitch, 720).is_none());
+    }
+
     #[test]
     fn repaint_call_site_storage_is_bounded_and_known_sites_keep_counting() {
         let mut stats = Statistics::default();
@@ -437,6 +735,8 @@ mod tests {
             close_document: AtomicBool::new(false),
             close_requested: AtomicBool::new(false),
             open_documents: AtomicBool::new(false),
+            input: None,
+            input_state: Mutex::default(),
         };
         assert!(!recorder.admits(origin, origin));
         recorder.window.set(origin).unwrap();

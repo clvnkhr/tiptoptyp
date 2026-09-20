@@ -19,6 +19,8 @@ cargo xtask profile --scenario settings
 cargo xtask profile --scenario large --sampler none
 cargo xtask profile --scenario find --warmup 5 --seconds 30 --skip-build
 cargo xtask profile --scenario multi-window --warmup 8 --seconds 8
+cargo xtask profile --scenario hover-scroll --warmup 0 --seconds 2 --sampler none
+cargo xtask profile --scenario tabs-switch --warmup 0 --seconds 2 --sampler none --skip-build
 cargo xtask profile --help
 ```
 
@@ -57,28 +59,31 @@ repository status/indexing needs a separate, controlled repository workload.
 | `find` | Find/replace controls open |
 | `fonts` | Settings font picker open, deterministic sample font |
 | `hover` | Function-hover native popup above the editor |
+| `hover-scroll` | Function-hover popup with bounded anchor, settle, wheel-scroll and pointer-away phases |
 | `large` | 5,000 Unicode comment lines and 100 definitions, over 300 KB of source; short rendered PDF |
 | `tabs` | Three deterministic tabs with the first tab retained as the designated preview |
+| `tabs-switch` | Three-tab fixture with bounded pointer clicks on the second, third and first tab |
 | `pdf` | A deterministic 40-page A6 PDF opened through the asset-preview path |
 | `no-window` | Capture the small document, then close it through the retained-root lifecycle before warmup; no document windows remain |
 | `multi-window` | The small isolated document opened in four independent document sessions; three secondary native windows are created once before warmup |
 
-These are **steady-state starting points**, not automated typing, scrolling,
-startup, or huge-PDF benchmarks. For an active workload, choose a longer duration,
-wait for warmup, perform a repeatable sequence in the disposable fixture, and
-record that sequence. Do not mix its results with idle runs. The large-source
-case isolates source scaling; it does not establish preview scaling.
+These are **steady-state starting points**, except for the two explicitly named
+active scenarios. The idle scenes do not automate typing or scrolling. For an
+active workload, choose a longer duration, wait for warmup, perform a repeatable
+sequence in the disposable fixture, and record that sequence. Do not mix its
+results with idle runs. The large-source case isolates source scaling; it does
+not establish preview scaling.
 QA helpers remain active (including deterministic font-picker fixture setup);
 use the samples to distinguish fixture overhead and confirm suspected production
 hot paths in an ordinary app launch before changing them.
 
-For active interaction runs, use `tabs` for repeated tab selection/reordering,
-`hover` for hover-then-scroll dismissal, and `pdf` for scrolling through the
-multi-page asset preview. Start the runner, wait for its readiness message, then
-perform one fixed sequence during the measured interval; write that sequence and
-whether the run was a cache hit or miss beside the artifacts. The runner does
-not synthesize pointer or wheel input into an idle run, so an unattended profile
-cannot honestly claim to measure hover scrolling or rapid tab switching.
+For active interaction runs, use `hover-scroll` for hover-then-scroll dismissal
+and `tabs-switch` for repeatable tab selection. These scenarios inject only
+bounded egui pointer/wheel events after measurement begins; `summary.json`
+records phase names, event counts and repaint locations without source contents.
+Use `tabs` for manual tab reordering and `pdf` for manual scrolling through the
+multi-page asset preview. The active scripts remain separate from idle runs, so
+an unattended idle profile still protects idle repaint behavior.
 
 The `no-window` scenario sets `TIPTOPTYP_PROFILE_NO_WINDOW=1` for the profiling
 build. It performs one document-close transition after capture, not repeated
@@ -262,6 +267,8 @@ Catppuccin Latte theme, isolated fixtures, and sampler `none` unless noted. The
 repaired hover and tabs rows use the current optimized binary, SHA-256
 `828d3d52a7a28fce63f1f32c3aac7f337d1d73445ac7bdbbd7f7aa650541f78c`; they are
 endpoint validation, not a before/after performance comparison.
+The active input rows use the rebuilt optimized binary, SHA-256
+`ed4af77288658063bdf11ed4369b0bd016cb28ab3321505d93b4e3943f328be0`.
 The retained directories are Git-ignored and contain the exact metadata,
 summary, logs, CPU readings, and initial viewport framebuffer.
 
@@ -275,16 +282,18 @@ summary, logs, CPU readings, and initial viewport framebuffer.
 | 40-page PDF residency | `.tiptoptyp/profiles/1789891570117-65164-pdf-0` | 0s / 1s | Complete; startup/raster admission captured `ui.editor.pass` and a bounded repaint |
 | deterministic function tooltip | `.tiptoptyp/profiles/1789894830846-81006-hover-0` | 0s / 1s | Complete after item 259; four diagnostic child paints and bounded root repaint requests |
 | deterministic three-tab workload | `.tiptoptyp/profiles/1789894840618-81492-tabs-0` | 0s / 1s | Complete after item 259; one bounded root repaint request and clean deadline shutdown |
+| active hover then scroll | `.tiptoptyp/profiles/1789895984635-91521-hover-scroll-0` | 0s / 2s | Complete after item 260; four phases and 68 injected events |
+| active tab selection | `.tiptoptyp/profiles/1789895996450-91995-tabs-switch-0` | 0s / 2s | Complete after item 260; seven phases and 10 injected events |
 
 Earlier attempts remain retained as invalid history: hover
 (`1789891376923-64483-hover-0`) never reached readiness, while tabs
 (`1789891511578-64829-tabs-0`) reached measurement but exceeded shutdown. Item
 259 fixed both causes: deterministic tooltip scenes now survive child-view
 lifecycle cleanup, and the profiler hands its deadline close back to the event
-loop and outer screenshot wrapper. The current rows above are valid endpoint
-captures, but they are still idle deterministic scenes; hover-then-scroll and
-rapid-tab-switching input phases remain item 260 rather than being inferred
-from these numbers.
+loop and outer screenshot wrapper. The current endpoint rows above are valid
+captures. The active rows are deliberately not comparable to the idle rows:
+they request frames during a bounded scripted interaction and should only be
+compared with repeated runs using the same phase schedule.
 
 The `cpu-before.txt`/`cpu-after.txt` values are process snapshots around the
 measurement window, not a portable CPU score; the successful runs used different

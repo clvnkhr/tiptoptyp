@@ -9,7 +9,7 @@ use std::{
 };
 
 const HELP: &str = "Usage: cargo xtask profile [options]
-  --scenario main|settings|find|fonts|hover|large|tabs|pdf|no-window|multi-window  (default settings)
+  --scenario main|settings|find|fonts|hover|hover-scroll|large|tabs|tabs-switch|pdf|no-window|multi-window  (default settings)
   --warmup SECONDS       0..300, after initial capture (default 3)
   --seconds SECONDS      1..300 (default 10)
   --sampler auto|none|sample|perf  (auto: sample on macOS, none elsewhere)
@@ -79,7 +79,8 @@ fn scenario_scene(scenario: &str) -> Option<&'static str> {
         "settings" => Some("settings-window"),
         "find" => Some("find-replace"),
         "fonts" => Some("settings-font-picker"),
-        "hover" => Some("function-tooltip"),
+        "hover" | "hover-scroll" => Some("function-tooltip"),
+        "tabs-switch" => Some("tabs"),
         _ => None,
     }
 }
@@ -207,6 +208,13 @@ pub(super) fn run(arguments: Vec<String>) -> Result<(), String> {
             scenario_scene(&options.scenario).unwrap(),
         ])
         .arg(&document);
+    if let Some(input) = match options.scenario.as_str() {
+        "hover-scroll" => Some("hover-scroll"),
+        "tabs-switch" => Some("tabs-switch"),
+        _ => None,
+    } {
+        command.env("TIPTOPTYP_PROFILE_INPUT", input);
+    }
     let mut app = ManagedChild::spawn(&mut command, &directory.join("app.log"))?;
     println!(
         "Waiting for initial capture, then {}s warmup + {}s measurement (PID {}).",
@@ -557,6 +565,8 @@ mod tests {
         assert_eq!(scenario_scene("no-window"), Some("main"));
         assert_eq!(scenario_scene("multi-window"), Some("main"));
         assert_eq!(scenario_scene("tabs"), Some("tabs"));
+        assert_eq!(scenario_scene("hover-scroll"), Some("function-tooltip"));
+        assert_eq!(scenario_scene("tabs-switch"), Some("tabs"));
         assert_eq!(scenario_scene("pdf"), Some("tabs-pdf"));
         let preserved = Options::parse(&args(&["--binary", "baseline/tiptoptyp"])).unwrap();
         assert!(preserved.skip_build);

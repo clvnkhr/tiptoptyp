@@ -521,8 +521,9 @@ Current physical counts and profiling evidence are maintained in
 endpoint has valid one-window, multi-window, Settings, 40-page PDF, deterministic
 tooltip and three-tab runs. The earlier hover-readiness and tabs-shutdown
 failures are retained as invalid history; item 259 fixed their runner/scene
-causes without adding an idle repaint loop. Actual pointer/wheel hover and
-rapid-tab input phases remain item 260. Items 229, 234 and 237 remain native
-acceptance gates. Proposed transaction/resource-wrapper extractions 251 and
-253 remain deferred because review found no justified duplicate policy to
-remove without weakening the existing owners.
+causes without adding an idle repaint loop. Item 260 now adds separate,
+bounded `hover-scroll` and `tabs-switch` input scenarios with phase/event
+records; they must not be compared with idle endpoint rows. Items 229, 234 and
+237 remain native acceptance gates. Proposed transaction/resource-wrapper
+extractions 251 and 253 remain deferred because review found no justified
+duplicate policy to remove without weakening the existing owners.

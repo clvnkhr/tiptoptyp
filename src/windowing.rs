@@ -830,7 +830,14 @@ impl eframe::App for AppShell {
     }
 
     fn raw_input_hook(&mut self, context: &egui::Context, raw_input: &mut egui::RawInput) {
-        let _ = raw_input;
+        #[cfg(feature = "profiling")]
+        crate::performance::inject_profile_input(
+            context,
+            raw_input,
+            self.primary.borrow().profile_tab_centers(),
+        );
+        #[cfg(not(feature = "profiling"))]
+        let _ = (context, raw_input);
         self.synchronize_settings(context);
     }
 }
