@@ -11179,4 +11179,6 @@ fn preserve_workspace_snapshot_for_open(
 #[cfg(test)]
 mod command_tests;
 #[cfg(test)]
+mod cross_owner_test;
+#[cfg(test)]
 mod tests;

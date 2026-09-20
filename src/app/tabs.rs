@@ -201,6 +201,13 @@ impl Tabs {
     pub(super) fn ids(&self) -> impl ExactSizeIterator<Item = u64> + '_ {
         self.order.iter().copied()
     }
+
+    #[cfg(test)]
+    pub(super) fn set_active_for_test(&mut self, id: u64) {
+        assert!(self.index_of(id).is_some(), "test tab must exist");
+        self.active = Some(id);
+    }
+
     pub(super) fn uses_designated_preview(&self) -> bool {
         self.len() > 1 || self.preview_explicit
     }

@@ -674,7 +674,7 @@ impl's app-wide access in the ownership map. Avoid brittle exact source/line-cou
 assertions; source-string checks supplement behavioral tests, not replace them.
 Depends on the completed extraction items, not deferred candidates.
 
-256. [ ] Add one bounded cross-owner regression scenario combining two windows,
+256. [x] Add one bounded cross-owner regression scenario combining two windows,
 multiple tabs, a pinned preview, an in-flight save and a late language-service
 reply. Use existing injectable jobs/event delivery to control completion order.
 Acceptance: closing/switching one owner cannot apply its result to another,
@@ -2203,3 +2203,29 @@ measured in this follow-up; automated results alone do not establish them.
   uses the existing revision-keyed cache; the shortcut editor computes its
   bindings from the already supplied snapshot and only clones settings on an
   actual edit action. The changes claim no cross-platform timing improvement.
+
+= Cross-owner architecture regression (20 September 2026)
+
+- Item 256 is complete. Added one bounded `AppShell` scenario with a primary
+  and secondary document owner. The primary fixture has multiple tabs and a
+  designated first-tab preview, starts a save while the canonical resource
+  lock is held, switches tabs, and receives a late completion response carrying
+  the old document key. The real completion adapter rejects the response; it
+  cannot edit the current tab or replace the current completion state.
+- The same scenario switches shell ownership while the save is in flight,
+  drains the save only after the lock is released, opens Settings from both
+  owners and verifies that both use the root Settings viewport. A shared
+  preference is then applied to both live owners. The macOS root-close policy
+  is asserted directly on every platform and the actual root retirement path
+  is exercised when running on macOS; the secondary owner remains active and
+  the process quit flag stays false.
+- The test uses the existing resource lock, `ExclusiveJob` save path and
+  completion identity checks. It adds no production coordinator, sleep or
+  repaint loop. Test-only fixture helpers live in `src/app/cross_owner_test.rs`
+  so the already-large `app.rs` does not absorb the scenario implementation.
+- Current physical counts after this item are `src/app.rs` 11,184 lines, the
+  root-plus-app family 35,122 lines, and all Rust under `src`, `core`, `tests`
+  and `xtask` 95,832 lines. These are accounting figures, not a performance
+  claim. The bounded regression passes with strict Clippy and formatting; the
+  full required suite remains the handoff gate. Native hover, Settings flash
+  and native preview/editor focus acceptance remain open in 229, 234 and 237.

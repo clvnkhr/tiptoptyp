@@ -1111,6 +1111,111 @@ mod tests {
     }
 
     #[test]
+    fn bounded_cross_owner_transition_keeps_state_and_singleton_services_isolated() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        context.set_embed_viewports(false);
+        let primary = EditorApp::dormant_for_tests(&context, directory.path().into());
+        let shared_settings = primary.settings_snapshot();
+        let (_, open_requests) = crate::open_requests::channel();
+        let (menu_sender, native_menu_commands) = crate::native_menu::channel();
+        let mut shell = AppShell {
+            primary: DocumentHost::new(primary),
+            shared_settings,
+            open_requests,
+            native_menu_commands,
+            closing: Default::default(),
+            secondary: Vec::new(),
+            active: ActiveSession::Primary,
+            next_session_id: 2,
+            pending_windows: VecDeque::new(),
+            captures: CaptureController::disabled_for_tests(),
+            capture_batch: None,
+            launch_mode: LaunchMode::Interactive,
+            primary_visible: true,
+            quit_requested: false,
+        };
+        let secondary = EditorApp::dormant_window_for_tests(
+            &context,
+            directory.path().into(),
+            document_viewport_id(1),
+        );
+        shell.secondary.push(SecondaryWindow {
+            id: 1,
+            editor: DocumentHost::new(secondary),
+            activate_once: false,
+        });
+
+        let save_path = directory.path().join("pending.typ");
+        crate::resource_lock::with_resource(&save_path, || {
+            shell
+                .primary
+                .borrow_mut()
+                .prepare_cross_owner_test_state(&context, save_path.clone());
+            shell.active = ActiveSession::Secondary(1);
+            shell
+                .primary
+                .borrow_mut()
+                .deliver_cross_owner_test_reply(&context);
+            assert_eq!(shell.active, ActiveSession::Secondary(1));
+        });
+        shell.primary.borrow_mut().finish_save_for_test(&context);
+        assert!(save_path.is_file());
+
+        // Settings remains a single root child regardless of which document
+        // viewport requests it, and an applied preference reaches both live
+        // document owners.
+        for owner in [ActiveSession::Primary, ActiveSession::Secondary(1)] {
+            shell.active = owner;
+            menu_sender
+                .send(NativeMenuRequest::Command(AppCommand::Settings))
+                .unwrap();
+            let output = context.run_ui(egui::RawInput::default(), |ui| {
+                shell.dispatch_process_requests(ui.ctx());
+                shell.primary.borrow_mut().hidden_host_ui(ui.ctx(), None);
+            });
+            let settings =
+                crate::child_view::child_viewport_id(egui::ViewportId::ROOT, "tiptoptyp-settings");
+            assert_eq!(
+                output.viewport_output[&settings].builder.visible,
+                Some(true)
+            );
+            output.drop_without_applying_deltas();
+        }
+        let mut updated = shell.shared_settings.clone();
+        updated.line_wrap = !updated.line_wrap;
+        shell
+            .primary
+            .borrow_mut()
+            .apply_shared_settings(updated.clone(), &context);
+        shell.secondary[0]
+            .editor
+            .borrow_mut()
+            .apply_shared_settings(updated.clone(), &context);
+        assert_eq!(shell.primary.borrow().settings_snapshot(), updated);
+        assert_eq!(
+            shell.secondary[0].editor.borrow().settings_snapshot(),
+            updated
+        );
+
+        // The process close policy is intentionally platform-specific. On
+        // macOS, retiring the root document window must leave the process host
+        // alive while the secondary survives; the pure policy is checked on
+        // every platform.
+        assert!(keeps_running_after_root_close(
+            true,
+            LaunchMode::Interactive,
+            false
+        ));
+        if cfg!(target_os = "macos") {
+            shell.retire_primary_window(&context);
+            assert!(!shell.primary_visible);
+            assert!(!shell.quit_requested);
+            assert_eq!(shell.active, ActiveSession::Secondary(1));
+        }
+    }
+
+    #[test]
     fn no_window_logic_reopens_documents_and_settings_without_an_editor_paint() {
         let directory = tempfile::tempdir().unwrap();
         let context = egui::Context::default();

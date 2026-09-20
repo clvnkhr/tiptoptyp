@@ -43,6 +43,7 @@ them does not narrow ownership. Existing leaf boundaries include `explorer_view`
 | 252 | `update_editor_hover`, `dismiss_hover_on_scroll`, `dismiss_keyboard_tooltip`, `clear_preview_for_document`, `activate_record` and child lifecycle cleanup can end hover. | Inventory same-lifetime writers first, then one semantic-hover invalidation path, conditional on 229's native reproduction. Test old dismissal versus newer popup, triangle handoff, scroll, tab switch and zero unchanged-source reparsing. Asset/control policies remain separate. |
 | 253 | `update_webview`, `hide_webview`, `discard_webview` own handle/cache/navigation; root restart and Ready handling still write reload intent. | Defer a new resource wrapper: teardown/property diff already have single owners (240). Investigate whether root reload writes can produce an invalid lifecycle in the native reproduction before proposing another abstraction. Existing property-diff/teardown/URL-reuse tests are the baseline. |
 | 254 | `reset_untitled_document`, `load_path` and `activate_record`/`activate_tab` cleared the same selection/attention/search state while differing on rekeying, loaded bytes and pinned preview. | Complete: `reset_transient_editor_state` owns only the shared transient reset; service-restart, dirty/cancel, rekeying and preview policy remain explicit. The transition regression plus existing tab/open/preview tests protect the split. |
+| 256 | `AppShell` routes document owners, while each `EditorApp` retains tab, save and language-service identity. | Complete: one bounded test combines two owners, multiple tabs, designated preview, a locked in-flight save, a late completion and root-owned Settings. The real key checks reject the late result; Settings stays one root child and updates both owners. The macOS last-window policy is tested separately from the native close/reopen smoke gap. |
 
 Search the named symbols when reading this map; line numbers intentionally do not
 serve as dependencies. Existing tests worth retaining include
@@ -117,3 +118,20 @@ behavior are preserved. No new worker, retained cache, source copy, disk work or
 repaint schedule is introduced. This batch makes no timing or native composition
 claim; the existing native acceptance items remain open. Validation details are
 in the 246–248 work diary at the bottom of `todo.typ`.
+
+## 256 cross-owner result
+
+The cross-owner scenario is deliberately a state test rather than a desktop
+smoke test. It creates one root and one secondary `EditorApp`, gives the root
+multiple tabs while keeping its first tab as the designated preview, holds the
+existing canonical resource lock around an admitted save, switches the active
+tab, and delivers a completion response carrying the old `DocumentKey`. The
+normal completion adapter rejects it without changing the current source or
+completion list. No production event bus or test sleep is involved.
+
+The same test routes Settings requests from both owners to the root child,
+applies one shared setting to both live sessions, and checks the pure macOS
+policy that root-window retirement leaves the process host alive. On macOS it
+also exercises root retirement with the secondary still active. Native close,
+hover geometry and preview-to-editor focus remain separate acceptance items
+229, 234 and 237; this test does not claim to replace those desktop checks.

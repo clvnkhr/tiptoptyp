@@ -355,7 +355,7 @@ impl EditorApp {
     }
 
     #[cfg(test)]
-    pub(super) fn finish_save_for_test(&mut self, context: &egui::Context) {
+    pub(crate) fn finish_save_for_test(&mut self, context: &egui::Context) {
         let deadline = Instant::now() + Duration::from_secs(10);
         while self.save_job.is_running() {
             self.poll_save(context);
