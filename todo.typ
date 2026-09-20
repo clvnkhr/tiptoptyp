@@ -2351,3 +2351,22 @@ portable whole-system resource score.
   phase-complete active comparison. The new Unix resource artifacts include the
   app, Tinymist and Typst process-group RSS/VSZ snapshots. No GPU memory or
   native child composition measurement is claimed.
+
+= Semantic-hover invalidation ownership (20 September 2026)
+
+- Item 229 is complete. A fresh committed-tree optimized `hover` endpoint
+  (`.tiptoptyp/profiles/1789897889628-3518-hover-0`) and matching `tabs`
+  endpoint (`.tiptoptyp/profiles/1789897920800-3976-tabs-0`) both completed
+  with sampler `none`; the earlier hover readiness timeout remains retained as
+  invalid history. The active `hover-scroll` profile separately exercises
+  anchor, scroll and pointer-away phases.
+- Item 252 is in progress. Semantic-hover request invalidation now has one
+  owner method, while response identity matching is centralized on
+  `EditorHoverState`. Tinymist replies must still match the request token,
+  URI, version, current document key and synchronization generation before
+  they can install detail. This removes duplicated clear/match logic without
+  touching Settings/control tooltip policy or adding per-frame work.
+- Added a deterministic regression for mismatched request token, URI and
+  version. The remaining item-252 work is to finish the dismissal-event
+  inventory and native popup entry/scroll/exit acceptance; no native claim is
+  inferred from this pure state test.

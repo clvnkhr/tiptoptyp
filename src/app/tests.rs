@@ -2012,6 +2012,23 @@ fn semantic_hover_tracks_identifiers_and_nearby_call_parentheses() {
     assert_eq!(hover_test_data("").hover_token_range(0), None);
 }
 
+#[test]
+fn semantic_hover_reply_identity_rejects_dismissed_or_replaced_targets() {
+    let hover = EditorHoverState {
+        key: DocumentKey::new(tiptoptyp_core::document::WindowSessionId::new(4), 2, 9),
+        range: 3..8,
+        request_token: 17,
+        uri: "file:///workspace/main.typ".to_owned(),
+        version: 9,
+        requested: true,
+        detail: None,
+    };
+    assert!(hover.accepts_response(&hover.uri, hover.version, hover.request_token));
+    assert!(!hover.accepts_response(&hover.uri, hover.version, 18));
+    assert!(!hover.accepts_response("file:///workspace/other.typ", hover.version, 17));
+    assert!(!hover.accepts_response(&hover.uri, 10, 17));
+}
+
 fn hover_test_data(source: &str) -> crate::editor_data::EditorDerivedData {
     let mut data = crate::editor_data::EditorDerivedData::default();
     data.prepare_source(&crate::document::DocumentSnapshot::fixture(

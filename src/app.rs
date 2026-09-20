@@ -535,6 +535,12 @@ struct EditorHoverState {
     detail: Option<Arc<str>>,
 }
 
+impl EditorHoverState {
+    fn accepts_response(&self, uri: &str, version: i32, request_token: u64) -> bool {
+        self.request_token == request_token && self.version == version && self.uri == uri
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum TooltipRequest {
     Pointer(Pos2),
@@ -2210,7 +2216,7 @@ impl EditorApp {
         self.format_when_tinymist_ready = None;
         self.tooltip_request = None;
         self.notice = None;
-        self.editor_hover = None;
+        self.clear_editor_hover();
         self.editor_completion = None;
         if self.document().config().is_some() {
             // Mapped positions belong to the previous view revision.
@@ -2658,7 +2664,7 @@ impl EditorApp {
         }
 
         self.diagnostic_tooltip = None;
-        self.editor_hover = None;
+        self.clear_editor_hover();
         clear_native_hover_overlay(context);
 
         let target_changed = self
@@ -2854,7 +2860,7 @@ impl EditorApp {
         self.preview
             .clear_for_document(self.document().revision(), preserve_designated_preview);
         self.pending_asset_page = None;
-        self.editor_hover = None;
+        self.clear_editor_hover();
         self.clear_asset_hover();
         if let Some(pending) = self.document_workflow.pending_export.take() {
             self.notice = Some(Notice {
@@ -5395,9 +5401,8 @@ impl EditorApp {
                 } => {
                     let current_key = self.document().key();
                     let request_key = self.editor_hover.as_ref().and_then(|hover| {
-                        (hover.request_token == request_token
-                            && hover.version == version
-                            && hover.uri == uri)
+                        hover
+                            .accepts_response(&uri, version, request_token)
                             .then_some(hover.key)
                     });
                     let current = request_key.is_some_and(|key| {
@@ -5413,9 +5418,7 @@ impl EditorApp {
                     });
                     if current
                         && let Some(hover) = &mut self.editor_hover
-                        && hover.request_token == request_token
-                        && hover.version == version
-                        && hover.uri == uri
+                        && hover.accepts_response(&uri, version, request_token)
                     {
                         hover.detail = contents.map(Arc::from);
                     }
@@ -6780,9 +6783,16 @@ impl EditorApp {
         }
     }
 
+    fn clear_editor_hover(&mut self) {
+        // Clearing the request state is the single invalidation path for a
+        // semantic hover. Tinymist replies still carry the old request token,
+        // so the event adapter cannot revive a dismissed or replaced target.
+        self.editor_hover = None;
+    }
+
     fn dismiss_hover_on_scroll(&mut self, context: &egui::Context) {
         self.tooltip_request = None;
-        self.editor_hover = None;
+        self.clear_editor_hover();
         self.diagnostic_tooltip = None;
         self.clear_asset_hover();
         clear_native_hover_overlay(context);
@@ -6797,7 +6807,7 @@ impl EditorApp {
 
     fn dismiss_keyboard_tooltip(&mut self, context: &egui::Context) {
         self.tooltip_request = None;
-        self.editor_hover = None;
+        self.clear_editor_hover();
         self.diagnostic_tooltip = None;
         self.clear_asset_hover();
         clear_native_hover_overlay(context);
@@ -6850,7 +6860,7 @@ impl EditorApp {
     fn update_editor_hover(&mut self, ui: &mut egui::Ui, hovered: Option<(Range<usize>, Rect)>) {
         let timing_id = native_hover_tooltip_id(ui.ctx()).with("semantic-hover-timing");
         let Some((range, rect)) = hovered else {
-            self.editor_hover = None;
+            self.clear_editor_hover();
             reset_hover_timing(ui.ctx(), timing_id);
             return;
         };
@@ -6864,7 +6874,7 @@ impl EditorApp {
             self.tinymist_sync.generation,
             self.tinymist_sync.current_uri.clone(),
         ) else {
-            self.editor_hover = None;
+            self.clear_editor_hover();
             return;
         };
         let version = revision_as_i32(self.document().revision());

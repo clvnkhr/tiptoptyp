@@ -807,11 +807,11 @@ impl EditorApp {
 
         if hovered_asset_literal {
             self.diagnostic_tooltip = None;
-            self.editor_hover = None;
+            self.clear_editor_hover();
         } else if self.diagnostic_tooltip.is_none() {
             self.update_editor_hover(ui, hovered_semantic_token);
         } else {
-            self.editor_hover = None;
+            self.clear_editor_hover();
         }
 
         let filler_top = editor_rect.bottom().clamp(
