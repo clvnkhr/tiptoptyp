@@ -595,6 +595,42 @@ fn retained_tooltip_survives_lifecycle_cleanup_after_leaving_source_token() {
 }
 
 #[test]
+fn deterministic_tooltip_scene_survives_lifecycle_cleanup() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    context.set_embed_viewports(false);
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    app.snapshot_scene = Some(UiSnapshotScene::FunctionTooltip);
+
+    let output = context.run_ui(Default::default(), |ui| {
+        ChildViewHost::show_deferred(
+            ui.ctx(),
+            &app.captures,
+            ChildViewSpec::tooltip(
+                "diagnostic-tooltip-overlay",
+                "tooltip",
+                Pos2::new(0.0, 30.0),
+                Vec2::new(200.0, 100.0),
+                true,
+                "diagnostic",
+            ),
+            ui.ctx().theme(),
+            ui.style(),
+            |_, _| {},
+        );
+        app.reconcile_child_view_lifecycles(ui.ctx());
+    });
+    let child = scoped_child_viewport_id(&context, "diagnostic-tooltip-overlay");
+    assert!(
+        !output.viewport_output[&child]
+            .commands
+            .iter()
+            .any(|command| matches!(command, egui::ViewportCommand::Close))
+    );
+    output.drop_without_applying_deltas();
+}
+
+#[test]
 fn dormant_host_rejects_document_jobs_but_delivers_commands_and_dialog_completions() {
     let directory = tempfile::tempdir().unwrap();
     let context = egui::Context::default();

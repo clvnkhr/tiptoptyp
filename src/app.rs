@@ -8252,6 +8252,10 @@ impl EditorApp {
         let overlay_id = native_hover_tooltip_id(context);
         let retained_hover =
             context.data(|data| data.get_temp::<HoverTooltipOverlay>(overlay_id).is_some());
+        let deterministic_tooltip = matches!(
+            self.snapshot_scene,
+            Some(UiSnapshotScene::DiagnosticTooltip | UiSnapshotScene::FunctionTooltip)
+        );
         for (visible, salt) in [
             (self.shortcut_editor_visible, "tiptoptyp-shortcuts"),
             (self.typst_overrides_visible, "tiptoptyp-typst-overrides"),
@@ -8259,7 +8263,7 @@ impl EditorApp {
             (self.app_popup.is_some(), "tiptoptyp-popup-overlay"),
             (self.asset_hover.is_some(), "asset-hover-overlay"),
             (
-                self.diagnostic_tooltip.is_some() || retained_hover,
+                self.diagnostic_tooltip.is_some() || retained_hover || deterministic_tooltip,
                 "diagnostic-tooltip-overlay",
             ),
         ] {

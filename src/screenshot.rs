@@ -862,6 +862,12 @@ impl<A: eframe::App> eframe::App for ScreenshotApp<A> {
         self.captures.begin_viewport(ui.ctx(), ROOT_VIEWPORT_NAME);
         self.inner.ui(ui, frame);
         self.captures.end_viewport(ui.ctx(), ROOT_VIEWPORT_NAME);
+        if crate::performance::take_profile_close_request() {
+            // Issue the deadline close at the same outer boundary as
+            // --ui-screenshot-exit. This keeps the profiling shutdown path
+            // outside the document UI's dirty-buffer transition.
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+        }
         if self.close_after_captures && !self.captures.has_pending() {
             self.close_after_captures = false;
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);

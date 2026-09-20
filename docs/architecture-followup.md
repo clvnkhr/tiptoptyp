@@ -518,9 +518,11 @@ identity adapter and does not introduce another event bus or worker policy.
 Current physical counts and profiling evidence are maintained in
 [`docs/app-ownership.md`](app-ownership.md) and
 [`docs/performance.md`](performance.md). The current optimized profiling
-endpoint has valid one-window, multi-window, Settings and 40-page PDF runs,
-but the hover scene fails before readiness and the tab scene exceeds shutdown
-watchdog time; neither is treated as a performance result. Items 229, 234 and
-237 remain native acceptance gates. Proposed transaction/resource-wrapper
-extractions 251 and 253 remain deferred because review found no justified
-duplicate policy to remove without weakening the existing owners.
+endpoint has valid one-window, multi-window, Settings, 40-page PDF, deterministic
+tooltip and three-tab runs. The earlier hover-readiness and tabs-shutdown
+failures are retained as invalid history; item 259 fixed their runner/scene
+causes without adding an idle repaint loop. Actual pointer/wheel hover and
+rapid-tab input phases remain item 260. Items 229, 234 and 237 remain native
+acceptance gates. Proposed transaction/resource-wrapper extractions 251 and
+253 remain deferred because review found no justified duplicate policy to
+remove without weakening the existing owners.

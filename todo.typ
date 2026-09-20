@@ -704,14 +704,22 @@ for demonstrated remaining coupling, defects or measured cost; explicitly state
 which proposed extractions were deferred and why. No declaration that the whole
 architecture is finished merely because files became smaller.
 
-259. [ ] Make the profiling runner's active-workload endpoint deterministic.
-Keep pointer/wheel/tab sequences explicit and opt-in, but fix the hover scene's
-readiness hang and the tabs scene's post-measurement shutdown timeout before
-accepting hover-then-scroll or rapid-tab-switching numbers. Acceptance: a
-bounded scripted workload records its phase boundaries, cache-hit/miss state,
+259. [x] Make the profiling runner's active-workload endpoint deterministic.
+Fix the hover scene's readiness hang and the tabs scene's post-measurement
+shutdown timeout before accepting their endpoint captures. Deterministic
+tooltip scenes now keep their child viewport alive through lifecycle cleanup;
+the profiling deadline signals the event-loop thread and closes at the same
+outer boundary as screenshot-exit, so deliberately dirty tab fixtures cannot
+enter an interactive save loop. Current optimized endpoint captures and the
+invalid pre-fix artifacts are recorded in `docs/performance.md`. Input phases
+remain separate in item 260; no idle scenario synthesizes input and the
+watchdog remains strict.
+
+260. [ ] Add explicit, opt-in active profiling phases for hover-then-scroll and
+rapid tab switching. Record phase boundaries, cache-hit/miss state,
 repaint/job/cache counters and native-sampler metadata without logging document
-contents; failed startup or teardown stays an invalid run. Do not synthesize
-input into idle scenarios or loosen the watchdog.
+contents. Keep these scripted inputs separate from idle endpoint captures;
+failed startup or teardown remains invalid.
 = Bounded PDF page residency (2026-09-18)
 
 - Items 198–200: PDF inspection now publishes a page catalog containing only
@@ -2215,10 +2223,10 @@ measured in this follow-up; automated results alone do not establish them.
 
 = Integrated profiling evidence and runner coverage (20 September 2026)
 
-- Item 257 is intentionally left open: the existing profiler was exercised with
-  the current optimized profiling binary and matched Catppuccin Latte fixtures,
-  and item 258 records the valid evidence, but two active endpoints are not yet
-  trustworthy. `main` and `multi-window` completed 5s warmup/5s measurement
+- Item 257 remains open: the existing profiler was exercised with the current
+  optimized profiling binary and matched Catppuccin Latte fixtures, and item
+  258 records the valid evidence. `main` and `multi-window` completed 5s
+  warmup/5s measurement
   runs with no idle spans or repaint requests; Settings produced an active
   0s/1s startup run with 8 Settings/UI calls and 101 spinner repaint requests,
   plus a settled 5s/5s run. A 40-page PDF scenario completed and retained its
@@ -2229,21 +2237,20 @@ measured in this follow-up; automated results alone do not establish them.
   xtask tests cover scenario parsing and reproducibility. The PDFs, screenshots,
   CPU readings and summaries remain under the ignored `.tiptoptyp/profiles/`
   evidence directories; no document contents are logged by the recorder.
-- The existing `hover` scene never wrote `ready` and consumed roughly one CPU
-  core until its owned process was stopped; an older retained hover attempt has
-  the same failure. The new `tabs` scene reached measurement but exceeded the
-  runner's shutdown watchdog, leaving an empty invalid summary. These are
-  actionable runner/scene defects, not zero-cost measurements, and become item
-  259. No GPU, texture, WebKit, Typst, Tinymist or Poppler child-process memory
-  measurement is claimed. CPU before/after files are process snapshots, not
-  portable benchmark scores.
+- The pre-fix `hover` scene never wrote `ready` and consumed roughly one CPU
+  core until its owned process was stopped; the pre-fix `tabs` scene reached
+  measurement but exceeded the runner's shutdown watchdog. Item 259 fixes both
+  defects, and fresh optimized `hover` and `tabs` endpoint captures now finish
+  with complete summaries. They are still deterministic idle scenes, not the
+  pointer/wheel/tab sequences deferred to item 260. No GPU, texture, WebKit,
+  Typst, Tinymist or Poppler child-process memory measurement is claimed. CPU
+  before/after files are process snapshots, not portable benchmark scores.
 - Item 258 is complete as a documentation/evidence pass: `docs/performance.md`
   now describes the active workload protocol, records the exact valid and invalid
   run IDs, binary hash, warmup/measurement conditions and sampling limitations;
   `docs/app-ownership.md` contains the cross-owner result from 256. Historical
   architecture notes were not rewritten. Items 229, 234 and 237 remain open for
-  native acceptance, and 259 is the only new recommendation because the failed
-  profiling endpoints demonstrate it is needed.
+  native acceptance; item 260 is the remaining active-input recommendation.
 
 = Cross-owner architecture regression (20 September 2026)
 
@@ -2270,3 +2277,31 @@ measured in this follow-up; automated results alone do not establish them.
   claim. The bounded regression passes with strict Clippy and formatting; the
   full required suite remains the handoff gate. Native hover, Settings flash
   and native preview/editor focus acceptance remain open in 229, 234 and 237.
+
+= Active profiling endpoint repair (20 September 2026)
+
+- Item 259 is complete. The deterministic DiagnosticTooltip/FunctionTooltip
+  scenes were creating their child viewport and then immediately closing it in
+  the generic lifecycle reconciliation because their payload is synthetic
+  rather than stored in the runtime hover field. The lifecycle now treats both
+  QA scenes as visible, with a regression test in `src/app/tests.rs`. This
+  removes the readiness hang and its runaway repaint/reopen behavior.
+- The profiling deadline no longer sends a native close from its timer thread.
+  It sets one atomic request, wakes the root once, and the outer screenshot
+  wrapper issues the close after the app UI pass, matching `--ui-screenshot-exit`.
+  The window shell uses `!launch_mode.persists_settings()` so both
+  `DeterministicCapture` and `Profiling { deterministic_capture: true }` bypass
+  interactive dirty-buffer confirmation for owned QA fixtures. This fixes the
+  deliberately dirty tabs fixture without changing normal macOS close behavior.
+- Fresh optimized endpoint captures use binary SHA-256
+  `828d3d52a7a28fce63f1f32c3aac7f337d1d73445ac7bdbbd7f7aa650541f78c`:
+  hover is `.tiptoptyp/profiles/1789894830846-81006-hover-0` and tabs is
+  `.tiptoptyp/profiles/1789894840618-81492-tabs-0`. Both completed 0s warmup
+  and 1s measurement with sampler `none`; their summaries and limitations are
+  recorded in `docs/performance.md`. Item 257 remains open because these are
+  deterministic endpoint captures, not scripted pointer/wheel/tab workloads;
+  item 260 owns that next step.
+- Focused regression tests, formatting and strict Clippy pass. The optimized
+  runner also completed both repaired scenarios without changing ordinary idle
+  repaint behavior. No visual screenshot claim is made for this lifecycle and
+  profiling-infrastructure fix.

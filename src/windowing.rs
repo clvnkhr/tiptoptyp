@@ -457,6 +457,12 @@ impl AppShell {
             context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             return;
         }
+        // A deterministic capture owns its fixture and its shutdown. Do not
+        // turn the profiler's deadline close into an interactive save flow for
+        // deliberately dirty scenes such as the tab workload.
+        if !self.launch_mode.persists_settings() {
+            return;
+        }
         if self.closing.ready(&self.document_keys()) {
             if crate::worker::has_active_operations() {
                 context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -1516,6 +1522,13 @@ mod tests {
             LaunchMode::DeterministicCapture,
             false
         ));
+        assert!(!LaunchMode::DeterministicCapture.persists_settings());
+        assert!(
+            !LaunchMode::Profiling {
+                deterministic_capture: true,
+            }
+            .persists_settings()
+        );
         assert!(!keeps_running_after_root_close(
             false,
             LaunchMode::Interactive,

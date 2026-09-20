@@ -50,6 +50,7 @@ impl Session {
                 close_document: AtomicBool::new(
                     std::env::var("TIPTOPTYP_PROFILE_NO_WINDOW").as_deref() == Ok("1"),
                 ),
+                close_requested: AtomicBool::new(false),
                 open_documents: AtomicBool::new(
                     std::env::var("TIPTOPTYP_PROFILE_MULTI_WINDOW").as_deref() == Ok("1"),
                 ),
@@ -146,6 +147,7 @@ struct Recorder {
     window: OnceLock<Instant>,
     stats: Mutex<Statistics>,
     close_document: AtomicBool,
+    close_requested: AtomicBool,
     open_documents: AtomicBool,
 }
 
@@ -161,6 +163,15 @@ pub(crate) fn take_no_window_request() -> bool {
     RECORDER.get().is_some_and(|recorder| {
         recorder.window.get().is_some() && recorder.close_document.swap(false, Ordering::Relaxed)
     })
+}
+
+/// Transfer the profiler's deadline close back to the event-loop thread. The
+/// timer only sets this bit and wakes the root; the UI thread issues the native
+/// close command, matching the ordinary screenshot-exit path.
+pub(crate) fn take_profile_close_request() -> bool {
+    RECORDER
+        .get()
+        .is_some_and(|recorder| recorder.close_requested.swap(false, Ordering::Relaxed))
 }
 
 impl Recorder {
@@ -243,10 +254,22 @@ fn arm_close_deadline(
         .name("profiling-deadline".into())
         .spawn(move || {
             std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
-            // send_viewport_cmd_to also wakes the native event loop. The timer
-            // sleeps once, outside the measured work; it never drives UI frames.
-            context.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
+            // Keep the timer outside the measured work and let the event-loop
+            // thread issue the final native close command. A direct command
+            // from this thread can race macOS's close-request/dirty-document
+            // transition for multi-tab fixtures.
+            signal_profile_close(
+                &context,
+                RECORDER.get().map(|recorder| &recorder.close_requested),
+            );
         })
+}
+
+fn signal_profile_close(context: &egui::Context, close_requested: Option<&AtomicBool>) {
+    if let Some(close_requested) = close_requested {
+        close_requested.store(true, Ordering::Relaxed);
+    }
+    context.request_repaint_of(egui::ViewportId::ROOT);
 }
 
 pub(crate) struct Span {
@@ -412,6 +435,7 @@ mod tests {
             window: OnceLock::new(),
             stats: Mutex::default(),
             close_document: AtomicBool::new(false),
+            close_requested: AtomicBool::new(false),
             open_documents: AtomicBool::new(false),
         };
         assert!(!recorder.admits(origin, origin));
@@ -476,25 +500,19 @@ mod tests {
     }
 
     #[test]
-    fn close_deadline_does_not_need_an_intervening_ui_frame() {
+    fn close_deadline_signals_the_event_loop_without_queueing_native_close() {
         let context = egui::Context::default();
-        let mut initial = context.run_ui(Default::default(), |_| {});
-        initial.textures_delta.clear();
-        arm_close_deadline(&context, Instant::now())
-            .unwrap()
-            .join()
-            .unwrap();
-        // No UI frames were driven while the timer ran. Its one close command
-        // must already be queued for the root, independent of input or repaint.
+        let close_requested = AtomicBool::new(false);
+        signal_profile_close(&context, Some(&close_requested));
+        assert!(close_requested.load(Ordering::Relaxed));
+
         let mut output = context.run_ui(Default::default(), |_| {});
         output.textures_delta.clear();
-        assert_eq!(
-            output.viewport_output[&egui::ViewportId::ROOT]
+        assert!(
+            !output.viewport_output[&egui::ViewportId::ROOT]
                 .commands
                 .iter()
-                .filter(|command| matches!(command, egui::ViewportCommand::Close))
-                .count(),
-            1
+                .any(|command| matches!(command, egui::ViewportCommand::Close))
         );
     }
 }

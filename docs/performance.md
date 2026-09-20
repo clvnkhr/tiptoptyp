@@ -255,10 +255,13 @@ paths remains ongoing work, not an unchecked part of the profiling setup.
 
 ### Integrated endpoint evidence — 2026-09-20
 
-The following runs were collected on Apple arm64 macOS with the same optimized
-profiling binary (`target/profiling/tiptoptyp`, SHA-256
+The baseline rows below were collected on Apple arm64 macOS with the same
+optimized profiling binary (`target/profiling/tiptoptyp`, SHA-256
 `260b0ea36dd5763df5a5e4f774ab259027998c014473bb44327be5f4b24c7a0b`), the
-Catppuccin Latte theme, isolated fixtures, and sampler `none` unless noted.
+Catppuccin Latte theme, isolated fixtures, and sampler `none` unless noted. The
+repaired hover and tabs rows use the current optimized binary, SHA-256
+`828d3d52a7a28fce63f1f32c3aac7f337d1d73445ac7bdbbd7f7aa650541f78c`; they are
+endpoint validation, not a before/after performance comparison.
 The retained directories are Git-ignored and contain the exact metadata,
 summary, logs, CPU readings, and initial viewport framebuffer.
 
@@ -270,15 +273,18 @@ summary, logs, CPU readings, and initial viewport framebuffer.
 | Settings settled | `.tiptoptyp/profiles/1789891583728-65502-settings-0` | 5s / 5s | Complete; settled idle had no instrumented spans or repaint requests |
 | Settings CPU sample | `.tiptoptyp/profiles/1789891627456-66109-settings-0` | 1s / 2s | Complete; `/usr/bin/sample` artifact retained, no wall-time scope calls |
 | 40-page PDF residency | `.tiptoptyp/profiles/1789891570117-65164-pdf-0` | 0s / 1s | Complete; startup/raster admission captured `ui.editor.pass` and a bounded repaint |
+| deterministic function tooltip | `.tiptoptyp/profiles/1789894830846-81006-hover-0` | 0s / 1s | Complete after item 259; four diagnostic child paints and bounded root repaint requests |
+| deterministic three-tab workload | `.tiptoptyp/profiles/1789894840618-81492-tabs-0` | 0s / 1s | Complete after item 259; one bounded root repaint request and clean deadline shutdown |
 
-Two attempted active endpoints were not accepted as measurements. The existing
-`hover` scene (`1789891376923-64483-hover-0`) stayed at roughly one CPU core
-without writing `ready`; the same failure is present in the older retained hover
-artifact, so it is a scene-readiness problem rather than a performance result.
-The new `tabs` scene (`1789891511578-64829-tabs-0`) reached measurement but
-exceeded the runner's post-measurement shutdown deadline; its empty summary is
-invalid. These findings leave hover-then-scroll and rapid-tab-switching as
-explicit follow-up work, rather than silently reporting zero cost.
+Earlier attempts remain retained as invalid history: hover
+(`1789891376923-64483-hover-0`) never reached readiness, while tabs
+(`1789891511578-64829-tabs-0`) reached measurement but exceeded shutdown. Item
+259 fixed both causes: deterministic tooltip scenes now survive child-view
+lifecycle cleanup, and the profiler hands its deadline close back to the event
+loop and outer screenshot wrapper. The current rows above are valid endpoint
+captures, but they are still idle deterministic scenes; hover-then-scroll and
+rapid-tab-switching input phases remain item 260 rather than being inferred
+from these numbers.
 
 The `cpu-before.txt`/`cpu-after.txt` values are process snapshots around the
 measurement window, not a portable CPU score; the successful runs used different
