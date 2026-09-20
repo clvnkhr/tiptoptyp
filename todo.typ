@@ -740,6 +740,16 @@ GPU/texture-residency observation remain explicitly unavailable.
 261. [ ] understand how to fix the popup syntax highlighting for typc etc
 262. [ ] add typstify to editor-comparison.typ
 263. [ ] popup width is not right, some are too narrow, especially for defs/lets
+264. [ ] pdf resizing via scroll is very jerky. we should make it smooth
+265. [ ] pdf resizing stops when the panels are being resized, we should instead constantly resize
+266. [ ] vim mode
+267. [ ] we need a much larger buffer of pdf pages for the raster mode, say 15 pages
+268. [ ] while adjusting the zoom, we show the user a blank page while it loads. it should always show us the lower res page until it loads the higher res page
+269. [ ] after dropping a file into the file explorer, the newly added file should be selected
+270. [ ] improve the table editor. we should be able to increase/decrease the colspan/rowspan of a cell, use keyboard shortcuts to select things in the table editor, and adjust the styling of the table (borders, bg, alignment, etc)
+280. [ ] we should be able to scroll the code panel etc while the table editor is up.
+281. [ ] we should be able to drag the table editor around resize etc. put it in a settings-like window
+282. [ ] we should be able to import from markdown tables
 = Bounded PDF page residency (2026-09-18)
 
 - Items 198–200: PDF inspection now publishes a page catalog containing only
