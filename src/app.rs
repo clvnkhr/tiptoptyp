@@ -58,6 +58,7 @@ use qa::{QaSession, source_editor_snapshot_scroll_offset};
 use qa::{STICKY_CONTEXT_SNAPSHOT_SOURCE, SceneDocument, prepare_sticky_context_snapshot_document};
 
 use std::{
+    cmp::Reverse,
     collections::{BTreeMap, VecDeque},
     fs,
     ops::Range,
@@ -2468,10 +2469,11 @@ impl EditorApp {
             match result.output {
                 Ok(mut pages) => {
                     let dark = preview.dark;
-                    // Admit speculative neighbours first and visible pages
-                    // last. If this batch crosses the process-wide budget,
-                    // eviction keeps the pixels the user can actually see.
-                    pages.sort_by_key(|(index, _)| preview.page_is_demanded(*index));
+                    // Admit the farthest speculative neighbours first and
+                    // visible/adjacent pages last. If this batch crosses the
+                    // process-wide budget, eviction keeps the nearest
+                    // contiguous pages instead of leaving scattered gaps.
+                    pages.sort_by_key(|(index, _)| Reverse(preview.page_demand_distance(*index)));
                     let mut residents = Vec::with_capacity(pages.len());
                     for (index, page) in pages {
                         let size = page.size;

@@ -738,18 +738,19 @@ item 257 now closes the integrated evidence pass. Native sampler and
 GPU/texture-residency observation remain explicitly unavailable.
 
 261. [ ] understand how to fix the popup syntax highlighting for typc etc
-262. [ ] add typstify to editor-comparison.typ
+262. [x] add typstify to editor-comparison.typ
 263. [ ] popup width is not right, some are too narrow, especially for defs/lets
 264. [ ] pdf resizing via scroll is very jerky. we should make it smooth
 265. [ ] pdf resizing stops when the panels are being resized, we should instead constantly resize
 266. [ ] vim mode
-267. [ ] we need a much larger buffer of pdf pages for the raster mode, say 15 pages
+267. [x] we need a much larger buffer of pdf pages for the raster mode, say 15 pages
 268. [ ] while adjusting the zoom, we show the user a blank page while it loads. it should always show us the lower res page until it loads the higher res page
 269. [ ] after dropping a file into the file explorer, the newly added file should be selected
 270. [ ] improve the table editor. we should be able to increase/decrease the colspan/rowspan of a cell, use keyboard shortcuts to select things in the table editor, and adjust the styling of the table (borders, bg, alignment, etc)
 280. [ ] we should be able to scroll the code panel etc while the table editor is up.
 281. [ ] we should be able to drag the table editor around resize etc. put it in a settings-like window
 282. [ ] we should be able to import from markdown tables
+283. [ ] connect to TPIX https://typstify.com/tpix
 = Bounded PDF page residency (2026-09-18)
 
 - Items 198–200: PDF inspection now publishes a page catalog containing only
@@ -2386,3 +2387,24 @@ portable whole-system resource score.
   `.tiptoptyp/profiles/1789897269887-97329-hover-scroll-0` completed all four
   phases and retained bounded cache counters. No visual framebuffer claim is
   made for this profiling evidence.
+
+= Easy backlog pass (20 September 2026)
+
+- Items 262 and 267 are complete. `editor-comparison.typ` now includes a
+  Typstify comparison based on its public repository and documentation,
+  covering its Tinymist/source-editor workflow, TPIX package/template
+  services, outline and Git support, bibliography integration, and
+  power-saving mode. The report keeps cloud services and publishing separate
+  from the editor-core roadmap.
+- Raster fallback requests now retain a bounded fifteen-page reading window:
+  seven adjacent pages on either side of the visible range plus the visible
+  page, clamped at document boundaries. The request cap remains explicit, so
+  larger documents cannot turn scrolling into an unbounded raster job. A
+  follow-up fixed budget pressure admitting pages in document order and
+  leaving scattered gaps: batches now admit farthest pages first, preserving
+  the nearest contiguous pages when decoded-pixel or texture limits are
+  reached. Added focused boundary, centered-window, and demand-distance tests
+  in `src/pdf_pages.rs` and `src/preview.rs`.
+- Items 261, 263–266, 268–270, and 280–282 remain open. The table-editor,
+  Vim, smooth-resize, and Explorer-drop-selection work needs a separate pass
+  because each crosses an existing interaction or ownership boundary.

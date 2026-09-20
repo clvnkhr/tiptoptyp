@@ -3,7 +3,7 @@
 #set par(leading: 0.65em)
 #show heading: set text(weight: "bold")
 
-= Editor comparison: tiptoptyp, Texpile, and Oleafly
+= Editor comparison: tiptoptyp, Texpile, Oleafly, and Typstify
 
 This report records a feature comparison made on 20 September 2026. It is
 intended to distinguish product gaps from deliberate scope choices. Claims
@@ -15,14 +15,37 @@ their documentation is not proof that a feature does not exist.
 tiptoptyp is currently a native, Typst-first source editor with unusually deep
 integration around Tinymist, preview recovery, Git hunks, multi-window state,
 themes, and performance diagnostics. Its biggest missing category is a visual
-or WYSIWYG editing mode. Texpile and Oleafly both treat visual editing as a
-first-class way to edit the same source document.
+or WYSIWYG editing mode. Texpile, Oleafly, and Typstify each cover more of the
+project-setup or visual-editing space in different ways.
 
 Texpile is primarily a local document editor with collaboration and review
 features. Oleafly is a broader research workspace: references, literature
 search, AI-assisted tasks, templates, conversion tools, diagrams, and
 submission-oriented checks. Most Oleafly gaps are product-direction choices,
-not small editor features.
+not small editor features. Typstify is a cross-platform desktop editor that
+combines a conventional source editor and preview with package/template
+discovery, TPIX-backed project services, and optional power-saving behavior.
+
+== Typstify comparison
+
+Typstify overlaps most directly with tiptoptyp's existing source-editor
+workflow. Its public documentation describes Typst and Tinymist integration,
+syntax highlighting, completion, hover and diagnostic tips, project folders,
+an outline, Git gutter markers, preview/export, and configurable external
+compiler/LSP paths. It also exposes features outside tiptoptyp's current scope:
+package and template browsing through TPIX, package publishing, dependency
+synchronization, Zotero-backed bibliography synchronization, and a
+power-saving mode that disables some Tinymist work.
+
+The comparison is useful in both directions. Typstify validates package and
+template workflow as a high-value project feature, while tiptoptyp currently
+has stronger evidence around native macOS behavior, explicit multi-window
+ownership, Git hunk actions, preview recovery, and bounded profiling. The
+most actionable Typstify-inspired gaps are package/template project actions,
+workspace outline polish, and an explicit low-resource mode. TPIX accounts,
+cloud services, package publishing, and bibliography synchronization should
+remain separate product decisions rather than being pulled into the editor
+core.
 
 == Capability comparison
 
@@ -157,6 +180,12 @@ state, persistence, security, or toolchain boundaries.
   https://oleafly.com/docs/
 - Oleafly product overview:
   https://oleafly.com/
+- Typstify source repository and feature overview:
+  https://github.com/typstify/typstify
+- Typstify quick guide:
+  https://typstify.com/docs/quick-guide-v1.5
+- Typstify user manual:
+  https://typstify.com/docs/user-manual-v1.7
 
 The comparison is also grounded in the current repository feature summary in
 `README.md` and the open architecture/product tasks in `todo.typ`.

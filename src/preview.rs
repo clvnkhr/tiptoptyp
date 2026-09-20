@@ -624,6 +624,23 @@ impl PreviewController {
             .is_some_and(|demand| demand.contains(&page))
     }
 
+    /// Distance from the currently visible page range. Raster batches are
+    /// admitted from farthest to nearest so a process-wide budget evicts
+    /// speculative outer pages first and never leaves a scattered gap beside
+    /// the viewport.
+    pub(crate) fn page_demand_distance(&self, page: usize) -> usize {
+        let Some(demand) = &self.page_demand else {
+            return usize::MAX;
+        };
+        if page < *demand.start() {
+            demand.start().saturating_sub(page)
+        } else if page > *demand.end() {
+            page.saturating_sub(*demand.end())
+        } else {
+            0
+        }
+    }
+
     pub(crate) fn raster_request_key(&self) -> Option<RasterPageRequestKey> {
         self.content.pdf()?;
         let artifact = self.content.artifact_key()?;
@@ -1500,6 +1517,18 @@ mod tests {
             Some(0..=1)
         );
         assert_eq!(visible_page_range(&[], 0.0, 100.0), None);
+    }
+
+    #[test]
+    fn page_demand_distance_orders_outer_pages_before_adjacent_pages() {
+        let mut preview = PreviewController::new(false, PreviewPreference::Native);
+        preview.page_demand = Some(5..=6);
+        assert_eq!(preview.page_demand_distance(5), 0);
+        assert_eq!(preview.page_demand_distance(6), 0);
+        assert_eq!(preview.page_demand_distance(4), 1);
+        assert_eq!(preview.page_demand_distance(7), 1);
+        assert_eq!(preview.page_demand_distance(0), 5);
+        assert_eq!(preview.page_demand_distance(12), 6);
     }
 
     #[test]

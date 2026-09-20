@@ -18,8 +18,12 @@ use crate::{
     worker::{LatestReceiver, LatestSender, RepaintTarget, latest_channel},
 };
 
-const MAX_PAGES_PER_REQUEST: usize = 12;
-pub(crate) const ADJACENT_PAGE_PREFETCH: usize = 1;
+/// Keep a useful reading buffer around the visible range without allowing a
+/// single scroll request to become an unbounded rasterization job.
+const MAX_PAGES_PER_REQUEST: usize = 15;
+/// A single visible page therefore requests up to fifteen pages: seven on
+/// either side plus the visible page, clamped at document boundaries.
+pub(crate) const ADJACENT_PAGE_PREFETCH: usize = 7;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PdfSurface {
@@ -274,11 +278,16 @@ mod tests {
 
     #[test]
     fn prefetch_is_adjacent_clamped_and_bounded() {
-        assert_eq!(bounded_prefetch_range(0..=0, 100), Some(0..=1));
-        assert_eq!(bounded_prefetch_range(4..=5, 10), Some(3..=6));
-        assert_eq!(bounded_prefetch_range(9..=9, 10), Some(8..=9));
+        assert_eq!(bounded_prefetch_range(0..=0, 100), Some(0..=7));
+        assert_eq!(bounded_prefetch_range(4..=5, 10), Some(0..=9));
+        assert_eq!(bounded_prefetch_range(9..=9, 10), Some(2..=9));
         let range = bounded_prefetch_range(10..=40, 100).unwrap();
         assert_eq!(range.end() - range.start() + 1, MAX_PAGES_PER_REQUEST);
+    }
+
+    #[test]
+    fn prefetch_keeps_a_fifteen_page_reading_buffer_around_one_page() {
+        assert_eq!(bounded_prefetch_range(50..=50, 100), Some(43..=57));
     }
 
     #[test]

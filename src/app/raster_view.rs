@@ -188,20 +188,23 @@ pub(super) fn show_pages(
                     Stroke::new(METRICS.preview.page_border_width, page_theme.border),
                     StrokeKind::Outside,
                 );
-                if let Some(resident) = page
+                let resident = page
                     .resident
                     .as_ref()
-                    .filter(|resident| resident.is_usable())
-                {
+                    .filter(|resident| resident.is_usable());
+                let page_is_resident = resident.is_some();
+                if let Some(resident) = resident {
                     ui.put(
                         rect,
                         egui::Image::new(&resident.texture)
                             .fit_to_exact_size(geometry.size)
                             .alt_text(format!("PDF page {}", geometry.index + 1)),
                     );
+                } else {
+                    show_page_loading_indicator(ui, rect, geometry.index);
                 }
                 for (link_index, link) in page.links.iter().enumerate() {
-                    if !raster_is_current || page.resident.is_none() {
+                    if !raster_is_current || !page_is_resident {
                         continue;
                     }
                     let [left, top, right, bottom] = link.rect;
@@ -253,6 +256,34 @@ pub(super) fn show_pages(
     clicked_link
 }
 
+const PAGE_LOADING_INDICATOR_WIDTH: f32 = 128.0;
+const PAGE_LOADING_INDICATOR_HEIGHT: f32 = 48.0;
+
+fn page_loading_indicator_rect(page: Rect) -> Rect {
+    Rect::from_center_size(
+        page.center(),
+        Vec2::new(
+            page.width().min(PAGE_LOADING_INDICATOR_WIDTH),
+            page.height().min(PAGE_LOADING_INDICATOR_HEIGHT),
+        ),
+    )
+}
+
+fn show_page_loading_indicator(ui: &mut egui::Ui, page: Rect, page_index: usize) {
+    let indicator = page_loading_indicator_rect(page);
+    ui.scope_builder(egui::UiBuilder::new().max_rect(indicator), |ui| {
+        ui.with_layout(
+            Layout::centered_and_justified(egui::Direction::TopDown),
+            |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.spinner();
+                    ui.label(RichText::new(format!("Loading page {}…", page_index + 1)).weak());
+                });
+            },
+        );
+    });
+}
+
 fn page_canvas_width(viewport_width: f32, widest_page: f32) -> f32 {
     viewport_width.max(widest_page + PAGE_MARGIN * 2.0)
 }
@@ -295,5 +326,19 @@ mod tests {
     fn zoomed_pages_can_scroll_with_margins_and_small_pages_stay_centered() {
         assert_eq!(page_canvas_width(400.0, 800.0), 800.0 + PAGE_MARGIN * 2.0);
         assert_eq!(page_canvas_width(800.0, 400.0), 800.0);
+    }
+
+    #[test]
+    fn page_loading_indicator_stays_centered_and_inside_page() {
+        let page = Rect::from_min_size(Pos2::new(32.0, 64.0), Vec2::new(500.0, 700.0));
+        let indicator = page_loading_indicator_rect(page);
+
+        assert_eq!(indicator.center(), page.center());
+        assert!(page.contains(indicator.min));
+        assert!(page.contains(indicator.max));
+
+        let small_page = Rect::from_min_size(Pos2::ZERO, Vec2::new(40.0, 30.0));
+        let small_indicator = page_loading_indicator_rect(small_page);
+        assert_eq!(small_indicator.size(), small_page.size());
     }
 }
