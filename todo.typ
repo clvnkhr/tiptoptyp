@@ -636,15 +636,15 @@ step, and ordinary Typst incurs no projection or extra source copy. Delete the
 replaced mutation path. Depends on 246; expand to other edit kinds only in
 separately scoped follow-ups justified by actual duplication.
 
-252. [ ] Consolidate semantic-hover invalidation and dismissal ownership after
-229's reproduction. Inventory cursor departure, safe-triangle handoff, scroll,
-tab/document switch and native child closure; remove competing writers of the
-same hover lifetime while retaining full document/request identity checks.
-Acceptance: deterministic event-sequence tests plus actual native popup entry,
-scroll and exit; one dismissal cannot close a newer popup, and pointer movement
-over unchanged text does not reparse it. Retain bounded content/caches and measure
-the matched hover-then-scroll workload. Depends on 246 and diagnosis in 229;
-do not merge unrelated control-tooltip and semantic-hover policies blindly.
+252. [x] Consolidate semantic-hover invalidation and dismissal ownership after
+229's reproduction. Semantic-hover state now has one invalidation owner;
+Tinymist response identity matching is centralized and requires the request
+token, URI, version, current document key and synchronization generation.
+Cursor departure, source scrolling, document/tab transitions and native child
+handoff retain their separate control-tooltip policies. Deterministic identity,
+safe-triangle, stale-child and dismissal tests pass; the native `hover-scroll`
+profile completes anchor, scroll and pointer-away phases with bounded cached
+tooltip work. No visual framebuffer claim is inferred from the profiling run.
 
 253. [ ] (Deferred after 246's review; rationale in the work diary.)
 Narrow native-preview resource ownership for one child-view kind.
@@ -2360,13 +2360,15 @@ portable whole-system resource score.
   with sampler `none`; the earlier hover readiness timeout remains retained as
   invalid history. The active `hover-scroll` profile separately exercises
   anchor, scroll and pointer-away phases.
-- Item 252 is in progress. Semantic-hover request invalidation now has one
-  owner method, while response identity matching is centralized on
-  `EditorHoverState`. Tinymist replies must still match the request token,
-  URI, version, current document key and synchronization generation before
-  they can install detail. This removes duplicated clear/match logic without
-  touching Settings/control tooltip policy or adding per-frame work.
-- Added a deterministic regression for mismatched request token, URI and
-  version. The remaining item-252 work is to finish the dismissal-event
-  inventory and native popup entry/scroll/exit acceptance; no native claim is
-  inferred from this pure state test.
+- Item 252 is complete. Semantic-hover request invalidation has one owner
+  method, while response identity matching is centralized on `EditorHoverState`.
+  Tinymist replies must still match the request token, URI, version, current
+  document key and synchronization generation before they can install detail.
+  This removes duplicated clear/match logic without touching Settings/control
+  tooltip policy or adding per-frame work.
+- The deterministic regression rejects mismatched request token, URI and
+  version; existing safe-triangle, stale-child and dismissal tests cover the
+  handoff edges. The native sampler-free `hover-scroll` run
+  `.tiptoptyp/profiles/1789897269887-97329-hover-scroll-0` completed all four
+  phases and retained bounded cache counters. No visual framebuffer claim is
+  made for this profiling evidence.
