@@ -2,7 +2,11 @@
 //! to repository handles, workers, or the filesystem.
 use super::DiffView;
 use crate::{
-    git::repository::{DiffKind, DiffSelection, Entry, Operation, Snapshot},
+    git::repository::{
+        DiffKind, DiffSelection, Entry, Operation, Snapshot,
+        diff::{LineChangeCounts, parse_hunks},
+    },
+    settings::GitDiffStyle,
     theme,
 };
 use eframe::egui;
@@ -14,6 +18,7 @@ pub(super) struct Input<'a> {
     pub(super) commit_message: &'a str,
     pub(super) failed: bool,
     pub(super) diff: Option<&'a DiffView>,
+    pub(super) diff_style: GitDiffStyle,
     pub(super) busy: bool,
     pub(super) dirty: bool,
 }
@@ -31,6 +36,8 @@ pub(crate) struct Output {
 pub(super) struct Cache {
     commit_message: String,
     diff_layout: Option<DiffLayout>,
+    diff_model: Option<DiffModel>,
+    diff_counts: Option<DiffCounts>,
 }
 
 #[derive(Debug)]
@@ -45,6 +52,41 @@ struct DiffLayout {
 struct DiffStyle {
     font: egui::FontId,
     colors: [egui::Color32; 4],
+    backgrounds: [egui::Color32; 4],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiffLineKind {
+    Added,
+    Removed,
+    Hunk,
+    Context,
+    Meta,
+}
+
+#[derive(Debug, Clone)]
+struct DiffCell {
+    text: String,
+    kind: DiffLineKind,
+}
+
+#[derive(Debug, Clone)]
+struct DiffRow {
+    full: Option<DiffCell>,
+    left: Option<DiffCell>,
+    right: Option<DiffCell>,
+}
+
+#[derive(Debug)]
+struct DiffModel {
+    content: Arc<str>,
+    rows: Vec<DiffRow>,
+}
+
+#[derive(Debug)]
+struct DiffCounts {
+    content: Arc<str>,
+    counts: LineChangeCounts,
 }
 
 impl DiffStyle {
@@ -58,27 +100,44 @@ impl DiffStyle {
                 palette.info,
                 ui.visuals().text_color(),
             ],
+            backgrounds: [
+                palette.success.gamma_multiply(0.16),
+                palette.error.gamma_multiply(0.16),
+                palette.info.gamma_multiply(0.14),
+                egui::Color32::TRANSPARENT,
+            ],
         }
+    }
+
+    fn color(&self, kind: DiffLineKind) -> egui::Color32 {
+        self.colors[match kind {
+            DiffLineKind::Added => 0,
+            DiffLineKind::Removed => 1,
+            DiffLineKind::Hunk => 2,
+            DiffLineKind::Context | DiffLineKind::Meta => 3,
+        }]
+    }
+
+    fn background(&self, kind: DiffLineKind) -> egui::Color32 {
+        self.backgrounds[match kind {
+            DiffLineKind::Added => 0,
+            DiffLineKind::Removed => 1,
+            DiffLineKind::Hunk => 2,
+            DiffLineKind::Context | DiffLineKind::Meta => 3,
+        }]
     }
 
     fn layout_job(&self, content: &str) -> egui::text::LayoutJob {
         let mut layout = egui::text::LayoutJob::default();
         for line in content.split_inclusive('\n') {
-            let color = self.colors[if line.starts_with('+') {
-                0
-            } else if line.starts_with('-') {
-                1
-            } else if line.starts_with("@@") {
-                2
-            } else {
-                3
-            }];
+            let kind = diff_line_kind(line);
             layout.append(
                 line,
                 0.0,
                 egui::TextFormat {
                     font_id: self.font.clone(),
-                    color,
+                    color: self.color(kind),
+                    background: self.background(kind),
                     ..Default::default()
                 },
             );
@@ -111,6 +170,237 @@ impl Cache {
             galley: Arc::clone(&galley),
         });
         galley
+    }
+
+    fn diff_model(&mut self, content: &Arc<str>) -> &DiffModel {
+        let replace = self
+            .diff_model
+            .as_ref()
+            .is_none_or(|model| !Arc::ptr_eq(&model.content, content));
+        if replace {
+            let rows = side_by_side_rows(content);
+            self.diff_model = Some(DiffModel {
+                content: Arc::clone(content),
+                rows,
+            });
+        }
+        self.diff_model
+            .as_ref()
+            .expect("diff model was inserted above")
+    }
+
+    fn diff_counts(&mut self, content: &Arc<str>) -> LineChangeCounts {
+        let replace = self
+            .diff_counts
+            .as_ref()
+            .is_none_or(|cached| !Arc::ptr_eq(&cached.content, content));
+        if replace {
+            let counts = parse_hunks(content)
+                .map(|hunks| LineChangeCounts::from_hunks(&hunks))
+                .unwrap_or_default();
+            self.diff_counts = Some(DiffCounts {
+                content: Arc::clone(content),
+                counts,
+            });
+        }
+        self.diff_counts
+            .as_ref()
+            .expect("diff counts were inserted above")
+            .counts
+    }
+}
+
+fn diff_line_kind(line: &str) -> DiffLineKind {
+    if line.starts_with("@@") {
+        DiffLineKind::Hunk
+    } else if line.starts_with('+') {
+        DiffLineKind::Added
+    } else if line.starts_with('-') {
+        DiffLineKind::Removed
+    } else {
+        DiffLineKind::Context
+    }
+}
+
+fn line_body(line: &str) -> &str {
+    line.strip_suffix('\n')
+        .unwrap_or(line)
+        .strip_suffix('\r')
+        .unwrap_or_else(|| line.strip_suffix('\n').unwrap_or(line))
+}
+
+fn diff_cell(line: &str, kind: DiffLineKind, strip_prefix: bool) -> DiffCell {
+    let text = if strip_prefix {
+        line.get(1..).unwrap_or_default()
+    } else {
+        line
+    };
+    DiffCell {
+        text: line_body(text).to_owned(),
+        kind,
+    }
+}
+
+fn side_by_side_rows(content: &str) -> Vec<DiffRow> {
+    let mut rows = Vec::new();
+    let mut in_hunk = false;
+    let mut removed = Vec::<String>::new();
+    let mut added = Vec::<String>::new();
+
+    let flush_changes =
+        |rows: &mut Vec<DiffRow>, removed: &mut Vec<String>, added: &mut Vec<String>| {
+            let count = removed.len().max(added.len());
+            for index in 0..count {
+                let left = removed.get(index).map(|text| DiffCell {
+                    text: text.clone(),
+                    kind: DiffLineKind::Removed,
+                });
+                let right = added.get(index).map(|text| DiffCell {
+                    text: text.clone(),
+                    kind: DiffLineKind::Added,
+                });
+                rows.push(DiffRow {
+                    full: None,
+                    left,
+                    right,
+                });
+            }
+            removed.clear();
+            added.clear();
+        };
+
+    for raw in content.split_inclusive('\n') {
+        let line = line_body(raw);
+        if line.starts_with("@@") {
+            flush_changes(&mut rows, &mut removed, &mut added);
+            rows.push(DiffRow {
+                full: Some(diff_cell(line, DiffLineKind::Hunk, false)),
+                left: None,
+                right: None,
+            });
+            in_hunk = true;
+            continue;
+        }
+        if !in_hunk {
+            rows.push(DiffRow {
+                full: Some(diff_cell(line, DiffLineKind::Meta, false)),
+                left: None,
+                right: None,
+            });
+            continue;
+        }
+        match line.as_bytes().first().copied() {
+            Some(b'-') => removed.push(line.get(1..).unwrap_or_default().to_owned()),
+            Some(b'+') => added.push(line.get(1..).unwrap_or_default().to_owned()),
+            Some(b' ') => {
+                flush_changes(&mut rows, &mut removed, &mut added);
+                let context = line.get(1..).unwrap_or_default().to_owned();
+                let cell = DiffCell {
+                    text: context,
+                    kind: DiffLineKind::Context,
+                };
+                rows.push(DiffRow {
+                    full: None,
+                    left: Some(cell.clone()),
+                    right: Some(cell),
+                });
+            }
+            Some(b'\\') => {
+                flush_changes(&mut rows, &mut removed, &mut added);
+                rows.push(DiffRow {
+                    full: Some(diff_cell(line, DiffLineKind::Meta, false)),
+                    left: None,
+                    right: None,
+                });
+            }
+            _ => {
+                flush_changes(&mut rows, &mut removed, &mut added);
+                rows.push(DiffRow {
+                    full: Some(diff_cell(line, DiffLineKind::Meta, false)),
+                    left: None,
+                    right: None,
+                });
+            }
+        }
+    }
+    flush_changes(&mut rows, &mut removed, &mut added);
+    rows
+}
+
+fn show_change_counts(ui: &mut egui::Ui, counts: LineChangeCounts) {
+    let palette = theme::palette(ui.ctx());
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = theme::SPACE.small;
+        for (symbol, count, color) in [
+            ("+", counts.added, palette.success),
+            ("~", counts.modified, palette.info),
+            ("-", counts.deleted, palette.error),
+        ] {
+            if count > 0 {
+                ui.colored_label(color, format!("{symbol}{count}"));
+            }
+        }
+    });
+}
+
+fn show_side_by_side_diff(ui: &mut egui::Ui, rows: &[DiffRow], style: &DiffStyle) {
+    let total_width = ui.available_width().max(2.0);
+    let gap = ui.spacing().item_spacing.x;
+    let column_width = ((total_width - gap) / 2.0).max(1.0);
+    let line_height = ui
+        .text_style_height(&egui::TextStyle::Monospace)
+        .max(ui.spacing().interact_size.y);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = gap;
+        for label in ["Previous", "Current"] {
+            ui.add_sized(
+                [column_width, line_height],
+                egui::Label::new(egui::RichText::new(label).small().strong()),
+            );
+        }
+    });
+    for row in rows {
+        if let Some(cell) = &row.full {
+            let (rect, _) =
+                ui.allocate_exact_size(egui::vec2(total_width, line_height), egui::Sense::hover());
+            ui.painter()
+                .rect_filled(rect, 0.0, style.background(cell.kind));
+            ui.put(
+                rect.shrink2(egui::vec2(theme::SPACE.small, 0.0)),
+                egui::Label::new(
+                    egui::RichText::new(&cell.text)
+                        .monospace()
+                        .color(style.color(cell.kind)),
+                )
+                .truncate(),
+            );
+            continue;
+        }
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            for cell in [row.left.as_ref(), row.right.as_ref()] {
+                let (rect, _) = ui.allocate_exact_size(
+                    egui::vec2(column_width, line_height),
+                    egui::Sense::hover(),
+                );
+                if let Some(cell) = cell {
+                    ui.painter()
+                        .rect_filled(rect, 0.0, style.background(cell.kind));
+                    ui.put(
+                        rect.shrink2(egui::vec2(theme::SPACE.small, 0.0)),
+                        egui::Label::new(
+                            egui::RichText::new(&cell.text)
+                                .monospace()
+                                .color(style.color(cell.kind)),
+                        )
+                        .truncate(),
+                    );
+                } else {
+                    ui.painter()
+                        .rect_filled(rect, 0.0, style.background(DiffLineKind::Context));
+                }
+            }
+        });
     }
 }
 
@@ -293,7 +583,7 @@ pub(super) fn show_panel(ui: &mut egui::Ui, input: Input<'_>, cache: &mut Cache)
                     ui.colored_label(palette.warning, "Temporary .tiptoptyp files are already staged. Unstage all keeps these files out of the next commit.");
                 }
                 ui.add_space(theme::SPACE.content);
-                show_diff(ui, input.diff, cache, &mut output);
+                show_diff(ui, input.diff, input.diff_style, cache, &mut output);
                 ui.add_space(theme::SPACE.content);
                 ui.separator();
                 let response = ui.add_enabled(
@@ -342,7 +632,13 @@ pub(super) fn show_panel(ui: &mut egui::Ui, input: Input<'_>, cache: &mut Cache)
     output
 }
 
-fn show_diff(ui: &mut egui::Ui, diff: Option<&DiffView>, cache: &mut Cache, output: &mut Output) {
+fn show_diff(
+    ui: &mut egui::Ui,
+    diff: Option<&DiffView>,
+    diff_style: GitDiffStyle,
+    cache: &mut Cache,
+    output: &mut Output,
+) {
     let Some(diff) = diff else {
         return;
     };
@@ -353,6 +649,10 @@ fn show_diff(ui: &mut egui::Ui, diff: Option<&DiffView>, cache: &mut Cache, outp
             right_action_row(ui, |ui| {
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     ui.strong(diff.selection.kind.title());
+                    ui.separator();
+                    if let Some(Ok(content)) = &diff.content {
+                        show_change_counts(ui, cache.diff_counts(&content.text));
+                    }
                 });
             });
             ui.add(
@@ -362,7 +662,11 @@ fn show_diff(ui: &mut egui::Ui, diff: Option<&DiffView>, cache: &mut Cache, outp
                 .truncate(),
             )
             .on_hover_text(diff.selection.path.display().to_string());
-            ui.weak(diff.selection.kind.description());
+            ui.horizontal_wrapped(|ui| {
+                ui.weak(diff.selection.kind.description());
+                ui.separator();
+                ui.weak(diff_style.label());
+            });
             ui.separator();
             match &diff.content {
                 None => {
@@ -386,9 +690,16 @@ fn show_diff(ui: &mut egui::Ui, diff: Option<&DiffView>, cache: &mut Cache, outp
                         ))
                         .max_height(230.0)
                         .auto_shrink([false, true])
-                        .show(ui, |ui| {
-                            let galley = cache.diff_galley(ui, &content.text);
-                            ui.add(egui::Label::new(galley).selectable(true).extend());
+                        .show(ui, |ui| match diff_style {
+                            GitDiffStyle::Unified => {
+                                let galley = cache.diff_galley(ui, &content.text);
+                                ui.add(egui::Label::new(galley).selectable(true).extend());
+                            }
+                            GitDiffStyle::SideBySide => {
+                                let style = DiffStyle::from_ui(ui);
+                                let model = cache.diff_model(&content.text);
+                                show_side_by_side_diff(ui, &model.rows, &style);
+                            }
                         });
                 }
             }
@@ -496,15 +807,57 @@ impl ChangeButtons {
     }
 }
 
-pub(crate) fn show_colored_diff(ui: &mut egui::Ui, content: &str) {
-    let layout = DiffStyle::from_ui(ui).layout_job(content);
-    ui.add(egui::Label::new(layout).selectable(true).extend());
+pub(crate) fn show_colored_diff(ui: &mut egui::Ui, content: &str, diff_style: GitDiffStyle) {
+    let style = DiffStyle::from_ui(ui);
+    match diff_style {
+        GitDiffStyle::Unified => {
+            let layout = style.layout_job(content);
+            ui.add(egui::Label::new(layout).selectable(true).extend());
+        }
+        GitDiffStyle::SideBySide => {
+            let rows = side_by_side_rows(content);
+            show_side_by_side_diff(ui, &rows, &style);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable as _};
+
+    #[test]
+    fn side_by_side_rows_pair_replacements_and_keep_git_headers_full_width() {
+        let rows = side_by_side_rows(
+            "diff --git a/main.typ b/main.typ\n--- a/main.typ\n+++ b/main.typ\n@@ -1,3 +1,3 @@\n context\n-old\n+new\n tail\n",
+        );
+        assert_eq!(
+            rows[0].full.as_ref().map(|cell| cell.kind),
+            Some(DiffLineKind::Meta)
+        );
+        assert_eq!(
+            rows[3].full.as_ref().map(|cell| cell.kind),
+            Some(DiffLineKind::Hunk)
+        );
+        let replacement = rows
+            .iter()
+            .find(|row| {
+                row.left
+                    .as_ref()
+                    .is_some_and(|cell| cell.kind == DiffLineKind::Removed)
+            })
+            .expect("replacement row");
+        assert_eq!(replacement.left.as_ref().unwrap().text, "old");
+        assert_eq!(replacement.right.as_ref().unwrap().text, "new");
+        assert_eq!(
+            replacement.left.as_ref().unwrap().kind,
+            DiffLineKind::Removed
+        );
+        assert_eq!(
+            replacement.right.as_ref().unwrap().kind,
+            DiffLineKind::Added
+        );
+    }
 
     #[test]
     fn read_only_panel_view_emits_a_typed_action_without_an_io_handle() {
@@ -525,6 +878,7 @@ mod tests {
                             commit_message: "",
                             failed: false,
                             diff: None,
+                            diff_style: GitDiffStyle::Unified,
                             busy: false,
                             dirty: false,
                         },

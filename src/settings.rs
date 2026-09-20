@@ -210,6 +210,27 @@ impl PreviewPreference {
     }
 }
 
+/// Presentation used for Git diffs in the Explorer and hunk popups.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum GitDiffStyle {
+    /// A conventional unified diff with one source column.
+    #[default]
+    Unified,
+    /// Old and new lines are shown in two aligned columns.
+    SideBySide,
+}
+
+impl GitDiffStyle {
+    pub(crate) const ALL: [Self; 2] = [Self::Unified, Self::SideBySide];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Unified => "Single column",
+            Self::SideBySide => "Side-by-side",
+        }
+    }
+}
+
 /// Persisted user choices for the current settings schema.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct AppSettings {
@@ -226,6 +247,8 @@ pub(crate) struct AppSettings {
     pub(crate) theme_colors: crate::theme_transform::ThemeColorAdjustments,
     pub(crate) document_theme: DocumentTheme,
     pub(crate) preview_preference: PreviewPreference,
+    #[serde(default)]
+    pub(crate) git_diff_style: GitDiffStyle,
     pub(crate) line_wrap: bool,
     pub(crate) line_numbers: bool,
     #[serde(default = "default_true")]
@@ -295,6 +318,7 @@ impl Default for AppSettings {
             theme_colors: Default::default(),
             document_theme: DocumentTheme::FollowInterface,
             preview_preference: PreviewPreference::Interactive,
+            git_diff_style: GitDiffStyle::Unified,
             line_wrap: true,
             line_numbers: true,
             sticky_context_rows: true,
@@ -358,6 +382,7 @@ impl AppSettings {
             theme_colors,
             document_theme,
             preview_preference,
+            git_diff_style,
             line_wrap,
             line_numbers,
             sticky_context_rows,
@@ -698,6 +723,7 @@ mod tests {
             },
             document_theme: DocumentTheme::Dark,
             preview_preference: PreviewPreference::Native,
+            git_diff_style: GitDiffStyle::Unified,
             line_wrap: false,
             line_numbers: false,
             sticky_context_rows: false,
@@ -1027,5 +1053,32 @@ mod tests {
                 Some(rejected)
             );
         }
+    }
+
+    #[test]
+    fn git_diff_style_persists_and_old_settings_default_to_single_column() {
+        let mut storage = MemoryStorage::default();
+        let settings = AppSettings {
+            git_diff_style: GitDiffStyle::SideBySide,
+            ..AppSettings::default()
+        };
+        settings.save(&mut storage);
+        assert_eq!(
+            AppSettings::load(Some(&storage)).unwrap().git_diff_style,
+            GitDiffStyle::SideBySide
+        );
+
+        let mut value: serde_json::Value = serde_json::from_str(
+            &storage
+                .get_string(STORAGE_KEY)
+                .expect("settings were persisted"),
+        )
+        .unwrap();
+        value.as_object_mut().unwrap().remove("git_diff_style");
+        storage.set_string(STORAGE_KEY, serde_json::to_string(&value).unwrap());
+        assert_eq!(
+            AppSettings::load(Some(&storage)).unwrap().git_diff_style,
+            GitDiffStyle::Unified
+        );
     }
 }

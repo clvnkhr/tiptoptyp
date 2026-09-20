@@ -836,6 +836,7 @@ enum SettingsTarget {
     StickyContextRows,
     AutoPairDelimiters,
     MitexDollars,
+    GitDiffStyle,
     RainbowBrackets,
     AutoSave,
     AutoSaveDelay,
@@ -861,7 +862,7 @@ enum SettingsTarget {
 }
 
 impl SettingsTarget {
-    const ALL: [Self; 35] = [
+    const ALL: [Self; 36] = [
         Self::Appearance,
         Self::TypstSyntax,
         Self::LightTheme,
@@ -875,6 +876,7 @@ impl SettingsTarget {
         Self::StickyContextRows,
         Self::AutoPairDelimiters,
         Self::MitexDollars,
+        Self::GitDiffStyle,
         Self::RainbowBrackets,
         Self::AutoSave,
         Self::AutoSaveDelay,
@@ -914,6 +916,7 @@ impl SettingsTarget {
             Self::StickyContextRows => "Sticky context rows",
             Self::AutoPairDelimiters => "Auto-close delimiters",
             Self::MitexDollars => "Auto-enable miTeX for compatible documents",
+            Self::GitDiffStyle => "Git diff style",
             Self::RainbowBrackets => "Rainbow brackets",
             Self::AutoSave => "Auto-save",
             Self::AutoSaveDelay => "Auto-save delay",
@@ -954,6 +957,7 @@ impl SettingsTarget {
             | Self::StickyContextRows
             | Self::AutoPairDelimiters
             | Self::MitexDollars
+            | Self::GitDiffStyle
             | Self::RainbowBrackets
             | Self::AutoSave
             | Self::AutoSaveDelay
@@ -999,6 +1003,9 @@ impl SettingsTarget {
             }
             Self::MitexDollars => {
                 "mitex latex tex dollar inline display block math package version translation"
+            }
+            Self::GitDiffStyle => {
+                "git diff changes hunk unified single column side by side double column"
             }
             Self::RainbowBrackets => {
                 "editor color colour palettes cycles nesting parentheses square braces mixed math"
@@ -6737,7 +6744,7 @@ impl EditorApp {
                 git_visible: self.git.visible,
             },
             &mut self.explorer,
-            |ui| self.git.show(ui, dirty),
+            |ui| self.git.show(ui, dirty, self.settings.git_diff_style),
         );
         if output.change_root {
             self.open_workspace_chooser();

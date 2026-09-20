@@ -16,8 +16,8 @@ use crate::{
     font_catalog::FontCatalog,
     screenshot::{CaptureController, CaptureThemeProfile, UiSnapshotScene},
     settings::{
-        AppSettings, ColorThemeChoice, DocumentTheme, InterfaceTheme, PreviewPreference,
-        SourcePreviewTrigger,
+        AppSettings, ColorThemeChoice, DocumentTheme, GitDiffStyle, InterfaceTheme,
+        PreviewPreference, SourcePreviewTrigger,
     },
     shortcuts::ShortcutAction,
     theme::{self, METRICS},
@@ -400,6 +400,14 @@ impl SettingsPanel<'_> {
                         .on_hover_text("Pinned package version used when enabling TeX mode. Existing imports are not rewritten.");
                 });
                 ui.label("$x$ → mi · $ x $ → mitex. Native Typst math prevents enabling.");
+                settings_target_anchor(ui, SettingsTarget::GitDiffStyle, &mut settings_scroll_target);
+                ui.horizontal_wrapped(|ui| {
+                    theme::apply_compact_control_spacing(ui);
+                    ui.label(RichText::new(SettingsTarget::GitDiffStyle.label()).strong());
+                    for style in GitDiffStyle::ALL {
+                        ui.selectable_value(&mut edited.git_diff_style, style, style.label());
+                    }
+                });
                 settings_target_anchor(ui, SettingsTarget::RainbowBrackets, &mut settings_scroll_target);
                 show_bracket_controls(ui, &mut edited.rainbow_brackets);
                 settings_target_anchor(
@@ -1180,6 +1188,13 @@ mod tests {
                 .iter()
                 .any(|a| matches!(a, SettingsAction::Update(settings) if settings.fixed_tab_width))
         );
+        harness.state_mut().2.clear();
+        harness.get_by_label("Side-by-side").click();
+        harness.run();
+        assert!(harness.state().2.iter().any(
+            |a| matches!(a, SettingsAction::Update(settings) if settings.git_diff_style
+                == crate::settings::GitDiffStyle::SideBySide)
+        ));
         harness.state_mut().2.clear();
         harness.get_by_label("Overrides…").click();
         harness.run();

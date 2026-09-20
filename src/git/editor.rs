@@ -1175,6 +1175,7 @@ mod tests {
                                 crate::shortcuts::ShortcutPlatform::current(),
                             ),
                             false,
+                            crate::settings::GitDiffStyle::Unified,
                         );
                     }
                 },

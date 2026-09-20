@@ -1214,6 +1214,7 @@ impl EditorApp {
                                         chunk,
                                         &shortcuts,
                                         self.git_hunk_job.is_running(),
+                                        self.settings.git_diff_style,
                                     ) {
                                         action = Some(AppPopupAction::GitHunk(
                                             selected,

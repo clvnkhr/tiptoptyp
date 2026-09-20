@@ -1,6 +1,7 @@
 //! Basic Git operations. Commands run off the UI thread, with literal paths
 //! and no terminal prompts; every result carries its originating workspace.
 pub(crate) mod editor;
+use crate::settings::GitDiffStyle;
 use crate::worker::{ExclusiveJob, LatestJobPoll};
 use eframe::egui;
 #[cfg(test)]
@@ -289,7 +290,12 @@ impl GitPanel {
         }
     }
 
-    pub(crate) fn show(&mut self, ui: &mut egui::Ui, dirty: bool) -> view::Output {
+    pub(crate) fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        dirty: bool,
+        diff_style: GitDiffStyle,
+    ) -> view::Output {
         // The app update loop polls independently of whether this body is open.
         // The view receives immutable model state and cannot start repository IO.
         // Maintenance scans stay out of the visible loading state. They must
@@ -305,6 +311,7 @@ impl GitPanel {
                 commit_message: &self.commit_message,
                 failed: self.failed,
                 diff: self.diff.as_ref(),
+                diff_style,
                 busy,
                 dirty,
             },
@@ -403,7 +410,7 @@ mod tests {
     };
 
     fn show_panel(ui: &mut egui::Ui, panel: &mut GitPanel) {
-        let output = panel.show(ui, false);
+        let output = panel.show(ui, false, crate::settings::GitDiffStyle::Unified);
         panel.apply_view_output(ui.ctx(), output);
     }
 

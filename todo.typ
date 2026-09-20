@@ -736,6 +736,10 @@ incomplete phase rather than a burst of catch-up events. Cache hit/miss counters
 are recorded without source text;
 item 257 now closes the integrated evidence pass. Native sampler and
 GPU/texture-residency observation remain explicitly unavailable.
+
+261. [ ] understand how to fix the popup syntax highlighting for typc etc
+262. [ ] add typstify to editor-comparison.typ
+263. [ ] popup width is not right, some are too narrow, especially for defs/lets
 = Bounded PDF page residency (2026-09-18)
 
 - Items 198–200: PDF inspection now publishes a page catalog containing only

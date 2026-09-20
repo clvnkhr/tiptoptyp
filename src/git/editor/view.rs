@@ -3,9 +3,13 @@
 use super::{ChunkDiff, marker_geometry};
 use crate::{
     git::{
-        repository::{diff::Hunk, hunks::Action as HunkAction},
+        repository::{
+            diff::{Hunk, LineChangeCounts},
+            hunks::Action as HunkAction,
+        },
         view::show_colored_diff,
     },
+    settings::GitDiffStyle,
     shortcuts::ShortcutBindings,
 };
 use eframe::egui;
@@ -42,9 +46,7 @@ pub(crate) fn show_markers(
             }
             if response
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(format!(
-                    "{label}\nClick to compare this chunk with the last commit. Includes unsaved edits."
-                ))
+                .on_hover_text("Open hunk diff")
                 .clicked()
             {
                 selected = Some(Action::OpenChunk(index));
@@ -59,10 +61,16 @@ pub(crate) fn show_chunk(
     chunk: &ChunkDiff,
     shortcuts: &ShortcutBindings,
     busy: bool,
+    diff_style: GitDiffStyle,
 ) -> Option<Action> {
     let mut selected = None;
     ui.horizontal(|ui| {
         ui.strong("Changes since last commit");
+        ui.separator();
+        show_change_counts(
+            ui,
+            LineChangeCounts::from_hunks(std::slice::from_ref(&chunk.hunk)),
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             for action in HunkAction::ALL.into_iter().rev() {
                 let shortcut = shortcuts.display(action.shortcut()).unwrap_or_default();
@@ -89,9 +97,25 @@ pub(crate) fn show_chunk(
         .id_salt("git-chunk-text")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            show_colored_diff(ui, &chunk.hunk.text);
+            show_colored_diff(ui, &chunk.hunk.text, diff_style);
         });
     selected
+}
+
+fn show_change_counts(ui: &mut egui::Ui, counts: LineChangeCounts) {
+    let palette = crate::theme::palette(ui.ctx());
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = crate::theme::SPACE.small;
+        for (symbol, count, color) in [
+            ("+", counts.added, palette.success),
+            ("~", counts.modified, palette.info),
+            ("-", counts.deleted, palette.error),
+        ] {
+            if count > 0 {
+                ui.colored_label(color, format!("{symbol}{count}"));
+            }
+        }
+    });
 }
 
 #[cfg(test)]
@@ -122,7 +146,9 @@ mod tests {
             .with_size(egui::vec2(620.0, 260.0))
             .build_ui_state(
                 move |ui, selected| {
-                    if let Some(action) = show_chunk(ui, &chunk, &shortcuts, false) {
+                    if let Some(action) =
+                        show_chunk(ui, &chunk, &shortcuts, false, GitDiffStyle::Unified)
+                    {
                         *selected = Some(action);
                     }
                 },
