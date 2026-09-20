@@ -2248,10 +2248,11 @@ measured in this follow-up; automated results alone do not establish them.
   core until its owned process was stopped; the pre-fix `tabs` scene reached
   measurement but exceeded the runner's shutdown watchdog. Item 259 fixes both
   defects, and fresh optimized `hover` and `tabs` endpoint captures now finish
-  with complete summaries. They are still deterministic idle scenes, not the
-  pointer/wheel/tab sequences deferred to item 260. No GPU, texture, WebKit,
-  Typst, Tinymist or Poppler child-process memory measurement is claimed. CPU
-  before/after files are process snapshots, not portable benchmark scores.
+with complete summaries. They are still deterministic idle scenes, not the
+pointer/wheel/tab sequences deferred to item 260. No GPU or texture-residency
+measurement is claimed. CPU before/after files are process snapshots, and the
+runner now also keeps Unix process-group RSS/VSZ snapshots; neither is a
+portable whole-system resource score.
 - Item 258 is complete as a documentation/evidence pass: `docs/performance.md`
   now describes the active workload protocol, records the exact valid and invalid
   run IDs, binary hash, warmup/measurement conditions and sampling limitations;

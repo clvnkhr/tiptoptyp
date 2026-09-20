@@ -297,13 +297,14 @@ compared with repeated runs using the same phase schedule.
 
 The `cpu-before.txt`/`cpu-after.txt` values are process snapshots around the
 measurement window, not a portable CPU score; the successful runs used different
-startup/cache phases and must not be ranked by those values. No GPU memory,
-texture residency, WebKit, Tinymist, Typst or Poppler child-process samples were
-captured by this runner. The PDF run proves the fixture and summary path, not a
-whole-system GPU budget. Future before/after work must preserve the same binary
-provenance, fixture, warmup, interaction sequence and sampler. The remaining
-architecture work is therefore documented as evidence collection with known
-gates, not a claim that the refactor improved runtime performance.
+startup/cache phases and must not be ranked by those values. Unix runs also keep
+`resources-before.txt`/`resources-after.txt`, listing the profiler-owned process
+group's PID, RSS, VSZ, CPU and elapsed time; these are residency clues, not
+allocator or GPU measurements. No GPU memory or texture-residency accounting is
+claimed. Future before/after work must preserve the same binary provenance,
+fixture, warmup, interaction sequence and sampler. The remaining architecture
+work is therefore documented as evidence collection with known gates, not a
+claim that the refactor improved runtime performance.
 
 The [background-save review](background-saves.md) records matched optimized
 synchronous/background dispatch measurements and the opt-in slow-storage probe.

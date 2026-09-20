@@ -230,6 +230,7 @@ pub(super) fn run(arguments: Vec<String>) -> Result<(), String> {
     wait_alive(&mut app.0, Duration::from_secs(options.warmup))?;
     println!("Measuring for {} seconds with {sampler}.", options.seconds);
     save_process_reading(&directory.join("cpu-before.txt"), app.0.id())?;
+    save_process_resources(&directory.join("resources-before.txt"), app.0.id())?;
     if sampler == "none" {
         wait_alive(&mut app.0, Duration::from_secs(options.seconds))?;
     } else {
@@ -267,6 +268,7 @@ pub(super) fn run(arguments: Vec<String>) -> Result<(), String> {
     }
     // Sampling analysis can outlive the measured process; retain that fact, not a fake zero.
     save_process_reading(&directory.join("cpu-after.txt"), app.0.id())?;
+    save_process_resources(&directory.join("resources-after.txt"), app.0.id())?;
     let status = wait_exit(&mut app.0, Duration::from_secs(30))?;
     if !status.success() {
         return Err(format!(
@@ -547,6 +549,28 @@ fn save_process_reading(path: &Path, pid: u32) -> Result<(), String> {
     fs::write(path, reading).map_err(|e| e.to_string())
 }
 
+fn save_process_resources(path: &Path, pid: u32) -> Result<(), String> {
+    let reading: String = if cfg!(unix) {
+        match Command::new("ps")
+            .args([
+                "-g",
+                &pid.to_string(),
+                "-o",
+                "pid=,ppid=,rss=,vsz=,pcpu=,etime=,comm=",
+            ])
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                String::from_utf8_lossy(&output.stdout).into()
+            }
+            _ => "process group exited or resource reading unavailable\n".into(),
+        }
+    } else {
+        "process-group RSS/VSZ readings are unavailable on this platform\n".into()
+    };
+    fs::write(path, reading).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -648,6 +672,17 @@ mod tests {
         fs::remove_file(workspace.join("typst.toml")).unwrap();
         fs::remove_file(&document).unwrap();
         fs::remove_dir(workspace).unwrap();
+        fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    fn resource_reading_always_leaves_a_bounded_artifact() {
+        let directory = create_run_directory(&env::temp_dir(), "resources-test").unwrap();
+        let path = directory.join("resources.txt");
+        save_process_resources(&path, std::process::id()).unwrap();
+        let contents = fs::read_to_string(&path).unwrap();
+        assert!(contents.len() < 32 * 1024);
+        fs::remove_file(path).unwrap();
         fs::remove_dir(directory).unwrap();
     }
 
