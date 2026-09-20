@@ -221,7 +221,7 @@ I was using two different windows with two different workspaces. Possibly i was 
 180. [x] Cmd+N opens a new tab without changing the designated preview tab or its source. Stable-ID regression coverage exercises repeated New operations with a different pinned preview.
 181. [ ] (deferred) we should be able to open from template.
 182. [ ] pretty animation for dragging tabs
-183. [ ] prettier git diff
+183. [ ] prettier git diff (two col view)
 
 == Architecture audit follow-up
 
