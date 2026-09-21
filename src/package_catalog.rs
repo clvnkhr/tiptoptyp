@@ -632,14 +632,19 @@ fn fetch_official_index_from(
     url: &str,
     timeout: Duration,
 ) -> Result<Vec<AvailablePackage>, CatalogError> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout(timeout)
-        .timeout_connect(timeout)
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(timeout))
+        .timeout_connect(Some(timeout))
         .build();
+    let agent = ureq::Agent::new_with_config(config);
     let response = agent.get(url).call().map_err(|error| {
         CatalogError::network(format!("could not fetch package index: {error}"))
     })?;
-    let body = read_index_body(response.into_reader(), MAX_INDEX_BYTES)?;
+    let body_config = response
+        .into_body()
+        .into_with_config()
+        .limit(MAX_INDEX_BYTES + 1);
+    let body = read_index_body(body_config.reader(), MAX_INDEX_BYTES)?;
     parse_official_index(&body)
 }
 

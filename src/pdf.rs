@@ -2,7 +2,7 @@
 //! Callers own artifact identity, scheduling, cancellation, and canonical export bytes.
 use crate::{private_workspace::PrivateWorkspace, process::finish_reader_with_timeout};
 use quick_xml::{
-    Decoder, Reader, XmlVersion,
+    Reader, XmlVersion,
     events::{BytesStart, Event},
 };
 use std::{
@@ -475,15 +475,15 @@ fn parse_pdf_links(xml: &str, generated_stem: &str) -> Result<Vec<Vec<PreviewLin
     loop {
         match reader.read_event() {
             Ok(Event::Start(element)) => match element.name().as_ref() {
-                b"page" => {
-                    let number = xml_attr(&element, b"number", reader.decoder())
+                "page" => {
+                    let number = xml_attr(&element, "number")
                         .and_then(|value| value.parse::<usize>().ok())
                         .unwrap_or(pages.len() + 1)
                         .saturating_sub(1);
-                    let width = xml_attr(&element, b"width", reader.decoder())
+                    let width = xml_attr(&element, "width")
                         .and_then(|value| value.parse::<f32>().ok())
                         .unwrap_or(0.0);
-                    let height = xml_attr(&element, b"height", reader.decoder())
+                    let height = xml_attr(&element, "height")
                         .and_then(|value| value.parse::<f32>().ok())
                         .unwrap_or(0.0);
                     if pages.len() <= number {
@@ -492,11 +492,11 @@ fn parse_pdf_links(xml: &str, generated_stem: &str) -> Result<Vec<Vec<PreviewLin
                     current_page = Some(number);
                     page_size = [width, height];
                 }
-                b"text" => {
-                    let left = xml_f32_attr(&element, b"left", reader.decoder());
-                    let top = xml_f32_attr(&element, b"top", reader.decoder());
-                    let width = xml_f32_attr(&element, b"width", reader.decoder());
-                    let height = xml_f32_attr(&element, b"height", reader.decoder());
+                "text" => {
+                    let left = xml_f32_attr(&element, "left");
+                    let top = xml_f32_attr(&element, "top");
+                    let width = xml_f32_attr(&element, "width");
+                    let height = xml_f32_attr(&element, "height");
                     text_rect = match (left, top, width, height) {
                         (Some(left), Some(top), Some(width), Some(height))
                             if page_size[0] > 0.0
@@ -514,12 +514,10 @@ fn parse_pdf_links(xml: &str, generated_stem: &str) -> Result<Vec<Vec<PreviewLin
                         _ => None,
                     };
                 }
-                b"a" => {
-                    if let (Some(page), Some(rect), Some(target)) = (
-                        current_page,
-                        text_rect,
-                        xml_attr(&element, b"href", reader.decoder()),
-                    ) {
+                "a" => {
+                    if let (Some(page), Some(rect), Some(target)) =
+                        (current_page, text_rect, xml_attr(&element, "href"))
+                    {
                         pages[page].push(PreviewLink {
                             rect,
                             target: normalize_pdftohtml_target(&target, generated_stem),
@@ -529,15 +527,15 @@ fn parse_pdf_links(xml: &str, generated_stem: &str) -> Result<Vec<Vec<PreviewLin
                 _ => {}
             },
             Ok(Event::End(element)) => match element.name().as_ref() {
-                b"text" => text_rect = None,
-                b"page" => {
+                "text" => text_rect = None,
+                "page" => {
                     current_page = None;
                     page_size = [0.0; 2];
                 }
                 _ => {}
             },
-            Ok(Event::Empty(element)) if element.name().as_ref() == b"page" => {
-                let number = xml_attr(&element, b"number", reader.decoder())
+            Ok(Event::Empty(element)) if element.name().as_ref() == "page" => {
+                let number = xml_attr(&element, "number")
                     .and_then(|value| value.parse::<usize>().ok())
                     .unwrap_or(pages.len() + 1)
                     .saturating_sub(1);
@@ -553,21 +551,17 @@ fn parse_pdf_links(xml: &str, generated_stem: &str) -> Result<Vec<Vec<PreviewLin
     Ok(pages)
 }
 
-fn xml_attr(element: &BytesStart<'_>, name: &[u8], decoder: Decoder) -> Option<String> {
+fn xml_attr(element: &BytesStart<'_>, name: &str) -> Option<String> {
     element
         .attributes()
         .flatten()
         .find(|attribute| attribute.key.as_ref() == name)
-        .and_then(|attribute| {
-            attribute
-                .decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)
-                .ok()
-        })
+        .and_then(|attribute| attribute.normalized_value(XmlVersion::Implicit1_0).ok())
         .map(|value| value.into_owned())
 }
 
-fn xml_f32_attr(element: &BytesStart<'_>, name: &[u8], decoder: Decoder) -> Option<f32> {
-    xml_attr(element, name, decoder)?.parse().ok()
+fn xml_f32_attr(element: &BytesStart<'_>, name: &str) -> Option<f32> {
+    xml_attr(element, name)?.parse().ok()
 }
 
 fn normalize_pdftohtml_target(target: &str, generated_stem: &str) -> String {

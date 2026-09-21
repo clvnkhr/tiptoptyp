@@ -7,9 +7,6 @@ version = 2
 ignore = [
     "RUSTSEC-2025-0141", # bincode is pulled by the native GUI stack
     "RUSTSEC-2024-0370", # proc-macro-error is pulled by a transitive macro
-    "RUSTSEC-2026-0194", # quick-xml 0.38 remains under syntect's plist path
-    "RUSTSEC-2026-0195", # same transitive quick-xml 0.38 path
-    "RUSTSEC-2026-0285", # rustls is pulled by the pinned ureq 2.x tool fetcher
 ]
 
 [licenses]

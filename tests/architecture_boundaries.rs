@@ -396,10 +396,8 @@ fn child_resources_follow_explicit_lifecycle_and_native_properties_are_diffed() 
 #[test]
 fn core_has_no_platform_dependencies_or_effect_apis() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let manifest: toml::Value = fs::read_to_string(root.join("core/Cargo.toml"))
-        .unwrap()
-        .parse()
-        .unwrap();
+    let manifest: toml::Value =
+        toml::from_str(&fs::read_to_string(root.join("core/Cargo.toml")).unwrap()).unwrap();
     let dependencies = manifest["dependencies"].as_table().unwrap();
     assert_eq!(
         dependencies.keys().map(String::as_str).collect::<Vec<_>>(),
