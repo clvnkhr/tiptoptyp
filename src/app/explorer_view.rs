@@ -218,6 +218,13 @@ pub(super) fn show(
                             &explorer_query,
                         );
                     }
+                    if let Some(selected) = state.selected_path() {
+                        open_workspace_ancestors_for_path(
+                            &mut tree_state,
+                            &snapshot.root,
+                            selected,
+                        );
+                    }
                     if let Some(selected) = state.selected_path().or(active) {
                         // Keep the document shown in the editor selected so the
                         // entire explorer row gets the same kind of tint as the
@@ -528,6 +535,27 @@ pub(super) fn open_matching_workspace_ancestors(
             state.set_openness(node.path.clone(), true);
             open_matching_workspace_ancestors(state, &node.children, normalized_query);
         }
+    }
+}
+
+/// Keep a selected imported file visible after its destination appears in a
+/// refreshed workspace snapshot. The tree view does not know parent paths, so
+/// derive and open them from the workspace root.
+pub(super) fn open_workspace_ancestors_for_path(
+    state: &mut TreeViewState<PathBuf>,
+    root: &Path,
+    path: &Path,
+) {
+    if !path.starts_with(root) {
+        return;
+    }
+    let mut ancestor = path.parent();
+    while let Some(directory) = ancestor {
+        if directory == root {
+            break;
+        }
+        state.set_openness(directory.to_owned(), true);
+        ancestor = directory.parent();
     }
 }
 

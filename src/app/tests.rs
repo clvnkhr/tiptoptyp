@@ -4133,6 +4133,33 @@ fn workspace_tree_state_survives_a_filesystem_refresh() {
 }
 
 #[test]
+fn imported_file_selection_opens_all_workspace_ancestors() {
+    let context = egui::Context::default();
+    let root = PathBuf::from("/workspace/project");
+    let selected = root.join("chapters/intro/first.typ");
+
+    context
+        .run_ui(Default::default(), |ui| {
+            let id = workspace_tree_state_id(ui, &root, false);
+            let mut state = TreeViewState::default();
+            open_workspace_ancestors_for_path(&mut state, &root, &selected);
+            state.set_one_selected(selected.clone());
+            state.store(ui, id);
+        })
+        .drop_without_applying_deltas();
+
+    context
+        .run_ui(Default::default(), |ui| {
+            let id = workspace_tree_state_id(ui, &root, false);
+            let state = TreeViewState::load(ui, id).expect("tree state from import");
+            assert_eq!(state.is_open(&root.join("chapters")), Some(true));
+            assert_eq!(state.is_open(&root.join("chapters/intro")), Some(true));
+            assert_eq!(state.selected(), &vec![selected.clone()]);
+        })
+        .drop_without_applying_deltas();
+}
+
+#[test]
 fn explorer_section_bodies_start_at_the_section_root() {
     let context = egui::Context::default();
     theme::configure_styles(&context);

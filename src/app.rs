@@ -18,9 +18,9 @@ use explorer_view::{
 use explorer_view::{
     ExplorerSectionLayout, ExplorerSectionsSpec, add_workspace_nodes,
     available_explorer_section_body_height, explorer_section_open_states,
-    explorer_section_query_matches, normalize_explorer_query, set_explorer_section_open,
-    show_explorer_sections, show_project_index_section, workspace_node_matches_query,
-    workspace_tree_state_id,
+    explorer_section_query_matches, normalize_explorer_query, open_workspace_ancestors_for_path,
+    set_explorer_section_open, show_explorer_sections, show_project_index_section,
+    workspace_node_matches_query, workspace_tree_state_id,
 };
 mod popup_layout;
 #[cfg(test)]
