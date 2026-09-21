@@ -30,10 +30,12 @@ impl EditorApp {
         self.tinymist_sync.current_uri = Some(stale_uri.clone());
         self.editor_completion = Some(EditorCompletionState {
             key: stale_key,
-            generation: stale_generation,
-            uri: stale_uri,
+            provenance: CompletionProvenance::Server {
+                generation: stale_generation,
+                uri: stale_uri,
+                request_token: stale_token,
+            },
             version: stale_version,
-            request_token: stale_token,
             cursor: 0,
             source_cursor: 0,
             anchor: Rect::ZERO,
@@ -53,7 +55,6 @@ impl EditorApp {
             }],
             all_items: Vec::new(),
             source: self.document().source().clone(),
-            local: false,
         });
 
         // Switch the active tab without starting a service in this dormant,
@@ -71,13 +72,21 @@ impl EditorApp {
             .editor_completion
             .clone()
             .expect("cross-owner fixture has a pending reply");
+        let CompletionProvenance::Server {
+            generation,
+            uri,
+            request_token,
+        } = pending.provenance
+        else {
+            panic!("cross-owner fixture must use server completion provenance");
+        };
         let before = self.document().source().clone();
         self.receive_editor_completions(
             EditorCompletionResponse {
-                generation: pending.generation,
-                uri: pending.uri,
+                generation,
+                uri,
                 version: pending.version,
-                request_token: pending.request_token,
+                request_token,
                 is_incomplete: false,
                 items: vec![CompletionItem {
                     label: "late completion".to_owned(),

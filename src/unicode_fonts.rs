@@ -23,11 +23,19 @@ const FONTS: [(&str, &[u8]); 4] = [
     ),
 ];
 
-pub(crate) const SYMBOL_EXAMPLES: [(&str, char); 6] = [
+pub(crate) const SYMBOL_EXAMPLES: [(&str, char); 14] = [
+    ("aleph", 'א'),
     ("beth", 'ב'),
     ("daleth", 'ד'),
+    ("lamed", 'ל'),
     ("nothing", '∅'),
     ("without", '∖'),
+    ("forall", '∀'),
+    ("complement", '∁'),
+    ("left-tack", '⊰'),
+    ("implies", '⟹'),
+    ("fraktur-a", '𝔄'),
+    ("script-a", '𝒜'),
     ("earth", '🜨'),
     ("wreath", '≀'),
 ];
@@ -51,7 +59,7 @@ mod tests {
     use eframe::egui::{Color32, FontFamily, FontId, epaint::text::Fonts};
     use skrifa::MetadataProvider;
 
-    pub(crate) const SYMBOLS: &str = "ב ד ∅ ∖ ≀ 🜨 ∀ ∁ ⊰ ⟹ 𝔄 𝒜 ⨳ ⨌";
+    pub(crate) const SYMBOLS: &str = "א ב ד ל ∅ ∖ ≀ 🜨 ∀ ∁ ⊰ ⟹ 𝔄 𝒜 ⨳ ⨌";
 
     #[test]
     fn reported_and_related_symbols_have_bundled_glyphs_without_system_fonts() {

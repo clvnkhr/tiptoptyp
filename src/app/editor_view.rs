@@ -889,7 +889,7 @@ impl EditorApp {
             if changed
                 && completion_edit_triggered
                 && let Some(mut previous) = previous_completion
-                && (previous.local || self.document().config().is_none())
+                && (previous.provenance.is_local() || self.document().config().is_none())
                 && let Some(items) = crate::completion::rebase(
                     &previous.all_items,
                     &previous.source,
@@ -916,10 +916,10 @@ impl EditorApp {
                 state.cursor == cursor
                     && state.version == revision_as_i32(self.document().revision())
                     && state.key == self.document().key()
-                    && (state.local
-                        || (self.tinymist_sync.generation == Some(state.generation)
-                            && self.tinymist_sync.current_uri.as_deref()
-                                == Some(state.uri.as_str())))
+                    && state.provenance.is_current(
+                        self.tinymist_sync.generation,
+                        self.tinymist_sync.current_uri.as_deref(),
+                    )
             });
             if completion_still_current {
                 if let Some(state) = &mut self.editor_completion {
@@ -1002,7 +1002,8 @@ impl EditorApp {
         }
         let selected = completion.selected.min(completion.items.len() - 1);
         let preview_family = completion
-            .local
+            .provenance
+            .is_local()
             .then(|| {
                 self.font_catalog
                     .families()

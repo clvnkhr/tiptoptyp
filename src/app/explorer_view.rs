@@ -216,11 +216,12 @@ pub(super) fn show(
                             &explorer_query,
                         );
                     }
-                    if let Some(active) = &active {
+                    if let Some(selected) = state.selected_path().or(active) {
                         // Keep the document shown in the editor selected so the
                         // entire explorer row gets the same kind of tint as the
-                        // editor's active line.
-                        tree_state.set_one_selected((*active).to_owned());
+                        // editor's active line. A completed file import may
+                        // temporarily take priority until the user opens it.
+                        tree_state.set_one_selected(selected.to_owned());
                     }
                     let tree = TreeView::new(tree_id)
                         .allow_multi_selection(false)
@@ -259,11 +260,24 @@ pub(super) fn show(
                         .inner;
                     tree_state.store(ui, tree_id);
                     for action in actions {
-                        if let TreeAction::Activate(activate) = action {
-                            output.open = activate
-                                .selected
-                                .into_iter()
-                                .find(|path| find_node(path).is_some_and(WorkspaceNode::is_file));
+                        match action {
+                            TreeAction::SetSelected(selected) => {
+                                if let Some(path) = selected.into_iter().next() {
+                                    state.select_path(path);
+                                } else {
+                                    state.clear_selection();
+                                }
+                            }
+                            TreeAction::Activate(activate) => {
+                                let path = activate.selected.into_iter().find(|path| {
+                                    find_node(path).is_some_and(WorkspaceNode::is_file)
+                                });
+                                if path.is_some() {
+                                    state.clear_selection();
+                                }
+                                output.open = path;
+                            }
+                            _ => {}
                         }
                     }
                     if filter_active

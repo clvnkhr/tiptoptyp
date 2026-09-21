@@ -555,13 +555,36 @@ struct EditorCaretState {
     rect: Rect,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CompletionProvenance {
+    Local,
+    Server {
+        generation: Generation,
+        uri: String,
+        request_token: u64,
+    },
+}
+
+impl CompletionProvenance {
+    fn is_local(&self) -> bool {
+        matches!(self, Self::Local)
+    }
+
+    fn is_current(&self, active_generation: Option<Generation>, active_uri: Option<&str>) -> bool {
+        match self {
+            Self::Local => true,
+            Self::Server {
+                generation, uri, ..
+            } => active_generation == Some(*generation) && active_uri == Some(uri.as_str()),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct EditorCompletionState {
     key: DocumentKey,
-    generation: Generation,
-    uri: String,
+    provenance: CompletionProvenance,
     version: i32,
-    request_token: u64,
     cursor: usize,
     // Cursor in `source`: canonical for LSP, displayed for local completions.
     source_cursor: usize,
@@ -572,7 +595,6 @@ struct EditorCompletionState {
     items: Vec<CompletionItem>,
     all_items: Vec<CompletionItem>,
     source: String,
-    local: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -722,6 +744,21 @@ pub(crate) enum EditorWindowRequest {
     New { workspace_root: PathBuf },
     /// Open a file or workspace in an independent session.
     Open(PathBuf),
+}
+
+struct FileImportResult {
+    message: String,
+    imported: Vec<PathBuf>,
+    warning: Option<String>,
+}
+
+impl crate::worker::OperationSummary for FileImportResult {
+    fn completion_summary(&self) -> String {
+        self.warning.as_ref().map_or_else(
+            || self.message.clone(),
+            |warning| format!("{}\n{warning}", self.message),
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1139,7 +1176,7 @@ pub struct EditorApp {
     workspace_history_removals: Vec<PathBuf>,
     workspace: Option<WorkspaceTree>,
     workspace_error: Option<String>,
-    file_import: crate::worker::ExclusiveJob<String>,
+    file_import: crate::worker::ExclusiveJob<FileImportResult>,
     package_uninstall: crate::worker::ExclusiveJob<String>,
     workspace_service: WorkspaceClient,
     project_index: ProjectIndex,
@@ -3675,10 +3712,26 @@ impl EditorApp {
 
     fn poll_file_import(&mut self) {
         match self.file_import.poll() {
-            LatestJobPoll::Ready(message) => {
-                self.notice = Some(Notice {
+            LatestJobPoll::Ready(result) => {
+                let FileImportResult {
                     message,
-                    kind: NoticeKind::Success,
+                    imported,
+                    warning,
+                } = result;
+                if let Some(path) = imported.last() {
+                    self.explorer.select_path(path.clone());
+                }
+                let has_warning = warning.is_some();
+                self.notice = Some(Notice {
+                    message: warning.map_or_else(
+                        || message.clone(),
+                        |warning| format!("{message}\n{warning}"),
+                    ),
+                    kind: if has_warning {
+                        NoticeKind::Error
+                    } else {
+                        NoticeKind::Success
+                    },
                 });
                 self.refresh_workspace();
             }
@@ -3719,13 +3772,17 @@ impl EditorApp {
                     self.file_import
                         .start_and_repaint("file-import", context, move || {
                             let mut imported = 0;
+                            let mut imported_paths = Vec::new();
                             let mut errors = Vec::new();
                             for path in paths {
                                 match crate::workspace::WorkspaceRoot::open(&root)
                                     .and_then(|root| root.directory(&directory))
                                     .and_then(|directory| directory.import(&path))
                                 {
-                                    Ok(_) => imported += 1,
+                                    Ok(destination) => {
+                                        imported += 1;
+                                        imported_paths.push(destination);
+                                    }
                                     Err(error) => {
                                         errors.push(format!("{}: {error}", path.display()))
                                     }
@@ -3733,11 +3790,11 @@ impl EditorApp {
                             }
                             let message =
                                 format!("Imported {imported} file(s) into {}", directory.display());
-                            if errors.is_empty() {
-                                Ok(message)
-                            } else {
-                                Err(format!("{message}\n{}", errors.join("\n")))
-                            }
+                            Ok(FileImportResult {
+                                message,
+                                imported: imported_paths,
+                                warning: (!errors.is_empty()).then(|| errors.join("\n")),
+                            })
                         })
                 {
                     self.show_file_error(error);
@@ -6060,6 +6117,8 @@ impl EditorApp {
         };
         let changed = previous_key != self.document().key();
         self.store_editor_cursor(context, next.cursor);
+        let range = next.cursor.as_sorted_char_range();
+        self.pending_editor_selection = Some(EditorSelection::Focus(range.start.0..range.end.0));
         self.document_mut().set_history_reset(false);
         let editor_id = source_editor_id(context);
         context.memory_mut(|memory| memory.request_focus(editor_id));
@@ -6990,10 +7049,8 @@ impl EditorApp {
             );
             self.editor_completion = Some(EditorCompletionState {
                 key: self.document().key(),
-                generation: self.tinymist_sync.generation.unwrap_or(Generation(0)),
-                uri: self.tinymist_sync.current_uri.clone().unwrap_or_default(),
+                provenance: CompletionProvenance::Local,
                 version: revision_as_i32(self.document().revision()),
-                request_token: 0,
                 cursor,
                 source_cursor: cursor,
                 anchor,
@@ -7003,7 +7060,6 @@ impl EditorApp {
                 items,
                 all_items,
                 source: self.document().source().clone(),
-                local: true,
             });
             return;
         }
@@ -7091,10 +7147,12 @@ impl EditorApp {
             Ok(()) => {
                 self.editor_completion = Some(EditorCompletionState {
                     key: self.document().key(),
-                    generation,
-                    uri,
+                    provenance: CompletionProvenance::Server {
+                        generation,
+                        uri,
+                        request_token,
+                    },
                     version,
-                    request_token,
                     cursor,
                     source_cursor,
                     anchor,
@@ -7112,7 +7170,6 @@ impl EditorApp {
                         .map(|state| state.all_items.clone())
                         .unwrap_or_default(),
                     source,
-                    local: false,
                 });
             }
             Err(error) => {
@@ -7201,10 +7258,10 @@ impl EditorApp {
         let Some(completion) = self.editor_completion.as_ref() else {
             return;
         };
-        let current = (completion.local
-            || (self.tinymist_sync.generation == Some(completion.generation)
-                && self.tinymist_sync.current_uri.as_deref() == Some(completion.uri.as_str())))
-            && completion.version == revision_as_i32(self.document().revision());
+        let current = completion.provenance.is_current(
+            self.tinymist_sync.generation,
+            self.tinymist_sync.current_uri.as_deref(),
+        ) && completion.version == revision_as_i32(self.document().revision());
         if !current || completion.key != self.document().key() {
             self.editor_completion = None;
             return;
@@ -7212,7 +7269,7 @@ impl EditorApp {
         let Some(item) = completion.items.get(index).cloned() else {
             return;
         };
-        let coordinates = if completion.local {
+        let coordinates = if completion.provenance.is_local() {
             crate::completion_edit::CompletionCoordinates::Display
         } else {
             crate::completion_edit::CompletionCoordinates::Canonical
@@ -8581,10 +8638,16 @@ fn completion_response_matches(
     active_uri: Option<&str>,
     active_version: i32,
 ) -> bool {
-    pending.generation == generation
-        && pending.uri == uri
-        && pending.version == version
-        && pending.request_token == request_token
+    matches!(
+        &pending.provenance,
+        CompletionProvenance::Server {
+            generation: pending_generation,
+            uri: pending_uri,
+            request_token: pending_request_token,
+        } if *pending_generation == generation
+            && pending_uri == uri
+            && *pending_request_token == request_token
+    ) && pending.version == version
         && active_generation == Some(generation)
         && active_uri == Some(uri)
         && active_version == version

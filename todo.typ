@@ -174,7 +174,7 @@ I was using two different windows with two different workspaces. Possibly i was 
 137. [x] we should also implement rainbow brackets. Each type of bracket pair (`[]`, `()`, `{}`,, and mixed brackets `(],[},` etc) should use a different cycle of colors. Allow us to choose palletes to cycle through for the brackets in settings.
 138. [x] i noticed that if a popup appears because i hovered over something, then scroll, the scrolling is not performant, losing frames. Investigate and fix.
 139. [x] too much space is reserved for the git hunk color marker on the side. It should take at most 1 char width or other similar small measurement.
-140. [ ] Supply missing Unicode glyphs in symbol completions, including Hebrew letters, mathematical operators, and alchemical symbols, without resetting fonts during interaction.
+140. [x] Supply missing Unicode glyphs in symbol completions, including Hebrew letters, mathematical operators, and alchemical symbols, without resetting fonts during interaction. Expanded the bundled symbol completion fixture and fallback coverage without rebuilding fonts; Unicode rendering regressions pass.
 141. [x] If the Tinymist server times out or fails, restart it automatically and use the raster fallback only after five consecutive failures.
 142. [x] Compress the Settings window for variable-width layouts, including compact bracket-family labels such as `()` instead of `Parentheses ()`.
 143. [x] Keep the auto-save delay label and slider together when wrapping; wrap complete toolchain status chips onto the next line when space runs out.
@@ -213,7 +213,7 @@ I was using two different windows with two different workspaces. Possibly i was 
 173. [x] Reorder the title bar: traffic lights, ttt, File Edit View | file title | right-aligned miTeX Find Pause Compile | Settings Explorer Code Split Preview Problems. Show miTeX only for compatible documents; keep active mode reachable during unfinished edits. Add a separate auto-enable preference for compatible documents, preserving manual toggles and opening incompatible files normally. Cache eligibility by source revision/package and reuse editor syntax. Verified narrow/wide semantic layouts, state transitions, optimized compatibility cost, fresh light/dark and Settings framebuffers, all 68 gallery images and required checks. Measurement and evidence: `docs/mitex-projection.md`.
 
 174. [x] Fix multi-document sluggishness: replace coupled immediate document viewports with independent deferred repainting while keeping native UI thread-affine. Preserve owner-specific menus/settings/close/native-parent routing; queue shared settings for owner-local application and prevent late callbacks/history resurrection. Add isolation regressions and a reusable four-window profiling scenario. Matched eight-second idle runs reduced total editor UI work from 380 ms to 66–108 ms, with process CPU advance 0.97 s versus 0.21–0.35 s; not an end-to-end FPS claim. Required ordinary/profiling checks pass. Evidence and limitations: `docs/multi-window-audit.md`.
-175. [ ] 'starter screen' if we cannot find a working directory
+175. [x] 'starter screen' if we cannot find a working directory. The empty workspace now explains the unavailable launch directory and offers folder selection before New document.
 176. [x] Expand application/document/workspace keyboard coverage to 76 configurable actions, all with collision-free platform defaults: miTeX, preview-source selection, folding, Find/Replace actions, raster page/fit controls, Explorer search/refresh, status history, display toggles, menus and shortcut-editor access. Fill previously unassigned Rename/Packages/Git/Sync/Fullscreen defaults. Preserve effective overrides, most-specific routing, focus/file-operation guards and safe replacement. Individual Settings options and per-item dialog actions do not each get a global chord. Details: `docs/keyboard-shortcuts.md`.
 177. [x] Line numbers use the configured editor font and align actual glyph baselines, including sticky headers and taller fallback-font rows. Keep a three-point text gap and separate fold/Git lanes; size the column correctly for proportional digits. Geometry, folded-row and semantic tests pass; fresh light/dark framebuffers inspected. Evidence: `docs/tabs-and-git-hunks.md`.
 178. [x] Closing the last tab leaves an empty workspace window with Explorer and New/Open controls. PDF/image tabs use the editor pane while a pinned Typst preview remains visible, with independent asset loading, page navigation and zoom. Empty-workspace commands/reopening, stale results, no empty-document service work and split-pane/page-margin geometry have regression coverage. Required checks pass; fresh light/dark captures and the regenerated 68-image gallery were inspected. Matched local idle profiles showed no added work, not an interaction speedup. Evidence and limitations: `docs/tabs-and-git-hunks.md`.
@@ -221,7 +221,7 @@ I was using two different windows with two different workspaces. Possibly i was 
 180. [x] Cmd+N opens a new tab without changing the designated preview tab or its source. Stable-ID regression coverage exercises repeated New operations with a different pinned preview.
 181. [ ] (deferred) we should be able to open from template.
 182. [ ] pretty animation for dragging tabs
-183. [ ] prettier git diff (two col view)
+183. [x] prettier git diff (two col view). The existing side-by-side renderer now includes old/new line-number gutters while retaining paired replacement rows and full-width hunk headers; model and range-parser regressions pass.
 
 == Architecture audit follow-up
 
@@ -739,7 +739,7 @@ GPU/texture-residency observation remain explicitly unavailable.
 
 261. [x] understand how to fix the popup syntax highlighting for typc etc
 262. [x] add typstify to editor-comparison.typ
-263. [ ] popup width is not right, some are too narrow, especially for defs/lets
+263. [x] popup width is not right, some are too narrow, especially for defs/lets. Short definition/function cards now have a readable minimum width while long documentation retains natural sizing up to the existing cap.
 264. [ ] Tinymist preview: smooth zoom on large real documents. Continuous
   pointer-anchored Ctrl-scroll is implemented, but full-SVG layout remains slow.
   Native preview shortcuts now dispatch to the viewer and mixed inputs accumulate
@@ -753,7 +753,7 @@ GPU/texture-residency observation remain explicitly unavailable.
 266. [ ] vim mode
 267. [x] we need a much larger buffer of pdf pages for the raster mode, say 15 pages
 268. [ ] while adjusting the zoom, we show the user a blank page while it loads. it should always show us the lower res page until it loads the higher res page
-269. [ ] after dropping a file into the file explorer, the newly added file should be selected
+269. [x] after dropping a file into the file explorer, the newly added file should be selected. Import completion carries destination paths back to the owning Explorer and selects the newest imported file after the refreshed snapshot arrives.
 270. [ ] improve the table editor. we should be able to increase/decrease the colspan/rowspan of a cell, use keyboard shortcuts to select things in the table editor, and adjust the styling of the table (borders, bg, alignment, etc)
 280. [ ] we should be able to scroll the code panel etc while the table editor is up.
 281. [ ] we should be able to drag the table editor around resize etc. put it in a settings-like window
@@ -764,10 +764,8 @@ GPU/texture-residency observation remain explicitly unavailable.
   control strip in every full-size-content title bar, including deferred windows.
 286. [x] Reject malformed source-link coordinates instead of guessing a cursor
   position; remove the lossy zoom conversion's silent reset to 100 percent.
-287. [ ] Split local and server completion provenance into typed variants.
-  Local completions currently fabricate generation 0, an empty URI, and token 0.
-  Verify local completions without a server and rejection of stale server replies.
-288. [ ] undo/redo should jump the cursor to the last edit position (and move the viewport to show it)
+287. [x] Split local and server completion provenance into typed variants. Local completions no longer fabricate generation 0, an empty URI, or token 0; server replies match only the typed server identity, with local/offline and stale-reply regressions.
+288. [x] undo/redo should jump the cursor to the last edit position (and move the viewport to show it). History restores now install a pending editor focus selection, reusing the existing fold reveal and centered scroll path; tab-state coverage verifies the destination.
 289. [ ] Document and expose a deliberate partial-rendering buffer policy for the
   Tinymist preview. The pinned frontend currently offers only the boolean
   `--partial-rendering` switch: its SVG window is derived from the preview
@@ -2520,3 +2518,26 @@ portable whole-system resource score.
   skipped. The remaining acceptance work is native geometry tracing and
   verifying that the overlay is fully mouse/scroll transparent; no claim is
   made yet that the current NSImageView overlay cannot intercept input.
+
+= TODO triage and bounded backlog pass (21 September 2026)
+
+- Items 140, 175, 183, 263, 269, 287 and 288 are complete and verified in
+  this pass. Item 183 was limited to the requested line-number gutters after
+  the existing two-column renderer was confirmed to be sound.
+- Item 268 remains open by decision: zoom fallback/residency needs a separate
+  investigation because changing it safely crosses the existing PDF budget
+  and transition behavior. No fallback code was changed in this pass.
+- Large or cross-owner work remains open in 114, 116, 117, 118, 163, 170,
+  222, 223, 270, 280, 281, 282, 283 and 284. These cover crash recovery,
+  workspace-wide replacement, shared performance infrastructure, a full PDF
+  viewer/pop-out or pdf.js migration, terminal integration, engine/binary
+  experiments, and the table-editor expansion/import work.
+- Deferred or deliberately postponed work remains open in 1, 26, 181, 251
+  and 253. Those entries already document the reason to defer a proper PDF
+  viewer, text rendering leak, template opening, and preview ownership/path
+  consolidation.
+- Interaction and acceptance work remains open in 182, 234, 237, 264, 265,
+  266, 289 and 290. Tab-drag animation, native flash/focus handoff,
+  large-document Tinymist measurements, Vim mode, partial-rendering policy,
+  and native bitmap-overlay acceptance need dedicated interactive or native
+  evidence; they are not being marked complete from headless tests.

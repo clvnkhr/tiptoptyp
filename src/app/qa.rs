@@ -333,7 +333,7 @@ impl QaSession {
                 app.settings_visible = true;
             }
             UiSnapshotScene::UnicodeCompletion => {
-                const SOURCE: &str = "= Unicode symbols\n\n$ sym. $\n\nב ד ∖ ≀ 🜨\n";
+                const SOURCE: &str = "= Unicode symbols\n\n$ sym. $\n\nא ב ד ל ∅ ∖ ∀ ⟹ 🜨 ≀\n";
                 if app.document().source() != SOURCE {
                     app.document_mut().replace_unprojected_untitled(SOURCE);
                     app.prepare_editor_source_data();
@@ -358,10 +358,8 @@ impl QaSession {
                     .collect::<Vec<_>>();
                 app.editor_completion = Some(EditorCompletionState {
                     key: app.document().key(),
-                    generation: Generation(0),
-                    uri: String::new(),
+                    provenance: CompletionProvenance::Local,
                     version: revision_as_i32(app.document().revision()),
-                    request_token: 0,
                     cursor,
                     source_cursor: cursor,
                     anchor: Rect::NOTHING,
@@ -371,7 +369,6 @@ impl QaSession {
                     all_items: items.clone(),
                     items,
                     source: SOURCE.into(),
-                    local: true,
                 });
             }
             UiSnapshotScene::FontCompletion => {

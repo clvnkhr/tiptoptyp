@@ -836,6 +836,13 @@ pub(super) fn repaint_tooltip_on_change(
 
 const TOOLTIP_PREVIEW_CHARS: usize = 600;
 
+fn tooltip_body_width(natural_width: f32) -> f32 {
+    (natural_width + METRICS.popup.tooltip_text_padding).clamp(
+        METRICS.popup.tooltip_min_width,
+        METRICS.popup.tooltip_max_width,
+    )
+}
+
 /// Byte boundaries are found only in the preview, never by counting
 /// or parsing the entire server response during initial hover layout.
 pub(super) fn tooltip_preview_end(text: &str) -> usize {
@@ -920,10 +927,7 @@ pub(super) fn show_native_tooltip_card(
                 .size()
                 .x
         });
-        (natural_width + METRICS.popup.tooltip_text_padding).clamp(
-            METRICS.popup.tooltip_min_width,
-            METRICS.popup.tooltip_max_width,
-        )
+        tooltip_body_width(natural_width)
     };
     let available_width = (window_rect.width() - METRICS.popup.viewport_edge * 2.0).max(1.0);
     let width = (desired_card_width + frame_margin.x).min(available_width);

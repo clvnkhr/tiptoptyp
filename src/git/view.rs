@@ -68,6 +68,7 @@ enum DiffLineKind {
 struct DiffCell {
     text: String,
     kind: DiffLineKind,
+    line: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -238,27 +239,24 @@ fn diff_cell(line: &str, kind: DiffLineKind, strip_prefix: bool) -> DiffCell {
     DiffCell {
         text: line_body(text).to_owned(),
         kind,
+        line: None,
     }
 }
 
 fn side_by_side_rows(content: &str) -> Vec<DiffRow> {
     let mut rows = Vec::new();
     let mut in_hunk = false;
-    let mut removed = Vec::<String>::new();
-    let mut added = Vec::<String>::new();
+    let mut old_line = 0;
+    let mut new_line = 0;
+    let mut removed = Vec::<DiffCell>::new();
+    let mut added = Vec::<DiffCell>::new();
 
     let flush_changes =
-        |rows: &mut Vec<DiffRow>, removed: &mut Vec<String>, added: &mut Vec<String>| {
+        |rows: &mut Vec<DiffRow>, removed: &mut Vec<DiffCell>, added: &mut Vec<DiffCell>| {
             let count = removed.len().max(added.len());
             for index in 0..count {
-                let left = removed.get(index).map(|text| DiffCell {
-                    text: text.clone(),
-                    kind: DiffLineKind::Removed,
-                });
-                let right = added.get(index).map(|text| DiffCell {
-                    text: text.clone(),
-                    kind: DiffLineKind::Added,
-                });
+                let left = removed.get(index).cloned();
+                let right = added.get(index).cloned();
                 rows.push(DiffRow {
                     full: None,
                     left,
@@ -278,6 +276,10 @@ fn side_by_side_rows(content: &str) -> Vec<DiffRow> {
                 left: None,
                 right: None,
             });
+            if let Some((old_start, new_start)) = hunk_line_starts(line) {
+                old_line = old_start;
+                new_line = new_start;
+            }
             in_hunk = true;
             continue;
         }
@@ -290,19 +292,40 @@ fn side_by_side_rows(content: &str) -> Vec<DiffRow> {
             continue;
         }
         match line.as_bytes().first().copied() {
-            Some(b'-') => removed.push(line.get(1..).unwrap_or_default().to_owned()),
-            Some(b'+') => added.push(line.get(1..).unwrap_or_default().to_owned()),
+            Some(b'-') => {
+                removed.push(DiffCell {
+                    text: line.get(1..).unwrap_or_default().to_owned(),
+                    kind: DiffLineKind::Removed,
+                    line: Some(old_line),
+                });
+                old_line = old_line.saturating_add(1);
+            }
+            Some(b'+') => {
+                added.push(DiffCell {
+                    text: line.get(1..).unwrap_or_default().to_owned(),
+                    kind: DiffLineKind::Added,
+                    line: Some(new_line),
+                });
+                new_line = new_line.saturating_add(1);
+            }
             Some(b' ') => {
                 flush_changes(&mut rows, &mut removed, &mut added);
                 let context = line.get(1..).unwrap_or_default().to_owned();
                 let cell = DiffCell {
                     text: context,
                     kind: DiffLineKind::Context,
+                    line: Some(old_line),
                 };
+                old_line = old_line.saturating_add(1);
+                let right = DiffCell {
+                    line: Some(new_line),
+                    ..cell.clone()
+                };
+                new_line = new_line.saturating_add(1);
                 rows.push(DiffRow {
                     full: None,
                     left: Some(cell.clone()),
-                    right: Some(cell),
+                    right: Some(right),
                 });
             }
             Some(b'\\') => {
@@ -325,6 +348,21 @@ fn side_by_side_rows(content: &str) -> Vec<DiffRow> {
     }
     flush_changes(&mut rows, &mut removed, &mut added);
     rows
+}
+
+fn hunk_line_starts(line: &str) -> Option<(usize, usize)> {
+    let mut fields = line.split_whitespace();
+    fields.next()?;
+    let old = fields.next()?.strip_prefix('-')?;
+    let new = fields.next()?.strip_prefix('+')?;
+    let start = |range: &str| {
+        range
+            .split_once(',')
+            .map_or(range, |(start, _)| start)
+            .parse::<usize>()
+            .ok()
+    };
+    Some((start(old)?, start(new)?))
 }
 
 fn show_change_counts(ui: &mut egui::Ui, counts: LineChangeCounts) {
@@ -350,6 +388,7 @@ fn show_side_by_side_diff(ui: &mut egui::Ui, rows: &[DiffRow], style: &DiffStyle
     let line_height = ui
         .text_style_height(&egui::TextStyle::Monospace)
         .max(ui.spacing().interact_size.y);
+    let line_number_width = 42.0;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = gap;
         for label in ["Previous", "Current"] {
@@ -365,15 +404,7 @@ fn show_side_by_side_diff(ui: &mut egui::Ui, rows: &[DiffRow], style: &DiffStyle
                 ui.allocate_exact_size(egui::vec2(total_width, line_height), egui::Sense::hover());
             ui.painter()
                 .rect_filled(rect, 0.0, style.background(cell.kind));
-            ui.put(
-                rect.shrink2(egui::vec2(theme::SPACE.small, 0.0)),
-                egui::Label::new(
-                    egui::RichText::new(&cell.text)
-                        .monospace()
-                        .color(style.color(cell.kind)),
-                )
-                .truncate(),
-            );
+            show_diff_cell(ui, rect, cell, line_number_width, style);
             continue;
         }
         ui.horizontal(|ui| {
@@ -386,15 +417,7 @@ fn show_side_by_side_diff(ui: &mut egui::Ui, rows: &[DiffRow], style: &DiffStyle
                 if let Some(cell) = cell {
                     ui.painter()
                         .rect_filled(rect, 0.0, style.background(cell.kind));
-                    ui.put(
-                        rect.shrink2(egui::vec2(theme::SPACE.small, 0.0)),
-                        egui::Label::new(
-                            egui::RichText::new(&cell.text)
-                                .monospace()
-                                .color(style.color(cell.kind)),
-                        )
-                        .truncate(),
-                    );
+                    show_diff_cell(ui, rect, cell, line_number_width, style);
                 } else {
                     ui.painter()
                         .rect_filled(rect, 0.0, style.background(DiffLineKind::Context));
@@ -402,6 +425,38 @@ fn show_side_by_side_diff(ui: &mut egui::Ui, rows: &[DiffRow], style: &DiffStyle
             }
         });
     }
+}
+
+fn show_diff_cell(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    cell: &DiffCell,
+    line_number_width: f32,
+    style: &DiffStyle,
+) {
+    let inner = rect.shrink2(egui::vec2(theme::SPACE.small, 0.0));
+    let number = cell.line.map_or_else(String::new, |line| line.to_string());
+    ui.put(
+        egui::Rect::from_min_size(inner.min, egui::vec2(line_number_width, inner.height())),
+        egui::Label::new(
+            egui::RichText::new(number)
+                .monospace()
+                .color(ui.visuals().weak_text_color()),
+        )
+        .truncate(),
+    );
+    ui.put(
+        egui::Rect::from_min_max(
+            egui::pos2(inner.left() + line_number_width, inner.top()),
+            inner.max,
+        ),
+        egui::Label::new(
+            egui::RichText::new(&cell.text)
+                .monospace()
+                .color(style.color(cell.kind)),
+        )
+        .truncate(),
+    );
 }
 
 pub(super) fn show_panel(ui: &mut egui::Ui, input: Input<'_>, cache: &mut Cache) -> Output {
@@ -849,6 +904,8 @@ mod tests {
             .expect("replacement row");
         assert_eq!(replacement.left.as_ref().unwrap().text, "old");
         assert_eq!(replacement.right.as_ref().unwrap().text, "new");
+        assert_eq!(replacement.left.as_ref().unwrap().line, Some(2));
+        assert_eq!(replacement.right.as_ref().unwrap().line, Some(2));
         assert_eq!(
             replacement.left.as_ref().unwrap().kind,
             DiffLineKind::Removed
@@ -857,6 +914,13 @@ mod tests {
             replacement.right.as_ref().unwrap().kind,
             DiffLineKind::Added
         );
+    }
+
+    #[test]
+    fn hunk_line_starts_accept_single_line_ranges() {
+        assert_eq!(hunk_line_starts("@@ -8 +12 @@"), Some((8, 12)));
+        assert_eq!(hunk_line_starts("@@ -8,2 +12,4 @@"), Some((8, 12)));
+        assert_eq!(hunk_line_starts("not a hunk"), None);
     }
 
     #[test]

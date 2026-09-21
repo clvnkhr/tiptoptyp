@@ -1156,7 +1156,11 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
         modal_message_max_height: 180.0,
         tooltip_width: 360.0,
         tooltip_text_padding: 18.0,
-        tooltip_min_width: 96.0,
+        // Tiny natural-width cards make function/definition hovers difficult
+        // to scan and cause their contents to reflow as the pointer moves.
+        // Keep short cards useful while retaining the natural width for long
+        // documentation and the existing viewport cap.
+        tooltip_min_width: 280.0,
         tooltip_max_width: 620.0,
         tooltip_title_height: 26.0,
         tooltip_min_height: 68.0,

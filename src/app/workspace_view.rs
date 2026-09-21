@@ -51,6 +51,20 @@ pub(super) fn content_view(
     }
 }
 
+pub(super) fn empty_workspace_copy(workspace_available: bool) -> (&'static str, &'static str) {
+    if workspace_available {
+        (
+            "No open tabs",
+            "Open a file from the Explorer, or create a new document.",
+        )
+    } else {
+        (
+            "Choose a working directory",
+            "The launch directory is unavailable. Choose a folder before creating a document.",
+        )
+    }
+}
+
 impl EditorApp {
     pub(super) fn status_preview(&self) -> &PreviewController {
         if self.document().kind().preview_only() && !self.typst_preview_available() {
@@ -75,6 +89,7 @@ impl EditorApp {
         self.git_editor.clear_document();
         self.close_app_popup();
         self.find_bar.search.clear();
+        self.explorer.clear_selection();
         self.pending_editor_selection = None;
         self.editor_attention = None;
         self.editor_completion = None;
@@ -96,12 +111,17 @@ impl EditorApp {
         ui: &mut egui::Ui,
         frame: Option<&eframe::Frame>,
     ) {
+        let workspace_available = self.workspace_root.is_dir();
+        let (heading, help) = empty_workspace_copy(workspace_available);
         ui.add_space((ui.available_height() * 0.4).max(0.0));
         ui.vertical_centered(|ui| {
-            ui.heading("No open tabs");
-            ui.weak("Open a file from the Explorer, or create a new document.");
-            if ui.button("New document").clicked() {
+            ui.heading(heading);
+            ui.weak(help);
+            if workspace_available && ui.button("New document").clicked() {
                 self.execute_app_command(AppCommand::New, ui.ctx(), frame);
+            }
+            if !workspace_available && ui.button("Choose folder…").clicked() {
+                self.execute_app_command(AppCommand::ChangeWorkspaceRoot, ui.ctx(), frame);
             }
             if ui.button("Open file…").clicked() {
                 self.execute_app_command(AppCommand::Open, ui.ctx(), frame);
@@ -167,5 +187,17 @@ impl EditorApp {
                 self.follow_preview_link_from(&target, self.current_directory());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unavailable_workspaces_get_a_folder_picker_instead_of_new_document_copy() {
+        assert_eq!(empty_workspace_copy(true).0, "No open tabs");
+        assert_eq!(empty_workspace_copy(false).0, "Choose a working directory");
+        assert!(empty_workspace_copy(false).1.contains("unavailable"));
     }
 }

@@ -1,5 +1,6 @@
 //! Stable Explorer identities and a validated, user-configurable display order.
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -227,6 +228,7 @@ pub(crate) struct ExplorerPanelState {
     query: String,
     focus_search: bool,
     reveal_git: bool,
+    selected_path: Option<PathBuf>,
 }
 impl Default for ExplorerPanelState {
     fn default() -> Self {
@@ -238,6 +240,7 @@ impl Default for ExplorerPanelState {
             query: String::new(),
             focus_search: false,
             reveal_git: true,
+            selected_path: None,
         }
     }
 }
@@ -253,6 +256,15 @@ impl ExplorerPanelState {
     }
     pub(crate) fn take_git_reveal(&mut self) -> bool {
         std::mem::take(&mut self.reveal_git)
+    }
+    pub(crate) fn select_path(&mut self, path: PathBuf) {
+        self.selected_path = Some(path);
+    }
+    pub(crate) fn selected_path(&self) -> Option<&Path> {
+        self.selected_path.as_deref()
+    }
+    pub(crate) fn clear_selection(&mut self) {
+        self.selected_path = None;
     }
     pub(crate) fn startup_width(&mut self, persisted: f32, default: f32) -> Option<f32> {
         if std::mem::take(&mut self.startup_pending)
@@ -360,5 +372,18 @@ mod panel_tests {
         state.hide();
         state.open();
         assert_eq!(state.take_restored_width(), Some(330.0));
+    }
+
+    #[test]
+    fn imported_file_selection_is_owner_local_and_can_be_replaced() {
+        let mut state = ExplorerPanelState::default();
+        let first = PathBuf::from("/workspace/first.typ");
+        let second = PathBuf::from("/workspace/second.typ");
+        state.select_path(first.clone());
+        assert_eq!(state.selected_path(), Some(first.as_path()));
+        state.select_path(second.clone());
+        assert_eq!(state.selected_path(), Some(second.as_path()));
+        state.clear_selection();
+        assert_eq!(state.selected_path(), None);
     }
 }

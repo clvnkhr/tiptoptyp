@@ -1353,10 +1353,12 @@ fn completion_popup_prefers_below_then_flips_and_clamps() {
 fn completion_responses_require_exact_request_and_document_identity() {
     let pending = EditorCompletionState {
         key: DocumentKey::new(tiptoptyp_core::document::WindowSessionId::new(1), 1, 12),
-        generation: Generation(7),
-        uri: "file:///project/main.typ".to_owned(),
+        provenance: CompletionProvenance::Server {
+            generation: Generation(7),
+            uri: "file:///project/main.typ".to_owned(),
+            request_token: 41,
+        },
         version: 12,
-        request_token: 41,
         cursor: 3,
         source_cursor: 3,
         anchor: Rect::ZERO,
@@ -1366,7 +1368,6 @@ fn completion_responses_require_exact_request_and_document_identity() {
         items: Vec::new(),
         all_items: Vec::new(),
         source: String::new(),
-        local: false,
     };
     assert!(completion_response_matches(
         &pending,
@@ -6587,7 +6588,7 @@ fn tex_completion_is_local_and_applies_one_safe_edit() {
     });
     app.request_editor_completion(9, Rect::ZERO, true);
     let completion = app.editor_completion.as_ref().unwrap();
-    assert!(completion.local);
+    assert!(completion.provenance.is_local());
     let index = completion
         .items
         .iter()
@@ -6806,7 +6807,7 @@ fn projected_application_settings_toggle_local_completion_and_block_save() {
     });
     app.request_editor_completion(5, Rect::ZERO, true);
     let completion = app.editor_completion.as_ref().unwrap();
-    assert!(completion.local);
+    assert!(completion.provenance.is_local());
     let index = completion
         .items
         .iter()
@@ -7135,10 +7136,12 @@ fn projected_application_remote_completion_uses_canonical_payload_and_one_undo_s
     };
     app.editor_completion = Some(EditorCompletionState {
         key: app.document().key(),
-        generation: Generation(92),
-        uri: "file:///completion.typ".into(),
+        provenance: CompletionProvenance::Server {
+            generation: Generation(92),
+            uri: "file:///completion.typ".into(),
+            request_token: 1,
+        },
         version: revision_as_i32(app.document().revision()),
-        request_token: 1,
         cursor: editor_cursor,
         source_cursor,
         anchor: Rect::ZERO,
@@ -7148,7 +7151,6 @@ fn projected_application_remote_completion_uses_canonical_payload_and_one_undo_s
         items: vec![item.clone()],
         all_items: vec![item],
         source: PROJECTED_SOURCE.into(),
-        local: false,
     });
     app.apply_editor_completion(0, &context);
     assert_eq!(

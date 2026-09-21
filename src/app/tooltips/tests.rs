@@ -175,6 +175,16 @@ fn tooltip_preview_is_bounded_utf8_safe_and_keeps_short_content_whole() {
 }
 
 #[test]
+fn tooltip_body_width_keeps_short_definitions_readable_and_caps_long_docs() {
+    assert_eq!(tooltip_body_width(1.0), METRICS.popup.tooltip_min_width,);
+    assert_eq!(
+        tooltip_body_width(METRICS.popup.tooltip_max_width * 2.0),
+        METRICS.popup.tooltip_max_width,
+    );
+    assert!(tooltip_body_width(320.0) > METRICS.popup.tooltip_min_width);
+}
+
+#[test]
 fn tooltip_expands_on_pointer_entry_without_buttons_and_resets_for_new_content() {
     let (sender, _receiver) = mpsc::channel();
     let content = format!("Preview\n{}\nHidden continuation", "preview ".repeat(74));
