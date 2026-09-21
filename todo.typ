@@ -768,6 +768,20 @@ GPU/texture-residency observation remain explicitly unavailable.
   Local completions currently fabricate generation 0, an empty URI, and token 0.
   Verify local completions without a server and rejection of stale server replies.
 288. [ ] undo/redo should jump the cursor to the last edit position
+289. [ ] Document and expose a deliberate partial-rendering buffer policy for the
+     Tinymist preview. The pinned frontend currently offers only the boolean
+     `--partial-rendering` switch: its SVG window is derived from the preview
+     scroll position and viewport, expanded to page boundaries, and is not tied
+     to the editor cursor. Decide whether a bounded page/viewport prefetch is
+     worth implementing upstream or in the adapter, then measure scroll refill
+     latency and memory before changing the production default.
+290. [ ] Add a bounded macOS bitmap transition for the live Tinymist viewport.
+     Keep one in-memory WKWebView snapshot, show it only during an active
+     zoom/divider transition, and replace it after the live preview settles.
+     Capture no image every frame, invalidate stale callbacks when the webview
+     or document changes, preserve pointer anchoring, and verify that the
+     overlay cannot steal editor/preview input. Add deterministic frame/state
+     tests and a native geometry trace before enabling it by default.
 = Bounded PDF page residency (2026-09-18)
 
 - Items 198–200: PDF inspection now publishes a page catalog containing only
@@ -2489,3 +2503,20 @@ portable whole-system resource score.
 - The fresh `function-tooltip` Catppuccin Latte capture was inspected: the
   `typc` function signature keeps keyword, function, parameter, operator, and
   literal colors without leaking synthetic delimiters into the popup.
+
+= Preview transition bitmap (21 September 2026)
+
+- Item 289 records the partial-rendering finding: pinned Tinymist v0.15.2 has
+  a boolean partial-rendering switch, not a configurable page buffer. Its SVG
+  window follows the preview scroller's visible rectangle and expands to page
+  boundaries; the editor cursor is used for cursor decoration, not viewport
+  admission. Scrolling asks the frontend for a new viewport window. Production
+  remains on complete rendering until a measured refill policy is designed.
+- Item 290 is in progress. macOS now has a bounded native transition path: one
+  WKWebView viewport snapshot is kept in an NSImageView, shown only while the
+  adapter reports an active zoom or divider transition, then refreshed after a
+  short settle delay. IPC is limited to transition messages, stale callbacks
+  are rejected by a webview generation, and snapshots above the pixel cap are
+  skipped. The remaining acceptance work is native geometry tracing and
+  verifying that the overlay is fully mouse/scroll transparent; no claim is
+  made yet that the current NSImageView overlay cannot intercept input.
