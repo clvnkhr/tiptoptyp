@@ -20,7 +20,8 @@ const TYPST_NOTICE_SHA256: &str =
     "1778244777547c281b6f5fa9fc0c18ab21f8d4491c803f64e09046800f5fcb26";
 const PACKAGE_TARGET_ENV: &str = "TIPTOPTYP_PACKAGE_TARGET";
 const MACOS_APP_ICON: &str = "tiptoptyp.icns";
-const MACOS_APP_BUNDLE: &str = "tiptoptyp Dev.app";
+const PRODUCTION_MACOS_APP_BUNDLE: &str = "tiptoptyp.app";
+const DEV_MACOS_APP_BUNDLE: &str = "tiptoptyp Dev.app";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Artifact {
@@ -78,6 +79,7 @@ fn run() -> Result<(), String> {
         return profile::run(arguments.collect());
     }
     let mut target = None;
+    let mut production = false;
     while let Some(argument) = arguments.next() {
         if argument == "--target" {
             target = Some(
@@ -85,6 +87,8 @@ fn run() -> Result<(), String> {
                     .next()
                     .ok_or_else(|| "--target requires a target triple".to_owned())?,
             );
+        } else if argument == "--prod" {
+            production = true;
         } else {
             return Err(format!("unknown argument: {argument}"));
         }
@@ -101,6 +105,9 @@ fn run() -> Result<(), String> {
             generate_third_party_notices()?;
             let mut cargo = Command::new("cargo");
             cargo.arg("build").arg("--release");
+            if production {
+                cargo.arg("--features").arg("production");
+            }
             if target != host_target()? {
                 cargo.arg("--target").arg(&target);
             }
@@ -108,12 +115,12 @@ fn run() -> Result<(), String> {
         }
         "verify-package" => {
             let target = target_or_host(target)?;
-            verify_package(&target)
+            verify_package(&target, production)
         }
         "generate-notices" => generate_third_party_notices(),
         "help" | "--help" | "-h" => {
             println!(
-                "tiptoptyp tasks\n\n  profile --help\n  fetch-sidecars [--target TRIPLE]\n  package-build [--target TRIPLE]\n  verify-package [--target TRIPLE]\n  generate-notices\n\n{PACKAGE_TARGET_ENV} supplies the target to cargo-packager's hook."
+                "tiptoptyp tasks\n\n  profile --help\n  fetch-sidecars [--target TRIPLE]\n  package-build [--target TRIPLE] [--prod]\n  verify-package [--target TRIPLE] [--prod]\n  generate-notices\n\n{PACKAGE_TARGET_ENV} supplies the target to cargo-packager's hook."
             );
             Ok(())
         }
@@ -171,18 +178,23 @@ fn generate_third_party_notices() -> Result<(), String> {
     Ok(())
 }
 
-fn verify_package(target: &str) -> Result<(), String> {
+fn verify_package(target: &str, production: bool) -> Result<(), String> {
     if !target.ends_with("apple-darwin") {
         return Err("verify-package currently supports macOS app bundles".to_owned());
     }
     let root = repository_root();
+    let bundle = if production {
+        PRODUCTION_MACOS_APP_BUNDLE
+    } else {
+        DEV_MACOS_APP_BUNDLE
+    };
     let app = if target == host_target()? {
-        root.join("target/release").join(MACOS_APP_BUNDLE)
+        root.join("target/release").join(bundle)
     } else {
         root.join("target")
             .join(target)
             .join("release")
-            .join(MACOS_APP_BUNDLE)
+            .join(bundle)
     };
     let executable_dir = app.join("Contents/MacOS");
     let resources = app.join("Contents/Resources");

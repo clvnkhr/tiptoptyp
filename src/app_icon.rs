@@ -1,17 +1,24 @@
 //! Canonical application-icon loading and platform installation.
 //!
 //! The packaged applications and the live process both use derivatives of
-//! `assets/icons/tiptoptyp.svg`. Keeping the runtime icon embedded in the
-//! binary is important for development/release executables, which do not have
-//! a bundle resource for the operating system to discover.
+//! The selected production or development icon is embedded in the binary so
+//! direct executables use the same identity as their packaged counterpart.
 
 use std::sync::{Arc, OnceLock};
 
 use eframe::egui;
 
+#[cfg(feature = "production")]
 const RUNTIME_ICON_PNG: &[u8] = include_bytes!("../assets/icons/tiptoptyp-256.png");
+#[cfg(not(feature = "production"))]
+const RUNTIME_ICON_PNG: &[u8] = include_bytes!("../assets/icons/tiptoptyp-dev-256.png");
 #[cfg(target_os = "macos")]
+#[cfg(feature = "production")]
 const MACOS_APPLICATION_ICON_PNG: &[u8] = include_bytes!("../assets/icons/tiptoptyp-512@2x.png");
+#[cfg(target_os = "macos")]
+#[cfg(not(feature = "production"))]
+const MACOS_APPLICATION_ICON_PNG: &[u8] =
+    include_bytes!("../assets/icons/tiptoptyp-dev-512@2x.png");
 
 pub(crate) fn runtime_icon() -> Arc<egui::IconData> {
     static ICON: OnceLock<Arc<egui::IconData>> = OnceLock::new();
@@ -95,7 +102,15 @@ mod tests {
         // These deliberately broad bounds catch a missing/replaced wordmark
         // without tying the test to antialiasing at individual edge pixels.
         assert!(neutral > 6_000, "neutral t area was only {neutral} pixels");
-        assert!(accent > 2_500, "accent t area was only {accent} pixels");
+        let minimum_accent = if cfg!(feature = "production") {
+            3_000
+        } else {
+            2_500
+        };
+        assert!(
+            accent > minimum_accent,
+            "accent t area was only {accent} pixels"
+        );
         assert!(
             neutral > accent * 3 / 2,
             "the two neutral t marks are missing"

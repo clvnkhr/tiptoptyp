@@ -8,6 +8,7 @@ publish = false
 repository = "https://github.com/calvinkhor/tiptoptyp"
 
 [features]
+production = []
 profiling = []
 
 [dependencies]
@@ -68,8 +69,8 @@ split-debuginfo = "packed"
 strip = "none"
 
 [package.metadata.packager]
-product-name = "tiptoptyp Dev"
-identifier = "dev.tiptoptyp.editor.dev"
+product-name = "tiptoptyp"
+identifier = "dev.tiptoptyp.editor"
 category = "DeveloperTool"
 icons = [
     "assets/icons/tiptoptyp-32.png",
@@ -80,7 +81,7 @@ icons = [
     "assets/icons/tiptoptyp-512@2x.png",
     "assets/icons/tiptoptyp.ico",
 ]
-before-packaging-command = "cargo run --manifest-path xtask/Cargo.toml -- package-build"
+before-packaging-command = "cargo run --manifest-path xtask/Cargo.toml -- package-build --prod"
 external-binaries = ["toolchain/bin/typst", "toolchain/bin/tinymist"]
 resources = [
     { src = "THIRD_PARTY_NOTICES", target = "THIRD_PARTY_NOTICES" },

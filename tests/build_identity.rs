@@ -8,10 +8,15 @@ fn version_reports_compiled_identity_without_starting_the_gui() {
             .output()
             .unwrap();
         assert!(output.status.success());
+        let name = if cfg!(feature = "production") {
+            "tiptoptyp"
+        } else {
+            "tiptoptyp Dev"
+        };
         assert_eq!(
             String::from_utf8(output.stdout).unwrap().trim(),
             format!(
-                "tiptoptyp Dev {} ({})",
+                "{name} {} ({})",
                 env!("CARGO_PKG_VERSION"),
                 env!("TIPTOPTYP_BUILD_ID")
             )

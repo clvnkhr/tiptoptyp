@@ -489,7 +489,8 @@ fn show_side_by_side_diff(ui: &mut egui::Ui, rows: &[DiffRow], style: &DiffStyle
         for label in ["Previous", "Current"] {
             ui.add_sized(
                 [column_width, line_height],
-                egui::Label::new(egui::RichText::new(label).small().strong()),
+                egui::Label::new(egui::RichText::new(label).small().strong())
+                    .halign(egui::Align::Min),
             );
         }
     });
@@ -531,14 +532,13 @@ fn show_diff_cell(
 ) {
     let inner = rect.shrink2(egui::vec2(theme::SPACE.small, 0.0));
     let number = cell.line.map_or_else(String::new, |line| line.to_string());
-    ui.put(
-        egui::Rect::from_min_size(inner.min, egui::vec2(line_number_width, inner.height())),
-        egui::Label::new(
-            egui::RichText::new(number)
-                .monospace()
-                .color(ui.visuals().weak_text_color()),
-        ),
+    let number_galley = ui.painter().layout_no_wrap(
+        number,
+        egui::TextStyle::Monospace.resolve(ui.style()),
+        ui.visuals().weak_text_color(),
     );
+    ui.painter()
+        .galley(inner.min, number_galley, ui.visuals().weak_text_color());
     let text_rect = egui::Rect::from_min_max(
         egui::pos2(inner.left() + line_number_width, inner.top()),
         inner.max,
@@ -589,7 +589,11 @@ fn show_diff_cell(
             },
         );
     }
-    ui.put(text_rect, egui::Label::new(ui.painter().layout_job(job)));
+    ui.painter().galley(
+        text_rect.left_top(),
+        ui.painter().layout_job(job),
+        style.color(cell.kind),
+    );
 }
 
 pub(super) fn show_panel(ui: &mut egui::Ui, input: Input<'_>, cache: &mut Cache) -> Output {

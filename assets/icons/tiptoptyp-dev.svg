@@ -1,14 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Canonical tiptoptyp application mark.
+  Development-only tiptoptyp application mark.
 
-  The three hand-drawn lowercase t shapes mirror the in-app `ttt` wordmark:
-  the first two use the primary foreground and the final t uses the app accent.
-  Raster and platform icon files in this directory are derived from this SVG.
+  This deliberately keeps the production mark intact and adds an amber DEV
+  badge so locally installed development builds are unmistakable.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
-  <title id="title">tiptoptyp</title>
-  <desc id="desc">Three rounded lowercase t letters, with the final letter in blue.</desc>
+  <title id="title">tiptoptyp Dev</title>
+  <desc id="desc">Three rounded lowercase t letters, with the final letter in blue and an amber DEV badge.</desc>
   <defs>
     <linearGradient id="surface" x1="180" y1="96" x2="844" y2="928" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#303747"/>
@@ -29,5 +28,10 @@
   <g fill="none" stroke="#4f8cff" stroke-width="76" stroke-linecap="round" stroke-linejoin="round">
     <path d="M662 331 H820"/>
     <path d="M741 238 V652 C741 720 780 758 840 758 H856"/>
+  </g>
+
+  <g aria-label="Development build">
+    <rect x="548" y="700" width="390" height="214" rx="54" fill="#f5b942" stroke="#171b24" stroke-width="18"/>
+    <text x="743" y="844" text-anchor="middle" fill="#171b24" font-family="Arial, sans-serif" font-size="112" font-weight="800" letter-spacing="3">DEV</text>
   </g>
 </svg>

@@ -748,11 +748,15 @@ impl SettingsPanel<'_> {
                 ui.add_space(theme::SPACE.small);
                 ui.separator();
                 settings_heading(ui, SettingsSection::Status);
-                ui.add(egui::Label::new(if deterministic_settings {
-                    "tiptoptyp Dev (deterministic QA build)"
+                let status = if deterministic_settings {
+                    format!(
+                        "{} (deterministic QA build)",
+                        crate::build_info::APP_NAME
+                    )
                 } else {
-                    crate::build_info::VERSION
-                }).wrap());
+                    crate::build_info::VERSION.to_owned()
+                };
+                ui.add(egui::Label::new(status).wrap());
                 settings_target_anchor(
                     ui,
                     SettingsTarget::ToolchainStatus,

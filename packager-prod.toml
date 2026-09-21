@@ -1,0 +1,39 @@
+name = "tiptoptyp"
+product-name = "tiptoptyp"
+version = "0.1.0"
+identifier = "dev.tiptoptyp.editor"
+category = "DeveloperTool"
+formats = ["app"]
+out-dir = "target/release"
+binaries-dir = "target/release"
+binaries = [{ path = "tiptoptyp", main = true }]
+icons = [
+    "assets/icons/tiptoptyp-32.png",
+    "assets/icons/tiptoptyp-64.png",
+    "assets/icons/tiptoptyp-128.png",
+    "assets/icons/tiptoptyp-256.png",
+    "assets/icons/tiptoptyp-512.png",
+    "assets/icons/tiptoptyp-512@2x.png",
+    "assets/icons/tiptoptyp.ico",
+]
+before-packaging-command = "cargo run --manifest-path xtask/Cargo.toml -- package-build --prod"
+external-binaries = ["toolchain/bin/typst", "toolchain/bin/tinymist"]
+resources = [
+    { src = "THIRD_PARTY_NOTICES", target = "THIRD_PARTY_NOTICES" },
+    { src = "toolchain/licenses", target = "licenses" },
+    { src = "assets/fonts/notosanssymbols/OFL.txt", target = "licenses/NotoSansSymbols-OFL.txt" },
+    { src = "assets/fonts/notosansmath/OFL.txt", target = "licenses/NotoSansMath-OFL.txt" },
+    { src = "assets/fonts/notosanssymbols2/OFL.txt", target = "licenses/NotoSansSymbols2-OFL.txt" },
+    { src = "assets/fonts/notosanshebrew/OFL.txt", target = "licenses/NotoSansHebrew-OFL.txt" },
+    { src = "assets/fonts/README.md", target = "font-provenance.md" },
+    { src = "toolchain/provenance", target = "toolchain-provenance" },
+]
+file-associations = [
+    { extensions = ["typ"], name = "Typst document", role = "editor" },
+    { extensions = ["txt", "md", "markdown", "json", "toml", "yaml", "yml", "xml", "html", "css", "js", "ts", "rs", "py", "sh"], name = "Text document", role = "editor" },
+    { extensions = ["pdf"], name = "PDF document", role = "viewer" },
+    { extensions = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tif", "tiff"], name = "Image", role = "viewer" },
+]
+
+[macos]
+signing-identity = "-"

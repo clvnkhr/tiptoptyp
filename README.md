@@ -116,7 +116,11 @@ Open a workspace directly:
 cargo run --release -- path/to/project
 ```
 
-Launching the packaged `tiptoptyp Dev.app` without a path restores the newest recent
+Direct `cargo run --release` launches the visibly marked `tiptoptyp Dev` build.
+Use the packaging commands below, or `scripts/install-macos-app.sh`, for the
+production `tiptoptyp.app` bundle.
+
+Launching the packaged `tiptoptyp.app` without a path restores the newest recent
 workspace that still exists, falling back to the current folder on first run.
 The bundle registers the text, Typst, PDF, and image formats supported by the
 editor, so Finder's **Open With** and dropping a file on the app icon open that
@@ -191,6 +195,10 @@ cargo install cargo-packager --locked
 cargo packager --release
 cargo run --manifest-path xtask/Cargo.toml -- verify-package
 ```
+
+The installer builds and launches the production `tiptoptyp.app` bundle. The
+default direct Cargo build remains the visibly marked development app with its
+amber `DEV` icon badge.
 
 The package hook downloads and verifies the pinned platform archives, checks
 both reported versions, performs the release build, and installs Typst and
