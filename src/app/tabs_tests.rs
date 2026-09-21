@@ -752,6 +752,12 @@ fn tabs_preserve_unsaved_sources_undo_cursor_and_first_preview() {
         app.pending_editor_selection,
         Some(EditorSelection::Focus(3..3))
     );
+    app.undo_editor(&context, true);
+    assert_eq!(app.document().source(), "first edited");
+    assert_eq!(
+        app.pending_editor_selection,
+        Some(EditorSelection::Focus(3..3))
+    );
     app.activate_tab(second, &context);
     assert_eq!(app.document().source(), "second");
     app.select_preview_tab(second, &context);

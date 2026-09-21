@@ -152,7 +152,7 @@ fn run(profile_storage: Option<std::path::PathBuf>) -> eframe::Result {
         native_menu::install_macos_handler(native_menu_sender)
             .map_err(|error| eframe::Error::AppCreation(error.into()))?;
         let mut app = eframe::create_native(
-            "tiptoptyp",
+            build_info::APP_NAME,
             options,
             Box::new(move |context| {
                 native_menu::install_macos_menu(
@@ -183,7 +183,7 @@ fn run(profile_storage: Option<std::path::PathBuf>) -> eframe::Result {
         drop(open_request_sender);
         drop(native_menu_sender);
         eframe::run_native(
-            "tiptoptyp",
+            build_info::APP_NAME,
             options,
             Box::new(move |context| {
                 let app = AppShell::new(

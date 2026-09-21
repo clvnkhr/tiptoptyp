@@ -20,6 +20,7 @@ const TYPST_NOTICE_SHA256: &str =
     "1778244777547c281b6f5fa9fc0c18ab21f8d4491c803f64e09046800f5fcb26";
 const PACKAGE_TARGET_ENV: &str = "TIPTOPTYP_PACKAGE_TARGET";
 const MACOS_APP_ICON: &str = "tiptoptyp.icns";
+const MACOS_APP_BUNDLE: &str = "tiptoptyp Dev.app";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Artifact {
@@ -176,11 +177,12 @@ fn verify_package(target: &str) -> Result<(), String> {
     }
     let root = repository_root();
     let app = if target == host_target()? {
-        root.join("target/release/tiptoptyp.app")
+        root.join("target/release").join(MACOS_APP_BUNDLE)
     } else {
         root.join("target")
             .join(target)
-            .join("release/tiptoptyp.app")
+            .join("release")
+            .join(MACOS_APP_BUNDLE)
     };
     let executable_dir = app.join("Contents/MacOS");
     let resources = app.join("Contents/Resources");

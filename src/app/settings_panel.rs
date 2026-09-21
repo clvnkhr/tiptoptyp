@@ -749,7 +749,7 @@ impl SettingsPanel<'_> {
                 ui.separator();
                 settings_heading(ui, SettingsSection::Status);
                 ui.add(egui::Label::new(if deterministic_settings {
-                    "tiptoptyp (deterministic QA build)"
+                    "tiptoptyp Dev (deterministic QA build)"
                 } else {
                     crate::build_info::VERSION
                 }).wrap());

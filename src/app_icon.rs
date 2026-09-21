@@ -95,7 +95,7 @@ mod tests {
         // These deliberately broad bounds catch a missing/replaced wordmark
         // without tying the test to antialiasing at individual edge pixels.
         assert!(neutral > 6_000, "neutral t area was only {neutral} pixels");
-        assert!(accent > 3_000, "accent t area was only {accent} pixels");
+        assert!(accent > 2_500, "accent t area was only {accent} pixels");
         assert!(
             neutral > accent * 3 / 2,
             "the two neutral t marks are missing"

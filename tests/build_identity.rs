@@ -11,7 +11,7 @@ fn version_reports_compiled_identity_without_starting_the_gui() {
         assert_eq!(
             String::from_utf8(output.stdout).unwrap().trim(),
             format!(
-                "tiptoptyp {} ({})",
+                "tiptoptyp Dev {} ({})",
                 env!("CARGO_PKG_VERSION"),
                 env!("TIPTOPTYP_BUILD_ID")
             )

@@ -3748,6 +3748,7 @@ impl EditorApp {
         if self.document_flow_busy() || self.file_import.is_running() {
             return;
         }
+        let id = viewport_scoped_id(context, "file-drop-target");
         let paths = context.input(|input| {
             input
                 .raw
@@ -3756,11 +3757,27 @@ impl EditorApp {
                 .map(|file| file.path().to_path_buf())
                 .collect::<Vec<_>>()
         });
+        let file_drag_active = context.input(|input| !input.raw.hovered_files.is_empty());
+        let (current_target, target) = context.data_mut(|data| {
+            let current = data.get_temp::<FileDropTarget>(id);
+            let target = current.clone().or_else(|| {
+                data.get_persisted::<RememberedFileDropTarget>(id)
+                    .map(|remembered| remembered.0)
+            });
+            (current, target)
+        });
         if paths.is_empty() {
+            if !file_drag_active && current_target.is_none() {
+                context.data_mut(|data| data.remove::<RememberedFileDropTarget>(id));
+            }
             return;
         }
-        let id = viewport_scoped_id(context, "file-drop-target");
-        let target = context.data(|data| data.get_temp::<FileDropTarget>(id));
+        // A drop is a one-shot event. Do not let its remembered target affect
+        // a later drop after the OS has cleared the hovered-file state.
+        context.data_mut(|data| {
+            data.remove::<FileDropTarget>(id);
+            data.remove::<RememberedFileDropTarget>(id);
+        });
         match target {
             Some(FileDropTarget::Editor) => {
                 self.queued_open_requests.extend(paths);
@@ -6116,8 +6133,12 @@ impl EditorApp {
             return;
         };
         let changed = previous_key != self.document().key();
-        self.store_editor_cursor(context, next.cursor);
-        let range = next.cursor.as_sorted_char_range();
+        // Undo should reveal the edit that is being undone. Redo should keep
+        // the cursor where the user performed the undo instead of jumping
+        // back to the cursor captured before that undo.
+        let target_cursor = if redo { current.cursor } else { next.cursor };
+        self.store_editor_cursor(context, target_cursor);
+        let range = target_cursor.as_sorted_char_range();
         self.pending_editor_selection = Some(EditorSelection::Focus(range.start.0..range.end.0));
         self.document_mut().set_history_reset(false);
         let editor_id = source_editor_id(context);
@@ -9447,11 +9468,14 @@ fn sticky_context_scroll_anchor(lines: &[StickyContextScrollLine], boundary: f32
     Some(lines.get(index)?.anchor)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 enum FileDropTarget {
     Editor,
     Folder(PathBuf),
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+struct RememberedFileDropTarget(FileDropTarget);
 
 fn offer_file_drop_target(ui: &egui::Ui, rect: Rect, target: FileDropTarget) {
     if ui
@@ -9460,7 +9484,14 @@ fn offer_file_drop_target(ui: &egui::Ui, rect: Rect, target: FileDropTarget) {
         .is_some_and(|pos| rect.intersect(ui.clip_rect()).contains(pos))
     {
         let id = viewport_scoped_id(ui.ctx(), "file-drop-target");
-        ui.ctx().data_mut(|data| data.insert_temp(id, target));
+        ui.ctx().data_mut(|data| {
+            data.insert_temp(id, target.clone());
+            // macOS can deliver the final DroppedFile event after the
+            // temporary per-frame target has been cleared and without a new
+            // pointer position. Remember the target while the pointer is over
+            // it, then consume it when the drop arrives.
+            data.insert_persisted(id, RememberedFileDropTarget(target));
+        });
     }
 }
 

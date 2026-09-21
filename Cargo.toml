@@ -68,8 +68,8 @@ split-debuginfo = "packed"
 strip = "none"
 
 [package.metadata.packager]
-product-name = "tiptoptyp"
-identifier = "dev.tiptoptyp.editor"
+product-name = "tiptoptyp Dev"
+identifier = "dev.tiptoptyp.editor.dev"
 category = "DeveloperTool"
 icons = [
     "assets/icons/tiptoptyp-32.png",

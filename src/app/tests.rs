@@ -1022,6 +1022,39 @@ fn drops_are_routed_by_visible_clipped_regions_and_folder_rows() {
 }
 
 #[test]
+fn file_drop_target_survives_the_os_drop_frame() {
+    let context = egui::Context::default();
+    let id = viewport_scoped_id(&context, "file-drop-target");
+    context
+        .run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(200.0, 120.0))),
+                events: vec![egui::Event::PointerMoved(Pos2::new(40.0, 40.0))],
+                hovered_files: vec![egui::HoveredFile {
+                    path: Some(PathBuf::from("/source/file.typ")),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            |ui| {
+                offer_file_drop_target(
+                    ui,
+                    Rect::from_min_size(Pos2::ZERO, Vec2::new(100.0, 100.0)),
+                    FileDropTarget::Folder(PathBuf::from("/workspace")),
+                );
+            },
+        )
+        .drop_without_applying_deltas();
+    context.data_mut(|data| data.remove::<FileDropTarget>(id));
+    assert_eq!(
+        context.data_mut(|data| data.get_persisted::<RememberedFileDropTarget>(id)),
+        Some(RememberedFileDropTarget(FileDropTarget::Folder(
+            PathBuf::from("/workspace"),
+        )))
+    );
+}
+
+#[test]
 fn every_shared_menu_command_is_present_and_routes_from_the_popup() {
     use egui_kittest::{Harness, kittest::Queryable as _};
     for menu in [CommandMenu::File, CommandMenu::Edit, CommandMenu::View] {

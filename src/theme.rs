@@ -600,6 +600,36 @@ where
         default: FONT_WEIGHT_NORMAL,
     };
     let mut code_weight_support = None;
+
+    // epaint can rasterize the outline glyphs in Apple's system emoji
+    // collection, even though it cannot preserve Apple's color layers. Put
+    // that system fallback first so macOS development builds use the same
+    // emoji shapes as the rest of the platform while retaining the bundled
+    // monochrome fallbacks for platforms without the font.
+    #[cfg(target_os = "macos")]
+    {
+        const APPLE_EMOJI: &str = "tiptoptyp-apple-color-emoji";
+        let path = Path::new("/System/Library/Fonts/Apple Color Emoji.ttc");
+        if let Ok(bytes) = read_font(path)
+            && skrifa::FontRef::from_index(&bytes, 0).is_ok()
+        {
+            let mut data = egui::FontData::from_owned(bytes);
+            data.index = 0;
+            definitions
+                .font_data
+                .insert(APPLE_EMOJI.to_owned(), Arc::new(data));
+            for family in [FontFamily::Proportional, FontFamily::Monospace] {
+                definitions
+                    .families
+                    .entry(family)
+                    .or_default()
+                    .insert(0, APPLE_EMOJI.to_owned());
+            }
+            proportional_fallback.insert(0, APPLE_EMOJI.to_owned());
+            monospace_fallback.insert(0, APPLE_EMOJI.to_owned());
+        }
+    }
+
     let mut prepared_files = FontFileCache::new(&mut read_font);
 
     let custom_editor_requested =

@@ -116,7 +116,7 @@ Open a workspace directly:
 cargo run --release -- path/to/project
 ```
 
-Launching the packaged `tiptoptyp.app` without a path restores the newest recent
+Launching the packaged `tiptoptyp Dev.app` without a path restores the newest recent
 workspace that still exists, falling back to the current folder on first run.
 The bundle registers the text, Typst, PDF, and image formats supported by the
 editor, so Finder's **Open With** and dropping a file on the app icon open that

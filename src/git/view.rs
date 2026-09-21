@@ -10,7 +10,7 @@ use crate::{
     theme,
 };
 use eframe::egui;
-use std::{path::PathBuf, sync::Arc};
+use std::{ops::Range, path::PathBuf, sync::Arc};
 
 pub(super) struct Input<'a> {
     pub(super) snapshot: &'a Snapshot,
@@ -53,6 +53,7 @@ struct DiffStyle {
     font: egui::FontId,
     colors: [egui::Color32; 4],
     backgrounds: [egui::Color32; 4],
+    changed_backgrounds: [egui::Color32; 4],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +70,7 @@ struct DiffCell {
     text: String,
     kind: DiffLineKind,
     line: Option<usize>,
+    changed: Option<Range<usize>>,
 }
 
 #[derive(Debug, Clone)]
@@ -107,6 +109,12 @@ impl DiffStyle {
                 palette.info.gamma_multiply(0.14),
                 egui::Color32::TRANSPARENT,
             ],
+            changed_backgrounds: [
+                palette.success.gamma_multiply(0.40),
+                palette.error.gamma_multiply(0.40),
+                palette.info.gamma_multiply(0.26),
+                egui::Color32::TRANSPARENT,
+            ],
         }
     }
 
@@ -121,6 +129,15 @@ impl DiffStyle {
 
     fn background(&self, kind: DiffLineKind) -> egui::Color32 {
         self.backgrounds[match kind {
+            DiffLineKind::Added => 0,
+            DiffLineKind::Removed => 1,
+            DiffLineKind::Hunk => 2,
+            DiffLineKind::Context | DiffLineKind::Meta => 3,
+        }]
+    }
+
+    fn changed_background(&self, kind: DiffLineKind) -> egui::Color32 {
+        self.changed_backgrounds[match kind {
             DiffLineKind::Added => 0,
             DiffLineKind::Removed => 1,
             DiffLineKind::Hunk => 2,
@@ -240,6 +257,7 @@ fn diff_cell(line: &str, kind: DiffLineKind, strip_prefix: bool) -> DiffCell {
         text: line_body(text).to_owned(),
         kind,
         line: None,
+        changed: None,
     }
 }
 
@@ -255,8 +273,22 @@ fn side_by_side_rows(content: &str) -> Vec<DiffRow> {
         |rows: &mut Vec<DiffRow>, removed: &mut Vec<DiffCell>, added: &mut Vec<DiffCell>| {
             let count = removed.len().max(added.len());
             for index in 0..count {
-                let left = removed.get(index).cloned();
-                let right = added.get(index).cloned();
+                let mut left = removed.get(index).cloned();
+                let mut right = added.get(index).cloned();
+                match (&mut left, &mut right) {
+                    (Some(left), Some(right)) => {
+                        let (left_changed, right_changed) =
+                            intra_line_change_ranges(&left.text, &right.text);
+                        left.changed = left_changed;
+                        right.changed = right_changed;
+                    }
+                    (Some(left), None) | (None, Some(left)) => {
+                        if !left.text.is_empty() {
+                            left.changed = Some(0..left.text.len());
+                        }
+                    }
+                    (None, None) => {}
+                }
                 rows.push(DiffRow {
                     full: None,
                     left,
@@ -297,6 +329,7 @@ fn side_by_side_rows(content: &str) -> Vec<DiffRow> {
                     text: line.get(1..).unwrap_or_default().to_owned(),
                     kind: DiffLineKind::Removed,
                     line: Some(old_line),
+                    changed: None,
                 });
                 old_line = old_line.saturating_add(1);
             }
@@ -305,6 +338,7 @@ fn side_by_side_rows(content: &str) -> Vec<DiffRow> {
                     text: line.get(1..).unwrap_or_default().to_owned(),
                     kind: DiffLineKind::Added,
                     line: Some(new_line),
+                    changed: None,
                 });
                 new_line = new_line.saturating_add(1);
             }
@@ -315,6 +349,7 @@ fn side_by_side_rows(content: &str) -> Vec<DiffRow> {
                     text: context,
                     kind: DiffLineKind::Context,
                     line: Some(old_line),
+                    changed: None,
                 };
                 old_line = old_line.saturating_add(1);
                 let right = DiffCell {
@@ -365,6 +400,44 @@ fn hunk_line_starts(line: &str) -> Option<(usize, usize)> {
     Some((start(old)?, start(new)?))
 }
 
+fn intra_line_change_ranges(
+    left: &str,
+    right: &str,
+) -> (Option<Range<usize>>, Option<Range<usize>>) {
+    let left_chars = left.chars().collect::<Vec<_>>();
+    let right_chars = right.chars().collect::<Vec<_>>();
+    let prefix = left_chars
+        .iter()
+        .zip(&right_chars)
+        .take_while(|(left, right)| left == right)
+        .count();
+    let max_suffix = left_chars
+        .len()
+        .saturating_sub(prefix)
+        .min(right_chars.len().saturating_sub(prefix));
+    let suffix = (0..max_suffix)
+        .take_while(|offset| {
+            left_chars[left_chars.len() - 1 - offset] == right_chars[right_chars.len() - 1 - offset]
+        })
+        .count();
+    let range = |text: &str, char_count: usize| {
+        let start = text
+            .char_indices()
+            .nth(prefix)
+            .map_or(text.len(), |(index, _)| index);
+        let end_char = char_count.saturating_sub(suffix);
+        let end = text
+            .char_indices()
+            .nth(end_char)
+            .map_or(text.len(), |(index, _)| index);
+        (start < end).then_some(start..end)
+    };
+    (
+        range(left, left_chars.len()),
+        range(right, right_chars.len()),
+    )
+}
+
 fn show_change_counts(ui: &mut egui::Ui, counts: LineChangeCounts) {
     let palette = theme::palette(ui.ctx());
     ui.horizontal(|ui| {
@@ -382,13 +455,35 @@ fn show_change_counts(ui: &mut egui::Ui, counts: LineChangeCounts) {
 }
 
 fn show_side_by_side_diff(ui: &mut egui::Ui, rows: &[DiffRow], style: &DiffStyle) {
-    let total_width = ui.available_width().max(2.0);
+    let available_width = ui.available_width().max(2.0);
     let gap = ui.spacing().item_spacing.x;
-    let column_width = ((total_width - gap) / 2.0).max(1.0);
     let line_height = ui
         .text_style_height(&egui::TextStyle::Monospace)
         .max(ui.spacing().interact_size.y);
     let line_number_width = 42.0;
+    let max_line_width = rows
+        .iter()
+        .flat_map(|row| {
+            row.full
+                .iter()
+                .chain(row.left.iter())
+                .chain(row.right.iter())
+        })
+        .map(|cell| {
+            ui.painter()
+                .layout_no_wrap(
+                    cell.text.clone(),
+                    style.font.clone(),
+                    style.color(cell.kind),
+                )
+                .size()
+                .x
+        })
+        .fold(0.0, f32::max);
+    let minimum_column_width = ((available_width - gap) / 2.0).max(1.0);
+    let column_width =
+        (max_line_width + line_number_width + 2.0 * theme::SPACE.small).max(minimum_column_width);
+    let total_width = (column_width * 2.0 + gap).max(available_width);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = gap;
         for label in ["Previous", "Current"] {
@@ -442,21 +537,59 @@ fn show_diff_cell(
             egui::RichText::new(number)
                 .monospace()
                 .color(ui.visuals().weak_text_color()),
-        )
-        .truncate(),
-    );
-    ui.put(
-        egui::Rect::from_min_max(
-            egui::pos2(inner.left() + line_number_width, inner.top()),
-            inner.max,
         ),
-        egui::Label::new(
-            egui::RichText::new(&cell.text)
-                .monospace()
-                .color(style.color(cell.kind)),
-        )
-        .truncate(),
     );
+    let text_rect = egui::Rect::from_min_max(
+        egui::pos2(inner.left() + line_number_width, inner.top()),
+        inner.max,
+    );
+    let mut job = egui::text::LayoutJob::default();
+    if let Some(changed) = &cell.changed {
+        if changed.start > 0 {
+            job.append(
+                &cell.text[..changed.start],
+                0.0,
+                egui::TextFormat {
+                    font_id: style.font.clone(),
+                    color: style.color(cell.kind),
+                    ..Default::default()
+                },
+            );
+        }
+        job.append(
+            &cell.text[changed.clone()],
+            0.0,
+            egui::TextFormat {
+                font_id: style.font.clone(),
+                color: style.color(cell.kind),
+                background: style.changed_background(cell.kind),
+                italics: true,
+                ..Default::default()
+            },
+        );
+        if changed.end < cell.text.len() {
+            job.append(
+                &cell.text[changed.end..],
+                0.0,
+                egui::TextFormat {
+                    font_id: style.font.clone(),
+                    color: style.color(cell.kind),
+                    ..Default::default()
+                },
+            );
+        }
+    } else {
+        job.append(
+            &cell.text,
+            0.0,
+            egui::TextFormat {
+                font_id: style.font.clone(),
+                color: style.color(cell.kind),
+                ..Default::default()
+            },
+        );
+    }
+    ui.put(text_rect, egui::Label::new(ui.painter().layout_job(job)));
 }
 
 pub(super) fn show_panel(ui: &mut egui::Ui, input: Input<'_>, cache: &mut Cache) -> Output {
@@ -921,6 +1054,19 @@ mod tests {
         assert_eq!(hunk_line_starts("@@ -8 +12 @@"), Some((8, 12)));
         assert_eq!(hunk_line_starts("@@ -8,2 +12,4 @@"), Some((8, 12)));
         assert_eq!(hunk_line_starts("not a hunk"), None);
+    }
+
+    #[test]
+    fn intra_line_change_ranges_ignore_shared_prefix_and_suffix() {
+        assert_eq!(
+            intra_line_change_ranges("keep old value", "keep new value"),
+            (Some(5..8), Some(5..8))
+        );
+        assert_eq!(intra_line_change_ranges("same", "same"), (None, None));
+        assert_eq!(
+            intra_line_change_ranges("old", "new text"),
+            (Some(0..3), Some(0..8))
+        );
     }
 
     #[test]

@@ -23,7 +23,7 @@ const FONTS: [(&str, &[u8]); 4] = [
     ),
 ];
 
-pub(crate) const SYMBOL_EXAMPLES: [(&str, char); 14] = [
+pub(crate) const SYMBOL_EXAMPLES: [(&str, char); 19] = [
     ("aleph", 'א'),
     ("beth", 'ב'),
     ("daleth", 'ד'),
@@ -38,6 +38,11 @@ pub(crate) const SYMBOL_EXAMPLES: [(&str, char); 14] = [
     ("script-a", '𝒜'),
     ("earth", '🜨'),
     ("wreath", '≀'),
+    ("grinning", '😀'),
+    ("smiling", '🙂'),
+    ("crab", '🦀'),
+    ("rocket", '🚀'),
+    ("party", '🎉'),
 ];
 
 pub(crate) fn definitions() -> FontDefinitions {
@@ -115,5 +120,15 @@ mod tests {
             assert_eq!(before.rect, after.rect);
             assert_eq!(before.rows[0].glyphs, after.rows[0].glyphs);
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn apple_color_emoji_has_outline_glyphs_usable_by_egui() {
+        let bytes = std::fs::read("/System/Library/Fonts/Apple Color Emoji.ttc")
+            .expect("Apple Color Emoji should be installed on macOS");
+        let font = skrifa::FontRef::from_index(&bytes, 0).expect("Apple Color Emoji face");
+        let glyph = font.charmap().map('😀').expect("grinning face glyph");
+        assert!(font.outline_glyphs().get(glyph).is_some());
     }
 }
