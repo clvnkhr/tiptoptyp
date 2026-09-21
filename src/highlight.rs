@@ -102,7 +102,7 @@ impl SyntaxHighlighter {
     ) -> LayoutJob {
         let _span = crate::performance::span("highlight.total");
         let parse_source = if code_mode {
-            format!("#{{{source}}}")
+            typst_code_parse_source(source)
         } else {
             source.to_owned()
         };
@@ -185,6 +185,11 @@ impl SyntaxHighlighter {
         }
         if code_mode {
             trim_layout_job(&mut job, 2, 1);
+            // The parser source may contain same-width substitutions for
+            // Tinymist's display-only type-union bars. Restore the exact LSP
+            // text after trimming the synthetic wrapper; section byte ranges
+            // remain valid because every substitution is one ASCII byte.
+            job.text = source.to_owned();
         }
         job.wrap.break_anywhere = false;
 
@@ -200,6 +205,19 @@ impl SyntaxHighlighter {
         self.has_cache = true;
         job
     }
+}
+
+/// Tinymist's `typc` signatures use `|` to describe a union of possible
+/// types. That notation is metadata, not a Typst expression, so feeding it
+/// directly into Typst's parser marks the remainder of a signature as an
+/// error. Parse a same-width equivalent expression while keeping the original
+/// text for display and copy/paste.
+fn typst_code_parse_source(source: &str) -> String {
+    let mut parse_source = String::with_capacity(source.len() + 3);
+    parse_source.push_str("#{");
+    parse_source.push_str(&source.replace('|', "+"));
+    parse_source.push('}');
+    parse_source
 }
 
 fn trim_layout_job(job: &mut LayoutJob, prefix_bytes: usize, suffix_bytes: usize) {
@@ -1077,6 +1095,27 @@ mod tests {
         assert_eq!(
             format_at(&job, source.find("text").unwrap()).color,
             format_for(Some(Tag::Function), true).color
+        );
+    }
+
+    #[test]
+    fn code_fenced_typst_type_unions_do_not_cascade_errors() {
+        let source = "let theorem(\n  kind: any | str = \"théorème\",\n  number: any | auto | counter | none\n)";
+        let mut highlighter = SyntaxHighlighter::default();
+        let syntect = GenericSyntaxHighlighter::default();
+        let job = highlighter.highlight_code(source, true, &syntect);
+
+        assert_exact_mapping(&job, source);
+        for (offset, _) in source.match_indices('|') {
+            assert_ne!(
+                format_at(&job, offset).color,
+                format_for(Some(Tag::Error), true).color,
+                "type-union bar at byte {offset} should not be highlighted as an error"
+            );
+        }
+        assert_ne!(
+            format_at(&job, source.find("\"théorème\"").unwrap()).color,
+            format_for(Some(Tag::Error), true).color
         );
     }
 

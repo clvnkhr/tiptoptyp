@@ -1177,6 +1177,7 @@ pub(super) fn frame_content_size(viewport_size: Vec2, frame_margin: Vec2) -> Vec
 #[derive(Clone)]
 enum MarkdownBlock {
     Space,
+    Separator,
     Code {
         source: String,
         token: String,
@@ -1215,26 +1216,60 @@ fn cached_tooltip_markdown(context: &egui::Context, markdown: &str) -> Arc<Parse
 fn parse_tooltip_markdown(markdown: &str) -> Vec<MarkdownBlock> {
     let mut blocks = Vec::new();
     let mut fenced = false;
+    let mut fence_len = 0;
+    let mut skipping_doc_error = false;
     let mut fence_token = String::new();
     let mut fence_lines = Vec::new();
     for line in markdown.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with("```") {
-            if fenced {
-                blocks.push(MarkdownBlock::Code {
-                    source: fence_lines.join("\n"),
-                    token: std::mem::take(&mut fence_token),
-                });
-                fence_lines.clear();
-                fence_token.clear();
-            } else {
-                fence_token = trimmed.trim_start_matches('`').trim().to_owned();
+        if skipping_doc_error {
+            if trimmed == "---" {
+                skipping_doc_error = false;
+                blocks.push(MarkdownBlock::Separator);
             }
-            fenced = !fenced;
+            continue;
+        }
+        if let Some((length, token)) = tooltip_markdown_fence(trimmed) {
+            if fenced {
+                let is_closing = length >= fence_len && token.is_empty();
+                if is_closing {
+                    push_tooltip_code_block(
+                        &mut blocks,
+                        fence_lines.join("\n"),
+                        std::mem::take(&mut fence_token),
+                    );
+                    fence_lines.clear();
+                    fence_token.clear();
+                    fence_len = 0;
+                    fenced = false;
+                } else {
+                    // A shorter fence, such as the nested ```typ examples in
+                    // Tinymist's four-backtick documentation block, is data.
+                    fence_lines.push(line.to_owned());
+                }
+            } else {
+                fence_len = length;
+                fence_token = token.to_owned();
+                fenced = true;
+            }
             continue;
         }
         if fenced {
             fence_lines.push(line.to_owned());
+            continue;
+        }
+        // Tinymist joins multiple hover sections with a Markdown thematic
+        // break. Keep the divider semantic instead of displaying raw `---`.
+        if trimmed == "---" {
+            blocks.push(MarkdownBlock::Separator);
+            continue;
+        }
+        // A documentation compiler failure is an implementation detail of
+        // the server, not useful hover documentation. It can include paths,
+        // source excerpts, and many lines of carets; omit that whole section
+        // while retaining the useful signature or preceding documentation.
+        if trimmed.starts_with("failed to parse docs:") {
+            skipping_doc_error = true;
             continue;
         }
         if trimmed.is_empty() {
@@ -1263,12 +1298,48 @@ fn parse_tooltip_markdown(markdown: &str) -> Vec<MarkdownBlock> {
         });
     }
     if fenced {
-        blocks.push(MarkdownBlock::Code {
-            source: fence_lines.join("\n"),
-            token: fence_token,
-        });
+        push_tooltip_code_block(&mut blocks, fence_lines.join("\n"), fence_token);
+    }
+    while matches!(
+        blocks.last(),
+        Some(MarkdownBlock::Separator | MarkdownBlock::Space)
+    ) {
+        blocks.pop();
     }
     blocks
+}
+
+fn tooltip_markdown_fence(line: &str) -> Option<(usize, &str)> {
+    let length = line.bytes().take_while(|byte| *byte == b'`').count();
+    (length >= 3).then(|| (length, line[length..].trim()))
+}
+
+fn push_tooltip_code_block(blocks: &mut Vec<MarkdownBlock>, source: String, token: String) {
+    let source = strip_tooltip_doc_parse_failure(&source);
+    if source.trim().is_empty() {
+        return;
+    }
+    blocks.push(MarkdownBlock::Code { source, token });
+}
+
+fn strip_tooltip_doc_parse_failure(source: &str) -> String {
+    let mut lines = source.lines();
+    let Some(first) = lines.next() else {
+        return String::new();
+    };
+    if !first.trim_start().starts_with("failed to parse docs:") {
+        return source.to_owned();
+    }
+
+    // Tinymist places the useful documentation after a blank line following
+    // the compiler excerpt. Drop only that diagnostic prefix; keep the docs,
+    // including any shorter nested fences, intact.
+    while let Some(line) = lines.next() {
+        if line.trim().is_empty() {
+            return lines.collect::<Vec<_>>().join("\n").trim_start().to_owned();
+        }
+    }
+    String::new()
 }
 
 pub(super) fn show_markdown(ui: &mut egui::Ui, markdown: &str, link_sender: &mpsc::Sender<String>) {
@@ -1350,6 +1421,9 @@ fn show_markdown_with_culling(
         }
         let response = ui.push_id(index, |ui| match block {
             MarkdownBlock::Space => ui.add_space(theme::SPACE.small),
+            MarkdownBlock::Separator => {
+                ui.separator();
+            }
             MarkdownBlock::Code { source, token } => {
                 show_markdown_code_block(ui, &highlighter, &mut typst_highlighter, source, token)
             }
@@ -1390,13 +1464,12 @@ pub(super) fn show_markdown_code_block(
     token: &str,
 ) {
     let dark_mode = ui.visuals().dark_mode;
-    let token = token.trim().to_ascii_lowercase();
     let job = cached_tooltip_code_job(
         ui.ctx(),
         highlighter,
         typst_highlighter,
         source,
-        &token,
+        token,
         dark_mode,
         theme::syntax_palette(ui.ctx()),
     );
@@ -1421,6 +1494,7 @@ pub(super) fn cached_tooltip_code_job(
     dark_mode: bool,
     palette: theme::SyntaxPalette,
 ) -> Option<Arc<egui::text::LayoutJob>> {
+    let token = normalize_tooltip_code_token(token);
     let cache_id = viewport_scoped_id(context, "tooltip-code-cache");
     let editor_font = theme::editor_font();
     let colors = tooltip_code_cache_colors(palette);
@@ -1428,7 +1502,7 @@ pub(super) fn cached_tooltip_code_job(
         data.get_temp_mut_or_default::<TooltipCodeCache>(cache_id)
             .jobs
             .iter()
-            .find(|entry| entry.matches(source, token, dark_mode, &editor_font, &colors))
+            .find(|entry| entry.matches(source, &token, dark_mode, &editor_font, &colors))
             .map(|entry| entry.job.clone())
     }) {
         crate::performance::counter("tooltip.code.cache_hit");
@@ -1439,7 +1513,7 @@ pub(super) fn cached_tooltip_code_job(
         highlighter,
         typst_highlighter,
         source,
-        token,
+        &token,
         dark_mode,
         palette,
     )
@@ -1453,7 +1527,7 @@ pub(super) fn cached_tooltip_code_job(
         }
         cache.jobs.push_back(TooltipCodeCacheEntry {
             source: source.to_owned(),
-            token: token.to_owned(),
+            token,
             dark_mode,
             editor_font,
             colors,
@@ -1491,19 +1565,46 @@ pub(super) fn tooltip_code_job(
     dark_mode: bool,
     palette: theme::SyntaxPalette,
 ) -> Option<egui::text::LayoutJob> {
-    if matches!(token, "typ" | "typst" | "typc") {
+    let token = normalize_tooltip_code_token(token);
+    let mode = tooltip_code_mode(&token);
+    if matches!(
+        mode,
+        TooltipCodeMode::TypstSource | TooltipCodeMode::TypstCode
+    ) {
         typst_highlighter.set_styles(ResolvedTypstStyles::resolve(
             palette,
             None,
             &Default::default(),
         ));
-        return Some(if token == "typc" {
+        return Some(if mode == TooltipCodeMode::TypstCode {
             typst_highlighter.highlight_code(source, dark_mode, highlighter)
         } else {
             typst_highlighter.highlight(source, dark_mode, highlighter)
         });
     }
-    highlighter.highlight_token(source, token, dark_mode)
+    highlighter.highlight_token(source, &token, dark_mode)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TooltipCodeMode {
+    TypstSource,
+    TypstCode,
+    Generic,
+}
+
+fn normalize_tooltip_code_token(token: &str) -> String {
+    token.trim().to_ascii_lowercase()
+}
+
+fn tooltip_code_mode(token: &str) -> TooltipCodeMode {
+    match token {
+        "typ" | "typst" => TooltipCodeMode::TypstSource,
+        // `typc` is Tinymist's marked-string language for a Typst code
+        // snippet. Accept the descriptive spellings too so other LSP clients
+        // can feed the same popup without silently falling back to plaintext.
+        "typc" | "typst-code" | "typst_code" | "typstcode" => TooltipCodeMode::TypstCode,
+        _ => TooltipCodeMode::Generic,
+    }
 }
 
 pub(super) fn show_markdown_inline(

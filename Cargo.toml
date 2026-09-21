@@ -2,7 +2,7 @@
 name = "tiptoptyp"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.98"
 description = "A fast, native Typst editor with live PDF preview"
 publish = false
 repository = "https://github.com/calvinkhor/tiptoptyp"

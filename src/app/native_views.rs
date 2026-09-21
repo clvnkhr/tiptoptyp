@@ -82,10 +82,7 @@ impl EditorApp {
                     .show(ui, |ui| {
                         ui.horizontal_centered(|ui| {
                             #[cfg(target_os = "macos")]
-                            ui.add_space(
-                                METRICS.toolbar.traffic_lights_fallback_width
-                                    + METRICS.toolbar.traffic_lights_gap,
-                            );
+                            theme::reserve_window_controls(ui);
                             crate::window_logo::show(ui, &captures);
                             ui.label(RichText::new("Typst packages").strong());
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1321,13 +1318,13 @@ impl EditorApp {
             );
             let builder = wry::WebViewBuilder::new()
                 .with_url(&url)
+                .with_initialization_script(include_str!("../preview_navigation.js"))
                 .with_bounds(bounds)
                 .with_background_color(rgba)
                 .with_background_throttling(wry::BackgroundThrottlingPolicy::Disabled)
-                // Enable WKWebView/WebView2's platform zoom gestures and
-                // standard zoom shortcuts instead of emulating trackpads in
-                // the egui layer.
-                .with_hotkeys_zoom(true)
+                // The SVG adapter owns keyboard zoom; AppKit still handles
+                // native pinch magnification without a second hotkey scale.
+                .with_hotkeys_zoom(false)
                 .with_navigation_handler(move |candidate| {
                     let action = navigation_handler_state
                         .lock()

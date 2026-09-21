@@ -737,11 +737,19 @@ are recorded without source text;
 item 257 now closes the integrated evidence pass. Native sampler and
 GPU/texture-residency observation remain explicitly unavailable.
 
-261. [ ] understand how to fix the popup syntax highlighting for typc etc
+261. [x] understand how to fix the popup syntax highlighting for typc etc
 262. [x] add typstify to editor-comparison.typ
 263. [ ] popup width is not right, some are too narrow, especially for defs/lets
-264. [ ] pdf resizing via scroll is very jerky. we should make it smooth
-265. [ ] pdf resizing stops when the panels are being resized, we should instead constantly resize
+264. [ ] Tinymist preview: smooth zoom on large real documents. Continuous
+  pointer-anchored Ctrl-scroll is implemented, but full-SVG layout remains slow.
+  Native preview shortcuts now dispatch to the viewer and mixed inputs accumulate
+  in order. Evaluate a cached viewport bitmap for gesture transitions: capture
+  after rendering settles, not on the first gesture event; bound pixel memory,
+  preserve the cursor anchor, and swap only when sharp content is ready.
+265. [ ] Tinymist preview: smooth divider resizing on large real documents.
+  Redundant rerenders are removed; the full SVG still costs about 200 ms to
+  rescale in WKWebView. Validate bounded visible-region rendering and scroll
+  refill before closing these items; the small fixture was insufficient.
 266. [ ] vim mode
 267. [x] we need a much larger buffer of pdf pages for the raster mode, say 15 pages
 268. [ ] while adjusting the zoom, we show the user a blank page while it loads. it should always show us the lower res page until it loads the higher res page
@@ -751,6 +759,15 @@ GPU/texture-residency observation remain explicitly unavailable.
 281. [ ] we should be able to drag the table editor around resize etc. put it in a settings-like window
 282. [ ] we should be able to import from markdown tables
 283. [ ] connect to TPIX https://typstify.com/tpix
+284. [ ] pdf raster preview is very slow. lets migrate to pdf.js
+285. [x] Remove divergent title-bar sizing fallbacks; reserve one native-point
+  control strip in every full-size-content title bar, including deferred windows.
+286. [x] Reject malformed source-link coordinates instead of guessing a cursor
+  position; remove the lossy zoom conversion's silent reset to 100 percent.
+287. [ ] Split local and server completion provenance into typed variants.
+  Local completions currently fabricate generation 0, an empty URI, and token 0.
+  Verify local completions without a server and rejection of stale server replies.
+288. [ ] undo/redo should jump the cursor to the last edit position
 = Bounded PDF page residency (2026-09-18)
 
 - Items 198–200: PDF inspection now publishes a page catalog containing only
@@ -2405,6 +2422,70 @@ portable whole-system resource score.
   the nearest contiguous pages when decoded-pixel or texture limits are
   reached. Added focused boundary, centered-window, and demand-distance tests
   in `src/pdf_pages.rs` and `src/preview.rs`.
-- Items 261, 263–266, 268–270, and 280–282 remain open. The table-editor,
+- Items 263–266, 268–270, and 280–282 remain open. The table-editor,
   Vim, smooth-resize, and Explorer-drop-selection work needs a separate pass
   because each crosses an existing interaction or ownership boundary.
+
+= Tinymist live resize and zoom (21 September 2026)
+
+- The bundled frontend enqueues a document rerender on every resize and delays
+  viewport changes while rendering. Its Ctrl-wheel handler accumulates 20 pixels
+  before selecting a discrete zoom step. Both policies impede continuous motion.
+- Added a small initialization adapter for the pinned full-document SVG renderer.
+  Resize events coalesce to one rescale per animation frame, using Tinymist's own
+  scroll anchoring. Document edits still use the normal compile/render pipeline.
+  Ctrl-wheel uses accumulated exponential scaling anchored to the pointer;
+  keyboard plus/minus zoom around the viewport center and zero restores fit width.
+  Wry keyboard zoom is disabled to avoid two independent shortcut owners; native
+  macOS pinch magnification remains enabled. Raster preview is unchanged.
+- Adapter tests cover bounded scheduling, no idle frames or document rerenders,
+  pointer anchoring, limits, reset, input fields, and document disappearance.
+  CI runs the dependency-free Node tests. See `docs/preview-zoom.md` for real
+  frontend measurements and native verification limitations.
+
+= Fallback audit (21 September 2026)
+
+- Removed root-versus-child title-bar measurement branches. Deferred document
+  callbacks pass no Frame, so the earlier root-gate removal was insufficient.
+  All five title bars now explicitly reserve 80 native points, divided by UI
+  zoom. This is a common layout policy, independent of focus or handle availability;
+  no native metric calls or additional repaint requests are needed.
+- Invalid source-link coordinates now fail parsing instead of redirecting to
+  line or column 1, or overriding an invalid query with a valid fragment.
+  Omitting the column still means the first column by design.
+- Zoom arithmetic now widens losslessly before clamping to the supported range.
+- Retained intentional recovery: Tinymist's five-attempt restart policy and PDF
+  recovery; reported tool discovery alternatives; unavailable custom theme/font
+  recovery; bundled glyph coverage; retained preview pixels during compilation.
+  Removing these would reduce availability or hide document contents when external
+  dependencies fail. They are distinct from fabricated internal state.
+- Follow-up 287 targets fabricated local-completion provenance. Filesystem
+  canonicalization fallbacks need a separate path-identity review: unsaved paths
+  legitimately do not exist yet, so globally requiring canonicalization is wrong.
+
+= Typst tooltip language contract (21 September 2026)
+
+- Item 261 is complete. Tinymist uses `typc` for marked Typst code snippets,
+  while `typ` and `typst` represent ordinary Typst source. Popup highlighting
+  already had the correct synthetic `#{…}` parser context for `typc`; the
+  remaining weakness was that the mode decision only accepted one exact,
+  lowercase spelling and the cache could retain equivalent language tags as
+  separate entries.
+- Tooltip code tags are now normalized once at the cache boundary and routed
+  through one explicit source/code/generic mode classifier. `typc` remains
+  code-mode; `typ`, `typst`, and descriptive `typst-code` aliases remain
+  source/code-compatible; all other languages continue through Syntect.
+  Added regressions cover whitespace/case variants, aliases, generic fallback,
+  source-vs-code behavior, and a realistic Tinymist function signature.
+- Typst's parser does not know Tinymist's display-only `|` type-union notation.
+  `typc` parsing now substitutes a same-width valid operator only in the
+  hidden parser copy, then restores the exact signature text and byte ranges
+  for display and copying. This prevents one union from cascading error
+  styling through later defaults and annotations.
+- Tinymist joins hover sections with `---`, and some package docs currently
+  return a noisy multi-line `failed to parse docs` compiler dump. The popup
+  renderer now paints the divider semantically and suppresses that diagnostic
+  section while retaining the useful signature and documentation around it.
+- The fresh `function-tooltip` Catppuccin Latte capture was inspected: the
+  `typc` function signature keeps keyword, function, parameter, operator, and
+  literal colors without leaking synthetic delimiters into the popup.

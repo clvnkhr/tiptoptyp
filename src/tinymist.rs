@@ -164,9 +164,8 @@ impl PreviewOptions {
             "--preview-mode=document".to_owned(),
             format!("--invert-colors={}", self.invert_colors.as_arg()),
         ]);
-        // Tinymist labels partial rendering experimental. Its visible-page
-        // cache can fail to refill after large scroll or zoom jumps, so the
-        // desktop editor deliberately requests the complete document.
+        // Keep complete document rendering until viewport refill and native
+        // interaction have been verified for partial rendering.
         arguments.push("--partial-rendering=false".to_owned());
         // This is a native application: opening the system browser would be a
         // surprising side effect and could expose a stale preview tab.

@@ -83,7 +83,7 @@ mod tests {
         let icon = runtime_icon();
         let mut neutral = 0usize;
         let mut accent = 0usize;
-        for pixel in icon.rgba.chunks_exact(4) {
+        for pixel in icon.rgba.as_chunks::<4>().0 {
             if pixel[3] > 240 && pixel[0] > 230 && pixel[1] > 225 && pixel[2] > 215 {
                 neutral += 1;
             }

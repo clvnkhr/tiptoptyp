@@ -772,10 +772,7 @@ impl SettingsWindow {
             .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     #[cfg(target_os = "macos")]
-                    ui.add_space(
-                        METRICS.toolbar.traffic_lights_fallback_width
-                            + METRICS.toolbar.traffic_lights_gap,
-                    );
+                    theme::reserve_window_controls(ui);
                     crate::window_logo::show(ui, captures);
                     ui.label(RichText::new("Settings").strong());
                     #[cfg(not(target_os = "macos"))]

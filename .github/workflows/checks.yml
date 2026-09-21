@@ -40,26 +40,28 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libegl1-mesa-dev libgtk-3-dev
       - name: Install Rust
-        run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
+        run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
       - name: Install cargo-deny
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny
       - name: Dependency policy
-        run: cargo +1.95.0 deny check
+        run: cargo +1.98.1 deny check
       - name: Formatting
-        run: cargo +1.95.0 fmt --all -- --check
+        run: cargo +1.98.1 fmt --all -- --check
       - name: Clippy
-        run: cargo +1.95.0 clippy --locked --all-targets -- -D warnings
+        run: cargo +1.98.1 clippy --locked --all-targets -- -D warnings
       - name: Application and core tests
-        run: cargo +1.95.0 test --locked --no-fail-fast
+        run: cargo +1.98.1 test --locked --no-fail-fast
+      - name: Embedded preview interaction tests
+        run: node --test scripts/test-preview-navigation.mjs
       - name: Packaging tests
-        run: cargo +1.95.0 test --locked --manifest-path xtask/Cargo.toml
+        run: cargo +1.98.1 test --locked --manifest-path xtask/Cargo.toml
       - name: Profiling infrastructure checks
         run: |
-          cargo +1.95.0 fmt --manifest-path xtask/Cargo.toml -- --check
-          cargo +1.95.0 clippy --locked --all-targets --features profiling -- -D warnings
-          cargo +1.95.0 test --locked --features profiling --no-fail-fast
+          cargo +1.98.1 fmt --manifest-path xtask/Cargo.toml -- --check
+          cargo +1.98.1 clippy --locked --all-targets --features profiling -- -D warnings
+          cargo +1.98.1 test --locked --features profiling --no-fail-fast
 
   real-tools:
     name: Real Typst and Tinymist (macOS)
@@ -70,7 +72,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install Rust
-        run: rustup toolchain install 1.95.0 --profile minimal
+        run: rustup toolchain install 1.98.1 --profile minimal
       - name: Install cargo-about
         uses: taiki-e/install-action@v2
         with:
@@ -80,14 +82,14 @@ jobs:
       - name: Install Poppler
         run: brew install poppler
       - name: Fetch hash-verified pinned sidecars
-        run: cargo +1.95.0 run --locked --manifest-path xtask/Cargo.toml -- fetch-sidecars
+        run: cargo +1.98.1 run --locked --manifest-path xtask/Cargo.toml -- fetch-sidecars
       - name: Run real-tool integration tests
         shell: bash
         run: |
-          target="$(rustc +1.95.0 -vV | sed -n 's/^host: //p')"
+          target="$(rustc +1.98.1 -vV | sed -n 's/^host: //p')"
           test -n "$target"
           export TIPTOPTYP_TEST_TYPST="$PWD/toolchain/bin/typst-$target"
           export TIPTOPTYP_TEST_TINYMIST="$PWD/toolchain/bin/tinymist-$target"
           test -x "$TIPTOPTYP_TEST_TYPST"
           test -x "$TIPTOPTYP_TEST_TINYMIST"
-          cargo +1.95.0 test --locked --bin tiptoptyp -- --ignored --test-threads=1
+          cargo +1.98.1 test --locked --bin tiptoptyp -- --ignored --test-threads=1

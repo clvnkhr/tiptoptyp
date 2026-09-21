@@ -61,7 +61,7 @@ and
 
 ## Requirements
 
-- Rust 1.95 or newer
+- Rust 1.98 or newer
 - `curl` and `tar` when fetching the pinned sidecars for a development build
 - Poppler's `pdftoppm` on `PATH` for native PDF rendering; `pdftohtml` from the
   same package enables clickable link hotspots

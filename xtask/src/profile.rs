@@ -560,9 +560,7 @@ fn save_process_resources(path: &Path, pid: u32) -> Result<(), String> {
             ])
             .output()
         {
-            Ok(output) if output.status.success() => {
-                String::from_utf8_lossy(&output.stdout).into()
-            }
+            Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout).into(),
             _ => "process group exited or resource reading unavailable\n".into(),
         }
     } else {

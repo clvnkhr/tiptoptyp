@@ -918,8 +918,6 @@ pub struct SpacingMetrics {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ToolbarMetrics {
     pub compact_breakpoint: f32,
-    pub traffic_lights_fallback_width: f32,
-    pub traffic_lights_gap: f32,
     pub title_character_width: f32,
     pub title_padding: f32,
     pub title_height: f32,
@@ -927,6 +925,13 @@ pub struct ToolbarMetrics {
     pub compact_title_max: f32,
     pub title_min: f32,
     pub title_max: f32,
+}
+
+/// All full-size-content title bars reserve the same native-point strip for
+/// AppKit's standard controls. UI zoom must not shrink this native footprint.
+#[cfg(target_os = "macos")]
+pub(crate) fn reserve_window_controls(ui: &mut egui::Ui) {
+    ui.add_space(80.0 / ui.ctx().zoom_factor());
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1129,8 +1134,6 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
     },
     toolbar: ToolbarMetrics {
         compact_breakpoint: 620.0,
-        traffic_lights_fallback_width: 64.0,
-        traffic_lights_gap: 4.0,
         title_character_width: 8.0,
         title_padding: 8.0,
         title_height: 20.0,

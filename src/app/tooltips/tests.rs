@@ -419,3 +419,59 @@ fn tooltip_child_scroll_does_not_wake_parent_but_leaving_dismisses() {
         42
     );
 }
+
+#[test]
+fn tooltip_code_language_tags_keep_typst_source_and_code_modes_distinct() {
+    assert_eq!(
+        tooltip_code_mode(&normalize_tooltip_code_token(" TypSt ")),
+        TooltipCodeMode::TypstSource
+    );
+    for token in ["typc", " typst-code ", "TYPST_CODE", "typstcode"] {
+        assert_eq!(
+            tooltip_code_mode(&normalize_tooltip_code_token(token)),
+            TooltipCodeMode::TypstCode
+        );
+    }
+    assert_eq!(
+        tooltip_code_mode(&normalize_tooltip_code_token("rust")),
+        TooltipCodeMode::Generic
+    );
+}
+
+#[test]
+fn tooltip_markdown_treats_tinymist_separators_and_doc_failures_as_structure() {
+    let blocks = parse_tooltip_markdown(
+        "```typc\nlet theorem()\n```\n\n---\n\nfailed to parse docs: error:\nunexpected argument: scale-preview\n/path/to/wrapper.typ:17:5\n^^^^^^^^^^^^^^^^^^^^\n",
+    );
+    assert!(matches!(blocks.first(), Some(MarkdownBlock::Code { .. })));
+    assert!(!blocks.iter().any(|block| {
+        matches!(
+            block,
+            MarkdownBlock::Line { spans, .. }
+                if spans.iter().any(|span| span.text.contains("failed to parse docs"))
+        )
+    }));
+    assert!(
+        !blocks
+            .iter()
+            .any(|block| matches!(block, MarkdownBlock::Separator))
+    );
+
+    let blocks = parse_tooltip_markdown("Signature\n\n---\n\nDocumentation.");
+    assert!(
+        blocks
+            .iter()
+            .any(|block| matches!(block, MarkdownBlock::Separator))
+    );
+
+    let blocks = parse_tooltip_markdown(
+        "````typ\nfailed to parse docs: error: unexpected argument: scale-preview\n   ┌─ /path/wrapper.typ:17:5\n17 │ ````, scale-preview: 90%)\n   │ ^^^^^^^^^^^^^^^^^^\n\nTheorem Environment\n\n#example(```typ\n#theorem[Body]\n```, scale-preview: 90%)\n````",
+    );
+    let Some(MarkdownBlock::Code { source, token }) = blocks.first() else {
+        panic!("nested documentation fence should remain one code block");
+    };
+    assert_eq!(token, "typ");
+    assert!(!source.contains("failed to parse docs"));
+    assert!(source.contains("Theorem Environment"));
+    assert!(source.contains("#example(```typ"));
+}

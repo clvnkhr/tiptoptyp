@@ -1030,7 +1030,9 @@ pub fn zoom_anchored_offset(
 /// untouched, so switching mode is lossless.
 pub fn dark_preview_rgba(rgba: &[u8]) -> Vec<u8> {
     let [red_percent, green_percent, blue_percent] = METRICS.preview.dark_transform_rgb_percent;
-    rgba.chunks_exact(4)
+    rgba.as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|pixel| {
             // A slightly blue-black inversion is more comfortable than a raw
             // photographic negative for predominantly black-on-white pages.

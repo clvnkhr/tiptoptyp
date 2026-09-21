@@ -4618,6 +4618,22 @@ fn tooltip_typst_fences_respect_source_and_code_modes() {
     .unwrap();
     assert_eq!(code_job.text, code);
     assert_eq!(color_at(&code_job, 0), keyword);
+
+    let signature = "let text(body, size: length = 1em, fill: color = black);";
+    let signature_job = tooltip_code_job(
+        &generic,
+        &mut typst,
+        signature,
+        " TypSt-CoDe ",
+        true,
+        theme::default_syntax_palette(true),
+    )
+    .unwrap();
+    assert_eq!(signature_job.text, signature);
+    assert_eq!(
+        color_at(&signature_job, signature.find("let").unwrap()),
+        keyword
+    );
 }
 
 #[test]
@@ -6661,6 +6677,47 @@ fn projected_application_toolbar_order_and_right_alignment_survive_resizing() {
             width - previous_right <= 12.0,
             "controls must hug the right edge"
         );
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn toolbar_reserves_native_controls_without_a_frame_at_every_ui_scale() {
+    for zoom in [0.75, 1.0, 1.5] {
+        let context = egui::Context::default();
+        context.set_zoom_factor(zoom);
+        context
+            .run_ui(Default::default(), |ui| {
+                ui.horizontal(|ui| {
+                    let start = ui.cursor().left();
+                    theme::reserve_window_controls(ui);
+                    let reserved = ui.cursor().left() - start;
+                    assert!(
+                        (reserved * ui.ctx().zoom_factor() - 80.0).abs() <= 1.0,
+                        "native inset at zoom {zoom}: {reserved} egui points"
+                    );
+                });
+            })
+            .drop_without_applying_deltas();
+    }
+}
+
+#[test]
+fn malformed_source_links_do_not_guess_a_cursor_position() {
+    for suffix in [
+        "?line=oops#L2",
+        "?line=2&column=oops",
+        "?line=0",
+        "#L2:0",
+        "#L2:bad",
+        "#L2:3:4",
+    ] {
+        let url = url::Url::parse(&format!("file:///tmp/main.typ{suffix}")).unwrap();
+        assert_eq!(source_position_from_url(&url), None, "{suffix}");
+    }
+    for suffix in ["?line=2", "#L2"] {
+        let url = url::Url::parse(&format!("file:///tmp/main.typ{suffix}")).unwrap();
+        assert_eq!(source_position_from_url(&url), Some((2, 1)));
     }
 }
 

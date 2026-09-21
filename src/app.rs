@@ -3093,16 +3093,30 @@ impl EditorApp {
         }
 
         if self.preview_visible()
-            && (self.document().kind().preview_only() || !self.interactive_preview_active())
-        {
-            let preview = if self.document().kind().preview_only() {
-                &mut self.asset_preview
-            } else {
-                &mut self.preview
-            };
-            if let Some(action) = context.input_mut_for(shortcut_viewport, |input| {
+            && let Some(action) = context.input_mut_for(shortcut_viewport, |input| {
                 consume_preview_zoom_shortcut(input, &shortcuts)
-            }) {
+            })
+        {
+            if self.interactive_preview_active() && !self.document().kind().preview_only() {
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                if let Some(webview) = &self.webview {
+                    let command = match action {
+                        PreviewZoomAction::In => "in",
+                        PreviewZoomAction::Out => "out",
+                        PreviewZoomAction::Reset => "reset",
+                    };
+                    if let Err(error) = webview.evaluate_script(&format!(
+                        "window.dispatchEvent(new CustomEvent('tiptoptyp-preview-zoom', {{detail: '{command}'}}))"
+                    )) {
+                        self.show_file_error(format!("Could not zoom the preview: {error}"));
+                    }
+                }
+            } else {
+                let preview = if self.document().kind().preview_only() {
+                    &mut self.asset_preview
+                } else {
+                    &mut self.preview
+                };
                 raster_view::request_zoom(preview, action);
             }
         }
@@ -3458,8 +3472,8 @@ impl EditorApp {
             .pending_settings
             .clone()
             .unwrap_or_else(|| self.settings.clone());
-        let current = i16::try_from(edited.ui_scale_percent).unwrap_or(100);
-        edited.ui_scale_percent = current.saturating_add(delta).clamp(75, 150) as u16;
+        edited.ui_scale_percent =
+            (i32::from(edited.ui_scale_percent) + i32::from(delta)).clamp(75, 150) as u16;
         let ui_scale_percent = edited.ui_scale_percent;
         self.queue_settings(edited, context);
         apply_ui_scale(context, ui_scale_percent);
@@ -5855,21 +5869,7 @@ impl EditorApp {
             theme::apply_compact_control_spacing(ui);
 
             #[cfg(target_os = "macos")]
-            {
-                use raw_window_handle::HasWindowHandle as _;
-
-                let traffic_lights_width = self
-                    .window_host
-                    .is_root()
-                    .then(|| frame.and_then(|frame| frame.window_handle().ok()))
-                    .flatten()
-                    .and_then(|handle| {
-                        eframe::WindowChromeMetrics::from_window_handle(&handle.as_raw())
-                    })
-                    .map(|metrics| metrics.traffic_lights_size.x / ui.ctx().zoom_factor().max(0.1))
-                    .unwrap_or(METRICS.toolbar.traffic_lights_fallback_width);
-                ui.add_space(traffic_lights_width + METRICS.toolbar.traffic_lights_gap);
-            }
+            theme::reserve_window_controls(ui);
 
             let toolbar_width = ui.available_width();
             let compact = toolbar_width < METRICS.toolbar.compact_breakpoint;
@@ -9703,9 +9703,9 @@ fn source_position_from_url(url: &url::Url) -> Option<(usize, usize)> {
     let mut column = 1;
     for (key, value) in url.query_pairs() {
         if key.eq_ignore_ascii_case("line") {
-            line = value.parse::<usize>().ok();
+            line = Some(value.parse::<usize>().ok()?);
         } else if key.eq_ignore_ascii_case("column") {
-            column = value.parse::<usize>().unwrap_or(1);
+            column = value.parse::<usize>().ok()?;
         }
     }
     if line.is_none()
@@ -9718,13 +9718,16 @@ fn source_position_from_url(url: &url::Url) -> Option<(usize, usize)> {
             .unwrap_or(fragment)
             .trim_start_matches(['=', ':']);
         let mut parts = fragment.split([':', ',']);
-        line = parts.next().and_then(|value| value.parse::<usize>().ok());
-        column = parts
-            .next()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(column);
+        line = Some(parts.next()?.parse::<usize>().ok()?);
+        if let Some(value) = parts.next() {
+            column = value.parse::<usize>().ok()?;
+        }
+        if parts.next().is_some() {
+            return None;
+        }
     }
-    line.map(|line| (line.max(1), column.max(1)))
+    line.filter(|line| *line > 0 && column > 0)
+        .map(|line| (line, column))
 }
 
 fn char_index_at_line_column(source: &str, line: usize, column: usize) -> usize {
