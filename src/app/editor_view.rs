@@ -506,7 +506,7 @@ impl EditorApp {
                     ui.ctx().request_repaint();
                 }
             }
-            if !changed && git_gutter {
+            if git_gutter {
                 let logical_rows = line_rows
                     .iter()
                     .filter_map(|rows| {
@@ -515,12 +515,18 @@ impl EditorApp {
                         Some(first.union(last).translate(output.galley_pos.to_vec2()))
                     })
                     .collect::<Vec<_>>();
-                git_chunk_clicked = crate::git::editor::view::show_markers(
+                let marker_action = crate::git::editor::view::show_markers(
                     ui,
                     &self.git_editor.hunks,
                     &logical_rows,
                     output.response.rect.left(),
                 );
+                // The markers may be stale in the frame that accepted an
+                // edit, so keep painting them for continuity but do not open
+                // a chunk from that frame's old line mapping.
+                if !changed {
+                    git_chunk_clicked = marker_action;
+                }
             }
 
             let requested_caret = match tooltip_request {

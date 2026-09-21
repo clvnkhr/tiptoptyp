@@ -214,6 +214,16 @@ resources form a valid local bundle. Public distribution must replace `-` in
 the packager signing configuration with a Developer ID Application identity
 and provide notarization credentials.
 
+For a local macOS build that installs the verified bundle into `/Applications`
+and launches it, run:
+
+```sh
+scripts/install-macos-app.sh
+```
+
+Set `TIPTOPTYP_APPLICATIONS_DIR="$HOME/Applications"` to install into a
+user-owned Applications directory instead.
+
 ## Keyboard shortcuts
 
 | Action | Shortcut |

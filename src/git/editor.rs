@@ -287,6 +287,11 @@ impl GitEditorState {
                 .current
                 .as_ref()
                 .is_some_and(|old| old.workspace == key.workspace && old.path == key.path);
+            let same_document = self.current.as_ref().is_some_and(|old| {
+                same_file
+                    && old.document.owner == key.document.owner
+                    && old.document.epoch == key.document.epoch
+            });
             if !same_file {
                 // An obsolete repository scan must not delay decorations in
                 // the newly opened file. Ordinary edits retain the existing
@@ -301,7 +306,13 @@ impl GitEditorState {
                 self.statuses = FileStatuses::default();
                 self.repository = None;
             }
-            self.hunks.clear();
+            if !same_document {
+                // Keep stale markers visible while an edit's debounced scan
+                // is pending. A completed scan replaces them atomically;
+                // document replacements must not inherit another buffer's
+                // decorations.
+                self.hunks.clear();
+            }
             // A selected chunk is tied to the exact buffer revision that
             // produced it. Keep stale text from surviving a file switch or a
             // subsequent edit while the replacement scan is pending.
@@ -968,6 +979,57 @@ mod tests {
         state.prepare_request(&key(root, 2), Instant::now());
 
         assert!(state.chunk.is_none());
+    }
+
+    #[test]
+    fn editing_keeps_stale_hunks_until_the_fresh_scan_is_accepted() {
+        let root = Path::new("/project");
+        let stale = Hunk {
+            text: "stale".into(),
+            changes: vec![LineChange {
+                lines: 1..2,
+                kind: ChangeKind::Modified,
+                old_line_count: 1,
+                new_line_count: 1,
+            }],
+        };
+        let fresh = Hunk {
+            text: "fresh".into(),
+            changes: vec![LineChange {
+                lines: 3..4,
+                kind: ChangeKind::Added,
+                old_line_count: 0,
+                new_line_count: 1,
+            }],
+        };
+        let mut state = GitEditorState {
+            current: Some(key(root, 1)),
+            repository: Some(root.into()),
+            hunks: vec![stale.clone()],
+            ..Default::default()
+        };
+
+        state.prepare_request(&key(root, 2), Instant::now());
+        assert_eq!(state.hunks, [stale]);
+
+        state.accept(ScanResult {
+            key: key(root, 2),
+            repository: Some(root.into()),
+            status: FileStatuses::default(),
+            hunks: Ok(vec![fresh.clone()]),
+        });
+        assert_eq!(state.hunks, [fresh]);
+
+        let replacement = RequestKey {
+            document: DocumentKey {
+                epoch: 2,
+                revision: 0,
+                ..key(root, 2).document
+            },
+            ..key(root, 2)
+        };
+        state.prepare_request(&replacement, Instant::now());
+        assert!(state.hunks.is_empty());
     }
 
     #[test]
