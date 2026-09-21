@@ -767,21 +767,21 @@ GPU/texture-residency observation remain explicitly unavailable.
 287. [ ] Split local and server completion provenance into typed variants.
   Local completions currently fabricate generation 0, an empty URI, and token 0.
   Verify local completions without a server and rejection of stale server replies.
-288. [ ] undo/redo should jump the cursor to the last edit position
+288. [ ] undo/redo should jump the cursor to the last edit position (and move the viewport to show it)
 289. [ ] Document and expose a deliberate partial-rendering buffer policy for the
-     Tinymist preview. The pinned frontend currently offers only the boolean
-     `--partial-rendering` switch: its SVG window is derived from the preview
-     scroll position and viewport, expanded to page boundaries, and is not tied
-     to the editor cursor. Decide whether a bounded page/viewport prefetch is
-     worth implementing upstream or in the adapter, then measure scroll refill
-     latency and memory before changing the production default.
+  Tinymist preview. The pinned frontend currently offers only the boolean
+  `--partial-rendering` switch: its SVG window is derived from the preview
+  scroll position and viewport, expanded to page boundaries, and is not tied
+  to the editor cursor. Decide whether a bounded page/viewport prefetch is
+  worth implementing upstream or in the adapter, then measure scroll refill
+  latency and memory before changing the production default.
 290. [ ] Add a bounded macOS bitmap transition for the live Tinymist viewport.
-     Keep one in-memory WKWebView snapshot, show it only during an active
-     zoom/divider transition, and replace it after the live preview settles.
-     Capture no image every frame, invalidate stale callbacks when the webview
-     or document changes, preserve pointer anchoring, and verify that the
-     overlay cannot steal editor/preview input. Add deterministic frame/state
-     tests and a native geometry trace before enabling it by default.
+  Keep one in-memory WKWebView snapshot, show it only during an active
+  zoom/divider transition, and replace it after the live preview settles.
+  Capture no image every frame, invalidate stale callbacks when the webview
+  or document changes, preserve pointer anchoring, and verify that the
+  overlay cannot steal editor/preview input. Add deterministic frame/state
+  tests and a native geometry trace before enabling it by default.
 = Bounded PDF page residency (2026-09-18)
 
 - Items 198–200: PDF inspection now publishes a page catalog containing only
