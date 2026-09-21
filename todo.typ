@@ -775,7 +775,7 @@ GPU/texture-residency observation remain explicitly unavailable.
   to the editor cursor. Decide whether a bounded page/viewport prefetch is
   worth implementing upstream or in the adapter, then measure scroll refill
   latency and memory before changing the production default.
-290. [ ] Add a bounded macOS bitmap transition for the live Tinymist viewport.
+290. [ ] (deferred) Add a bounded macOS bitmap transition for the live Tinymist viewport.
   Keep one in-memory WKWebView snapshot, show it only during an active
   zoom/divider transition, and replace it after the live preview settles.
   Capture no image every frame, invalidate stale callbacks when the webview
