@@ -546,7 +546,7 @@ mod tests {
             let mut galley = None;
             context
                 .run_ui(Default::default(), |ui| {
-                    galley = Some(cache.diff_galley(ui, &diff.text));
+                    galley = Some(cache.diff_galley(ui, &diff.text, ui.available_width().max(1.0)));
                 })
                 .drop_without_applying_deltas();
             galley.unwrap()

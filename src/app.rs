@@ -9478,11 +9478,7 @@ enum FileDropTarget {
 struct RememberedFileDropTarget(FileDropTarget);
 
 fn offer_file_drop_target(ui: &egui::Ui, rect: Rect, target: FileDropTarget) {
-    if ui
-        .ctx()
-        .pointer_latest_pos()
-        .is_some_and(|pos| rect.intersect(ui.clip_rect()).contains(pos))
-    {
+    if file_drop_target_contains_pointer(ui, rect) {
         let id = viewport_scoped_id(ui.ctx(), "file-drop-target");
         ui.ctx().data_mut(|data| {
             data.insert_temp(id, target.clone());
@@ -9493,6 +9489,19 @@ fn offer_file_drop_target(ui: &egui::Ui, rect: Rect, target: FileDropTarget) {
             data.insert_persisted(id, RememberedFileDropTarget(target));
         });
     }
+}
+
+fn file_drop_target_contains_pointer(ui: &egui::Ui, rect: Rect) -> bool {
+    ui.ctx()
+        .pointer_latest_pos()
+        .is_some_and(|pos| rect.intersect(ui.clip_rect()).contains(pos))
+}
+
+fn file_drag_hovered_over(context: &egui::Context, rect: Rect) -> bool {
+    context.input(|input| !input.raw.hovered_files.is_empty())
+        && context
+            .pointer_latest_pos()
+            .is_some_and(|pos| rect.contains(pos))
 }
 
 fn offer_folder_row_drop(ui: &egui::Ui, row: Rect, directory: &Path) {

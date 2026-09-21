@@ -54,9 +54,11 @@ pub(super) fn show(
     state: &mut ExplorerPanelState,
     mut show_git: impl FnMut(&mut egui::Ui) -> crate::git::view::Output,
 ) -> Output {
+    let explorer_rect = ui.max_rect();
+    let file_drag_hovered = super::file_drag_hovered_over(ui.ctx(), explorer_rect);
     offer_file_drop_target(
         ui,
-        ui.max_rect(),
+        explorer_rect,
         FileDropTarget::Folder(input.root.to_owned()),
     );
     let label = input.label;
@@ -322,7 +324,50 @@ pub(super) fn show(
         output.repaint = true;
     }
 
+    if file_drag_hovered {
+        paint_file_drop_hint(ui);
+    }
+
     output
+}
+
+fn paint_file_drop_hint(ui: &egui::Ui) {
+    let rect = ui.max_rect().intersect(ui.clip_rect()).shrink(1.0);
+    if rect.width() <= 2.0 || rect.height() <= 2.0 {
+        return;
+    }
+    let accent = theme::palette(ui.ctx()).accent;
+    let painter = ui.painter();
+    painter.rect_filled(
+        rect,
+        theme::RADIUS.card as f32,
+        Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 24),
+    );
+    painter.rect_stroke(
+        rect,
+        theme::RADIUS.card as f32,
+        Stroke::new(2.0, accent),
+        StrokeKind::Inside,
+    );
+
+    let banner = Rect::from_center_size(
+        rect.center(),
+        Vec2::new((rect.width() - 16.0).max(1.0), 40.0_f32.min(rect.height())),
+    );
+    painter.rect_filled(banner, theme::RADIUS.card as f32, ui.visuals().panel_fill);
+    painter.rect_stroke(
+        banner,
+        theme::RADIUS.card as f32,
+        Stroke::new(1.5, accent),
+        StrokeKind::Inside,
+    );
+    painter.text(
+        banner.center(),
+        egui::Align2::CENTER_CENTER,
+        "Drop to add file",
+        theme::supporting_font(),
+        ui.visuals().strong_text_color(),
+    );
 }
 
 pub(super) fn add_workspace_nodes(

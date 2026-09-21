@@ -44,6 +44,7 @@ pub(super) struct Cache {
 struct DiffLayout {
     content: Arc<str>,
     style: DiffStyle,
+    max_width: f32,
     font_cache: Arc<egui::Galley>,
     galley: Arc<egui::Galley>,
 }
@@ -165,7 +166,12 @@ impl DiffStyle {
 }
 
 impl Cache {
-    pub(super) fn diff_galley(&mut self, ui: &egui::Ui, content: &Arc<str>) -> Arc<egui::Galley> {
+    pub(super) fn diff_galley(
+        &mut self,
+        ui: &egui::Ui,
+        content: &Arc<str>,
+        max_width: f32,
+    ) -> Arc<egui::Galley> {
         let style = DiffStyle::from_ui(ui);
         // As with viewport_fonts, an empty layout witnesses egui's font-cache
         // lifetime. Fonts, density, and atlas resets must invalidate retained
@@ -176,14 +182,19 @@ impl Cache {
         if let Some(layout) = &self.diff_layout
             && Arc::ptr_eq(&layout.content, content)
             && layout.style == style
+            && layout.max_width == max_width
             && Arc::ptr_eq(&layout.font_cache, &font_cache)
         {
             return Arc::clone(&layout.galley);
         }
-        let galley = ui.painter().layout_job(style.layout_job(content));
+        let mut job = style.layout_job(content);
+        job.wrap.max_width = max_width;
+        job.wrap.break_anywhere = true;
+        let galley = ui.painter().layout_job(job);
         self.diff_layout = Some(DiffLayout {
             content: Arc::clone(content),
             style,
+            max_width,
             font_cache,
             galley: Arc::clone(&galley),
         });
@@ -455,35 +466,17 @@ fn show_change_counts(ui: &mut egui::Ui, counts: LineChangeCounts) {
 }
 
 fn show_side_by_side_diff(ui: &mut egui::Ui, rows: &[DiffRow], style: &DiffStyle) {
-    let available_width = ui.available_width().max(2.0);
-    let gap = ui.spacing().item_spacing.x;
+    let available_width = diff_available_width(ui).max(2.0);
+    let gap = ui.spacing().item_spacing.x.min(available_width / 4.0);
     let line_height = ui
         .text_style_height(&egui::TextStyle::Monospace)
         .max(ui.spacing().interact_size.y);
     let line_number_width = 42.0;
-    let max_line_width = rows
-        .iter()
-        .flat_map(|row| {
-            row.full
-                .iter()
-                .chain(row.left.iter())
-                .chain(row.right.iter())
-        })
-        .map(|cell| {
-            ui.painter()
-                .layout_no_wrap(
-                    cell.text.clone(),
-                    style.font.clone(),
-                    style.color(cell.kind),
-                )
-                .size()
-                .x
-        })
-        .fold(0.0, f32::max);
-    let minimum_column_width = ((available_width - gap) / 2.0).max(1.0);
-    let column_width =
-        (max_line_width + line_number_width + 2.0 * theme::SPACE.small).max(minimum_column_width);
-    let total_width = (column_width * 2.0 + gap).max(available_width);
+    let column_width = ((available_width - gap) / 2.0).max(1.0);
+    let total_width = column_width * 2.0 + gap;
+    let horizontal_padding = 2.0 * theme::SPACE.small;
+    let side_text_width = (column_width - line_number_width - horizontal_padding).max(1.0);
+    let full_text_width = (total_width - horizontal_padding).max(1.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = gap;
         for label in ["Previous", "Current"] {
@@ -496,53 +489,72 @@ fn show_side_by_side_diff(ui: &mut egui::Ui, rows: &[DiffRow], style: &DiffStyle
     });
     for row in rows {
         if let Some(cell) = &row.full {
+            let galley = diff_cell_galley(ui, cell, style, full_text_width);
+            let row_height = galley.size().y.max(line_height);
             let (rect, _) =
-                ui.allocate_exact_size(egui::vec2(total_width, line_height), egui::Sense::hover());
+                ui.allocate_exact_size(egui::vec2(total_width, row_height), egui::Sense::hover());
             ui.painter()
                 .rect_filled(rect, 0.0, style.background(cell.kind));
-            show_diff_cell(ui, rect, cell, line_number_width, style);
+            show_diff_cell(ui, rect, cell, 0.0, galley, style);
             continue;
         }
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = gap;
-            for cell in [row.left.as_ref(), row.right.as_ref()] {
-                let (rect, _) = ui.allocate_exact_size(
-                    egui::vec2(column_width, line_height),
-                    egui::Sense::hover(),
-                );
-                if let Some(cell) = cell {
-                    ui.painter()
-                        .rect_filled(rect, 0.0, style.background(cell.kind));
-                    show_diff_cell(ui, rect, cell, line_number_width, style);
-                } else {
-                    ui.painter()
-                        .rect_filled(rect, 0.0, style.background(DiffLineKind::Context));
-                }
+        let left_galley = row
+            .left
+            .as_ref()
+            .map(|cell| diff_cell_galley(ui, cell, style, side_text_width));
+        let right_galley = row
+            .right
+            .as_ref()
+            .map(|cell| diff_cell_galley(ui, cell, style, side_text_width));
+        let row_height = left_galley
+            .as_ref()
+            .map_or(line_height, |galley| galley.size().y.max(line_height))
+            .max(
+                right_galley
+                    .as_ref()
+                    .map_or(line_height, |galley| galley.size().y.max(line_height)),
+            );
+        let (row_rect, _) =
+            ui.allocate_exact_size(egui::vec2(total_width, row_height), egui::Sense::hover());
+        let left_rect =
+            egui::Rect::from_min_size(row_rect.min, egui::vec2(column_width, row_height));
+        let right_rect = egui::Rect::from_min_size(
+            egui::pos2(row_rect.left() + column_width + gap, row_rect.top()),
+            egui::vec2(column_width, row_height),
+        );
+        for (cell, rect, galley) in [
+            (row.left.as_ref(), left_rect, left_galley),
+            (row.right.as_ref(), right_rect, right_galley),
+        ] {
+            if let Some(cell) = cell {
+                ui.painter()
+                    .rect_filled(rect, 0.0, style.background(cell.kind));
+                show_diff_cell(ui, rect, cell, line_number_width, galley.unwrap(), style);
+            } else {
+                ui.painter()
+                    .rect_filled(rect, 0.0, style.background(DiffLineKind::Context));
             }
-        });
+        }
     }
 }
 
-fn show_diff_cell(
-    ui: &mut egui::Ui,
-    rect: egui::Rect,
+fn diff_available_width(ui: &egui::Ui) -> f32 {
+    ui.available_width().min(ui.clip_rect().width()).max(1.0)
+}
+
+fn diff_cell_galley(
+    ui: &egui::Ui,
     cell: &DiffCell,
-    line_number_width: f32,
     style: &DiffStyle,
-) {
-    let inner = rect.shrink2(egui::vec2(theme::SPACE.small, 0.0));
-    let number = cell.line.map_or_else(String::new, |line| line.to_string());
-    let number_galley = ui.painter().layout_no_wrap(
-        number,
-        egui::TextStyle::Monospace.resolve(ui.style()),
-        ui.visuals().weak_text_color(),
-    );
-    ui.painter()
-        .galley(inner.min, number_galley, ui.visuals().weak_text_color());
-    let text_rect = egui::Rect::from_min_max(
-        egui::pos2(inner.left() + line_number_width, inner.top()),
-        inner.max,
-    );
+    max_width: f32,
+) -> Arc<egui::Galley> {
+    let mut job = diff_cell_job(cell, style);
+    job.wrap.max_width = max_width;
+    job.wrap.break_anywhere = true;
+    ui.painter().layout_job(job)
+}
+
+fn diff_cell_job(cell: &DiffCell, style: &DiffStyle) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
     if let Some(changed) = &cell.changed {
         if changed.start > 0 {
@@ -589,11 +601,37 @@ fn show_diff_cell(
             },
         );
     }
-    ui.painter().galley(
-        text_rect.left_top(),
-        ui.painter().layout_job(job),
-        style.color(cell.kind),
+    job
+}
+
+fn show_diff_cell(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    cell: &DiffCell,
+    line_number_width: f32,
+    galley: Arc<egui::Galley>,
+    style: &DiffStyle,
+) {
+    let inner = rect.shrink2(egui::vec2(theme::SPACE.small, 0.0));
+    let number = cell.line.map_or_else(String::new, |line| line.to_string());
+    if !number.is_empty() {
+        let number_galley = ui.painter().layout_no_wrap(
+            number,
+            egui::TextStyle::Monospace.resolve(ui.style()),
+            ui.visuals().weak_text_color(),
+        );
+        ui.painter()
+            .galley(inner.min, number_galley, ui.visuals().weak_text_color());
+    }
+    let text_rect = egui::Rect::from_min_max(
+        egui::pos2(
+            (inner.left() + line_number_width).min(inner.right()),
+            inner.top(),
+        ),
+        inner.max,
     );
+    ui.painter()
+        .galley(text_rect.left_top(), galley, style.color(cell.kind));
 }
 
 pub(super) fn show_panel(ui: &mut egui::Ui, input: Input<'_>, cache: &mut Cache) -> Output {
@@ -874,7 +912,7 @@ fn show_diff(
                     ui.label(diff.selection.kind.empty_message());
                 }
                 Some(Ok(content)) => {
-                    egui::ScrollArea::both()
+                    egui::ScrollArea::vertical()
                         .id_salt((
                             "git-diff",
                             &diff.selection.path,
@@ -884,7 +922,8 @@ fn show_diff(
                         .auto_shrink([false, true])
                         .show(ui, |ui| match diff_style {
                             GitDiffStyle::Unified => {
-                                let galley = cache.diff_galley(ui, &content.text);
+                                let galley =
+                                    cache.diff_galley(ui, &content.text, diff_available_width(ui));
                                 ui.add(egui::Label::new(galley).selectable(true).extend());
                             }
                             GitDiffStyle::SideBySide => {
@@ -1070,6 +1109,33 @@ mod tests {
         assert_eq!(
             intra_line_change_ranges("old", "new text"),
             (Some(0..3), Some(0..8))
+        );
+    }
+
+    #[test]
+    fn long_diff_cells_wrap_to_their_available_width() {
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(320.0, 200.0))
+            .build_ui_state(
+                |ui, heights: &mut Option<(f32, f32)>| {
+                    let style = DiffStyle::from_ui(ui);
+                    let cell = DiffCell {
+                        text: "a-really-long-unbroken-source-token-that-must-wrap".to_owned(),
+                        kind: DiffLineKind::Added,
+                        line: Some(1),
+                        changed: None,
+                    };
+                    let narrow = diff_cell_galley(ui, &cell, &style, 80.0);
+                    let wide = diff_cell_galley(ui, &cell, &style, 800.0);
+                    *heights = Some((narrow.size().y, wide.size().y));
+                },
+                None,
+            );
+        harness.run();
+        let (narrow, wide) = harness.state().expect("layout heights");
+        assert!(
+            narrow > wide,
+            "narrow diff cells should wrap: {narrow} <= {wide}"
         );
     }
 

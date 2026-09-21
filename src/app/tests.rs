@@ -1055,6 +1055,55 @@ fn file_drop_target_survives_the_os_drop_frame() {
 }
 
 #[test]
+fn file_drop_hint_requires_a_file_drag_over_the_explorer() {
+    let context = egui::Context::default();
+    let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(100.0, 100.0));
+    context
+        .run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(200.0, 120.0))),
+                events: vec![egui::Event::PointerMoved(Pos2::new(40.0, 40.0))],
+                hovered_files: vec![egui::HoveredFile {
+                    path: Some(PathBuf::from("/source/file.typ")),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            |_| {},
+        )
+        .drop_without_applying_deltas();
+    assert!(file_drag_hovered_over(&context, rect));
+
+    context
+        .run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(200.0, 120.0))),
+                events: vec![egui::Event::PointerMoved(Pos2::new(140.0, 40.0))],
+                hovered_files: vec![egui::HoveredFile {
+                    path: Some(PathBuf::from("/source/file.typ")),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            |_| {},
+        )
+        .drop_without_applying_deltas();
+    assert!(!file_drag_hovered_over(&context, rect));
+
+    context
+        .run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(200.0, 120.0))),
+                events: vec![egui::Event::PointerMoved(Pos2::new(40.0, 40.0))],
+                ..Default::default()
+            },
+            |_| {},
+        )
+        .drop_without_applying_deltas();
+    assert!(!file_drag_hovered_over(&context, rect));
+}
+
+#[test]
 fn every_shared_menu_command_is_present_and_routes_from_the_popup() {
     use egui_kittest::{Harness, kittest::Queryable as _};
     for menu in [CommandMenu::File, CommandMenu::Edit, CommandMenu::View] {
