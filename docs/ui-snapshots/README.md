@@ -12,16 +12,14 @@ scripts/capture-theme-gallery.sh
 Ordinary timestamped captures remain private under `.tiptoptyp/screenshots`.
 Only deliberate `--ui-screenshot-latest` captures belong here.
 
-The maintained matrix contains exactly 68 decoded PNGs:
+The maintained matrix contains exactly 22 decoded PNGs:
 
-- the ready main editor/preview scene for every bundled light and dark theme;
-- all maintained custom themed popup, tooltip, modal, context-menu, window,
-  panel, and find/replace families in representative Catppuccin Latte and
-  Mocha themes, including both independent Settings theme pickers, the
-  Settings-local tooltip, and all three app-owned modal layouts;
-- deterministic diagnostics and compiling-preview lifecycle states;
-- inversion-then-hue-shift examples for both the main window and an elevated
-  menu viewport.
+- the ready main editor/preview and all 18 component scenes in Catppuccin Latte;
+- three Catppuccin Mocha samples: the main window, File dropdown and Save popup.
+
+Extra themes and color-transform variants remain opt-in. Panel and diagnostic
+scenes are covered in light mode; the default run does not repeat every scene
+in dark mode.
 
 [`gallery-manifest.tsv`](gallery-manifest.tsv) is the shared contract for the
 theme order, scene-to-viewport mapping, stable filename stems, visual smoke

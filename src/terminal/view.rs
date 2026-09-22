@@ -30,6 +30,7 @@ pub(crate) struct TerminalPane {
     revision: u64,
     grid: Option<Arc<Grid>>,
     error: Option<String>,
+    status: Option<Status>,
     wheel_remainder: f32,
     preedit: String,
 }
@@ -101,55 +102,39 @@ impl TerminalPane {
         }
     }
 
-    pub(crate) fn show(&mut self, ui: &mut egui::Ui, cwd: &Path) {
-        let colors = Colors {
-            foreground: ui.visuals().text_color(),
-            background: ui.visuals().extreme_bg_color,
-        };
-        let snapshot = self.session.as_ref().map(Session::snapshot);
-        if let Some(snapshot) = &snapshot {
+    pub(crate) fn sync_snapshot(&mut self) {
+        if let Some(snapshot) = self.session.as_ref().map(Session::snapshot) {
             if self.revision != snapshot.revision
                 && !same_cells(self.grid.as_deref(), snapshot.grid.as_deref())
             {
                 self.selection = None;
             }
             self.revision = snapshot.revision;
-            self.grid = snapshot.grid.clone();
+            self.grid = snapshot.grid;
+            self.status = Some(snapshot.status);
         }
-        let mut restart = false;
-        ui.horizontal(|ui| {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                restart = ui
-                    .button("Restart terminal")
-                    .on_hover_text("Stop this shell and start a new one in the current workspace")
-                    .clicked();
-                if let Some(snapshot) = &snapshot {
-                    let status = match &snapshot.status {
-                        Status::Starting => Some("Starting shell…"),
-                        Status::Exited(message) | Status::Failed(message) => Some(message.as_str()),
-                        Status::Running => None,
-                    };
-                    if let Some(status) = status {
-                        ui.add(egui::Label::new(status).truncate());
-                    }
-                }
-                let label = self
-                    .session
-                    .as_ref()
-                    .map_or(self.fixture_cwd.as_deref().unwrap_or(cwd), |session| {
-                        session.cwd.as_path()
-                    });
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(label.display().to_string()).weak())
-                            .truncate(),
-                    );
-                });
-            });
-        });
-        if restart {
-            self.restart();
+    }
+
+    pub(crate) fn status_text(&self) -> Option<&str> {
+        match self.status.as_ref()? {
+            Status::Starting => Some("Starting shell…"),
+            Status::Exited(message) | Status::Failed(message) => Some(message),
+            Status::Running => None,
         }
+    }
+
+    pub(crate) fn starting_directory<'a>(&'a self, workspace: &'a Path) -> &'a Path {
+        self.session.as_ref().map_or(
+            self.fixture_cwd.as_deref().unwrap_or(workspace),
+            |session| session.cwd.as_path(),
+        )
+    }
+
+    pub(crate) fn show(&mut self, ui: &mut egui::Ui, cwd: &Path) {
+        let colors = Colors {
+            foreground: ui.visuals().text_color(),
+            background: ui.visuals().extreme_bg_color,
+        };
         if let Some(error) = self.error.clone() {
             ui.horizontal_wrapped(|ui| {
                 ui.colored_label(ui.visuals().error_fg_color, error);

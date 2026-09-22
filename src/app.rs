@@ -43,7 +43,7 @@ mod raster_view;
 mod saves;
 mod tabs;
 mod terminal_panel;
-use crate::terminal::{BottomPanel, TerminalPane, terminal_id};
+use crate::terminal::{BottomPanel, PanelTab, TerminalPane, terminal_id};
 mod workspace_view;
 use lifecycle::DocumentLifecycle;
 mod native_views;
@@ -1433,7 +1433,7 @@ impl EditorApp {
             editor_data: EditorDerivedData::default(),
             view_mode: ViewMode::Split,
             explorer: ExplorerPanelState::default(),
-            bottom_panel: BottomPanel::Hidden,
+            bottom_panel: BottomPanel::default(),
             terminal: TerminalPane::default(),
             settings_visible: false,
             settings_open_requested: false,
@@ -1778,7 +1778,7 @@ impl EditorApp {
             return;
         }
         self.terminal = TerminalPane::default();
-        self.bottom_panel = BottomPanel::Hidden;
+        self.bottom_panel = BottomPanel::default();
         self.tabs = tabs::Tabs::default();
         let _ = self.compiler.pause(self.document().revision());
         self.stop_tinymist_session();
@@ -3420,8 +3420,8 @@ impl EditorApp {
                 let cursor = self.editor_snapshot(context).cursor.primary.index.0;
                 self.jump_source_to_preview(cursor);
             }
-            AppCommand::Problems => self.toggle_bottom_panel(BottomPanel::Problems, context),
-            AppCommand::Terminal => self.toggle_bottom_panel(BottomPanel::Terminal, context),
+            AppCommand::Panel => self.toggle_panel(context),
+            AppCommand::Terminal => self.toggle_bottom_panel(PanelTab::Terminal, context),
             AppCommand::Explorer => {
                 self.explorer.toggle();
                 context.request_repaint();
@@ -6066,23 +6066,36 @@ impl EditorApp {
 
             let tex_available = self.tex_mode_available();
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let panel = ui.add_enabled(
+                    self.native_command_enabled(AppCommand::Panel),
+                    egui::Button::selectable(
+                        self.bottom_panel.is_visible(),
+                        if compact { "" } else { "Panel" },
+                    )
+                    .min_size(if compact {
+                        METRICS.icon.button_size
+                    } else {
+                        Vec2::ZERO
+                    }),
+                );
+                if compact {
+                    paint_ui_icon(
+                        ui.painter(),
+                        panel.rect.shrink(4.0),
+                        UiIcon::Panel,
+                        ui.style().interact(&panel).fg_stroke.color,
+                    );
+                    panel.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Panel")
+                    });
+                }
                 if native_hover_text(
-                    ui.add_enabled(
-                        self.native_command_enabled(AppCommand::Problems),
-                        egui::Button::selectable(
-                            self.bottom_panel == BottomPanel::Problems,
-                            if compact { "!" } else { "Problems" },
-                        ),
-                    ),
-                    shortcut_tooltip(
-                        "Toggle compiler diagnostics",
-                        &shortcuts,
-                        ShortcutAction::Problems,
-                    ),
+                    panel,
+                    shortcut_tooltip("Toggle bottom panel", &shortcuts, ShortcutAction::Panel),
                 )
                 .clicked()
                 {
-                    self.execute_app_command(AppCommand::Problems, ui.ctx(), frame);
+                    self.execute_app_command(AppCommand::Panel, ui.ctx(), frame);
                 }
                 ui.add_enabled_ui(view_mode_enabled, |ui| {
                     for (mode, command, hint) in [
@@ -7653,17 +7666,6 @@ impl EditorApp {
 
     fn show_problems(&mut self, ui: &mut egui::Ui) {
         ui.set_min_width(ui.available_width());
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(format!(
-                    "{} diagnostics",
-                    self.preview.diagnostics.len() + self.preview.tinymist_diagnostics.len()
-                ))
-                .size(theme::TYPE.supporting)
-                .color(ui.visuals().weak_text_color()),
-            );
-        });
-        ui.separator();
         let diagnostic_count =
             self.preview.diagnostics.len() + self.preview.tinymist_diagnostics.len();
         let mut jump_target = None;
@@ -8391,8 +8393,8 @@ impl EditorApp {
             .exact_size(METRICS.chrome.status_height)
             .show(ui, |ui| self.show_status_bar(ui));
         self.terminal
-            .set_visible(self.bottom_panel == BottomPanel::Terminal);
-        if self.bottom_panel != BottomPanel::Hidden {
+            .set_visible(self.bottom_panel.selected() == Some(PanelTab::Terminal));
+        if self.bottom_panel.is_visible() {
             let panel = egui::Panel::bottom("bottom-panel");
             let panel = if matches!(
                 self.snapshot_scene,

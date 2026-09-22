@@ -2438,6 +2438,32 @@ portable whole-system resource score.
   Vim, smooth-resize, and Explorer-drop-selection work needs a separate pass
   because each crosses an existing interaction or ownership boundary.
 
+= Compact bottom panel and focus deadlock (22 September 2026)
+
+291. [x] Fix the hang when opening Problems, switching to Terminal, then using
+  the toolbar's Problems button again. Audit terminal focus checks for nested
+  egui context locks and cover toolbar, tab, menu and shortcut transitions.
+292. [x] Replace the terminal's full-width restart/path row with a thin right
+  action strip: a square refresh icon, then a square directory-information
+  button. Show the shell's starting directory only on click, with a terse
+  explanation that it is not the live directory after shell `cd` commands.
+293. [x] Put the diagnostic count in a number badge beside the Problems tab;
+  remove the separate diagnostics-count row. Name the shared container Panel
+  in toolbar, menu and shortcut settings, preserving Problems and Terminal as
+  its views and restoring the last selected view when reopened.
+
+- Items 291–293 are complete. The lock regression reproduces the old nested
+  egui context-lock failure and passes with IDs resolved outside memory locks.
+  Toolbar, compact toolbar, native menu and shortcut routes pass in root and
+  secondary windows. Semantic tests cover the count badge, square right-strip
+  controls, minimum-height directory popover and focus release on tab/close.
+- Formatting, strict Clippy, the full Rust suite and xtask tests pass. Fresh
+  light terminal/problems framebuffers under `.tiptoptyp/screenshots` were
+  inspected. The reduced gallery was regenerated in one app session and its
+  22 PNGs validated: 19 light plus dark main, File dropdown and Save popup.
+  See `docs/bottom-panel.md`. No composed native-desktop verification or native
+  performance timing is claimed; no new worker or idle repaint was introduced.
+
 = Tinymist live resize and zoom (21 September 2026)
 
 - The bundled frontend enqueues a document rerender on every resize and delays

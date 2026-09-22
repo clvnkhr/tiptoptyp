@@ -11,6 +11,7 @@ pub(super) fn empty_workspace_command(command: AppCommand) -> bool {
             | AppCommand::ChangeWorkspaceRoot
             | AppCommand::Settings
             | AppCommand::Terminal
+            | AppCommand::Panel
             | AppCommand::Explorer
             | AppCommand::Git
             | AppCommand::Packages

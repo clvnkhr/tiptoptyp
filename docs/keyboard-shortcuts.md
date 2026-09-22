@@ -15,6 +15,7 @@ New bindings (modifier order is interchangeable):
 
 | Action | Default |
 | --- | --- |
+| Toggle Panel (Problems / Terminal) | Primary+5 |
 | Toggle Terminal | Control+` |
 | Keyboard shortcuts | Primary+Alt+, |
 | Toggle miTeX notation | Primary+Alt+M |
@@ -85,6 +86,6 @@ Find/Replace safety, fold/caret/source invariants, and bounded independent
 asset page navigation. See also [tab and gutter verification](tabs-and-git-hunks.md).
 
 When Terminal input has focus, raw Control keys (including Ctrl+C, Ctrl+D,
-Ctrl+R and Ctrl+Z), Tab, Escape and arrows go to the shell. The terminal toggle
-remains available. macOS Command menu actions remain host commands. Copy/paste
+Ctrl+R and Ctrl+Z), Tab, Escape and arrows go to the shell. The Panel and Terminal
+toggles remain available. macOS Command menu actions remain host commands. Copy/paste
 uses Command+C/V on macOS and Ctrl+Shift+C/V elsewhere.

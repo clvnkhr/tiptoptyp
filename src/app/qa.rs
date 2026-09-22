@@ -401,7 +401,7 @@ impl QaSession {
                 app.preview.diagnostics.clear();
                 app.preview.tinymist_diagnostics.clear();
                 app.mark_diagnostics_changed();
-                app.bottom_panel = BottomPanel::Hidden;
+                app.bottom_panel = BottomPanel::default();
                 app.find_bar.visible = false;
                 app.find_bar.replace_visible = false;
             }
@@ -471,7 +471,7 @@ impl QaSession {
             UiSnapshotScene::StickyContext => {
                 app.notice = None;
                 app.view_mode = ViewMode::Code;
-                app.bottom_panel = BottomPanel::Hidden;
+                app.bottom_panel = BottomPanel::default();
                 app.find_bar.visible = false;
                 app.find_bar.replace_visible = false;
                 if prepare_sticky_context_snapshot_document(app.document_mut()) {
@@ -513,7 +513,7 @@ impl QaSession {
                     self.folding_prepared = true;
                 }
                 app.view_mode = ViewMode::Code;
-                app.bottom_panel = BottomPanel::Hidden;
+                app.bottom_panel = BottomPanel::default();
                 app.notice = None;
             }
             UiSnapshotScene::FileMenu => {
@@ -673,14 +673,14 @@ impl QaSession {
             }
             UiSnapshotScene::WorkspaceChooser => app.workspace_chooser_visible = true,
             UiSnapshotScene::TerminalPanel => {
-                app.bottom_panel = BottomPanel::Terminal;
+                app.bottom_panel.select(PanelTab::Terminal);
                 app.terminal.prepare_fixture(
                     "\x1b[32m~/project\x1b[0m $ typst compile notes.typ\r\n\x1b[32mCompilation finished\x1b[0m in 42 ms\r\n\r\n\x1b[1mGhostty terminal\x1b[0m  \x1b[31mred\x1b[0m  \x1b[34mblue\x1b[0m  \x1b[38;2;180;90;200mtrue color\x1b[0m\r\nUnicode: α + β = γ   é   界\r\n\x1b[32m~/project\x1b[0m $ ".as_bytes(),
                     Path::new("~/project"),
                 );
             }
             UiSnapshotScene::ProblemsPanel => {
-                app.bottom_panel = BottomPanel::Problems;
+                app.bottom_panel.select(PanelTab::Problems);
                 app.preview.diagnostics = vec![
                     Diagnostic {
                         severity: DiagnosticSeverity::Error,
@@ -742,7 +742,7 @@ impl QaSession {
         app.packages_visible = false;
         app.typst_overrides_visible = false;
         app.workspace_chooser_visible = false;
-        app.bottom_panel = BottomPanel::Hidden;
+        app.bottom_panel = BottomPanel::default();
         app.terminal = TerminalPane::default();
         app.find_bar.visible = false;
         app.find_bar.replace_visible = false;

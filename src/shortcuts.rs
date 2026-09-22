@@ -43,7 +43,7 @@ pub(crate) enum ShortcutAction {
     FindReplace,
     Format,
     SyncPreview,
-    Problems,
+    Panel,
     Terminal,
     Explorer,
     Code,
@@ -126,7 +126,7 @@ impl ShortcutAction {
         Self::FindReplace,
         Self::Format,
         Self::SyncPreview,
-        Self::Problems,
+        Self::Panel,
         Self::Terminal,
         Self::Explorer,
         Self::Code,
@@ -209,7 +209,7 @@ impl ShortcutAction {
             Self::FindReplace => "edit.find_replace",
             Self::Format => "edit.format",
             Self::SyncPreview => "edit.sync_preview",
-            Self::Problems => "view.problems",
+            Self::Panel => "view.panel",
             Self::Terminal => "view.terminal",
             Self::Explorer => "view.explorer",
             Self::Code => "view.code",
@@ -297,7 +297,7 @@ impl ShortcutAction {
             Self::FindReplace => "Find and replace",
             Self::Format => "Format document",
             Self::SyncPreview => "Reveal in preview",
-            Self::Problems => "Problems",
+            Self::Panel => "Panel",
             Self::Terminal => "Terminal",
             Self::Explorer => "Explorer",
             Self::Code => "Code view",
@@ -387,7 +387,7 @@ impl ShortcutAction {
             Self::Compile | Self::ToggleCompilation => "Build",
             Self::Packages
             | Self::Git
-            | Self::Problems
+            | Self::Panel
             | Self::Terminal
             | Self::Explorer
             | Self::Code
@@ -1196,7 +1196,7 @@ fn default_binding(action: ShortcutAction, platform: ShortcutPlatform) -> Option
             alt: true,
         },
         Action::SyncPreview => ShortcutChord::primary(Key::J).shift(),
-        Action::Problems => ShortcutChord::primary(Key::Num5),
+        Action::Panel => ShortcutChord::primary(Key::Num5),
         Action::Terminal => ShortcutChord::control(Key::Backtick),
         Action::Explorer => ShortcutChord::primary(Key::Num1),
         Action::Code => ShortcutChord::primary(Key::Num2),

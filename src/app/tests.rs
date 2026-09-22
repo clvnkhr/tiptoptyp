@@ -6897,7 +6897,7 @@ fn projected_application_toolbar_order_and_right_alignment_survive_resizing() {
                 app,
             );
         harness.run_steps(3);
-        let compact = harness.query_by_label("Problems").is_none();
+        let compact = harness.query_by_label("Settings").is_none();
         let labels = [
             "Window color",
             "File",
@@ -6913,7 +6913,7 @@ fn projected_application_toolbar_order_and_right_alignment_survive_resizing() {
             if compact { "C" } else { "Code" },
             if compact { "S" } else { "Split" },
             if compact { "P" } else { "Preview" },
-            if compact { "!" } else { "Problems" },
+            "Panel",
         ];
         let mut previous_right = 0.0;
         for label in labels {

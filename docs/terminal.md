@@ -1,23 +1,25 @@
 # Embedded terminal (todo 170)
 
 Open **View → Terminal** or press **Control+`**. The bottom panel has mutually
-exclusive **Problems** and **Terminal** tabs; the existing Problems toolbar
-button opens diagnostics. Its height is shared and resizable. Terminal also
-works in an empty workspace, without an open document.
+exclusive **Problems** and **Terminal** tabs. The **Panel** toolbar button or
+**View → Panel** (Primary+5) hides or reopens the last selected tab. Its height
+is shared and resizable. Terminal also works in an empty workspace, without an
+open document. See [bottom-panel controls](bottom-panel.md).
 
 A window creates one login shell on first opening Terminal, in that window's
-workspace directory. The directory above the grid is the session's starting
-directory. Switching tabs, hiding the panel, opening files or changing the
-workspace does not restart the shell or change its working directory. Use
-`cd` normally; **Restart terminal** stops the current session and starts another
-in the currently selected workspace. An exited shell retains its last output.
+workspace directory. The folder icon in the thin right-hand strip reveals the
+session's starting directory and a short explanation. Switching tabs, hiding
+the panel, opening files or changing the workspace does not restart the shell
+or change its working directory. Use `cd` normally; the refresh icon above the
+folder (**Restart terminal**) stops the current session and starts another in
+the currently selected workspace. An exited shell retains its last output.
 Closing the editor window stops its shell and foreground job, including the
 retained hidden root window on macOS. Other windows own independent sessions.
 
 Click the grid to focus it. Text, IME commits, Tab, Escape, arrows, function keys,
 and Control sequences go through Ghostty's key encoder. Ctrl+C interrupts,
 Ctrl+D sends EOF, and application cursor/Kitty keyboard modes are honored.
-The terminal toggle remains available; macOS Command menu commands remain
+The Panel and Terminal toggles remain available; macOS Command menu commands remain
 application commands. Source editing shortcuts do not modify the document
 while the terminal owns focus.
 
@@ -106,9 +108,11 @@ Fresh light/dark terminal framebuffers were inspected for readable ANSI colors,
 Unicode/cursor placement, header alignment and clipping. Captures exposed a
 header that consumed the available height; the fixed header is constrained to
 one horizontal row. A semantic geometry regression reproduces the zero-height
-grid before the fix and now checks the remaining grid height. Maintained images:
-[Latte](ui-snapshots/latest/main-terminal-panel--catppuccin-latte.png) and
-[Mocha](ui-snapshots/latest/main-terminal-panel--catppuccin-mocha.png).
+grid before the fix and now checks the remaining grid height. The current
+[Latte capture](ui-snapshots/latest/main-terminal-panel--catppuccin-latte.png)
+shows the subsequent [compact controls and focus-lock fix](bottom-panel.md).
+The reduced gallery retains dark samples for the main window, one dropdown and
+one popup; terminal and other component scenes use light mode.
 Local fresh captures are under
 `.tiptoptyp/screenshots/agent-review/terminal/1790068806135-0001-main-terminal-panel.png`
 and `1790068806298-0002-main-terminal-panel.png`.

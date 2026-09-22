@@ -4,7 +4,7 @@
 
 The main title bar order is traffic lights, **ttt**, **File Edit View** |
 file title | right-aligned **miTeX Find Pause Compile** |
-**Settings Explorer Code Split Preview Problems**. The title truncates into the
+**Settings Explorer Code Split Preview Panel**. The title truncates into the
 space remaining after the controls. Existing compact labels remain at narrow
 widths. Hiding title-bar menus in Settings still works; the ttt color picker is
 retained immediately after the traffic lights.

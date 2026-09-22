@@ -19,7 +19,7 @@ fn fixture(context: &egui::Context, root: &Path, owner: egui::ViewportId) -> Edi
         .replace_unprojected_untitled("alpha beta");
     app.document_mut().set_history_reset(false);
     app.find_bar.visible = false;
-    app.bottom_panel = BottomPanel::Hidden;
+    app.bottom_panel = BottomPanel::default();
     app.explorer.open();
     app.view_mode = ViewMode::Split;
     app
@@ -36,6 +36,108 @@ fn key_event(shortcut: KeyboardShortcut) -> egui::Event {
 }
 
 #[test]
+fn panel_routes_close_and_reopen_a_focused_terminal_without_mutating_source() {
+    for owner in [
+        egui::ViewportId::ROOT,
+        egui::ViewportId::from_hash_of("terminal-second"),
+    ] {
+        for route in [
+            Route::Toolbar,
+            Route::CompactToolbar,
+            Route::NativeMenu,
+            Route::Shortcut,
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let context = egui::Context::default();
+            let mut app = fixture(&context, root.path(), owner);
+            app.terminal.prepare_fixture(b"test", Path::new("/project"));
+            let width = if matches!(route, Route::CompactToolbar) {
+                600.0
+            } else {
+                1800.0
+            };
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(width, 300.0))
+                .with_os(egui::os::OperatingSystem::from_target_os())
+                .build_ui_state(
+                    |ui, app: &mut EditorApp| {
+                        app.handle_shortcuts(ui.ctx(), None);
+                        app.process_native_menu_commands(ui.ctx(), None);
+                        egui::Panel::top("terminal-test-toolbar")
+                            .exact_size(METRICS.chrome.toolbar_height)
+                            .show(ui, |ui| app.show_toolbar(ui, None));
+                        if app.bottom_panel.is_visible() {
+                            app.show_bottom_panel(ui);
+                        }
+                    },
+                    app,
+                );
+            harness.input_mut().viewport_id = owner;
+            harness.set_size(Vec2::new(width, 300.0));
+            harness
+                .input_mut()
+                .viewports
+                .entry(owner)
+                .or_default()
+                .focused = Some(true);
+            harness.run();
+            harness.get_by_label("Panel").click();
+            harness.run();
+            assert_eq!(
+                harness.state().bottom_panel.selected(),
+                Some(PanelTab::Problems)
+            );
+            harness.get_by_label("Terminal").click();
+            harness.run();
+            harness.get_by_label("Terminal input").click();
+            harness.run();
+            // Outside an egui pass the Context reports ROOT, even when its
+            // last input pass belonged to a secondary document viewport.
+            let id = egui::Id::new((owner, "terminal-grid"));
+            assert!(
+                harness.ctx.memory(|memory| memory.has_focus(id)),
+                "{owner:?} {route:?}"
+            );
+            for visible in [false, true] {
+                match route {
+                    Route::Toolbar | Route::CompactToolbar => harness.get_by_label("Panel").click(),
+                    Route::NativeMenu => harness
+                        .state_mut()
+                        .enqueue_native_menu_command(AppCommand::Panel),
+                    Route::Shortcut => {
+                        let shortcut = harness
+                            .state()
+                            .settings
+                            .effective_shortcuts()
+                            .egui(ShortcutAction::Panel)
+                            .unwrap();
+                        harness.key_press_modifiers(shortcut.modifiers, shortcut.logical_key);
+                    }
+                }
+                harness.run();
+                assert_eq!(
+                    harness.state().bottom_panel.is_visible(),
+                    visible,
+                    "{route:?}"
+                );
+                assert_eq!(
+                    harness.ctx.memory(|memory| memory.has_focus(id)),
+                    visible,
+                    "{route:?}"
+                );
+                assert_eq!(harness.state().document().source(), "alpha beta");
+                if visible {
+                    assert_eq!(
+                        harness.state().bottom_panel.selected(),
+                        Some(PanelTab::Terminal)
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn command_toolbar_menu_and_shortcut_effects_agree_once_per_owner() {
     for owner in [
         egui::ViewportId::ROOT,
@@ -43,7 +145,7 @@ fn command_toolbar_menu_and_shortcut_effects_agree_once_per_owner() {
     ] {
         for (command, label, compact_label, view) in [
             (AppCommand::Find, "Find", "Find", ViewMode::Split),
-            (AppCommand::Problems, "Problems", "!", ViewMode::Split),
+            (AppCommand::Panel, "Panel", "Panel", ViewMode::Split),
             (AppCommand::Explorer, "Explorer", "Files", ViewMode::Split),
             (AppCommand::Settings, "Settings", "Set", ViewMode::Split),
             (AppCommand::Code, "Code", "C", ViewMode::Code),
@@ -111,8 +213,8 @@ fn command_toolbar_menu_and_shortcut_effects_agree_once_per_owner() {
                         "{route:?} {command:?}"
                     );
                     assert_eq!(
-                        app.bottom_panel == BottomPanel::Problems,
-                        command == AppCommand::Problems
+                        app.bottom_panel.selected() == Some(PanelTab::Problems),
+                        command == AppCommand::Panel
                     );
                     assert_eq!(
                         app.explorer.contents_visible(),
@@ -422,7 +524,7 @@ fn command_toolbar_availability_matches_document_and_empty_workspace_admission()
         harness.run();
         for (command, label) in [
             (AppCommand::Find, "Find"),
-            (AppCommand::Problems, "Problems"),
+            (AppCommand::Panel, "Panel"),
             (AppCommand::Explorer, "Explorer"),
             (AppCommand::Settings, "Settings"),
             (AppCommand::Code, "Code"),
