@@ -80,6 +80,43 @@ The PDF.js backend and its validation are described in
 - Poppler's `pdftoppm` on `PATH` for native PDF rendering; `pdftohtml` from the
   same package enables clickable link hotspots
 
+### Set up Zig for source builds
+
+The embedded terminal needs Zig **0.15.2**, not the latest release. With
+[mise](https://mise.jdx.dev/lang/zig.html), the checked-in `mise.toml` selects
+the correct version for this repository without changing your global tools:
+
+```sh
+mise trust mise.toml
+mise install
+mise exec -- zig version                 # must print 0.15.2
+mise exec -- cargo run --release
+```
+
+If mise is activated in your shell, plain `cargo run --release` works in this
+directory after installation (open a new prompt to refresh `PATH`). Without
+mise, macOS users can install the
+[versioned Homebrew formula](https://formulae.brew.sh/formula/zig@0.15):
+
+```sh
+brew install zig@0.15
+export PATH="$(brew --prefix zig@0.15)/bin:$PATH"
+zig version                             # must print 0.15.2
+cargo run --release
+```
+
+Keep that `PATH` export in your shell startup file if using Homebrew; its
+versioned formula is keg-only. On other platforms, install the matching
+[Zig 0.15.2 archive](https://ziglang.org/download/#release-0.15.2) and put its
+directory on `PATH`.
+
+**Build error: `failed to execute zig build: No such file or directory`:**
+`libghostty-vt-sys` could not find the `zig` executable. Follow the setup above
+and retry; `cargo clean` is unnecessary. Installing the Ghostty application
+does not supply this compiler. See [terminal build details](docs/terminal.md#native-dependency-and-build).
+
+### Typst and Tinymist sidecars
+
 Packaged releases include Typst 0.15.1 and Tinymist 0.15.2. For a source-tree
 run, fetch those exact, hash-verified binaries once:
 

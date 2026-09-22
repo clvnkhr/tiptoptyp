@@ -1,0 +1,4 @@
+# The pinned libghostty-vt source requires this exact Zig release.
+# Rust is managed separately by rust-toolchain.toml.
+[tools]
+zig = "0.15.2"

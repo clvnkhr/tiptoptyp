@@ -51,6 +51,9 @@ runtime library lookup is needed in the packaged app.
 
 Install Zig **0.15.2** on PATH before building. The pinned source requires that
 version, even though current upstream instructions describe a newer compiler.
+The repository's `mise.toml` pins this version; see the
+[Zig setup and missing-executable troubleshooting](../README.md#set-up-zig-for-source-builds)
+for mise, Homebrew, and manual installation commands.
 The first Cargo build fetches the pinned Ghostty sources and Zig dependencies.
 For a prefetched build, the sys crate supports `GHOSTTY_SOURCE_DIR` and
 `GHOSTTY_ZIG_SYSTEM_DIR`; use the exact pinned revision. CI installs Zig 0.15.2.
