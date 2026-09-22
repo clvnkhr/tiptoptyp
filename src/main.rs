@@ -53,6 +53,7 @@ mod search;
 mod settings;
 mod shortcuts;
 mod syntax_theme;
+mod terminal;
 #[cfg(test)]
 #[allow(unsafe_code)]
 mod test_allocations;
