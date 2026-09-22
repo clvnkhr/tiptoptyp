@@ -21,7 +21,6 @@ const TYPST_NOTICE_SHA256: &str =
 const PACKAGE_TARGET_ENV: &str = "TIPTOPTYP_PACKAGE_TARGET";
 const MACOS_APP_ICON: &str = "tiptoptyp.icns";
 const PRODUCTION_MACOS_APP_BUNDLE: &str = "tiptoptyp.app";
-const DEV_MACOS_APP_BUNDLE: &str = "tiptoptyp Dev.app";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Artifact {
@@ -114,13 +113,16 @@ fn run() -> Result<(), String> {
             run_status(&mut cargo, "release build")
         }
         "verify-package" => {
+            if production {
+                return Err("verify-package always verifies the production app bundle".to_owned());
+            }
             let target = target_or_host(target)?;
-            verify_package(&target, production)
+            verify_package(&target)
         }
         "generate-notices" => generate_third_party_notices(),
         "help" | "--help" | "-h" => {
             println!(
-                "tiptoptyp tasks\n\n  profile --help\n  fetch-sidecars [--target TRIPLE]\n  package-build [--target TRIPLE] [--prod]\n  verify-package [--target TRIPLE] [--prod]\n  generate-notices\n\n{PACKAGE_TARGET_ENV} supplies the target to cargo-packager's hook."
+                "tiptoptyp tasks\n\n  profile --help\n  fetch-sidecars [--target TRIPLE]\n  package-build [--target TRIPLE] [--prod]\n  verify-package [--target TRIPLE]\n  generate-notices\n\n{PACKAGE_TARGET_ENV} supplies the target to cargo-packager's hook."
             );
             Ok(())
         }
@@ -178,23 +180,18 @@ fn generate_third_party_notices() -> Result<(), String> {
     Ok(())
 }
 
-fn verify_package(target: &str, production: bool) -> Result<(), String> {
+fn verify_package(target: &str) -> Result<(), String> {
     if !target.ends_with("apple-darwin") {
         return Err("verify-package currently supports macOS app bundles".to_owned());
     }
     let root = repository_root();
-    let bundle = if production {
-        PRODUCTION_MACOS_APP_BUNDLE
-    } else {
-        DEV_MACOS_APP_BUNDLE
-    };
     let app = if target == host_target()? {
-        root.join("target/release").join(bundle)
+        root.join("target/release").join(PRODUCTION_MACOS_APP_BUNDLE)
     } else {
         root.join("target")
             .join(target)
             .join("release")
-            .join(bundle)
+            .join(PRODUCTION_MACOS_APP_BUNDLE)
     };
     let executable_dir = app.join("Contents/MacOS");
     let resources = app.join("Contents/Resources");

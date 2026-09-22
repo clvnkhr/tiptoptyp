@@ -22,7 +22,7 @@ echo "Building the release app bundle"
 (cd "$root_dir" && cargo packager --config "$root_dir/packager-prod.toml")
 
 echo "Verifying the packaged app"
-(cd "$root_dir" && cargo run --manifest-path xtask/Cargo.toml -- verify-package --prod)
+(cd "$root_dir" && cargo run --manifest-path xtask/Cargo.toml -- verify-package)
 
 if [ ! -d "$source_app" ]; then
     echo "packager did not produce $source_app" >&2
