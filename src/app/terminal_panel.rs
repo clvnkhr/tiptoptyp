@@ -186,6 +186,11 @@ mod tests {
         harness.run();
         assert_eq!(harness.state().bottom_panel, BottomPanel::Terminal);
         assert!(harness.query_by_label("Terminal input").is_some());
+        let input_rect = harness.get_by_label("Terminal input").rect();
+        assert!(
+            input_rect.height() > 160.0,
+            "terminal header consumed the grid: {input_rect:?}"
+        );
         harness.key_press_modifiers(Modifiers::CTRL, egui::Key::R);
         harness.key_press(egui::Key::Tab);
         harness.run();

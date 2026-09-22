@@ -92,5 +92,59 @@ row reuse, scrollback limits, paste encoding, IME, panel controls and editor
 input isolation. The `terminal-panel` QA scene feeds a fixed VT transcript
 through the same Ghostty adapter without starting a shell.
 
-Validation results and performance measurements are recorded below after the
-final run.
+Validation on macOS 14.6.1 / Apple silicon, 22 September 2026, after integrating
+master `d1dbae1` (PDF.js preview and the table editor):
+
+- `cargo fmt --all -- --check` and strict all-target Clippy passed.
+- `cargo test --no-fail-fast`: 1,147 passed, 18 explicitly ignored.
+- `cargo test --manifest-path xtask/Cargo.toml`: 14 passed; xtask formatting passed.
+- Both preview JavaScript test files: 12 passed.
+- The complete 70-image gallery was freshly generated in one app session;
+  `scripts/capture-theme-gallery.sh --validate-latest` decoded and validated all 70.
+
+Fresh light/dark terminal framebuffers were inspected for readable ANSI colors,
+Unicode/cursor placement, header alignment and clipping. Captures exposed a
+header that consumed the available height; the fixed header is constrained to
+one horizontal row. A semantic geometry regression reproduces the zero-height
+grid before the fix and now checks the remaining grid height. Maintained images:
+[Latte](ui-snapshots/latest/main-terminal-panel--catppuccin-latte.png) and
+[Mocha](ui-snapshots/latest/main-terminal-panel--catppuccin-mocha.png).
+Local fresh captures are under
+`.tiptoptyp/screenshots/agent-review/terminal/1790068806135-0001-main-terminal-panel.png`
+and `1790068806298-0002-main-terminal-panel.png`.
+
+The local `.tiptoptyp/terminal-evidence/terminal-capture.log` retained this trace:
+
+```text
+ui.preview.bounds available=(846.5,30.0)-(1392.0,642.0) clip=(838.5,30.0)-(1400.0,642.0) egui=(846.5,30.0)-(1392.0,642.0) native=(846.5,30.0)-(1392.0,642.0) viewport=(0.0,0.0)-(1400.0,886.0) zoom=1.000 egui_ppp=2.000 native_ppp=2.000
+```
+
+The bounds reserve the bottom panel beneath the preview. These are viewport
+framebuffers; native child-view composition was not visually verified. CUA could
+select the separately installed app but not this standalone test binary, so that
+other running app was left untouched.
+
+## Idle measurement
+
+The baseline is a preserved binary built from `git archive d1dbae1`; the after
+binary includes the integrated terminal and final header fix. Both used the
+optimized `profiling` profile, `--features profiling` and
+`RUSTFLAGS='-C force-frame-pointers=yes'`, Rust 1.98.1 on the same macOS aarch64
+machine. The `main` scenario used the same isolated source/sidecar hashes,
+Catppuccin Latte, a 1400×886-point viewport at 2× scale, no manual interaction,
+and an 8-second measurement with no concurrent builds. The terminal was closed.
+The runner used `--binary` to retain the exact binary hashes; its metadata says
+build skipped because compilation was performed separately as described here.
+
+The first pair used a 3-second warmup: master still delivered 89 editor passes
+(mean 808.49 µs), while the after run delivered none. This is different settling,
+not evidence of a speedup. A second pair used an 8-second warmup for both builds. Both settled runs recorded no editor
+passes or repaint requests during the measurement window; there is no per-pass
+timing to compare. No closed-terminal idle repaint was observed.
+
+[Run metadata and summaries](terminal-performance.json) retain all four runs,
+binary hashes, build provenance and workload details. These are bounded local
+idle observations, not CPU measurements or a speedup claim. Shell startup,
+open-terminal output throughput, active interaction and other platforms were
+not benchmarked. Deterministic tests protect lazy startup, row reuse, bounded
+queues/scrollback and hidden-terminal repaint suppression.

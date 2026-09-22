@@ -117,32 +117,34 @@ impl TerminalPane {
             self.grid = snapshot.grid.clone();
         }
         let mut restart = false;
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            restart = ui
-                .button("Restart terminal")
-                .on_hover_text("Stop this shell and start a new one in the current workspace")
-                .clicked();
-            if let Some(snapshot) = &snapshot {
-                let status = match &snapshot.status {
-                    Status::Starting => Some("Starting shell…"),
-                    Status::Exited(message) | Status::Failed(message) => Some(message.as_str()),
-                    Status::Running => None,
-                };
-                if let Some(status) = status {
-                    ui.add(egui::Label::new(status).truncate());
+        ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                restart = ui
+                    .button("Restart terminal")
+                    .on_hover_text("Stop this shell and start a new one in the current workspace")
+                    .clicked();
+                if let Some(snapshot) = &snapshot {
+                    let status = match &snapshot.status {
+                        Status::Starting => Some("Starting shell…"),
+                        Status::Exited(message) | Status::Failed(message) => Some(message.as_str()),
+                        Status::Running => None,
+                    };
+                    if let Some(status) = status {
+                        ui.add(egui::Label::new(status).truncate());
+                    }
                 }
-            }
-            let label = self
-                .session
-                .as_ref()
-                .map_or(self.fixture_cwd.as_deref().unwrap_or(cwd), |session| {
-                    session.cwd.as_path()
+                let label = self
+                    .session
+                    .as_ref()
+                    .map_or(self.fixture_cwd.as_deref().unwrap_or(cwd), |session| {
+                        session.cwd.as_path()
+                    });
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(label.display().to_string()).weak())
+                            .truncate(),
+                    );
                 });
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.add(
-                    egui::Label::new(egui::RichText::new(label.display().to_string()).weak())
-                        .truncate(),
-                );
             });
         });
         if restart {

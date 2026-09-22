@@ -1,0 +1,217 @@
+{
+  "date": "2026-09-22",
+  "baseline_source": "git archive d1dbae118e0d11a86d39c972343f14601fb044e4",
+  "after_source": "b59704d452c249b62913ee2b181a819319c0ae84 plus the final header layout correction",
+  "after_terminal_view_sha256": "c0f6cf71f4636a0b325ec790da9a8e40912609d70df46f8bc6ced3382d4f6a91",
+  "build": "cargo build --profile profiling --features profiling; RUSTFLAGS=-C force-frame-pointers=yes",
+  "viewport": {
+    "points": [
+      1400,
+      886
+    ],
+    "scale": 2,
+    "theme": "catppuccin-latte"
+  },
+  "workload": "main QA scenario; terminal closed; no manual interaction or concurrent builds",
+  "interpretation": "The 3-second warmup pair differed in settling. Both 8-second warmup runs recorded no editor scopes or repaint requests during the 8-second window. No speedup or CPU-time claim; open-terminal throughput and startup were not measured.",
+  "runs": {
+    "baseline_short": {
+      "artifact_directory": ".tiptoptyp/profiles/1790068541499-75237-main-0",
+      "metadata": "scenario=main\nwarmup_seconds=3\nmeasurement_seconds=8\nsampler=none\nos=macos\narch=aarch64\nskip_build=true\nbinary=<workspace>/.tiptoptyp/terminal-evidence/master-baseline-tiptoptyp\nbinary_sha256=b1aeee7e9831396b1effe3eeee1aa14001ce794f81b319282293928be5570e08\nfixture_sha256=3625fd0a2b8656e8569d3a9df61ac867a2454fd38df1baea54af9b3bf8a38289\nmanifest_sha256=f25c5aace663cb0a8b742081d5c748b1a15069f75fd65d18414be19986f75301\nRUSTFLAGS=None\nCARGO_ENCODED_RUSTFLAGS=None\nappended_build_flag=unknown (build skipped)\nlogical_parallelism=Some(12)\n\ntypst_sha256=7c4a136b377f3689400afe37b4f0fe3528d50faaa55cbb1106ac8a128f86ba1a\ntinymist_sha256=37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2\nkernel:\nDarwin 23.6.0\n\nmacos:\nProductName:\t\tmacOS\nProductVersion:\t\t14.6.1\nBuildVersion:\t\t23G93\n\nrevision:\nb59704d452c249b62913ee2b181a819319c0ae84\n\nworktree:\n M docs/ui-snapshots/latest/main--ayu-dark.png\n M docs/ui-snapshots/latest/main--ayu-light.png\n M docs/ui-snapshots/latest/main--catppuccin-frappe.png\n M docs/ui-snapshots/latest/main--catppuccin-latte-inverted-hue-p30.png\n M docs/ui-snapshots/latest/main--catppuccin-latte.png\n M docs/ui-snapshots/latest/main--catppuccin-macchiato.png\n M docs/ui-snapshots/latest/main--catppuccin-mocha.png\n M docs/ui-snapshots/latest/main--dracula-alucard.png\n M docs/ui-snapshots/latest/main--dracula.png\n M docs/ui-snapshots/latest/main--everforest-dark.png\n M docs/ui-snapshots/latest/main--everforest-light.png\n M docs/ui-snapshots/latest/main--flexoki-dark.png\n M docs/ui-snapshots/latest/main--flexoki-light.png\n M docs/ui-snapshots/latest/main--forest-dark.png\n M docs/ui-snapshots/latest/main--forest-light.png\n M docs/ui-snapshots/latest/main--github-dark-default.png\n M docs/ui-snapshots/latest/main--github-light-default.png\n M docs/ui-snapshots/latest/main--gruvbox-dark.png\n M docs/ui-snapshots/latest/main--gruvbox-light.png\n M docs/ui-snapshots/latest/main--kanagawa-lotus.png\n M docs/ui-snapshots/latest/main--kanagawa-wave.png\n M docs/ui-snapshots/latest/main--ocean-dark.png\n M docs/ui-snapshots/latest/main--ocean-light.png\n M docs/ui-snapshots/latest/main--paper-dark.png\n M docs/ui-snapshots/latest/main--paper-light.png\n M docs/ui-snapshots/latest/main--rose-pine-dawn.png\n M docs/ui-snapshots/latest/main--rose-pine.png\n M docs/ui-snapshots/latest/main--solarized-dark.png\n M docs/ui-snapshots/latest/main--solarized-light.png\n M docs/ui-snapshots/latest/main--tiptop-dark.png\n M docs/ui-snapshots/latest/main--tiptop-light.png\n M docs/ui-snapshots/latest/main--tokyo-night-light.png\n M docs/ui-snapshots/latest/main--tokyo-night.png\n M docs/ui-snapshots/latest/main-find-replace--catppuccin-latte.png\n M docs/ui-snapshots/latest/main-find-replace--catppuccin-mocha.png\n M docs/ui-snapshots/latest/main-preview-compiling--catppuccin-latte.png\n M docs/ui-snapshots/latest/main-preview-compiling--catppuccin-mocha.png\n M docs/ui-snapshots/latest/main-problems-panel--catppuccin-latte.png\n M docs/ui-snapshots/latest/main-problems-panel--catppuccin-mocha.png\n M src/app/terminal_panel.rs\n M src/terminal/view.rs\n?? docs/ui-snapshots/latest/main-terminal-panel--catppuccin-latte.png\n?? docs/ui-snapshots/latest/main-terminal-panel--catppuccin-mocha.png\n\nrustc:\nrustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8\n\npoppler:\npdftoppm version 26.04.0\nCopyright 2005-2026 The Poppler Developers - http://poppler.freedesktop.org\nCopyright 1996-2011, 2022 Glyph & Cog, LLC\n\n",
+      "summary": {
+        "root_repaint_requests": [
+          {
+            "file": "<user>/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/egui-0.36.2/src/context.rs",
+            "line": 538,
+            "requests": 14
+          },
+          {
+            "file": "<user>/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/egui-0.36.2/src/context.rs",
+            "line": 4024,
+            "requests": 4
+          },
+          {
+            "file": "<user>/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/egui-0.36.2/src/context.rs",
+            "line": 4027,
+            "requests": 1
+          },
+          {
+            "file": "src/app/tooltips.rs",
+            "line": 379,
+            "requests": 16
+          },
+          {
+            "file": "src/app/tooltips.rs",
+            "line": 696,
+            "requests": 52
+          },
+          {
+            "file": "src/app/tooltips.rs",
+            "line": 810,
+            "requests": 1
+          }
+        ],
+        "secondary_repaint_requests": [],
+        "dropped_repaint_locations": 0,
+        "schema_version": 1,
+        "complete": true,
+        "measured_seconds": 8.0,
+        "dropped_scopes": 0,
+        "scopes": [
+          {
+            "name": "compile.receive",
+            "calls": 89,
+            "total_ms": 0.124295,
+            "mean_us": 1.396573033707865,
+            "max_us": 6.625,
+            "p50_upper_us": 2.047,
+            "p95_upper_us": 4.095
+          },
+          {
+            "name": "diagnostic",
+            "calls": 4,
+            "total_ms": 0.363375,
+            "mean_us": 90.84375,
+            "max_us": 126.875,
+            "p50_upper_us": 65.535,
+            "p95_upper_us": 131.071
+          },
+          {
+            "name": "highlight.total",
+            "calls": 89,
+            "total_ms": 1.204541,
+            "mean_us": 13.534168539325844,
+            "max_us": 33.875,
+            "p50_upper_us": 16.383,
+            "p95_upper_us": 32.767
+          },
+          {
+            "name": "tooltip.markdown.paint",
+            "calls": 4,
+            "total_ms": 0.296917,
+            "mean_us": 74.22925,
+            "max_us": 109.667,
+            "p50_upper_us": 65.535,
+            "p95_upper_us": 131.071
+          },
+          {
+            "name": "tooltip.markdown.parse",
+            "calls": 1,
+            "total_ms": 0.0035,
+            "mean_us": 3.5,
+            "max_us": 3.5,
+            "p50_upper_us": 4.095,
+            "p95_upper_us": 4.095
+          },
+          {
+            "name": "ui.editor.pass",
+            "calls": 89,
+            "total_ms": 71.955625,
+            "mean_us": 808.4901685393259,
+            "max_us": 2319.042,
+            "p50_upper_us": 1048.575,
+            "p95_upper_us": 2097.151
+          },
+          {
+            "name": "ui.explorer",
+            "calls": 89,
+            "total_ms": 18.305575,
+            "mean_us": 205.68061797752807,
+            "max_us": 397.916,
+            "p50_upper_us": 262.143,
+            "p95_upper_us": 524.287
+          },
+          {
+            "name": "ui.shell.pass",
+            "calls": 89,
+            "total_ms": 79.590329,
+            "mean_us": 894.2733595505617,
+            "max_us": 2419.583,
+            "p50_upper_us": 1048.575,
+            "p95_upper_us": 2097.151
+          },
+          {
+            "name": "ui.source",
+            "calls": 89,
+            "total_ms": 19.742001,
+            "mean_us": 221.82023595505618,
+            "max_us": 746.875,
+            "p50_upper_us": 262.143,
+            "p95_upper_us": 524.287
+          }
+        ],
+        "dropped_counters": 0,
+        "counters": [
+          {
+            "name": "highlight.cache_hit",
+            "count": 89
+          },
+          {
+            "name": "tooltip.markdown.cache_hit",
+            "count": 3
+          },
+          {
+            "name": "tooltip.markdown.cache_miss",
+            "count": 1
+          }
+        ],
+        "input": null,
+        "input_phases": []
+      }
+    },
+    "after_short": {
+      "artifact_directory": ".tiptoptyp/profiles/1790068834283-82439-main-0",
+      "metadata": "scenario=main\nwarmup_seconds=3\nmeasurement_seconds=8\nsampler=none\nos=macos\narch=aarch64\nskip_build=true\nbinary=<workspace>/target/profiling/tiptoptyp\nbinary_sha256=5bc6dfaacceec987dc4d3ba7ccb84209d69e0fcbca54ed6ced9b28c0121273f6\nfixture_sha256=3625fd0a2b8656e8569d3a9df61ac867a2454fd38df1baea54af9b3bf8a38289\nmanifest_sha256=f25c5aace663cb0a8b742081d5c748b1a15069f75fd65d18414be19986f75301\nRUSTFLAGS=None\nCARGO_ENCODED_RUSTFLAGS=None\nappended_build_flag=unknown (build skipped)\nlogical_parallelism=Some(12)\n\ntypst_sha256=7c4a136b377f3689400afe37b4f0fe3528d50faaa55cbb1106ac8a128f86ba1a\ntinymist_sha256=37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2\nkernel:\nDarwin 23.6.0\n\nmacos:\nProductName:\t\tmacOS\nProductVersion:\t\t14.6.1\nBuildVersion:\t\t23G93\n\nrevision:\nb59704d452c249b62913ee2b181a819319c0ae84\n\nworktree:\n M docs/ui-snapshots/latest/main--ayu-dark.png\n M docs/ui-snapshots/latest/main--ayu-light.png\n M docs/ui-snapshots/latest/main--catppuccin-frappe.png\n M docs/ui-snapshots/latest/main--catppuccin-latte-inverted-hue-p30.png\n M docs/ui-snapshots/latest/main--catppuccin-latte.png\n M docs/ui-snapshots/latest/main--catppuccin-macchiato.png\n M docs/ui-snapshots/latest/main--catppuccin-mocha.png\n M docs/ui-snapshots/latest/main--dracula-alucard.png\n M docs/ui-snapshots/latest/main--dracula.png\n M docs/ui-snapshots/latest/main--everforest-dark.png\n M docs/ui-snapshots/latest/main--everforest-light.png\n M docs/ui-snapshots/latest/main--flexoki-dark.png\n M docs/ui-snapshots/latest/main--flexoki-light.png\n M docs/ui-snapshots/latest/main--forest-dark.png\n M docs/ui-snapshots/latest/main--forest-light.png\n M docs/ui-snapshots/latest/main--github-dark-default.png\n M docs/ui-snapshots/latest/main--github-light-default.png\n M docs/ui-snapshots/latest/main--gruvbox-dark.png\n M docs/ui-snapshots/latest/main--gruvbox-light.png\n M docs/ui-snapshots/latest/main--kanagawa-lotus.png\n M docs/ui-snapshots/latest/main--kanagawa-wave.png\n M docs/ui-snapshots/latest/main--ocean-dark.png\n M docs/ui-snapshots/latest/main--ocean-light.png\n M docs/ui-snapshots/latest/main--paper-dark.png\n M docs/ui-snapshots/latest/main--paper-light.png\n M docs/ui-snapshots/latest/main--rose-pine-dawn.png\n M docs/ui-snapshots/latest/main--rose-pine.png\n M docs/ui-snapshots/latest/main--solarized-dark.png\n M docs/ui-snapshots/latest/main--solarized-light.png\n M docs/ui-snapshots/latest/main--tiptop-dark.png\n M docs/ui-snapshots/latest/main--tiptop-light.png\n M docs/ui-snapshots/latest/main--tokyo-night-light.png\n M docs/ui-snapshots/latest/main--tokyo-night.png\n M docs/ui-snapshots/latest/main-find-replace--catppuccin-latte.png\n M docs/ui-snapshots/latest/main-find-replace--catppuccin-mocha.png\n M docs/ui-snapshots/latest/main-preview-compiling--catppuccin-latte.png\n M docs/ui-snapshots/latest/main-preview-compiling--catppuccin-mocha.png\n M docs/ui-snapshots/latest/main-problems-panel--catppuccin-latte.png\n M docs/ui-snapshots/latest/main-problems-panel--catppuccin-mocha.png\n M src/app/terminal_panel.rs\n M src/terminal/view.rs\n M todo.typ\n?? docs/ui-snapshots/latest/main-terminal-panel--catppuccin-latte.png\n?? docs/ui-snapshots/latest/main-terminal-panel--catppuccin-mocha.png\n\nrustc:\nrustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8\n\npoppler:\npdftoppm version 26.04.0\nCopyright 2005-2026 The Poppler Developers - http://poppler.freedesktop.org\nCopyright 1996-2011, 2022 Glyph & Cog, LLC\n\n",
+      "summary": {
+        "root_repaint_requests": [],
+        "secondary_repaint_requests": [],
+        "dropped_repaint_locations": 0,
+        "schema_version": 1,
+        "complete": true,
+        "measured_seconds": 8.0,
+        "dropped_scopes": 0,
+        "scopes": [],
+        "dropped_counters": 0,
+        "counters": [],
+        "input": null,
+        "input_phases": []
+      }
+    },
+    "baseline_settled": {
+      "artifact_directory": ".tiptoptyp/profiles/1790068942458-82822-main-0",
+      "metadata": "scenario=main\nwarmup_seconds=8\nmeasurement_seconds=8\nsampler=none\nos=macos\narch=aarch64\nskip_build=true\nbinary=<workspace>/.tiptoptyp/terminal-evidence/master-baseline-tiptoptyp\nbinary_sha256=b1aeee7e9831396b1effe3eeee1aa14001ce794f81b319282293928be5570e08\nfixture_sha256=3625fd0a2b8656e8569d3a9df61ac867a2454fd38df1baea54af9b3bf8a38289\nmanifest_sha256=f25c5aace663cb0a8b742081d5c748b1a15069f75fd65d18414be19986f75301\nRUSTFLAGS=None\nCARGO_ENCODED_RUSTFLAGS=None\nappended_build_flag=unknown (build skipped)\nlogical_parallelism=Some(12)\n\ntypst_sha256=7c4a136b377f3689400afe37b4f0fe3528d50faaa55cbb1106ac8a128f86ba1a\ntinymist_sha256=37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2\nkernel:\nDarwin 23.6.0\n\nmacos:\nProductName:\t\tmacOS\nProductVersion:\t\t14.6.1\nBuildVersion:\t\t23G93\n\nrevision:\nb59704d452c249b62913ee2b181a819319c0ae84\n\nworktree:\n M docs/terminal.md\n M docs/ui-snapshots/latest/main--ayu-dark.png\n M docs/ui-snapshots/latest/main--ayu-light.png\n M docs/ui-snapshots/latest/main--catppuccin-frappe.png\n M docs/ui-snapshots/latest/main--catppuccin-latte-inverted-hue-p30.png\n M docs/ui-snapshots/latest/main--catppuccin-latte.png\n M docs/ui-snapshots/latest/main--catppuccin-macchiato.png\n M docs/ui-snapshots/latest/main--catppuccin-mocha.png\n M docs/ui-snapshots/latest/main--dracula-alucard.png\n M docs/ui-snapshots/latest/main--dracula.png\n M docs/ui-snapshots/latest/main--everforest-dark.png\n M docs/ui-snapshots/latest/main--everforest-light.png\n M docs/ui-snapshots/latest/main--flexoki-dark.png\n M docs/ui-snapshots/latest/main--flexoki-light.png\n M docs/ui-snapshots/latest/main--forest-dark.png\n M docs/ui-snapshots/latest/main--forest-light.png\n M docs/ui-snapshots/latest/main--github-dark-default.png\n M docs/ui-snapshots/latest/main--github-light-default.png\n M docs/ui-snapshots/latest/main--gruvbox-dark.png\n M docs/ui-snapshots/latest/main--gruvbox-light.png\n M docs/ui-snapshots/latest/main--kanagawa-lotus.png\n M docs/ui-snapshots/latest/main--kanagawa-wave.png\n M docs/ui-snapshots/latest/main--ocean-dark.png\n M docs/ui-snapshots/latest/main--ocean-light.png\n M docs/ui-snapshots/latest/main--paper-dark.png\n M docs/ui-snapshots/latest/main--paper-light.png\n M docs/ui-snapshots/latest/main--rose-pine-dawn.png\n M docs/ui-snapshots/latest/main--rose-pine.png\n M docs/ui-snapshots/latest/main--solarized-dark.png\n M docs/ui-snapshots/latest/main--solarized-light.png\n M docs/ui-snapshots/latest/main--tiptop-dark.png\n M docs/ui-snapshots/latest/main--tiptop-light.png\n M docs/ui-snapshots/latest/main--tokyo-night-light.png\n M docs/ui-snapshots/latest/main--tokyo-night.png\n M docs/ui-snapshots/latest/main-find-replace--catppuccin-latte.png\n M docs/ui-snapshots/latest/main-find-replace--catppuccin-mocha.png\n M docs/ui-snapshots/latest/main-preview-compiling--catppuccin-latte.png\n M docs/ui-snapshots/latest/main-preview-compiling--catppuccin-mocha.png\n M docs/ui-snapshots/latest/main-problems-panel--catppuccin-latte.png\n M docs/ui-snapshots/latest/main-problems-panel--catppuccin-mocha.png\n M src/app/terminal_panel.rs\n M src/terminal/view.rs\n M todo.typ\n?? docs/ui-snapshots/latest/main-terminal-panel--catppuccin-latte.png\n?? docs/ui-snapshots/latest/main-terminal-panel--catppuccin-mocha.png\n\nrustc:\nrustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8\n\npoppler:\npdftoppm version 26.04.0\nCopyright 2005-2026 The Poppler Developers - http://poppler.freedesktop.org\nCopyright 1996-2011, 2022 Glyph & Cog, LLC\n\n",
+      "summary": {
+        "root_repaint_requests": [],
+        "secondary_repaint_requests": [],
+        "dropped_repaint_locations": 0,
+        "schema_version": 1,
+        "complete": true,
+        "measured_seconds": 8.0,
+        "dropped_scopes": 0,
+        "scopes": [],
+        "dropped_counters": 0,
+        "counters": [],
+        "input": null,
+        "input_phases": []
+      }
+    },
+    "after_settled": {
+      "artifact_directory": ".tiptoptyp/profiles/1790068962999-82821-main-0",
+      "metadata": "scenario=main\nwarmup_seconds=8\nmeasurement_seconds=8\nsampler=none\nos=macos\narch=aarch64\nskip_build=true\nbinary=<workspace>/target/profiling/tiptoptyp\nbinary_sha256=5bc6dfaacceec987dc4d3ba7ccb84209d69e0fcbca54ed6ced9b28c0121273f6\nfixture_sha256=3625fd0a2b8656e8569d3a9df61ac867a2454fd38df1baea54af9b3bf8a38289\nmanifest_sha256=f25c5aace663cb0a8b742081d5c748b1a15069f75fd65d18414be19986f75301\nRUSTFLAGS=None\nCARGO_ENCODED_RUSTFLAGS=None\nappended_build_flag=unknown (build skipped)\nlogical_parallelism=Some(12)\n\ntypst_sha256=7c4a136b377f3689400afe37b4f0fe3528d50faaa55cbb1106ac8a128f86ba1a\ntinymist_sha256=37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2\nkernel:\nDarwin 23.6.0\n\nmacos:\nProductName:\t\tmacOS\nProductVersion:\t\t14.6.1\nBuildVersion:\t\t23G93\n\nrevision:\nb59704d452c249b62913ee2b181a819319c0ae84\n\nworktree:\n M docs/terminal.md\n M docs/ui-snapshots/latest/main--ayu-dark.png\n M docs/ui-snapshots/latest/main--ayu-light.png\n M docs/ui-snapshots/latest/main--catppuccin-frappe.png\n M docs/ui-snapshots/latest/main--catppuccin-latte-inverted-hue-p30.png\n M docs/ui-snapshots/latest/main--catppuccin-latte.png\n M docs/ui-snapshots/latest/main--catppuccin-macchiato.png\n M docs/ui-snapshots/latest/main--catppuccin-mocha.png\n M docs/ui-snapshots/latest/main--dracula-alucard.png\n M docs/ui-snapshots/latest/main--dracula.png\n M docs/ui-snapshots/latest/main--everforest-dark.png\n M docs/ui-snapshots/latest/main--everforest-light.png\n M docs/ui-snapshots/latest/main--flexoki-dark.png\n M docs/ui-snapshots/latest/main--flexoki-light.png\n M docs/ui-snapshots/latest/main--forest-dark.png\n M docs/ui-snapshots/latest/main--forest-light.png\n M docs/ui-snapshots/latest/main--github-dark-default.png\n M docs/ui-snapshots/latest/main--github-light-default.png\n M docs/ui-snapshots/latest/main--gruvbox-dark.png\n M docs/ui-snapshots/latest/main--gruvbox-light.png\n M docs/ui-snapshots/latest/main--kanagawa-lotus.png\n M docs/ui-snapshots/latest/main--kanagawa-wave.png\n M docs/ui-snapshots/latest/main--ocean-dark.png\n M docs/ui-snapshots/latest/main--ocean-light.png\n M docs/ui-snapshots/latest/main--paper-dark.png\n M docs/ui-snapshots/latest/main--paper-light.png\n M docs/ui-snapshots/latest/main--rose-pine-dawn.png\n M docs/ui-snapshots/latest/main--rose-pine.png\n M docs/ui-snapshots/latest/main--solarized-dark.png\n M docs/ui-snapshots/latest/main--solarized-light.png\n M docs/ui-snapshots/latest/main--tiptop-dark.png\n M docs/ui-snapshots/latest/main--tiptop-light.png\n M docs/ui-snapshots/latest/main--tokyo-night-light.png\n M docs/ui-snapshots/latest/main--tokyo-night.png\n M docs/ui-snapshots/latest/main-find-replace--catppuccin-latte.png\n M docs/ui-snapshots/latest/main-find-replace--catppuccin-mocha.png\n M docs/ui-snapshots/latest/main-preview-compiling--catppuccin-latte.png\n M docs/ui-snapshots/latest/main-preview-compiling--catppuccin-mocha.png\n M docs/ui-snapshots/latest/main-problems-panel--catppuccin-latte.png\n M docs/ui-snapshots/latest/main-problems-panel--catppuccin-mocha.png\n M src/app/terminal_panel.rs\n M src/terminal/view.rs\n M todo.typ\n?? docs/ui-snapshots/latest/main-terminal-panel--catppuccin-latte.png\n?? docs/ui-snapshots/latest/main-terminal-panel--catppuccin-mocha.png\n\nrustc:\nrustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8\n\npoppler:\npdftoppm version 26.04.0\nCopyright 2005-2026 The Poppler Developers - http://poppler.freedesktop.org\nCopyright 1996-2011, 2022 Glyph & Cog, LLC\n\n",
+      "summary": {
+        "root_repaint_requests": [],
+        "secondary_repaint_requests": [],
+        "dropped_repaint_locations": 0,
+        "schema_version": 1,
+        "complete": true,
+        "measured_seconds": 8.0,
+        "dropped_scopes": 0,
+        "scopes": [],
+        "dropped_counters": 0,
+        "counters": [],
+        "input": null,
+        "input_phases": []
+      }
+    }
+  }
+}
