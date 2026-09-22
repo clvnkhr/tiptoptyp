@@ -833,7 +833,10 @@ GPU/texture-residency observation remain explicitly unavailable.
 306. [ ] comfy mode (typst only) - adjust black and white (+ background color) with default set rules to match theme
 307. [ ] language/grammar linting
 308. [ ] highlight invisible chars or chars commonly mistaken for other chars (e.g. cjk)
-309. [ ] weird chinese encoding -> utf-8 conversion
+309. [ ] weird chinese encoding -> utf-8 conversion (deferred until we have more details)
+310. [ ] full document templates
+311. [ ] snippet support
+312. [ ] allow passing flags to the various tools we use (tinymist, typst, etc)
 
 = Bounded PDF page residency (2026-09-18)
 
