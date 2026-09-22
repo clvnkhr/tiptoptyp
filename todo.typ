@@ -789,6 +789,52 @@ GPU/texture-residency observation remain explicitly unavailable.
   or document changes, preserve pointer anchoring, and verify that the
   overlay cannot steal editor/preview input. Add deterministic frame/state
   tests and a native geometry trace before enabling it by default.
+
+291. [x] Fix the hang when opening Problems, switching to Terminal, then using
+  the toolbar's Problems button again. Audit terminal focus checks for nested
+  egui context locks and cover toolbar, tab, menu and shortcut transitions.
+292. [x] Replace the terminal's full-width restart/path row with a thin right
+  action strip: a square refresh icon, then a square directory-information
+  button. Show the shell's starting directory only on click, with a terse
+  explanation that it is not the live directory after shell `cd` commands.
+293. [x] Put the diagnostic count in a number badge beside the Problems tab;
+  remove the separate diagnostics-count row. Name the shared container Panel
+  in toolbar, menu and shortcut settings, preserving Problems and Terminal as
+  its views and restoring the last selected view when reopened.
+
+294. [x] Use PDF.js by default for opened PDFs, independently of the default
+  Tinymist mode for Typst. Route unavailable/exhausted Tinymist and native
+  preview failures to PDF.js, preserving retry policy and canonical export
+  bytes. Keep raster only for an explicit selection and deterministic captures.
+295. [ ] Delete the rasterised PDF preview after its remaining dependencies are
+  separated: replace the viewport-capture surrogate, retire PDF raster controls
+  and settings, and remove preview-only Poppler work/residency. Preserve image
+  viewing, PDF thumbnails, canonical PDF export and PDF.js. Do not add features
+  to the retiring viewer. Track the removal boundary in `docs/pdfjs-preview.md`.
+296. [x] as i am using find (and replace) the sticky rows sometimes go on top of the find and replace popup. this is wrong.
+297. [x] find and replace should say e.g. x/166 instead of 166 matches, where x/ means we are at the xth match
+298. [x] if the find (and replace) popup is open but not focused, cmd+F (cmd+opt+F) should focus it. it should only toggle off when we press this while the popup is focused.
+299. [x] if we cmd+F (similarly for replace) and refocus the find popup, we should resume at the xth match, not start from the beginning
+300. [x] when we resize the code panel, the currently selected line must stay at (approx) the same pos on screen. if its not already visible, then center the resize at the center line
+301. [x] if we are editing a line with an error popup, then the line's error disappears because of our changes, then the popup from mouseover on that problem should also go away
+
+302. [x] Fix clipped/mismatched terminal glyphs, especially prompt version
+  numbers. Check font fallback precedence against fixed terminal-cell metrics,
+  preserve normal/bold/italic text and Unicode fallbacks, and add metric
+  regressions plus a fresh terminal capture before closing this item. Keep normal
+  colored macOS emoji, respect Ghostty's two-cell graphemes, and fit installed
+  Nerd Font icons to their assigned cell width.
+303. [x] Remove the terminal folder button/popover. Put only `(start: <path>)`
+  in the restart button tooltip.
+304. [x] Remove the bottom panel height cap; add maximize/restore that returns
+  to its previous resized height, with a configurable shortcut.
+305. [x] Add maximize/restore controls to Explorer subpanels. Maximizing one
+  hides all siblings; restoring recovers their sizes and collapsed states.
+306. [ ] comfy mode (typst only) - adjust black and white (+ background color) with default set rules to match theme
+307. [ ] language/grammar linting
+308. [ ] highlight invisible chars or chars commonly mistaken for other chars (e.g. cjk)
+309. [ ] weird chinese encoding -> utf-8 conversion
+
 = Bounded PDF page residency (2026-09-18)
 
 - Items 198–200: PDF inspection now publishes a page catalog containing only
@@ -2449,19 +2495,6 @@ portable whole-system resource score.
 
 = Terminal fonts and panel sizing (22 September 2026)
 
-302. [x] Fix clipped/mismatched terminal glyphs, especially prompt version
-  numbers. Check font fallback precedence against fixed terminal-cell metrics,
-  preserve normal/bold/italic text and Unicode fallbacks, and add metric
-  regressions plus a fresh terminal capture before closing this item. Keep normal
-  colored macOS emoji, respect Ghostty's two-cell graphemes, and fit installed
-  Nerd Font icons to their assigned cell width.
-303. [x] Remove the terminal folder button/popover. Put only `(start: <path>)`
-  in the restart button tooltip.
-304. [x] Remove the bottom panel height cap; add maximize/restore that returns
-  to its previous resized height, with a configurable shortcut.
-305. [x] Add maximize/restore controls to Explorer subpanels. Maximizing one
-  hides all siblings; restoring recovers their sizes and collapsed states.
-
 - Items 302–305 are complete. Apple Color Emoji had overridden ordinary ASCII
   metrics and produced invisible outline glyphs. Text now keeps its monospace
   face, macOS emoji use their actual color bitmaps, and installed Nerd Fonts
@@ -2477,21 +2510,6 @@ portable whole-system resource score.
 
 = PDF.js defaults and raster retirement (22 September 2026)
 
-294. [x] Use PDF.js by default for opened PDFs, independently of the default
-  Tinymist mode for Typst. Route unavailable/exhausted Tinymist and native
-  preview failures to PDF.js, preserving retry policy and canonical export
-  bytes. Keep raster only for an explicit selection and deterministic captures.
-295. [ ] Delete the rasterised PDF preview after its remaining dependencies are
-  separated: replace the viewport-capture surrogate, retire PDF raster controls
-  and settings, and remove preview-only Poppler work/residency. Preserve image
-  viewing, PDF thumbnails, canonical PDF export and PDF.js. Do not add features
-  to the retiring viewer. Track the removal boundary in `docs/pdfjs-preview.md`.
-296. [x] as i am using find (and replace) the sticky rows sometimes go on top of the find and replace popup. this is wrong.
-297. [x] find and replace should say e.g. x/166 instead of 166 matches, where x/ means we are at the xth match
-298. [x] if the find (and replace) popup is open but not focused, cmd+F (cmd+opt+F) should focus it. it should only toggle off when we press this while the popup is focused.
-299. [x] if we cmd+F (similarly for replace) and refocus the find popup, we should resume at the xth match, not start from the beginning
-300. [x] when we resize the code panel, the currently selected line must stay at (approx) the same pos on screen. if its not already visible, then center the resize at the center line
-301. [x] if we are editing a line with an error popup, then the line's error disappears because of our changes, then the popup from mouseover on that problem should also go away
 - Item 294 is complete. Tests cover PDF tabs beside Tinymist, canonical byte
   loading without Poppler, the fifth-failure transition, native-view failure,
   pause and duplicate-event admission, explicit raster choice and capture
@@ -2501,18 +2519,6 @@ portable whole-system resource score.
   open: raster code is retained and its Settings option is marked for removal.
 
 = Compact bottom panel and focus deadlock (22 September 2026)
-
-291. [x] Fix the hang when opening Problems, switching to Terminal, then using
-  the toolbar's Problems button again. Audit terminal focus checks for nested
-  egui context locks and cover toolbar, tab, menu and shortcut transitions.
-292. [x] Replace the terminal's full-width restart/path row with a thin right
-  action strip: a square refresh icon, then a square directory-information
-  button. Show the shell's starting directory only on click, with a terse
-  explanation that it is not the live directory after shell `cd` commands.
-293. [x] Put the diagnostic count in a number badge beside the Problems tab;
-  remove the separate diagnostics-count row. Name the shared container Panel
-  in toolbar, menu and shortcut settings, preserving Problems and Terminal as
-  its views and restoring the last selected view when reopened.
 
 - Items 291–293 are complete. The lock regression reproduces the old nested
   egui context-lock failure and passes with IDs resolved outside memory locks.
