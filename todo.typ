@@ -754,12 +754,12 @@ GPU/texture-residency observation remain explicitly unavailable.
 267. [x] we need a much larger buffer of pdf pages for the raster mode, say 15 pages
 268. [ ] while adjusting the zoom, we show the user a blank page while it loads. it should always show us the lower res page until it loads the higher res page
 269. [x] after dropping a file into the file explorer, the newly added file should be selected. Import completion carries destination paths back to the owning Explorer and selects the newest imported file after the refreshed snapshot arrives.
-270. [ ] improve the table editor. we should be able to increase/decrease the colspan/rowspan of a cell, use keyboard shortcuts to select things in the table editor, and adjust the styling of the table (borders, bg, alignment, etc)
-280. [ ] we should be able to scroll the code panel etc while the table editor is up.
-281. [ ] we should be able to drag the table editor around resize etc. put it in a settings-like window
-282. [ ] we should be able to import from markdown tables
+270. [x] Table workbench: loss-safe colspan/rowspan editing, keyboard and row/column selection, whole-table/selected-cell border, background, alignment and padding presets. Edit → New Table / Edit Table; Apply is one undoable edit. Details and limits: `docs/table-editor.md`.
+280. [x] The code panel stays scrollable/selectable/copyable with a visible read-only banner while a table draft is open. Alternate editing paths are also locked.
+281. [x] The table editor is a movable, resizable settings-style native window with a responsive inspector, merged-cell layout and clipped, scrollable cell editors.
+282. [x] Import one pasted Markdown table into the draft, preserving column alignment/emphasis and escaping literal text for Typst. Unsupported content produces an error without replacing the draft.
 283. [ ] connect to TPIX https://typstify.com/tpix
-284. [ ] pdf raster preview is very slow. lets migrate to pdf.js
+284. [x] Add an offline PDF.js preview mode for compiled Typst and opened PDF tabs, with continuous scrolling, zoom, text selection and links. Recompiles preserve position/zoom and no Poppler work runs in PDF.js mode. Chromium and native WKWebView checks pass; physical trackpad feel remains a manual check. Select Settings → Preview → PDF.js. Evidence: `docs/pdfjs-preview.md`.
 285. [x] Remove divergent title-bar sizing fallbacks; reserve one native-point
   control strip in every full-size-content title bar, including deferred windows.
 286. [x] Reject malformed source-link coordinates instead of guessing a cursor

@@ -1,0 +1,12 @@
+/* Keep the upstream navigation/find/zoom controls, but file ownership stays in
+   tiptoptyp. Annotation editing and automatic printing are disabled in host.js. */
+#secondaryOpenFile, #secondaryPrint, #secondaryDownload,
+#printButton, #downloadButton, #presentationMode, #viewBookmark,
+#viewBookmarkSeparator, #editorModeButtons, #editorModeSeparator {
+  display: none !important;
+}
+
+/* Document appearance is separate from the system toolbar theme. */
+.tiptoptyp-dark #viewer .page {
+  filter: invert(1) hue-rotate(180deg);
+}

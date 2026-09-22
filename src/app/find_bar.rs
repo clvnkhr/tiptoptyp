@@ -48,6 +48,7 @@ pub(super) fn show(
     state: &mut FindBarState,
     source: &str,
     document_key: DocumentKey,
+    editable: bool,
 ) -> FindBarActions {
     let match_status = {
         let search_results = state.search.results(
@@ -150,8 +151,10 @@ pub(super) fn show(
                     .hint_text("Replace")
                     .desired_width(METRICS.editor.find_field_width),
             );
-            actions.replace_one |= ui.button("Replace").clicked();
-            actions.replace_all |= ui.button("All").clicked();
+            actions.replace_one |= ui
+                .add_enabled(editable, egui::Button::new("Replace"))
+                .clicked();
+            actions.replace_all |= ui.add_enabled(editable, egui::Button::new("All")).clicked();
         });
     }
 
@@ -198,6 +201,7 @@ mod tests {
                     &mut state,
                     source,
                     DocumentKey::new(tiptoptyp_core::document::WindowSessionId::new(1), 0, 0),
+                    true,
                 );
                 assert!(!actions.next);
                 assert_eq!(

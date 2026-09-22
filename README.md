@@ -1,8 +1,8 @@
 # tiptoptyp
 
 `tiptoptyp` is a native Typst editor written in Rust. It uses Tinymist for an
-interactive vector preview and Typst plus Poppler for canonical PDF output and
-a rasterised recovery viewer.
+interactive vector preview, Typst for canonical PDF output, PDF.js for an
+embedded PDF viewer, and Poppler for a rasterised recovery viewer.
 
 ## MVP features
 
@@ -10,11 +10,18 @@ a rasterised recovery viewer.
 - Debounced canonical PDF compilation with project-local private artifacts
 - Tinymist SVG preview on macOS and Windows, including hover feedback and
   bidirectional preview/source navigation
+- Offline PDF.js preview on macOS and Windows: continuous scrolling, zoom,
+  text selection, search, internal PDF destinations and external links.
+  Choose **Settings → Preview → PDF.js**. Recompiles retain the page position
+  and zoom. PDF tabs use this mode too; Poppler is not required.
 - Continuous multi-page rasterised fallback with trackpad pinch zoom,
   pointer-anchored scaling, visible page edges, clickable PDF links, and
   dark-page rendering
 - Editable UTF-8 text files with Syntect highlighting, direct image previews,
   and direct native PDF viewing
+- A resizable [table workbench](docs/table-editor.md) with spans, keyboard
+  selection, appearance controls and Markdown import. Use **Edit → New Table…**
+  or **Edit → Edit Table…**; source stays read-only but scrollable while editing.
 - Inline error/warning line decoration, virtual diagnostic text, and full
   hover tooltips
 - Explorer sections for files, document contents, subfiles, symbols, and packages
@@ -58,6 +65,8 @@ The decisions behind the dual preview pipeline are recorded in
 [`docs/architecture/0002-interactive-editor.md`](docs/architecture/0002-interactive-editor.md)
 and
 [`docs/architecture/0003-bundled-toolchain.md`](docs/architecture/0003-bundled-toolchain.md).
+The PDF.js backend and its validation are described in
+[`docs/pdfjs-preview.md`](docs/pdfjs-preview.md).
 
 ## Requirements
 

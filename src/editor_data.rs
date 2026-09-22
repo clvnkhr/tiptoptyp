@@ -87,6 +87,8 @@ pub(crate) struct EditorDerivedData {
     regions: Arc<[ContextRegion]>,
     delimiter_query: Option<(DocumentKey, usize)>,
     delimiter_pair: Option<[Range<usize>; 2]>,
+    table_query: Option<(DocumentKey, usize)>,
+    table_at_cursor: Option<crate::editor_features::EditableTable>,
     hover_query: Option<(DocumentKey, usize)>,
     hover_range: Option<Range<usize>>,
     diagnostics_key: Option<DiagnosticsKey>,
@@ -123,6 +125,8 @@ impl Default for EditorDerivedData {
             regions: Arc::from([]),
             delimiter_query: None,
             delimiter_pair: None,
+            table_query: None,
+            table_at_cursor: None,
             hover_query: None,
             hover_range: None,
             diagnostics_key: None,
@@ -351,6 +355,29 @@ impl EditorDerivedData {
     pub(crate) fn context_regions(&mut self) -> Arc<[ContextRegion]> {
         self.prepare_regions();
         Arc::clone(&self.regions)
+    }
+
+    pub(crate) fn prepare_table_at_cursor(&mut self, cursor: usize) {
+        let Some(key) = self.source_key else {
+            return;
+        };
+        if self.table_query == Some((key, cursor)) {
+            return;
+        }
+        self.prepare_syntax();
+        self.table_at_cursor = crate::editor_features::editable_table_in_source(
+            &self.parsed_source,
+            self.char_to_byte(cursor),
+        );
+        self.table_query = Some((key, cursor));
+    }
+
+    pub(crate) fn cached_table_at_cursor(
+        &self,
+        key: DocumentKey,
+    ) -> Option<&crate::editor_features::EditableTable> {
+        self.table_query.filter(|(cached, _)| *cached == key)?;
+        self.table_at_cursor.as_ref()
     }
 
     fn prepare_regions(&mut self) {
@@ -935,6 +962,30 @@ mod tests {
         }
         assert_eq!(data.syntax_rebuild_count(), 2);
         data.sticky_context_query();
+        assert_eq!(data.syntax_rebuild_count(), 2);
+    }
+
+    #[test]
+    fn table_cursor_queries_reuse_syntax_and_invalidate_on_document_changes() {
+        let mut data = EditorDerivedData::default();
+        let source = "#table(columns: 2, [A], [B])";
+        data.prepare_source(&DocumentSnapshot::fixture(revision(1), source));
+        for _ in 0..100 {
+            data.prepare_table_at_cursor(4);
+        }
+        assert_eq!(data.syntax_rebuild_count(), 1);
+        let table = data.cached_table_at_cursor(revision(1)).unwrap() as *const _;
+        data.prepare_table_at_cursor(4);
+        assert_eq!(
+            table,
+            data.cached_table_at_cursor(revision(1)).unwrap() as *const _
+        );
+        data.prepare_table_at_cursor(5);
+        assert_eq!(data.syntax_rebuild_count(), 1);
+        data.prepare_source(&DocumentSnapshot::fixture(revision(2), "not a table"));
+        assert!(data.cached_table_at_cursor(revision(2)).is_none());
+        data.prepare_table_at_cursor(4);
+        assert!(data.cached_table_at_cursor(revision(2)).is_none());
         assert_eq!(data.syntax_rebuild_count(), 2);
     }
 

@@ -56,6 +56,8 @@ The accepted scenes and their framebuffer targets are:
 | Scene | Capture target | Themed state |
 | --- | --- | --- |
 | `main` | `main` | Main split editor and preview |
+| `table-editor` | `table-editor` | Resizable table workbench with a merged heading, styling inspector and read-only source |
+| `table-editor-narrow` | `table-editor` | The table workbench at its minimum width |
 | `tabs` | `main` | Adjacent title-bar tabs with close controls, a dirty active tab, and the first tab selected as preview source |
 | `empty-workspace` | `main` | No document tabs; workspace Explorer and New/Open remain available |
 | `tabs-pdf` | `main` | PDF tab in the editor pane beside the first tab's Typst preview |

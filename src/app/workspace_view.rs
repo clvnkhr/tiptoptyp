@@ -133,10 +133,12 @@ impl EditorApp {
         self.asset_preview.status = PreviewStatus::Compiling;
         self.asset_preview.dark =
             self.preview.dark && self.document().kind() != DocumentKind::Image;
-        if let Err(error) =
-            self.asset_loader
-                .request(self.asset_token, path, self.document().kind())
-        {
+        if let Err(error) = self.asset_loader.request(
+            self.asset_token,
+            path,
+            self.document().kind(),
+            !self.pdfjs_requested() || self.captures.has_pending_for("main"),
+        ) {
             self.asset_preview.status = PreviewStatus::Error;
             self.notice = Some(Notice {
                 message: error,
@@ -145,7 +147,26 @@ impl EditorApp {
         }
     }
 
-    pub(super) fn show_asset_view(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn show_asset_view(&mut self, ui: &mut egui::Ui, frame: Option<&eframe::Frame>) {
+        if self.pdfjs_requested()
+            && self.document().kind() == DocumentKind::Pdf
+            && !self.captures.has_pending_for("main")
+        {
+            self.show_pdfjs_view(ui, frame, true);
+            return;
+        }
+        self.pdfjs_asset.hide();
+        // A PDF opened without Poppler still needs a raster surrogate when a
+        // framebuffer capture is explicitly requested. Queue it only once.
+        if self.pdfjs_requested()
+            && self.document().kind() == DocumentKind::Pdf
+            && self.captures.has_pending_for("main")
+            && self.asset_preview.content.pages().is_empty()
+            && matches!(self.asset_preview.status, PreviewStatus::Ready(_))
+            && let Some(path) = self.document().path().clone()
+        {
+            self.request_asset(path);
+        }
         let fresh = self
             .asset_preview
             .raster_freshness(self.document().revision())

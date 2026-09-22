@@ -225,6 +225,15 @@ impl QaSession {
         }
         let toolbar_anchor = Pos2::new(theme::SPACE.content, METRICS.chrome.toolbar_height);
         match scene {
+            UiSnapshotScene::TableEditor | UiSnapshotScene::TableEditorNarrow => {
+                if app.table_editor.is_none() {
+                    const SOURCE: &str = "= Quarterly review\n\n#table(\n  columns: (2fr, 1fr, 1fr),\n  inset: 8pt,\n  stroke: 0.5pt,\n  table.cell(colspan: 3, fill: rgb(\"#dbeafe\"))[Research programme · 2026],\n  [*Milestone*], [*Owner*], [*Status*],\n  [Literature review], [Ada], [Complete],\n  [Field study], [René], [In progress],\n  [Final report], [Sam], [Planned],\n)\n\nThe code remains selectable and scrollable while the table draft is open.\n";
+                    app.document_mut().replace_unprojected_untitled(SOURCE);
+                    app.prepare_editor_source_data();
+                    let cursor = SOURCE.find("table(").unwrap();
+                    app.begin_table_editor(editable_table_at(SOURCE, cursor).unwrap());
+                }
+            }
             UiSnapshotScene::EmptyWorkspace => {
                 if !self.tabs_prepared {
                     app.empty_workspace(context);
@@ -736,6 +745,7 @@ impl QaSession {
         app.close_app_popup();
         app.document_workflow.clear_modal();
         app.rename_dialog = None;
+        app.table_editor = None;
         app.rename_overlay_had_focus = false;
         app.rename_overlay_suspended = false;
         app.settings_window.lock().unwrap().ui.staged_ui_font_weight = None;
@@ -754,7 +764,15 @@ impl QaSession {
         app.recorded_notice = None;
         app.preview.status = PreviewStatus::Ready(Duration::ZERO);
         if let Some(fixture) = &self.document {
-            app.tabs = tabs::Tabs::default();
+            // Keep a real, owned document tab. Restoring into Tabs::default's
+            // empty-workspace placeholder disables preview processing and
+            // leaves every subsequent main capture waiting forever.
+            let owner = app.document().key().owner;
+            let document = std::mem::replace(
+                app.document_mut(),
+                DocumentSession::new(owner, "", DocumentKind::Typst),
+            );
+            app.tabs = tabs::Tabs::new(false, document, app.workspace_root.clone());
             if fixture.restore(app.document_mut()) {
                 app.preview.content.clear();
             }
@@ -804,6 +822,53 @@ fn prepare_git_panel_capture(context: &egui::Context, explorer: &mut ExplorerPan
 mod tests {
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable as _};
+
+    #[test]
+    fn serial_capture_restores_a_live_document_tab_and_preserves_unchanged_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        let mut qa = QaSession {
+            document: Some(SceneDocument::capture(app.document())),
+            ..Default::default()
+        };
+        let key = app.document().key();
+        for theme in ["tiptop-light", "tiptop-dark"] {
+            qa.set_step(
+                &mut app,
+                &UiCaptureStep {
+                    theme: CaptureThemeProfile {
+                        name: theme.into(),
+                        invert: false,
+                        hue_shift_degrees: 0,
+                    },
+                    scene: UiSnapshotScene::Main,
+                },
+                &context,
+            );
+            assert_eq!(app.tabs.len(), 1);
+            assert!(app.typst_preview_available());
+            assert_eq!(app.document().key(), key);
+        }
+        app.document_mut()
+            .replace_unprojected_untitled("scene-only buffer");
+        qa.set_step(
+            &mut app,
+            &UiCaptureStep {
+                theme: CaptureThemeProfile {
+                    name: "tiptop-light".into(),
+                    invert: false,
+                    hue_shift_degrees: 0,
+                },
+                scene: UiSnapshotScene::Main,
+            },
+            &context,
+        );
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.document().source(), &qa.document.unwrap().source);
+        assert_eq!(app.document().key().owner, key.owner);
+        assert!(app.typst_preview_available());
+    }
 
     #[test]
     fn git_capture_restores_collapsed_explorer_and_renders_real_repository_controls() {

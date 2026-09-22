@@ -1,0 +1,85 @@
+# PDF.js preview
+
+Select **Settings → Preview → PDF.js**, then use Split or Preview view. It also
+applies to opened PDF tabs, including a PDF tab beside a designated Typst preview.
+The backend is available on macOS and Windows, matching the existing native
+web-view support. Other platforms retain the raster viewer. Tinymist remains the
+default and provides the source/preview synchronization unavailable in PDF.js.
+
+The bundled Mozilla generic viewer provides continuous scroll, horizontal pan
+when zoomed in, zoom buttons and percentage/fit controls, Cmd/Ctrl +/- and 0,
+Ctrl-wheel zoom, text selection, find, outlines, and PDF link annotations.
+Internal links stay in the document. HTTP(S) and mail links go through the app's
+external-link handler. PDF scripts, annotation editing, automatic printing and
+opening a different file within the embedded viewer are disabled. Use the app's
+Open and Export commands. On macOS, GestureEvents feed trackpad pinch into the
+same PDF.js scale as the other zoom controls.
+
+The adapter keeps the displayed PDF while Typst compiles. It receives only
+accepted canonical artifacts, downloads the new immutable bytes, and restores
+the page/zoom/position when replacing a PDF for the same document. A different
+document starts at page one, fit width. A shortened document clamps the restored
+page. Theme changes do not reload the PDF. The new viewer does not modify the
+Tinymist zoom adapter or the deferred zoom-fallback investigation.
+
+## Ownership and cost
+
+`src/pdfjs.rs` embeds the hash-verified upstream distribution in the application.
+Each visible PDF surface has one loopback server with a random capability URL;
+it serves an explicit embedded asset map and the current PDF, never arbitrary
+workspace files. Host/origin validation, a restrictive CSP, and no CORS prevent
+unrelated web pages from reading a document. There is no CDN, telemetry, polling
+timer or new compile worker. Closing the document/window or changing backend
+drops the native view and server together. Code view hides the retained viewer.
+
+Rust shares the canonical `Arc<[u8]>`; unchanged frames compare pointer identity
+instead of copying/hashing PDF contents. Old request URLs cannot return newer
+PDF bytes. JavaScript serializes loads and collapses superseded downloads. The
+upstream rendering queue and page buffer render the visible vicinity; individual
+canvases are capped at 16 Mi pixels. WebKit/Chromium and PDF.js still incur their
+own document/worker/canvas memory costs, outside the raster residency accounting.
+PDF.js mode disables Poppler compilation/catalog work and raster page requests.
+No cross-platform speed or physical gesture smoothness guarantee is implied.
+
+Upstream version, archive hash, extraction exclusions and licenses are recorded
+in `assets/pdfjs/PROVENANCE.md`. The aggregate package notice includes the viewer,
+CMap, ICC, font and WASM licenses.
+
+## Validation
+
+Deterministic checks:
+
+```sh
+cargo test pdfjs
+node --test scripts/test-pdfjs-host.mjs
+```
+
+The optional real-browser driver compiles a 24-page fixture using the bundled
+Typst executable and serves it through the actual Rust asset server. Install
+Playwright in a temporary QA directory and point `PLAYWRIGHT_MODULE` at it:
+
+```sh
+PLAYWRIGHT_MODULE=/path/to/node_modules/playwright node scripts/check-pdfjs.mjs
+```
+
+`CHROME_PATH` overrides the installed Chrome executable; `TIPTOPTYP_TEST_TYPST`
+overrides the fixture compiler. Browser evidence is written beneath
+`.tiptoptyp/screenshots/agent-review/pdfjs/`. These browser captures test the
+actual viewer but are not the composed native app or its viewport framebuffer.
+The normal app framebuffer capture substitutes raster pages for native child
+views, as documented in `ui-qa-screenshots.md`.
+
+On macOS, `PDFJS_NATIVE=1` also compiles and runs the optimized Swift WKWebView
+probe against the same Rust server and captures its child-view framebuffer.
+On 22 September 2026 the Chrome 153 / macOS arm64 run retained page 13, 175%
+zoom and scroll offset 15,294 exactly across a reload; shrinking to one page,
+switching documents, internal links and viewport resizing passed. No remote
+requests or page errors were observed. The native probe rendered 24 pages,
+scrolled, changed the PDF.js scale from 1.5 to 1.8 with synthetic GestureEvents,
+and reset to page width. Its fresh PNG was inspected. This tests native WebKit
+rendering and event routing, not physical trackpad feel or the composed app.
+
+Manual acceptance: scroll far down, zoom and pan, follow the fixture's first/last
+page links, open an external link, and edit the source while scrolled down.
+Check that the new PDF keeps your position and zoom. Switch between Code/Split/
+Preview, open a PDF tab, resize the split divider and try a macOS trackpad pinch.

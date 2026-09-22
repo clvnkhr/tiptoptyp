@@ -54,7 +54,7 @@ jobs:
       - name: Application and core tests
         run: cargo +1.98.1 test --locked --no-fail-fast
       - name: Embedded preview interaction tests
-        run: node --test scripts/test-preview-navigation.mjs
+        run: node --test scripts/test-preview-navigation.mjs scripts/test-pdfjs-host.mjs
       - name: Packaging tests
         run: cargo +1.98.1 test --locked --manifest-path xtask/Cargo.toml
       - name: Profiling infrastructure checks
