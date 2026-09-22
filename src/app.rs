@@ -6239,10 +6239,9 @@ impl EditorApp {
             return;
         };
         let changed = previous_key != self.document().key();
-        // Undo should reveal the edit that is being undone. Redo should keep
-        // the cursor where the user performed the undo instead of jumping
-        // back to the cursor captured before that undo.
-        let target_cursor = if redo { current.cursor } else { next.cursor };
+        // Restore text and cursor together in both directions. The redo
+        // snapshot holds the post-edit caret, including the inserted text.
+        let target_cursor = next.cursor;
         self.store_editor_cursor(context, target_cursor);
         let range = target_cursor.as_sorted_char_range();
         self.pending_editor_selection = Some(EditorSelection::Focus(range.start.0..range.end.0));

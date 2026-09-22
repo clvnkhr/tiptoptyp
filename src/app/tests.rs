@@ -98,6 +98,120 @@ fn explorer_view_returns_navigation_without_effects_and_does_not_paint_hidden_gi
 }
 
 #[test]
+fn live_editor_redo_restores_the_cursor_after_inserted_or_replaced_text() {
+    for (original, typed) in [("", "zzz"), ("old", "é🙂z")] {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        app.snapshot_scene = None;
+        let prefix = "α🙂 before\n";
+        let start = prefix.chars().count();
+        let before = format!("{prefix}{original}\nafter");
+        app.document_mut().replace_unprojected_untitled(&before);
+        let frame = |app: &mut EditorApp, events| {
+            context
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 500.0))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| app.show_editor(ui),
+                )
+                .drop_without_applying_deltas();
+        };
+        frame(&mut app, Vec::new());
+        app.store_editor_cursor(
+            &context,
+            CCursorRange::two(
+                CCursor::new(start),
+                CCursor::new(start + original.chars().count()),
+            ),
+        );
+        let editor_id = source_editor_id(&context);
+        context.memory_mut(|memory| memory.request_focus(editor_id));
+        frame(&mut app, vec![egui::Event::Text(typed.into())]);
+        let after = format!("{prefix}{typed}\nafter");
+        let after_cursor = start + typed.chars().count();
+        assert_eq!(app.document().source(), &after);
+        assert_eq!(
+            app.editor_snapshot(&context).cursor.primary.index.0,
+            after_cursor
+        );
+
+        app.undo_editor(&context, false);
+        frame(&mut app, Vec::new());
+        assert_eq!(app.document().source(), &before);
+        let selection = app.editor_snapshot(&context).cursor.as_sorted_char_range();
+        assert_eq!(
+            selection.start.0..selection.end.0,
+            start..start + original.chars().count()
+        );
+
+        // Cursor-only navigation after Undo must not redirect Redo's caret.
+        app.store_editor_cursor(&context, CCursorRange::one(CCursor::new(0)));
+        frame(&mut app, Vec::new());
+        app.undo_editor(&context, true);
+        frame(&mut app, Vec::new());
+        assert_eq!(app.document().source(), &after);
+        let cursor = app.editor_snapshot(&context).cursor;
+        assert_eq!(cursor.primary.index.0, after_cursor);
+        assert_eq!(cursor.secondary.index.0, after_cursor);
+        frame(&mut app, vec![egui::Event::Text("!".into())]);
+        assert_eq!(app.document().source(), &format!("{prefix}{typed}!\nafter"));
+    }
+}
+
+#[test]
+fn live_editor_redo_replays_the_caret_through_consecutive_typing_steps() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+    app.snapshot_scene = None;
+    app.document_mut()
+        .replace_unprojected_untitled("before\n\nafter");
+    let frame = |app: &mut EditorApp, events| {
+        context
+            .run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 500.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.show_editor(ui),
+            )
+            .drop_without_applying_deltas();
+    };
+    frame(&mut app, Vec::new());
+    app.store_editor_cursor(&context, CCursorRange::one(CCursor::new(7)));
+    let editor_id = source_editor_id(&context);
+    context.memory_mut(|memory| memory.request_focus(editor_id));
+    for _ in 0..3 {
+        frame(&mut app, vec![egui::Event::Text("z".into())]);
+    }
+    for _ in 0..2 {
+        for (redo, count) in [
+            (false, 2),
+            (false, 1),
+            (false, 0),
+            (true, 1),
+            (true, 2),
+            (true, 3),
+        ] {
+            app.undo_editor(&context, redo);
+            frame(&mut app, Vec::new());
+            assert_eq!(
+                app.document().source(),
+                &format!("before\n{}\nafter", "z".repeat(count))
+            );
+            let cursor = app.editor_snapshot(&context).cursor;
+            assert_eq!(cursor.primary.index.0, 7 + count);
+            assert_eq!(cursor.secondary.index.0, 7 + count);
+        }
+    }
+}
+
+#[test]
 fn source_navigation_takes_editor_focus_even_with_find_open() {
     let directory = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
