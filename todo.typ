@@ -2453,6 +2453,8 @@ portable whole-system resource score.
 297. [ ] find and replace should say e.g. x/166 instead of 166 matches, where x/ means we are at the xth match
 298. [ ] if the find (and replace) popup is open but not focused, cmd+F (cmd+opt+F) should focus it. it should only toggle off when we press this while the popup is focused.
 299. [ ] if we cmd+F (similarly for replace) and refocus the find popup, we should resume at the xth match, not start from the beginning
+300. [ ] when we resize the code panel, the currently selected line must stay at (approx) the same pos on screen. if its not already visible, then center the resize at the center line
+301. [ ] if we are editing a line with an error popup, then the line's error disappears because of our changes, then the popup from mouseover on that problem should also go away
 - Item 294 is complete. Tests cover PDF tabs beside Tinymist, canonical byte
   loading without Poppler, the fifth-failure transition, native-view failure,
   pause and duplicate-event admission, explicit raster choice and capture
