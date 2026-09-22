@@ -164,18 +164,18 @@ Re-running the same capture replaces its previous gallery slot. Add
 been written. These options are also available as
 `TIPTOPTYP_UI_SCREENSHOT_LATEST` and `TIPTOPTYP_UI_SCREENSHOT_EXIT`.
 
-Run the maintained light/dark matrix with:
+Run the maintained gallery with:
 
 ```sh
 scripts/capture-theme-gallery.sh
 ```
 
-It captures every bundled theme in the ready main split view. It also captures
-the maintained themed scene set in representative Catppuccin Latte and
-Catppuccin Mocha matrices, including the error workbench and compiling preview
-states, plus transformed main and elevated-menu examples to verify that the
-ordered color operations reach every viewport. The complete checked-in matrix
-is 70 decoded PNGs. The remaining deterministic scenes are still available for
+The default is 22 PNGs: the main split view and all maintained component scenes
+in Catppuccin Latte, plus three Catppuccin Mocha samples—the main window, File
+dropdown, and Save dialog popup. Transformed variants are excluded by default;
+set `TIPTOPTYP_UI_GALLERY_SKIP_VARIANTS=0` to request them explicitly.
+Existing images remain untouched until the next successful capture run prunes
+the obsolete slots. The remaining deterministic scenes are still available for
 targeted local captures and become gallery slots when their images are
 committed and their manifest role is promoted from `targeted` to `component`.
 `docs/ui-snapshots/gallery-manifest.tsv` is the shared source of truth for

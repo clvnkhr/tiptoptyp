@@ -421,22 +421,29 @@ fn missing_successful_capture_is_detected_and_restores_the_complete_set() {
 #[test]
 fn default_gallery_manifest_has_the_maintained_shape_and_order_boundaries() {
     let actual = lines(manifest_command().output().expect("run gallery manifest"));
-    assert_eq!(actual.len(), 70);
-    assert_eq!(actual.iter().collect::<BTreeSet<_>>().len(), 70);
-    assert_eq!(actual.first().unwrap(), "main--tiptop-light.png");
-    assert_eq!(actual.get(31).unwrap(), "main--dracula.png");
+    assert_eq!(actual.len(), 22);
+    assert_eq!(actual.iter().collect::<BTreeSet<_>>().len(), 22);
+    assert_eq!(actual.first().unwrap(), "main--catppuccin-latte.png");
     assert_eq!(
-        actual.get(32).unwrap(),
-        "main--catppuccin-latte-inverted-hue-p30.png"
+        actual
+            .iter()
+            .filter(|name| !name.ends_with("--catppuccin-latte.png"))
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        [
+            "main--catppuccin-mocha.png",
+            "popup-file-menu--catppuccin-mocha.png",
+            "modal-save-dialog--catppuccin-mocha.png"
+        ]
     );
     assert_eq!(
         actual.last().unwrap(),
-        "popup-file-menu--catppuccin-latte-inverted-hue-p30.png"
+        "workspace-workspace-chooser--catppuccin-latte.png"
     );
 }
 
 #[test]
-fn checked_in_gallery_matches_the_manifest_and_every_png_decodes() {
+fn checked_in_gallery_contains_required_images_and_every_png_decodes() {
     let expected = lines(manifest_command().output().expect("run gallery manifest"));
     let mut actual = std::fs::read_dir(gallery_directory())
         .expect("read checked-in gallery")
@@ -451,11 +458,17 @@ fn checked_in_gallery_matches_the_manifest_and_every_png_decodes() {
         .collect::<Vec<_>>();
     actual.sort();
 
-    let mut expected_sorted = expected.clone();
-    expected_sorted.sort();
-    assert_eq!(actual, expected_sorted);
-
+    // A reduced capture policy does not require deleting existing evidence.
+    // Obsolete slots are pruned only after the next successful default run,
+    // which the transaction tests cover separately.
     for name in expected {
+        assert!(
+            actual.contains(&name),
+            "missing required gallery PNG: {name}"
+        );
+    }
+
+    for name in actual {
         let path = gallery_directory().join(&name);
         let image = image::ImageReader::open(&path)
             .unwrap_or_else(|error| panic!("open gallery PNG {name}: {error}"))
@@ -616,10 +629,10 @@ fn manifest_reader_keeps_an_unterminated_final_record() {
 
     let output = harness.print_manifest();
     let outputs = lines(output);
-    assert_eq!(outputs.len(), 70);
+    assert_eq!(outputs.len(), 22);
     assert_eq!(
         outputs.last().unwrap(),
-        "popup-file-menu--catppuccin-latte-inverted-hue-p30.png"
+        "workspace-workspace-chooser--catppuccin-latte.png"
     );
 }
 

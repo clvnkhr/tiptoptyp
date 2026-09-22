@@ -13,6 +13,8 @@ Usage: scripts/capture-theme-gallery.sh [fixture]
 
 Capture the maintained app-framebuffer theme gallery. The optional fixture
 defaults to docs/ui-snapshots/theme-fixture.typ.
+By default, all scenes use Catppuccin Latte, with three additional Mocha
+captures: the main window, File dropdown, and Save dialog popup.
 
 --print-manifest   Print the requested stable PNG filenames without launching.
 --validate-latest  Decode and validate every requested PNG without launching.
@@ -309,7 +311,7 @@ if (( ${#catalog_theme_ids[@]} == 0 || ${#catalog_scene_ids[@]} == 0 \
   exit 2
 fi
 
-themes=("${catalog_theme_ids[@]}")
+themes=(catppuccin-latte)
 scenes=()
 theme_matrix_scene=""
 catalog_index=0
@@ -440,6 +442,12 @@ validate_catalog_contract() {
 
 validate_catalog_contract
 
+# Keep the catalog complete for explicit overrides, but make routine evidence
+# light-only apart from three representative dark surfaces. Transformed color
+# variants are opt-in with TIPTOPTYP_UI_GALLERY_SKIP_VARIANTS=0.
+scene_themes=(catppuccin-latte)
+skip_variants="${TIPTOPTYP_UI_GALLERY_SKIP_VARIANTS:-1}"
+
 # Subset overrides are useful for quick local review. They deliberately disable
 # pruning: a partial run must never decide that the rest of the gallery is stale.
 full_default_matrix=1
@@ -455,7 +463,7 @@ if [[ -n "${TIPTOPTYP_UI_GALLERY_SCENE_THEMES:-}" ]]; then
   read -r -a scene_themes <<< "${TIPTOPTYP_UI_GALLERY_SCENE_THEMES}"
   full_default_matrix=0
 fi
-if [[ "${TIPTOPTYP_UI_GALLERY_SKIP_VARIANTS:-0}" == "1" ]]; then
+if [[ -n "${TIPTOPTYP_UI_GALLERY_SKIP_VARIANTS:-}" ]]; then
   full_default_matrix=0
 fi
 
@@ -568,7 +576,11 @@ build_manifest() {
     load_theme "${theme}"
     append_job "${theme}" "${theme_matrix_scene}" 0 0 "${theme_slug}"
   done
-  if [[ "${TIPTOPTYP_UI_GALLERY_SKIP_VARIANTS:-0}" != "1" ]]; then
+  if (( full_default_matrix == 1 )); then
+    load_theme catppuccin-mocha
+    append_job catppuccin-mocha "${theme_matrix_scene}" 0 0 "${theme_slug}"
+  fi
+  if [[ "${skip_variants}" != "1" ]]; then
     append_variants before-components
   fi
   # Keep equal framebuffer targets adjacent. Immediate child viewports have
@@ -579,13 +591,18 @@ build_manifest() {
       load_theme "${theme}"
       append_job "${theme}" "${scene}" 0 0 "${theme_slug}"
     done
+    if (( full_default_matrix == 1 )) \
+      && [[ "${scene}" == "file-menu" || "${scene}" == "save-dialog" ]]; then
+      load_theme catppuccin-mocha
+      append_job catppuccin-mocha "${scene}" 0 0 "${theme_slug}"
+    fi
   done
-  if [[ "${TIPTOPTYP_UI_GALLERY_SKIP_VARIANTS:-0}" != "1" ]]; then
+  if [[ "${skip_variants}" != "1" ]]; then
     append_variants after-components
   fi
 
   local expected_default_count
-  expected_default_count=$((${#catalog_theme_ids[@]} + ${#scene_themes[@]} * ${#scenes[@]} + ${#variant_phases[@]}))
+  expected_default_count=$((${#scenes[@]} + 4))
   if (( full_default_matrix == 1 && ${#expected_outputs[@]} != expected_default_count )); then
     printf 'Internal gallery error: default manifest has %d outputs, expected %d.\n' \
       "${#expected_outputs[@]}" "${expected_default_count}" >&2
