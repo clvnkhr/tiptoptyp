@@ -175,7 +175,7 @@ I was using two different windows with two different workspaces. Possibly i was 
 138. [x] i noticed that if a popup appears because i hovered over something, then scroll, the scrolling is not performant, losing frames. Investigate and fix.
 139. [x] too much space is reserved for the git hunk color marker on the side. It should take at most 1 char width or other similar small measurement.
 140. [x] Supply missing Unicode glyphs in symbol completions, including Hebrew letters, mathematical operators, and alchemical symbols, without resetting fonts during interaction. Expanded the bundled symbol completion fixture and fallback coverage without rebuilding fonts; Unicode rendering regressions pass.
-141. [x] If the Tinymist server times out or fails, restart it automatically and use the raster fallback only after five consecutive failures.
+141. [x] If the Tinymist server times out or fails, restart it automatically and use the PDF.js fallback only after five consecutive failures (updated by item 294).
 142. [x] Compress the Settings window for variable-width layouts, including compact bracket-family labels such as `()` instead of `Parentheses ()`.
 143. [x] Keep the auto-save delay label and slider together when wrapping; wrap complete toolchain status chips onto the next line when space runs out.
 144. [x] Remove the “both themes · invert, then hue” text and allow any light or dark theme in either appearance slot, listing matching themes before opposite-mode themes.
@@ -2437,6 +2437,26 @@ portable whole-system resource score.
 - Items 263–266, 268–270, and 280–282 remain open. The table-editor,
   Vim, smooth-resize, and Explorer-drop-selection work needs a separate pass
   because each crosses an existing interaction or ownership boundary.
+
+= PDF.js defaults and raster retirement (22 September 2026)
+
+294. [x] Use PDF.js by default for opened PDFs, independently of the default
+  Tinymist mode for Typst. Route unavailable/exhausted Tinymist and native
+  preview failures to PDF.js, preserving retry policy and canonical export
+  bytes. Keep raster only for an explicit selection and deterministic captures.
+295. [ ] Delete the rasterised PDF preview after its remaining dependencies are
+  separated: replace the viewport-capture surrogate, retire PDF raster controls
+  and settings, and remove preview-only Poppler work/residency. Preserve image
+  viewing, PDF thumbnails, canonical PDF export and PDF.js. Do not add features
+  to the retiring viewer. Track the removal boundary in `docs/pdfjs-preview.md`.
+
+- Item 294 is complete. Tests cover PDF tabs beside Tinymist, canonical byte
+  loading without Poppler, the fifth-failure transition, native-view failure,
+  pause and duplicate-event admission, explicit raster choice and capture
+  overrides. Formatting, strict Clippy, the full Rust suite (1,159 passed,
+  18 ignored) and xtask (14 passed) pass. No screenshot retake is needed for
+  backend routing; the existing viewer geometry is unchanged. Item 295 remains
+  open: raster code is retained and its Settings option is marked for removal.
 
 = Compact bottom panel and focus deadlock (22 September 2026)
 

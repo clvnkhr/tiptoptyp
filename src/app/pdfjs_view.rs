@@ -1,4 +1,4 @@
-//! PDF.js native surfaces. Tinymist's zoom/fallback adapter is independent.
+//! PDF.js native surfaces for opened PDFs and the Typst PDF fallback.
 use super::*;
 
 #[derive(Default)]
@@ -60,9 +60,13 @@ impl PdfJsView {
 }
 
 impl EditorApp {
-    pub(super) fn pdfjs_requested(&self) -> bool {
-        self.settings.preview_preference == PreviewPreference::PdfJs
-            && cfg!(any(target_os = "macos", target_os = "windows"))
+    pub(super) fn pdfjs_preview_requested(&self) -> bool {
+        self.preview_status_snapshot().effective_backend == crate::preview::PreviewBackend::PdfJs
+    }
+
+    pub(super) fn pdfjs_asset_requested(&self) -> bool {
+        self.document().kind() == DocumentKind::Pdf
+            && self.settings.preview_preference != PreviewPreference::Native
     }
 
     pub(super) fn clear_pdfjs_views(&mut self) {
@@ -227,7 +231,14 @@ impl EditorApp {
             }
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        let _ = (ui, frame, asset);
+        {
+            let _ = (frame, asset);
+            show_centered_preview_message(
+                ui,
+                "PDF.js requires native web-view support (macOS or Windows).",
+                false,
+            );
+        }
     }
 }
 

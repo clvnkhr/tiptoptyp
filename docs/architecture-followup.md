@@ -151,7 +151,7 @@ timing threshold in normal tests.
 
 `PreviewController` now applies typed transition events to the existing
 connection, recovery and content models and returns adapter effects for service
-restart/stop, refresh mode, raster scheduling and bounded repaint deadlines.
+restart/stop, refresh mode, canonical PDF compilation and bounded repaint deadlines.
 There is no second retry counter or parallel connection state. `EditorApp`
 performs those effects, while native views, texture handles, sidecar calls and
 egui repaint APIs remain in their platform/UI adapters.
@@ -159,7 +159,7 @@ egui repaint APIs remain in their platform/UI adapters.
 Service failures, recovery ticks, explicit restarts, preview-entry changes,
 pause changes, stop and render requests use this path. A failure emits each
 cleanup/repaint/render effect once; a duplicate terminal event emits nothing,
-the fifth consecutive failure schedules one raster fallback, and exhausted or
+the fifth consecutive failure schedules one PDF.js fallback compile, and exhausted or
 inactive recovery emits no idle repaint. Tests also cover retained late
 readiness, pause/restart, export rendering during recovery and entry changes.
 

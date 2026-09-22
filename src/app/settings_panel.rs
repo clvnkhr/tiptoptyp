@@ -719,7 +719,12 @@ impl SettingsPanel<'_> {
                             &mut edited.preview_preference,
                             preference,
                             preference.label(),
-                        );
+                        )
+                        .on_hover_text(match preference {
+                            PreviewPreference::Interactive => "Typst uses Tinymist; opened PDFs and preview failures use PDF.js.",
+                            PreviewPreference::PdfJs => "Use PDF.js for compiled previews and opened PDFs.",
+                            PreviewPreference::Native => "Scheduled for removal. Prefer PDF.js; raster remains an explicit option for now.",
+                        });
                     }
                     ui.separator();
                     settings_inline_value(
@@ -741,7 +746,7 @@ impl SettingsPanel<'_> {
                     ui.add(egui::Label::new(if cfg!(any(target_os = "macos", target_os = "windows")) {
                         "PDF.js supports scrolling, zooming, text selection and PDF links. Source-to-preview jumps require the Tinymist mode."
                     } else {
-                        "PDF.js is available on macOS and Windows. This platform uses the rasterised PDF preview."
+                        "PDF.js requires native web-view support (macOS or Windows). Rasterised PDF remains an explicit option for now."
                     }).wrap());
                 }
                 settings_target_anchor(

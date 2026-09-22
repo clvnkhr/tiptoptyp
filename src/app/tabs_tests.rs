@@ -1055,3 +1055,62 @@ fn all_dirty_tabs_must_be_approved_and_later_edits_revoke_window_close() {
         .edit(CCursorRange::default(), |source| source.push('?'));
     assert!(!app.close_accepted());
 }
+
+#[test]
+fn opened_pdfs_default_to_pdfjs_without_poppler_even_beside_a_typst_preview() {
+    let root = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&context, root.path());
+    app.snapshot_scene = None;
+    assert_eq!(
+        app.settings.preview_preference,
+        PreviewPreference::Interactive
+    );
+    app.preview = PreviewController::new(false, PreviewPreference::Interactive);
+    app.preview.accept_artifact(
+        ArtifactKey::unversioned(app.document().revision()),
+        Arc::from(b"retained Typst PDF".as_slice()),
+    );
+    app.append_tab(&context);
+    let path = root.path().join("reference.pdf");
+    // Invalid for Poppler: success proves that PDF.js owns parsing this asset.
+    fs::write(&path, b"PDF.js parses these bytes").unwrap();
+    app.document_mut().replace_loaded_unprojected(
+        String::new(),
+        path.clone(),
+        DocumentKind::Pdf,
+        None,
+    );
+    app.clear_preview_for_document(true);
+    assert!(app.pdfjs_asset_requested());
+    assert!(app.typst_preview_available());
+    // The dormant fixture has no sidecar. Model its normal startup state.
+    app.preview.tinymist_state = ServiceState::Starting("Launching Tinymist".into());
+    app.preview.webview_state = ServiceState::Starting("Waiting for preview".into());
+    if cfg!(any(target_os = "macos", target_os = "windows")) {
+        assert!(
+            !app.pdfjs_preview_requested(),
+            "the designated Typst pane still uses Tinymist"
+        );
+    }
+    app.request_asset(path);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.asset_preview.status == PreviewStatus::Compiling && Instant::now() < deadline {
+        app.receive_asset_results(&context);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        app.asset_preview.content.pdf().map(|pdf| pdf.as_ref()),
+        Some(b"PDF.js parses these bytes".as_slice())
+    );
+    assert!(app.asset_preview.content.pages().is_empty());
+    assert_eq!(
+        app.preview.content.pdf().map(|pdf| pdf.as_ref()),
+        Some(b"retained Typst PDF".as_slice())
+    );
+    app.settings.preview_preference = PreviewPreference::Native;
+    assert!(
+        !app.pdfjs_asset_requested(),
+        "explicit raster selection remains available"
+    );
+}

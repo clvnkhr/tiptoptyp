@@ -167,10 +167,7 @@ use crate::editor_features::{StickyContextKind, sticky_context_rows};
 #[cfg(test)]
 use crate::presentation::{ThemeSourceRequest, load_active_theme};
 #[cfg(test)]
-use crate::preview::{
-    preview_backend_label_for, preview_fallback_reason_for, raster_content_freshness,
-    raster_result_matches_artifact,
-};
+use crate::preview::{raster_content_freshness, raster_result_matches_artifact};
 
 const COMPILE_DEBOUNCE: Duration = Duration::from_millis(60);
 const AUTOSAVE_RETRY_DELAY: Duration = Duration::from_secs(2);
@@ -283,25 +280,6 @@ fn typst_preview_available_for(document_kind: DocumentKind, designated: bool) ->
 fn preview_visible_for(document_kind: DocumentKind, view_mode: ViewMode, designated: bool) -> bool {
     document_kind.preview_only()
         || (typst_preview_available_for(document_kind, designated) && view_mode.shows_preview())
-}
-
-#[cfg(test)]
-const fn raster_preview_required_for(
-    interactive_requested: bool,
-    interactive_unavailable: bool,
-    screenshot_pending: bool,
-) -> bool {
-    screenshot_pending || !interactive_requested || interactive_unavailable
-}
-
-#[cfg(any(test, target_os = "macos", target_os = "windows"))]
-const fn raster_fallback_compile_needed(
-    typst_preview_available: bool,
-    compilation_allowed: bool,
-    raster_was_required: bool,
-    raster_is_required: bool,
-) -> bool {
-    typst_preview_available && compilation_allowed && !raster_was_required && raster_is_required
 }
 
 const fn compilation_run_allowed(
@@ -2590,11 +2568,10 @@ impl EditorApp {
 
         let raster_document_visible = self.typst_preview_available()
             && self.view_mode.shows_preview()
-            && (!self.pdfjs_requested() || self.captures.has_pending_for("main"))
-            && (!self.interactive_preview_active() || self.captures.has_pending_for("main"));
+            && self.raster_preview_required();
         let asset_visible = self.document().kind().preview_only()
             && (self.document().kind() != DocumentKind::Pdf
-                || !self.pdfjs_requested()
+                || !self.pdfjs_asset_requested()
                 || self.captures.has_pending_for("main"));
         let owner = self.document().key().owner;
         let visible = raster_document_visible
@@ -3195,12 +3172,10 @@ impl EditorApp {
                 consume_preview_zoom_shortcut(input, &shortcuts)
             })
         {
-            if self.pdfjs_requested() && self.document().kind() != DocumentKind::Image {
-                if self.document().kind() == DocumentKind::Pdf {
-                    self.pdfjs_asset.zoom(action);
-                } else {
-                    self.pdfjs_preview.zoom(action);
-                }
+            if self.pdfjs_asset_requested() {
+                self.pdfjs_asset.zoom(action);
+            } else if self.pdfjs_preview_requested() && !self.document().kind().preview_only() {
+                self.pdfjs_preview.zoom(action);
             } else if self.interactive_preview_active() && !self.document().kind().preview_only() {
                 #[cfg(any(target_os = "macos", target_os = "windows"))]
                 if let Some(webview) = &self.webview {
@@ -5162,7 +5137,7 @@ impl EditorApp {
                         self.preview.tinymist_state = ServiceState::Degraded(error.to_string());
                     }
                 }
-                PreviewEffect::ScheduleRaster => self.schedule_compile_now_io(),
+                PreviewEffect::ScheduleCompile => self.schedule_compile_now_io(),
                 PreviewEffect::RepaintAfter(delay) => {
                     if let Some(context) = context {
                         context.request_repaint_after(delay);
@@ -5872,16 +5847,12 @@ impl EditorApp {
     }
 
     fn preview_status_snapshot(&self) -> PreviewStatusSnapshot<'_> {
-        let mut status = self.preview.status_snapshot(
+        self.preview.status_snapshot(
             self.typst_preview_available(),
             self.preview_visible(),
             cfg!(any(target_os = "macos", target_os = "windows")),
             self.document().revision(),
-        );
-        if self.pdfjs_requested() {
-            status.effective_backend = crate::preview::PreviewBackend::PdfJs;
-        }
-        status
+        )
     }
 
     fn interactive_preview_requested(&self) -> bool {
@@ -5891,32 +5862,23 @@ impl EditorApp {
     fn preview_processing_enabled(&self) -> bool {
         self.typst_preview_available()
             && (self.document_workflow.pending_export.is_some()
-                || self.pdfjs_requested()
+                || self.pdfjs_preview_requested()
                 || self.raster_preview_required())
     }
 
     fn raster_preview_required(&self) -> bool {
-        if self.pdfjs_requested() && !self.captures.has_pending_for("main") {
-            return false;
-        }
-        self.preview.raster_required(
-            self.interactive_preview_requested(),
-            self.captures.has_pending_for("main"),
-        )
+        self.captures.has_pending_for("main")
+            || self.preview_status_snapshot().effective_backend
+                == crate::preview::PreviewBackend::Raster
     }
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn fail_local_webview(&mut self, message: String) {
-        let raster_was_required = self.raster_preview_required();
+        let compile_was_required = self.preview_processing_enabled();
         self.discard_webview();
         self.preview.webview_state = ServiceState::Failed(message);
-        let raster_is_required = self.raster_preview_required();
-        if raster_fallback_compile_needed(
-            self.typst_preview_available(),
-            self.may_run_compilation(),
-            raster_was_required,
-            raster_is_required,
-        ) {
+        if !compile_was_required && self.preview_processing_enabled() && self.may_run_compilation()
+        {
             let transition = self
                 .preview
                 .transition(PreviewTransitionEvent::RenderRequested);
@@ -7554,7 +7516,7 @@ impl EditorApp {
             self.show_asset_view(ui, frame);
             return;
         }
-        if self.pdfjs_requested() && !self.captures.has_pending_for("main") {
+        if self.pdfjs_preview_requested() && !self.captures.has_pending_for("main") {
             self.hide_webview();
             self.show_pdfjs_view(ui, frame, false);
             return;
@@ -7615,6 +7577,11 @@ impl EditorApp {
             ) {
                 ui.allocate_rect(rect, Sense::hover());
                 ui.painter().rect_filled(rect, 0.0, preview_background(ui));
+            } else if self.pdfjs_preview_requested() {
+                // Creation/navigation can fail during this frame. Route the
+                // failure straight to PDF.js, including before the next repaint.
+                self.hide_webview();
+                self.show_pdfjs_view(ui, frame, false);
             } else if native_transitioning {
                 self.hide_webview();
                 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -8452,20 +8419,18 @@ impl EditorApp {
             self.typst_preview_available(),
             self.view_mode,
         );
-        if !self.pdfjs_requested() {
-            self.clear_pdfjs_views();
-        } else {
-            if !matches!(
-                content_view,
-                ContentView::SplitSource | ContentView::SplitAsset | ContentView::Preview
-            ) {
-                self.pdfjs_preview.hide();
-            }
-            if !matches!(content_view, ContentView::Asset | ContentView::SplitAsset)
-                || self.document().kind() != DocumentKind::Pdf
-            {
-                self.pdfjs_asset.hide();
-            }
+        if !self.pdfjs_preview_requested() {
+            self.pdfjs_preview.clear();
+        } else if !matches!(
+            content_view,
+            ContentView::SplitSource | ContentView::SplitAsset | ContentView::Preview
+        ) {
+            self.pdfjs_preview.hide();
+        }
+        if !self.pdfjs_asset_requested() {
+            self.pdfjs_asset.clear();
+        } else if !matches!(content_view, ContentView::Asset | ContentView::SplitAsset) {
+            self.pdfjs_asset.hide();
         }
         match content_view {
             ContentView::Empty | ContentView::Source | ContentView::Asset => {

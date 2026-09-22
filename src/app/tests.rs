@@ -13,16 +13,11 @@ fn pdfjs_compiles_canonical_bytes_without_starting_svg_or_raster_work() {
     let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
     app.settings.preview_preference = PreviewPreference::PdfJs;
     app.preview.set_requested_backend(PreviewPreference::PdfJs);
-    if cfg!(any(target_os = "macos", target_os = "windows")) {
-        assert!(app.pdfjs_requested());
-        assert!(app.preview_processing_enabled());
-        assert!(!app.raster_preview_required());
-        assert!(!app.interactive_preview_requested());
-        assert_eq!(app.preview_status_snapshot().backend_label(), "PDF.js");
-    } else {
-        assert!(!app.pdfjs_requested());
-        assert!(app.raster_preview_required());
-    }
+    assert!(app.pdfjs_preview_requested());
+    assert!(app.preview_processing_enabled());
+    assert!(!app.raster_preview_required());
+    assert!(!app.interactive_preview_requested());
+    assert_eq!(app.preview_status_snapshot().backend_label(), "PDF.js");
 }
 
 #[test]
@@ -1925,37 +1920,72 @@ fn designated_typst_entry_remains_visible_while_editing_other_file_kinds() {
 }
 
 #[test]
-fn interactive_preview_does_not_duplicate_raster_compilation() {
-    assert!(!raster_preview_required_for(true, false, false));
-    assert!(raster_preview_required_for(true, true, false));
-    assert!(raster_preview_required_for(true, false, true));
-    assert!(raster_preview_required_for(false, false, false));
+fn pdfjs_fallback_does_not_duplicate_raster_work_and_captures_remain_explicit() {
+    let root = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+    app.preview = PreviewController::new(false, PreviewPreference::Interactive);
+    if cfg!(any(target_os = "macos", target_os = "windows")) {
+        assert!(
+            !app.preview_processing_enabled(),
+            "wait for Tinymist startup"
+        );
+    }
+    app.preview.tinymist_state = ServiceState::Failed("unavailable".into());
+    assert!(app.pdfjs_preview_requested());
+    assert!(app.preview_processing_enabled());
+    assert!(!app.raster_preview_required());
+    assert_eq!(
+        app.preview_status_snapshot().backend_label(),
+        "PDF.js · fallback"
+    );
+    assert_eq!(
+        app.preview.requested_backend,
+        PreviewPreference::Interactive
+    );
+    let mut config = crate::screenshot::CaptureConfig::for_working_directory(root.path());
+    config.enabled = true;
+    app.captures = CaptureController::new(config);
+    app.captures.queue("main", "routing-test").unwrap();
+    assert!(
+        app.raster_preview_required(),
+        "explicit capture keeps its surrogate"
+    );
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[test]
-fn local_webview_failure_schedules_the_first_raster_fallback() {
-    let raster_was_required = raster_preview_required_for(true, false, false);
-    let raster_is_required = raster_preview_required_for(true, true, false);
-
-    assert!(raster_fallback_compile_needed(
-        true,
-        true,
-        raster_was_required,
-        raster_is_required,
-    ));
-    assert!(!raster_fallback_compile_needed(
-        false,
-        true,
-        raster_was_required,
-        raster_is_required,
-    ));
-    assert!(!raster_fallback_compile_needed(
-        true,
-        false,
-        raster_was_required,
-        raster_is_required,
-    ));
-    assert!(!raster_fallback_compile_needed(true, true, true, true));
+fn local_webview_failure_schedules_pdfjs_once_and_respects_pause() {
+    for paused in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        app.lifecycle.request_resume();
+        app.lifecycle.activate();
+        app.preview = PreviewController::new(false, PreviewPreference::Interactive);
+        let generation = crate::tinymist::Generation(1);
+        app.preview.connection.start(generation);
+        app.preview.connection.initialized(generation);
+        app.preview.connection.connect(
+            generation,
+            url::Url::parse("http://127.0.0.1:23625").unwrap(),
+        );
+        app.compilation_paused = paused;
+        app.fail_local_webview("child webview could not load".into());
+        assert!(app.pdfjs_preview_requested());
+        assert!(!app.raster_preview_required());
+        assert_eq!(app.compile_deadline.is_some(), !paused);
+        assert_eq!(
+            app.preview_fallback_reason(),
+            Some("Failed: child webview could not load".into())
+        );
+        app.compile_deadline = None;
+        app.fail_local_webview("repeated error".into());
+        assert!(
+            app.compile_deadline.is_none(),
+            "same failure cannot enqueue another build"
+        );
+    }
 }
 
 #[test]
@@ -6732,55 +6762,6 @@ fn light_and_dark_styles_have_identical_layout_geometry() {
     assert_eq!(
         dark.text_styles.get(&egui::TextStyle::Monospace),
         Some(&theme::editor_font())
-    );
-}
-
-#[test]
-fn automatic_preview_fallback_preserves_and_reports_user_intent() {
-    let preference = PreviewPreference::Interactive;
-    let tinymist = ServiceState::Failed("tinymist executable was not found".to_owned());
-    let webview = ServiceState::Starting("waiting".to_owned());
-
-    assert_eq!(
-        preview_fallback_reason_for(preference, false, false, &tinymist, &webview),
-        Some("Failed: tinymist executable was not found".to_owned())
-    );
-    assert_eq!(
-        preview_backend_label_for(preference, false),
-        "Rasterised PDF · fallback"
-    );
-    assert_eq!(preference, PreviewPreference::Interactive);
-}
-
-#[test]
-fn explicitly_selected_native_preview_is_not_a_fallback() {
-    let tinymist = ServiceState::Failed("unavailable".to_owned());
-    let webview = ServiceState::Failed("unavailable".to_owned());
-
-    assert_eq!(
-        preview_fallback_reason_for(PreviewPreference::Native, false, false, &tinymist, &webview,),
-        None
-    );
-    assert_eq!(
-        preview_backend_label_for(PreviewPreference::Native, false),
-        "Rasterised PDF"
-    );
-}
-
-#[test]
-fn embedded_viewer_failure_is_reported_after_preview_server_startup() {
-    let tinymist = ServiceState::Ready("server ready".to_owned());
-    let webview = ServiceState::Failed("child webview could not load".to_owned());
-
-    assert_eq!(
-        preview_fallback_reason_for(
-            PreviewPreference::Interactive,
-            false,
-            true,
-            &tinymist,
-            &webview,
-        ),
-        Some("Failed: child webview could not load".to_owned())
     );
 }
 

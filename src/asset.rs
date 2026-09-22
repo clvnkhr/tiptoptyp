@@ -63,9 +63,10 @@ struct AssetRequest {
     inspect_pages: bool,
 }
 
-/// Decodes images and rasterizes directly opened PDFs away from egui's frame
-/// callback. In particular, a long PDF cannot freeze resizing or leave the UI
-/// in a modal-looking state while Poppler is working.
+/// Decodes images and reads opened PDFs away from egui's frame callback.
+/// PDF.js needs only bytes; explicit raster mode and captures also inspect
+/// pages with Poppler off the UI thread. Keep thumbnail decoding separate
+/// when retiring that optional inspection path (todo 295).
 pub struct AssetLoader {
     requests: Option<LatestSender<AssetRequest>>,
     results: Receiver<AssetResult>,

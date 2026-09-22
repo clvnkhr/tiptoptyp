@@ -1,10 +1,22 @@
 # PDF.js preview
 
-Select **Settings → Preview → PDF.js**, then use Split or Preview view. It also
-applies to opened PDF tabs, including a PDF tab beside a designated Typst preview.
-The backend is available on macOS and Windows, matching the existing native
-web-view support. Other platforms retain the raster viewer. Tinymist remains the
-default and provides the source/preview synchronization unavailable in PDF.js.
+Opened PDF tabs use **PDF.js by default**, including beside a designated Typst
+preview. Typst documents still default to Tinymist for source/preview
+synchronization. Select **Settings → Preview → PDF.js** to use PDF.js for compiled
+Typst output too, in Split or Preview view.
+
+PDF.js is also the automatic fallback when Tinymist is unavailable, exhausts its
+five consecutive attempts, or its native view fails. The first four failures keep
+the existing retry behavior and any retained Tinymist surface. Fallback preserves
+the requested preference and reports **PDF.js · fallback** with the failure
+reason. It compiles canonical PDF bytes without Poppler page inspection or
+rasterization; explicit export uses the same bytes.
+
+Native PDF.js views are available on macOS and Windows. Other platforms report
+missing native web-view support rather than silently selecting raster. A PDF.js
+load failure exposes its error and retry button, without another backend switch.
+An explicit **Rasterised PDF** preference remains available for now and applies
+to both compiled previews and opened PDFs.
 
 The bundled Mozilla generic viewer provides continuous scroll, horizontal pan
 when zoomed in, zoom buttons and percentage/fit controls, Cmd/Ctrl +/- and 0,
@@ -40,6 +52,31 @@ canvases are capped at 16 Mi pixels. WebKit/Chromium and PDF.js still incur thei
 own document/worker/canvas memory costs, outside the raster residency accounting.
 PDF.js mode disables Poppler compilation/catalog work and raster page requests.
 No cross-platform speed or physical gesture smoothness guarantee is implied.
+
+## Raster preview retirement (todos 294–295)
+
+The rasterised PDF viewer is pending deletion. Keep it working for explicit
+selection and deterministic viewport captures; do not extend it with new viewer
+features. PDF.js owns new PDF-viewing work. Removal has these boundaries:
+
+- Replace the raster surrogate used by app framebuffer captures with an explicit
+  native PDF.js evidence strategy. Egui framebuffers cannot capture child views.
+- Remove the raster preview setting, page/fit controls and shortcuts, PDF page
+  demand workers and preview-only residency/texture state. Audit the shared code
+  in `app/raster_view.rs`, `preview.rs`, `pdf_pages.rs`, and `pdf_residency.rs`.
+- Remove preview-only Poppler inspection, link extraction and rasterization from
+  the compiler and asset loader. Retain the canonical PDF artifact/export path.
+- Separate image display and PDF hover thumbnails before deleting shared raster
+  helpers in `asset.rs` and `pdf.rs`. Audit capability reporting and packaging;
+  do not remove Poppler while thumbnail consumers still require it.
+- Preserve PDF.js document replacement, retained page/zoom, theme handling,
+  links, multi-window ownership and cancellation tests.
+
+Routing regressions cover explicit raster selection, absent platform support,
+five-failure recovery, local-view failure, pause/duplicate-error admission, PDF
+tabs beside Tinymist and the explicit capture override. No new polling, worker
+or per-frame I/O is introduced. This changes backend admission, not the viewers'
+rendering algorithms; no new performance or visual-verification claim is made.
 
 Upstream version, archive hash, extraction exclusions and licenses are recorded
 in `assets/pdfjs/PROVENANCE.md`. The aggregate package notice includes the viewer,

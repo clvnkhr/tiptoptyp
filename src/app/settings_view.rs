@@ -103,7 +103,7 @@ impl EditorApp {
             preview_status.backend_label()
         } else {
             match self.document().kind() {
-                DocumentKind::Pdf if self.pdfjs_requested() => "PDF.js",
+                DocumentKind::Pdf if self.pdfjs_asset_requested() => "PDF.js",
                 DocumentKind::Pdf => "Rasterised PDF",
                 DocumentKind::Image => "Image",
                 DocumentKind::Text => "Text editor",

@@ -133,10 +133,10 @@ impl PreviewStatusSnapshot<'_> {
     pub(crate) fn backend_label(&self) -> &'static str {
         match self.effective_backend {
             PreviewBackend::Interactive => "Interactive",
-            PreviewBackend::PdfJs => "PDF.js",
-            PreviewBackend::Raster if self.requested_backend == PreviewPreference::Interactive => {
-                "Rasterised PDF · fallback"
+            PreviewBackend::PdfJs if self.requested_backend == PreviewPreference::Interactive => {
+                "PDF.js · fallback"
             }
+            PreviewBackend::PdfJs => "PDF.js",
             PreviewBackend::Raster => "Rasterised PDF",
         }
     }
@@ -174,7 +174,7 @@ pub(crate) enum PreviewEffect {
         generation: crate::tinymist::Generation,
         refresh: crate::tinymist::PreviewRefresh,
     },
-    ScheduleRaster,
+    ScheduleCompile,
     RepaintAfter(Duration),
     DiscardLanguageRequests,
 }
@@ -183,39 +183,6 @@ pub(crate) enum PreviewEffect {
 pub(crate) struct PreviewTransition {
     pub(crate) handled: bool,
     pub(crate) effects: Vec<PreviewEffect>,
-}
-
-#[cfg(test)]
-pub(crate) fn preview_fallback_reason_for(
-    preference: PreviewPreference,
-    interactive_active: bool,
-    preview_url_available: bool,
-    tinymist_state: &ServiceState,
-    webview_state: &ServiceState,
-) -> Option<String> {
-    if preference != PreviewPreference::Interactive || interactive_active {
-        return None;
-    }
-    let state = if preview_url_available {
-        webview_state
-    } else {
-        tinymist_state
-    };
-    Some(format!("{}: {}", state.label(), state.detail()))
-}
-
-#[cfg(test)]
-pub(crate) fn preview_backend_label_for(
-    preference: PreviewPreference,
-    interactive_active: bool,
-) -> &'static str {
-    if interactive_active {
-        "Interactive"
-    } else if preference == PreviewPreference::Interactive {
-        "Rasterised PDF · fallback"
-    } else {
-        "Rasterised PDF"
-    }
 }
 
 pub(crate) fn raster_result_matches_artifact(
@@ -341,7 +308,7 @@ impl PreviewController {
             }
         };
         if became_visible {
-            transition.effects.push(PreviewEffect::ScheduleRaster);
+            transition.effects.push(PreviewEffect::ScheduleCompile);
         }
         transition
     }
@@ -375,7 +342,7 @@ impl PreviewController {
                     Failure::Exhausted => vec![
                         PreviewEffect::StopAttempt(event.generation()),
                         PreviewEffect::DiscardLanguageRequests,
-                        PreviewEffect::ScheduleRaster,
+                        PreviewEffect::ScheduleCompile,
                     ],
                 }
             }
@@ -414,7 +381,7 @@ impl PreviewController {
                 })
                 .into_iter()
                 .collect(),
-            PreviewTransitionEvent::RenderRequested => vec![PreviewEffect::ScheduleRaster],
+            PreviewTransitionEvent::RenderRequested => vec![PreviewEffect::ScheduleCompile],
         };
         PreviewTransition {
             handled: true,
@@ -886,11 +853,7 @@ impl PreviewController {
             self.interactive_requested(typst_preview_available, platform_supported);
         PreviewStatusSnapshot {
             requested_backend: self.requested_backend,
-            effective_backend: if native_ready {
-                PreviewBackend::Interactive
-            } else {
-                PreviewBackend::Raster
-            },
+            effective_backend: self.effective_backend(typst_preview_available, platform_supported),
             interactive_requested,
             should_attempt_native: self
                 .should_attempt_interactive(typst_preview_available, platform_supported),
@@ -905,7 +868,8 @@ impl PreviewController {
             fallback_state: if typst_preview_available
                 && preview_visible
                 && self.requested_backend == PreviewPreference::Interactive
-                && !native_ready
+                && self.effective_backend(typst_preview_available, platform_supported)
+                    == PreviewBackend::PdfJs
             {
                 Some(if self.connection.endpoint().is_some() {
                     &self.webview_state
@@ -918,12 +882,26 @@ impl PreviewController {
         }
     }
 
-    pub(crate) fn raster_required(
+    fn effective_backend(
         &self,
-        interactive_requested: bool,
-        screenshot_pending: bool,
-    ) -> bool {
-        let interactive_unavailable = (self.connection.endpoint().is_none()
+        typst_preview_available: bool,
+        platform_supported: bool,
+    ) -> PreviewBackend {
+        match self.requested_backend {
+            PreviewPreference::Native => PreviewBackend::Raster,
+            PreviewPreference::PdfJs => PreviewBackend::PdfJs,
+            PreviewPreference::Interactive
+                if self.interactive_requested(typst_preview_available, platform_supported)
+                    && !self.interactive_unavailable() =>
+            {
+                PreviewBackend::Interactive
+            }
+            PreviewPreference::Interactive => PreviewBackend::PdfJs,
+        }
+    }
+
+    fn interactive_unavailable(&self) -> bool {
+        (self.connection.endpoint().is_none()
             && matches!(
                 self.tinymist_state,
                 ServiceState::Disabled(_)
@@ -934,8 +912,7 @@ impl PreviewController {
             || matches!(
                 self.webview_state,
                 ServiceState::Failed(_) | ServiceState::Unsupported(_)
-            );
-        screenshot_pending || !interactive_requested || interactive_unavailable
+            )
     }
 }
 
@@ -1084,7 +1061,7 @@ mod tests {
             };
             let transition = preview.transition(PreviewTransitionEvent::Failure(&failure, now));
             assert_eq!(
-                transition.effects.contains(&PreviewEffect::ScheduleRaster),
+                transition.effects.contains(&PreviewEffect::ScheduleCompile),
                 attempt == 5
             );
             assert!(
@@ -1170,7 +1147,7 @@ mod tests {
                 PreviewEffect::RestartService {
                     preserve_surface: false
                 },
-                PreviewEffect::ScheduleRaster,
+                PreviewEffect::ScheduleCompile,
             ]
         );
         // The restart adapter installs the requested service configuration.
@@ -1285,6 +1262,16 @@ mod tests {
                 ),
                 Some(Failure::Ignored)
             );
+            assert_eq!(
+                preview
+                    .status_snapshot(true, true, true, 0)
+                    .effective_backend,
+                if attempt < 5 {
+                    PreviewBackend::Interactive
+                } else {
+                    PreviewBackend::PdfJs
+                },
+            );
             if attempt < 5 {
                 assert!(matches!(result, Failure::Waiting { .. }));
                 assert!(preview.interactive_transitioning(true, true));
@@ -1397,7 +1384,7 @@ mod tests {
                     !transition
                         .effects
                         .iter()
-                        .any(|effect| matches!(effect, PreviewEffect::ScheduleRaster))
+                        .any(|effect| matches!(effect, PreviewEffect::ScheduleCompile))
                 );
                 let idle = preview.transition(PreviewTransitionEvent::RecoveryTick(now));
                 assert!(matches!(
@@ -1417,7 +1404,7 @@ mod tests {
                     transition
                         .effects
                         .iter()
-                        .filter(|effect| matches!(effect, PreviewEffect::ScheduleRaster))
+                        .filter(|effect| matches!(effect, PreviewEffect::ScheduleCompile))
                         .count(),
                     1
                 );
@@ -1461,13 +1448,13 @@ mod tests {
             preview
                 .transition(PreviewTransitionEvent::RenderRequested)
                 .effects,
-            vec![PreviewEffect::ScheduleRaster]
+            vec![PreviewEffect::ScheduleCompile]
         );
         preview.recovery.started(Generation(9));
         let recovering_export = preview.transition(PreviewTransitionEvent::RenderRequested);
         assert_eq!(
             recovering_export.effects,
-            vec![PreviewEffect::ScheduleRaster],
+            vec![PreviewEffect::ScheduleCompile],
             "an export render remains one bounded request during recovery"
         );
         assert_eq!(
@@ -1626,14 +1613,37 @@ mod tests {
     }
 
     #[test]
+    fn raster_is_only_an_explicit_choice_even_without_native_webview_support() {
+        for supported in [false, true] {
+            for preference in PreviewPreference::ALL {
+                let mut preview = PreviewController::new(false, preference);
+                preview.tinymist_state = ServiceState::Failed("unavailable".into());
+                let status = preview.status_snapshot(true, true, supported, 0);
+                assert_eq!(
+                    status.effective_backend,
+                    if preference == PreviewPreference::Native {
+                        PreviewBackend::Raster
+                    } else {
+                        PreviewBackend::PdfJs
+                    }
+                );
+                assert_eq!(
+                    status.fallback_reason().is_some(),
+                    preference == PreviewPreference::Interactive
+                );
+            }
+        }
+    }
+
+    #[test]
     fn requested_and_effective_backends_expose_fallback_state() {
         let mut preview = PreviewController::new(false, PreviewPreference::Interactive);
         preview.tinymist_state = ServiceState::Failed("server stopped".to_owned());
         preview.accept_artifact(key(7, 1), Arc::from(&b"pdf"[..]));
         let status = preview.status_snapshot(true, true, true, 0);
-        assert_eq!(status.effective_backend, PreviewBackend::Raster);
+        assert_eq!(status.effective_backend, PreviewBackend::PdfJs);
         assert!(!status.canonical_artifact_available);
-        assert_eq!(status.backend_label(), "Rasterised PDF · fallback");
+        assert_eq!(status.backend_label(), "PDF.js · fallback");
         assert!(
             status
                 .fallback_reason()

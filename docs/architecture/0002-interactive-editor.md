@@ -16,10 +16,13 @@ execution details in decisions 1–3:
   distinct. Document windows also repaint independently, while native UI remains
   on its required thread.
 - Interactive preview does not require a parallel CLI compile for every edit.
-  The CLI artifact path runs when raster preview, deterministic capture or an
-  explicit PDF export needs it. Export still uses canonical PDF bytes, never
+  The CLI artifact path runs when PDF.js, explicit raster preview, deterministic
+  capture or an explicit PDF export needs it. Export still uses canonical PDF bytes, never
   rendered screen pixels. Recovery preserves the requested backend and permits
-  four delayed retries before fallback on the fifth failure.
+  four delayed retries before PDF.js fallback on the fifth failure. Opened PDFs
+  default to PDF.js independently of the Typst preference. Raster preview is
+  retained only for explicit selection and deterministic captures, pending
+  [removal](../pdfjs-preview.md#raster-preview-retirement-todos-294295).
 - Optional miTeX editing is enabled in the application: displayed TeX dollar
   notation maps to canonical Typst/MiTeX source at save and service boundaries.
   Ordinary documents bypass that projection. CLI compilation still reads imported

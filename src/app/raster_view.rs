@@ -1,4 +1,5 @@
 //! Shared raster controls and painting; each pane supplies independent state.
+//! PDF viewing is pending removal (todo 295); preserve shared image display.
 use super::*;
 
 pub(super) fn request_zoom(preview: &mut PreviewController, action: PreviewZoomAction) {

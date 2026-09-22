@@ -139,7 +139,7 @@ impl EditorApp {
             self.asset_token,
             path,
             self.document().kind(),
-            !self.pdfjs_requested() || self.captures.has_pending_for("main"),
+            !self.pdfjs_asset_requested() || self.captures.has_pending_for("main"),
         ) {
             self.asset_preview.status = PreviewStatus::Error;
             self.notice = Some(Notice {
@@ -150,7 +150,7 @@ impl EditorApp {
     }
 
     pub(super) fn show_asset_view(&mut self, ui: &mut egui::Ui, frame: Option<&eframe::Frame>) {
-        if self.pdfjs_requested()
+        if self.pdfjs_asset_requested()
             && self.document().kind() == DocumentKind::Pdf
             && !self.captures.has_pending_for("main")
         {
@@ -160,7 +160,7 @@ impl EditorApp {
         self.pdfjs_asset.hide();
         // A PDF opened without Poppler still needs a raster surrogate when a
         // framebuffer capture is explicitly requested. Queue it only once.
-        if self.pdfjs_requested()
+        if self.pdfjs_asset_requested()
             && self.document().kind() == DocumentKind::Pdf
             && self.captures.has_pending_for("main")
             && self.asset_preview.content.pages().is_empty()

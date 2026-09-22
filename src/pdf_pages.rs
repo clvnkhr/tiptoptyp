@@ -1,4 +1,5 @@
-//! Latest-wins PDF page rasterization for the fallback preview.
+//! Latest-wins PDF rasterization for explicit raster mode and QA captures.
+//! Pending removal with the raster viewer (todo 295); PDF.js is the fallback.
 
 use std::{
     ops::RangeInclusive,

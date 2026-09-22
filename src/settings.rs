@@ -134,6 +134,7 @@ pub(crate) enum PreviewPreference {
     #[default]
     Interactive,
     PdfJs,
+    /// Explicit opt-in only; pending removal with its capture surrogate (todo 295).
     Native,
 }
 
