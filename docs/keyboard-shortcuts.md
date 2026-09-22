@@ -1,6 +1,6 @@
 # Keyboard coverage (todo 176)
 
-There are 76 configurable application actions, each with a collision-free
+There are 77 configurable application actions, each with a collision-free
 default on macOS and other platforms. Open **Settings → Keyboard shortcuts**
 or press Primary+Alt+, to search, change, disable or reset bindings. Primary
 means Command on macOS and Control elsewhere; Alt means Option on macOS.
@@ -14,6 +14,7 @@ New bindings (modifier order is interchangeable):
 
 | Action | Default |
 | --- | --- |
+| Toggle Terminal | Control+` |
 | Keyboard shortcuts | Primary+Alt+, |
 | Toggle miTeX notation | Primary+Alt+M |
 | Use active tab for preview | Primary+Alt+P |
@@ -81,3 +82,8 @@ Regression tests cover catalog uniqueness and defaults on both platforms,
 effective overrides, cross-action chord specificity, modal/empty guards,
 Find/Replace safety, fold/caret/source invariants, and bounded independent
 asset page navigation. See also [tab and gutter verification](tabs-and-git-hunks.md).
+
+When Terminal input has focus, raw Control keys (including Ctrl+C, Ctrl+D,
+Ctrl+R and Ctrl+Z), Tab, Escape and arrows go to the shell. The terminal toggle
+remains available. macOS Command menu actions remain host commands. Copy/paste
+uses Command+C/V on macOS and Ctrl+Shift+C/V elsewhere.

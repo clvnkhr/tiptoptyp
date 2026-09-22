@@ -198,6 +198,7 @@ impl QaSession {
                 | UiSnapshotScene::TabsPdf
                 | UiSnapshotScene::TabsImage
                 | UiSnapshotScene::ProblemsPanel
+                | UiSnapshotScene::TerminalPanel
                 | UiSnapshotScene::FindReplace
         ) && !app.preview.has_resident_pages()
         {
@@ -391,7 +392,7 @@ impl QaSession {
                 app.preview.diagnostics.clear();
                 app.preview.tinymist_diagnostics.clear();
                 app.mark_diagnostics_changed();
-                app.problems_visible = false;
+                app.bottom_panel = BottomPanel::Hidden;
                 app.find_bar.visible = false;
                 app.find_bar.replace_visible = false;
             }
@@ -461,7 +462,7 @@ impl QaSession {
             UiSnapshotScene::StickyContext => {
                 app.notice = None;
                 app.view_mode = ViewMode::Code;
-                app.problems_visible = false;
+                app.bottom_panel = BottomPanel::Hidden;
                 app.find_bar.visible = false;
                 app.find_bar.replace_visible = false;
                 if prepare_sticky_context_snapshot_document(app.document_mut()) {
@@ -503,7 +504,7 @@ impl QaSession {
                     self.folding_prepared = true;
                 }
                 app.view_mode = ViewMode::Code;
-                app.problems_visible = false;
+                app.bottom_panel = BottomPanel::Hidden;
                 app.notice = None;
             }
             UiSnapshotScene::FileMenu => {
@@ -662,8 +663,15 @@ impl QaSession {
                 }
             }
             UiSnapshotScene::WorkspaceChooser => app.workspace_chooser_visible = true,
+            UiSnapshotScene::TerminalPanel => {
+                app.bottom_panel = BottomPanel::Terminal;
+                app.terminal.prepare_fixture(
+                    "\x1b[32m~/project\x1b[0m $ typst compile notes.typ\r\n\x1b[32mCompilation finished\x1b[0m in 42 ms\r\n\r\n\x1b[1mGhostty terminal\x1b[0m  \x1b[31mred\x1b[0m  \x1b[34mblue\x1b[0m  \x1b[38;2;180;90;200mtrue color\x1b[0m\r\nUnicode: α + β = γ   é   界\r\n\x1b[32m~/project\x1b[0m $ ".as_bytes(),
+                    Path::new("~/project"),
+                );
+            }
             UiSnapshotScene::ProblemsPanel => {
-                app.problems_visible = true;
+                app.bottom_panel = BottomPanel::Problems;
                 app.preview.diagnostics = vec![
                     Diagnostic {
                         severity: DiagnosticSeverity::Error,
@@ -725,7 +733,8 @@ impl QaSession {
         app.packages_visible = false;
         app.typst_overrides_visible = false;
         app.workspace_chooser_visible = false;
-        app.problems_visible = false;
+        app.bottom_panel = BottomPanel::Hidden;
+        app.terminal = TerminalPane::default();
         app.find_bar.visible = false;
         app.find_bar.replace_visible = false;
         app.view_mode = ViewMode::Split;
@@ -754,7 +763,15 @@ impl QaSession {
         app.recorded_notice = None;
         app.preview.status = PreviewStatus::Ready(Duration::ZERO);
         if let Some(fixture) = &self.document {
-            app.tabs = tabs::Tabs::default();
+            // Keep a real, owned document tab. Restoring into Tabs::default's
+            // empty-workspace placeholder disables preview processing and
+            // leaves every subsequent main capture waiting forever.
+            let owner = app.document().key().owner;
+            let document = std::mem::replace(
+                app.document_mut(),
+                DocumentSession::new(owner, "", DocumentKind::Typst),
+            );
+            app.tabs = tabs::Tabs::new(false, document, app.workspace_root.clone());
             if fixture.restore(app.document_mut()) {
                 app.preview.content.clear();
             }
@@ -779,6 +796,7 @@ impl QaSession {
                 | UiSnapshotScene::TabsPdf
                 | UiSnapshotScene::TabsImage
                 | UiSnapshotScene::ProblemsPanel
+                | UiSnapshotScene::TerminalPanel
                 | UiSnapshotScene::FindReplace
         ) && !app.preview.has_resident_pages()
         {
@@ -804,6 +822,53 @@ fn prepare_git_panel_capture(context: &egui::Context, explorer: &mut ExplorerPan
 mod tests {
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable as _};
+
+    #[test]
+    fn serial_capture_restores_a_live_document_tab_and_preserves_unchanged_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        let mut qa = QaSession {
+            document: Some(SceneDocument::capture(app.document())),
+            ..Default::default()
+        };
+        let key = app.document().key();
+        for theme in ["tiptop-light", "tiptop-dark"] {
+            qa.set_step(
+                &mut app,
+                &UiCaptureStep {
+                    theme: CaptureThemeProfile {
+                        name: theme.into(),
+                        invert: false,
+                        hue_shift_degrees: 0,
+                    },
+                    scene: UiSnapshotScene::Main,
+                },
+                &context,
+            );
+            assert_eq!(app.tabs.len(), 1);
+            assert!(app.typst_preview_available());
+            assert_eq!(app.document().key(), key);
+        }
+        app.document_mut()
+            .replace_unprojected_untitled("scene-only buffer");
+        qa.set_step(
+            &mut app,
+            &UiCaptureStep {
+                theme: CaptureThemeProfile {
+                    name: "tiptop-light".into(),
+                    invert: false,
+                    hue_shift_degrees: 0,
+                },
+                scene: UiSnapshotScene::Main,
+            },
+            &context,
+        );
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.document().source(), &qa.document.unwrap().source);
+        assert_eq!(app.document().key().owner, key.owner);
+        assert!(app.typst_preview_available());
+    }
 
     #[test]
     fn git_capture_restores_collapsed_explorer_and_renders_real_repository_controls() {

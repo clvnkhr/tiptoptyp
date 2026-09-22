@@ -95,6 +95,7 @@ The accepted scenes and their framebuffer targets are:
 | `status-log` | `popup` | Recent compiler and document-status history |
 | `rename-dialog` | `rename` | Rename card |
 | `workspace-chooser` | `workspace` | Explicit workspace-root chooser |
+| `terminal-panel` | `main` | Shared bottom panel with deterministic libghostty colors, Unicode and cursor; no shell is spawned |
 | `problems-panel` | `main` | Expanded Problems panel with diagnostics |
 | `find-replace` | `main` | Find and replace controls |
 | `preview-compiling` | `main` | Compiling status and empty preview state |
@@ -172,7 +173,7 @@ the maintained themed scene set in representative Catppuccin Latte and
 Catppuccin Mocha matrices, including the error workbench and compiling preview
 states, plus transformed main and elevated-menu examples to verify that the
 ordered color operations reach every viewport. The complete checked-in matrix
-is 68 decoded PNGs. The remaining deterministic scenes are still available for
+is 70 decoded PNGs. The remaining deterministic scenes are still available for
 targeted local captures and become gallery slots when their images are
 committed and their manifest role is promoted from `targeted` to `component`.
 `docs/ui-snapshots/gallery-manifest.tsv` is the shared source of truth for

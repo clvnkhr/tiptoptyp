@@ -107,12 +107,13 @@ pub enum UiSnapshotScene {
     RenameDialog,
     WorkspaceChooser,
     ProblemsPanel,
+    TerminalPanel,
     FindReplace,
     PreviewCompiling,
 }
 
 impl UiSnapshotScene {
-    pub const ALL: [Self; 43] = [
+    pub const ALL: [Self; 44] = [
         Self::Main,
         Self::Tabs,
         Self::EmptyWorkspace,
@@ -154,6 +155,7 @@ impl UiSnapshotScene {
         Self::RenameDialog,
         Self::WorkspaceChooser,
         Self::ProblemsPanel,
+        Self::TerminalPanel,
         Self::FindReplace,
         Self::PreviewCompiling,
     ];
@@ -201,6 +203,7 @@ impl UiSnapshotScene {
             Self::RenameDialog => "rename-dialog",
             Self::WorkspaceChooser => "workspace-chooser",
             Self::ProblemsPanel => "problems-panel",
+            Self::TerminalPanel => "terminal-panel",
             Self::FindReplace => "find-replace",
             Self::PreviewCompiling => "preview-compiling",
         }
@@ -222,6 +225,7 @@ impl UiSnapshotScene {
             | Self::DelimiterMatch
             | Self::RainbowBrackets
             | Self::ProblemsPanel
+            | Self::TerminalPanel
             | Self::FindReplace
             | Self::PreviewCompiling => ROOT_VIEWPORT_NAME,
             Self::FileMenu
@@ -304,6 +308,7 @@ impl UiSnapshotScene {
             "rename-dialog" => Self::RenameDialog,
             "workspace-chooser" => Self::WorkspaceChooser,
             "problems-panel" => Self::ProblemsPanel,
+            "terminal-panel" => Self::TerminalPanel,
             "find-replace" => Self::FindReplace,
             "preview-compiling" => Self::PreviewCompiling,
             _ => {
@@ -1532,7 +1537,7 @@ mod tests {
         let default_output_count = contract.themes.len()
             + component_count * contract.scene_themes.len()
             + contract.variants.len();
-        assert_eq!(default_output_count, 68);
+        assert_eq!(default_output_count, 70);
     }
 
     #[test]

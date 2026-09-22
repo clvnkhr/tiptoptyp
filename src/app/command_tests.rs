@@ -19,7 +19,7 @@ fn fixture(context: &egui::Context, root: &Path, owner: egui::ViewportId) -> Edi
         .replace_unprojected_untitled("alpha beta");
     app.document_mut().set_history_reset(false);
     app.find_bar.visible = false;
-    app.problems_visible = false;
+    app.bottom_panel = BottomPanel::Hidden;
     app.explorer.open();
     app.view_mode = ViewMode::Split;
     app
@@ -110,7 +110,10 @@ fn command_toolbar_menu_and_shortcut_effects_agree_once_per_owner() {
                         command == AppCommand::Find,
                         "{route:?} {command:?}"
                     );
-                    assert_eq!(app.problems_visible, command == AppCommand::Problems);
+                    assert_eq!(
+                        app.bottom_panel == BottomPanel::Problems,
+                        command == AppCommand::Problems
+                    );
                     assert_eq!(
                         app.explorer.contents_visible(),
                         command != AppCommand::Explorer,

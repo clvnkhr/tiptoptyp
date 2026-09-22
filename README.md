@@ -20,6 +20,8 @@ a rasterised recovery viewer.
 - Explorer sections for files, document contents, subfiles, symbols, and packages
 - A per-project Typst preview entry point for multi-file documents
 - Navigable Problems rows and compact, normalized diagnostic hover cards
+- A libghostty terminal sharing the bottom panel with Problems; open it from
+  View → Terminal or Ctrl+` (see [terminal notes](docs/terminal.md))
 - Code, Split, and Preview workspace modes
 - Sorted, symlink-safe multi-file project tree
 - UTF-8-safe literal find/replace with wraparound navigation
@@ -62,6 +64,9 @@ and
 ## Requirements
 
 - Rust 1.98 or newer
+- Zig **0.15.2** on `PATH` and Git for the pinned libghostty-vt 0.2.1 build.
+  The first build fetches Ghostty and its Zig dependencies; packaged apps
+  statically include the terminal library and need no Zig or Ghostty install.
 - `curl` and `tar` when fetching the pinned sidecars for a development build
 - Poppler's `pdftoppm` on `PATH` for native PDF rendering; `pdftohtml` from the
   same package enables clickable link hotspots

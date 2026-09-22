@@ -81,6 +81,7 @@ commands! {
     Format => ("Format Document", Edit, 3, TypstDocument, 208),
     SyncPreview => ("Sync Preview", Edit, 3, InteractivePreview, 209),
     Problems => ("Problems", View, 0, Always, 300),
+    Terminal => ("Terminal", View, 0, Always, 307),
     Explorer => ("Explorer", View, 0, Always, 301),
     Code => ("Code", View, 1, TypstDocument, 302),
     Split => ("Split", View, 1, TypstDocument, 303),
@@ -743,6 +744,7 @@ mod tests {
             shortcuts,
             [
                 (AppCommand::Problems, egui::Key::Num5),
+                (AppCommand::Terminal, egui::Key::Backtick),
                 (AppCommand::Explorer, egui::Key::Num1),
                 (AppCommand::Code, egui::Key::Num2),
                 (AppCommand::Split, egui::Key::Num3),

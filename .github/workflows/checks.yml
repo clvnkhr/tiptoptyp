@@ -39,6 +39,10 @@ jobs:
       - name: Install Linux GUI build dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libegl1-mesa-dev libgtk-3-dev
+      - name: Install Zig for libghostty
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
       - name: Install Rust
         run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
       - name: Install cargo-deny
@@ -71,6 +75,10 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - name: Install Zig for libghostty
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
       - name: Install Rust
         run: rustup toolchain install 1.98.1 --profile minimal
       - name: Install cargo-about

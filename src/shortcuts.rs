@@ -42,6 +42,7 @@ pub(crate) enum ShortcutAction {
     Format,
     SyncPreview,
     Problems,
+    Terminal,
     Explorer,
     Code,
     Split,
@@ -92,7 +93,7 @@ pub(crate) enum ShortcutAction {
 }
 
 impl ShortcutAction {
-    pub(crate) const ALL: [Self; 76] = [
+    pub(crate) const ALL: [Self; 77] = [
         Self::Settings,
         Self::New,
         Self::NewWindow,
@@ -122,6 +123,7 @@ impl ShortcutAction {
         Self::Format,
         Self::SyncPreview,
         Self::Problems,
+        Self::Terminal,
         Self::Explorer,
         Self::Code,
         Self::Split,
@@ -202,6 +204,7 @@ impl ShortcutAction {
             Self::Format => "edit.format",
             Self::SyncPreview => "edit.sync_preview",
             Self::Problems => "view.problems",
+            Self::Terminal => "view.terminal",
             Self::Explorer => "view.explorer",
             Self::Code => "view.code",
             Self::Split => "view.split",
@@ -287,6 +290,7 @@ impl ShortcutAction {
             Self::Format => "Format document",
             Self::SyncPreview => "Reveal in preview",
             Self::Problems => "Problems",
+            Self::Terminal => "Terminal",
             Self::Explorer => "Explorer",
             Self::Code => "Code view",
             Self::Split => "Split view",
@@ -374,6 +378,7 @@ impl ShortcutAction {
             Self::Packages
             | Self::Git
             | Self::Problems
+            | Self::Terminal
             | Self::Explorer
             | Self::Code
             | Self::Split
@@ -1181,6 +1186,7 @@ fn default_binding(action: ShortcutAction, platform: ShortcutPlatform) -> Option
         },
         Action::SyncPreview => ShortcutChord::primary(Key::J).shift(),
         Action::Problems => ShortcutChord::primary(Key::Num5),
+        Action::Terminal => ShortcutChord::control(Key::Backtick),
         Action::Explorer => ShortcutChord::primary(Key::Num1),
         Action::Code => ShortcutChord::primary(Key::Num2),
         Action::Split => ShortcutChord::primary(Key::Num3),

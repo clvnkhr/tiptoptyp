@@ -421,8 +421,8 @@ fn missing_successful_capture_is_detected_and_restores_the_complete_set() {
 #[test]
 fn default_gallery_manifest_has_the_maintained_shape_and_order_boundaries() {
     let actual = lines(manifest_command().output().expect("run gallery manifest"));
-    assert_eq!(actual.len(), 68);
-    assert_eq!(actual.iter().collect::<BTreeSet<_>>().len(), 68);
+    assert_eq!(actual.len(), 70);
+    assert_eq!(actual.iter().collect::<BTreeSet<_>>().len(), 70);
     assert_eq!(actual.first().unwrap(), "main--tiptop-light.png");
     assert_eq!(actual.get(31).unwrap(), "main--dracula.png");
     assert_eq!(
@@ -616,7 +616,7 @@ fn manifest_reader_keeps_an_unterminated_final_record() {
 
     let output = harness.print_manifest();
     let outputs = lines(output);
-    assert_eq!(outputs.len(), 68);
+    assert_eq!(outputs.len(), 70);
     assert_eq!(
         outputs.last().unwrap(),
         "popup-file-menu--catppuccin-latte-inverted-hue-p30.png"

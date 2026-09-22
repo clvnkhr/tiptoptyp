@@ -40,6 +40,8 @@ mod mitex_mode;
 mod raster_view;
 mod saves;
 mod tabs;
+mod terminal_panel;
+use crate::terminal::{BottomPanel, TerminalPane, terminal_id};
 mod workspace_view;
 use lifecycle::DocumentLifecycle;
 mod native_views;
@@ -403,7 +405,8 @@ const fn settled_snapshot_preview_status(
         | UiSnapshotScene::Tabs
         | UiSnapshotScene::TabsPdf
         | UiSnapshotScene::TabsImage
-        | UiSnapshotScene::FindReplace => Some(PreviewStatus::Ready(Duration::ZERO)),
+        | UiSnapshotScene::FindReplace
+        | UiSnapshotScene::TerminalPanel => Some(PreviewStatus::Ready(Duration::ZERO)),
         UiSnapshotScene::ProblemsPanel => Some(PreviewStatus::Error),
         _ => None,
     }
@@ -1136,7 +1139,8 @@ pub struct EditorApp {
 
     view_mode: ViewMode,
     explorer: ExplorerPanelState,
-    problems_visible: bool,
+    bottom_panel: BottomPanel,
+    terminal: TerminalPane,
     settings_visible: bool,
     settings_open_requested: bool,
     settings_window: Arc<std::sync::Mutex<SettingsWindow>>,
@@ -1417,7 +1421,8 @@ impl EditorApp {
             editor_data: EditorDerivedData::default(),
             view_mode: ViewMode::Split,
             explorer: ExplorerPanelState::default(),
-            problems_visible: false,
+            bottom_panel: BottomPanel::Hidden,
+            terminal: TerminalPane::default(),
             settings_visible: false,
             settings_open_requested: false,
             settings_window: Arc::default(),
@@ -1749,6 +1754,8 @@ impl EditorApp {
         if !self.lifecycle.suspend() {
             return;
         }
+        self.terminal = TerminalPane::default();
+        self.bottom_panel = BottomPanel::Hidden;
         self.tabs = tabs::Tabs::default();
         let _ = self.compiler.pause(self.document().revision());
         self.stop_tinymist_session();
@@ -2930,6 +2937,9 @@ impl EditorApp {
             return;
         }
         let shortcuts = self.settings.effective_shortcuts();
+        if self.handle_terminal_shortcuts(context, shortcut_viewport, &shortcuts, frame) {
+            return;
+        }
         self.handle_extra_shortcuts(context, shortcut_viewport, &shortcuts);
         // egui allows extra Shift/Alt modifiers on a simpler shortcut. Consume
         // Cmd+Shift+W before the File menu's Cmd+W tab action.
@@ -3346,7 +3356,8 @@ impl EditorApp {
                 let cursor = self.editor_snapshot(context).cursor.primary.index.0;
                 self.jump_source_to_preview(cursor);
             }
-            AppCommand::Problems => self.problems_visible = !self.problems_visible,
+            AppCommand::Problems => self.toggle_bottom_panel(BottomPanel::Problems, context),
+            AppCommand::Terminal => self.toggle_bottom_panel(BottomPanel::Terminal, context),
             AppCommand::Explorer => {
                 self.explorer.toggle();
                 context.request_repaint();
@@ -3377,6 +3388,9 @@ impl EditorApp {
         context: &egui::Context,
         viewport: egui::ViewportId,
     ) -> bool {
+        if self.route_terminal_edit_command(command, context, viewport) {
+            return true;
+        }
         if viewport == scoped_child_viewport_id(context, "tiptoptyp-settings")
             && self
                 .settings_window
@@ -5967,7 +5981,7 @@ impl EditorApp {
                     ui.add_enabled(
                         self.native_command_enabled(AppCommand::Problems),
                         egui::Button::selectable(
-                            self.problems_visible,
+                            self.bottom_panel == BottomPanel::Problems,
                             if compact { "!" } else { "Problems" },
                         ),
                     ),
@@ -7495,7 +7509,6 @@ impl EditorApp {
     fn show_problems(&mut self, ui: &mut egui::Ui) {
         ui.set_min_width(ui.available_width());
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Problems").strong());
             ui.label(
                 RichText::new(format!(
                     "{} diagnostics",
@@ -8235,18 +8248,23 @@ impl EditorApp {
         egui::Panel::bottom("status-bar")
             .exact_size(METRICS.chrome.status_height)
             .show(ui, |ui| self.show_status_bar(ui));
-        if self.problems_visible {
-            let panel = egui::Panel::bottom("problems");
-            let panel = if self.snapshot_scene == Some(UiSnapshotScene::ProblemsPanel) {
+        self.terminal
+            .set_visible(self.bottom_panel == BottomPanel::Terminal);
+        if self.bottom_panel != BottomPanel::Hidden {
+            let panel = egui::Panel::bottom("bottom-panel");
+            let panel = if matches!(
+                self.snapshot_scene,
+                Some(UiSnapshotScene::ProblemsPanel | UiSnapshotScene::TerminalPanel)
+            ) {
                 panel.resizable(false).exact_size(220.0)
             } else {
                 panel
                     .resizable(true)
-                    .default_size(METRICS.chrome.problems_default_height)
-                    .min_size(METRICS.chrome.problems_min_height)
-                    .max_size(METRICS.chrome.problems_max_height)
+                    .default_size(METRICS.chrome.bottom_panel_default_height)
+                    .min_size(METRICS.chrome.bottom_panel_min_height)
+                    .max_size(METRICS.chrome.bottom_panel_max_height)
             };
-            panel.show(ui, |ui| self.show_problems(ui));
+            panel.show(ui, |ui| self.show_bottom_panel(ui));
         }
         if self.explorer.panel_visible() {
             let panel_id = explorer_panel_id(&context);

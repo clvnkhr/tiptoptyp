@@ -45,6 +45,7 @@ scene	main	main	main	theme-matrix	-	-
 scene	sticky-context	main	main-sticky-context	targeted	-	-
 scene	folding	main	main-folding	targeted	-	-
 scene	mitex-dollars	main	main-mitex-dollars	targeted	-	-
+scene	terminal-panel	main	main-terminal-panel	component	-	-
 scene	problems-panel	main	main-problems-panel	component	-	-
 scene	find-replace	main	main-find-replace	component	-	-
 scene	preview-compiling	main	main-preview-compiling	component	-	-
