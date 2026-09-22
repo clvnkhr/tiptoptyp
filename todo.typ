@@ -837,6 +837,8 @@ GPU/texture-residency observation remain explicitly unavailable.
 310. [ ] full document templates
 311. [ ] snippet support
 312. [ ] allow passing flags to the various tools we use (tinymist, typst, etc)
+313. [ ] if nothing is staged but there are diffs, the greyed out Commit staged changes should be 'stage all and commit'.
+314. [ ] there should also be a revert/revert all button (with confirmation dialog)
 
 = Bounded PDF page residency (2026-09-18)
 
