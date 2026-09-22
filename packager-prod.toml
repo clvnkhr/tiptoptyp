@@ -21,6 +21,7 @@ external-binaries = ["toolchain/bin/typst", "toolchain/bin/tinymist"]
 resources = [
     { src = "THIRD_PARTY_NOTICES", target = "THIRD_PARTY_NOTICES" },
     { src = "toolchain/licenses", target = "licenses" },
+    { src = "assets/fonts/notoemoji/OFL.txt", target = "licenses/NotoEmoji-OFL.txt" },
     { src = "assets/fonts/notosanssymbols/OFL.txt", target = "licenses/NotoSansSymbols-OFL.txt" },
     { src = "assets/fonts/notosansmath/OFL.txt", target = "licenses/NotoSansMath-OFL.txt" },
     { src = "assets/fonts/notosanssymbols2/OFL.txt", target = "licenses/NotoSansSymbols2-OFL.txt" },
