@@ -198,6 +198,12 @@ impl SearchSession {
         })
     }
 
+    /// One-based position in the cached result set. An overlapping replacement
+    /// anchor outside that set has no ordinal until navigation selects a result.
+    pub fn selected_ordinal(&self) -> Option<usize> {
+        self.selected.map(|index| index + 1)
+    }
+
     /// Clear navigation without discarding a still-valid compiled query or
     /// match result.
     pub fn clear(&mut self) {
@@ -1064,5 +1070,33 @@ mod tests {
         assert_eq!(text.len(), 30_000);
         assert!(text.starts_with("xyzxyz"));
         assert!(text.ends_with("xyzxyz"));
+    }
+    #[test]
+    fn ordinal_tracks_navigation_replacement_and_query_invalidation_without_rescanning() {
+        let mut state = SearchSession::default();
+        let mut source = "α α α".to_owned();
+        state.results(&source, revision(0), "α", true, false);
+        assert_eq!(state.selected_ordinal(), None);
+        for expected in [1, 2, 3, 1] {
+            state.next(&source, revision(0), "α", true, false);
+            assert_eq!(state.selected_ordinal(), Some(expected));
+        }
+        state.previous(&source, revision(0), "α", true, false);
+        assert_eq!(state.selected_ordinal(), Some(3));
+        assert_eq!(state.work_counts(), (1, 1));
+        state.replace_one(&mut source, revision(0), "α", "β", true, false);
+        assert_eq!(state.selected_ordinal(), Some(1));
+        assert_eq!(
+            state.results(&source, revision(1), "α", true, false).len(),
+            2
+        );
+        assert_eq!(state.work_counts(), (1, 2));
+        assert!(
+            state
+                .results(&source, revision(1), "[", true, true)
+                .error()
+                .is_some()
+        );
+        assert_eq!(state.selected_ordinal(), None);
     }
 }

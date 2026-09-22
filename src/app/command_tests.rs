@@ -36,6 +36,109 @@ fn key_event(shortcut: KeyboardShortcut) -> egui::Event {
 }
 
 #[test]
+fn find_shortcuts_refocus_resume_and_only_close_when_focused() {
+    for replace in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = fixture(&context, root.path(), egui::ViewportId::ROOT);
+        app.document_mut()
+            .replace_unprojected_untitled("alpha alpha alpha");
+        app.find_bar.query = "alpha".into();
+        let mut fonts_configured = false;
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(900.0, 500.0))
+            .build_ui_state(
+                move |ui, app: &mut EditorApp| {
+                    if !fonts_configured {
+                        theme::configure_editor_fonts(
+                            ui.ctx(),
+                            Default::default(),
+                            Default::default(),
+                            false,
+                            400,
+                            400,
+                            None,
+                        );
+                        fonts_configured = true;
+                        return;
+                    }
+                    app.handle_shortcuts(ui.ctx(), None);
+                    app.show_editor(ui);
+                },
+                app,
+            );
+        harness.run();
+        let action = if replace {
+            ShortcutAction::FindReplace
+        } else {
+            ShortcutAction::Find
+        };
+        let chord = harness
+            .state()
+            .settings
+            .effective_shortcuts()
+            .egui(action)
+            .unwrap();
+        harness.key_press_modifiers(chord.modifiers, chord.logical_key);
+        harness.run();
+        assert!(harness.state().find_bar.visible);
+        assert_eq!(harness.state().find_bar.replace_visible, replace);
+        harness.get_by_label("Next match · Enter").click();
+        harness.run();
+        harness.get_by_label("Next match · Enter").click();
+        harness.run();
+        harness.get_by_label("2/3");
+        // Restore source keyboard focus without changing the search session.
+        let context = harness.ctx.clone();
+        let editor = source_editor_id(&context);
+        context.memory_mut(|memory| memory.request_focus(editor));
+        harness.step();
+        harness.key_press_modifiers(chord.modifiers, chord.logical_key);
+        harness.run();
+        assert!(harness.state().find_bar.visible, "refocus must not close");
+        assert!(find_bar::has_focus(&context));
+        assert_eq!(harness.state().find_bar.search.selected_ordinal(), Some(2));
+        harness.get_by_label("2/3");
+        assert_eq!(
+            harness
+                .state()
+                .find_bar
+                .search
+                .selected()
+                .unwrap()
+                .char_range,
+            6..11
+        );
+        assert_eq!(
+            harness
+                .state_mut()
+                .editor_snapshot(&context)
+                .cursor
+                .primary
+                .index
+                .0,
+            11
+        );
+        harness.key_press_modifiers(chord.modifiers, chord.logical_key);
+        harness.run();
+        assert!(!harness.state().find_bar.visible);
+        harness.key_press_modifiers(chord.modifiers, chord.logical_key);
+        harness.run();
+        harness.get_by_label("2/3");
+        harness.get_by_label("Next match · Enter").click();
+        harness.run();
+        harness.get_by_label("3/3");
+        harness.get_by_label("Next match · Enter").click();
+        harness.run();
+        harness.get_by_label("1/3");
+        harness.key_press(egui::Key::Escape);
+        harness.run();
+        assert!(!harness.state().find_bar.visible);
+        assert_eq!(harness.state().find_bar.search.selected_ordinal(), Some(1));
+    }
+}
+
+#[test]
 fn panel_routes_close_and_reopen_a_focused_terminal_without_mutating_source() {
     for owner in [
         egui::ViewportId::ROOT,
@@ -377,9 +480,6 @@ fn command_select_all_obeys_source_or_find_focus() {
                 app.pending_editor_selection = Some(EditorSelection::Focus(0..0));
             }
             let paint = |app: &mut EditorApp, ui: &mut egui::Ui| {
-                if find {
-                    app.show_find_bar(ui);
-                }
                 app.show_editor(ui);
             };
             for _ in 0..2 {

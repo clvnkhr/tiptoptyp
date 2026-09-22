@@ -33,6 +33,7 @@ use popup_layout::{
 };
 mod package_browser;
 use package_browser::{PackageBrowserAction, PackageFilter, show_package_browser_ui};
+mod editor_scroll;
 mod editor_view;
 mod table_editor;
 use table_editor::show_table_editor_ui;
@@ -645,6 +646,8 @@ impl PendingWidgetPaste {
 
 #[derive(Debug, Clone)]
 struct DiagnosticTooltipOverlay {
+    source: (DocumentKey, u64),
+    line: usize,
     origin: Rect,
     anchor: Pos2,
     severity: DiagnosticSeverity,
@@ -3165,9 +3168,7 @@ impl EditorApp {
                 input.consume_key(Modifiers::NONE, egui::Key::Escape)
             })
         {
-            self.find_bar.visible = false;
-            self.find_bar.replace_visible = false;
-            self.find_bar.search.clear();
+            self.find_bar.close();
         }
 
         if self.preview_visible()
@@ -3391,8 +3392,8 @@ impl EditorApp {
             AppCommand::Paste => self.request_editor_paste(context),
             AppCommand::SelectAll => self.select_all_editor(context),
             AppCommand::ToggleComment => self.toggle_comments(context),
-            AppCommand::Find => self.toggle_find(),
-            AppCommand::FindReplace => self.open_find(true),
+            AppCommand::Find => self.toggle_find(false, context),
+            AppCommand::FindReplace => self.toggle_find(true, context),
             AppCommand::Format => self.request_format_document(),
             AppCommand::SyncPreview => {
                 let cursor = self.editor_snapshot(context).cursor.primary.index.0;
@@ -3549,18 +3550,25 @@ impl EditorApp {
         self.find_bar.visible = true;
         self.find_bar.replace_visible |= replace;
         self.find_bar.focus = true;
+        if let Some(matched) = self.find_bar.search.selected() {
+            self.pending_editor_selection =
+                Some(EditorSelection::Search(matched.char_range.clone()));
+        }
         if !self.view_mode.shows_code() {
             self.view_mode = ViewMode::Split;
         }
     }
 
-    fn toggle_find(&mut self) {
-        if self.find_bar.visible {
-            self.find_bar.visible = false;
-            self.find_bar.replace_visible = false;
-            self.find_bar.search.clear();
+    fn toggle_find(&mut self, replace: bool, context: &egui::Context) {
+        if self.find_bar.visible
+            && find_bar::has_focus(context)
+            && (!replace || self.find_bar.replace_visible)
+        {
+            self.find_bar.close();
+            let editor = source_editor_id(context);
+            context.memory_mut(|memory| memory.request_focus(editor));
         } else {
-            self.open_find(false);
+            self.open_find(replace);
         }
     }
 
@@ -7007,6 +7015,44 @@ impl EditorApp {
         self.editor_hover = None;
     }
 
+    fn refresh_diagnostic_tooltip(&mut self, context: &egui::Context) {
+        let Some(tooltip) = self.diagnostic_tooltip.as_ref() else {
+            return;
+        };
+        let source = (self.document().key(), self.preview.diagnostics_generation);
+        if tooltip.source == source {
+            return;
+        }
+        let same_document = tooltip.source.0 == source.0;
+        self.prepare_editor_data();
+        let tooltip = self.diagnostic_tooltip.as_mut().unwrap();
+        if same_document
+            && self
+                .editor_data
+                .line_diagnostics()
+                .iter()
+                .any(|diagnostic| {
+                    diagnostic.line == tooltip.line
+                        && diagnostic.severity == tooltip.severity
+                        && diagnostic.detail == tooltip.detail
+                })
+        {
+            tooltip.source = source;
+            return;
+        }
+        // Native pointer handoff retains a payload, not the diagnostic that
+        // produced it. Invalidate both when that source is edited or resolved.
+        self.diagnostic_tooltip = None;
+        let geometry = tooltip_geometry_id(context);
+        let interaction = tooltip_interaction_id(context);
+        let timing = diagnostic_hover_timing_id(context);
+        context.data_mut(|data| {
+            data.remove::<TooltipGeometry>(geometry);
+            data.remove::<TooltipInteractionState>(interaction);
+        });
+        reset_hover_timing(context, timing);
+    }
+
     fn dismiss_hover_on_scroll(&mut self, context: &egui::Context) {
         self.tooltip_request = None;
         self.clear_editor_hover();
@@ -8467,6 +8513,7 @@ impl EditorApp {
         }
         self.handle_dropped_file(&context);
         self.update_asset_hover(&context);
+        self.refresh_diagnostic_tooltip(&context);
         self.focus_requested_tooltip(&context);
         self.show_app_popup_window(&context);
         self.show_rename_dialog(&context);
@@ -9143,7 +9190,9 @@ fn show_sticky_context_overlay(
 
     let mut jump_target = None;
     egui::Area::new(viewport_scoped_id(context, "sticky-context-overlay"))
-        .order(egui::Order::Foreground)
+        // Find/Replace is Foreground. Distinct orders keep it above sticky
+        // rows even after egui promotes a clicked sticky Area to the top.
+        .order(egui::Order::Middle)
         .fixed_pos(geometry.anchor)
         .fade_in(false)
         .constrain_to(viewport)
@@ -9274,6 +9323,7 @@ fn paint_line_diagnostics(
     diagnostics: &[LineDiagnostic],
     line_rows: &[Range<usize>],
     slots: Vec<egui::layers::ShapeIdx>,
+    source: (DocumentKey, u64),
 ) -> Option<DiagnosticTooltipOverlay> {
     let painter = ui.painter();
     let mut hovered_diagnostic = None;
@@ -9324,6 +9374,8 @@ fn paint_line_diagnostics(
             && hovered_diagnostic.is_none()
         {
             hovered_diagnostic = Some(DiagnosticTooltipOverlay {
+                source,
+                line: diagnostic.line,
                 origin: hover_rect,
                 anchor: Pos2::new(
                     output.response.rect.right() + METRICS.editor.tooltip_gap,

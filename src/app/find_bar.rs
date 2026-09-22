@@ -4,7 +4,7 @@
 //! cache. It does not edit documents or decide whether an edit is admitted;
 //! those effects remain in the document-window owner.
 
-use super::{METRICS, UiIcon, icon_button, native_hover_text, theme};
+use super::{METRICS, UiIcon, icon_button, native_hover_text, theme, viewport_scoped_id};
 use crate::{document::DocumentKey, search::SearchSession};
 use eframe::egui::{self, RichText};
 
@@ -34,6 +34,42 @@ impl Default for FindBarState {
     }
 }
 
+pub(super) fn query_id(context: &egui::Context) -> egui::Id {
+    viewport_scoped_id(context, "find-query")
+}
+
+pub(super) fn replacement_id(context: &egui::Context) -> egui::Id {
+    viewport_scoped_id(context, "find-replacement")
+}
+
+pub(super) fn overlay_layer(context: &egui::Context) -> egui::LayerId {
+    egui::LayerId::new(
+        egui::Order::Foreground,
+        viewport_scoped_id(context, "find-replace-overlay"),
+    )
+}
+
+pub(super) fn has_focus(context: &egui::Context) -> bool {
+    let focused = context.memory(|memory| memory.focused());
+    focused.is_some_and(|id| {
+        id == query_id(context)
+            || id == replacement_id(context)
+            || context
+                .read_response(id)
+                .is_some_and(|response| response.layer_id == overlay_layer(context))
+    })
+}
+
+impl FindBarState {
+    pub(super) fn close(&mut self) {
+        self.visible = false;
+        self.replace_visible = false;
+        self.focus = false;
+        // Closing changes presentation only. The revision/query-keyed session
+        // keeps the selected match until the document or query actually changes.
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(super) struct FindBarActions {
     pub(super) previous: bool,
@@ -58,10 +94,12 @@ pub(super) fn show(
             state.case_sensitive,
             state.regex,
         );
-        search_results.error().map_or_else(
-            || format!("{} matches", search_results.len()),
-            |_| "Invalid pattern".to_owned(),
-        )
+        if search_results.error().is_some() {
+            "Invalid pattern".to_owned()
+        } else {
+            let total = search_results.len();
+            format!("{}/{total}", state.search.selected_ordinal().unwrap_or(0))
+        }
     };
     let mut actions = FindBarActions::default();
     let mut query_changed = false;
@@ -69,7 +107,7 @@ pub(super) fn show(
     ui.horizontal_wrapped(|ui| {
         let response = ui.add(
             egui::TextEdit::singleline(&mut state.query)
-                .id_salt("find-query")
+                .id(query_id(ui.ctx()))
                 .hint_text("Find")
                 .desired_width(METRICS.editor.find_field_width),
         );
@@ -137,9 +175,7 @@ pub(super) fn show(
         actions.previous |= icon_button(ui, UiIcon::Up, "Previous match · Shift+Enter").clicked();
         actions.next |= icon_button(ui, UiIcon::Down, "Next match · Enter").clicked();
         if icon_button(ui, UiIcon::Close, "Close · Esc").clicked() {
-            state.visible = false;
-            state.replace_visible = false;
-            state.search.clear();
+            state.close();
             actions.closed = true;
         }
     });
@@ -148,6 +184,7 @@ pub(super) fn show(
         ui.horizontal(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut state.replacement)
+                    .id(replacement_id(ui.ctx()))
                     .hint_text("Replace")
                     .desired_width(METRICS.editor.find_field_width),
             );

@@ -7,6 +7,181 @@ use crate::{
 };
 
 #[test]
+fn retained_diagnostic_tooltip_tracks_edits_and_resolved_diagnostics() {
+    for change in ["resolved", "edited", "different", "unchanged"] {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        app.document_mut().replace_unprojected_untitled("#broken");
+        app.preview.diagnostics = vec![Diagnostic {
+            severity: DiagnosticSeverity::Error,
+            source: DiagnosticSource::Main,
+            location: Some(crate::diagnostics::DiagnosticLocation { line: 1, column: 1 }),
+            message: "Unknown variable".into(),
+            details: Vec::new(),
+        }];
+        app.mark_diagnostics_changed();
+        let origin = Rect::from_min_size(Pos2::ZERO, Vec2::splat(20.0));
+        app.diagnostic_tooltip = Some(DiagnosticTooltipOverlay {
+            source: (app.document().key(), app.preview.diagnostics_generation),
+            line: 1,
+            origin,
+            anchor: origin.left_bottom(),
+            severity: DiagnosticSeverity::Error,
+            detail: "Unknown variable".into(),
+        });
+        let interaction = tooltip_interaction_id(&context);
+        context.data_mut(|data| data.insert_temp(interaction, TooltipInteractionState::new(1)));
+        match change {
+            "resolved" => app.preview.diagnostics.clear(),
+            "edited" => {
+                app.document_mut()
+                    .edit(CCursorRange::default(), |source| source.clear());
+            }
+            "different" => app.preview.diagnostics[0].message = "Different problem".into(),
+            _ => {}
+        }
+        app.mark_diagnostics_changed();
+        app.refresh_diagnostic_tooltip(&context);
+        assert_eq!(
+            app.diagnostic_tooltip.is_some(),
+            change == "unchanged",
+            "{change}"
+        );
+        assert_eq!(
+            context.data(|data| data
+                .get_temp::<TooltipInteractionState>(interaction)
+                .is_some()),
+            change == "unchanged"
+        );
+    }
+}
+
+#[test]
+fn editor_resize_preserves_visible_caret_or_offscreen_caret_viewport_center() {
+    for (offscreen, line_wrap) in [(false, true), (true, true), (false, false), (true, false)] {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        app.settings.line_wrap = line_wrap;
+        app.settings.sticky_context_rows = false;
+        let line =
+            "A wrapped line with αβ and enough text to reflow when its panel becomes narrower.\n";
+        app.document_mut()
+            .replace_unprojected_untitled(line.repeat(150));
+        let cursor = CCursor::new(line.chars().count() * 60 + 15);
+        app.pending_editor_selection = Some(if offscreen {
+            EditorSelection::Search(cursor.index.0..cursor.index.0)
+        } else {
+            EditorSelection::Focus(cursor.index.0..cursor.index.0)
+        });
+        let mut time = 0.0;
+        let mut frame = |app: &mut EditorApp, size| {
+            time += 1.0;
+            context
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                        time: Some(time),
+                        ..Default::default()
+                    },
+                    |ui| app.show_editor(ui),
+                )
+                .drop_without_applying_deltas();
+        };
+        let snapshot_id = source_editor_id(&context).with("resize-anchor");
+        let snapshot = || {
+            context.data(|data| {
+                data.get_temp::<editor_scroll::Snapshot>(snapshot_id)
+                    .unwrap()
+            })
+        };
+        for _ in 0..4 {
+            frame(&mut app, Vec2::new(800.0, 500.0));
+        }
+        let before = snapshot();
+        let anchor = if offscreen {
+            app.store_editor_cursor(&context, CCursorRange::one(CCursor::new(0)));
+            let center = before
+                .galley
+                .cursor_from_pos(before.viewport.center() - before.galley_pos);
+            before.galley.cursor_begin_of_paragraph(&center)
+        } else {
+            cursor
+        };
+        let screen_y = |s: &editor_scroll::Snapshot| {
+            s.galley.pos_from_cursor(anchor).center().y + s.galley_pos.y
+        };
+        let original_y = screen_y(&before);
+        assert!(original_y > before.viewport.top() && original_y < before.viewport.bottom());
+        for width in [500.0, 400.0, 650.0, 800.0] {
+            for _ in 0..3 {
+                frame(&mut app, Vec2::new(width, 500.0));
+            }
+            let current = snapshot();
+            assert!(
+                (screen_y(&current) - original_y).abs() < 1.0,
+                "offscreen={offscreen}, width={width}: {original_y} -> {}",
+                screen_y(&current)
+            );
+        }
+        let stable = snapshot();
+        assert!(
+            stable
+                .resize_anchor(app.document().key(), stable.available_size, cursor)
+                .is_none()
+        );
+        assert!(
+            stable
+                .resize_anchor(
+                    app.document().key().after_edit(),
+                    Vec2::new(300.0, 500.0),
+                    cursor
+                )
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn find_overlay_stays_above_sticky_rows_after_sticky_layer_promotion() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+    app.snapshot_scene = Some(UiSnapshotScene::FindStickyContext);
+    app.prepare_qa_scene(&context);
+    let frame = |app: &mut EditorApp| {
+        context
+            .run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 500.0))),
+                    ..Default::default()
+                },
+                |ui| app.show_editor(ui),
+            )
+            .drop_without_applying_deltas()
+    };
+    for _ in 0..3 {
+        frame(&mut app);
+    }
+    let sticky = egui::LayerId::new(
+        egui::Order::Middle,
+        viewport_scoped_id(&context, "sticky-context-overlay"),
+    );
+    let find = find_bar::overlay_layer(&context);
+    let overlap = context.memory(|memory| {
+        memory
+            .area_rect(sticky.id)
+            .unwrap()
+            .intersect(memory.area_rect(find.id).unwrap())
+    });
+    assert!(overlap.is_positive(), "fixture must overlap the overlays");
+    context.move_to_top(sticky);
+    frame(&mut app);
+    assert_eq!(context.layer_id_at(overlap.center()), Some(find));
+}
+
+#[test]
 fn pdfjs_compiles_canonical_bytes_without_starting_svg_or_raster_work() {
     let directory = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
@@ -217,14 +392,12 @@ fn source_navigation_takes_editor_focus_even_with_find_open() {
     app.find_bar.focus = true;
     context
         .run_ui(Default::default(), |ui| {
-            app.show_find_bar(ui);
             app.show_editor(ui);
         })
         .drop_without_applying_deltas();
     app.apply_editor_location(None, Some((1, 1)));
     context
         .run_ui(Default::default(), |ui| {
-            app.show_find_bar(ui);
             app.show_editor(ui);
         })
         .drop_without_applying_deltas();
@@ -329,7 +502,6 @@ fn navigation_entry_points_focus_only_their_owner_and_keep_mac_arrow_shortcuts()
             };
             context
                 .run_ui(raw(), |ui| {
-                    app.show_find_bar(ui);
                     app.show_editor(ui);
                 })
                 .drop_without_applying_deltas();
@@ -352,7 +524,6 @@ fn navigation_entry_points_focus_only_their_owner_and_keep_mac_arrow_shortcuts()
                 _ => unreachable!(),
             }
             let output = context.run_ui(raw(), |ui| {
-                app.show_find_bar(ui);
                 app.show_editor(ui);
             });
             let focused: Vec<_> = output
@@ -388,7 +559,6 @@ fn navigation_entry_points_focus_only_their_owner_and_keep_mac_arrow_shortcuts()
                 ];
                 let output = context.run_ui(input, |ui| {
                     app.handle_shortcuts(ui.ctx(), None);
-                    app.show_find_bar(ui);
                     app.show_editor(ui);
                     let state =
                         egui::text_edit::TextEditState::load(ui.ctx(), source_editor_id(ui.ctx()))
@@ -424,7 +594,6 @@ fn find_selection_preserves_find_focus_and_does_not_activate_native_window() {
     app.find_bar.query = "alpha".into();
     context
         .run_ui(Default::default(), |ui| {
-            app.show_find_bar(ui);
             app.show_editor(ui);
         })
         .drop_without_applying_deltas();
@@ -435,7 +604,6 @@ fn find_selection_preserves_find_focus_and_does_not_activate_native_window() {
         Some(EditorSelection::Search(_))
     ));
     let output = context.run_ui(Default::default(), |ui| {
-        app.show_find_bar(ui);
         app.show_editor(ui);
     });
     assert_eq!(context.memory(|memory| memory.focused()), focused);

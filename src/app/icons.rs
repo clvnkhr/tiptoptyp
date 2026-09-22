@@ -69,6 +69,9 @@ pub(super) fn icon_button_enabled(
         tooltip,
     );
     let color = ui.style().interact(&response).fg_stroke.color;
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), tooltip)
+    });
     paint_ui_icon(
         ui.painter(),
         response.rect.shrink(METRICS.icon.button_icon_shrink),

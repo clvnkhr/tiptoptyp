@@ -34,6 +34,13 @@ document starts at page one, fit width. A shortened document clamps the restored
 page. Theme changes do not reload the PDF. The new viewer does not modify the
 Tinymist zoom adapter or the deferred zoom-fallback investigation.
 
+The newest-first todo audit also verified the existing search and thumbnail
+controls in the real bundled viewer: 23 matches across a 24-page fixture,
+24 thumbnail entries, a decoded thumbnail, and navigation back to page one by
+clicking its thumbnail. The same run retained page 13, 175% zoom and scroll
+offset 15,294 exactly across reload, with no remote requests or browser errors.
+This closes stale todos 118 and 1; it does not close raster removal (295).
+
 ## Ownership and cost
 
 `src/pdfjs.rs` embeds the hash-verified upstream distribution in the application.

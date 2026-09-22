@@ -113,11 +113,12 @@ pub enum UiSnapshotScene {
     TerminalMaximized,
     ExplorerMaximized,
     FindReplace,
+    FindStickyContext,
     PreviewCompiling,
 }
 
 impl UiSnapshotScene {
-    pub const ALL: [Self; 48] = [
+    pub const ALL: [Self; 49] = [
         Self::TableEditor,
         Self::TableEditorNarrow,
         Self::Main,
@@ -165,6 +166,7 @@ impl UiSnapshotScene {
         Self::TerminalMaximized,
         Self::ExplorerMaximized,
         Self::FindReplace,
+        Self::FindStickyContext,
         Self::PreviewCompiling,
     ];
 
@@ -217,6 +219,7 @@ impl UiSnapshotScene {
             Self::TerminalMaximized => "terminal-maximized",
             Self::ExplorerMaximized => "explorer-maximized",
             Self::FindReplace => "find-replace",
+            Self::FindStickyContext => "find-sticky-context",
             Self::PreviewCompiling => "preview-compiling",
         }
     }
@@ -242,6 +245,7 @@ impl UiSnapshotScene {
             | Self::TerminalMaximized
             | Self::ExplorerMaximized
             | Self::FindReplace
+            | Self::FindStickyContext
             | Self::PreviewCompiling => ROOT_VIEWPORT_NAME,
             Self::FileMenu
             | Self::EditMenu
@@ -329,6 +333,7 @@ impl UiSnapshotScene {
             "terminal-maximized" => Self::TerminalMaximized,
             "explorer-maximized" => Self::ExplorerMaximized,
             "find-replace" => Self::FindReplace,
+            "find-sticky-context" => Self::FindStickyContext,
             "preview-compiling" => Self::PreviewCompiling,
             _ => {
                 let choices = Self::ALL

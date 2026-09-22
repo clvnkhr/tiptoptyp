@@ -12,7 +12,7 @@ completed tasks or renumber existing tasks; append new tasks with the next
 unused number. Resolved and audit notes must cite the relevant item numbers.
 Update the checkbox only when the entire task is complete and verified.
 
-1. [ ] (Deferred) there should be a proper pdf preview option that is just a proper pdf viewer. maybe a webview?
+1. [x] Proper PDF viewer in a webview: completed by the bundled PDF.js viewer (284/294); opened PDFs now use it by default.
 2. [x] Establish repeatable profiling builds, isolated representative workloads, CPU samples and bounded subsystem timings, plus an ongoing performance-review policy. (Resumed from deferred perf; individual optimizations remain ongoing work.)
 
 3. [x] typst overrides should be in appearances subsection
@@ -152,7 +152,7 @@ I was using two different windows with two different workspaces. Possibly i was 
 115. [x] Git chunk actions: stage, unstage, and revert individual chunks, with buttons in the existing hunk popup and configurable keyboard shortcuts for actions and previous/next change. Reject stale selections and preserve unrelated staged/unsaved changes; revert through the editor's undo history. Implemented and regression-tested; see `docs/tabs-and-git-hunks.md` for controls, safety rules, visual evidence, and profiling results.
 116. [ ] workspace search and replace: preview replacements across files, support regex capture groups, and provide undo
 117. [ ] large-project performance: share repository status between windows and measure indexing, preview, and typing latency (ongoing optimization, using the profiling foundation in item 2)
-118. [ ] PDF polish: document search, thumbnails, and reliable position restoration (extends deferred item 1)
+118. [x] PDF polish: document search, thumbnails, and reliable position restoration. Already supplied by PDF.js; the 22 September real-browser audit verifies all three against the bundled viewer.
 119. [x] extract settings, editor rendering, and window orchestration into focused modules with enforced ownership boundaries
 120. [x] implement refactor.typ R1–R8: sealed document mutations, workflow states, owned tasks, preview provenance, headless core, coordinate types, presentation ownership, and explicit write outcomes
 121. [x] The image preview int he file explorer appears to the right of the file name position. But this is not exactly right - it should appear to the right of the fine explorer panel. This is different if the name is so long that we have to scroll the panel to see it. As currently it uses the file name length, this is past the panel boundary.
@@ -2477,12 +2477,12 @@ portable whole-system resource score.
   and settings, and remove preview-only Poppler work/residency. Preserve image
   viewing, PDF thumbnails, canonical PDF export and PDF.js. Do not add features
   to the retiring viewer. Track the removal boundary in `docs/pdfjs-preview.md`.
-296. [ ] as i am using find (and replace) the sticky rows sometimes go on top of the find and replace popup. this is wrong.
-297. [ ] find and replace should say e.g. x/166 instead of 166 matches, where x/ means we are at the xth match
-298. [ ] if the find (and replace) popup is open but not focused, cmd+F (cmd+opt+F) should focus it. it should only toggle off when we press this while the popup is focused.
-299. [ ] if we cmd+F (similarly for replace) and refocus the find popup, we should resume at the xth match, not start from the beginning
-300. [ ] when we resize the code panel, the currently selected line must stay at (approx) the same pos on screen. if its not already visible, then center the resize at the center line
-301. [ ] if we are editing a line with an error popup, then the line's error disappears because of our changes, then the popup from mouseover on that problem should also go away
+296. [x] as i am using find (and replace) the sticky rows sometimes go on top of the find and replace popup. this is wrong.
+297. [x] find and replace should say e.g. x/166 instead of 166 matches, where x/ means we are at the xth match
+298. [x] if the find (and replace) popup is open but not focused, cmd+F (cmd+opt+F) should focus it. it should only toggle off when we press this while the popup is focused.
+299. [x] if we cmd+F (similarly for replace) and refocus the find popup, we should resume at the xth match, not start from the beginning
+300. [x] when we resize the code panel, the currently selected line must stay at (approx) the same pos on screen. if its not already visible, then center the resize at the center line
+301. [x] if we are editing a line with an error popup, then the line's error disappears because of our changes, then the popup from mouseover on that problem should also go away
 - Item 294 is complete. Tests cover PDF tabs beside Tinymist, canonical byte
   loading without Poppler, the fifth-failure transition, native-view failure,
   pause and duplicate-event admission, explicit raster choice and capture
@@ -2620,3 +2620,39 @@ portable whole-system resource score.
   large-document Tinymist measurements, Vim mode, partial-rendering policy,
   and native bitmap-overlay acceptance need dedicated interactive or native
   evidence; they are not being marked complete from headless tests.
+
+= Newest-first todo pass (22 September 2026)
+
+- Reviewed 305 downwards. Items 302–305 were already complete. Implemented
+  301–296: retained diagnostic cards are invalidated when their document or
+  diagnostic changes; source resizing retains the visible caret's screen
+  position, or the central logical line when the caret is offscreen; Find and
+  Replace shortcuts refocus an unfocused bar, preserve its selected match,
+  and only close a focused bar. The match label is now `x/total`. Sticky rows
+  use a lower egui layer than Find, including after sticky-row interaction.
+- Items 118 and 1 were stale. PDF.js already implements their viewer, search,
+  thumbnail and same-document position requirements. The real bundled-viewer
+  probe found 23 matches, exposed all 24 thumbnail entries, checked a decoded
+  thumbnail and navigated by thumbnail.
+  Reload retained page 13, 175% zoom and scroll offset 15,294 exactly; shorter
+  documents and document switches also passed. No viewer rewrite was needed.
+- Item 295 remains the newest open implementation task. Its capture surrogate,
+  shared image/PDF-thumbnail helpers and preview residency still exist; deletion
+  is not complete merely because PDF.js is the default. Its ordered removal
+  boundaries remain in `docs/pdfjs-preview.md`. Item 268 remains open against
+  that retiring raster viewer and should be retired with 295, not expanded.
+- The remaining unchecked entries were reviewed for staleness. Native
+  acceptance items 290, 265, 264, 237 and 234 still explicitly lack their
+  measurements/observations; they remain open. TPIX (283), Vim (266), engine
+  work (223/222), tab animation (182), templates (181), preview pop-out (163),
+  large-project performance (117), workspace replacement (116), crash recovery
+  (114), and the old global text corruption report (26) are not made complete
+  by the recent terminal/PDF work. Deferred ownership work 253/251 remains
+  deferred, and partial-rendering policy/measurement 289 remains open.
+- Formatting, strict all-target Clippy, 1,175 Rust tests (21 opt-in tests
+  ignored), 14 xtask tests and 5 PDF.js host tests pass. Details and the native
+  evidence boundary are in `docs/editor-interactions.md`.
+- The fresh light Find/sticky framebuffer was inspected and the reduced
+  22-image gallery validated. The optimized 10,000-line geometry probe adds
+  about 10.24 microseconds per resize, without another text layout; this is
+  not a whole-frame or native smoothness measurement.

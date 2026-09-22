@@ -102,6 +102,7 @@ The accepted scenes and their framebuffer targets are:
 | `terminal-panel` | `main` | Shared bottom panel with deterministic libghostty colors, Unicode and cursor; no shell is spawned |
 | `problems-panel` | `main` | Expanded Problems panel with diagnostics |
 | `find-replace` | `main` | Find and replace controls |
+| `find-sticky-context` | `main` | Find/replace above scrolled sticky rows, with the current match count |
 | `preview-compiling` | `main` | Compiling status and empty preview state |
 
 A capture batch retains its initial document separately from scene-specific

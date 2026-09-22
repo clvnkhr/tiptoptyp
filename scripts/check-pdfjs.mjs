@@ -86,6 +86,25 @@ try {
   }));
   assert.equal((await state()).pages, 24);
   assert.equal((await state()).scaleValue, "page-width");
+  // These viewer features predate the backlog triage: exercise the real
+  // bundled controls before marking document search/thumbnails complete.
+  await page.locator("#viewFindButton").click();
+  await page.locator("#findInput").fill("Scroll freely");
+  await page.waitForFunction(() => PDFViewerApplication.findController.pageMatches
+    .reduce((sum, matches) => sum + matches.length, 0) === 23);
+  await page.locator("#findNextButton").click();
+  await page.waitForFunction(() => PDFViewerApplication.pdfViewer.currentPageNumber === 3);
+  await page.locator("#viewFindButton").click();
+  await page.locator("#viewsManagerToggleButton").click();
+  await page.waitForSelector('#thumbnailsView .thumbnail[page-number="1"] img');
+  assert.equal(await page.locator("#thumbnailsView .thumbnail").count(), 24);
+  await page.locator('#thumbnailsView .thumbnail[page-number="1"] .thumbnailImageContainer').click();
+  await page.waitForFunction(() => PDFViewerApplication.pdfViewer.currentPageNumber === 1);
+  await page.waitForFunction(() => {
+    const image = document.querySelector('#thumbnailsView .thumbnail[page-number="1"] img');
+    return image.complete && image.naturalWidth > 0;
+  });
+  await page.locator("#viewsManagerToggleButton").click();
   await page.waitForSelector('.annotationLayer a[href*="example.com"]');
   const external = page.locator('.annotationLayer a[href*="example.com"]');
   assert.equal(await external.getAttribute("target"), "_blank");

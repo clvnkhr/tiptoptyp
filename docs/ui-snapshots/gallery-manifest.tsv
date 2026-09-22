@@ -50,6 +50,7 @@ scene	terminal-maximized	main	main-terminal-maximized	targeted	-	-
 scene	explorer-maximized	main	main-explorer-maximized	targeted	-	-
 scene	problems-panel	main	main-problems-panel	component	-	-
 scene	find-replace	main	main-find-replace	component	-	-
+scene	find-sticky-context	main	main-find-sticky-context	targeted	-	-
 scene	preview-compiling	main	main-preview-compiling	component	-	-
 scene	file-menu	popup	popup-file-menu	component	transparent	-
 scene	edit-menu	popup	popup-edit-menu	component	transparent	-

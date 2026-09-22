@@ -144,6 +144,8 @@ impl EditorApp {
             self.document_mut().set_history_reset(false);
         }
         self.prepare_editor_data();
+        self.refresh_diagnostic_tooltip(ui.ctx());
+        let diagnostic_source = (self.document().key(), self.preview.diagnostics_generation);
         let source_metrics = self.editor_data.source_metrics();
         let line_diagnostics = self.editor_data.line_diagnostics();
         let available_width = ui.available_width();
@@ -157,7 +159,10 @@ impl EditorApp {
                     + METRICS.editor.unwrapped_width_padding,
             )
             .max(METRICS.editor.unwrapped_minimum_width);
-        let sticky_context_snapshot = self.snapshot_scene == Some(UiSnapshotScene::StickyContext);
+        let sticky_context_snapshot = matches!(
+            self.snapshot_scene,
+            Some(UiSnapshotScene::StickyContext | UiSnapshotScene::FindStickyContext)
+        );
         let folding_snapshot = self.snapshot_scene == Some(UiSnapshotScene::Folding);
         let line_wrap = sticky_context_snapshot || folding_snapshot || self.settings.line_wrap;
         let line_numbers =
@@ -241,6 +246,23 @@ impl EditorApp {
             state.store(ui.ctx(), id);
         }
         let snapshot_before_edit = self.editor_snapshot(ui.ctx());
+        let available_size = ui.available_size();
+        let viewport_snapshot_id = source_editor_id(ui.ctx()).with("resize-anchor");
+        let resize_anchor = self
+            .pending_editor_selection
+            .is_none()
+            .then(|| {
+                ui.ctx()
+                    .data(|data| data.get_temp::<editor_scroll::Snapshot>(viewport_snapshot_id))
+                    .and_then(|previous| {
+                        previous.resize_anchor(
+                            document_key,
+                            available_size,
+                            snapshot_before_edit.cursor.primary,
+                        )
+                    })
+            })
+            .flatten();
         self.highlighter
             .set_rainbow_brackets(self.settings.rainbow_brackets);
         let auto_pair_enabled = self.settings.auto_pair_delimiters && document_kind.is_typst();
@@ -289,13 +311,14 @@ impl EditorApp {
 
         let scroll_area = egui::ScrollArea::new([!line_wrap, true])
             .id_salt(("source-editor-scroll", active_tab))
-            .auto_shrink([false, false]);
+            .auto_shrink([false, false])
+            .animated(resize_anchor.is_none());
         let scroll_area = if let Some(offset) = snapshot_scroll_offset {
             scroll_area.vertical_scroll_offset(offset)
         } else {
             scroll_area
         };
-        let scroll_output = scroll_area.show(ui, |ui| {
+        let scroll_output = scroll_area.show_viewport(ui, |ui, viewport| {
             let editor_width = if line_wrap {
                 ui.available_width()
                     .max(METRICS.editor.wrapped_minimum_width)
@@ -495,9 +518,14 @@ impl EditorApp {
                 }
                 painter.set(delimiter_fill_slot, egui::Shape::Vec(backgrounds));
             }
-            if let Some(tooltip) =
-                paint_line_diagnostics(ui, &output, &line_diagnostics, &line_rows, background_slots)
-                && !native_tooltip_handoff_blocks(ui.ctx(), tooltip.origin)
+            if let Some(tooltip) = paint_line_diagnostics(
+                ui,
+                &output,
+                &line_diagnostics,
+                &line_rows,
+                background_slots,
+                diagnostic_source,
+            ) && !native_tooltip_handoff_blocks(ui.ctx(), tooltip.origin)
             {
                 // Keep the last diagnostic payload while the pointer is
                 // crossing the root-local bridge or sitting in the
@@ -579,6 +607,8 @@ impl EditorApp {
                         .pos_from_cursor(CCursor::new(cursor))
                         .translate(output.galley_pos.to_vec2());
                     self.diagnostic_tooltip = Some(DiagnosticTooltipOverlay {
+                        source: diagnostic_source,
+                        line: diagnostic.line,
                         origin: rect,
                         anchor: rect.left_bottom(),
                         detail: diagnostic.detail.clone(),
@@ -813,15 +843,47 @@ impl EditorApp {
                     scroll_lines,
                 }
             });
+            let viewport_snapshot = editor_scroll::Snapshot {
+                document: document.key(),
+                available_size,
+                viewport: ui.clip_rect(),
+                galley: Arc::clone(&output.galley),
+                galley_pos: output.galley_pos,
+            };
+            if !changed
+                && !folds_changed
+                && let Some(anchor) = &resize_anchor
+            {
+                ui.scroll_with_delta(egui::vec2(
+                    0.0,
+                    anchor.scroll_delta(&output.galley, output.galley_pos, ui.clip_rect()),
+                ));
+            }
             (
                 output.response.rect,
                 visuals.corner_radius,
                 border,
                 sticky_context,
+                viewport_snapshot,
+                viewport.min.to_vec2(),
             )
         });
 
-        let (editor_rect, corner_radius, border, sticky_context) = scroll_output.inner;
+        let (
+            editor_rect,
+            corner_radius,
+            border,
+            sticky_context,
+            mut viewport_snapshot,
+            painted_offset,
+        ) = scroll_output.inner;
+        // ScrollArea commits input/programmatic scrolling after its content
+        // closure. Store geometry at that offset so consecutive resize frames
+        // cannot accumulate drift from the previous frame's painted position.
+        viewport_snapshot.galley_pos -= scroll_output.state.offset - painted_offset;
+        viewport_snapshot.viewport = scroll_output.inner_rect;
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(viewport_snapshot_id, viewport_snapshot));
         // Covers scrollbar drags and keyboard/programmatic scrolling too,
         // which need not deliver a wheel event to the parent viewport.
         if source_scroll_changed(ui.ctx(), scroll_output.state.offset) || folds_changed {
@@ -907,6 +969,7 @@ impl EditorApp {
         if changed {
             self.find_bar.search.clear();
             self.mark_edited();
+            self.refresh_diagnostic_tooltip(ui.ctx());
         }
         if document_kind.is_typst()
             && let Some(cursor) = table_cursor
@@ -1005,8 +1068,7 @@ impl EditorApp {
             ui.ctx().request_repaint();
         }
 
-        // Paint Find/Replace after the sticky rows so it remains the topmost
-        // editor overlay without reserving any layout space below it.
+        // Find/Replace sits above the sticky rows without reserving layout space.
         if self.find_bar.visible {
             let context = ui.ctx().clone();
             let overlay_width = (scroll_output.inner_rect.width() - 4.0 * theme::SPACE.content)

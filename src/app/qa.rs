@@ -164,7 +164,9 @@ pub(super) const fn source_editor_snapshot_scroll_offset(
     scene: Option<UiSnapshotScene>,
 ) -> Option<f32> {
     match scene {
-        Some(UiSnapshotScene::StickyContext) => Some(STICKY_CONTEXT_SNAPSHOT_SCROLL_OFFSET),
+        Some(UiSnapshotScene::StickyContext | UiSnapshotScene::FindStickyContext) => {
+            Some(STICKY_CONTEXT_SNAPSHOT_SCROLL_OFFSET)
+        }
         _ => None,
     }
 }
@@ -469,14 +471,25 @@ impl QaSession {
                 let cursor = SOURCE.find('{').unwrap();
                 app.pending_editor_selection = Some(EditorSelection::Focus(cursor..cursor));
             }
-            UiSnapshotScene::StickyContext => {
+            UiSnapshotScene::StickyContext | UiSnapshotScene::FindStickyContext => {
                 app.notice = None;
                 app.view_mode = ViewMode::Code;
                 app.bottom_panel = BottomPanel::default();
-                app.find_bar.visible = false;
-                app.find_bar.replace_visible = false;
+                app.find_bar.visible = scene == UiSnapshotScene::FindStickyContext;
+                app.find_bar.replace_visible = app.find_bar.visible;
                 if prepare_sticky_context_snapshot_document(app.document_mut()) {
                     app.prepare_editor_source_data();
+                }
+                if app.find_bar.visible {
+                    app.find_bar.query = "Verify".into();
+                    app.find_bar.replacement = "Check".into();
+                    let key = app.document().key();
+                    let source = app.tabs.current_record().document.source();
+                    if app.find_bar.search.selected().is_none() {
+                        app.find_bar
+                            .search
+                            .next(source, key, &app.find_bar.query, true, false);
+                    }
                 }
             }
             UiSnapshotScene::Folding => {
@@ -810,7 +823,10 @@ impl QaSession {
         self.folding_prepared = false;
         self.tabs_prepared = false;
         self.asset_fixture = None;
-        if step.scene == UiSnapshotScene::StickyContext {
+        if matches!(
+            step.scene,
+            UiSnapshotScene::StickyContext | UiSnapshotScene::FindStickyContext
+        ) {
             app.document_mut().set_history_reset(true);
         }
 
