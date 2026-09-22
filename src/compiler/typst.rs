@@ -3,7 +3,7 @@ mod diagnostics;
 use super::{CompileInput, CompileRequest, EngineEvent, EngineResult};
 use crate::{
     diagnostics::DiagnosticReport,
-    private_workspace::{PrivateTypstDocument, PrivateWorkspace},
+    private_workspace::{PrivateSourceMirror, PrivateWorkspace},
     process::finish_reader_with_timeout,
 };
 use diagnostics::report;
@@ -92,7 +92,7 @@ struct WatchSession {
     id: u64,
     context: WatchContext,
     // Owns the project-local mirror and removes it after the child is reaped.
-    shadow: PrivateTypstDocument,
+    shadow: PrivateSourceMirror,
     pdf_path: PathBuf,
     child: Child,
     reader: Option<thread::JoinHandle<()>>,
@@ -129,7 +129,7 @@ impl WatchSession {
             )
         })?;
         let shadow = private
-            .mirrored_typst_document(
+            .mirrored_source(
                 &context.source_dir,
                 &context.display_name,
                 &request.input.source,

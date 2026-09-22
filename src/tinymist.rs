@@ -24,12 +24,11 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use url::Url;
 
-use crate::private_workspace::{PrivateTypstDocument, PrivateWorkspace};
+use crate::private_workspace::{PrivateSourceMirror, PrivateWorkspace};
 
-mod transport;
-use transport::{read_lsp_message, write_lsp_message};
+use crate::lsp::transport::{read_lsp_message, write_lsp_message};
 
-mod protocol;
+use crate::lsp::protocol;
 #[cfg(test)]
 use protocol::DEFAULT_PREVIEW_TASK_ID;
 use protocol::{
@@ -39,7 +38,7 @@ use protocol::{
     parse_hover_result, parse_port, rpc_error_message, scroll_preview_params,
 };
 pub use protocol::{
-    CompileStatus, CompletionItem, DiagnosticSeverity, TextDocument, TinymistDiagnostic,
+    CompileStatus, CompletionItem, DiagnosticSeverity, LspDiagnostic, TextDocument,
 };
 
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -59,8 +58,7 @@ pub type Result<T> = std::result::Result<T, TinymistError>;
 ///
 /// Every document command includes its generation. This prevents a queued
 /// edit from one workspace from being applied after the user opens another.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Generation(pub u64);
+pub use crate::lsp::Generation;
 
 #[derive(Debug)]
 pub enum TinymistError {
@@ -297,7 +295,7 @@ impl TextDocument {
 #[derive(Debug)]
 pub struct UnsavedTextDocument {
     project_root: PathBuf,
-    backing: PrivateTypstDocument,
+    backing: PrivateSourceMirror,
     uri: String,
 }
 
@@ -317,7 +315,7 @@ impl UnsavedTextDocument {
         })?;
         let project_root = private.project_root().to_owned();
         let backing = private
-            .mirrored_typst_document(source_dir, display_name, source)
+            .mirrored_source(source_dir, display_name, source)
             .map_err(|error| TinymistError::PrivateDocument {
                 project_root: project_root.clone(),
                 message: error.to_string(),
@@ -402,7 +400,7 @@ pub enum TinymistEvent {
         generation: Generation,
         uri: String,
         version: Option<i32>,
-        diagnostics: Vec<TinymistDiagnostic>,
+        diagnostics: Vec<LspDiagnostic>,
         raw: Value,
     },
     /// The result of formatting one exact version of an open document.

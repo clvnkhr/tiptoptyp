@@ -60,8 +60,11 @@ embedded PDF viewer, and Poppler for a rasterised recovery viewer.
   reproducible checked-in light/dark gallery under `docs/ui-snapshots/latest`
 - Line wrapping and line numbers enabled by default, independently toggleable
   without changing the source buffer
-- Pinned Typst and Tinymist sidecars in packaged builds, with per-tool custom
-  executable paths
+- Native TeX editing and PDF builds: Tectonic compilation, TexLab completion/hover,
+  and Badness formatting/linting; tex-fmt is an alternative formatter. Each feature
+  can be disabled independently in Settings → Tools → TeX tools.
+- Pinned Typst, Tinymist, Tectonic, TexLab, Badness and tex-fmt sidecars in packaged
+  builds, with per-tool custom executable paths
 
 The decisions behind the dual preview pipeline are recorded in
 [`docs/architecture/0002-interactive-editor.md`](docs/architecture/0002-interactive-editor.md)
@@ -115,10 +118,11 @@ directory on `PATH`.
 and retry; `cargo clean` is unnecessary. Installing the Ghostty application
 does not supply this compiler. See [terminal build details](docs/terminal.md#native-dependency-and-build).
 
-### Typst and Tinymist sidecars
+### Typesetting sidecars
 
-Packaged releases include Typst 0.15.1 and Tinymist 0.15.2. For a source-tree
-run, fetch those exact, hash-verified binaries once:
+Packaged releases include Typst 0.15.1, Tinymist 0.15.2, Tectonic 0.17.0,
+TexLab 5.26.0, Badness 0.24.0 and tex-fmt 0.5.7. For a source-tree run, fetch
+those exact, hash-verified binaries once:
 
 ```sh
 cargo run --manifest-path xtask/Cargo.toml -- fetch-sidecars
@@ -127,7 +131,9 @@ cargo run --manifest-path xtask/Cargo.toml -- fetch-sidecars
 The downloaded archives, staged executables, licenses, and provenance records
 are generated under `toolchain/` and ignored by Git. If they are absent during
 development, tiptoptyp checks `PATH`. `TIPTOPTYP_TYPST` and
-`TIPTOPTYP_TINYMIST` can override that development fallback. Every fallback is
+`TIPTOPTYP_TINYMIST` can override that development fallback. The TeX equivalents
+are `TIPTOPTYP_TECTONIC`, `TIPTOPTYP_TEXLAB`, `TIPTOPTYP_BADNESS` and
+`TIPTOPTYP_TEX_FMT`. Every fallback is
 labelled in the fixed bottom status bar and Settings.
 
 Each binary can instead be set to **Custom path** in Settings. This persisted
@@ -141,13 +147,34 @@ TIPTOPTYP_TINYMIST=/absolute/path/to/tinymist \
 cargo run --release
 ```
 
-On macOS, install Poppler for the PDF recovery viewer with
-`brew install poppler`. Without Tinymist, or if its embedded viewer fails, the
-application uses the rasterised viewer and marks the automatic choice as a
-fallback. Tinymist server and preview-start failures first receive up to four
+On macOS and Windows, PDF.js displays opened PDFs and serves as the recovery
+viewer when Tinymist is unavailable or its embedded viewer fails. The retiring
+raster viewer remains available explicitly and requires Poppler. Tinymist server and preview-start failures first receive up to four
 retries, one second apart; the fifth consecutive failure selects the fallback.
 Linux currently uses this route because the Wry child-view
 integration is limited to macOS and Windows in this MVP.
+
+### Native TeX
+
+Open a `.tex` document, edit it, and use the existing preview and PDF export
+commands. Tectonic builds the current main buffer in a private project mirror;
+included files are read from disk. Save an included file or build explicitly to
+refresh its PDF. Build output never replaces a user PDF until Compile/Export is
+requested. PDF.js displays canonical output on macOS and Windows.
+
+In **Settings → Tools → TeX tools**, choose the build engine, toggle TexLab
+completion/hover/diagnostics, select Badness or tex-fmt formatting, and toggle
+Badness linting independently. Disabling TexLab leaves Badness available.
+TexLab's own automatic builds, ChkTeX and formatters are disabled to prevent
+duplicate work. Standard LaTeX is labelled as coming soon; its adapter is not yet
+implemented. These controls concern native TeX, separately from Typst's miTeX mode.
+
+Tectonic downloads missing packages by default; first use can take several
+minutes. Enable **Use cached TeX packages only** for offline builds. Shell escape
+is disabled. The service cancels replaced builds and bounds a stalled build to
+ten minutes. Dependency watching outside the app, SyncTeX navigation, additional
+LSP commands and system LaTeX engines remain future work. See
+[the service architecture](docs/architecture/0007-tex-services.md).
 
 ## Run
 
@@ -252,9 +279,8 @@ default direct Cargo build remains the visibly marked development app with its
 amber `DEV` icon badge.
 
 The package hook downloads and verifies the pinned platform archives, checks
-both reported versions, performs the release build, and installs Typst and
-Tinymist as external sidecars beside `tiptoptyp`. Typst's `LICENSE`/`NOTICE`,
-Tinymist's `LICENSE`, and per-artifact provenance are included as resources.
+all reported versions, performs the release build, and installs Typst and
+Tinymist, Tectonic, TexLab, Badness and tex-fmt as external sidecars beside `tiptoptyp`. Upstream licenses and per-artifact provenance are included as resources.
 The canonical `ttt` application mark is embedded in direct executable launches
 and supplied as native ICNS/ICO/PNG artwork to packaged builds.
 The committed target/URL/hash matrix is
@@ -383,5 +409,5 @@ agreement in `AGENTS.md`.
 The editor still uses `egui::TextEdit<String>` and lays out the whole buffer.
 A rope-backed, virtualized editor is the next performance milestone for very
 large books. Linux interactive webview support is also follow-up work;
-bidirectional source/preview navigation is already implemented on supported
-platforms.
+bidirectional Typst source/preview navigation is already implemented on supported
+platforms. TeX SyncTeX navigation remains future work.

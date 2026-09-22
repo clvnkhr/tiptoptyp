@@ -233,6 +233,7 @@ pub(crate) struct PreviewController {
     compile_started: Option<(crate::tinymist::Generation, String, std::time::Instant)>,
     pub(crate) raw_diagnostics: String,
     pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) editor_diagnostics: Vec<Diagnostic>,
     pub(crate) tinymist_diagnostics: Vec<Diagnostic>,
     pub(crate) diagnostics_generation: u64,
     pub(crate) content: tiptoptyp_core::preview::PreviewContent<PreviewTexture>,
@@ -487,6 +488,7 @@ impl PreviewController {
             compile_started: None,
             raw_diagnostics: String::new(),
             diagnostics: Vec::new(),
+            editor_diagnostics: Vec::new(),
             tinymist_diagnostics: Vec::new(),
             diagnostics_generation: 0,
             content: Default::default(),
@@ -775,6 +777,7 @@ impl PreviewController {
         self.visible_page = 0;
         self.raw_diagnostics.clear();
         self.diagnostics.clear();
+        self.editor_diagnostics.clear();
         self.tinymist_diagnostics.clear();
         self.mark_diagnostics_changed();
     }

@@ -14,6 +14,7 @@ pub(super) struct SettingsWindowInput {
     pub(super) font_configuration: theme::FontConfiguration,
     pub(super) typst_tool: ToolResolution,
     pub(super) tinymist_tool: ToolResolution,
+    pub(super) tex_tools: crate::tex::tools::TexTools,
     pub(super) status: SettingsStatus,
     pub(super) project_root: PathBuf,
     pub(super) appearance: egui::Theme,
@@ -198,6 +199,9 @@ mod tests {
                 origin: ToolOrigin::Bundled,
                 fallback_reason: None,
             },
+            tex_tools: crate::tex::tools::TexTools::resolve(
+                &crate::tex::settings::TexSettings::default(),
+            ),
             tinymist_tool: ToolResolution {
                 kind: ToolKind::Tinymist,
                 program: "tinymist".into(),
@@ -801,6 +805,7 @@ impl SettingsWindow {
                     font_configuration: &input.font_configuration,
                     typst_tool: &input.typst_tool,
                     tinymist_tool: &input.tinymist_tool,
+                    tex_tools: &input.tex_tools,
                     status: input.status.clone(),
                     project_root: &input.project_root,
                     captures,

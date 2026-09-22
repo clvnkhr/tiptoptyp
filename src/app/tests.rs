@@ -1127,7 +1127,7 @@ fn shared_menu_geometry_contains_all_rows_and_frame_margins() {
                                 can_undo: true,
                                 can_redo: true,
                                 saved_document: true,
-                                typst_document: true,
+                                typesetting_document: true,
                                 source_preview: true,
                                 interactive_preview: true,
                                 new_table: true,
@@ -1186,7 +1186,7 @@ fn reused_menu_area_grows_from_file_to_edit_without_retaining_scroll_clipping() 
                                                     can_undo: true,
                                                     can_redo: true,
                                                     saved_document: true,
-                                                    typst_document: true,
+                                                    typesetting_document: true,
                                                     source_preview: true,
                                                     interactive_preview: true,
                                                     new_table: true,
@@ -1435,7 +1435,7 @@ fn every_shared_menu_command_is_present_and_routes_from_the_popup() {
                                 can_undo: true,
                                 can_redo: true,
                                 saved_document: true,
-                                typst_document: true,
+                                typesetting_document: true,
                                 source_preview: true,
                                 interactive_preview: true,
                                 empty_workspace: false,
@@ -3137,7 +3137,7 @@ fn menu_availability_distinguishes_the_document_from_a_pinned_source_preview() {
         can_undo: false,
         can_redo: false,
         saved_document: false,
-        typst_document: false,
+        typesetting_document: false,
         source_preview: true,
         interactive_preview: false,
         ..Default::default()
@@ -7738,15 +7738,15 @@ fn projected_application_diagnostics_and_preview_selection_map_canonical_unicode
         start: position,
         end: position,
     };
-    let diagnostic = TinymistDiagnostic {
+    let diagnostic = LspDiagnostic {
         range,
-        severity: Some(TinymistDiagnosticSeverity::Warning),
+        severity: Some(LspDiagnosticSeverity::Warning),
         code: None,
         source: None,
         message: "test warning".into(),
         raw: serde_json::json!({}),
     };
-    app.receive_tinymist_diagnostics(
+    app.receive_editor_diagnostics(
         uri,
         Some(revision_as_i32(app.document().revision())),
         vec![diagnostic.clone()],
@@ -7755,7 +7755,7 @@ fn projected_application_diagnostics_and_preview_selection_map_canonical_unicode
         .chars()
         .count();
     let (line, column) = line_column_at_char(app.document().source(), cursor);
-    let location = app.preview.tinymist_diagnostics[0].location.unwrap();
+    let location = app.preview.editor_diagnostics[0].location.unwrap();
     assert_eq!((location.line, location.column), (line, column));
     let name = app
         .preview_document_path()
@@ -7788,10 +7788,10 @@ fn projected_application_diagnostics_and_preview_selection_map_canonical_unicode
     app.document_mut()
         .edit(CCursorRange::default(), |source| source.push('!'));
     app.mark_edited();
-    assert!(app.preview.tinymist_diagnostics.is_empty());
-    app.receive_tinymist_diagnostics(uri, None, vec![diagnostic]);
+    assert!(app.preview.editor_diagnostics.is_empty());
+    app.receive_editor_diagnostics(uri, None, vec![diagnostic]);
     assert!(
-        app.preview.tinymist_diagnostics.is_empty(),
+        app.preview.editor_diagnostics.is_empty(),
         "unversioned positions are unsafe after projection"
     );
 }
@@ -8005,14 +8005,14 @@ fn live_editor_pairs_a_typed_fence_in_the_middle_of_a_document() {
 }
 
 #[test]
-fn tinymist_diagnostics_become_one_based_inline_diagnostics() {
+fn editor_diagnostics_become_one_based_inline_diagnostics() {
     let converted = tinymist_diagnostic(
-        TinymistDiagnostic {
+        LspDiagnostic {
             range: LspRange {
                 start: LspPosition::new(4, 7),
                 end: LspPosition::new(4, 11),
             },
-            severity: Some(TinymistDiagnosticSeverity::Warning),
+            severity: Some(LspDiagnosticSeverity::Warning),
             code: Some(serde_json::json!("deprecated")),
             source: Some("tinymist".to_owned()),
             message: "old syntax".to_owned(),

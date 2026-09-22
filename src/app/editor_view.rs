@@ -227,7 +227,7 @@ impl EditorApp {
         } else {
             (Vec::new(), None)
         };
-        let completion_edit_triggered = document_kind.is_typst()
+        let completion_edit_triggered = document_kind.typesetting_language().is_some()
             && ui.input(|input| completion_requested_after_events(&input.events));
         if let Some(selection) = self.pending_editor_selection.clone() {
             let selection = selection.range();
@@ -641,7 +641,7 @@ impl EditorApp {
                             )
                         })
                 });
-            if document_kind.is_typst()
+            if document_kind.typesetting_language().is_some()
                 && let Some((char_index, pointer)) = hover_position
             {
                 let asset_target = asset_source_path.as_deref().and_then(|source_path| {
@@ -697,7 +697,11 @@ impl EditorApp {
                         }
                         hovered_asset_literal = true;
                     }
-                } else if let Some(range) = self.editor_data.hover_token_range(char_index) {
+                } else if let Some(range) = if document_kind == DocumentKind::Tex {
+                    tex_hover_range(document.source(), char_index)
+                } else {
+                    self.editor_data.hover_token_range(char_index)
+                } {
                     let start = output
                         .galley
                         .pos_from_cursor(CCursor::new(range.start))
@@ -969,6 +973,7 @@ impl EditorApp {
         if changed {
             self.find_bar.search.clear();
             self.mark_edited();
+            self.sync_tex(ui.ctx());
             self.refresh_diagnostic_tooltip(ui.ctx());
         }
         if document_kind.is_typst()
@@ -1013,10 +1018,9 @@ impl EditorApp {
                 state.cursor == cursor
                     && state.version == revision_as_i32(self.document().revision())
                     && state.key == self.document().key()
-                    && state.provenance.is_current(
-                        self.tinymist_sync.generation,
-                        self.tinymist_sync.current_uri.as_deref(),
-                    )
+                    && state
+                        .provenance
+                        .is_current(self.editor_lsp_identity().0, self.editor_lsp_identity().1)
             });
             if completion_still_current {
                 if let Some(state) = &mut self.editor_completion {
@@ -1250,4 +1254,28 @@ pub(super) fn apply_search_highlights(
         }
     }
     job.sections = highlighted;
+}
+
+/// TeX command/word range in scalar coordinates, without asking Typst's parser.
+fn tex_hover_range(source: &str, cursor: usize) -> Option<std::ops::Range<usize>> {
+    let (byte, character) = source.char_indices().nth(cursor)?;
+    if !(character.is_alphanumeric() || character == '\\') {
+        return None;
+    }
+    let before = source[..byte]
+        .chars()
+        .rev()
+        .take(256)
+        .take_while(|c| c.is_alphanumeric())
+        .count();
+    let mut start = cursor - before;
+    if source[..byte].chars().rev().nth(before) == Some('\\') {
+        start -= 1;
+    }
+    let after = source[byte + character.len_utf8()..]
+        .chars()
+        .take(256)
+        .take_while(|c| c.is_alphanumeric())
+        .count();
+    Some(start..cursor + 1 + after)
 }

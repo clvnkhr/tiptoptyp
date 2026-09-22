@@ -58,6 +58,42 @@ pub(crate) fn wait(
     }
 }
 
+/// A finite external tool with deterministic cancellation and process reaping.
+/// Unix tools get their own process group so custom wrappers cannot leave a
+/// descendant running after a document/settings change.
+pub(crate) struct OwnedChild(Child);
+impl OwnedChild {
+    pub(crate) fn spawn(command: &mut std::process::Command) -> io::Result<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        command.spawn().map(Self)
+    }
+    pub(crate) fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        self.0.try_wait()
+    }
+    pub(crate) fn child_mut(&mut self) -> &mut Child {
+        &mut self.0
+    }
+}
+impl Drop for OwnedChild {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            let _ = nix::sys::signal::killpg(
+                nix::unistd::Pid::from_raw(self.0.id() as i32),
+                nix::sys::signal::Signal::SIGKILL,
+            );
+        }
+        if !matches!(self.0.try_wait(), Ok(Some(_))) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;

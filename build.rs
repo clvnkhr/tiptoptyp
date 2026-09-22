@@ -12,7 +12,7 @@ fn main() {
     for (tool, version) in versions {
         println!(
             "cargo:rustc-env=TIPTOPTYP_BUNDLED_{}_VERSION={version}",
-            tool.to_ascii_uppercase()
+            tool.to_ascii_uppercase().replace('-', "_")
         );
     }
 }

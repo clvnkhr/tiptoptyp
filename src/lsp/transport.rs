@@ -8,7 +8,7 @@ const MAX_HEADER_LINE_BYTES: usize = 8 * 1024;
 const MAX_HEADER_BYTES: usize = 32 * 1024;
 const MAX_MESSAGE_BYTES: usize = 32 * 1024 * 1024;
 
-pub(super) fn write_lsp_message(
+pub(crate) fn write_lsp_message(
     writer: &mut impl Write,
     message: &impl Serialize,
 ) -> io::Result<()> {
@@ -25,7 +25,7 @@ pub(super) fn write_lsp_message(
     writer.flush()
 }
 
-pub(super) fn read_lsp_message(reader: &mut impl BufRead) -> io::Result<Option<Value>> {
+pub(crate) fn read_lsp_message(reader: &mut impl BufRead) -> io::Result<Option<Value>> {
     let mut content_length = None;
     let mut total_header_bytes = 0usize;
     let mut saw_header = false;

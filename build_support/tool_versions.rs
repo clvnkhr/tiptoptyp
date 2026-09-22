@@ -14,7 +14,10 @@ pub fn versions(manifest: &str) -> Result<BTreeMap<&str, &str>, String> {
         let [tool, target, _asset, version, _archive, _hash] = fields.as_slice() else {
             return Err(format!("manifest line {} must have six fields", index + 1));
         };
-        if !matches!(*tool, "typst" | "tinymist") {
+        if !matches!(
+            *tool,
+            "typst" | "tinymist" | "tectonic" | "texlab" | "badness" | "tex-fmt"
+        ) {
             return Err(format!("unknown manifest tool {tool}"));
         }
         if !targets.insert((*tool, *target)) {
@@ -28,7 +31,9 @@ pub fn versions(manifest: &str) -> Result<BTreeMap<&str, &str>, String> {
             ));
         }
     }
-    for tool in ["typst", "tinymist"] {
+    for tool in [
+        "typst", "tinymist", "tectonic", "texlab", "badness", "tex-fmt",
+    ] {
         if !versions.contains_key(tool) {
             return Err(format!("missing manifest tool {tool}"));
         }

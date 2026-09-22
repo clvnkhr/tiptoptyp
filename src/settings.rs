@@ -310,6 +310,8 @@ pub(crate) struct AppSettings {
     pub(crate) last_opened_files: BTreeMap<String, String>,
     pub(crate) typst: ToolPreference,
     pub(crate) tinymist: ToolPreference,
+    #[serde(default)]
+    pub(crate) tex: crate::tex::settings::TexSettings,
 }
 
 impl Default for AppSettings {
@@ -355,6 +357,7 @@ impl Default for AppSettings {
             last_opened_files: BTreeMap::new(),
             typst: ToolPreference::default(),
             tinymist: ToolPreference::default(),
+            tex: crate::tex::settings::TexSettings::default(),
         }
     }
 }
@@ -420,6 +423,7 @@ impl AppSettings {
             last_opened_files,
             typst,
             tinymist,
+            tex,
         );
     }
 
@@ -718,6 +722,7 @@ mod tests {
         dark_comment.background = Some(Rgba::from_rgba(12, 18, 28, 180));
         dark_comment.italic = Some(false);
         let expected = AppSettings {
+            tex: Default::default(),
             interface_theme: InterfaceTheme::Light,
             light_theme: ColorThemeChoice::builtin("catppuccin-latte"),
             dark_theme: ColorThemeChoice::sublime("/themes/Example.sublime-color-scheme"),

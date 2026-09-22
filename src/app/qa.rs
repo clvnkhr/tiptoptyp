@@ -402,6 +402,7 @@ impl QaSession {
                 app.notice = None;
                 app.preview.raw_diagnostics.clear();
                 app.preview.diagnostics.clear();
+                app.preview.editor_diagnostics.clear();
                 app.preview.tinymist_diagnostics.clear();
                 app.mark_diagnostics_changed();
                 app.bottom_panel = BottomPanel::default();
@@ -731,6 +732,7 @@ impl QaSession {
                         details: Vec::new(),
                     },
                 ];
+                app.preview.editor_diagnostics.clear();
                 app.preview.tinymist_diagnostics.clear();
                 app.preview.raw_diagnostics.clear();
                 app.mark_diagnostics_changed();
@@ -794,6 +796,7 @@ impl QaSession {
         app.notice = None;
         app.preview.raw_diagnostics.clear();
         app.preview.diagnostics.clear();
+        app.preview.editor_diagnostics.clear();
         app.preview.tinymist_diagnostics.clear();
         app.mark_diagnostics_changed();
         app.status_log.clear();

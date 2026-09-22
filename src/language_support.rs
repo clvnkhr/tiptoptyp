@@ -4,12 +4,14 @@ use tiptoptyp_core::document::{DocumentKind, TypesettingLanguage};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BuildEngineKind {
     Typst,
+    Tectonic,
 }
 
 impl BuildEngineKind {
     pub(crate) fn language(self) -> TypesettingLanguage {
         match self {
             Self::Typst => TypesettingLanguage::Typst,
+            Self::Tectonic => TypesettingLanguage::Tex,
         }
     }
 }
@@ -17,6 +19,7 @@ impl BuildEngineKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LanguageServiceKind {
     Tinymist,
+    Texlab,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,9 +37,12 @@ impl LanguageSupport {
                 language_service: Some(LanguageServiceKind::Tinymist),
                 interactive_preview: true,
             },
-            // Native TeX editing is supported. A TeX build adapter and language
-            // service are separate future capabilities, never Typst fallbacks.
-            Some(TypesettingLanguage::Tex) | None => Self {
+            Some(TypesettingLanguage::Tex) => Self {
+                build: Some(BuildEngineKind::Tectonic),
+                language_service: Some(LanguageServiceKind::Texlab),
+                interactive_preview: false,
+            },
+            None => Self {
                 build: None,
                 language_service: None,
                 interactive_preview: false,
@@ -76,17 +82,16 @@ mod tests {
             Some(TypesettingLanguage::Tex)
         );
         assert_ne!(BuildEngineKind::Typst.language(), TypesettingLanguage::Tex);
-        for kind in [
-            DocumentKind::Tex,
-            DocumentKind::Text,
-            DocumentKind::Pdf,
-            DocumentKind::Image,
-        ] {
+        for kind in [DocumentKind::Text, DocumentKind::Pdf, DocumentKind::Image] {
             let support = LanguageSupport::for_document(kind);
             assert_eq!(support.build, None);
             assert_eq!(support.language_service, None);
             assert!(!support.interactive_preview);
         }
+        let tex = LanguageSupport::for_document(DocumentKind::Tex);
+        assert_eq!(tex.build, Some(BuildEngineKind::Tectonic));
+        assert_eq!(tex.language_service, Some(LanguageServiceKind::Texlab));
+        assert!(!tex.interactive_preview);
         let typst = LanguageSupport::for_document(DocumentKind::Typst);
         assert_eq!(typst.build, Some(BuildEngineKind::Typst));
         assert_eq!(typst.language_service, Some(LanguageServiceKind::Tinymist));

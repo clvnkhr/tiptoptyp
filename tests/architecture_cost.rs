@@ -1,6 +1,6 @@
 //! Opt-in optimized costs; no timing thresholds in the normal test suite.
 #[allow(dead_code)]
-#[path = "../src/tinymist/transport.rs"]
+#[path = "../src/lsp/transport.rs"]
 mod framing;
 #[allow(dead_code)]
 #[path = "../src/project_index.rs"]

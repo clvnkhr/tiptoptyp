@@ -28,6 +28,7 @@ mod highlight;
 mod index_jobs;
 mod language_support;
 mod launch;
+mod lsp;
 #[allow(unsafe_code)]
 mod native_menu;
 #[allow(unsafe_code)]
@@ -58,6 +59,7 @@ mod terminal;
 #[cfg(test)]
 #[allow(unsafe_code)]
 mod test_allocations;
+mod tex;
 mod tex_completion;
 mod theme;
 mod tinymist;

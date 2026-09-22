@@ -1,7 +1,9 @@
 //! Canonical-source to build-service adapter; compiler formats stay in engine modules.
 use super::*;
 use crate::{
-    compiler::{CompileEvent, CompileInput, CompileRequest, EngineConfig, TypstOptions},
+    compiler::{
+        CompileEvent, CompileInput, CompileRequest, EngineConfig, TectonicOptions, TypstOptions,
+    },
     language_support::BuildEngineKind,
 };
 
@@ -30,10 +32,28 @@ impl EditorApp {
         let Some(language) = self.preview_document_kind().typesetting_language() else {
             return;
         };
+        if engine == BuildEngineKind::Tectonic
+            && (!self.settings.tex.build_enabled
+                || self.settings.tex.build_engine == crate::tex::settings::BuildEngine::Latex)
+        {
+            self.set_compile_error(
+                if self.settings.tex.build_enabled {
+                    "Standard LaTeX builds are not implemented yet"
+                } else {
+                    "TeX builds are disabled in Settings"
+                }
+                .into(),
+            );
+            return;
+        }
         let engine = match engine {
             BuildEngineKind::Typst => EngineConfig::Typst(TypstOptions {
                 executable: self.typst_tool.program.clone(),
                 font_paths: self.font_catalog.workspace_directories().to_vec(),
+            }),
+            BuildEngineKind::Tectonic => EngineConfig::Tectonic(TectonicOptions {
+                executable: self.tex_tools.tectonic.program.clone(),
+                only_cached: self.settings.tex.only_cached,
             }),
         };
         let request = CompileRequest {

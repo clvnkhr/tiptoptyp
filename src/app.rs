@@ -1,5 +1,6 @@
 mod build;
 mod icons;
+mod tex;
 use icons::{
     UiIcon, icon_button, icon_button_enabled, paint_ui_icon, square_icon_button, static_icon,
 };
@@ -152,8 +153,8 @@ use crate::{
     syntax_theme::{ResolvedTypstStyles, TypstSyntaxRole},
     theme::{self, METRICS},
     tinymist::{
-        CompletionItem, DiagnosticSeverity as TinymistDiagnosticSeverity, Generation, InvertColors,
-        PreviewRefresh, TextDocument, TinymistConfig, TinymistDiagnostic, TinymistEvent,
+        CompletionItem, DiagnosticSeverity as LspDiagnosticSeverity, Generation, InvertColors,
+        LspDiagnostic, PreviewRefresh, TextDocument, TinymistConfig, TinymistEvent,
         TinymistSidecar, UnsavedTextDocument,
     },
     toolchain::{ToolKind, ToolResolution, resolve_tool},
@@ -347,7 +348,7 @@ fn default_compile_pdf_path(
     document_path: Option<&Path>,
 ) -> Option<PathBuf> {
     let source = designated_preview.or_else(|| {
-        if document_kind.is_typst() {
+        if document_kind.typesetting_language().is_some() {
             document_path
         } else {
             None
@@ -663,6 +664,7 @@ struct DiagnosticTooltipOverlay {
 enum ToolPickerTarget {
     Typst,
     Tinymist,
+    Tex(ToolKind),
     SublimeTheme { dark_mode: bool },
     UiFont,
     CodeFont,
@@ -888,6 +890,7 @@ enum SettingsTarget {
     HoverDelay,
     TypstCompiler,
     TinymistLanguageServer,
+    TexServices,
     RefreshBinaryStatus,
     BrowseTypstPackages,
     PreviewBackend,
@@ -898,7 +901,7 @@ enum SettingsTarget {
 }
 
 impl SettingsTarget {
-    const ALL: [Self; 37] = [
+    const ALL: [Self; 38] = [
         Self::Appearance,
         Self::TypstSyntax,
         Self::LightTheme,
@@ -929,6 +932,7 @@ impl SettingsTarget {
         Self::HoverDelay,
         Self::TypstCompiler,
         Self::TinymistLanguageServer,
+        Self::TexServices,
         Self::RefreshBinaryStatus,
         Self::BrowseTypstPackages,
         Self::PreviewBackend,
@@ -969,6 +973,7 @@ impl SettingsTarget {
             Self::PreviewJump => "Preview jump",
             Self::HoverDelay => "Hover delay",
             Self::TypstCompiler => "Typst compiler",
+            Self::TexServices => "TeX tools",
             Self::TinymistLanguageServer => "Tinymist language server",
             Self::RefreshBinaryStatus => "Refresh binary status",
             Self::BrowseTypstPackages => "Browse Typst packages…",
@@ -1012,6 +1017,7 @@ impl SettingsTarget {
             | Self::HoverDelay => SettingsSection::Editor,
             Self::TypstCompiler
             | Self::TinymistLanguageServer
+            | Self::TexServices
             | Self::RefreshBinaryStatus
             | Self::BrowseTypstPackages => SettingsSection::Tools,
             Self::PreviewBackend | Self::PreviewFollowEdits => SettingsSection::Preview,
@@ -1064,6 +1070,9 @@ impl SettingsTarget {
             Self::PreviewJump => "editor source sync click double modifier",
             Self::HoverDelay => "editor tooltip wait milliseconds timing",
             Self::TypstCompiler => "tools binary custom bundled path",
+            Self::TexServices => {
+                "TeX tools: Tectonic, TexLab, Badness, tex-fmt; build, completion, hover, diagnostics, formatting, linting"
+            }
             Self::TinymistLanguageServer => "tools binary lsp custom bundled path",
             Self::RefreshBinaryStatus => "tools rescan reload",
             Self::BrowseTypstPackages => "tools package manager registry installed published",
@@ -1167,6 +1176,9 @@ pub struct EditorApp {
     tool_refresh_requested: bool,
     typst_tool: ToolResolution,
     tinymist_tool: ToolResolution,
+    tex_tools: crate::tex::tools::TexTools,
+    tex_service: crate::tex::TexService,
+    tex_diagnostics: [Vec<Diagnostic>; 2],
     capabilities: CapabilityCache,
     workspace_root: PathBuf,
     git: crate::git::GitPanel,
@@ -1204,7 +1216,7 @@ pub struct EditorApp {
     last_editor_caret: Option<EditorCaretState>,
     manual_format_revision: Option<u64>,
     format_request_key: Option<DocumentKey>,
-    format_when_tinymist_ready: Option<DocumentKey>,
+    format_when_service_ready: Option<DocumentKey>,
     diagnostic_tooltip: Option<DiagnosticTooltipOverlay>,
     app_popup: Option<AppPopup>,
     app_popup_generation: u64,
@@ -1339,6 +1351,7 @@ impl EditorApp {
         );
         let typst_tool = resolve_tool(ToolKind::Typst, &settings.typst);
         let tinymist_tool = resolve_tool(ToolKind::Tinymist, &settings.tinymist);
+        let tex_tools = crate::tex::tools::TexTools::resolve(&settings.tex);
         let capabilities = CapabilityCache::discover();
         context.options_mut(|options| {
             options.zoom_with_keyboard = false;
@@ -1451,6 +1464,9 @@ impl EditorApp {
             tool_refresh_requested: false,
             typst_tool,
             tinymist_tool,
+            tex_tools,
+            tex_service: Default::default(),
+            tex_diagnostics: Default::default(),
             capabilities,
             workspace_root,
             git: crate::git::GitPanel::default(),
@@ -1494,7 +1510,7 @@ impl EditorApp {
             last_editor_caret: None,
             manual_format_revision: None,
             format_request_key: None,
-            format_when_tinymist_ready: None,
+            format_when_service_ready: None,
             diagnostic_tooltip: None,
             app_popup: None,
             app_popup_generation: 0,
@@ -1682,7 +1698,9 @@ impl EditorApp {
             // Undo/redo history is viewport-local egui state. Keep these menu
             // items enabled so the active viewport can make the final choice.
             CommandRequirement::Undo | CommandRequirement::Redo => true,
-            CommandRequirement::TypstDocument => self.document().kind().is_typst(),
+            CommandRequirement::TypesettingDocument => {
+                self.document().kind().typesetting_language().is_some()
+            }
             CommandRequirement::SourcePreview => self.source_preview_available(),
             CommandRequirement::InteractivePreview => {
                 self.document().kind().is_typst() && self.interactive_preview_active()
@@ -2294,7 +2312,7 @@ impl EditorApp {
         self.queue_preview_follow();
         self.manual_format_revision = None;
         self.format_request_key = None;
-        self.format_when_tinymist_ready = None;
+        self.format_when_service_ready = None;
         self.tooltip_request = None;
         self.notice = None;
         self.clear_editor_hover();
@@ -2302,6 +2320,7 @@ impl EditorApp {
         if self.document().config().is_some() {
             // Mapped positions belong to the previous view revision.
             self.preview.diagnostics.clear();
+            self.preview.editor_diagnostics.clear();
             self.preview.tinymist_diagnostics.clear();
             self.mark_diagnostics_changed();
         }
@@ -2400,7 +2419,7 @@ impl EditorApp {
             &virtual_path,
             current_is_preview,
             &self.preview.diagnostics,
-            &self.preview.tinymist_diagnostics,
+            &self.preview.editor_diagnostics,
         );
     }
 
@@ -2707,8 +2726,12 @@ impl EditorApp {
 
     fn may_run_compilation(&self) -> bool {
         compilation_run_allowed(
-            self.compilation_paused,
-            self.document_workflow.pending_export.is_some(),
+            self.compilation_paused
+                || (self.preview_document_kind() == DocumentKind::Tex
+                    && !self.settings.tex.build_enabled),
+            self.document_workflow.pending_export.is_some()
+                && (self.preview_document_kind() != DocumentKind::Tex
+                    || self.settings.tex.build_enabled),
             self.captures.has_pending_for("main"),
         )
     }
@@ -2762,7 +2785,7 @@ impl EditorApp {
     fn compile_pdf(&mut self, frame: Option<&eframe::Frame>) {
         if !self.source_preview_available() {
             self.notice = Some(Notice {
-                message: "Compile needs a Typst preview entry".to_owned(),
+                message: "Compile needs a typesetting preview entry".to_owned(),
                 kind: NoticeKind::Info,
             });
             return;
@@ -2795,7 +2818,7 @@ impl EditorApp {
         }
         self.manual_format_revision = None;
         self.format_request_key = None;
-        self.format_when_tinymist_ready = None;
+        self.format_when_service_ready = None;
         self.external_file_change_notice = None;
         self.external_file_stamp = self
             .document()
@@ -3604,9 +3627,19 @@ impl EditorApp {
             self.tinymist_tool = next_tinymist;
         }
 
+        if refresh_tools || changes.tex {
+            self.tex_tools = crate::tex::tools::TexTools::resolve(&request.tex);
+            self.tex_service.stop();
+            self.tex_diagnostics = Default::default();
+            if self.preview_document_kind() == DocumentKind::Tex {
+                let _ = self.compiler.pause(self.document().revision());
+                self.preview.content.invalidate();
+                self.schedule_compile_now();
+            }
+        }
         if refresh_tools {
             self.capabilities.refresh_tools();
-        } else if changes.typst || changes.tinymist {
+        } else if changes.typst || changes.tinymist || changes.tex {
             self.capabilities.invalidate();
         }
 
@@ -4294,6 +4327,7 @@ impl EditorApp {
         let title = match target {
             ToolPickerTarget::Typst => "Choose Typst compiler",
             ToolPickerTarget::Tinymist => "Choose Tinymist language server",
+            ToolPickerTarget::Tex(_) => "Choose TeX tool",
             ToolPickerTarget::SublimeTheme { dark_mode: false } => {
                 "Choose color scheme for light appearance"
             }
@@ -4342,6 +4376,13 @@ impl EditorApp {
         match target {
             ToolPickerTarget::Typst => edited.typst.custom_path = value,
             ToolPickerTarget::Tinymist => edited.tinymist.custom_path = value,
+            ToolPickerTarget::Tex(tool) => match tool {
+                ToolKind::Tectonic => edited.tex.tectonic.custom_path = value,
+                ToolKind::Texlab => edited.tex.texlab.custom_path = value,
+                ToolKind::Badness => edited.tex.badness.custom_path = value,
+                ToolKind::TexFmt => edited.tex.tex_fmt.custom_path = value,
+                _ => return,
+            },
             ToolPickerTarget::UiFont => {
                 if let Err(error) = theme::load_ui_font_bytes(file.path()) {
                     self.notice = Some(Notice {
@@ -4524,6 +4565,18 @@ impl EditorApp {
             self.document().revision(),
             requires_new_artifact,
         );
+        if !reusable
+            && self.preview_document_kind() == DocumentKind::Tex
+            && (!self.settings.tex.build_enabled
+                || self.settings.tex.build_engine == crate::tex::settings::BuildEngine::Latex)
+        {
+            self.notice = Some(Notice {
+                message: "Enable Tectonic builds in Settings → Tools before creating this PDF"
+                    .into(),
+                kind: NoticeKind::Info,
+            });
+            return;
+        }
         self.document_workflow.pending_export = Some(PendingExport {
             path,
             document_epoch: self.document().epoch(),
@@ -5037,7 +5090,7 @@ impl EditorApp {
                 PreviewEffect::DiscardLanguageRequests => {
                     self.manual_format_revision = None;
                     self.format_request_key = None;
-                    self.format_when_tinymist_ready = None;
+                    self.format_when_service_ready = None;
                     self.editor_completion = None;
                 }
             }
@@ -5084,7 +5137,7 @@ impl EditorApp {
         );
         self.preview.connection.suspend(retain_preview_surface);
         self.preview.tinymist_diagnostics.clear();
-        self.mark_diagnostics_changed();
+        self.update_tex_diagnostics();
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             self.webview_reload_pending = false;
@@ -5092,7 +5145,8 @@ impl EditorApp {
                 self.discard_webview();
             }
         }
-        if !self.document().kind().is_typst() && self.designated_preview_path().is_none() {
+        if !self.document().kind().is_typst() && self.preview_document_kind() != DocumentKind::Typst
+        {
             self.preview.tinymist_state =
                 ServiceState::Disabled("The selected file is not a Typst document".to_owned());
             self.preview.webview_state =
@@ -5133,10 +5187,18 @@ impl EditorApp {
         } else {
             ServiceState::Starting("Waiting for Tinymist's preview server".to_owned())
         };
-        let mut config = TinymistConfig::new(self.tab_preview_root())
+        let tinymist_root = if self.preview_document_kind() == DocumentKind::Typst {
+            self.tab_preview_root().to_owned()
+        } else {
+            self.project_root()
+        };
+        let mut config = TinymistConfig::new(tinymist_root)
             .with_executable(self.tinymist_tool.program.clone())
             .with_font_paths(self.font_catalog.workspace_directories());
-        if let Some(entry_path) = self.designated_preview_path() {
+        if let Some(entry_path) = self
+            .designated_preview_path()
+            .filter(|_| self.preview_document_kind() == DocumentKind::Typst)
+        {
             config = config.with_entry_path(entry_path);
         }
         config.start_preview = start_preview;
@@ -5201,23 +5263,25 @@ impl EditorApp {
                     }
                 };
 
-                let preview_document =
-                    if !self.document().kind().is_typst() || self.current_is_preview_document() {
-                        current_document.clone()
-                    } else {
-                        let path = self.preview_document_path();
-                        match self.preview_document_source().and_then(|source| {
-                            TextDocument::from_path(&path, version, source)
-                                .map_err(|error| error.to_string())
-                        }) {
-                            Ok(document) => document,
-                            Err(error) => {
-                                let _ = self.tinymist.stop_workspace(generation);
-                                self.preview.tinymist_state = ServiceState::Failed(error);
-                                return;
-                            }
+                let preview_document = if !self.document().kind().is_typst()
+                    || self.current_is_preview_document()
+                    || self.preview_document_kind() != DocumentKind::Typst
+                {
+                    current_document.clone()
+                } else {
+                    let path = self.preview_document_path();
+                    match self.preview_document_source().and_then(|source| {
+                        TextDocument::from_path(&path, version, source)
+                            .map_err(|error| error.to_string())
+                    }) {
+                        Ok(document) => document,
+                        Err(error) => {
+                            let _ = self.tinymist.stop_workspace(generation);
+                            self.preview.tinymist_state = ServiceState::Failed(error);
+                            return;
                         }
-                    };
+                    }
+                };
 
                 self.preview.connection.start(generation);
                 let preview_key = self
@@ -5327,6 +5391,7 @@ impl EditorApp {
     }
 
     fn receive_tinymist_events(&mut self, context: &egui::Context) {
+        self.receive_tex_events(context);
         while let Some(event) = self.tinymist.try_recv() {
             if self.handle_tinymist_failure(&event, context) {
                 continue;
@@ -5378,7 +5443,7 @@ impl EditorApp {
                     self.sync_parked_tinymist();
                     let document_key = self.document().key();
                     if take_ready_format_handoff(
-                        &mut self.format_when_tinymist_ready,
+                        &mut self.format_when_service_ready,
                         document_key,
                         self.tinymist_sync.generation == Some(generation)
                             && self.tinymist_sync.current_open,
@@ -5435,7 +5500,7 @@ impl EditorApp {
                     ..
                 } => {
                     if self.tinymist_sync.generation == Some(generation) {
-                        self.receive_tinymist_diagnostics(&uri, version, diagnostics);
+                        self.receive_editor_diagnostics(&uri, version, diagnostics);
                     }
                 }
                 TinymistEvent::Formatted {
@@ -5461,7 +5526,7 @@ impl EditorApp {
                             .then_some(hover.key)
                     });
                     let current = request_key.is_some_and(|key| {
-                        self.tinymist_sync.accepts_reply(
+                        self.editor_accepts_reply(
                             crate::tinymist_sync::ReplyIdentity {
                                 generation,
                                 uri: &uri,
@@ -5805,11 +5870,11 @@ impl EditorApp {
         self.apply_preview_transition(transition, None);
     }
 
-    fn receive_tinymist_diagnostics(
+    fn receive_editor_diagnostics(
         &mut self,
         uri: &str,
         version: Option<i32>,
-        diagnostics: Vec<TinymistDiagnostic>,
+        diagnostics: Vec<LspDiagnostic>,
     ) {
         if self.tinymist_sync.current_uri.as_deref() == Some(uri)
             && version.is_some_and(|version| version != revision_as_i32(self.document().revision()))
@@ -5856,7 +5921,7 @@ impl EditorApp {
             .collect();
         normalize_diagnostics(&mut converted);
         self.preview.tinymist_diagnostics = converted;
-        self.mark_diagnostics_changed();
+        self.update_tex_diagnostics();
     }
 
     fn interactive_preview_active(&self) -> bool {
@@ -6212,7 +6277,9 @@ impl EditorApp {
             return;
         }
         if self.document().kind().is_editable() {
-            if self.document().kind().is_typst() && !self.view_mode.shows_code() {
+            if self.document().kind().typesetting_language().is_some()
+                && !self.view_mode.shows_code()
+            {
                 self.view_mode = ViewMode::Split;
             }
             let editor_id = source_editor_id(context);
@@ -6283,6 +6350,10 @@ impl EditorApp {
         if self.table_editor.is_some() {
             return;
         }
+        if self.document().kind() == DocumentKind::Tex {
+            self.request_tex_format();
+            return;
+        }
         if !self.document().kind().is_typst() {
             self.manual_format_revision = None;
             self.format_request_key = None;
@@ -6344,7 +6415,12 @@ impl EditorApp {
     }
 
     fn request_format_after_manual_save(&mut self) {
-        if self.document().kind().is_typst() {
+        if self.document().kind() == DocumentKind::Tex
+            && self.settings.tex.formatter == crate::tex::settings::Formatter::Disabled
+        {
+            return;
+        }
+        if self.document().kind().typesetting_language().is_some() {
             self.manual_format_revision = Some(self.document().revision());
             self.request_format_document();
         }
@@ -6361,7 +6437,7 @@ impl EditorApp {
         let Some(request_key) = self.format_request_key else {
             return;
         };
-        if !self.tinymist_sync.accepts_reply(
+        if !self.editor_accepts_reply(
             crate::tinymist_sync::ReplyIdentity {
                 generation,
                 uri,
@@ -6376,7 +6452,8 @@ impl EditorApp {
         let Some(edits) = edits else {
             self.manual_format_revision = None;
             self.notice = Some(Notice {
-                message: "Tinymist did not provide a formatter for this document".to_owned(),
+                message: "The selected tool did not provide a formatter for this document"
+                    .to_owned(),
                 kind: NoticeKind::Error,
             });
             return;
@@ -6403,7 +6480,7 @@ impl EditorApp {
             Err(error) => {
                 self.manual_format_revision = None;
                 self.notice = Some(Notice {
-                    message: format!("Tinymist returned invalid formatting edits: {error}"),
+                    message: format!("The formatter returned invalid edits: {error}"),
                     kind: NoticeKind::Error,
                 });
                 return;
@@ -6446,9 +6523,9 @@ impl EditorApp {
         };
         self.notice = Some(Notice {
             message: if saved_after_format {
-                "Formatted with Tinymist; saving…".to_owned()
+                "Document formatted; saving…".to_owned()
             } else {
-                "Formatted with Tinymist".to_owned()
+                "Document formatted".to_owned()
             },
             kind: NoticeKind::Success,
         });
@@ -6596,7 +6673,7 @@ impl EditorApp {
             } else {
                 self.reset_document_services();
             }
-            if self.document().kind().is_typst() {
+            if self.document().kind().typesetting_language().is_some() {
                 self.schedule_compile_now();
             } else {
                 self.preview.status = PreviewStatus::Ready(Duration::ZERO);
@@ -6751,18 +6828,14 @@ impl EditorApp {
 
     fn compiler_service_state(&self) -> ServiceState {
         if !self.source_preview_available() {
-            return ServiceState::Disabled("The selected file is not compiled as Typst".to_owned());
+            return ServiceState::Disabled("The selected file has no PDF build engine".to_owned());
         }
         if !self.may_run_compilation() {
             return ServiceState::Disabled("Automatic preview updates are paused".to_owned());
         }
         match self.preview.status {
-            PreviewStatus::Waiting => {
-                ServiceState::Starting("Build queued for persistent `typst watch`".to_owned())
-            }
-            PreviewStatus::Compiling => {
-                ServiceState::Starting("Persistent `typst watch` is compiling".to_owned())
-            }
+            PreviewStatus::Waiting => ServiceState::Starting("Document build queued".to_owned()),
+            PreviewStatus::Compiling => ServiceState::Starting("Building the document".to_owned()),
             PreviewStatus::Ready(_) => ServiceState::Ready("Preview ready".to_owned()),
             PreviewStatus::Error => {
                 let detail = self
@@ -7034,10 +7107,8 @@ impl EditorApp {
         if native_tooltip_handoff_blocks(ui.ctx(), rect.expand(theme::SPACE.tight)) {
             return;
         }
-        let (Some(generation), Some(uri)) = (
-            self.tinymist_sync.generation,
-            self.tinymist_sync.current_uri.clone(),
-        ) else {
+        let (generation, uri) = self.editor_lsp_identity();
+        let (Some(generation), Some(uri)) = (generation, uri.map(str::to_owned)) else {
             self.clear_editor_hover();
             return;
         };
@@ -7072,8 +7143,8 @@ impl EditorApp {
 
         let should_request = hover_request_ready(
             opacity.is_some(),
-            self.preview.connection.is_ready(),
-            self.tinymist_sync.current_open,
+            self.editor_lsp_ready(),
+            self.editor_lsp_ready(),
             self.editor_hover
                 .as_ref()
                 .is_none_or(|hover| hover.requested),
@@ -7095,15 +7166,23 @@ impl EditorApp {
             let Some(position) = position else {
                 return;
             };
+            let is_tex = self.document().kind() == DocumentKind::Tex;
             if let Some(hover) = &mut self.editor_hover {
                 hover.requested = true;
-                let _ = self.tinymist.hover_document(
-                    generation,
-                    uri,
-                    version,
-                    position,
-                    hover.request_token,
-                );
+                if is_tex {
+                    let _ = self.tex_service.request(crate::tex::RequestKind::Hover {
+                        position,
+                        token: hover.request_token,
+                    });
+                } else {
+                    let _ = self.tinymist.hover_document(
+                        generation,
+                        uri,
+                        version,
+                        position,
+                        hover.request_token,
+                    );
+                }
             }
         }
 
@@ -7173,19 +7252,14 @@ impl EditorApp {
             self.editor_completion = None;
             return;
         }
-        let ready = tinymist_language_features_ready(
-            self.document().kind(),
-            self.preview.connection.is_ready(),
-            self.tinymist_sync.current_open,
-        );
-        let (Some(generation), Some(uri)) = (
-            self.tinymist_sync.generation,
-            self.tinymist_sync.current_uri.clone(),
-        ) else {
+        let ready = self.editor_lsp_ready();
+        let (generation, uri) = self.editor_lsp_identity();
+        let (Some(generation), Some(uri)) = (generation, uri.map(str::to_owned)) else {
             self.editor_completion = None;
             if explicit {
                 self.notice = Some(Notice {
-                    message: "Completions are unavailable until Tinymist is ready".to_owned(),
+                    message: "Completions are unavailable until the language server is ready"
+                        .to_owned(),
                     kind: NoticeKind::Info,
                 });
             }
@@ -7195,7 +7269,8 @@ impl EditorApp {
             self.editor_completion = None;
             if explicit {
                 self.notice = Some(Notice {
-                    message: "Completions are unavailable until Tinymist is ready".to_owned(),
+                    message: "Completions are unavailable until the language server is ready"
+                        .to_owned(),
                     kind: NoticeKind::Info,
                 });
             }
@@ -7236,13 +7311,18 @@ impl EditorApp {
             };
             (position, source_cursor.get(), snapshot.source().to_owned())
         };
-        match self.tinymist.complete_document(
-            generation,
-            uri.clone(),
-            version,
-            position,
-            request_token,
-        ) {
+        let result = if self.document().kind() == DocumentKind::Tex {
+            self.tex_service
+                .request(crate::tex::RequestKind::Completion {
+                    position,
+                    token: request_token,
+                })
+        } else {
+            self.tinymist
+                .complete_document(generation, uri.clone(), version, position, request_token)
+                .map_err(|e| e.to_string())
+        };
+        match result {
             Ok(()) => {
                 self.editor_completion = Some(EditorCompletionState {
                     key: self.document().key(),
@@ -7302,7 +7382,7 @@ impl EditorApp {
             .editor_completion
             .as_ref()
             .map_or(document_key, |completion| completion.key);
-        let sync_current = self.tinymist_sync.accepts_reply(
+        let sync_current = self.editor_accepts_reply(
             crate::tinymist_sync::ReplyIdentity {
                 generation,
                 uri: &uri,
@@ -7311,6 +7391,8 @@ impl EditorApp {
             },
             document_key,
         );
+        let (active_generation, active_uri) = self.editor_lsp_identity();
+        let active_uri = active_uri.map(str::to_owned);
         let Some(completion) = &mut self.editor_completion else {
             return;
         };
@@ -7321,8 +7403,8 @@ impl EditorApp {
                 &uri,
                 version,
                 request_token,
-                self.tinymist_sync.generation,
-                self.tinymist_sync.current_uri.as_deref(),
+                active_generation,
+                active_uri.as_deref(),
                 revision_as_i32(document_revision),
             );
         if !current || completion.key != document_key {
@@ -7360,10 +7442,9 @@ impl EditorApp {
         let Some(completion) = self.editor_completion.as_ref() else {
             return;
         };
-        let current = completion.provenance.is_current(
-            self.tinymist_sync.generation,
-            self.tinymist_sync.current_uri.as_deref(),
-        ) && completion.version == revision_as_i32(self.document().revision());
+        let (generation, uri) = self.editor_lsp_identity();
+        let current = completion.provenance.is_current(generation, uri)
+            && completion.version == revision_as_i32(self.document().revision());
         if !current || completion.key != self.document().key() {
             self.editor_completion = None;
             return;
@@ -7587,7 +7668,7 @@ impl EditorApp {
     fn show_problems(&mut self, ui: &mut egui::Ui) {
         ui.set_min_width(ui.available_width());
         let diagnostic_count =
-            self.preview.diagnostics.len() + self.preview.tinymist_diagnostics.len();
+            self.preview.diagnostics.len() + self.preview.editor_diagnostics.len();
         let mut jump_target = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -7600,7 +7681,7 @@ impl EditorApp {
                     .preview
                     .diagnostics
                     .iter()
-                    .chain(&self.preview.tinymist_diagnostics)
+                    .chain(&self.preview.editor_diagnostics)
                     .enumerate()
                 {
                     let color = diagnostic_color(diagnostic.severity, ui.ctx());
@@ -10096,13 +10177,13 @@ fn non_preview_fallback_details_for(
     details
 }
 
-fn tinymist_diagnostic(diagnostic: TinymistDiagnostic, source: DiagnosticSource) -> Diagnostic {
+fn tinymist_diagnostic(diagnostic: LspDiagnostic, source: DiagnosticSource) -> Diagnostic {
     let severity = match diagnostic.severity {
-        Some(TinymistDiagnosticSeverity::Error) => DiagnosticSeverity::Error,
-        Some(TinymistDiagnosticSeverity::Warning) => DiagnosticSeverity::Warning,
-        Some(TinymistDiagnosticSeverity::Information) => DiagnosticSeverity::Note,
-        Some(TinymistDiagnosticSeverity::Hint) => DiagnosticSeverity::Help,
-        Some(TinymistDiagnosticSeverity::Other(_)) | None => DiagnosticSeverity::Unknown,
+        Some(LspDiagnosticSeverity::Error) => DiagnosticSeverity::Error,
+        Some(LspDiagnosticSeverity::Warning) => DiagnosticSeverity::Warning,
+        Some(LspDiagnosticSeverity::Information) => DiagnosticSeverity::Note,
+        Some(LspDiagnosticSeverity::Hint) => DiagnosticSeverity::Help,
+        Some(LspDiagnosticSeverity::Other(_)) | None => DiagnosticSeverity::Unknown,
     };
     let mut details = Vec::new();
     // The editor is Typst-specific, so repeating Tinymist's provider name in
@@ -10513,7 +10594,7 @@ struct CommandAvailability {
     can_undo: bool,
     can_redo: bool,
     saved_document: bool,
-    typst_document: bool,
+    typesetting_document: bool,
     source_preview: bool,
     interactive_preview: bool,
     new_table: bool,
@@ -10530,7 +10611,7 @@ impl CommandAvailability {
             CommandRequirement::SavedDocument => self.saved_document,
             CommandRequirement::Undo => self.can_undo,
             CommandRequirement::Redo => self.can_redo,
-            CommandRequirement::TypstDocument => self.typst_document,
+            CommandRequirement::TypesettingDocument => self.typesetting_document,
             CommandRequirement::SourcePreview => self.source_preview,
             CommandRequirement::InteractivePreview => self.interactive_preview,
         }
@@ -10595,7 +10676,7 @@ fn show_edit_popup_ui(
 
 fn show_view_popup_ui(
     ui: &mut egui::Ui,
-    typst_document: bool,
+    typesetting_document: bool,
     shortcuts: &ShortcutBindings,
     action: &mut Option<AppPopupAction>,
 ) {
@@ -10603,7 +10684,7 @@ fn show_view_popup_ui(
         ui,
         CommandMenu::View,
         CommandAvailability {
-            typst_document,
+            typesetting_document,
             ..Default::default()
         },
         shortcuts,
@@ -11150,7 +11231,7 @@ fn save_as_format_handoff(
     destination_kind: DocumentKind,
     key: DocumentKey,
 ) -> Option<DocumentKey> {
-    (saved && destination_kind.is_typst()).then_some(key)
+    (saved && destination_kind.typesetting_language().is_some()).then_some(key)
 }
 
 fn take_ready_format_handoff(

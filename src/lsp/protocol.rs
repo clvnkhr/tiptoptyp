@@ -1,11 +1,11 @@
-//! Pure Tinymist JSON-RPC data and feature codecs. No UI, process or session state.
+//! Pure LSP data/feature codecs and Tinymist preview extensions. No UI, process or session state.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::path::Path;
 use tiptoptyp_core::text::{LineIndex, LspPosition, LspRange, LspTextEdit, ScalarColumn};
 
-pub(super) const DEFAULT_PREVIEW_TASK_ID: &str = "default_preview";
+pub(crate) const DEFAULT_PREVIEW_TASK_ID: &str = "default_preview";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -17,34 +17,34 @@ pub struct TextDocument {
 }
 
 #[derive(Serialize)]
-pub(super) struct Notification<'a, Params> {
-    pub(super) jsonrpc: &'static str,
-    pub(super) method: &'a str,
-    pub(super) params: Params,
+pub(crate) struct Notification<'a, Params> {
+    pub(crate) jsonrpc: &'static str,
+    pub(crate) method: &'a str,
+    pub(crate) params: Params,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct DidOpenParams<'a> {
-    pub(super) text_document: &'a TextDocument,
+pub(crate) struct DidOpenParams<'a> {
+    pub(crate) text_document: &'a TextDocument,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct DidChangeParams<'a> {
-    pub(super) text_document: VersionedDocument<'a>,
-    pub(super) content_changes: [ContentChange<'a>; 1],
+pub(crate) struct DidChangeParams<'a> {
+    pub(crate) text_document: VersionedDocument<'a>,
+    pub(crate) content_changes: [ContentChange<'a>; 1],
 }
 
 #[derive(Serialize)]
-pub(super) struct VersionedDocument<'a> {
-    pub(super) uri: &'a str,
-    pub(super) version: i32,
+pub(crate) struct VersionedDocument<'a> {
+    pub(crate) uri: &'a str,
+    pub(crate) version: i32,
 }
 
 #[derive(Serialize)]
-pub(super) struct ContentChange<'a> {
-    pub(super) text: &'a str,
+pub(crate) struct ContentChange<'a> {
+    pub(crate) text: &'a str,
 }
 
 /// One completion candidate returned by Tinymist.
@@ -86,7 +86,7 @@ impl DiagnosticSeverity {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct TinymistDiagnostic {
+pub struct LspDiagnostic {
     pub range: LspRange,
     pub severity: Option<DiagnosticSeverity>,
     pub code: Option<Value>,
@@ -104,7 +104,7 @@ pub enum CompileStatus {
     CompileError,
 }
 
-pub(super) fn format_document_params(uri: &str) -> Value {
+pub(crate) fn format_document_params(uri: &str) -> Value {
     json!({
         "textDocument": { "uri": uri },
         "options": {
@@ -114,14 +114,14 @@ pub(super) fn format_document_params(uri: &str) -> Value {
     })
 }
 
-pub(super) fn hover_document_params(uri: &str, position: LspPosition) -> Value {
+pub(crate) fn hover_document_params(uri: &str, position: LspPosition) -> Value {
     json!({
         "textDocument": { "uri": uri },
         "position": position,
     })
 }
 
-pub(super) fn completion_document_params(uri: &str, position: LspPosition) -> Value {
+pub(crate) fn completion_document_params(uri: &str, position: LspPosition) -> Value {
     json!({
         "textDocument": { "uri": uri },
         "position": position,
@@ -129,7 +129,7 @@ pub(super) fn completion_document_params(uri: &str, position: LspPosition) -> Va
     })
 }
 
-pub(super) fn parse_hover_result(result: &Value) -> (Option<String>, Option<LspRange>) {
+pub(crate) fn parse_hover_result(result: &Value) -> (Option<String>, Option<LspRange>) {
     let Some(object) = result.as_object() else {
         return (None, None);
     };
@@ -167,7 +167,7 @@ fn flatten_hover_contents(contents: &Value) -> Option<String> {
     }
 }
 
-pub(super) fn parse_completion_result(
+pub(crate) fn parse_completion_result(
     result: &Value,
 ) -> std::result::Result<(bool, Vec<CompletionItem>), String> {
     if result.is_null() {
@@ -301,13 +301,13 @@ fn completion_documentation(value: &Value) -> Option<String> {
     }
 }
 
-pub(super) fn parse_format_document_result(
+pub(crate) fn parse_format_document_result(
     result: Value,
 ) -> std::result::Result<Option<Vec<LspTextEdit>>, serde_json::Error> {
     serde_json::from_value(result)
 }
 
-pub(super) fn scroll_preview_params(
+pub(crate) fn scroll_preview_params(
     path: &Path,
     line: LineIndex,
     character: ScalarColumn,
@@ -326,7 +326,7 @@ pub(super) fn scroll_preview_params(
     })
 }
 
-pub(super) fn parse_port(value: &Value) -> Option<u16> {
+pub(crate) fn parse_port(value: &Value) -> Option<u16> {
     let port = value
         .as_u64()
         .or_else(|| value.as_str()?.parse::<u64>().ok())?;
@@ -334,7 +334,7 @@ pub(super) fn parse_port(value: &Value) -> Option<u16> {
     (port != 0).then_some(port)
 }
 
-pub(super) fn rpc_error_message(error: &Value) -> String {
+pub(crate) fn rpc_error_message(error: &Value) -> String {
     let message = error
         .get("message")
         .and_then(Value::as_str)
@@ -347,14 +347,14 @@ pub(super) fn rpc_error_message(error: &Value) -> String {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ShowDocumentParams {
-    pub(super) uri: String,
-    pub(super) external: Option<bool>,
-    pub(super) take_focus: Option<bool>,
-    pub(super) selection: Option<LspRange>,
+pub(crate) struct ShowDocumentParams {
+    pub(crate) uri: String,
+    pub(crate) external: Option<bool>,
+    pub(crate) take_focus: Option<bool>,
+    pub(crate) selection: Option<LspRange>,
 }
 
-pub(super) fn configuration_response(params: &Value, settings: &Value) -> Value {
+pub(crate) fn configuration_response(params: &Value, settings: &Value) -> Value {
     let Some(items) = params.get("items").and_then(Value::as_array) else {
         return Value::Array(Vec::new());
     };
@@ -383,7 +383,7 @@ fn configuration_section(settings: &Value, section: &str) -> Value {
         .unwrap_or(Value::Null)
 }
 
-pub(super) fn parse_diagnostic(raw: &Value) -> Option<TinymistDiagnostic> {
+pub(crate) fn parse_diagnostic(raw: &Value) -> Option<LspDiagnostic> {
     let range = serde_json::from_value(raw.get("range")?.clone()).ok()?;
     let message = raw.get("message")?.as_str()?.to_owned();
     let severity = raw
@@ -395,7 +395,7 @@ pub(super) fn parse_diagnostic(raw: &Value) -> Option<TinymistDiagnostic> {
         .get("source")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
-    Some(TinymistDiagnostic {
+    Some(LspDiagnostic {
         range,
         severity,
         code,
@@ -406,9 +406,9 @@ pub(super) fn parse_diagnostic(raw: &Value) -> Option<TinymistDiagnostic> {
 }
 
 #[derive(Deserialize)]
-pub(super) struct CompileReport {
-    pub(super) path: String,
-    pub(super) status: CompileStatus,
+pub(crate) struct CompileReport {
+    pub(crate) path: String,
+    pub(crate) status: CompileStatus,
 }
 
 #[cfg(test)]

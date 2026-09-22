@@ -345,7 +345,7 @@ impl EditorApp {
         });
         if active && unchanged && pending.format_after && self.document().kind().is_typst() {
             if pending.path_changed {
-                self.format_when_tinymist_ready =
+                self.format_when_service_ready =
                     save_as_format_handoff(true, self.document().kind(), self.document().key());
             } else {
                 self.request_format_after_manual_save();
@@ -459,7 +459,7 @@ mod tests {
         assert!(!app.document().is_dirty());
         assert!(!app.document_workflow.has_continuation());
         assert!(app.document_workflow.take_action().is_none());
-        assert!(app.format_when_tinymist_ready.is_none());
+        assert!(app.format_when_service_ready.is_none());
         assert!(
             app.notice
                 .as_ref()
@@ -603,18 +603,18 @@ mod tests {
         app.document_mut().replace_unprojected_untitled("hello");
         let (release, holder) = hold_destination(path.clone());
         assert!(app.save_to(path.clone(), &context));
-        assert!(app.format_when_tinymist_ready.is_none());
+        assert!(app.format_when_service_ready.is_none());
         assert!(app.document().path().is_none());
         release.send(()).unwrap();
         holder.join().unwrap();
         app.finish_save_for_test(&context);
-        assert_eq!(app.format_when_tinymist_ready, Some(app.document().key()));
-        app.format_when_tinymist_ready = None;
+        assert_eq!(app.format_when_service_ready, Some(app.document().key()));
+        app.format_when_service_ready = None;
         app.document_mut()
             .edit(CCursorRange::default(), |source| source.push('!'));
         assert!(app.save_to_with_intent(path, SaveIntent::Auto, &context));
         app.finish_save_for_test(&context);
-        assert!(app.format_when_tinymist_ready.is_none());
+        assert!(app.format_when_service_ready.is_none());
         assert!(app.manual_format_revision.is_none());
     }
 

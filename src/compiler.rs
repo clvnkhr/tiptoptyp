@@ -1,5 +1,6 @@
 //! Shared build service. Engine adapters own processes and translate output;
 //! this owner schedules requests and publishes canonical PDF artifacts.
+mod tectonic;
 mod typst;
 
 use crate::{
@@ -21,16 +22,19 @@ use std::{
 use tiptoptyp_core::document::TypesettingLanguage;
 
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(15);
+pub(crate) use tectonic::TectonicOptions;
 pub(crate) use typst::TypstOptions;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum EngineConfig {
     Typst(TypstOptions),
+    Tectonic(TectonicOptions),
 }
 impl EngineConfig {
     pub(crate) fn kind(&self) -> BuildEngineKind {
         match self {
             Self::Typst(_) => BuildEngineKind::Typst,
+            Self::Tectonic(_) => BuildEngineKind::Tectonic,
         }
     }
 }
@@ -92,13 +96,14 @@ pub(crate) enum CompileEvent {
 
 #[derive(Debug)]
 pub(crate) struct CompileResult {
+    request_generation: u64,
     pub(crate) revision: u64,
     pub(crate) elapsed: Duration,
     pub(crate) event: CompileEvent,
 }
 
 enum CompilerCommand {
-    Request(CompileRequest),
+    Request(u64, CompileRequest),
     Pause,
 }
 
@@ -109,6 +114,7 @@ pub(crate) struct Compiler {
     worker: Option<thread::JoinHandle<()>>,
     shutdown: Arc<AtomicBool>,
     latest_revision: Arc<AtomicU64>,
+    latest_request: Arc<AtomicU64>,
 }
 
 impl Compiler {
@@ -117,6 +123,8 @@ impl Compiler {
         let (result_tx, result_rx) = mpsc::channel::<CompileResult>();
         let shutdown = Arc::new(AtomicBool::new(false));
         let latest_revision = Arc::new(AtomicU64::new(0));
+        let latest_request = Arc::new(AtomicU64::new(0));
+        let worker_latest_request = latest_request.clone();
         let worker_shutdown = shutdown.clone();
         let worker_latest_revision = latest_revision.clone();
 
@@ -129,6 +137,7 @@ impl Compiler {
                     context,
                     worker_shutdown,
                     worker_latest_revision,
+                    worker_latest_request,
                 )
             })
             .ok();
@@ -140,20 +149,26 @@ impl Compiler {
             worker,
             shutdown,
             latest_revision,
+            latest_request,
         }
     }
 
     pub(crate) fn request(&self, request: CompileRequest) -> Result<(), String> {
+        let generation = self
+            .latest_request
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
         self.latest_revision
             .store(request.revision, Ordering::Release);
         self.requests
             .as_ref()
             .ok_or_else(|| "The preview worker has stopped".to_owned())?
-            .send(CompilerCommand::Request(request))
+            .send(CompilerCommand::Request(generation, request))
             .map_err(|_| "The preview worker stopped unexpectedly".to_owned())
     }
 
     pub(crate) fn pause(&self, revision: u64) -> Result<(), String> {
+        self.latest_request.fetch_add(1, Ordering::AcqRel);
         // Interrupt PDF inspection before asking the worker to retire its backend.
         self.latest_revision
             .store(revision.wrapping_add(1), Ordering::Release);
@@ -165,17 +180,27 @@ impl Compiler {
     }
 
     pub(crate) fn try_recv(&self) -> Option<CompileResult> {
-        Some(
-            crate::worker::poll_service(&self.results, &self.disconnected)?.unwrap_or_else(|()| {
-                CompileResult {
-                    revision: self.latest_revision.load(Ordering::Acquire),
-                    elapsed: Duration::ZERO,
-                    event: CompileEvent::Failed(DiagnosticReport::error(
-                        "The preview worker stopped unexpectedly".to_owned(),
-                    )),
+        loop {
+            let event = crate::worker::poll_service(&self.results, &self.disconnected)?;
+            match event {
+                Ok(result)
+                    if result.request_generation == self.latest_request.load(Ordering::Acquire) =>
+                {
+                    return Some(result);
                 }
-            }),
-        )
+                Ok(_) => continue,
+                Err(()) => {
+                    return Some(CompileResult {
+                        request_generation: self.latest_request.load(Ordering::Acquire),
+                        revision: self.latest_revision.load(Ordering::Acquire),
+                        elapsed: Duration::ZERO,
+                        event: CompileEvent::Failed(DiagnosticReport::error(
+                            "The preview worker stopped unexpectedly".into(),
+                        )),
+                    });
+                }
+            }
+        }
     }
 }
 
@@ -209,17 +234,20 @@ enum EngineEvent {
 }
 
 enum Backend {
-    Typst(typst::Backend),
+    Typst(Box<typst::Backend>),
+    Tectonic(Box<tectonic::Backend>),
 }
 impl Backend {
     fn kind(&self) -> BuildEngineKind {
         match self {
             Self::Typst(_) => BuildEngineKind::Typst,
+            Self::Tectonic(_) => BuildEngineKind::Tectonic,
         }
     }
     fn for_config(config: &EngineConfig) -> Self {
         match config {
-            EngineConfig::Typst(_) => Self::Typst(typst::Backend::new()),
+            EngineConfig::Typst(_) => Self::Typst(Box::new(typst::Backend::new())),
+            EngineConfig::Tectonic(_) => Self::Tectonic(Box::new(tectonic::Backend::new())),
         }
     }
     fn submit(&mut self, request: &CompileRequest) -> Result<(), String> {
@@ -227,16 +255,47 @@ impl Backend {
             (Self::Typst(backend), EngineConfig::Typst(options)) => {
                 backend.submit(request, options)
             }
+            (Self::Tectonic(backend), EngineConfig::Tectonic(options)) => {
+                backend.submit(request, options)
+            }
+            _ => Err("Build engine configuration changed".into()),
         }
     }
     fn poll(&mut self) -> Vec<EngineResult> {
         match self {
             Self::Typst(backend) => backend.poll(),
+            Self::Tectonic(backend) => backend.poll(),
         }
     }
     fn is_running(&self) -> bool {
         match self {
             Self::Typst(backend) => backend.is_running(),
+            Self::Tectonic(backend) => backend.is_running(),
+        }
+    }
+}
+
+struct ResultSender {
+    sender: Sender<CompileResult>,
+    generation: u64,
+    latest: Arc<AtomicU64>,
+}
+impl ResultSender {
+    fn is_current(&self) -> bool {
+        self.generation == self.latest.load(Ordering::Acquire)
+    }
+    fn send(&self, mut result: CompileResult) -> Result<(), mpsc::SendError<CompileResult>> {
+        result.request_generation = self.generation;
+        self.sender.send(result)
+    }
+}
+#[cfg(test)]
+impl From<Sender<CompileResult>> for ResultSender {
+    fn from(sender: Sender<CompileResult>) -> Self {
+        Self {
+            sender,
+            generation: 0,
+            latest: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -247,7 +306,13 @@ fn worker_loop(
     context: crate::worker::RepaintTarget,
     shutdown: Arc<AtomicBool>,
     latest_revision: Arc<AtomicU64>,
+    latest_request: Arc<AtomicU64>,
 ) {
+    let mut results = ResultSender {
+        sender: results,
+        generation: 0,
+        latest: latest_request,
+    };
     let mut next_artifact_generation = 1_u64;
     let mut backend: Option<Backend> = None;
     loop {
@@ -274,8 +339,9 @@ fn worker_loop(
         };
         match command {
             Ok(CompilerCommand::Pause) => backend = None,
-            Ok(CompilerCommand::Request(request)) => {
+            Ok(CompilerCommand::Request(generation, request)) => {
                 poll(&mut backend);
+                results.generation = generation;
                 let submitted = request.validate().and_then(|()| {
                     if backend
                         .as_ref()
@@ -294,6 +360,7 @@ fn worker_loop(
                         &results,
                         &context,
                         CompileResult {
+                            request_generation: 0,
                             revision: request.revision,
                             elapsed: Duration::ZERO,
                             event: CompileEvent::Failed(DiagnosticReport::error(error)),
@@ -309,12 +376,15 @@ fn worker_loop(
 
 fn publish_engine_result(
     result: EngineResult,
-    results: &Sender<CompileResult>,
+    results: &ResultSender,
     context: &crate::worker::RepaintTarget,
     shutdown: &AtomicBool,
     latest_revision: &AtomicU64,
     next_artifact_generation: &mut u64,
 ) {
+    if !results.is_current() {
+        return;
+    }
     let event = match result.event {
         EngineEvent::Started => CompileEvent::Started,
         EngineEvent::Failed(report) => CompileEvent::Failed(report),
@@ -349,6 +419,7 @@ fn publish_engine_result(
         results,
         context,
         CompileResult {
+            request_generation: 0,
             revision: result.revision,
             elapsed: result.elapsed,
             event,
@@ -367,7 +438,7 @@ fn publish_compiled_artifact(
     shutdown: &AtomicBool,
     latest_revision: &AtomicU64,
     inspector: &Path,
-    results: &Sender<CompileResult>,
+    results: &ResultSender,
     context: &crate::worker::RepaintTarget,
 ) {
     // The backend already snapshotted its output. Export and optional page
@@ -376,6 +447,7 @@ fn publish_compiled_artifact(
         results,
         context,
         CompileResult {
+            request_generation: 0,
             revision: key.revision,
             elapsed,
             event: CompileEvent::Artifact(CompileArtifact {
@@ -390,7 +462,9 @@ fn publish_compiled_artifact(
     }
 
     let event = match inspect_pdf_with_program(&pdf, project_root, inspector, || {
-        shutdown.load(Ordering::Acquire) || latest_revision.load(Ordering::Acquire) != key.revision
+        shutdown.load(Ordering::Acquire)
+            || !results.is_current()
+            || latest_revision.load(Ordering::Acquire) != key.revision
     }) {
         Ok(catalog) => CompileEvent::Catalog { key, catalog },
         Err(error) => CompileEvent::RasterFailed { key, error },
@@ -399,6 +473,7 @@ fn publish_compiled_artifact(
         results,
         context,
         CompileResult {
+            request_generation: 0,
             revision: key.revision,
             elapsed,
             event,
@@ -407,7 +482,7 @@ fn publish_compiled_artifact(
 }
 
 fn send_result(
-    results: &Sender<CompileResult>,
+    results: &ResultSender,
     context: &crate::worker::RepaintTarget,
     result: CompileResult,
 ) {
@@ -436,25 +511,60 @@ mod tests {
     use tiptoptyp_core::document::TypesettingLanguage;
 
     #[test]
+    fn same_revision_requests_never_admit_a_previous_engine_or_root_artifact() {
+        let mut compiler = Compiler::new(crate::worker::RepaintTarget::test());
+        let (sender, receiver) = mpsc::channel();
+        compiler.results = receiver;
+        compiler
+            .latest_request
+            .store(2, std::sync::atomic::Ordering::Release);
+        for request_generation in [1, 2] {
+            sender
+                .send(CompileResult {
+                    request_generation,
+                    revision: 7,
+                    elapsed: Duration::ZERO,
+                    event: CompileEvent::Started,
+                })
+                .unwrap();
+        }
+        assert_eq!(compiler.try_recv().unwrap().request_generation, 2);
+        assert!(compiler.try_recv().is_none());
+        compiler.pause(7).unwrap();
+        sender
+            .send(CompileResult {
+                request_generation: 2,
+                revision: 7,
+                elapsed: Duration::ZERO,
+                event: CompileEvent::Started,
+            })
+            .unwrap();
+        assert!(compiler.try_recv().is_none());
+    }
+
+    #[test]
     fn mismatched_engine_is_rejected_before_touching_the_project_or_executable() {
         let project = tempfile::tempdir().unwrap();
         let (tx, rx) = latest_channel();
         let (results, received) = mpsc::channel();
-        tx.send(CompilerCommand::Request(CompileRequest {
-            revision: 19,
-            rasterize: false,
-            input: CompileInput {
-                language: TypesettingLanguage::Tex,
-                source: "\\documentclass{article}".to_owned(),
-                source_dir: project.path().join("missing"),
-                project_root: project.path().to_owned(),
-                display_name: "paper.tex".to_owned(),
+        tx.send(CompilerCommand::Request(
+            0,
+            CompileRequest {
+                revision: 19,
+                rasterize: false,
+                input: CompileInput {
+                    language: TypesettingLanguage::Tex,
+                    source: "\\documentclass{article}".to_owned(),
+                    source_dir: project.path().join("missing"),
+                    project_root: project.path().to_owned(),
+                    display_name: "paper.tex".to_owned(),
+                },
+                engine: EngineConfig::Typst(TypstOptions {
+                    executable: "must-not-run".into(),
+                    font_paths: Vec::new(),
+                }),
             },
-            engine: EngineConfig::Typst(TypstOptions {
-                executable: "must-not-run".into(),
-                font_paths: Vec::new(),
-            }),
-        }))
+        ))
         .unwrap();
         drop(tx);
         worker_loop(
@@ -463,6 +573,7 @@ mod tests {
             crate::worker::RepaintTarget::test(),
             Arc::new(AtomicBool::new(false)),
             Arc::new(AtomicU64::new(19)),
+            Arc::new(AtomicU64::new(0)),
         );
         let result = received.recv().unwrap();
         assert_eq!(result.revision, 19);
@@ -496,7 +607,7 @@ mod tests {
                         rasterize: false,
                     },
                 },
-                &tx,
+                &super::ResultSender::from(tx.clone()),
                 &crate::worker::RepaintTarget::test(),
                 &AtomicBool::new(false),
                 &AtomicU64::new(7),
@@ -550,24 +661,27 @@ mod tests {
             let (result_tx, result_rx) = mpsc::channel();
             for revision in commands {
                 let command = revision.map_or(CompilerCommand::Pause, |revision| {
-                    CompilerCommand::Request(CompileRequest {
-                        revision,
-                        rasterize: false,
-                        input: CompileInput {
-                            language: TypesettingLanguage::Typst,
+                    CompilerCommand::Request(
+                        0,
+                        CompileRequest {
+                            revision,
+                            rasterize: false,
+                            input: CompileInput {
+                                language: TypesettingLanguage::Typst,
 
-                            source: String::new(),
-                            // Resolve fails deterministically before starting a process.
-                            source_dir: project.path().join("missing"),
-                            project_root: project.path().to_path_buf(),
-                            display_name: "main.typ".to_owned(),
+                                source: String::new(),
+                                // Resolve fails deterministically before starting a process.
+                                source_dir: project.path().join("missing"),
+                                project_root: project.path().to_path_buf(),
+                                display_name: "main.typ".to_owned(),
+                            },
+
+                            engine: EngineConfig::Typst(TypstOptions {
+                                executable: PathBuf::from("unused-typst"),
+                                font_paths: Vec::new(),
+                            }),
                         },
-
-                        engine: EngineConfig::Typst(TypstOptions {
-                            executable: PathBuf::from("unused-typst"),
-                            font_paths: Vec::new(),
-                        }),
-                    })
+                    )
                 });
                 request_tx.send(command).unwrap();
             }
@@ -577,6 +691,7 @@ mod tests {
                 result_tx,
                 crate::worker::RepaintTarget::test(),
                 Arc::new(AtomicBool::new(false)),
+                Arc::new(AtomicU64::new(0)),
                 Arc::new(AtomicU64::new(0)),
             );
             let results = result_rx.try_iter().collect::<Vec<_>>();
@@ -595,6 +710,7 @@ mod tests {
         let expected = b"%PDF-exact-artifact\0bytes";
         fs::write(&pdf_path, expected).unwrap();
         let (result_tx, result_rx) = mpsc::channel();
+        let result_tx: super::ResultSender = result_tx.into();
         let shutdown = AtomicBool::new(false);
         let latest_revision = AtomicU64::new(7);
 
@@ -669,7 +785,7 @@ mod tests {
                 &shutdown,
                 &latest_revision,
                 &program,
-                &result_tx,
+                &super::ResultSender::from(result_tx.clone()),
                 &crate::worker::RepaintTarget::test(),
             );
         }

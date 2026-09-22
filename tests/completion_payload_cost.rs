@@ -1,6 +1,6 @@
 //! Isolates the unchanged-frame payload handoff, not egui layout or GPU costs.
 #[allow(dead_code)]
-#[path = "../src/tinymist/protocol.rs"]
+#[path = "../src/lsp/protocol.rs"]
 mod protocol;
 
 use std::{

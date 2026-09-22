@@ -29,8 +29,9 @@ pub(crate) struct CapabilitySnapshot {
 pub(crate) struct CapabilityInputs {
     pub(crate) document: DocumentKind,
     pub(crate) preview_document: DocumentKind,
-    pub(crate) typst: ToolResolution,
-    pub(crate) tinymist: ToolResolution,
+    pub(crate) build_tool: ToolResolution,
+    pub(crate) editor_tool: ToolResolution,
+    pub(crate) interactive_tool: ToolResolution,
     pub(crate) lsp: ServiceState,
     pub(crate) interactive_preview: ServiceState,
     pub(crate) pdf_generation: ServiceState,
@@ -116,7 +117,7 @@ fn derive_snapshot(
             "Built-in source editing and syntax parsing are available".to_owned(),
         ),
         lsp: if editor.language_service.is_some() {
-            require_tool(&inputs.tinymist, "LSP", inputs.lsp.clone())
+            require_tool(&inputs.editor_tool, "LSP", inputs.lsp.clone())
         } else {
             ServiceState::Unsupported(
                 "No language service is implemented for this document type".to_owned(),
@@ -132,14 +133,14 @@ fn derive_snapshot(
             )
         } else {
             require_tool(
-                &inputs.tinymist,
+                &inputs.interactive_tool,
                 "interactive preview",
                 inputs.interactive_preview.clone(),
             )
         },
         pdf_generation: if preview.build.is_some() {
             require_tool(
-                &inputs.typst,
+                &inputs.build_tool,
                 "PDF generation",
                 inputs.pdf_generation.clone(),
             )
@@ -173,7 +174,11 @@ fn require_tool(
     capability: &str,
     available_state: ServiceState,
 ) -> ServiceState {
-    if resolution.is_available() {
+    if matches!(
+        available_state,
+        ServiceState::Disabled(_) | ServiceState::Unsupported(_)
+    ) || resolution.is_available()
+    {
         available_state
     } else {
         let reason = resolution
@@ -237,8 +242,9 @@ mod tests {
         CapabilityInputs {
             document: DocumentKind::Typst,
             preview_document: DocumentKind::Typst,
-            typst: tool(ToolKind::Typst, true),
-            tinymist: tool(ToolKind::Tinymist, true),
+            build_tool: tool(ToolKind::Typst, true),
+            editor_tool: tool(ToolKind::Tinymist, true),
+            interactive_tool: tool(ToolKind::Tinymist, true),
             lsp: ServiceState::Ready("LSP connected".into()),
             interactive_preview: ServiceState::Ready("Preview connected".into()),
             pdf_generation: ServiceState::Ready("PDF ready".into()),
@@ -260,7 +266,7 @@ mod tests {
             _ => unreachable!(),
         });
         let mut inputs = inputs();
-        inputs.typst = tool(ToolKind::Typst, false);
+        inputs.build_tool = tool(ToolKind::Typst, false);
         inputs.interactive_preview_supported = false;
 
         let snapshot = cache.snapshot(inputs);
@@ -334,15 +340,15 @@ mod tests {
         input.preview_document = DocumentKind::Tex;
         let tex = cache.snapshot(input.clone());
         assert!(tex.editing.is_ready());
-        assert!(matches!(tex.lsp, ServiceState::Unsupported(_)));
-        assert!(matches!(tex.pdf_generation, ServiceState::Unsupported(_)));
+        assert!(tex.lsp.is_ready());
+        assert!(tex.pdf_generation.is_ready());
         assert!(matches!(
             tex.interactive_preview,
             ServiceState::Unsupported(_)
         ));
         input.preview_document = DocumentKind::Typst;
         let pinned = cache.snapshot(input);
-        assert!(matches!(pinned.lsp, ServiceState::Unsupported(_)));
+        assert!(pinned.lsp.is_ready());
         assert!(pinned.pdf_generation.is_ready());
         assert!(pinned.interactive_preview.is_ready());
         assert_eq!(

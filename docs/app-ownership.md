@@ -26,7 +26,7 @@ Update this map when an owner changes. Native acceptance remains open in todos
 | Window requests, native menu queue, open requests, host/close state | `AppShell` owns process/window routing; each `EditorApp` consumes commands in its viewport. | No-document policy belongs to shell; empty workspace policy belongs to editor. Settings is the root-owned exception. |
 | Captures, scene and `QaSession` | Opt-in window/test state. | Preserve non-persistence and bounded capture/profile behavior. |
 
-The child modules `build`, `editor_view`, `extra_shortcuts`, `git_actions`, `mitex_mode`,
+The child modules `build`, `tex`, `editor_view`, `extra_shortcuts`, `git_actions`, `mitex_mode`,
 `native_views`, `navigation`, `saves`, `settings_view`, `tabs` and `workspace_view`
 still implement `EditorApp` and can access all its fields. Moving methods among
 them does not narrow ownership. Existing leaf boundaries include `explorer_view`,
@@ -141,3 +141,12 @@ policy that root-window retirement leaves the process host alive. On macOS it
 also exercises root retirement with the secondary still active. Native close,
 hover geometry and preview-to-editor focus remain separate acceptance items
 229, 234 and 237; this test does not claim to replace those desktop checks.
+
+Native TeX adds a lazy window-owned coordinator in `src/tex.rs`. TexLab and
+Badness own separate stdio sessions, with an explicit one-shot tex-fmt job.
+`app/tex.rs` admits exact-document results and routes formatting through the
+existing edit/save transaction. `compiler/tectonic.rs` owns private finite builds;
+compiler request generations reject results across same-revision engine/root
+switches. `lsp/transport.rs` and `lsp/protocol.rs` contain the shared wire contracts.
+TeX does not acquire a second preview controller or per-tab services. Details are
+in [Native TeX services](architecture/0007-tex-services.md).

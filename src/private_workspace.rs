@@ -106,17 +106,17 @@ impl PrivateWorkspace {
 
     /// Creates a source file at the corresponding virtual project location.
     ///
-    /// A private mirror makes relative Typst imports behave as though the
+    /// A private mirror makes relative source imports behave as though the
     /// unsaved buffer still lived in `source_dir`. On Unix this mirror consists
     /// of symlinks, so dependency edits remain visible to filesystem watchers.
     /// Platforms that cannot create symlinks fall back to private copies.
-    pub fn mirrored_typst_document(
+    pub fn mirrored_source(
         &self,
         source_dir: impl AsRef<Path>,
         display_name: impl AsRef<OsStr>,
         source: &str,
-    ) -> io::Result<PrivateTypstDocument> {
-        PrivateTypstDocument::create(self, source_dir.as_ref(), display_name.as_ref(), source)
+    ) -> io::Result<PrivateSourceMirror> {
+        PrivateSourceMirror::create(self, source_dir.as_ref(), display_name.as_ref(), source)
     }
 }
 
@@ -142,10 +142,10 @@ fn validate_private_directory(path: &Path, metadata: &fs::Metadata) -> io::Resul
     Ok(())
 }
 
-/// A project-local, automatically cleaned backing file for an unsaved Typst
+/// A project-local, automatically cleaned backing file for an unsaved source
 /// document or a live-preview shadow.
 #[derive(Debug)]
-pub struct PrivateTypstDocument {
+pub struct PrivateSourceMirror {
     project_root: PathBuf,
     relative_source_dir: PathBuf,
     display_name: OsString,
@@ -154,7 +154,7 @@ pub struct PrivateTypstDocument {
     path: PathBuf,
 }
 
-impl PrivateTypstDocument {
+impl PrivateSourceMirror {
     fn create(
         private: &PrivateWorkspace,
         source_dir: &Path,
@@ -167,14 +167,14 @@ impl PrivateTypstDocument {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!(
-                    "Typst source directory {} is outside project root {}",
+                    "Source directory {} is outside project root {}",
                     source_dir.display(),
                     private.project_root().display()
                 ),
             ));
         }
 
-        let session = private.temp_dir("typst-")?;
+        let session = private.temp_dir("source-")?;
         let mirror_root = session.path().join("project");
         fs::create_dir(&mirror_root)?;
         let relative_source_dir = source_dir
@@ -763,7 +763,7 @@ mod tests {
 
         let session_path = {
             let document = private
-                .mirrored_typst_document(
+                .mirrored_source(
                     project.path().join("chapters"),
                     "main.typ",
                     "unsaved source",
@@ -818,7 +818,7 @@ mod tests {
         assert!(private.temp_file("safe-", "").is_ok());
         assert_eq!(
             private
-                .mirrored_typst_document(project.path(), "../escape.typ", "text")
+                .mirrored_source(project.path(), "../escape.typ", "text")
                 .unwrap_err()
                 .kind(),
             io::ErrorKind::InvalidInput
@@ -832,7 +832,7 @@ mod tests {
         fs::create_dir(project.path().join("chapters")).unwrap();
         let private = PrivateWorkspace::open(project.path()).unwrap();
         let document = private
-            .mirrored_typst_document(project.path().join("chapters"), "main.typ", "first")
+            .mirrored_source(project.path().join("chapters"), "main.typ", "first")
             .unwrap();
         #[cfg(unix)]
         let original_inode = {

@@ -84,8 +84,7 @@ impl EditorApp {
                 {
                     self.bottom_panel.select(PanelTab::Problems);
                 }
-                let count =
-                    self.preview.diagnostics.len() + self.preview.tinymist_diagnostics.len();
+                let count = self.preview.diagnostics.len() + self.preview.editor_diagnostics.len();
                 egui::Frame::new()
                     .fill(ui.visuals().widgets.inactive.bg_fill)
                     .corner_radius(6.0)

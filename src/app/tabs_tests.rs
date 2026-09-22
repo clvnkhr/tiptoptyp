@@ -13,9 +13,13 @@ fn opening_tex_preserves_native_source_and_never_requests_typst_services() {
     assert_eq!(app.document().kind(), DocumentKind::Tex);
     assert_eq!(app.document().source(), source);
     assert!(app.document().config().is_none());
-    assert!(!app.source_preview_available());
+    assert!(app.source_preview_available());
     assert!(!app.interactive_preview_requested());
-    assert!(!app.preview_processing_enabled());
+    assert!(
+        app.preview_language_support().build
+            == Some(crate::language_support::BuildEngineKind::Tectonic)
+    );
+    app.settings.tex.build_enabled = false;
     assert!(!tinymist_language_features_ready(
         DocumentKind::Tex,
         true,
@@ -50,12 +54,6 @@ fn a_tex_tab_can_be_edited_beside_a_designated_typst_preview() {
     assert_eq!(app.preview_document_kind(), DocumentKind::Typst);
     assert_eq!(app.preview_document_source().unwrap(), "first");
     assert!(app.source_preview_available());
-    app.select_preview_tab(tex, &context);
-    assert_eq!(
-        app.tabs.preview_id(),
-        Some(preview),
-        "unsupported source cannot replace the designated build entry"
-    );
     app.document_mut()
         .edit(CCursorRange::default(), |text| text.push('!'));
     app.mark_edited();
@@ -65,6 +63,14 @@ fn a_tex_tab_can_be_edited_beside_a_designated_typst_preview() {
     );
     assert_eq!(app.preview_document_source().unwrap(), "first");
     assert!(crate::tinymist_sync::collect(app.document(), &root.path().join("paper.tex")).is_err());
+    app.select_preview_tab(tex, &context);
+    assert_eq!(app.tabs.preview_id(), Some(tex));
+    assert_eq!(app.preview_document_kind(), DocumentKind::Tex);
+    assert!(!app.interactive_preview_requested());
+    assert!(
+        app.preview_language_support().build
+            == Some(crate::language_support::BuildEngineKind::Tectonic)
+    );
 }
 
 #[test]
@@ -1180,4 +1186,146 @@ fn opened_pdfs_default_to_pdfjs_without_poppler_even_beside_a_typst_preview() {
         !app.pdfjs_asset_requested(),
         "explicit raster selection remains available"
     );
+}
+
+#[test]
+fn tex_formatting_is_one_unicode_safe_undoable_edit_and_rejects_stale_results() {
+    let context = egui::Context::default();
+    let root = tempfile::tempdir().unwrap();
+    let mut app = fixture(&context, root.path());
+    let source = "é😀 tail\n";
+    let path = root.path().join("main.tex");
+    app.document_mut().replace_loaded_unprojected(
+        source.into(),
+        path.clone(),
+        DocumentKind::Tex,
+        None,
+    );
+    let key = app.document().key();
+    let settings = crate::tex::settings::TexSettings {
+        texlab_enabled: false,
+        lint: false,
+        formatter: crate::tex::settings::Formatter::Disabled,
+        ..Default::default()
+    };
+    app.tex_service.synchronize(
+        crate::tex::Snapshot {
+            generation: Generation(0),
+            key,
+            uri: url::Url::from_file_path(path).unwrap().into(),
+            source: Arc::from(source),
+            root: root.path().into(),
+            tools: app.tex_tools.clone(),
+            settings,
+        },
+        crate::worker::RepaintTarget::test(),
+    );
+    let identity = app.tex_service.identity().unwrap().clone();
+    app.document_mut().set_history_reset(false);
+    app.store_editor_cursor(
+        &context,
+        CCursorRange::one(CCursor::new(source.chars().count())),
+    );
+    let edit = LspTextEdit {
+        range: LspRange {
+            start: LspPosition::new(0, 4),
+            end: LspPosition::new(0, 8),
+        },
+        new_text: "longer tail".into(),
+    };
+    app.format_request_key = Some(key);
+    app.receive_formatted_document(
+        &context,
+        Generation(identity.generation.0 + 1),
+        &identity.uri,
+        0,
+        Some(vec![edit.clone()]),
+    );
+    assert_eq!(
+        app.document().source(),
+        source,
+        "previous provider cannot format this buffer"
+    );
+    app.receive_formatted_document(
+        &context,
+        identity.generation,
+        &identity.uri,
+        revision_as_i32(key.revision),
+        Some(vec![edit.clone()]),
+    );
+    assert_eq!(app.document().source(), "é😀 longer tail\n");
+    assert_eq!(
+        app.editor_snapshot(&context).cursor.primary.index.0,
+        source.chars().count() + 7
+    );
+    let changed = app.document().key();
+    app.format_request_key = Some(key);
+    app.receive_formatted_document(
+        &context,
+        identity.generation,
+        &identity.uri,
+        revision_as_i32(key.revision),
+        Some(vec![edit]),
+    );
+    assert_eq!(
+        app.document().key(),
+        changed,
+        "late formatting cannot overwrite a newer edit"
+    );
+    app.document_mut()
+        .history_step(false, CCursorRange::default())
+        .unwrap();
+    assert_eq!(app.document().source(), source);
+}
+
+#[test]
+fn pinned_typst_diagnostics_do_not_replace_the_active_tex_providers() {
+    let context = egui::Context::default();
+    let root = tempfile::tempdir().unwrap();
+    let mut app = fixture(&context, root.path());
+    app.document_mut().replace_loaded_unprojected(
+        "text".into(),
+        root.path().join("main.tex"),
+        DocumentKind::Tex,
+        None,
+    );
+    app.tex_diagnostics[0] = vec![crate::diagnostics::Diagnostic {
+        severity: crate::diagnostics::DiagnosticSeverity::Warning,
+        source: DiagnosticSource::File(root.path().join("main.tex")),
+        location: None,
+        message: "TeX warning".into(),
+        details: Vec::new(),
+    }];
+    app.receive_editor_diagnostics(
+        "file:///preview.typ",
+        None,
+        vec![LspDiagnostic {
+            range: LspRange {
+                start: LspPosition::new(0, 0),
+                end: LspPosition::new(0, 1),
+            },
+            severity: Some(LspDiagnosticSeverity::Error),
+            code: None,
+            source: Some("tinymist".into()),
+            message: "Typst error".into(),
+            raw: serde_json::Value::Null,
+        }],
+    );
+    assert_eq!(app.preview.editor_diagnostics.len(), 2);
+    assert!(
+        app.preview
+            .editor_diagnostics
+            .iter()
+            .any(|d| d.message == "TeX warning")
+    );
+    assert!(
+        app.preview
+            .editor_diagnostics
+            .iter()
+            .any(|d| d.message == "Typst error")
+    );
+    app.tex_diagnostics = Default::default();
+    app.update_tex_diagnostics();
+    assert_eq!(app.preview.editor_diagnostics.len(), 1);
+    assert_eq!(app.preview.editor_diagnostics[0].message, "Typst error");
 }

@@ -4,7 +4,11 @@ mod tool_versions;
 const VALID: &str = "# tool target asset version archive hash\n\
 typst target-a asset-a 1.2.3 archive hash\n\
 typst target-b asset-b 1.2.3 archive hash\n\
-tinymist target-a asset-a 4.5.6 archive hash\n";
+tinymist target-a asset-a 4.5.6 archive hash\n\
+tectonic target-a asset-a 1.0.0 archive hash\n\
+texlab target-a asset-a 1.0.0 archive hash\n\
+badness target-a asset-a 1.0.0 archive hash\n\
+tex-fmt target-a asset-a 1.0.0 archive hash\n";
 
 #[test]
 fn runtime_labels_are_generated_from_the_packaging_manifest() {

@@ -86,9 +86,30 @@ impl EditorApp {
             .snapshot(crate::capabilities::CapabilityInputs {
                 document,
                 preview_document,
-                typst: self.typst_tool.clone(),
-                tinymist: self.tinymist_tool.clone(),
-                lsp: self.preview.tinymist_state.clone(),
+                build_tool: if preview_document == DocumentKind::Tex {
+                    self.tex_tools.tectonic.clone()
+                } else {
+                    self.typst_tool.clone()
+                },
+                editor_tool: if document == DocumentKind::Tex {
+                    self.tex_tools.texlab.clone()
+                } else {
+                    self.tinymist_tool.clone()
+                },
+                interactive_tool: self.tinymist_tool.clone(),
+                lsp: if document == DocumentKind::Tex {
+                    if !self.settings.tex.texlab_enabled {
+                        ServiceState::Disabled("TexLab is disabled".into())
+                    } else if let Some(error) = &self.tex_service.texlab_error {
+                        ServiceState::Failed(error.clone())
+                    } else if self.tex_service.texlab_ready {
+                        ServiceState::Ready("TexLab is ready".into())
+                    } else {
+                        ServiceState::Starting("Starting TexLab".into())
+                    }
+                } else {
+                    self.preview.tinymist_state.clone()
+                },
                 interactive_preview: self.preview.webview_state.clone(),
                 pdf_generation: self.compiler_service_state(),
                 rasterization: self.rasterizer_service_state(),
@@ -128,6 +149,7 @@ impl EditorApp {
             font_configuration: self.font_configuration.clone(),
             typst_tool: self.typst_tool.clone(),
             tinymist_tool: self.tinymist_tool.clone(),
+            tex_tools: self.tex_tools.clone(),
             status: SettingsStatus {
                 backend_label,
                 fallback_reason,

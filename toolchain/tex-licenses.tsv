@@ -1,0 +1,5 @@
+# tool filename url sha256
+tectonic tectonic-LICENSE https://raw.githubusercontent.com/tectonic-typesetting/tectonic/tectonic@0.17.0/LICENSE 814a258f76e420b25cb3c07172eb2b3956f34cefbf0a650413b78e65c425f306
+texlab texlab-LICENSE https://raw.githubusercontent.com/latex-lsp/texlab/v5.26.0/LICENSE 3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986
+tex-fmt tex-fmt-LICENSE https://raw.githubusercontent.com/WGUNDERWOOD/tex-fmt/v0.5.7/LICENSE d4f7b3c809d3a03fdd12382c6b23fb2542ef6011e15989ea8640fb8e43b870ee
+badness badness-LICENSE https://raw.githubusercontent.com/jolars/badness/v0.24.0/LICENSE c350265d5a2d04f8ba0f19ada3936c9d1003be9ef55192e2a85f2580e3e45b41

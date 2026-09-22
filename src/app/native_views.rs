@@ -1025,7 +1025,7 @@ impl EditorApp {
                 editor_context_menu_size(
                     link.is_some(),
                     table.is_some(),
-                    self.document().kind().is_typst(),
+                    self.document().kind().typesetting_language().is_some(),
                     &style,
                 ),
             ),
@@ -1056,14 +1056,14 @@ impl EditorApp {
         let (can_undo, can_redo) = self.editor_history_availability(context);
         let shortcuts = self.settings.effective_shortcuts();
         let has_selection = self.selected_editor_chars(context).is_some();
-        let can_format = self.document().kind().is_typst();
+        let can_format = self.document().kind().typesetting_language().is_some();
         let can_export_pdf = self.source_preview_available();
         let can_sync_preview =
             self.document().kind().is_typst() && self.interactive_preview_active();
         let edit_availability = CommandAvailability {
             can_undo,
             can_redo,
-            typst_document: can_format,
+            typesetting_document: can_format,
             interactive_preview: can_sync_preview,
             new_table: self.native_command_enabled(AppCommand::NewTable),
             edit_table: self.native_command_enabled(AppCommand::EditTable),
@@ -1153,7 +1153,7 @@ impl EditorApp {
                                 AppPopup::View { .. } => {
                                     show_view_popup_ui(
                                         ui,
-                                        self.document().kind().is_typst(),
+                                        self.document().kind().typesetting_language().is_some(),
                                         &shortcuts,
                                         &mut action,
                                     );

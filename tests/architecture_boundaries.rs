@@ -188,7 +188,7 @@ fn launch_policy_and_lsp_transport_have_focused_owners() {
             "capture renderer owns launch policy: {forbidden}"
         );
     }
-    for module in ["tinymist/transport.rs", "tinymist/protocol.rs"] {
+    for module in ["lsp/transport.rs", "lsp/protocol.rs"] {
         let source = fs::read_to_string(root.join(module)).unwrap();
         let production = source.split("#[cfg(test)]").next().unwrap();
         for forbidden in [
@@ -244,7 +244,7 @@ fn build_scheduler_and_application_do_not_decode_engine_output() {
         for forbidden in [
             "parse_typst_short_output",
             "classify_watch_line",
-            "PrivateTypstDocument",
+            "PrivateSourceMirror",
             "Command::new",
             "--diagnostic-format",
         ] {

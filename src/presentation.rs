@@ -52,6 +52,7 @@ pub(crate) struct ResolvedPresentationRequest {
     pub(crate) preview_preference: PreviewPreference,
     pub(crate) typst: ToolPreference,
     pub(crate) tinymist: ToolPreference,
+    pub(crate) tex: crate::tex::settings::TexSettings,
     pub(crate) ui_scale_percent: u16,
     pub(crate) ui_font: FontSelection,
     pub(crate) code_font: FontSelection,
@@ -71,6 +72,7 @@ impl ResolvedPresentationRequest {
             preview_preference: settings.preview_preference,
             typst: settings.typst.clone(),
             tinymist: settings.tinymist.clone(),
+            tex: settings.tex.clone(),
             ui_scale_percent: settings.ui_scale_percent,
             ui_font: FontSelection {
                 path: settings.ui_font_path.clone(),
@@ -99,6 +101,7 @@ pub(crate) struct PresentationChanges {
     pub(crate) preview_preference: bool,
     pub(crate) typst: bool,
     pub(crate) tinymist: bool,
+    pub(crate) tex: bool,
     pub(crate) ui_scale: bool,
     pub(crate) fonts: bool,
 }
@@ -123,6 +126,7 @@ impl AppliedPresentation {
             preview_preference: self.request.preview_preference != next.preview_preference,
             typst: self.request.typst != next.typst,
             tinymist: self.request.tinymist != next.tinymist,
+            tex: self.request.tex != next.tex,
             ui_scale: self.request.ui_scale_percent != next.ui_scale_percent,
             fonts: self.request.ui_font != next.ui_font
                 || self.request.code_font != next.code_font
@@ -309,6 +313,7 @@ mod tests {
                 preview_preference: false,
                 typst: false,
                 tinymist: false,
+                tex: false,
                 ui_scale: false,
                 fonts: false,
             }

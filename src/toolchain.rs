@@ -20,6 +20,10 @@ pub(crate) const BUNDLED_TINYMIST_VERSION: &str = env!("TIPTOPTYP_BUNDLED_TINYMI
 pub(crate) enum ToolKind {
     Typst,
     Tinymist,
+    Tectonic,
+    Texlab,
+    Badness,
+    TexFmt,
 }
 
 impl ToolKind {
@@ -27,6 +31,10 @@ impl ToolKind {
         match self {
             Self::Typst => "Typst",
             Self::Tinymist => "Tinymist",
+            Self::Tectonic => "Tectonic",
+            Self::Texlab => "TexLab",
+            Self::Badness => "Badness",
+            Self::TexFmt => "tex-fmt",
         }
     }
 
@@ -34,6 +42,10 @@ impl ToolKind {
         match self {
             Self::Typst => "typst",
             Self::Tinymist => "tinymist",
+            Self::Tectonic => "tectonic",
+            Self::Texlab => "texlab",
+            Self::Badness => "badness",
+            Self::TexFmt => "tex-fmt",
         }
     }
 
@@ -41,6 +53,10 @@ impl ToolKind {
         match self {
             Self::Typst => BUNDLED_TYPST_VERSION,
             Self::Tinymist => BUNDLED_TINYMIST_VERSION,
+            Self::Tectonic => env!("TIPTOPTYP_BUNDLED_TECTONIC_VERSION"),
+            Self::Texlab => env!("TIPTOPTYP_BUNDLED_TEXLAB_VERSION"),
+            Self::Badness => env!("TIPTOPTYP_BUNDLED_BADNESS_VERSION"),
+            Self::TexFmt => env!("TIPTOPTYP_BUNDLED_TEX_FMT_VERSION"),
         }
     }
 
@@ -48,6 +64,10 @@ impl ToolKind {
         match self {
             Self::Typst => "TIPTOPTYP_TYPST",
             Self::Tinymist => "TIPTOPTYP_TINYMIST",
+            Self::Tectonic => "TIPTOPTYP_TECTONIC",
+            Self::Texlab => "TIPTOPTYP_TEXLAB",
+            Self::Badness => "TIPTOPTYP_BADNESS",
+            Self::TexFmt => "TIPTOPTYP_TEX_FMT",
         }
     }
 }

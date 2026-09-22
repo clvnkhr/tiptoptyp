@@ -64,6 +64,7 @@ pub(super) struct SettingsPanel<'a> {
     pub(super) font_configuration: &'a theme::FontConfiguration,
     pub(super) typst_tool: &'a ToolResolution,
     pub(super) tinymist_tool: &'a ToolResolution,
+    pub(super) tex_tools: &'a crate::tex::tools::TexTools,
     pub(super) status: SettingsStatus,
     pub(super) project_root: &'a Path,
     pub(super) captures: &'a CaptureController,
@@ -681,6 +682,23 @@ impl SettingsPanel<'_> {
                 {
                     fallback_notice(ui, "Binary fallback active", reason);
                 }
+                let reveal_tex = settings_scroll_target == Some(SettingsTarget::TexServices);
+                settings_target_anchor(ui, SettingsTarget::TexServices, &mut settings_scroll_target);
+                ui.add_space(theme::SPACE.small);
+                egui::CollapsingHeader::new("TeX tools").open(reveal_tex.then_some(true)).show(ui, |ui| {
+                    show_tex_preferences(ui, &mut edited.tex);
+                    for (kind, preference, resolution) in [
+                        (crate::toolchain::ToolKind::Tectonic, &mut edited.tex.tectonic, &self.tex_tools.tectonic),
+                        (crate::toolchain::ToolKind::Texlab, &mut edited.tex.texlab, &self.tex_tools.texlab),
+                        (crate::toolchain::ToolKind::Badness, &mut edited.tex.badness, &self.tex_tools.badness),
+                        (crate::toolchain::ToolKind::TexFmt, &mut edited.tex.tex_fmt, &self.tex_tools.tex_fmt),
+                    ] {
+                        if tool_preference_editor(ui, kind.label(), preference, resolution, deterministic_settings) {
+                            self.actions.push(SettingsAction::ChooseTool(ToolPickerTarget::Tex(kind)));
+                        }
+                        if !deterministic_settings && let Some(reason) = &resolution.fallback_reason { fallback_notice(ui, kind.label(), reason); }
+                    }
+                });
                 settings_target_anchor(
                     ui,
                     SettingsTarget::RefreshBinaryStatus,
@@ -1088,6 +1106,44 @@ pub(super) fn show_bracket_controls(
     });
 }
 
+fn show_tex_preferences(ui: &mut egui::Ui, settings: &mut crate::tex::settings::TexSettings) {
+    use crate::tex::settings::{BuildEngine, Formatter};
+    ui.checkbox(&mut settings.build_enabled, "Build TeX documents");
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Build engine:");
+        ui.selectable_value(
+            &mut settings.build_engine,
+            BuildEngine::Tectonic,
+            "Tectonic",
+        );
+        ui.add_enabled(false, egui::Button::new("Standard LaTeX (coming soon)"));
+    });
+    if settings.build_engine == BuildEngine::Latex {
+        ui.label("Standard LaTeX is not implemented yet. Select Tectonic to build.");
+    }
+    ui.checkbox(&mut settings.only_cached, "Use cached TeX packages only")
+        .on_hover_text("Otherwise Tectonic downloads missing packages. Shell escape is disabled.");
+    ui.checkbox(&mut settings.texlab_enabled, "TexLab editor intelligence");
+    ui.indent("texlab-features", |ui| {
+        ui.checkbox(&mut settings.completion, "TeX completions");
+        ui.checkbox(&mut settings.hover, "TeX hover documentation");
+        ui.checkbox(&mut settings.diagnostics, "TexLab diagnostics");
+    });
+    ui.horizontal_wrapped(|ui| {
+        ui.label("TeX formatter:");
+        for choice in [Formatter::Badness, Formatter::TexFmt, Formatter::Disabled] {
+            ui.selectable_value(&mut settings.formatter, choice, choice.label());
+        }
+    });
+    ui.checkbox(&mut settings.lint, "Badness linting");
+    ui.label(
+        egui::RichText::new(
+            "The main buffer is built from the editor; included files are read from disk.",
+        )
+        .weak(),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::settings_controls::settings_status_has_detail;
@@ -1099,6 +1155,37 @@ mod tests {
     use egui::{Color32, Pos2};
     use egui_kittest::{Harness, kittest::Queryable as _};
     use std::time::Duration;
+
+    #[test]
+    fn tex_controls_keep_build_intelligence_format_and_lint_independent() {
+        use crate::tex::settings::{Formatter, TexSettings};
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(700.0, 600.0))
+            .build_ui_state(
+                |ui, settings: &mut TexSettings| show_tex_preferences(ui, settings),
+                TexSettings::default(),
+            );
+        harness.run();
+        harness.get_by_label("Build TeX documents").click();
+        harness.run();
+        assert!(!harness.state().build_enabled);
+        assert!(harness.state().texlab_enabled && harness.state().lint);
+        harness.get_by_label("TexLab editor intelligence").click();
+        harness.run();
+        assert!(!harness.state().texlab_enabled);
+        assert!(harness.state().lint);
+        harness.get_by_label("tex-fmt").click();
+        harness.run();
+        assert_eq!(harness.state().formatter, Formatter::TexFmt);
+        assert!(harness.state().needs_badness());
+        harness.get_by_label("Badness linting").click();
+        harness.run();
+        assert!(!harness.state().needs_badness());
+        harness.get_by_label("TeX completions").click();
+        harness.run();
+        assert!(!harness.state().completion);
+        assert!(harness.state().hover && harness.state().diagnostics);
+    }
 
     #[test]
     fn settings_renderer_emits_actions_without_mutating_live_preferences_or_services() {
@@ -1150,6 +1237,9 @@ mod tests {
                         font_configuration: &font_configuration,
                         typst_tool: &typst,
                         tinymist_tool: &tinymist,
+                        tex_tools: &crate::tex::tools::TexTools::resolve(
+                            &crate::tex::settings::TexSettings::default(),
+                        ),
                         status: SettingsStatus {
                             backend_label: "Rasterised PDF",
                             fallback_reason: None,

@@ -2,6 +2,9 @@
 
 Status: implemented, 2026-09-22. Todo 222.
 
+The subsequent native TeX implementation is documented in
+[Native TeX services](0007-tex-services.md); the scope below records the foundation.
+
 ## Scope and existing constraints
 
 Prepare for native TeX compilation while preserving today's Typst editor. This

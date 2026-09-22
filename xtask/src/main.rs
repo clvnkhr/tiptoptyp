@@ -12,6 +12,7 @@ use std::{
 };
 
 const MANIFEST: &str = include_str!("../../toolchain/manifest.tsv");
+const TEX_LICENSES: &str = include_str!("../../toolchain/tex-licenses.tsv");
 const TINYMIST_LICENSE_SHA256: &str =
     "a9f29769fd3a7ee2976e6e161a93e16461fa305c088c4806242e50ec8ef86bce";
 const TYPST_LICENSE_SHA256: &str =
@@ -41,6 +42,22 @@ impl Artifact {
             ),
             "tinymist" => format!(
                 "https://github.com/Myriad-Dreamin/tinymist/releases/download/v{}/{}",
+                self.version, self.archive
+            ),
+            "tectonic" => format!(
+                "https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%40{}/{}",
+                self.version, self.archive
+            ),
+            "texlab" => format!(
+                "https://github.com/latex-lsp/texlab/releases/download/v{}/{}",
+                self.version, self.archive
+            ),
+            "badness" => format!(
+                "https://github.com/jolars/badness/releases/download/v{}/{}",
+                self.version, self.archive
+            ),
+            "tex-fmt" => format!(
+                "https://github.com/WGUNDERWOOD/tex-fmt/releases/download/v{}/{}",
                 self.version, self.archive
             ),
             _ => unreachable!("manifest parser rejects unknown tools"),
@@ -157,6 +174,10 @@ fn generate_third_party_notices() -> Result<(), String> {
         root.join("toolchain/licenses/tinymist-LICENSE"),
         root.join("toolchain/licenses/typst-LICENSE"),
         root.join("toolchain/licenses/typst-NOTICE"),
+        root.join("toolchain/licenses/tectonic-LICENSE"),
+        root.join("toolchain/licenses/texlab-LICENSE"),
+        root.join("toolchain/licenses/badness-LICENSE"),
+        root.join("toolchain/licenses/tex-fmt-LICENSE"),
         root.join("assets/fonts/notoemoji/OFL.txt"),
         root.join("assets/fonts/notosanssymbols/OFL.txt"),
         root.join("assets/fonts/notosansmath/OFL.txt"),
@@ -265,6 +286,9 @@ fn verify_package(target: &str) -> Result<(), String> {
         &resources.join("licenses/typst-NOTICE"),
         TYPST_NOTICE_SHA256,
     )?;
+    for (file, _, hash) in tex_licenses()? {
+        verify_hash(&resources.join("licenses").join(file), hash)?;
+    }
     for (directory, name) in [
         ("notoemoji", "NotoEmoji"),
         ("notosanssymbols", "NotoSansSymbols"),
@@ -385,7 +409,7 @@ fn fetch_sidecars(target: &str) -> Result<(), String> {
         .into_iter()
         .filter(|artifact| artifact.app_target == target)
         .collect::<Vec<_>>();
-    if artifacts.len() != 2
+    if artifacts.len() != 6
         || !artifacts.iter().any(|artifact| artifact.tool == "typst")
         || !artifacts.iter().any(|artifact| artifact.tool == "tinymist")
     {
@@ -409,6 +433,13 @@ fn fetch_sidecars(target: &str) -> Result<(), String> {
         fetch_artifact(artifact, &cache, &binaries, &licenses, &provenance, native)?;
     }
     fetch_tinymist_license(&licenses)?;
+    for (file, url, hash) in tex_licenses()? {
+        let path = licenses.join(file);
+        if !path.is_file() || sha256(&path)? != hash {
+            download(url, &path)?;
+        }
+        verify_hash(&path, hash)?;
+    }
     Ok(())
 }
 
@@ -520,7 +551,10 @@ fn parse_manifest(input: &str) -> Result<Vec<Artifact>, String> {
                 fields.len()
             ));
         }
-        if !matches!(fields[0], "typst" | "tinymist") {
+        if !matches!(
+            fields[0],
+            "typst" | "tinymist" | "tectonic" | "texlab" | "badness" | "tex-fmt"
+        ) {
             return Err(format!("unknown tool {} on line {}", fields[0], index + 1));
         }
         if fields[5].len() != 64 || !fields[5].bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -599,6 +633,28 @@ fn download(url: &str, destination: &Path) -> Result<(), String> {
             destination.display()
         )
     })
+}
+
+fn tex_licenses() -> Result<Vec<(&'static str, &'static str, &'static str)>, String> {
+    TEX_LICENSES
+        .lines()
+        .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
+        .map(|line| {
+            let fields = line.split_whitespace().collect::<Vec<_>>();
+            match fields.as_slice() {
+                [_tool, file, url, hash]
+                    if !file.contains('/')
+                        && !file.contains("..")
+                        && url.starts_with("https://raw.githubusercontent.com/")
+                        && hash.len() == 64
+                        && hash.bytes().all(|b| b.is_ascii_hexdigit()) =>
+                {
+                    Ok((*file, *url, *hash))
+                }
+                _ => Err("Invalid TeX license manifest".into()),
+            }
+        })
+        .collect()
 }
 
 fn fetch_tinymist_license(licenses: &Path) -> Result<(), String> {
@@ -755,7 +811,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn manifest_has_two_valid_artifacts_for_every_target() {
+    fn manifest_has_six_valid_artifacts_for_every_target() {
         let artifacts = parse_manifest(MANIFEST).unwrap();
         let mut targets = artifacts
             .iter()
@@ -769,7 +825,7 @@ mod tests {
                 .iter()
                 .filter(|artifact| artifact.app_target == target)
                 .collect::<Vec<_>>();
-            assert_eq!(matching.len(), 2, "{target}");
+            assert_eq!(matching.len(), 6, "{target}");
             assert!(matching.iter().any(|artifact| artifact.tool == "typst"));
             assert!(matching.iter().any(|artifact| artifact.tool == "tinymist"));
         }
