@@ -226,6 +226,15 @@ impl QaSession {
         }
         let toolbar_anchor = Pos2::new(theme::SPACE.content, METRICS.chrome.toolbar_height);
         match scene {
+            UiSnapshotScene::TableEditor | UiSnapshotScene::TableEditorNarrow => {
+                if app.table_editor.is_none() {
+                    const SOURCE: &str = "= Quarterly review\n\n#table(\n  columns: (2fr, 1fr, 1fr),\n  inset: 8pt,\n  stroke: 0.5pt,\n  table.cell(colspan: 3, fill: rgb(\"#dbeafe\"))[Research programme · 2026],\n  [*Milestone*], [*Owner*], [*Status*],\n  [Literature review], [Ada], [Complete],\n  [Field study], [René], [In progress],\n  [Final report], [Sam], [Planned],\n)\n\nThe code remains selectable and scrollable while the table draft is open.\n";
+                    app.document_mut().replace_unprojected_untitled(SOURCE);
+                    app.prepare_editor_source_data();
+                    let cursor = SOURCE.find("table(").unwrap();
+                    app.begin_table_editor(editable_table_at(SOURCE, cursor).unwrap());
+                }
+            }
             UiSnapshotScene::EmptyWorkspace => {
                 if !self.tabs_prepared {
                     app.empty_workspace(context);
@@ -745,6 +754,7 @@ impl QaSession {
         app.close_app_popup();
         app.document_workflow.clear_modal();
         app.rename_dialog = None;
+        app.table_editor = None;
         app.rename_overlay_had_focus = false;
         app.rename_overlay_suspended = false;
         app.settings_window.lock().unwrap().ui.staged_ui_font_weight = None;

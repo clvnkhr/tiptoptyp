@@ -24,6 +24,8 @@ pub(crate) enum CommandRequirement {
     TypstDocument,
     TypstPreview,
     InteractivePreview,
+    NewTable,
+    EditTable,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -80,6 +82,8 @@ commands! {
     FindReplace => ("Find and Replace…", Edit, 2, Always, 207),
     Format => ("Format Document", Edit, 3, TypstDocument, 208),
     SyncPreview => ("Sync Preview", Edit, 3, InteractivePreview, 209),
+    NewTable => ("New Table…", Edit, 4, NewTable, 211),
+    EditTable => ("Edit Table…", Edit, 4, EditTable, 212),
     Problems => ("Problems", View, 0, Always, 300),
     Terminal => ("Terminal", View, 0, Always, 307),
     Explorer => ("Explorer", View, 0, Always, 301),

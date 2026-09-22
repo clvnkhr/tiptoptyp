@@ -1,7 +1,8 @@
 # Keyboard coverage (todo 176)
 
-There are 77 configurable application actions, each with a collision-free
-default on macOS and other platforms. Open **Settings → Keyboard shortcuts**
+There are 79 configurable application actions. The original 76 and Terminal have
+collision-free defaults on macOS and other platforms; New Table and Edit Table
+are initially unbound and available in the Edit menu. Open **Settings → Keyboard shortcuts**
 or press Primary+Alt+, to search, change, disable or reset bindings. Primary
 means Command on macOS and Control elsewhere; Alt means Option on macOS.
 Existing saved overrides still take precedence, including intentionally

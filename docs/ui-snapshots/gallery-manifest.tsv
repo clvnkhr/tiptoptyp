@@ -89,3 +89,5 @@ scene	tabs	main	main-tabs	targeted	-	-
 scene	empty-workspace	main	main-empty-workspace	targeted	-	-
 scene	tabs-pdf	main	main-tabs-pdf	targeted	-	-
 scene	tabs-image	main	main-tabs-image	targeted	-	-
+scene	table-editor	table-editor	table-editor	targeted	-	-
+scene	table-editor-narrow	table-editor	table-editor-table-editor-narrow	targeted	-	-

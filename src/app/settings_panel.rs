@@ -737,6 +737,13 @@ impl SettingsPanel<'_> {
                 {
                     fallback_notice(ui, "Preview fallback active", reason);
                 }
+                if edited.preview_preference == PreviewPreference::PdfJs {
+                    ui.add(egui::Label::new(if cfg!(any(target_os = "macos", target_os = "windows")) {
+                        "PDF.js supports scrolling, zooming, text selection and PDF links. Source-to-preview jumps require the Tinymist mode."
+                    } else {
+                        "PDF.js is available on macOS and Windows. This platform uses the rasterised PDF preview."
+                    }).wrap());
+                }
                 if !deterministic_settings
                     && self.status.requested_backend == PreviewPreference::Interactive
                     && !self.status.interactive_active

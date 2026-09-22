@@ -32,6 +32,8 @@ use popup_layout::{
 mod package_browser;
 use package_browser::{PackageBrowserAction, PackageFilter, show_package_browser_ui};
 mod editor_view;
+mod table_editor;
+use table_editor::show_table_editor_ui;
 mod extra_shortcuts;
 mod find_bar;
 mod git_actions;
@@ -45,6 +47,7 @@ use crate::terminal::{BottomPanel, TerminalPane, terminal_id};
 mod workspace_view;
 use lifecycle::DocumentLifecycle;
 mod native_views;
+mod pdfjs_view;
 mod settings_panel;
 mod settings_view;
 mod settings_window;
@@ -721,8 +724,10 @@ enum EditorMenuAction {
 struct TableEditorDialog {
     table: EditableTable,
     original_call: String,
+    insertion_prefix: Option<&'static str>,
     document_key: DocumentKey,
     focus_first_cell: bool,
+    ui: table_editor::TableEditorState,
     error: Option<String>,
 }
 
@@ -1219,8 +1224,6 @@ pub struct EditorApp {
     rename_overlay_had_focus: bool,
     rename_overlay_suspended: bool,
     table_editor: Option<TableEditorDialog>,
-    table_editor_had_focus: bool,
-    table_editor_suspended: bool,
 
     pending_tool_picker: Option<PendingDialog<ToolPickerTarget>>,
     notice: Option<Notice>,
@@ -1247,6 +1250,8 @@ pub struct EditorApp {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     webview_applied: Option<native_views::WebviewAppliedState>,
     web_link_sender: mpsc::Sender<String>,
+    pdfjs_preview: pdfjs_view::PdfJsView,
+    pdfjs_asset: pdfjs_view::PdfJsView,
     web_link_receiver: mpsc::Receiver<String>,
     browser_launch: Option<mpsc::Receiver<Result<String, String>>>,
     browser_repaint: crate::worker::RepaintTarget,
@@ -1507,8 +1512,6 @@ impl EditorApp {
             rename_overlay_had_focus: false,
             rename_overlay_suspended: false,
             table_editor: None,
-            table_editor_had_focus: false,
-            table_editor_suspended: false,
             pending_tool_picker: None,
             notice: None,
             status_log: VecDeque::new(),
@@ -1532,6 +1535,8 @@ impl EditorApp {
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             webview_applied: None,
             web_link_sender,
+            pdfjs_preview: pdfjs_view::PdfJsView::default(),
+            pdfjs_asset: pdfjs_view::PdfJsView::default(),
             web_link_receiver,
             browser_launch: None,
             browser_repaint: crate::worker::RepaintTarget::new(context, viewport),
@@ -1666,6 +1671,17 @@ impl EditorApp {
         }
         match command_spec(command).requirement {
             CommandRequirement::Always => true,
+            CommandRequirement::NewTable => {
+                self.document().kind().is_typst() && self.table_editor.is_none()
+            }
+            CommandRequirement::EditTable => {
+                self.document().kind().is_typst()
+                    && self.table_editor.is_none()
+                    && self
+                        .editor_data
+                        .cached_table_at_cursor(self.document().key())
+                        .is_some()
+            }
             CommandRequirement::SavedDocument => self.document().path().is_some(),
             // Undo/redo history is viewport-local egui state. Keep these menu
             // items enabled so the active viewport can make the final choice.
@@ -1761,6 +1777,7 @@ impl EditorApp {
         self.stop_tinymist_session();
         self.preview.suspend_document("No document window is open");
         self.discard_webview();
+        self.clear_pdfjs_views();
         self.compile_deadline = None;
         self.project_index_deadline.clear();
         self.project_index_job.supersede();
@@ -2565,8 +2582,12 @@ impl EditorApp {
 
         let raster_document_visible = self.typst_preview_available()
             && self.view_mode.shows_preview()
+            && (!self.pdfjs_requested() || self.captures.has_pending_for("main"))
             && (!self.interactive_preview_active() || self.captures.has_pending_for("main"));
-        let asset_visible = self.document().kind().preview_only();
+        let asset_visible = self.document().kind().preview_only()
+            && (self.document().kind() != DocumentKind::Pdf
+                || !self.pdfjs_requested()
+                || self.captures.has_pending_for("main"));
         let owner = self.document().key().owner;
         let visible = raster_document_visible
             .then(|| self.preview.visible_residency_ids())
@@ -2633,8 +2654,13 @@ impl EditorApp {
             }
             Ok(LoadedAsset::Pdf { bytes, catalog }) => {
                 let key = ArtifactKey::unversioned(self.document().revision());
-                self.asset_preview
-                    .replace_pdf_asset(key, bytes.into(), catalog);
+                if let Some(catalog) = catalog {
+                    self.asset_preview
+                        .replace_pdf_asset(key, bytes.into(), catalog);
+                } else {
+                    self.asset_preview
+                        .replace_asset(key, Some(bytes.into()), Vec::new());
+                }
                 if let Some(page) = self.pending_asset_page.take() {
                     self.asset_preview.requested_page =
                         Some(page.min(self.asset_preview.content.pages().len().saturating_sub(1)));
@@ -2895,6 +2921,10 @@ impl EditorApp {
     }
 
     fn clear_preview_for_document(&mut self, preserve_designated_preview: bool) {
+        self.pdfjs_asset.clear();
+        if !preserve_designated_preview {
+            self.pdfjs_preview.clear();
+        }
         self.manual_format_revision = None;
         self.format_request_key = None;
         self.format_when_tinymist_ready = None;
@@ -2940,6 +2970,13 @@ impl EditorApp {
         if self.handle_terminal_shortcuts(context, shortcut_viewport, &shortcuts, frame) {
             return;
         }
+        // Cmd/Ctrl+Shift+A selects cells in the table workbench, not source or
+        // text. Do not normalize it to TextEdit's less-specific Cmd/Ctrl+A.
+        if shortcut_viewport == scoped_child_viewport_id(context, "tiptoptyp-table-editor")
+            && context.input_for(shortcut_viewport, |input| input.events.iter().any(|event| matches!(event,
+                egui::Event::Key { key: egui::Key::A, pressed: true, modifiers, .. } if modifiers.command && modifiers.shift
+            )))
+        { return; }
         self.handle_extra_shortcuts(context, shortcut_viewport, &shortcuts);
         // egui allows extra Shift/Alt modifiers on a simpler shortcut. Consume
         // Cmd+Shift+W before the File menu's Cmd+W tab action.
@@ -3040,7 +3077,13 @@ impl EditorApp {
                 ) || matches!(command, AppCommand::Find | AppCommand::FindReplace)
                     || (can_sync_preview && command == AppCommand::SyncPreview)
                     || (!other_text_input_focused
-                        && matches!(command, AppCommand::Format | AppCommand::ToggleComment))
+                        && matches!(
+                            command,
+                            AppCommand::Format
+                                | AppCommand::ToggleComment
+                                | AppCommand::NewTable
+                                | AppCommand::EditTable
+                        ))
             })
         });
         if let Some(command) = global_command {
@@ -3144,7 +3187,13 @@ impl EditorApp {
                 consume_preview_zoom_shortcut(input, &shortcuts)
             })
         {
-            if self.interactive_preview_active() && !self.document().kind().preview_only() {
+            if self.pdfjs_requested() && self.document().kind() != DocumentKind::Image {
+                if self.document().kind() == DocumentKind::Pdf {
+                    self.pdfjs_asset.zoom(action);
+                } else {
+                    self.pdfjs_preview.zoom(action);
+                }
+            } else if self.interactive_preview_active() && !self.document().kind().preview_only() {
                 #[cfg(any(target_os = "macos", target_os = "windows"))]
                 if let Some(webview) = &self.webview {
                     let command = match action {
@@ -3296,6 +3345,13 @@ impl EditorApp {
             return;
         }
         match command {
+            AppCommand::NewTable => self.begin_new_table(context),
+            AppCommand::EditTable => {
+                let cursor = self.editor_snapshot(context).cursor.primary.index.0;
+                if let Some(table) = editable_table_at(self.document().source(), cursor) {
+                    self.begin_table_editor(table);
+                }
+            }
             AppCommand::Settings => self.toggle_settings(),
             AppCommand::CloseTab => {
                 if let Some(id) = self.tabs.active_id() {
@@ -3430,7 +3486,10 @@ impl EditorApp {
             }
             // Source-only editing commands must not mutate the document while
             // a find, settings, rename, package, or table field owns focus.
-            AppCommand::ToggleComment | AppCommand::Format => {}
+            AppCommand::ToggleComment
+            | AppCommand::Format
+            | AppCommand::NewTable
+            | AppCommand::EditTable => {}
             _ => return false,
         }
         true
@@ -3564,6 +3623,15 @@ impl EditorApp {
             self.font_catalog_revision,
         );
         let changes = self.presentation.changes(&request);
+        if changes.preview_preference {
+            self.clear_pdfjs_views();
+            if self.document().kind() == DocumentKind::Pdf
+                && let Some(path) = self.document().path().clone()
+            {
+                self.asset_token.advance();
+                self.request_asset(path);
+            }
+        }
         self.preview
             .set_requested_backend(request.preview_preference);
 
@@ -5172,7 +5240,8 @@ impl EditorApp {
             return;
         }
         self.preview.tinymist_state = ServiceState::Starting("Launching Tinymist LSP".to_owned());
-        self.preview.webview_state = if self.preview.requested_backend == PreviewPreference::Native
+        self.preview.webview_state = if self.preview.requested_backend
+            != PreviewPreference::Interactive
         {
             ServiceState::Disabled("Interactive preview is not requested".to_owned())
         } else if !cfg!(any(target_os = "macos", target_os = "windows")) {
@@ -5792,12 +5861,16 @@ impl EditorApp {
     }
 
     fn preview_status_snapshot(&self) -> PreviewStatusSnapshot<'_> {
-        self.preview.status_snapshot(
+        let mut status = self.preview.status_snapshot(
             self.typst_preview_available(),
             self.preview_visible(),
             cfg!(any(target_os = "macos", target_os = "windows")),
             self.document().revision(),
-        )
+        );
+        if self.pdfjs_requested() {
+            status.effective_backend = crate::preview::PreviewBackend::PdfJs;
+        }
+        status
     }
 
     fn interactive_preview_requested(&self) -> bool {
@@ -5806,10 +5879,15 @@ impl EditorApp {
 
     fn preview_processing_enabled(&self) -> bool {
         self.typst_preview_available()
-            && (self.document_workflow.pending_export.is_some() || self.raster_preview_required())
+            && (self.document_workflow.pending_export.is_some()
+                || self.pdfjs_requested()
+                || self.raster_preview_required())
     }
 
     fn raster_preview_required(&self) -> bool {
+        if self.pdfjs_requested() && !self.captures.has_pending_for("main") {
+            return false;
+        }
         self.preview.raster_required(
             self.interactive_preview_requested(),
             self.captures.has_pending_for("main"),
@@ -6137,6 +6215,9 @@ impl EditorApp {
     }
 
     fn undo_editor(&mut self, context: &egui::Context, redo: bool) {
+        if self.table_editor.is_some() {
+            return;
+        }
         if !self.document().kind().is_editable() {
             return;
         }
@@ -6204,6 +6285,9 @@ impl EditorApp {
     }
 
     fn cut_editor_selection(&mut self, context: &egui::Context) {
+        if self.table_editor.is_some() {
+            return;
+        }
         if !self.document().kind().is_editable() {
             return;
         }
@@ -6228,6 +6312,9 @@ impl EditorApp {
     }
 
     fn request_editor_paste(&mut self, context: &egui::Context) {
+        if self.table_editor.is_some() {
+            return;
+        }
         if self.document().kind().is_editable() {
             if self.document().kind().is_typst() && !self.view_mode.shows_code() {
                 self.view_mode = ViewMode::Split;
@@ -6251,6 +6338,9 @@ impl EditorApp {
     }
 
     fn toggle_comments(&mut self, context: &egui::Context) {
+        if self.table_editor.is_some() {
+            return;
+        }
         if !self.document().kind().is_editable() {
             return;
         }
@@ -6294,6 +6384,9 @@ impl EditorApp {
     }
 
     fn request_format_document(&mut self) {
+        if self.table_editor.is_some() {
+            return;
+        }
         if !self.document().kind().is_typst() {
             self.manual_format_revision = None;
             self.format_request_key = None;
@@ -6466,6 +6559,9 @@ impl EditorApp {
     }
 
     fn begin_table_editor(&mut self, table: EditableTable) {
+        if self.table_editor.is_some() {
+            return;
+        }
         let Some(original_call) =
             char_range_slice(self.document().source(), table.source_range.clone())
         else {
@@ -6478,12 +6574,36 @@ impl EditorApp {
         self.table_editor = Some(TableEditorDialog {
             table,
             original_call: original_call.to_owned(),
+            insertion_prefix: None,
             document_key: self.document().key(),
             focus_first_cell: true,
+            ui: Default::default(),
             error: None,
         });
-        self.table_editor_had_focus = false;
-        self.table_editor_suspended = false;
+        self.editor_completion = None;
+        self.format_request_key = None;
+        self.manual_format_revision = None;
+    }
+
+    fn begin_new_table(&mut self, context: &egui::Context) {
+        if self.table_editor.is_some() || !self.document().kind().is_typst() {
+            return;
+        }
+        let cursor = self.editor_snapshot(context).cursor.primary.index.0;
+        let Some(prefix) =
+            crate::editor_features::table_insertion_prefix(self.document().source(), cursor)
+        else {
+            self.notice = Some(Notice {
+                message: "Place the cursor in markup or between code expressions to insert a table"
+                    .into(),
+                kind: NoticeKind::Info,
+            });
+            return;
+        };
+        let mut table = editable_table_at("#table(columns: 2, [], [], [], [])", 2).unwrap();
+        table.source_range = cursor..cursor;
+        self.begin_table_editor(table);
+        self.table_editor.as_mut().unwrap().insertion_prefix = Some(prefix);
     }
 
     fn begin_rename(&mut self, path: PathBuf) {
@@ -6696,6 +6816,9 @@ impl EditorApp {
         family: &str,
         context: &egui::Context,
     ) {
+        if self.table_editor.is_some() {
+            return;
+        }
         if target.value_range.end > self.document().source().len()
             || !self
                 .document()
@@ -7071,6 +7194,9 @@ impl EditorApp {
     }
 
     fn request_editor_completion(&mut self, cursor: usize, anchor: Rect, explicit: bool) {
+        if self.table_editor.is_some() {
+            return;
+        }
         self.prepare_editor_source_data();
         if self.document().kind().is_typst()
             && let Some(all_items) = self.editor_data.tex_completions(cursor).or_else(|| {
@@ -7290,6 +7416,9 @@ impl EditorApp {
     }
 
     fn apply_editor_completion(&mut self, index: usize, context: &egui::Context) {
+        if self.table_editor.is_some() {
+            return;
+        }
         let Some(completion) = self.editor_completion.as_ref() else {
             return;
         };
@@ -7399,9 +7528,15 @@ impl EditorApp {
     fn show_preview(&mut self, ui: &mut egui::Ui, frame: Option<&eframe::Frame>) {
         if self.document().kind().preview_only() && !self.typst_preview_available() {
             self.hide_webview();
-            self.show_asset_view(ui);
+            self.show_asset_view(ui, frame);
             return;
         }
+        if self.pdfjs_requested() && !self.captures.has_pending_for("main") {
+            self.hide_webview();
+            self.show_pdfjs_view(ui, frame, false);
+            return;
+        }
+        self.pdfjs_preview.hide();
         let status = self.preview_status_snapshot();
         let native_ready = status.native_ready;
         let native_transitioning = status.interactive_transitioning;
@@ -7953,6 +8088,7 @@ impl EditorApp {
             // A recreated native viewport needs a fresh child WKWebView. The
             // Tinymist process and preview URL remain owned by this session.
             self.discard_webview();
+            self.clear_pdfjs_views();
             self.preview.webview_state =
                 ServiceState::Starting("Attaching preview to this document window".to_owned());
         }
@@ -8120,10 +8256,6 @@ impl EditorApp {
             if self.rename_overlay_suspended {
                 self.rename_overlay_had_focus = false;
                 self.rename_overlay_suspended = false;
-            }
-            if self.table_editor_suspended {
-                self.table_editor_had_focus = false;
-                self.table_editor_suspended = false;
             }
         }
         // The GL surface is alpha-capable for child popup viewports. Keep the
@@ -8308,6 +8440,21 @@ impl EditorApp {
             self.typst_preview_available(),
             self.view_mode,
         );
+        if !self.pdfjs_requested() {
+            self.clear_pdfjs_views();
+        } else {
+            if !matches!(
+                content_view,
+                ContentView::SplitSource | ContentView::SplitAsset | ContentView::Preview
+            ) {
+                self.pdfjs_preview.hide();
+            }
+            if !matches!(content_view, ContentView::Asset | ContentView::SplitAsset)
+                || self.document().kind() != DocumentKind::Pdf
+            {
+                self.pdfjs_asset.hide();
+            }
+        }
         match content_view {
             ContentView::Empty | ContentView::Source | ContentView::Asset => {
                 self.hide_webview();
@@ -8315,7 +8462,7 @@ impl EditorApp {
                     .frame(theme::content_panel_frame(ui.style()))
                     .show(ui, |ui| match content_view {
                         ContentView::Empty => self.show_empty_workspace(ui, frame),
-                        ContentView::Asset => self.show_asset_view(ui),
+                        ContentView::Asset => self.show_asset_view(ui, frame),
                         _ => self.show_editor(ui),
                     });
             }
@@ -8329,7 +8476,7 @@ impl EditorApp {
                     .max_size(layout.editor_maximum)
                     .show(ui, |ui| {
                         if content_view == ContentView::SplitAsset {
-                            self.show_asset_view(ui);
+                            self.show_asset_view(ui, frame);
                         } else {
                             self.show_editor(ui);
                         }
@@ -9979,13 +10126,8 @@ fn app_popup_blocked_by_root_overlay(
     typst_overrides_visible: bool,
     workspace_chooser_visible: bool,
     has_rename_dialog: bool,
-    has_table_editor: bool,
 ) -> bool {
-    has_modal
-        || typst_overrides_visible
-        || workspace_chooser_visible
-        || has_rename_dialog
-        || has_table_editor
+    has_modal || typst_overrides_visible || workspace_chooser_visible || has_rename_dialog
 }
 
 fn current_timestamp() -> String {
@@ -10109,7 +10251,7 @@ fn owned_input_viewports(current: egui::ViewportId) -> [egui::ViewportId; 12] {
     [
         current,
         child_viewport_id(current, "tiptoptyp-packages"),
-        child_viewport_id(current, "tiptoptyp-table-editor-overlay"),
+        child_viewport_id(current, "tiptoptyp-table-editor"),
         child_viewport_id(current, "tiptoptyp-rename-overlay"),
         child_viewport_id(current, "tiptoptyp-workspace-chooser"),
         child_viewport_id(current, "tiptoptyp-modal-overlay"),
@@ -10272,6 +10414,20 @@ fn standard_text_edit_shortcut(command: AppCommand) -> Option<KeyboardShortcut> 
     Some(KeyboardShortcut::new(modifiers, key))
 }
 
+fn source_mutating_command(command: AppCommand) -> bool {
+    matches!(
+        command,
+        AppCommand::Undo
+            | AppCommand::Redo
+            | AppCommand::Cut
+            | AppCommand::Paste
+            | AppCommand::ToggleComment
+            | AppCommand::Format
+            | AppCommand::NewTable
+            | AppCommand::EditTable
+    )
+}
+
 fn clamp_cursor_range(range: CCursorRange, len: usize) -> CCursorRange {
     CCursorRange {
         primary: CCursor::new(range.primary.index.0.min(len)),
@@ -10431,12 +10587,17 @@ struct CommandAvailability {
     typst_document: bool,
     typst_preview: bool,
     interactive_preview: bool,
+    new_table: bool,
+    edit_table: bool,
+    source_read_only: bool,
 }
 
 impl CommandAvailability {
     fn allows(self, requirement: CommandRequirement) -> bool {
         match requirement {
             CommandRequirement::Always => true,
+            CommandRequirement::NewTable => self.new_table,
+            CommandRequirement::EditTable => self.edit_table,
             CommandRequirement::SavedDocument => self.saved_document,
             CommandRequirement::Undo => self.can_undo,
             CommandRequirement::Redo => self.can_redo,
@@ -10464,6 +10625,7 @@ fn show_command_popup_ui(
             workspace_view::empty_workspace_command(spec.command)
         } else {
             availability.allows(spec.requirement)
+                && !(availability.source_read_only && source_mutating_command(spec.command))
         };
         let shortcut = shortcuts.egui(spec.shortcut_action);
         if menu_item_enabled(ui, enabled, spec.title, shortcut).clicked() {
@@ -10495,26 +10657,11 @@ fn show_file_popup_ui(
 
 fn show_edit_popup_ui(
     ui: &mut egui::Ui,
-    can_undo: bool,
-    can_redo: bool,
-    can_format: bool,
-    can_sync_preview: bool,
+    availability: CommandAvailability,
     shortcuts: &ShortcutBindings,
     action: &mut Option<AppPopupAction>,
 ) {
-    show_command_popup_ui(
-        ui,
-        CommandMenu::Edit,
-        CommandAvailability {
-            can_undo,
-            can_redo,
-            typst_document: can_format,
-            interactive_preview: can_sync_preview,
-            ..Default::default()
-        },
-        shortcuts,
-        action,
-    );
+    show_command_popup_ui(ui, CommandMenu::Edit, availability, shortcuts, action);
 }
 
 fn show_view_popup_ui(
@@ -10898,128 +11045,6 @@ fn show_editor_context_menu_ui(
     }
 }
 
-fn show_table_editor_ui(
-    ui: &mut egui::Ui,
-    dialog: &mut TableEditorDialog,
-    available_width: f32,
-    cells_height: f32,
-) -> Option<TableEditorUiAction> {
-    ui.label(RichText::new("Table editor").strong());
-    ui.label(
-        RichText::new(
-            "Edit static Typst markup cells. Dynamic expressions stay protected and cannot be applied.",
-        )
-        .size(theme::TYPE.supporting)
-        .color(ui.visuals().weak_text_color()),
-    );
-    ui.add_space(theme::SPACE.small);
-
-    let mut changed = false;
-    ui.horizontal_wrapped(|ui| {
-        ui.label(format!(
-            "{} × {}",
-            dialog.table.row_count(),
-            dialog.table.columns
-        ));
-        if ui.button("Add row").clicked() {
-            dialog.table.add_row();
-            dialog.focus_first_cell = dialog.table.row_count() == 1;
-            changed = true;
-        }
-        if ui
-            .add_enabled(
-                dialog.table.row_count() > 0,
-                egui::Button::new("Remove last row"),
-            )
-            .clicked()
-        {
-            let last = dialog.table.row_count() - 1;
-            dialog.table.remove_row(last);
-            changed = true;
-        }
-        if ui.button("Add column").clicked() {
-            dialog.table.add_column();
-            changed = true;
-        }
-        if ui
-            .add_enabled(
-                dialog.table.columns > 1,
-                egui::Button::new("Remove last column"),
-            )
-            .clicked()
-        {
-            dialog.table.remove_column();
-            changed = true;
-        }
-    });
-    ui.separator();
-
-    let cell_width =
-        ((available_width - 112.0) / dialog.table.columns.min(4) as f32).clamp(112.0, 220.0);
-    let mut remove_row = None;
-    egui::ScrollArea::both()
-        .id_salt("table-editor-cells")
-        .max_height(cells_height)
-        .show(ui, |ui| {
-            egui::Grid::new(viewport_scoped_id(ui.ctx(), "table-editor-grid"))
-                .spacing(Vec2::new(theme::SPACE.small, theme::SPACE.small))
-                .striped(true)
-                .show(ui, |ui| {
-                    ui.label("");
-                    for column in 0..dialog.table.columns {
-                        ui.label(RichText::new(format!("Column {}", column + 1)).strong());
-                    }
-                    ui.label("");
-                    ui.end_row();
-
-                    for row in 0..dialog.table.row_count() {
-                        ui.label(RichText::new(format!("Row {}", row + 1)).strong());
-                        for column in 0..dialog.table.columns {
-                            let response = ui.add_sized(
-                                [cell_width, 56.0],
-                                egui::TextEdit::multiline(&mut dialog.table.cells[row][column])
-                                    .id_salt(("table-cell", row, column))
-                                    .desired_width(cell_width)
-                                    .desired_rows(2),
-                            );
-                            if dialog.focus_first_cell && row == 0 && column == 0 {
-                                response.request_focus();
-                                dialog.focus_first_cell = false;
-                            }
-                            changed |= response.changed();
-                        }
-                        if ui.small_button("Remove").clicked() {
-                            remove_row = Some(row);
-                        }
-                        ui.end_row();
-                    }
-                });
-        });
-    if let Some(row) = remove_row {
-        dialog.table.remove_row(row);
-        changed = true;
-    }
-    if changed {
-        dialog.error = None;
-    }
-
-    if let Some(error) = &dialog.error {
-        ui.add_space(theme::SPACE.small);
-        ui.label(RichText::new(error).color(ui.visuals().error_fg_color));
-    }
-    ui.add_space(theme::SPACE.control);
-    let mut action = None;
-    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        if ui.button("Apply").clicked() {
-            action = Some(TableEditorUiAction::Apply);
-        }
-        if ui.button("Cancel").clicked() {
-            action = Some(TableEditorUiAction::Cancel);
-        }
-    });
-    action
-}
-
 fn prepare_table_source_edit(
     source: &str,
     document_key: DocumentKey,
@@ -11028,10 +11053,16 @@ fn prepare_table_source_edit(
     if document_key != dialog.document_key {
         return Err("The document changed while the table editor was open. Reopen the table to edit the latest source.".to_owned());
     }
-    let SourceEdit { range, replacement } = dialog
+    let SourceEdit {
+        range,
+        mut replacement,
+    } = dialog
         .table
         .source_edit()
         .map_err(|error| format!("Cannot apply this table: {error}"))?;
+    if let Some(prefix) = dialog.insertion_prefix {
+        replacement.insert_str(0, prefix);
+    }
     let byte_range = char_range_to_byte_range(source, range.clone())
         .ok_or_else(|| "The table range is no longer valid".to_owned())?;
     if source.get(byte_range.clone()) != Some(dialog.original_call.as_str()) {

@@ -139,68 +139,62 @@ impl EditorApp {
     }
 
     pub(super) fn show_table_editor_window(&mut self, context: &egui::Context) {
-        if self.table_editor.is_none()
-            || self.document_workflow.modal().is_some()
-            || self.table_editor_suspended
-        {
+        if self.table_editor.is_none() || self.document_workflow.modal().is_some() {
             return;
         }
-        let Some(window_rect) = context.input(|input| input.viewport().inner_rect) else {
-            return;
-        };
-        let card_width = (window_rect.width() - METRICS.popup.modal_window_inset).clamp(1.0, 900.0);
-        let cells_height = (window_rect.height() - 190.0).clamp(80.0, 420.0);
         let theme = context.theme();
         let style = context.style_of(theme);
         let Some(dialog) = &mut self.table_editor else {
             return;
         };
         let mut requested_action = None;
-        let mut overlay_had_focus = self.table_editor_had_focus;
-        let mut suspend_overlay = false;
         let captures = self.captures.clone();
-        let spec = ChildViewSpec::modal(
-            "tiptoptyp-table-editor-overlay",
-            "Table editor",
-            window_rect,
+        let size = if self.snapshot_scene == Some(UiSnapshotScene::TableEditorNarrow) {
+            [620.0, 600.0]
+        } else {
+            [940.0, 700.0]
+        };
+        let spec = ChildViewSpec::persistent(
+            "tiptoptyp-table-editor",
+            "tiptoptyp Table editor",
+            size,
+            [620.0, 560.0],
             "table-editor",
         );
         ChildViewHost::show(context, &captures, spec, theme, &style, |ui, input| {
-            if input.focused == Some(true) {
-                overlay_had_focus = true;
-            }
-            suspend_overlay |= overlay_had_focus && input.focused == Some(false);
             if input.close_requested || input.escape_pressed {
                 requested_action = Some(TableEditorUiAction::Cancel);
             }
-            if suspend_overlay {
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            }
-            egui::Area::new(viewport_scoped_id(ui.ctx(), "table-editor-dialog"))
-                .order(egui::Order::Foreground)
-                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-                .show(ui.ctx(), |ui| {
-                    theme::dialog_card_frame(&style).show(ui, |ui| {
-                        ui.set_width(card_width);
-                        if let Some(action) =
-                            show_table_editor_ui(ui, dialog, card_width, cells_height)
-                        {
-                            requested_action = Some(action);
-                        }
+            ui.painter()
+                .rect_filled(ui.max_rect(), 0.0, ui.visuals().panel_fill);
+            egui::Panel::top("table-editor-titlebar")
+                .exact_size(METRICS.chrome.toolbar_height)
+                .frame(theme::settings_title_frame(ui.style()))
+                .show(ui, |ui| {
+                    ui.horizontal_centered(|ui| {
+                        #[cfg(target_os = "macos")]
+                        theme::reserve_window_controls(ui);
+                        crate::window_logo::show(ui, &captures);
+                        ui.strong("Table workbench");
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.weak("Unsaved draft");
+                        });
                     });
                 });
+            egui::CentralPanel::default()
+                .frame(theme::settings_content_frame(ui.style()))
+                .show(ui, |ui| {
+                    let width = ui.available_width();
+                    let height = ui.available_height();
+                    if let Some(action) = show_table_editor_ui(ui, dialog, width, height) {
+                        requested_action = Some(action);
+                    }
+                });
         });
-        self.table_editor_had_focus = overlay_had_focus;
-        if suspend_overlay {
-            self.table_editor_suspended = true;
-        }
 
         match requested_action {
             Some(TableEditorUiAction::Cancel) => {
                 self.table_editor = None;
-                self.table_editor_had_focus = false;
-                self.table_editor_suspended = false;
                 context.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
             Some(TableEditorUiAction::Apply) => {
@@ -223,8 +217,6 @@ impl EditorApp {
                             message: "Updated table".to_owned(),
                             kind: NoticeKind::Success,
                         });
-                        self.table_editor_had_focus = false;
-                        self.table_editor_suspended = false;
                         context.send_viewport_cmd(egui::ViewportCommand::Focus);
                     }
                     Err(error) => {
@@ -1003,7 +995,6 @@ impl EditorApp {
             self.typst_overrides_visible,
             self.workspace_chooser_visible,
             self.rename_dialog.is_some(),
-            self.table_editor.is_some(),
         ) {
             self.close_app_popup();
             return;
@@ -1069,6 +1060,16 @@ impl EditorApp {
         let can_export_pdf = self.typst_preview_available();
         let can_sync_preview =
             self.document().kind().is_typst() && self.interactive_preview_active();
+        let edit_availability = CommandAvailability {
+            can_undo,
+            can_redo,
+            typst_document: can_format,
+            interactive_preview: can_sync_preview,
+            new_table: self.native_command_enabled(AppCommand::NewTable),
+            edit_table: self.native_command_enabled(AppCommand::EditTable),
+            source_read_only: self.table_editor.is_some(),
+            ..Default::default()
+        };
         let mut close = false;
         let mut action = None;
         let mut had_focus = self.app_popup_had_focus;
@@ -1144,10 +1145,7 @@ impl EditorApp {
                                 AppPopup::Edit { .. } => {
                                     show_edit_popup_ui(
                                         ui,
-                                        can_undo,
-                                        can_redo,
-                                        can_format,
-                                        can_sync_preview,
+                                        edit_availability,
                                         &shortcuts,
                                         &mut action,
                                     );

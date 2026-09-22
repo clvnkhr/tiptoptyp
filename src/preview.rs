@@ -113,6 +113,7 @@ impl ServiceState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PreviewBackend {
     Interactive,
+    PdfJs,
     Raster,
 }
 
@@ -132,6 +133,7 @@ impl PreviewStatusSnapshot<'_> {
     pub(crate) fn backend_label(&self) -> &'static str {
         match self.effective_backend {
             PreviewBackend::Interactive => "Interactive",
+            PreviewBackend::PdfJs => "PDF.js",
             PreviewBackend::Raster if self.requested_backend == PreviewPreference::Interactive => {
                 "Rasterised PDF · fallback"
             }

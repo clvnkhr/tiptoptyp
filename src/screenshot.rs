@@ -66,6 +66,8 @@ impl UiCaptureStep {
 /// find bar remain in the root app viewport.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum UiSnapshotScene {
+    TableEditor,
+    TableEditorNarrow,
     Main,
     Tabs,
     EmptyWorkspace,
@@ -113,7 +115,9 @@ pub enum UiSnapshotScene {
 }
 
 impl UiSnapshotScene {
-    pub const ALL: [Self; 44] = [
+    pub const ALL: [Self; 46] = [
+        Self::TableEditor,
+        Self::TableEditorNarrow,
         Self::Main,
         Self::Tabs,
         Self::EmptyWorkspace,
@@ -162,6 +166,8 @@ impl UiSnapshotScene {
 
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::TableEditor => "table-editor",
+            Self::TableEditorNarrow => "table-editor-narrow",
             Self::Main => "main",
             Self::Tabs => "tabs",
             Self::EmptyWorkspace => "empty-workspace",
@@ -212,6 +218,7 @@ impl UiSnapshotScene {
     /// Logical framebuffer target used by [`CaptureController`].
     pub const fn viewport_target(self) -> &'static str {
         match self {
+            Self::TableEditor | Self::TableEditorNarrow => "table-editor",
             Self::Main
             | Self::Tabs
             | Self::EmptyWorkspace
@@ -268,6 +275,8 @@ impl UiSnapshotScene {
         let value = value.trim();
         let scene = match value {
             "main" => Self::Main,
+            "table-editor" => Self::TableEditor,
+            "table-editor-narrow" => Self::TableEditorNarrow,
             "tabs" => Self::Tabs,
             "empty-workspace" => Self::EmptyWorkspace,
             "tabs-pdf" => Self::TabsPdf,

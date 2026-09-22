@@ -665,6 +665,9 @@ impl EditorApp {
     }
 
     pub(super) fn activate_tab(&mut self, id: u64, context: &egui::Context) {
+        if self.table_editor.is_some() {
+            return;
+        }
         if self.tabs.index_of(id).is_none() {
             return;
         }

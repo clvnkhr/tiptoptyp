@@ -37,6 +37,8 @@ pub(crate) enum ShortcutAction {
     Paste,
     SelectAll,
     ToggleComment,
+    NewTable,
+    EditTable,
     Find,
     FindReplace,
     Format,
@@ -93,7 +95,7 @@ pub(crate) enum ShortcutAction {
 }
 
 impl ShortcutAction {
-    pub(crate) const ALL: [Self; 77] = [
+    pub(crate) const ALL: [Self; 79] = [
         Self::Settings,
         Self::New,
         Self::NewWindow,
@@ -118,6 +120,8 @@ impl ShortcutAction {
         Self::Paste,
         Self::SelectAll,
         Self::ToggleComment,
+        Self::NewTable,
+        Self::EditTable,
         Self::Find,
         Self::FindReplace,
         Self::Format,
@@ -199,6 +203,8 @@ impl ShortcutAction {
             Self::Paste => "edit.paste",
             Self::SelectAll => "edit.select_all",
             Self::ToggleComment => "edit.toggle_comment",
+            Self::NewTable => "edit.new_table",
+            Self::EditTable => "edit.edit_table",
             Self::Find => "edit.find",
             Self::FindReplace => "edit.find_replace",
             Self::Format => "edit.format",
@@ -285,6 +291,8 @@ impl ShortcutAction {
             Self::Paste => "Paste",
             Self::SelectAll => "Select all",
             Self::ToggleComment => "Toggle comment",
+            Self::NewTable => "New table",
+            Self::EditTable => "Edit table at cursor",
             Self::Find => "Find",
             Self::FindReplace => "Find and replace",
             Self::Format => "Format document",
@@ -366,6 +374,8 @@ impl ShortcutAction {
             | Self::Paste
             | Self::SelectAll
             | Self::ToggleComment
+            | Self::NewTable
+            | Self::EditTable
             | Self::Find
             | Self::FindReplace
             | Self::Format
@@ -1172,6 +1182,7 @@ fn default_binding(action: ShortcutAction, platform: ShortcutPlatform) -> Option
         Action::Paste => ShortcutChord::primary(Key::V),
         Action::SelectAll => ShortcutChord::primary(Key::A),
         Action::ToggleComment => ShortcutChord::primary(Key::Slash),
+        Action::NewTable | Action::EditTable => return None,
         Action::Find => ShortcutChord::primary(Key::F),
         Action::FindReplace if platform == ShortcutPlatform::MacOs => {
             ShortcutChord::primary(Key::F).alt()
@@ -1272,7 +1283,8 @@ mod tests {
             assert!(
                 ShortcutAction::ALL
                     .into_iter()
-                    .all(|action| bindings.binding(action).is_some())
+                    .all(|action| bindings.binding(action).is_some()
+                        || matches!(action, ShortcutAction::NewTable | ShortcutAction::EditTable))
             );
         }
 

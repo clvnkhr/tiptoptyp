@@ -7,7 +7,13 @@ impl EditorApp {
     pub(super) fn show_find_bar(&mut self, ui: &mut egui::Ui) {
         let source = self.tabs.current_record().document.source();
         let document_key = self.document().key();
-        let actions = find_bar::show(ui, &mut self.find_bar, source, document_key);
+        let actions = find_bar::show(
+            ui,
+            &mut self.find_bar,
+            source,
+            document_key,
+            self.table_editor.is_none(),
+        );
         self.apply_find_actions(
             ui.ctx(),
             actions.previous,
@@ -54,7 +60,7 @@ impl EditorApp {
                 )
                 .map(|matched| EditorSelection::Search(matched.char_range.clone()));
         }
-        if replace_one {
+        if replace_one && self.table_editor.is_none() {
             let before = self.document().source().clone();
             let snapshot = self.editor_snapshot(context);
             let find_query = &self.find_bar.query;
@@ -84,7 +90,7 @@ impl EditorApp {
                 }
             }
         }
-        if replace_all {
+        if replace_all && self.table_editor.is_none() {
             let before = self.document().source().clone();
             let snapshot = self.editor_snapshot(context);
             let find_query = &self.find_bar.query;
@@ -115,6 +121,15 @@ impl EditorApp {
 
     pub(super) fn show_editor(&mut self, ui: &mut egui::Ui) {
         let _span = crate::performance::span("ui.source");
+        let read_only = self.table_editor.is_some();
+        if read_only {
+            egui::Frame::new().fill(ui.visuals().selection.bg_fill.gamma_multiply(0.15)).inner_margin(8.0).show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.strong("Read-only · Table editor open");
+                    ui.label("Scroll, select and copy code. Apply or cancel the table draft to resume editing.");
+                });
+            });
+        }
         offer_file_drop_target(ui, ui.max_rect(), FileDropTarget::Editor);
         ui.set_min_width(ui.available_width());
         if self.document().reset_editor_history {
@@ -261,6 +276,7 @@ impl EditorApp {
         let mut hovered_asset_literal = false;
         let mut popup_request = None;
         let mut completion_cursor: Option<usize> = None;
+        let mut table_cursor = None;
         let mut completion_anchor: Option<Rect> = None;
         let mut editor_has_focus = false;
         let editor_base_slot = ui.painter().add(egui::Shape::Noop);
@@ -318,15 +334,23 @@ impl EditorApp {
             };
             let document_before_edit = document.key();
             let mut output = document.edit(snapshot_before_edit.cursor, |source| {
-                let mut buffer = ui.input(|input| {
-                    crate::auto_pairs::PairingBuffer::new(
-                        source,
-                        auto_pair_syntax,
-                        auto_pair_enabled,
-                        &input.events,
-                    )
-                });
-                let editor = egui::TextEdit::multiline(&mut buffer)
+                let mut readonly;
+                let mut pairing;
+                let buffer: &mut dyn egui::TextBuffer = if read_only {
+                    readonly = source.as_str();
+                    &mut readonly
+                } else {
+                    pairing = ui.input(|input| {
+                        crate::auto_pairs::PairingBuffer::new(
+                            source,
+                            auto_pair_syntax,
+                            auto_pair_enabled,
+                            &input.events,
+                        )
+                    });
+                    &mut pairing
+                };
+                let editor = egui::TextEdit::multiline(buffer)
                     .id(source_editor_id(ui.ctx()))
                     .code_editor()
                     .desired_width(editor_width)
@@ -341,6 +365,11 @@ impl EditorApp {
             // A closer can move the caret without modifying the document.
             // Do not invalidate completions or schedule work for that movement.
             changed = document.key() != document_before_edit;
+            table_cursor = output
+                .state
+                .cursor
+                .char_range()
+                .map(|range| range.primary.index.0);
             if changed {
                 self.editor_data.prepare_source(&document.snapshot());
             }
@@ -878,6 +907,11 @@ impl EditorApp {
         if changed {
             self.find_bar.search.clear();
             self.mark_edited();
+        }
+        if document_kind.is_typst()
+            && let Some(cursor) = table_cursor
+        {
+            self.editor_data.prepare_table_at_cursor(cursor);
         }
         if let (Some(cursor), Some(anchor)) = (completion_cursor, completion_anchor) {
             let key = self.document().key();

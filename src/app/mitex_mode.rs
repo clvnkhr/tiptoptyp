@@ -53,6 +53,9 @@ impl EditorApp {
         }
     }
     pub(super) fn set_tex_mode(&mut self, enabled: bool, context: &egui::Context) -> bool {
+        if self.table_editor.is_some() {
+            return false;
+        }
         if enabled == self.document().config().is_some() {
             return true;
         }

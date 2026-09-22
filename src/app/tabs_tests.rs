@@ -425,7 +425,7 @@ fn assets_keep_typst_output_and_reject_late_results_after_closing() {
             token,
             output: Ok(LoadedAsset::Pdf {
                 bytes: b"asset pdf".to_vec(),
-                catalog: crate::pdf::PdfDocumentCatalog {
+                catalog: Some(crate::pdf::PdfDocumentCatalog {
                     pages: vec![
                         crate::pdf::PdfPageMetadata {
                             size: [2, 2],
@@ -436,7 +436,7 @@ fn assets_keep_typst_output_and_reject_late_results_after_closing() {
                             links: Vec::new(),
                         },
                     ],
-                },
+                }),
             }),
         },
     );

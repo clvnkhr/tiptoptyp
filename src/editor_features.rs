@@ -632,6 +632,9 @@ struct PreservedTableOption {
     source: String,
 }
 
+mod table;
+pub(crate) use table::{CellPosition, TableSelection};
+
 /// A conservative, rectangular table/grid model suitable for direct editing.
 ///
 /// Cell strings are Typst markup from inside their original `[...]` blocks.
@@ -643,6 +646,7 @@ pub(crate) struct EditableTable {
     pub(crate) source_range: std::ops::Range<usize>,
     pub(crate) columns: usize,
     pub(crate) cells: Vec<Vec<String>>,
+    cell_options: std::collections::BTreeMap<(usize, usize), table::CellOptions>,
     options: Vec<PreservedTableOption>,
     original_columns: usize,
     columns_were_explicit: bool,
@@ -657,6 +661,9 @@ pub(crate) struct SourceEdit {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TableEditError {
+    InvalidSpan,
+    OccupiedSpan,
+    TooLarge,
     ZeroColumns,
     NonRectangular {
         row: usize,
@@ -672,6 +679,13 @@ pub(crate) enum TableEditError {
 impl fmt::Display for TableEditError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidSpan => formatter
+                .write_str("the span must fit inside the table without overlapping another span"),
+            Self::OccupiedSpan => formatter
+                .write_str("clear neighbouring cells and their styling before expanding this span"),
+            Self::TooLarge => {
+                formatter.write_str("the visual editor supports up to 4,096 cells and 128 columns")
+            }
             Self::ZeroColumns => formatter.write_str("a table must have at least one column"),
             Self::NonRectangular {
                 row,
@@ -704,6 +718,33 @@ impl std::error::Error for TableEditError {}
 pub(crate) fn editable_table_at(source: &str, char_cursor: usize) -> Option<EditableTable> {
     let cursor = char_to_byte(source, char_cursor)?;
     let parsed = Source::detached(source);
+    editable_table_in_source(&parsed, cursor)
+}
+
+pub(crate) fn table_insertion_prefix(source: &str, char_cursor: usize) -> Option<&'static str> {
+    let byte = char_to_byte(source, char_cursor)?;
+    if source.is_empty() {
+        return Some("#");
+    }
+    let parsed = Source::detached(source);
+    let node = LinkedNode::new(parsed.root())
+        .leaf_at(byte, typst_syntax::Side::After)
+        .or_else(|| LinkedNode::new(parsed.root()).leaf_at(byte, typst_syntax::Side::Before))?;
+    if node.kind() == SyntaxKind::Str && byte < node.range().end {
+        return None;
+    }
+    node.mode_after()?;
+    // Incomplete expressions can leave trailing whitespace under the markup
+    // root (e.g. `#let t = |`). Probe a literal call at the insertion point so
+    // the parser, rather than whitespace heuristics, decides if a hash is needed.
+    let candidate = format!("{}table(){}", &source[..byte], &source[byte..]);
+    let code = editable_table_at(&candidate, char_cursor + 1)
+        .is_some_and(|table| table.source_range == (char_cursor..char_cursor + 7));
+    Some(if code { "" } else { "#" })
+}
+
+pub(crate) fn editable_table_in_source(parsed: &Source, cursor: usize) -> Option<EditableTable> {
+    let source = parsed.text();
     let root = LinkedNode::new(parsed.root());
     find_editable_table(&root, source, cursor).or_else(|| {
         // The expression node starts after markup's `#`, but the sigil is a
@@ -778,6 +819,9 @@ fn parse_editable_table(node: &LinkedNode<'_>, source: &str) -> Option<EditableT
                         return None;
                     }
                     columns = literal_column_count(named.expr())?;
+                    if columns > 128 {
+                        return None;
+                    }
                     columns_were_explicit = true;
                 }
                 options.push(PreservedTableOption {
@@ -785,25 +829,18 @@ fn parse_editable_table(node: &LinkedNode<'_>, source: &str) -> Option<EditableT
                     source: source.get(argument.range())?.to_owned(),
                 });
             }
-            ast::Arg::Pos(ast::Expr::ContentBlock(_)) => {
+            ast::Arg::Pos(_) => {
+                if flat_cells.len() >= 4096 {
+                    return None;
+                }
                 saw_cell = true;
-                if has_dynamic_content(&argument) {
-                    return None;
-                }
-                let range = argument.range();
-                if range.end < range.start + 2 {
-                    return None;
-                }
-                flat_cells.push(source.get(range.start + 1..range.end - 1)?.to_owned());
+                flat_cells.push(table::parse_cell(&argument, source, kind)?);
             }
-            ast::Arg::Pos(_) | ast::Arg::Spread(_) => return None,
+            ast::Arg::Spread(_) => return None,
         }
     }
 
-    if columns == 0 || flat_cells.len() % columns != 0 {
-        return None;
-    }
-    let cells = flat_cells.chunks(columns).map(<[String]>::to_vec).collect();
+    let (cells, cell_options) = table::place_cells(columns, flat_cells)?;
     let source_range = byte_range_to_char(source, node.range());
     let line_start = source[..node.offset()]
         .rfind('\n')
@@ -818,6 +855,7 @@ fn parse_editable_table(node: &LinkedNode<'_>, source: &str) -> Option<EditableT
         source_range,
         columns,
         cells,
+        cell_options,
         options,
         original_columns: columns,
         columns_were_explicit,
@@ -869,6 +907,9 @@ impl EditableTable {
 
     /// Append an empty row while preserving the model's rectangular shape.
     pub(crate) fn add_row(&mut self) {
+        if !self.can_add_row() {
+            return;
+        }
         self.cells.push(vec![String::new(); self.columns]);
     }
 
@@ -878,11 +919,26 @@ impl EditableTable {
             return false;
         }
         self.cells.remove(row);
+        self.cell_options = std::mem::take(&mut self.cell_options)
+            .into_iter()
+            .filter_map(|((r, c), mut options)| {
+                if r == row {
+                    return None;
+                }
+                if r < row && r + options.rowspan > row {
+                    options.rowspan -= 1;
+                }
+                Some(((r - usize::from(r > row), c), options))
+            })
+            .collect();
         true
     }
 
     /// Append an empty column to every row.
     pub(crate) fn add_column(&mut self) {
+        if !self.can_add_column() {
+            return;
+        }
         self.columns += 1;
         for row in &mut self.cells {
             row.push(String::new());
@@ -895,6 +951,13 @@ impl EditableTable {
             return false;
         }
         self.columns -= 1;
+        self.cell_options.retain(|&(_, c), options| {
+            if c >= self.columns {
+                return false;
+            }
+            options.colspan = options.colspan.min(self.columns - c);
+            true
+        });
         for row in &mut self.cells {
             row.pop();
         }
@@ -924,8 +987,33 @@ impl EditableTable {
         if !emitted_columns && (self.columns != 1 || self.columns_were_explicit) {
             arguments.insert(0, format!("columns: {}", self.columns));
         }
-        for row in &self.cells {
-            for cell in row {
+        let owners = self.cell_owners()?;
+        for (r, row) in self.cells.iter().enumerate() {
+            for (c, cell) in row.iter().enumerate() {
+                if owners[r][c] != (r, c) {
+                    continue;
+                }
+                if let Some(options) = self.cell_options.get(&(r, c)) {
+                    let mut args: Vec<String> = options
+                        .options
+                        .iter()
+                        .map(|option| option.source.clone())
+                        .collect();
+                    if options.colspan > 1 {
+                        args.push(format!("colspan: {}", options.colspan));
+                    }
+                    if options.rowspan > 1 {
+                        args.push(format!("rowspan: {}", options.rowspan));
+                    }
+                    if !args.is_empty() {
+                        arguments.push(format!(
+                            "{}.cell({})[{cell}]",
+                            self.kind.callee(),
+                            args.join(", ")
+                        ));
+                        continue;
+                    }
+                }
                 arguments.push(format!("[{cell}]"));
             }
         }
@@ -955,6 +1043,9 @@ impl EditableTable {
         if self.columns == 0 {
             return Err(TableEditError::ZeroColumns);
         }
+        if self.columns > 128 || self.cells.len().saturating_mul(self.columns) > 4096 {
+            return Err(TableEditError::TooLarge);
+        }
         for (row_index, row) in self.cells.iter().enumerate() {
             if row.len() != self.columns {
                 return Err(TableEditError::NonRectangular {
@@ -972,6 +1063,7 @@ impl EditableTable {
                 }
             }
         }
+        self.cell_owners()?;
         Ok(())
     }
 }

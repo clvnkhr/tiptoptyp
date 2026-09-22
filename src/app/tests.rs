@@ -7,6 +7,25 @@ use crate::{
 };
 
 #[test]
+fn pdfjs_compiles_canonical_bytes_without_starting_svg_or_raster_work() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+    app.settings.preview_preference = PreviewPreference::PdfJs;
+    app.preview.set_requested_backend(PreviewPreference::PdfJs);
+    if cfg!(any(target_os = "macos", target_os = "windows")) {
+        assert!(app.pdfjs_requested());
+        assert!(app.preview_processing_enabled());
+        assert!(!app.raster_preview_required());
+        assert!(!app.interactive_preview_requested());
+        assert_eq!(app.preview_status_snapshot().backend_label(), "PDF.js");
+    } else {
+        assert!(!app.pdfjs_requested());
+        assert!(app.raster_preview_required());
+    }
+}
+
+#[test]
 fn file_navigation_to_untitled_backing_reuses_the_editor() {
     let root = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
@@ -834,6 +853,9 @@ fn shared_menu_geometry_contains_all_rows_and_frame_margins() {
                                 typst_document: true,
                                 typst_preview: true,
                                 interactive_preview: true,
+                                new_table: true,
+                                edit_table: true,
+                                source_read_only: false,
                             },
                             &ShortcutBindings::current_defaults(),
                             &mut None,
@@ -890,6 +912,9 @@ fn reused_menu_area_grows_from_file_to_edit_without_retaining_scroll_clipping() 
                                                     typst_document: true,
                                                     typst_preview: true,
                                                     interactive_preview: true,
+                                                    new_table: true,
+                                                    edit_table: true,
+                                                    source_read_only: false,
                                                 },
                                                 &ShortcutBindings::current_defaults(),
                                                 &mut None,
@@ -1137,6 +1162,9 @@ fn every_shared_menu_command_is_present_and_routes_from_the_popup() {
                                 typst_preview: true,
                                 interactive_preview: true,
                                 empty_workspace: false,
+                                new_table: true,
+                                edit_table: true,
+                                source_read_only: false,
                             },
                             &shortcuts,
                             action,
@@ -2800,6 +2828,7 @@ fn menu_availability_distinguishes_the_document_from_a_pinned_typst_preview() {
         typst_document: false,
         typst_preview: true,
         interactive_preview: false,
+        ..Default::default()
     };
     assert!(text_with_pinned_preview.allows(command_spec(AppCommand::ExportPdf).requirement));
     assert!(!text_with_pinned_preview.allows(command_spec(AppCommand::Format).requirement));
@@ -3013,12 +3042,14 @@ fn table_editor_controls_keep_rows_and_columns_rectangular() {
     let dialog = TableEditorDialog {
         table,
         original_call,
+        insertion_prefix: None,
         document_key: DocumentKey {
             owner: tiptoptyp_core::document::WindowSessionId::new(1),
             epoch: 3,
             revision: 7,
         },
         focus_first_cell: false,
+        ui: Default::default(),
         error: None,
     };
     let mut harness = Harness::builder()
@@ -3085,8 +3116,10 @@ fn prepared_table_edit_is_one_unicode_safe_replacement_and_rejects_stale_source(
     let dialog = TableEditorDialog {
         table,
         original_call,
+        insertion_prefix: None,
         document_key: key,
         focus_first_cell: false,
+        ui: Default::default(),
         error: None,
     };
 
@@ -3132,8 +3165,10 @@ fn prepared_table_edit_refuses_dynamic_cell_source() {
     let dialog = TableEditorDialog {
         table,
         original_call,
+        insertion_prefix: None,
         document_key: key,
         focus_first_cell: false,
+        ui: Default::default(),
         error: None,
     };
 
@@ -5062,23 +5097,12 @@ fn hidden_git_section_clears_a_persisted_open_state() {
 #[test]
 fn app_popup_guard_only_blocks_root_owned_overlays() {
     assert!(!app_popup_blocked_by_root_overlay(
-        false, false, false, false, false
+        false, false, false, false
     ));
-    assert!(app_popup_blocked_by_root_overlay(
-        true, false, false, false, false
-    ));
-    assert!(app_popup_blocked_by_root_overlay(
-        false, true, false, false, false
-    ));
-    assert!(app_popup_blocked_by_root_overlay(
-        false, false, true, false, false
-    ));
-    assert!(app_popup_blocked_by_root_overlay(
-        false, false, false, true, false
-    ));
-    assert!(app_popup_blocked_by_root_overlay(
-        false, false, false, false, true
-    ));
+    assert!(app_popup_blocked_by_root_overlay(true, false, false, false));
+    assert!(app_popup_blocked_by_root_overlay(false, true, false, false));
+    assert!(app_popup_blocked_by_root_overlay(false, false, true, false));
+    assert!(app_popup_blocked_by_root_overlay(false, false, false, true));
 }
 
 #[test]

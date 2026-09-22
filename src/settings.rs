@@ -133,6 +133,7 @@ impl DocumentTheme {
 pub(crate) enum PreviewPreference {
     #[default]
     Interactive,
+    PdfJs,
     Native,
 }
 
@@ -200,11 +201,12 @@ impl Default for ToolPreference {
 }
 
 impl PreviewPreference {
-    pub(crate) const ALL: [Self; 2] = [Self::Interactive, Self::Native];
+    pub(crate) const ALL: [Self; 3] = [Self::Interactive, Self::PdfJs, Self::Native];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Interactive => "Interactive (Tinymist)",
+            Self::PdfJs => "PDF.js",
             Self::Native => "Rasterised PDF",
         }
     }
