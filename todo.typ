@@ -2449,7 +2449,10 @@ portable whole-system resource score.
   and settings, and remove preview-only Poppler work/residency. Preserve image
   viewing, PDF thumbnails, canonical PDF export and PDF.js. Do not add features
   to the retiring viewer. Track the removal boundary in `docs/pdfjs-preview.md`.
-
+296. [ ] as i am using find (and replace) the sticky rows sometimes go on top of the find and replace popup. this is wrong.
+297. [ ] find and replace should say e.g. x/166 instead of 166 matches, where x/ means we are at the xth match
+298. [ ] if the find (and replace) popup is open but not focused, cmd+F (cmd+opt+F) should focus it. it should only toggle off when we press this while the popup is focused.
+299. [ ] if we cmd+F (similarly for replace) and refocus the find popup, we should resume at the xth match, not start from the beginning
 - Item 294 is complete. Tests cover PDF tabs beside Tinymist, canonical byte
   loading without Poppler, the fifth-failure transition, native-view failure,
   pause and duplicate-event admission, explicit raster choice and capture
