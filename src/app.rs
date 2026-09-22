@@ -48,6 +48,7 @@ mod workspace_view;
 use lifecycle::DocumentLifecycle;
 mod native_views;
 mod pdfjs_view;
+mod preview_follow;
 mod settings_panel;
 mod settings_view;
 mod settings_window;
@@ -902,13 +903,14 @@ enum SettingsTarget {
     RefreshBinaryStatus,
     BrowseTypstPackages,
     PreviewBackend,
+    PreviewFollowEdits,
     ToolchainStatus,
     ProjectRoot,
     UiScreenshots,
 }
 
 impl SettingsTarget {
-    const ALL: [Self; 36] = [
+    const ALL: [Self; 37] = [
         Self::Appearance,
         Self::TypstSyntax,
         Self::LightTheme,
@@ -942,6 +944,7 @@ impl SettingsTarget {
         Self::RefreshBinaryStatus,
         Self::BrowseTypstPackages,
         Self::PreviewBackend,
+        Self::PreviewFollowEdits,
         Self::ToolchainStatus,
         Self::ProjectRoot,
         Self::UiScreenshots,
@@ -982,6 +985,7 @@ impl SettingsTarget {
             Self::RefreshBinaryStatus => "Refresh binary status",
             Self::BrowseTypstPackages => "Browse Typst packages…",
             Self::PreviewBackend => "Preview backend",
+            Self::PreviewFollowEdits => "Follow edits in preview",
             Self::ToolchainStatus => "Toolchain status",
             Self::ProjectRoot => "Project root",
             Self::UiScreenshots => "UI screenshots",
@@ -1022,7 +1026,7 @@ impl SettingsTarget {
             | Self::TinymistLanguageServer
             | Self::RefreshBinaryStatus
             | Self::BrowseTypstPackages => SettingsSection::Tools,
-            Self::PreviewBackend => SettingsSection::Preview,
+            Self::PreviewBackend | Self::PreviewFollowEdits => SettingsSection::Preview,
             Self::ToolchainStatus | Self::ProjectRoot | Self::UiScreenshots => {
                 SettingsSection::Status
             }
@@ -1076,6 +1080,7 @@ impl SettingsTarget {
             Self::RefreshBinaryStatus => "tools rescan reload",
             Self::BrowseTypstPackages => "tools package manager registry installed published",
             Self::PreviewBackend => "interactive raster pdf tinymist native retry",
+            Self::PreviewFollowEdits => "automatic scroll jump sync source typing changes",
             Self::ToolchainStatus => "tools typst tinymist lsp vector watcher pdf syntax ready",
             Self::ProjectRoot => "workspace folder directory path",
             Self::UiScreenshots => "capture png main settings both output directory",
@@ -1138,6 +1143,7 @@ pub struct EditorApp {
     asset_hover: Option<AssetHoverState>,
     pending_asset_page: Option<usize>,
     compile_deadline: Option<Instant>,
+    preview_follow: preview_follow::PreviewFollow,
     compilation_paused: bool,
     preview: PreviewController,
     editor_data: EditorDerivedData,
@@ -1421,6 +1427,7 @@ impl EditorApp {
             asset_hover: None,
             pending_asset_page: None,
             compile_deadline: lifecycle.allows_document_work().then(Instant::now),
+            preview_follow: preview_follow::PreviewFollow::default(),
             compilation_paused: false,
             preview: PreviewController::new(preview_dark, settings.preview_preference),
             editor_data: EditorDerivedData::default(),
@@ -2280,6 +2287,7 @@ impl EditorApp {
         if self.document_mut().take_edit().is_none() {
             return;
         }
+        self.queue_preview_follow();
         self.manual_format_revision = None;
         self.format_request_key = None;
         self.format_when_tinymist_ready = None;
@@ -5478,6 +5486,7 @@ impl EditorApp {
                     {
                         self.preview
                             .compile_status(generation, path, status, received);
+                        self.preview_follow.compiled(generation, status, received);
                     }
                 }
                 TinymistEvent::Initialized { generation } => {
@@ -5813,6 +5822,8 @@ impl EditorApp {
     }
 
     fn jump_source_to_preview(&mut self, char_index: usize) {
+        // An explicit jump takes precedence over any delayed edit-follow jump.
+        self.preview_follow.clear();
         if !self.document().kind().is_typst() || !self.interactive_preview_active() {
             return;
         }
@@ -8510,6 +8521,7 @@ impl EditorApp {
         // commands which do not explicitly request immediate service updates.
         self.mark_edited();
         self.sync_preview_visibility();
+        self.tick_preview_follow(&context);
         self.tick_autosave(&context);
         self.tick_compile(&context);
         self.tick_pdf_page_requests();

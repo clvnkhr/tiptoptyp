@@ -266,6 +266,8 @@ pub(crate) struct AppSettings {
     #[serde(default)]
     pub(crate) explorer_order: ExplorerOrder,
     pub(crate) source_preview_trigger: SourcePreviewTrigger,
+    #[serde(default = "default_true")]
+    pub(crate) preview_follow_edits: bool,
     pub(crate) auto_save: bool,
     pub(crate) auto_save_delay_ms: u64,
     pub(crate) hover_delay_ms: u64,
@@ -330,6 +332,7 @@ impl Default for AppSettings {
             rainbow_brackets: crate::rainbow::RainbowBrackets::default(),
             explorer_order: ExplorerOrder::default(),
             source_preview_trigger: SourcePreviewTrigger::DoubleClick,
+            preview_follow_edits: true,
             auto_save: true,
             auto_save_delay_ms: 750,
             hover_delay_ms: DEFAULT_HOVER_DELAY_MS,
@@ -394,6 +397,7 @@ impl AppSettings {
             rainbow_brackets,
             explorer_order,
             source_preview_trigger,
+            preview_follow_edits,
             auto_save,
             auto_save_delay_ms,
             hover_delay_ms,
@@ -635,6 +639,7 @@ mod tests {
             SourcePreviewTrigger::DoubleClick
         );
         assert!(settings.auto_save);
+        assert!(settings.preview_follow_edits);
         assert_eq!(settings.auto_save_delay_ms, 750);
         assert!(!settings.fixed_tab_width);
         assert_eq!(settings.hover_delay_ms, DEFAULT_HOVER_DELAY_MS);
@@ -742,6 +747,7 @@ mod tests {
                 order
             },
             source_preview_trigger: SourcePreviewTrigger::ModifierClick,
+            preview_follow_edits: false,
             auto_save: false,
             auto_save_delay_ms: 1_500,
             hover_delay_ms: 450,
@@ -1081,6 +1087,48 @@ mod tests {
         assert_eq!(
             AppSettings::load(Some(&storage)).unwrap().git_diff_style,
             GitDiffStyle::Unified
+        );
+    }
+
+    #[test]
+    fn preview_follow_edits_defaults_on_persists_off_and_merges_independently() {
+        let base = AppSettings::default();
+        let mut edited = base.clone();
+        edited.preview_follow_edits = false;
+        let mut storage = MemoryStorage::default();
+        edited.save(&mut storage);
+        assert!(
+            !AppSettings::load(Some(&storage))
+                .unwrap()
+                .preview_follow_edits
+        );
+
+        let mut value = serde_json::to_value(&edited).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("preview_follow_edits");
+        storage.set_string(STORAGE_KEY, value.to_string());
+        assert!(
+            AppSettings::load(Some(&storage))
+                .unwrap()
+                .preview_follow_edits
+        );
+
+        let mut current = base.clone();
+        current.line_numbers = false;
+        current.apply_edits(&base, edited);
+        assert!(!current.preview_follow_edits);
+        assert!(
+            !current.line_numbers,
+            "preserve other windows' newer settings"
+        );
+        let mut unrelated = base.clone();
+        unrelated.auto_save = false;
+        current.apply_edits(&base, unrelated);
+        assert!(
+            !current.preview_follow_edits,
+            "an unchanged stale toggle must not overwrite it"
         );
     }
 }

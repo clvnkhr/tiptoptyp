@@ -5240,6 +5240,10 @@ fn settings_search_indexes_every_visible_setting_label() {
     );
     assert!(settings_search_results("autosave").contains(&SettingsTarget::AutoSave));
     assert_eq!(
+        settings_search_results("follow edits"),
+        vec![SettingsTarget::PreviewFollowEdits]
+    );
+    assert_eq!(
         settings_search_results("titlebar"),
         vec![SettingsTarget::TitleBarMenus]
     );

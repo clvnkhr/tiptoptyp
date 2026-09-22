@@ -744,6 +744,18 @@ impl SettingsPanel<'_> {
                         "PDF.js is available on macOS and Windows. This platform uses the rasterised PDF preview."
                     }).wrap());
                 }
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::PreviewFollowEdits,
+                    &mut settings_scroll_target,
+                );
+                ui.checkbox(
+                    &mut edited.preview_follow_edits,
+                    SettingsTarget::PreviewFollowEdits.label(),
+                )
+                .on_hover_text(
+                    "Automatically scroll the Tinymist preview to your edit after compilation. Does not move the editor cursor. PDF.js and raster previews do not support source jumps.",
+                );
                 if !deterministic_settings
                     && self.status.requested_backend == PreviewPreference::Interactive
                     && !self.status.interactive_active
@@ -1168,6 +1180,12 @@ mod tests {
             harness.state().2.is_empty(),
             "idle Settings must not emit updates"
         );
+        harness.get_by_label("Follow edits in preview").click();
+        harness.run();
+        assert!(harness.state().1.preview_follow_edits);
+        assert!(harness.state().2.iter().any(|action| {
+            matches!(action, SettingsAction::Update(settings) if !settings.preview_follow_edits)
+        }));
         harness.state_mut().2.clear();
         harness.get_by_label("Retry Tinymist").click();
         harness.run();
