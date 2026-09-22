@@ -1128,7 +1128,7 @@ fn shared_menu_geometry_contains_all_rows_and_frame_margins() {
                                 can_redo: true,
                                 saved_document: true,
                                 typst_document: true,
-                                typst_preview: true,
+                                source_preview: true,
                                 interactive_preview: true,
                                 new_table: true,
                                 edit_table: true,
@@ -1187,7 +1187,7 @@ fn reused_menu_area_grows_from_file_to_edit_without_retaining_scroll_clipping() 
                                                     can_redo: true,
                                                     saved_document: true,
                                                     typst_document: true,
-                                                    typst_preview: true,
+                                                    source_preview: true,
                                                     interactive_preview: true,
                                                     new_table: true,
                                                     edit_table: true,
@@ -1436,7 +1436,7 @@ fn every_shared_menu_command_is_present_and_routes_from_the_popup() {
                                 can_redo: true,
                                 saved_document: true,
                                 typst_document: true,
-                                typst_preview: true,
+                                source_preview: true,
                                 interactive_preview: true,
                                 empty_workspace: false,
                                 new_table: true,
@@ -2065,11 +2065,11 @@ fn designated_typst_entry_remains_visible_while_editing_other_file_kinds() {
         DocumentKind::Pdf,
         DocumentKind::Image,
     ] {
-        assert!(typst_preview_available_for(document_kind, true));
+        assert!(source_preview_available_for(document_kind, true));
         assert!(preview_visible_for(document_kind, ViewMode::Split, true));
     }
 
-    assert!(!typst_preview_available_for(DocumentKind::Text, false));
+    assert!(!source_preview_available_for(DocumentKind::Text, false));
     assert!(!preview_visible_for(
         DocumentKind::Text,
         ViewMode::Split,
@@ -3131,14 +3131,14 @@ fn fallback_menu_rows_keep_their_caption_left_aligned() {
 }
 
 #[test]
-fn menu_availability_distinguishes_the_document_from_a_pinned_typst_preview() {
+fn menu_availability_distinguishes_the_document_from_a_pinned_source_preview() {
     let text_with_pinned_preview = CommandAvailability {
         empty_workspace: false,
         can_undo: false,
         can_redo: false,
         saved_document: false,
         typst_document: false,
-        typst_preview: true,
+        source_preview: true,
         interactive_preview: false,
         ..Default::default()
     };
@@ -7765,9 +7765,19 @@ fn projected_application_diagnostics_and_preview_selection_map_canonical_unicode
         .into_owned();
     let (canonical_line, canonical_column) =
         line_column_at_char(PROJECTED_SOURCE, canonical_cursor);
-    app.set_diagnostics(format!(
-        "{name}:{canonical_line}:{canonical_column}: warning: CLI test"
-    ));
+    app.set_diagnostics(DiagnosticReport {
+        raw: format!("{name}:{canonical_line}:{canonical_column}: warning: CLI test"),
+        diagnostics: vec![Diagnostic {
+            severity: DiagnosticSeverity::Warning,
+            source: DiagnosticSource::Main,
+            location: Some(crate::diagnostics::DiagnosticLocation {
+                line: canonical_line,
+                column: canonical_column,
+            }),
+            message: "CLI test".to_owned(),
+            details: Vec::new(),
+        }],
+    });
     let cli_location = app.preview.diagnostics[0].location.unwrap();
     assert_eq!((cli_location.line, cli_location.column), (line, column));
     app.apply_tinymist_selection(Some(&range));

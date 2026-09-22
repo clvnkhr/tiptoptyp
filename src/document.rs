@@ -15,8 +15,7 @@ pub(crate) fn detect_document(path: &Path, bytes: &[u8]) -> Result<DocumentKind,
     }
 
     match extension_kind(path) {
-        Some(DocumentKind::Typst) => return utf8_document(bytes, DocumentKind::Typst, path),
-        Some(DocumentKind::Text) => return utf8_document(bytes, DocumentKind::Text, path),
+        Some(kind) if kind.is_editable() => return utf8_document(bytes, kind, path),
         Some(kind) => return Ok(kind),
         None if looks_like_text(bytes) => return Ok(DocumentKind::Text),
         None => {}
@@ -46,6 +45,8 @@ fn extension_kind(path: &Path) -> Option<DocumentKind> {
     let extension = path.extension()?.to_str()?;
     if extension.eq_ignore_ascii_case("typ") {
         Some(DocumentKind::Typst)
+    } else if extension.eq_ignore_ascii_case("tex") {
+        Some(DocumentKind::Tex)
     } else if extension.eq_ignore_ascii_case("pdf") {
         Some(DocumentKind::Pdf)
     } else if IMAGE_EXTENSIONS
@@ -70,8 +71,7 @@ const IMAGE_EXTENSIONS: &[&str] = &[
 const TEXT_EXTENSIONS: &[&str] = &[
     "txt", "md", "markdown", "rs", "toml", "json", "jsonc", "yaml", "yml", "xml", "html", "htm",
     "css", "scss", "js", "jsx", "ts", "tsx", "py", "rb", "go", "java", "c", "h", "cc", "cpp",
-    "hpp", "sh", "bash", "zsh", "fish", "sql", "csv", "tsv", "ini", "cfg", "conf", "log", "tex",
-    "bib",
+    "hpp", "sh", "bash", "zsh", "fish", "sql", "csv", "tsv", "ini", "cfg", "conf", "log", "bib",
 ];
 
 #[cfg(test)]
@@ -129,6 +129,8 @@ mod tests {
     fn advertised_paths_and_detection_share_one_case_insensitive_extension_policy() {
         for (path, expected) in [
             ("main.TyP", DocumentKind::Typst),
+            ("paper.TeX", DocumentKind::Tex),
+            ("references.BIB", DocumentKind::Text),
             ("notes.JsOnC", DocumentKind::Text),
             ("photo.WeBp", DocumentKind::Image),
             ("paper.PdF", DocumentKind::Pdf),
@@ -161,5 +163,10 @@ mod tests {
         let error = detect_document(Path::new("broken.toml"), b"\xff\xfe").unwrap_err();
         assert!(error.contains("UTF-8"));
         assert!(error.contains("broken.toml"));
+        assert!(detect_document(Path::new("broken.tex"), b"\xff\xfe").is_err());
+        assert_eq!(
+            detect_document(Path::new("renamed.tex"), b"%PDF-1.7").unwrap(),
+            DocumentKind::Pdf
+        );
     }
 }

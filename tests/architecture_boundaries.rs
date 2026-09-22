@@ -235,6 +235,55 @@ fn capability_derivation_cannot_probe_or_render() {
 }
 
 #[test]
+fn build_scheduler_and_application_do_not_decode_engine_output() {
+    for source in [
+        include_str!("../src/compiler.rs"),
+        include_str!("../src/app/build.rs"),
+    ] {
+        let production = source.split("#[cfg(test)]\nmod tests").next().unwrap();
+        for forbidden in [
+            "parse_typst_short_output",
+            "classify_watch_line",
+            "PrivateTypstDocument",
+            "Command::new",
+            "--diagnostic-format",
+        ] {
+            assert!(
+                !production.contains(forbidden),
+                "shared build owner contains engine detail {forbidden}"
+            );
+        }
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/compiler");
+    for path in rust_files(&root) {
+        let source = fs::read_to_string(path).unwrap();
+        let production = source.split("#[cfg(test)]\nmod tests").next().unwrap();
+        for forbidden in [
+            "egui",
+            "eframe",
+            "PreviewController",
+            "crate::app",
+            "crate::tinymist",
+        ] {
+            assert!(
+                !production.contains(forbidden),
+                "build adapter owns unrelated service {forbidden}"
+            );
+        }
+    }
+    let support = include_str!("../src/language_support.rs");
+    for forbidden in [
+        "egui",
+        "std::fs",
+        "std::process",
+        "resolve_tool",
+        "Command::new",
+    ] {
+        assert!(!support.contains(forbidden));
+    }
+}
+
+#[test]
 fn window_code_uses_stable_tab_accessors_instead_of_storage_slots() {
     let app = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/app");
     for path in rust_files(&app) {

@@ -357,7 +357,7 @@ fn load_thumbnail(
     match kind {
         DocumentKind::Image => load_image_thumbnail(path, max_dimension, cancelled),
         DocumentKind::Pdf => load_pdf_thumbnail(path, max_dimension, cancelled),
-        DocumentKind::Typst | DocumentKind::Text => {
+        DocumentKind::Typst | DocumentKind::Tex | DocumentKind::Text => {
             Err("Only image and PDF files have hover thumbnails".to_owned())
         }
     }
@@ -486,7 +486,7 @@ fn worker_loop(
         let output = match request.kind {
             DocumentKind::Image => load_image(&request.path, &cancelled),
             DocumentKind::Pdf => load_pdf(&request.path, request.inspect_pages, cancelled),
-            DocumentKind::Typst | DocumentKind::Text => {
+            DocumentKind::Typst | DocumentKind::Tex | DocumentKind::Text => {
                 Err("Only binary preview assets use the asset loader".to_owned())
             }
         };

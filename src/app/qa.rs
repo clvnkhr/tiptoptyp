@@ -888,7 +888,7 @@ mod tests {
                 &context,
             );
             assert_eq!(app.tabs.len(), 1);
-            assert!(app.typst_preview_available());
+            assert!(app.source_preview_available());
             assert_eq!(app.document().key(), key);
         }
         app.document_mut()
@@ -908,7 +908,7 @@ mod tests {
         assert_eq!(app.tabs.len(), 1);
         assert_eq!(app.document().source(), &qa.document.unwrap().source);
         assert_eq!(app.document().key().owner, key.owner);
-        assert!(app.typst_preview_available());
+        assert!(app.source_preview_available());
     }
 
     #[test]

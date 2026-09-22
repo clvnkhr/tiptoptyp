@@ -3,6 +3,37 @@ use crate::mitex_projection::Error as TranslationError;
 
 const ORIGINAL: &str = "#import \"@preview/mitex:0.2.7\": mi\n文 #mi(`\\alpha+😀`) end\n";
 
+#[test]
+fn native_tex_roundtrips_without_projection_and_keeps_undo_and_save_identity() {
+    let source = "\\documentclass{article}\n\\begin{document}\n文 $\\alpha+😀$\n\\end{document}\n";
+    let mut document = Document::<usize>::new(WindowSessionId::new(1), source, DocumentKind::Tex);
+    assert_eq!(document.name(), "Untitled.tex");
+    assert_eq!(
+        document.enable(Config::default()).unwrap_err(),
+        Error::NotTypst
+    );
+    assert!(document.config().is_none());
+    assert_eq!(document.canonical_snapshot().unwrap().source(), source);
+    let initial = document.key();
+    let cursor = source.chars().count();
+    document.edit(cursor, |text| text.push_str("% extra\n"));
+    assert_ne!(document.key(), initial);
+    assert!(document.is_dirty());
+    document.history_step(false, cursor + 8).unwrap();
+    assert_eq!(document.source(), source);
+    document.history_step(true, cursor).unwrap();
+    let edited = format!("{source}% extra\n");
+    assert_eq!(document.source(), &edited);
+    let request = document
+        .prepare_save("paper.tex".into(), DocumentKind::Tex)
+        .unwrap();
+    assert_eq!(request.source(), edited);
+    document.record_save(request.committed(17)).unwrap();
+    assert!(!document.is_dirty());
+    assert_eq!(document.kind(), DocumentKind::Tex);
+    assert_eq!(document.canonical_snapshot().unwrap().source(), edited);
+}
+
 fn canonical_edit(
     source: &str,
     needle: &str,

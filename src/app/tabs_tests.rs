@@ -1,6 +1,73 @@
 use super::*;
 
 #[test]
+fn opening_tex_preserves_native_source_and_never_requests_typst_services() {
+    let context = egui::Context::default();
+    let root = tempfile::tempdir().unwrap();
+    let mut app = fixture(&context, root.path());
+    app.settings.mitex_auto_enable = true;
+    let path = root.path().join("paper.tex");
+    let source = "\\documentclass{article}\n$\\alpha$\n";
+    fs::write(&path, source).unwrap();
+    assert!(app.load_path(path));
+    assert_eq!(app.document().kind(), DocumentKind::Tex);
+    assert_eq!(app.document().source(), source);
+    assert!(app.document().config().is_none());
+    assert!(!app.source_preview_available());
+    assert!(!app.interactive_preview_requested());
+    assert!(!app.preview_processing_enabled());
+    assert!(!tinymist_language_features_ready(
+        DocumentKind::Tex,
+        true,
+        true
+    ));
+    assert!(app.tinymist_sync.generation.is_none());
+    app.document_mut()
+        .edit(CCursorRange::default(), |text| text.push_str("% edit"));
+    app.mark_edited();
+    assert!(app.compile_deadline.is_none());
+    app.request_compile();
+    assert!(app.compiler.try_recv().is_none());
+    assert!(app.document().is_dirty());
+}
+
+#[test]
+fn a_tex_tab_can_be_edited_beside_a_designated_typst_preview() {
+    let context = egui::Context::default();
+    let root = tempfile::tempdir().unwrap();
+    let mut app = fixture(&context, root.path());
+    app.snapshot_scene = Some(UiSnapshotScene::Tabs);
+    let preview = app.tabs.active_id().unwrap();
+    app.select_preview_tab(preview, &context);
+    app.append_tab(&context);
+    let tex = app.tabs.active_id().unwrap();
+    app.document_mut().replace_loaded_unprojected(
+        "$\\alpha$".to_owned(),
+        root.path().join("paper.tex"),
+        DocumentKind::Tex,
+        None,
+    );
+    assert_eq!(app.preview_document_kind(), DocumentKind::Typst);
+    assert_eq!(app.preview_document_source().unwrap(), "first");
+    assert!(app.source_preview_available());
+    app.select_preview_tab(tex, &context);
+    assert_eq!(
+        app.tabs.preview_id(),
+        Some(preview),
+        "unsupported source cannot replace the designated build entry"
+    );
+    app.document_mut()
+        .edit(CCursorRange::default(), |text| text.push('!'));
+    app.mark_edited();
+    assert!(
+        app.compile_deadline.is_none(),
+        "editing TeX must not rebuild an unrelated Typst entry"
+    );
+    assert_eq!(app.preview_document_source().unwrap(), "first");
+    assert!(crate::tinymist_sync::collect(app.document(), &root.path().join("paper.tex")).is_err());
+}
+
+#[test]
 fn native_drag_is_excluded_on_tab_hover_and_until_the_tab_gesture_ends() {
     let mut tabs = Tabs::default();
     tabs.tab_drag_rects.push(Rect::from_min_max(
@@ -352,7 +419,7 @@ fn last_tab_closes_to_an_empty_workspace_and_new_reuses_the_window() {
     assert_eq!(app.workspace_root, root.path().canonicalize().unwrap());
     assert!(!app.is_dirty_for_close());
     assert!(!app.preview_visible());
-    assert!(!app.typst_preview_available());
+    assert!(!app.source_preview_available());
     for _ in 0..20 {
         app.schedule_compile_now();
         app.schedule_project_index();
@@ -1083,7 +1150,7 @@ fn opened_pdfs_default_to_pdfjs_without_poppler_even_beside_a_typst_preview() {
     );
     app.clear_preview_for_document(true);
     assert!(app.pdfjs_asset_requested());
-    assert!(app.typst_preview_available());
+    assert!(app.source_preview_available());
     // The dormant fixture has no sidecar. Model its normal startup state.
     app.preview.tinymist_state = ServiceState::Starting("Launching Tinymist".into());
     app.preview.webview_state = ServiceState::Starting("Waiting for preview".into());

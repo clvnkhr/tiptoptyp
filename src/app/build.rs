@@ -1,0 +1,176 @@
+//! Canonical-source to build-service adapter; compiler formats stay in engine modules.
+use super::*;
+use crate::{
+    compiler::{CompileEvent, CompileInput, CompileRequest, EngineConfig, TypstOptions},
+    language_support::BuildEngineKind,
+};
+
+impl EditorApp {
+    pub(super) fn request_compile(&mut self) {
+        self.compile_deadline = None;
+        if !self.preview_processing_enabled() || !self.may_run_compilation() {
+            return;
+        }
+        let preview_path = self.preview_document_path();
+        let source = match self.preview_document_source() {
+            Ok(source) => source,
+            Err(error) => {
+                self.set_compile_error(error);
+                return;
+            }
+        };
+        let source_dir = self.preview_source_directory();
+        let display_name = preview_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Untitled.typ".to_owned());
+        let Some(engine) = self.preview_language_support().build else {
+            return;
+        };
+        let Some(language) = self.preview_document_kind().typesetting_language() else {
+            return;
+        };
+        let engine = match engine {
+            BuildEngineKind::Typst => EngineConfig::Typst(TypstOptions {
+                executable: self.typst_tool.program.clone(),
+                font_paths: self.font_catalog.workspace_directories().to_vec(),
+            }),
+        };
+        let request = CompileRequest {
+            revision: self.document().revision(),
+            rasterize: self.raster_preview_required(),
+            input: CompileInput {
+                language,
+                source,
+                project_root: self.tab_preview_root().to_owned(),
+                source_dir,
+                display_name,
+            },
+            engine,
+        };
+
+        match self.compiler.request(request) {
+            Ok(()) => self.preview.status = PreviewStatus::Compiling,
+            Err(error) => self.set_compile_error(error),
+        }
+    }
+
+    pub(super) fn preview_source_directory(&self) -> PathBuf {
+        if self.tab_preview_document().is_some_and(|document| {
+            LanguageSupport::for_document(document.kind())
+                .build
+                .is_some()
+                && document.path().is_none()
+        }) {
+            return self.tab_preview_root().into();
+        }
+        if self.current_is_preview_document() && self.document().path().is_none() {
+            // The preview path is only a virtual identity for an untitled
+            // document. Relative imports and private mirrors need a real root.
+            self.current_directory()
+                .unwrap_or_else(|| self.project_root())
+        } else {
+            self.preview_document_path()
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| self.project_root())
+        }
+    }
+
+    pub(super) fn tick_compile(&mut self, context: &egui::Context) {
+        if !self.preview_processing_enabled() || !self.may_run_compilation() {
+            self.compile_deadline = None;
+            return;
+        }
+        let Some(deadline) = self.compile_deadline else {
+            return;
+        };
+        let now = Instant::now();
+        if deadline <= now {
+            self.request_compile();
+        } else {
+            context.request_repaint_after(deadline - now);
+        }
+    }
+
+    pub(super) fn receive_compile_results(&mut self) {
+        let _span = crate::performance::span("compile.receive");
+        while let Some(result) = self.compiler.try_recv() {
+            if !self.preview_processing_enabled()
+                || !self.may_run_compilation()
+                || result.revision != self.document().revision()
+            {
+                continue;
+            }
+
+            match result.event {
+                CompileEvent::Started => {
+                    // Keep the previous artifact and pages until their
+                    // independently versioned replacements arrive.
+                    self.preview.status = PreviewStatus::Compiling;
+                }
+                CompileEvent::Failed(report) => self.set_compile_failure(report),
+                CompileEvent::Artifact(artifact) => {
+                    self.preview.accept_artifact(artifact.key, artifact.pdf);
+                    self.set_diagnostics(artifact.diagnostics);
+                    self.preview.status = PreviewStatus::Ready(result.elapsed);
+                    self.complete_pending_export();
+                }
+                CompileEvent::Catalog { key, catalog }
+                    if self.preview.accepts_raster(key, self.document().revision()) =>
+                {
+                    self.preview.accept_catalog(key, catalog);
+                }
+                CompileEvent::RasterFailed { key, error }
+                    if self.preview.accepts_raster(key, self.document().revision()) =>
+                {
+                    self.preview.content.fail_raster(key, error.clone());
+                    self.notice = Some(Notice {
+                        message: format!(
+                            "Preview is ready, but its raster preview is unavailable: {error}"
+                        ),
+                        kind: NoticeKind::Error,
+                    });
+                }
+                CompileEvent::Catalog { .. } | CompileEvent::RasterFailed { .. } => {}
+            }
+        }
+    }
+
+    pub(super) fn set_compile_error(&mut self, error: String) {
+        self.set_compile_failure(DiagnosticReport::error(error));
+    }
+
+    pub(super) fn set_compile_failure(&mut self, report: DiagnosticReport) {
+        self.preview.content.invalidate();
+        self.preview.status = PreviewStatus::Error;
+        self.set_diagnostics(report);
+    }
+
+    pub(super) fn set_diagnostics(&mut self, report: DiagnosticReport) {
+        let DiagnosticReport {
+            raw,
+            mut diagnostics,
+        } = report;
+        if self.document().config().is_some()
+            && let Ok(snapshot) = self.document().canonical_snapshot()
+        {
+            for diagnostic in &mut diagnostics {
+                if self.diagnostic_targets_current_document(diagnostic) {
+                    diagnostic.location = diagnostic.location.and_then(|location| {
+                        let cursor = char_index_at_line_column(
+                            snapshot.source(),
+                            location.line,
+                            location.column,
+                        );
+                        let cursor = snapshot.editor_scalar_cursor(ScalarOffset::new(cursor))?;
+                        let (line, column) =
+                            line_column_at_char(snapshot.editor_source(), cursor.get());
+                        Some(crate::diagnostics::DiagnosticLocation { line, column })
+                    });
+                }
+            }
+        }
+        self.preview.set_diagnostics(raw, diagnostics);
+    }
+}

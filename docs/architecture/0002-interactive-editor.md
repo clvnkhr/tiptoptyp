@@ -36,7 +36,7 @@ execution details in decisions 1–3:
 | Window orchestration and tab-owned document state | `src/app.rs`, `src/app/tabs.rs`; [tabs and Git hunks](../tabs-and-git-hunks.md) |
 | Settings presentation and deferred host | `src/app/settings_panel.rs`, `src/app/settings_window.rs`; [focused ownership](0005-focused-ui-and-recovery.md) |
 | Canonical/displayed document boundary | `src/mitex_document.rs`, `src/mitex_projection.rs`; [miTeX projection](../mitex-projection.md) |
-| Protocol, artifact production and preview policy | `src/tinymist.rs`, `src/compiler.rs`, `src/preview.rs`, `core/src/recovery.rs`; [focused recovery](0005-focused-ui-and-recovery.md) |
+| Protocol, artifact production and preview policy | `src/tinymist.rs`, `src/compiler.rs`, `src/compiler/typst.rs`, `src/app/build.rs`, `src/preview.rs`, `core/src/recovery.rs`; [typesetting engines](0006-typesetting-engines.md), [focused recovery](0005-focused-ui-and-recovery.md) |
 | Native child-view composition | `src/app/native_views.rs`, `src/child_view.rs`; [native boundaries](0004-native-unsafe-boundaries.md) |
 
 The broader [architecture audit](../../output/pdf/architecture-audit.typ) describes

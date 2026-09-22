@@ -79,9 +79,13 @@ impl EditorApp {
                     egui::Theme::Light
                 }
             });
+        let preview_document = self.preview_document_kind();
+        let document = self.document().kind();
         let capabilities = self
             .capabilities
             .snapshot(crate::capabilities::CapabilityInputs {
+                document,
+                preview_document,
                 typst: self.typst_tool.clone(),
                 tinymist: self.tinymist_tool.clone(),
                 lsp: self.preview.tinymist_state.clone(),
@@ -99,14 +103,14 @@ impl EditorApp {
         // be constructible there (including its initially hidden surface).
         let backend_label = if self.tabs.is_empty() {
             "No document"
-        } else if self.typst_preview_available() {
+        } else if self.source_preview_available() {
             preview_status.backend_label()
         } else {
             match self.document().kind() {
                 DocumentKind::Pdf if self.pdfjs_asset_requested() => "PDF.js",
                 DocumentKind::Pdf => "Rasterised PDF",
                 DocumentKind::Image => "Image",
-                DocumentKind::Text => "Text editor",
+                DocumentKind::Tex | DocumentKind::Text => "Text editor",
                 DocumentKind::Typst => preview_status.backend_label(),
             }
         };

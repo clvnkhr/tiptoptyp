@@ -180,7 +180,16 @@ impl<C> DocumentSession<C> {
             .as_ref()
             .and_then(|path| path.file_name())
             .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "Untitled.typ".to_owned())
+            .unwrap_or_else(|| {
+                match self.kind {
+                    DocumentKind::Typst => "Untitled.typ",
+                    DocumentKind::Tex => "Untitled.tex",
+                    DocumentKind::Text => "Untitled.txt",
+                    DocumentKind::Pdf => "Untitled.pdf",
+                    DocumentKind::Image => "Untitled image",
+                }
+                .to_owned()
+            })
     }
 
     pub fn source(&self) -> &String {
@@ -397,19 +406,43 @@ impl<C> Drop for EditTransaction<'_, C> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocumentKind {
     Typst,
+    Tex,
     Text,
     Image,
     Pdf,
 }
 impl DocumentKind {
     pub fn is_editable(self) -> bool {
-        matches!(self, Self::Typst | Self::Text)
+        matches!(self, Self::Typst | Self::Tex | Self::Text)
     }
     pub fn is_typst(self) -> bool {
         self == Self::Typst
     }
     pub fn preview_only(self) -> bool {
         !self.is_editable()
+    }
+    /// Source language is independent of installed tools and editing projections.
+    pub fn typesetting_language(self) -> Option<TypesettingLanguage> {
+        match self {
+            Self::Typst => Some(TypesettingLanguage::Typst),
+            Self::Tex => Some(TypesettingLanguage::Tex),
+            Self::Text | Self::Image | Self::Pdf => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypesettingLanguage {
+    Typst,
+    Tex,
+}
+
+impl TypesettingLanguage {
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Typst => "typ",
+            Self::Tex => "tex",
+        }
     }
 }
 

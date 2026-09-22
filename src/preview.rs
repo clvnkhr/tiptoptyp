@@ -133,7 +133,10 @@ impl PreviewStatusSnapshot<'_> {
     pub(crate) fn backend_label(&self) -> &'static str {
         match self.effective_backend {
             PreviewBackend::Interactive => "Interactive",
-            PreviewBackend::PdfJs if self.requested_backend == PreviewPreference::Interactive => {
+            PreviewBackend::PdfJs
+                if self.requested_backend == PreviewPreference::Interactive
+                    && (self.interactive_requested || self.fallback_state.is_some()) =>
+            {
                 "PDF.js · fallback"
             }
             PreviewBackend::PdfJs => "PDF.js",
@@ -794,30 +797,30 @@ impl PreviewController {
 
     pub(crate) fn interactive_requested(
         &self,
-        typst_preview_available: bool,
+        interactive_source_supported: bool,
         platform_supported: bool,
     ) -> bool {
-        typst_preview_available
+        interactive_source_supported
             && self.requested_backend == PreviewPreference::Interactive
             && platform_supported
     }
 
     pub(crate) fn interactive_active(
         &self,
-        typst_preview_available: bool,
+        interactive_source_supported: bool,
         platform_supported: bool,
     ) -> bool {
-        self.interactive_requested(typst_preview_available, platform_supported)
+        self.interactive_requested(interactive_source_supported, platform_supported)
             && self.connection.endpoint().is_some()
             && self.webview_state.is_ready()
     }
 
     pub(crate) fn should_attempt_interactive(
         &self,
-        typst_preview_available: bool,
+        interactive_source_supported: bool,
         platform_supported: bool,
     ) -> bool {
-        self.interactive_requested(typst_preview_available, platform_supported)
+        self.interactive_requested(interactive_source_supported, platform_supported)
             && self.connection.endpoint().is_some()
             && !matches!(
                 self.webview_state,
@@ -827,10 +830,10 @@ impl PreviewController {
 
     pub(crate) fn interactive_transitioning(
         &self,
-        typst_preview_available: bool,
+        interactive_source_supported: bool,
         platform_supported: bool,
     ) -> bool {
-        self.interactive_requested(typst_preview_available, platform_supported)
+        self.interactive_requested(interactive_source_supported, platform_supported)
             && matches!(
                 self.tinymist_state,
                 ServiceState::Starting(_) | ServiceState::Ready(_)
@@ -843,20 +846,22 @@ impl PreviewController {
 
     pub(crate) fn status_snapshot(
         &self,
-        typst_preview_available: bool,
+        interactive_source_supported: bool,
         preview_visible: bool,
         platform_supported: bool,
         document_revision: u64,
     ) -> PreviewStatusSnapshot<'_> {
-        let native_ready = self.interactive_active(typst_preview_available, platform_supported);
+        let native_ready =
+            self.interactive_active(interactive_source_supported, platform_supported);
         let interactive_requested =
-            self.interactive_requested(typst_preview_available, platform_supported);
+            self.interactive_requested(interactive_source_supported, platform_supported);
         PreviewStatusSnapshot {
             requested_backend: self.requested_backend,
-            effective_backend: self.effective_backend(typst_preview_available, platform_supported),
+            effective_backend: self
+                .effective_backend(interactive_source_supported, platform_supported),
             interactive_requested,
             should_attempt_native: self
-                .should_attempt_interactive(typst_preview_available, platform_supported),
+                .should_attempt_interactive(interactive_source_supported, platform_supported),
             native_ready,
             canonical_artifact_available: self.content.pdf().is_some()
                 && self
@@ -864,11 +869,11 @@ impl PreviewController {
                     .artifact_key()
                     .is_some_and(|key| key.revision == document_revision),
             interactive_transitioning: self
-                .interactive_transitioning(typst_preview_available, platform_supported),
-            fallback_state: if typst_preview_available
+                .interactive_transitioning(interactive_source_supported, platform_supported),
+            fallback_state: if interactive_source_supported
                 && preview_visible
                 && self.requested_backend == PreviewPreference::Interactive
-                && self.effective_backend(typst_preview_available, platform_supported)
+                && self.effective_backend(interactive_source_supported, platform_supported)
                     == PreviewBackend::PdfJs
             {
                 Some(if self.connection.endpoint().is_some() {
@@ -884,14 +889,14 @@ impl PreviewController {
 
     fn effective_backend(
         &self,
-        typst_preview_available: bool,
+        interactive_source_supported: bool,
         platform_supported: bool,
     ) -> PreviewBackend {
         match self.requested_backend {
             PreviewPreference::Native => PreviewBackend::Raster,
             PreviewPreference::PdfJs => PreviewBackend::PdfJs,
             PreviewPreference::Interactive
-                if self.interactive_requested(typst_preview_available, platform_supported)
+                if self.interactive_requested(interactive_source_supported, platform_supported)
                     && !self.interactive_unavailable() =>
             {
                 PreviewBackend::Interactive
@@ -1680,5 +1685,19 @@ mod tests {
         );
         assert!(recovering.interactive_transitioning);
         assert_eq!(recovering.effective_backend, PreviewBackend::Interactive);
+    }
+
+    #[test]
+    fn a_pdf_only_engine_uses_pdfjs_without_claiming_an_interactive_failure() {
+        let mut preview = PreviewController::new(false, PreviewPreference::Interactive);
+        preview.accept_artifact(key(7, 1), Arc::from(&b"pdf"[..]));
+        let status = preview.status_snapshot(false, true, true, 7);
+        assert_eq!(status.effective_backend, PreviewBackend::PdfJs);
+        assert_eq!(status.backend_label(), "PDF.js");
+        assert!(status.canonical_artifact_available);
+        assert!(!status.interactive_requested);
+        assert!(!status.should_attempt_native);
+        assert!(!status.interactive_transitioning);
+        assert!(status.fallback_reason().is_none());
     }
 }

@@ -26,6 +26,7 @@ mod generic_highlight;
 mod git;
 mod highlight;
 mod index_jobs;
+mod language_support;
 mod launch;
 #[allow(unsafe_code)]
 mod native_menu;

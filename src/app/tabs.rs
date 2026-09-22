@@ -406,9 +406,14 @@ impl EditorApp {
         let preview = self.tabs.preview_id().and_then(|id| {
             let document = self.document_for_tab(id)?;
             let root = self.tab_workspace(id)?;
-            Some((root, document.kind().is_typst()))
+            Some((
+                root,
+                LanguageSupport::for_document(document.kind())
+                    .build
+                    .is_some(),
+            ))
         });
-        crate::tinymist_sync::preview_root(&self.workspace_root, preview)
+        crate::language_support::preview_root(&self.workspace_root, preview)
     }
     pub(super) fn tab_workspace(&self, id: u64) -> Option<&Path> {
         self.tabs
@@ -674,7 +679,7 @@ impl EditorApp {
         if Some(id) == self.tabs.active_id() {
             return;
         }
-        let preserve_preview = self.typst_preview_available();
+        let preserve_preview = self.source_preview_available();
         let workspace_changed = self.tabs.records[&id].workspace != self.workspace_root;
         self.activate_record(id, context);
         self.tabs.reveal_active = true;
@@ -698,7 +703,7 @@ impl EditorApp {
             self.request_asset(path);
         }
         self.git_editor.request_refresh();
-        if self.typst_preview_available()
+        if self.source_preview_available()
             && switch_needs_compile(
                 preserve_preview,
                 self.raster_preview_required(),
@@ -825,7 +830,7 @@ impl EditorApp {
         }
         if self
             .document_for_tab(id)
-            .is_none_or(|d| !d.kind().is_typst())
+            .is_none_or(|d| LanguageSupport::for_document(d.kind()).build.is_none())
         {
             return;
         }
@@ -878,7 +883,7 @@ impl EditorApp {
                                     let name = document.name();
                                     let active = Some(id) == self.tabs.active_id();
                                     ui.push_id(id, |ui| {
-                                        let compatible = document.kind().is_typst();
+                                        let compatible = LanguageSupport::for_document(document.kind()).build.is_some();
                                         let title_width = tab_title_width(
                                             &name,
                                             width,
@@ -1133,26 +1138,29 @@ fn tab_widget(
                     .sense(Sense::click_and_drag())
                     .truncate(),
                 );
-                let preview = document.kind().is_typst().then(|| {
-                    let preview = tab_icon_button(
-                        ui,
-                        true,
-                        if chosen {
-                            UiIcon::Eye
-                        } else {
-                            UiIcon::EyeClosed
-                        },
-                        &format!("Preview {name}"),
-                    );
-                    native_hover_text(
-                        preview,
-                        if chosen {
-                            "Preview source"
-                        } else {
-                            "Use this tab for preview"
-                        },
-                    )
-                });
+                let preview = LanguageSupport::for_document(document.kind())
+                    .build
+                    .is_some()
+                    .then(|| {
+                        let preview = tab_icon_button(
+                            ui,
+                            true,
+                            if chosen {
+                                UiIcon::Eye
+                            } else {
+                                UiIcon::EyeClosed
+                            },
+                            &format!("Preview {name}"),
+                        );
+                        native_hover_text(
+                            preview,
+                            if chosen {
+                                "Preview source"
+                            } else {
+                                "Use this tab for preview"
+                            },
+                        )
+                    });
                 let close = tab_icon_button(ui, true, UiIcon::Close, &format!("Close {name}"));
                 let close = native_hover_text(close, format!("Close {name}"));
                 (title, preview, close)

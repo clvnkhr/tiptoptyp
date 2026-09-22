@@ -5,6 +5,8 @@
 //! environment or process work, so Settings may request it during rendering.
 
 use crate::{
+    document::DocumentKind,
+    language_support::LanguageSupport,
     preview::ServiceState,
     toolchain::{PathProgramResolution, ToolResolution, resolve_path_program},
 };
@@ -25,6 +27,8 @@ pub(crate) struct CapabilitySnapshot {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CapabilityInputs {
+    pub(crate) document: DocumentKind,
+    pub(crate) preview_document: DocumentKind,
     pub(crate) typst: ToolResolution,
     pub(crate) tinymist: ToolResolution,
     pub(crate) lsp: ServiceState,
@@ -105,12 +109,24 @@ fn derive_snapshot(
     pdf_inspector: &PathProgramResolution,
     link_extractor: &PathProgramResolution,
 ) -> CapabilitySnapshot {
+    let editor = LanguageSupport::for_document(inputs.document);
+    let preview = LanguageSupport::for_document(inputs.preview_document);
     CapabilitySnapshot {
         editing: ServiceState::Ready(
             "Built-in source editing and syntax parsing are available".to_owned(),
         ),
-        lsp: require_tool(&inputs.tinymist, "LSP", inputs.lsp.clone()),
-        interactive_preview: if !inputs.interactive_preview_supported {
+        lsp: if editor.language_service.is_some() {
+            require_tool(&inputs.tinymist, "LSP", inputs.lsp.clone())
+        } else {
+            ServiceState::Unsupported(
+                "No language service is implemented for this document type".to_owned(),
+            )
+        },
+        interactive_preview: if !preview.interactive_preview {
+            ServiceState::Unsupported(
+                "This document type has no interactive preview service".to_owned(),
+            )
+        } else if !inputs.interactive_preview_supported {
             ServiceState::Unsupported(
                 "Interactive preview is available on macOS and Windows".to_owned(),
             )
@@ -121,11 +137,17 @@ fn derive_snapshot(
                 inputs.interactive_preview.clone(),
             )
         },
-        pdf_generation: require_tool(
-            &inputs.typst,
-            "PDF generation",
-            inputs.pdf_generation.clone(),
-        ),
+        pdf_generation: if preview.build.is_some() {
+            require_tool(
+                &inputs.typst,
+                "PDF generation",
+                inputs.pdf_generation.clone(),
+            )
+        } else {
+            ServiceState::Unsupported(
+                "No PDF build engine is implemented for this document type".to_owned(),
+            )
+        },
         rasterization: require_pdf_preview_programs(
             rasterizer,
             pdf_inspector,
@@ -213,6 +235,8 @@ mod tests {
 
     fn inputs() -> CapabilityInputs {
         CapabilityInputs {
+            document: DocumentKind::Typst,
+            preview_document: DocumentKind::Typst,
             typst: tool(ToolKind::Typst, true),
             tinymist: tool(ToolKind::Tinymist, true),
             lsp: ServiceState::Ready("LSP connected".into()),
@@ -298,5 +322,32 @@ mod tests {
         let snapshot = cache.snapshot(inputs());
         assert!(matches!(snapshot.rasterization, ServiceState::Failed(_)));
         assert!(snapshot.rasterization.detail().contains("pdfinfo"));
+    }
+
+    #[test]
+    fn tex_editing_and_a_pinned_typst_preview_have_independent_capabilities() {
+        let mut cache = CapabilityCache::discover_with(|binary| {
+            PathProgramResolution::from_program(binary, None)
+        });
+        let mut input = inputs();
+        input.document = DocumentKind::Tex;
+        input.preview_document = DocumentKind::Tex;
+        let tex = cache.snapshot(input.clone());
+        assert!(tex.editing.is_ready());
+        assert!(matches!(tex.lsp, ServiceState::Unsupported(_)));
+        assert!(matches!(tex.pdf_generation, ServiceState::Unsupported(_)));
+        assert!(matches!(
+            tex.interactive_preview,
+            ServiceState::Unsupported(_)
+        ));
+        input.preview_document = DocumentKind::Typst;
+        let pinned = cache.snapshot(input);
+        assert!(matches!(pinned.lsp, ServiceState::Unsupported(_)));
+        assert!(pinned.pdf_generation.is_ready());
+        assert!(pinned.interactive_preview.is_ready());
+        assert_eq!(
+            cache.derivations, 2,
+            "document routing belongs in the cache key"
+        );
     }
 }

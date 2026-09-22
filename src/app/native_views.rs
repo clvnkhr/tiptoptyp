@@ -1057,7 +1057,7 @@ impl EditorApp {
         let shortcuts = self.settings.effective_shortcuts();
         let has_selection = self.selected_editor_chars(context).is_some();
         let can_format = self.document().kind().is_typst();
-        let can_export_pdf = self.typst_preview_available();
+        let can_export_pdf = self.source_preview_available();
         let can_sync_preview =
             self.document().kind().is_typst() && self.interactive_preview_active();
         let edit_availability = CommandAvailability {

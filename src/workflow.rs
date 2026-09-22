@@ -11,7 +11,7 @@ use tiptoptyp_core::text::LspRange;
 use eframe::egui;
 use rfd::FileHandle;
 
-use crate::document::DocumentKey;
+use crate::document::{DocumentKey, DocumentKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NoticeKind {
@@ -25,7 +25,16 @@ pub(crate) enum DocumentDialogTarget {
     OpenFile,
     OpenFileInNewWindow,
     OpenFolder,
-    SaveAs { typst: bool },
+    SaveAs { kind: DocumentKind },
+}
+
+pub(crate) fn source_save_path(mut path: PathBuf, kind: DocumentKind) -> PathBuf {
+    if path.extension().is_none()
+        && let Some(language) = kind.typesetting_language()
+    {
+        path.set_extension(language.extension());
+    }
+    path
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -396,6 +405,24 @@ impl DocumentWorkflow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn save_as_retains_the_source_language_and_explicit_extensions() {
+        for (kind, expected) in [
+            (DocumentKind::Typst, "paper.typ"),
+            (DocumentKind::Tex, "paper.tex"),
+            (DocumentKind::Text, "paper"),
+        ] {
+            assert_eq!(
+                source_save_path("paper".into(), kind),
+                PathBuf::from(expected)
+            );
+            assert_eq!(
+                source_save_path("paper.txt".into(), kind),
+                PathBuf::from("paper.txt")
+            );
+        }
+    }
 
     const KEY: DocumentKey = DocumentKey {
         owner: tiptoptyp_core::document::WindowSessionId::new(1),

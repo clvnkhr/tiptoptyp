@@ -70,7 +70,7 @@ pub(super) fn empty_workspace_copy(workspace_available: bool) -> (&'static str, 
 
 impl EditorApp {
     pub(super) fn status_preview(&self) -> &PreviewController {
-        if self.document().kind().preview_only() && !self.typst_preview_available() {
+        if self.document().kind().preview_only() && !self.source_preview_available() {
             &self.asset_preview
         } else {
             &self.preview

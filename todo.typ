@@ -288,7 +288,16 @@ does not include the viewer features in items 1, 118 or 163.
 219. [x] (A12) Derive a cached capability snapshot from existing tool resolution and service state, separating editing/LSP, interactive preview, PDF generation, rasterization and link extraction. Expose missing raster/link capabilities separately; invalidate on tool-preference changes and explicit refresh, and test partial availability. Do not add a competing discovery/status service or probe tools in a frame callback.
 220. [x] (A12) Generate or validate runtime tool-version metadata from toolchain/manifest.tsv so constants and packaging cannot drift. Add a mismatch regression/build check; preserve resolution precedence without bundling new tools or retaining compatibility aliases.
 221. [x] (A12) Correct obsolete miTeX comments in src/lib.rs and add superseding current-state notes to ADR 0002 for per-window Tinymist, the separate Settings viewport and conditional CLI compilation. Cross-link the current ownership/module map without erasing historical decision context.
-222. [ ] refactor to allow for a tex engine
+222. [x] Refactor for native TeX engines: distinguish TeX source from Typst/miTeX,
+separate implemented build/language/interactive-preview capabilities, extract the
+Typst process and diagnostic adapter from the shared compiler scheduler, and pass
+structured reports plus immutable PDF artifacts to the application. Preserve
+window-owned services, latest-request scheduling, source/save identity and
+PDF.js output. Native TeX keeps its source and Save As extension without starting
+Typst or Tinymist. Architecture and the next engine's workspace/cancellation/
+SyncTeX requirements are in docs/architecture/0006-typesetting-engines.md;
+Tectonic is the likely first adapter, but engine selection remains open. This
+completes the foundation, not TeX compilation itself.
 223. [ ] prove out typst-compatible binaries like calepin
 224. [x] Audit the completed architecture refactors at their ownership and asynchronous-result boundaries. Fix rejected-work admission destroying valid jobs, stale workspace/Tinymist results, PDF process/page/residency errors, parked Save As rebinding, incomplete capability reporting and malformed Git-hunk arithmetic. Add focused regressions and retain bounded, event-driven resource use.
 225. [x] Restore reliable interactive tooltip handoff and preview-to-source keyboard focus. Use a fixed safe triangle from the opening cursor position to the popup's complete facing edge, never classify motion inside it as moving away, and do not restart hover delay because of a slow frame. After a Tinymist source jump, return native focus from the preview child to the editor so macOS Option+Left/Right word navigation works.

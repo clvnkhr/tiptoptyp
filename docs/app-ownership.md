@@ -10,7 +10,7 @@ Update this map when an owner changes. Native acceptance remains open in todos
 | --- | --- | --- |
 | `Tabs` / `TabRecord` / `DocumentSession` | Document: source, revision/epoch, projection, folding, parked editor state, autosave and workspace. `tabs.rs` activates/rekeys records; edits go through document APIs. | Stable tab ID is distinct from a document lifetime and the preview entry. Keep undo/selection in its owning viewport. |
 | `DocumentLifecycle`, `DocumentWorkflow`, `PendingSave` | Window: new/open/close, dialogs, continuation tokens, protected saves. Root app, `tabs.rs`, `saves.rs`, `workspace_view.rs` apply transitions. | Save receipt admission and durability remain in existing workflow/core APIs; disk work stays in `save_io` under its path lease. |
-| `Compiler`, `TinymistSidecar`, sync `Coordinator` | Window services: root request/restart/event adapters, `mitex_mode.rs`, tabs and saves supply versioned input. | Coordinator owns open URIs/backings; services own processes; adapters check result identity before document/UI effects. No service per tab. |
+| `Compiler`, `TinymistSidecar`, sync `Coordinator` | Window services: `app/build.rs` supplies canonical build inputs and consumes typed reports; root restart/event adapters, `mitex_mode.rs`, tabs and saves supply versioned language-service input. | Compiler owns the latest-request worker and PDF publication; `compiler/typst.rs` owns Typst process/mirror/logs. Coordinator owns open URIs/backings; adapters check result identity before document/UI effects. No service per tab. |
 | `PreviewController` (designated and asset), page/asset loaders | Window: compile deadlines/pause, artifact, status, recovery, visible page demands and asset tokens. Root, raster/native/workspace views request work and accept results. | Controller owns readiness/recovery/visibility policy. PDF service and process-wide residency own decoding and byte budgets. |
 | `webview*`, native parent, browser channels/job | Window, UI thread: `native_views.rs` creates/applies/hides/discards; root restart/event adapters request reload, navigation reclaims focus. | `discard_webview` already owns teardown. Keep native resource lifetime separate from server generation and readiness. Browser launches stay bounded/off the UI thread. |
 | `EditorDerivedData`, highlighters, pair syntax | Window caches keyed to active document identity: root preparation and `editor_view.rs` consume them. | Invalidate by source/key/theme; no reparsing on pointer movement or ordinary unchanged frames. |
@@ -26,11 +26,17 @@ Update this map when an owner changes. Native acceptance remains open in todos
 | Window requests, native menu queue, open requests, host/close state | `AppShell` owns process/window routing; each `EditorApp` consumes commands in its viewport. | No-document policy belongs to shell; empty workspace policy belongs to editor. Settings is the root-owned exception. |
 | Captures, scene and `QaSession` | Opt-in window/test state. | Preserve non-persistence and bounded capture/profile behavior. |
 
-The child modules `editor_view`, `extra_shortcuts`, `git_actions`, `mitex_mode`,
+The child modules `build`, `editor_view`, `extra_shortcuts`, `git_actions`, `mitex_mode`,
 `native_views`, `navigation`, `saves`, `settings_view`, `tabs` and `workspace_view`
 still implement `EditorApp` and can access all its fields. Moving methods among
 them does not narrow ownership. Existing leaf boundaries include `explorer_view`,
 `completion_popup`, `package_browser`, `popup_layout`, icons and Settings controls.
+
+The [typesetting foundation](architecture/0006-typesetting-engines.md) adds a pure
+`language_support` policy for build, language-service and interactive-preview
+capabilities. Native TeX is distinct from the miTeX representation of Typst.
+Compiler diagnostics are decoded by the engine adapter on its worker;
+`app/build.rs` only applies canonical-to-editor coordinate mapping and UI effects.
 
 ## Reviewed candidates
 

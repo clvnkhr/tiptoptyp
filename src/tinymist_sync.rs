@@ -57,6 +57,9 @@ pub(crate) fn collect(
     document: &DocumentSession,
     path: &std::path::Path,
 ) -> Result<VersionedInput, String> {
+    if !document.kind().is_typst() {
+        return Err("Tinymist requires a Typst document".to_owned());
+    }
     let snapshot = document
         .canonical_snapshot()
         .map_err(|error| error.to_string())?;
@@ -66,15 +69,6 @@ pub(crate) fn collect(
         version: revision_as_i32(snapshot.key().revision),
         source: snapshot.source().to_owned(),
     })
-}
-
-pub(crate) fn preview_root<'a>(
-    active_root: &'a std::path::Path,
-    preview: Option<(&'a std::path::Path, bool)>,
-) -> &'a std::path::Path {
-    preview
-        .filter(|(_, is_typst)| *is_typst)
-        .map_or(active_root, |(root, _)| root)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -341,6 +335,16 @@ mod tests {
     use eframe::egui::text::CCursorRange;
     use tiptoptyp_core::document::{DocumentKind, WindowSessionId};
 
+    #[test]
+    fn native_tex_cannot_cross_the_tinymist_source_boundary() {
+        let document =
+            DocumentSession::new(WindowSessionId::new(1), "$\\alpha$", DocumentKind::Tex);
+        assert_eq!(
+            collect(&document, std::path::Path::new("/paper.tex")).unwrap_err(),
+            "Tinymist requires a Typst document"
+        );
+    }
+
     fn input(owner: u64, epoch: u64, revision: u64, uri: &str, source: &str) -> VersionedInput {
         VersionedInput {
             key: DocumentKey {
@@ -512,14 +516,5 @@ mod tests {
         document.edit(CCursorRange::default(), |source| source.push_str("text"));
         let edited = collect(&document, &path).unwrap();
         assert_ne!(edited.key, projected.key);
-    }
-
-    #[test]
-    fn preview_root_uses_only_a_compatible_designated_document() {
-        let active = std::path::Path::new("/active");
-        let preview = std::path::Path::new("/preview");
-        assert_eq!(preview_root(active, None), active);
-        assert_eq!(preview_root(active, Some((preview, false))), active);
-        assert_eq!(preview_root(active, Some((preview, true))), preview);
     }
 }

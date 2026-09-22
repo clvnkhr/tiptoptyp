@@ -1,3 +1,4 @@
+mod build;
 mod icons;
 use icons::{
     UiIcon, icon_button, icon_button_enabled, paint_ui_icon, square_icon_button, static_icon,
@@ -102,10 +103,10 @@ use crate::{
         ChildViewHost, ChildViewSpec, POPUP_BLUR_GRACE, popup_focus_should_close,
         scoped_child_viewport_id, viewport_scoped_id,
     },
-    compiler::{ArtifactKey, CompileEvent, CompileRequest, Compiler},
+    compiler::{ArtifactKey, Compiler},
     diagnostics::{
-        Diagnostic, DiagnosticLocation, DiagnosticSeverity, DiagnosticSource,
-        normalize_diagnostics, parse_typst_short_output,
+        Diagnostic, DiagnosticLocation, DiagnosticReport, DiagnosticSeverity, DiagnosticSource,
+        normalize_diagnostics,
     },
     document::{DocumentKey, DocumentKind, DocumentSession, EditorSnapshot},
     editor_data::{EditorDerivedData, FontArgumentTarget, LineDiagnostic},
@@ -118,6 +119,7 @@ use crate::{
     generic_highlight::GenericSyntaxHighlighter,
     highlight::SyntaxHighlighter,
     index_jobs::{Poll as ProjectIndexPoll, ProjectIndexClient, ProjectIndexInput},
+    language_support::{LanguageServiceKind, LanguageSupport},
     native_menu::{
         AppCommand, CommandMenu, CommandRequirement, NativeMenuCommandQueue, command_spec,
         command_specs, consume_shortcut,
@@ -276,13 +278,13 @@ impl ViewMode {
     }
 }
 
-fn typst_preview_available_for(document_kind: DocumentKind, designated: bool) -> bool {
-    document_kind.is_typst() || designated
+fn source_preview_available_for(document_kind: DocumentKind, designated: bool) -> bool {
+    LanguageSupport::for_document(document_kind).build.is_some() || designated
 }
 
 fn preview_visible_for(document_kind: DocumentKind, view_mode: ViewMode, designated: bool) -> bool {
     document_kind.preview_only()
-        || (typst_preview_available_for(document_kind, designated) && view_mode.shows_preview())
+        || (source_preview_available_for(document_kind, designated) && view_mode.shows_preview())
 }
 
 const fn compilation_run_allowed(
@@ -310,7 +312,10 @@ fn tinymist_language_features_ready(
     lsp_ready: bool,
     current_document_open: bool,
 ) -> bool {
-    document_kind.is_typst() && lsp_ready && current_document_open
+    LanguageSupport::for_document(document_kind).language_service
+        == Some(LanguageServiceKind::Tinymist)
+        && lsp_ready
+        && current_document_open
 }
 
 fn pdf_output_requires_new_artifact(
@@ -1678,7 +1683,7 @@ impl EditorApp {
             // items enabled so the active viewport can make the final choice.
             CommandRequirement::Undo | CommandRequirement::Redo => true,
             CommandRequirement::TypstDocument => self.document().kind().is_typst(),
-            CommandRequirement::TypstPreview => self.typst_preview_available(),
+            CommandRequirement::SourcePreview => self.source_preview_available(),
             CommandRequirement::InteractivePreview => {
                 self.document().kind().is_typst() && self.interactive_preview_active()
             }
@@ -2080,7 +2085,11 @@ impl EditorApp {
         if self.tabs.uses_designated_preview() {
             return self
                 .tab_preview_document()
-                .filter(|document| document.kind().is_typst())
+                .filter(|document| {
+                    LanguageSupport::for_document(document.kind())
+                        .build
+                        .is_some()
+                })
                 .map(|document| {
                     document.path().clone().unwrap_or_else(|| {
                         self.untitled_tab_path(
@@ -2095,9 +2104,11 @@ impl EditorApp {
     fn preview_document_path(&self) -> PathBuf {
         self.designated_preview_path()
             .or_else(|| {
-                (self.document().kind().is_typst())
-                    .then(|| self.document().path().clone())
-                    .flatten()
+                (LanguageSupport::for_document(self.document().kind())
+                    .build
+                    .is_some())
+                .then(|| self.document().path().clone())
+                .flatten()
             })
             .unwrap_or_else(|| {
                 self.project_root()
@@ -2107,9 +2118,9 @@ impl EditorApp {
             })
     }
 
-    fn typst_preview_available(&self) -> bool {
+    fn source_preview_available(&self) -> bool {
         !self.tabs.is_empty()
-            && typst_preview_available_for(
+            && source_preview_available_for(
                 self.document().kind(),
                 self.designated_preview_path().is_some(),
             )
@@ -2118,19 +2129,28 @@ impl EditorApp {
     fn current_is_preview_document(&self) -> bool {
         if self.tabs.uses_designated_preview() {
             return self.tabs.active_id() == self.tabs.preview_id()
-                && self.document().kind().is_typst();
+                && LanguageSupport::for_document(self.document().kind())
+                    .build
+                    .is_some();
         }
         match &self.document().path() {
             Some(path) => same_path(path, &self.preview_document_path()),
-            None => self.designated_preview_path().is_none() && self.document().kind().is_typst(),
+            None => {
+                self.designated_preview_path().is_none()
+                    && LanguageSupport::for_document(self.document().kind())
+                        .build
+                        .is_some()
+            }
         }
     }
 
     fn preview_document_source(&self) -> Result<String, String> {
         if self.tabs.uses_designated_preview()
-            && let Some(document) = self
-                .tab_preview_document()
-                .filter(|document| document.kind().is_typst())
+            && let Some(document) = self.tab_preview_document().filter(|document| {
+                LanguageSupport::for_document(document.kind())
+                    .build
+                    .is_some()
+            })
         {
             if document.config().is_none() {
                 return Ok(document.source().clone());
@@ -2285,7 +2305,10 @@ impl EditorApp {
             self.preview.tinymist_diagnostics.clear();
             self.mark_diagnostics_changed();
         }
-        if self.document().kind().is_typst() {
+        if LanguageSupport::for_document(self.document().kind())
+            .build
+            .is_some()
+        {
             // Tinymist sees unsaved edits in every open source file. The CLI
             // fallback can only see an imported subfile after it is saved, so
             // avoid rebuilding the designated main entry with stale disk data.
@@ -2296,6 +2319,12 @@ impl EditorApp {
             if self.compile_deadline.is_some() {
                 self.preview.status = PreviewStatus::Waiting;
             }
+        } else {
+            self.compile_deadline = None;
+        }
+        if LanguageSupport::for_document(self.document().kind()).language_service
+            == Some(LanguageServiceKind::Tinymist)
+        {
             // Pausing freezes preview output, not the language server. Keep the
             // exact document version synchronized so completions, hover,
             // formatting, and diagnostics continue to describe this buffer.
@@ -2303,8 +2332,6 @@ impl EditorApp {
                 self.preview.tinymist_state = ServiceState::Degraded(error);
             }
             self.schedule_project_index();
-        } else {
-            self.compile_deadline = None;
         }
         self.schedule_autosave_if_needed();
     }
@@ -2379,121 +2406,6 @@ impl EditorApp {
 
     fn mark_diagnostics_changed(&mut self) {
         self.preview.mark_diagnostics_changed();
-    }
-
-    fn request_compile(&mut self) {
-        self.compile_deadline = None;
-        if !self.preview_processing_enabled() || !self.may_run_compilation() {
-            return;
-        }
-        let preview_path = self.preview_document_path();
-        let source = match self.preview_document_source() {
-            Ok(source) => source,
-            Err(error) => {
-                self.set_compile_error(error);
-                return;
-            }
-        };
-        let source_dir = self.preview_source_directory();
-        let display_name = preview_path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "Untitled.typ".to_owned());
-        let request = CompileRequest {
-            revision: self.document().revision(),
-            rasterize: self.raster_preview_required(),
-            source,
-            project_root: self.tab_preview_root().to_owned(),
-            source_dir,
-            display_name,
-            typst_executable: self.typst_tool.program.clone(),
-            font_paths: self.font_catalog.workspace_directories().to_vec(),
-        };
-
-        match self.compiler.request(request) {
-            Ok(()) => self.preview.status = PreviewStatus::Compiling,
-            Err(error) => self.set_compile_error(error),
-        }
-    }
-
-    fn preview_source_directory(&self) -> PathBuf {
-        if self
-            .tab_preview_document()
-            .is_some_and(|document| document.kind().is_typst() && document.path().is_none())
-        {
-            return self.tab_preview_root().into();
-        }
-        if self.current_is_preview_document() && self.document().path().is_none() {
-            // The preview path is only a virtual identity for an untitled
-            // document. Relative imports and private mirrors need a real root.
-            self.current_directory()
-                .unwrap_or_else(|| self.project_root())
-        } else {
-            self.preview_document_path()
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| self.project_root())
-        }
-    }
-
-    fn tick_compile(&mut self, context: &egui::Context) {
-        if !self.preview_processing_enabled() || !self.may_run_compilation() {
-            self.compile_deadline = None;
-            return;
-        }
-        let Some(deadline) = self.compile_deadline else {
-            return;
-        };
-        let now = Instant::now();
-        if deadline <= now {
-            self.request_compile();
-        } else {
-            context.request_repaint_after(deadline - now);
-        }
-    }
-
-    fn receive_compile_results(&mut self) {
-        let _span = crate::performance::span("compile.receive");
-        while let Some(result) = self.compiler.try_recv() {
-            if !self.preview_processing_enabled()
-                || !self.may_run_compilation()
-                || result.revision != self.document().revision()
-            {
-                continue;
-            }
-
-            match result.event {
-                CompileEvent::Started => {
-                    // Keep the previous artifact and pages until their
-                    // independently versioned replacements arrive.
-                    self.preview.status = PreviewStatus::Compiling;
-                }
-                CompileEvent::Failed(error) => self.set_compile_error(error),
-                CompileEvent::Artifact(artifact) => {
-                    self.preview.accept_artifact(artifact.key, artifact.pdf);
-                    self.set_diagnostics(artifact.diagnostics);
-                    self.preview.status = PreviewStatus::Ready(result.elapsed);
-                    self.complete_pending_export();
-                }
-                CompileEvent::Catalog { key, catalog }
-                    if self.preview.accepts_raster(key, self.document().revision()) =>
-                {
-                    self.preview.accept_catalog(key, catalog);
-                }
-                CompileEvent::RasterFailed { key, error }
-                    if self.preview.accepts_raster(key, self.document().revision()) =>
-                {
-                    self.preview.content.fail_raster(key, error.clone());
-                    self.notice = Some(Notice {
-                        message: format!(
-                            "Preview is ready, but its raster preview is unavailable: {error}"
-                        ),
-                        kind: NoticeKind::Error,
-                    });
-                }
-                CompileEvent::Catalog { .. } | CompileEvent::RasterFailed { .. } => {}
-            }
-        }
     }
 
     fn receive_asset_results(&mut self, context: &egui::Context) {
@@ -2572,7 +2484,7 @@ impl EditorApp {
         self.preview.prune_evicted_pages();
         self.asset_preview.prune_evicted_pages();
 
-        let raster_document_visible = self.typst_preview_available()
+        let raster_document_visible = self.source_preview_available()
             && self.view_mode.shows_preview()
             && self.raster_preview_required();
         let asset_visible = self.document().kind().preview_only()
@@ -2659,7 +2571,7 @@ impl EditorApp {
                 self.complete_pending_export();
             }
             Err(error) => {
-                if !self.typst_preview_available() {
+                if !self.source_preview_available() {
                     self.document_workflow.pending_export = None;
                 }
                 self.asset_preview.status = PreviewStatus::Error;
@@ -2774,41 +2686,6 @@ impl EditorApp {
         }
     }
 
-    fn set_compile_error(&mut self, error: String) {
-        self.preview.content.invalidate();
-        self.preview.status = PreviewStatus::Error;
-        self.set_diagnostics(error);
-    }
-
-    fn set_diagnostics(&mut self, raw: String) {
-        let display_name = self
-            .preview_document_path()
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| self.document_name());
-        let mut diagnostics = parse_typst_short_output(&raw, Some(Path::new(&display_name)));
-        if self.document().config().is_some()
-            && let Ok(snapshot) = self.document().canonical_snapshot()
-        {
-            for diagnostic in &mut diagnostics {
-                if self.diagnostic_targets_current_document(diagnostic) {
-                    diagnostic.location = diagnostic.location.and_then(|location| {
-                        let cursor = char_index_at_line_column(
-                            snapshot.source(),
-                            location.line,
-                            location.column,
-                        );
-                        let cursor = snapshot.editor_scalar_cursor(ScalarOffset::new(cursor))?;
-                        let (line, column) =
-                            line_column_at_char(snapshot.editor_source(), cursor.get());
-                        Some(crate::diagnostics::DiagnosticLocation { line, column })
-                    });
-                }
-            }
-        }
-        self.preview.set_diagnostics(raw, diagnostics);
-    }
-
     fn schedule_compile_now(&mut self) {
         let transition = self
             .preview
@@ -2883,7 +2760,7 @@ impl EditorApp {
     }
 
     fn compile_pdf(&mut self, frame: Option<&eframe::Frame>) {
-        if !self.typst_preview_available() {
+        if !self.source_preview_available() {
             self.notice = Some(Notice {
                 message: "Compile needs a Typst preview entry".to_owned(),
                 kind: NoticeKind::Info,
@@ -4123,9 +4000,9 @@ impl EditorApp {
             .add_filter(
                 "Supported documents",
                 &[
-                    "typ", "pdf", "txt", "md", "rs", "toml", "json", "yaml", "yml", "xml", "html",
-                    "css", "js", "ts", "py", "c", "cpp", "h", "png", "jpg", "jpeg", "gif", "webp",
-                    "bmp", "ico", "tif", "tiff",
+                    "typ", "tex", "bib", "pdf", "txt", "md", "rs", "toml", "json", "yaml", "yml",
+                    "xml", "html", "css", "js", "ts", "py", "c", "cpp", "h", "png", "jpg", "jpeg",
+                    "gif", "webp", "bmp", "ico", "tif", "tiff",
                 ],
             )
             .add_filter("Typst documents", &["typ"])
@@ -4251,7 +4128,7 @@ impl EditorApp {
                 ))
         {
             self.schedule_compile_now();
-        } else if !self.typst_preview_available() {
+        } else if !self.source_preview_available() {
             self.preview.status = PreviewStatus::Ready(Duration::ZERO);
         }
         self.git.request_refresh();
@@ -4286,15 +4163,19 @@ impl EditorApp {
         if self.document_workflow.has_dialog() {
             return false;
         }
-        let typst = self.document().kind().is_typst();
+        let kind = self.document().kind();
         let Some(dialog) = self.native_file_dialog(frame) else {
             return false;
         };
         let mut dialog = dialog.set_file_name(self.document_name());
-        dialog = if typst {
+        dialog = if kind == DocumentKind::Typst {
             dialog
                 .add_filter("Typst documents", &["typ"])
                 .set_title("Save Typst document")
+        } else if kind == DocumentKind::Tex {
+            dialog
+                .add_filter("TeX documents", &["tex"])
+                .set_title("Save TeX document")
         } else {
             dialog
                 .add_filter("Text files", &["txt"])
@@ -4305,7 +4186,7 @@ impl EditorApp {
         }
         self.document_workflow.start_dialog(PendingDialog::new(
             DocumentDialogRequest {
-                target: DocumentDialogTarget::SaveAs { typst },
+                target: DocumentDialogTarget::SaveAs { kind },
                 key: self.document().key(),
             },
             dialog.save_file(),
@@ -4318,7 +4199,7 @@ impl EditorApp {
     }
 
     fn choose_pdf_output(&mut self, frame: Option<&eframe::Frame>, intent: PdfWriteIntent) {
-        if !self.typst_preview_available() && self.document().kind() != DocumentKind::Pdf {
+        if !self.source_preview_available() && self.document().kind() != DocumentKind::Pdf {
             self.notice = Some(Notice {
                 message: format!(
                     "{} needs a Typst preview entry or PDF document",
@@ -4338,7 +4219,7 @@ impl EditorApp {
         if self.document_workflow.pending_export_dialog.is_some() {
             return;
         }
-        let export_source = if self.typst_preview_available() {
+        let export_source = if self.source_preview_available() {
             Some(self.preview_document_path())
         } else {
             self.document().path().clone()
@@ -4548,7 +4429,7 @@ impl EditorApp {
             self.schedule_autosave_if_needed();
             return;
         };
-        let mut path = file.path().to_path_buf();
+        let path = file.path().to_path_buf();
         if path.is_dir()
             && matches!(
                 target,
@@ -4597,7 +4478,7 @@ impl EditorApp {
                 }
                 self.schedule_autosave_if_needed();
             }
-            DocumentDialogTarget::SaveAs { typst } => {
+            DocumentDialogTarget::SaveAs { kind } => {
                 if self.document().epoch() != key.epoch {
                     self.document_workflow.cancel_continuation();
                     self.notice = Some(Notice {
@@ -4608,10 +4489,7 @@ impl EditorApp {
                     self.schedule_autosave_if_needed();
                     return;
                 }
-                if typst && path.extension().is_none() {
-                    path.set_extension("typ");
-                }
-                self.save_to(path, context);
+                self.save_to(crate::workflow::source_save_path(path, kind), context);
             }
         }
     }
@@ -4628,7 +4506,7 @@ impl EditorApp {
             path.set_extension("pdf");
         }
 
-        let typst_output = self.typst_preview_available();
+        let typst_output = self.source_preview_available();
         let output_preview = if typst_output {
             &self.preview
         } else {
@@ -4676,7 +4554,7 @@ impl EditorApp {
     }
 
     fn complete_pending_export(&mut self) {
-        let output_preview = if self.typst_preview_available() {
+        let output_preview = if self.source_preview_available() {
             &self.preview
         } else {
             &self.asset_preview
@@ -5704,7 +5582,7 @@ impl EditorApp {
     }
 
     fn follow_preview_link(&mut self, target: &str) {
-        let directory = if self.typst_preview_available() {
+        let directory = if self.source_preview_available() {
             Some(self.preview_source_directory())
         } else {
             self.current_directory()
@@ -5860,9 +5738,25 @@ impl EditorApp {
             )
     }
 
+    fn preview_document_kind(&self) -> DocumentKind {
+        if self.tabs.is_empty() {
+            return DocumentKind::Text;
+        }
+        if self.tabs.uses_designated_preview() {
+            self.tab_preview_document()
+                .map_or(DocumentKind::Text, |document| document.kind())
+        } else {
+            self.document().kind()
+        }
+    }
+
+    fn preview_language_support(&self) -> LanguageSupport {
+        LanguageSupport::for_document(self.preview_document_kind())
+    }
+
     fn preview_status_snapshot(&self) -> PreviewStatusSnapshot<'_> {
         self.preview.status_snapshot(
-            self.typst_preview_available(),
+            self.preview_language_support().interactive_preview,
             self.preview_visible(),
             cfg!(any(target_os = "macos", target_os = "windows")),
             self.document().revision(),
@@ -5874,7 +5768,7 @@ impl EditorApp {
     }
 
     fn preview_processing_enabled(&self) -> bool {
-        self.typst_preview_available()
+        self.source_preview_available()
             && (self.document_workflow.pending_export.is_some()
                 || self.pdfjs_preview_requested()
                 || self.raster_preview_required())
@@ -6123,7 +6017,10 @@ impl EditorApp {
 
                 ui.separator();
                 if native_hover_text(
-                    ui.add_enabled(self.typst_preview_available(), egui::Button::new("Compile")),
+                    ui.add_enabled(
+                        self.source_preview_available(),
+                        egui::Button::new("Compile"),
+                    ),
                     shortcut_tooltip(
                         "Compile PDF beside the Typst source",
                         &shortcuts,
@@ -6138,7 +6035,7 @@ impl EditorApp {
                 let (pause_label, pause_hint) = compilation_toggle_copy(self.compilation_paused);
                 if native_hover_text(
                     ui.add_enabled(
-                        self.typst_preview_available(),
+                        self.source_preview_available(),
                         egui::Button::new(pause_label).selected(self.compilation_paused),
                     ),
                     shortcut_tooltip(pause_hint, &shortcuts, ShortcutAction::ToggleCompilation),
@@ -6853,7 +6750,7 @@ impl EditorApp {
     }
 
     fn compiler_service_state(&self) -> ServiceState {
-        if !self.typst_preview_available() {
+        if !self.source_preview_available() {
             return ServiceState::Disabled("The selected file is not compiled as Typst".to_owned());
         }
         if !self.may_run_compilation() {
@@ -6888,11 +6785,15 @@ impl EditorApp {
 
     fn rasterizer_service_state(&self) -> ServiceState {
         let preview = self.status_preview();
-        if self.document().kind() == DocumentKind::Text && !self.typst_preview_available() {
+        if matches!(
+            self.document().kind(),
+            DocumentKind::Tex | DocumentKind::Text
+        ) && !self.source_preview_available()
+        {
             return ServiceState::Disabled("Text files do not need a preview renderer".to_owned());
         }
         if self.document().kind() == DocumentKind::Image
-            && !self.typst_preview_available()
+            && !self.source_preview_available()
             && !preview.content.pages().is_empty()
         {
             return ServiceState::Ready("The selected image decoded successfully".to_owned());
@@ -7563,7 +7464,7 @@ impl EditorApp {
     }
 
     fn show_preview(&mut self, ui: &mut egui::Ui, frame: Option<&eframe::Frame>) {
-        if self.document().kind().preview_only() && !self.typst_preview_available() {
+        if self.document().kind().preview_only() && !self.source_preview_available() {
             self.hide_webview();
             self.show_asset_view(ui, frame);
             return;
@@ -7859,6 +7760,7 @@ impl EditorApp {
             .or_else(|| {
                 Some(
                     match self.document().kind() {
+                        DocumentKind::Tex => ".tex",
                         DocumentKind::Text => ".txt",
                         DocumentKind::Pdf => ".pdf",
                         DocumentKind::Image => ".img",
@@ -7972,7 +7874,7 @@ impl EditorApp {
                 );
             }
 
-            let (icon, color, _) = if !self.may_run_compilation() && self.typst_preview_available()
+            let (icon, color, _) = if !self.may_run_compilation() && self.source_preview_available()
             {
                 (UiIcon::Waiting, neutral_color(ui.ctx()), None)
             } else {
@@ -8067,12 +7969,12 @@ impl EditorApp {
         if self.tabs.is_empty() {
             return "Workspace ready · no open tabs".into();
         }
-        if !self.may_run_compilation() && self.typst_preview_available() {
+        if !self.may_run_compilation() && self.source_preview_available() {
             return "Automatic preview updates paused".to_owned();
         }
-        if !self.typst_preview_available() {
+        if !self.source_preview_available() {
             return match (self.document().kind(), self.status_preview().status) {
-                (DocumentKind::Text, _) => "Text file ready".to_owned(),
+                (DocumentKind::Tex | DocumentKind::Text, _) => "Text file ready".to_owned(),
                 (DocumentKind::Image, PreviewStatus::Compiling) => "Decoding image".to_owned(),
                 (DocumentKind::Image, PreviewStatus::Ready(_)) => "Image ready".to_owned(),
                 (DocumentKind::Pdf, PreviewStatus::Compiling) => "Rendering PDF".to_owned(),
@@ -8458,7 +8360,7 @@ impl EditorApp {
             let content_view = workspace_view::content_view(
                 self.tabs.is_empty(),
                 self.document().kind(),
-                self.typst_preview_available(),
+                self.source_preview_available(),
                 self.view_mode,
             );
             if !self.pdfjs_preview_requested() {
@@ -10612,7 +10514,7 @@ struct CommandAvailability {
     can_redo: bool,
     saved_document: bool,
     typst_document: bool,
-    typst_preview: bool,
+    source_preview: bool,
     interactive_preview: bool,
     new_table: bool,
     edit_table: bool,
@@ -10629,7 +10531,7 @@ impl CommandAvailability {
             CommandRequirement::Undo => self.can_undo,
             CommandRequirement::Redo => self.can_redo,
             CommandRequirement::TypstDocument => self.typst_document,
-            CommandRequirement::TypstPreview => self.typst_preview,
+            CommandRequirement::SourcePreview => self.source_preview,
             CommandRequirement::InteractivePreview => self.interactive_preview,
         }
     }
@@ -10664,7 +10566,7 @@ fn show_command_popup_ui(
 
 fn show_file_popup_ui(
     ui: &mut egui::Ui,
-    typst_preview: bool,
+    source_preview: bool,
     rename_path: Option<&Path>,
     shortcuts: &ShortcutBindings,
     action: &mut Option<AppPopupAction>,
@@ -10674,7 +10576,7 @@ fn show_file_popup_ui(
         CommandMenu::File,
         CommandAvailability {
             saved_document: rename_path.is_some(),
-            typst_preview,
+            source_preview,
             ..Default::default()
         },
         shortcuts,
