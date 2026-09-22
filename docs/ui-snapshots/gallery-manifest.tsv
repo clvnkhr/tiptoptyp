@@ -46,6 +46,8 @@ scene	sticky-context	main	main-sticky-context	targeted	-	-
 scene	folding	main	main-folding	targeted	-	-
 scene	mitex-dollars	main	main-mitex-dollars	targeted	-	-
 scene	terminal-panel	main	main-terminal-panel	component	-	-
+scene	terminal-maximized	main	main-terminal-maximized	targeted	-	-
+scene	explorer-maximized	main	main-explorer-maximized	targeted	-	-
 scene	problems-panel	main	main-problems-panel	component	-	-
 scene	find-replace	main	main-find-replace	component	-	-
 scene	preview-compiling	main	main-preview-compiling	component	-	-

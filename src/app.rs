@@ -1,5 +1,7 @@
 mod icons;
-use icons::{UiIcon, icon_button, icon_button_enabled, paint_ui_icon, static_icon};
+use icons::{
+    UiIcon, icon_button, icon_button_enabled, paint_ui_icon, square_icon_button, static_icon,
+};
 #[cfg(test)]
 use icons::{closed_eye_icon_geometry, eye_icon_geometry, refresh_icon_geometry};
 mod completion_popup;
@@ -1350,6 +1352,7 @@ impl EditorApp {
             settings.ui_font_monospace,
             settings.ui_font_weight,
             settings.code_font_weight,
+            None,
         );
         theme::configure_styles(context);
         theme::configure_ui_font(context, font_configuration.weighted_ui_loaded);
@@ -3396,6 +3399,7 @@ impl EditorApp {
                 self.jump_source_to_preview(cursor);
             }
             AppCommand::Panel => self.toggle_panel(context),
+            AppCommand::MaximizePanel => self.toggle_panel_maximized(context),
             AppCommand::Terminal => self.toggle_bottom_panel(PanelTab::Terminal, context),
             AppCommand::Explorer => {
                 self.explorer.toggle();
@@ -3649,6 +3653,7 @@ impl EditorApp {
                 request.ui_font.monospace,
                 request.ui_font.weight,
                 request.code_font.weight,
+                self.font_catalog.terminal_symbols(),
             );
             if request.ui_font.path.is_some() && !self.font_configuration.custom_ui_loaded {
                 self.notice = Some(Notice {
@@ -5838,7 +5843,8 @@ impl EditorApp {
     }
 
     fn preview_visible(&self) -> bool {
-        !self.tabs.is_empty()
+        !self.bottom_panel.is_maximized()
+            && !self.tabs.is_empty()
             && preview_visible_for(
                 self.document().kind(),
                 self.view_mode,
@@ -8361,111 +8367,102 @@ impl EditorApp {
             .show(ui, |ui| self.show_status_bar(ui));
         self.terminal
             .set_visible(self.bottom_panel.selected() == Some(PanelTab::Terminal));
-        if self.bottom_panel.is_visible() {
-            let panel = egui::Panel::bottom("bottom-panel");
-            let panel = if matches!(
-                self.snapshot_scene,
-                Some(UiSnapshotScene::ProblemsPanel | UiSnapshotScene::TerminalPanel)
-            ) {
-                panel.resizable(false).exact_size(220.0)
-            } else {
-                panel
-                    .resizable(true)
-                    .default_size(METRICS.chrome.bottom_panel_default_height)
-                    .min_size(METRICS.chrome.bottom_panel_min_height)
-                    .max_size(METRICS.chrome.bottom_panel_max_height)
-            };
-            panel.show(ui, |ui| self.show_bottom_panel(ui));
-        }
-        if self.explorer.panel_visible() {
-            let panel_id = explorer_panel_id(&context);
-            let persisted_width = egui::PanelState::load(&context, panel_id)
-                .map_or(METRICS.chrome.explorer_default_width, |state| {
-                    state.size().x
-                });
-            let startup_width = self
-                .explorer
-                .startup_width(persisted_width, METRICS.chrome.explorer_default_width);
-            if let Some(width) = startup_width.or_else(|| self.explorer.take_restored_width())
-                && let Some(state) = egui::PanelState::load(&context, panel_id)
-            {
-                let outer_rect = explorer_width_restored_rect(state.outer_rect, width);
-                context.data_mut(|data| {
-                    data.insert_persisted(panel_id, egui::PanelState { outer_rect });
-                });
-            }
-            let show_contents = self.explorer.contents_visible();
-            egui::Panel::left(panel_id)
-                .frame(theme::content_panel_frame(ui.style()))
-                .resizable(true)
-                .default_size(METRICS.chrome.explorer_default_width)
-                .min_size(METRICS.chrome.explorer_min_width)
-                .show(ui, |ui| {
-                    if show_contents {
-                        self.show_workspace(ui);
-                    }
-                });
-            if show_contents && let Some(state) = egui::PanelState::load(&context, panel_id) {
-                self.explorer.remember_width(state.size().x);
-            }
-            if self.explorer.finish_frame() {
-                context.request_repaint();
-            }
-        }
-        use workspace_view::ContentView;
-        let content_view = workspace_view::content_view(
-            self.tabs.is_empty(),
-            self.document().kind(),
-            self.typst_preview_available(),
-            self.view_mode,
-        );
-        if !self.pdfjs_preview_requested() {
-            self.pdfjs_preview.clear();
-        } else if !matches!(
-            content_view,
-            ContentView::SplitSource | ContentView::SplitAsset | ContentView::Preview
-        ) {
+        let content_hidden = self.show_bottom_panel_container(ui);
+        if content_hidden {
+            self.hide_webview();
             self.pdfjs_preview.hide();
-        }
-        if !self.pdfjs_asset_requested() {
-            self.pdfjs_asset.clear();
-        } else if !matches!(content_view, ContentView::Asset | ContentView::SplitAsset) {
             self.pdfjs_asset.hide();
-        }
-        match content_view {
-            ContentView::Empty | ContentView::Source | ContentView::Asset => {
-                self.hide_webview();
-                egui::CentralPanel::default()
-                    .frame(theme::content_panel_frame(ui.style()))
-                    .show(ui, |ui| match content_view {
-                        ContentView::Empty => self.show_empty_workspace(ui, frame),
-                        ContentView::Asset => self.show_asset_view(ui, frame),
-                        _ => self.show_editor(ui),
+        } else {
+            if self.explorer.panel_visible() {
+                let panel_id = explorer_panel_id(&context);
+                let persisted_width = egui::PanelState::load(&context, panel_id)
+                    .map_or(METRICS.chrome.explorer_default_width, |state| {
+                        state.size().x
                     });
-            }
-            ContentView::SplitSource | ContentView::SplitAsset => {
-                let layout = theme::split_pane_layout(ui.available_width());
-                egui::Panel::left("editor")
+                let startup_width = self
+                    .explorer
+                    .startup_width(persisted_width, METRICS.chrome.explorer_default_width);
+                if let Some(width) = startup_width.or_else(|| self.explorer.take_restored_width())
+                    && let Some(state) = egui::PanelState::load(&context, panel_id)
+                {
+                    let outer_rect = explorer_width_restored_rect(state.outer_rect, width);
+                    context.data_mut(|data| {
+                        data.insert_persisted(panel_id, egui::PanelState { outer_rect });
+                    });
+                }
+                let show_contents = self.explorer.contents_visible();
+                egui::Panel::left(panel_id)
                     .frame(theme::content_panel_frame(ui.style()))
                     .resizable(true)
-                    .default_size(layout.editor_width)
-                    .min_size(layout.editor_minimum)
-                    .max_size(layout.editor_maximum)
+                    .default_size(METRICS.chrome.explorer_default_width)
+                    .min_size(METRICS.chrome.explorer_min_width)
                     .show(ui, |ui| {
-                        if content_view == ContentView::SplitAsset {
-                            self.show_asset_view(ui, frame);
-                        } else {
-                            self.show_editor(ui);
+                        if show_contents {
+                            self.show_workspace(ui);
                         }
                     });
-                egui::CentralPanel::default()
-                    .frame(theme::content_panel_frame(ui.style()))
-                    .show(ui, |ui| self.show_preview(ui, frame));
+                if show_contents && let Some(state) = egui::PanelState::load(&context, panel_id) {
+                    self.explorer.remember_width(state.size().x);
+                }
+                if self.explorer.finish_frame() {
+                    context.request_repaint();
+                }
             }
-            ContentView::Preview => {
-                egui::CentralPanel::default()
-                    .frame(theme::content_panel_frame(ui.style()))
-                    .show(ui, |ui| self.show_preview(ui, frame));
+            use workspace_view::ContentView;
+            let content_view = workspace_view::content_view(
+                self.tabs.is_empty(),
+                self.document().kind(),
+                self.typst_preview_available(),
+                self.view_mode,
+            );
+            if !self.pdfjs_preview_requested() {
+                self.pdfjs_preview.clear();
+            } else if !matches!(
+                content_view,
+                ContentView::SplitSource | ContentView::SplitAsset | ContentView::Preview
+            ) {
+                self.pdfjs_preview.hide();
+            }
+            if !self.pdfjs_asset_requested() {
+                self.pdfjs_asset.clear();
+            } else if !matches!(content_view, ContentView::Asset | ContentView::SplitAsset) {
+                self.pdfjs_asset.hide();
+            }
+            match content_view {
+                ContentView::Empty | ContentView::Source | ContentView::Asset => {
+                    self.hide_webview();
+                    egui::CentralPanel::default()
+                        .frame(theme::content_panel_frame(ui.style()))
+                        .show(ui, |ui| match content_view {
+                            ContentView::Empty => self.show_empty_workspace(ui, frame),
+                            ContentView::Asset => self.show_asset_view(ui, frame),
+                            _ => self.show_editor(ui),
+                        });
+                }
+                ContentView::SplitSource | ContentView::SplitAsset => {
+                    let layout = theme::split_pane_layout(ui.available_width());
+                    egui::Panel::left("editor")
+                        .frame(theme::content_panel_frame(ui.style()))
+                        .resizable(true)
+                        .default_size(layout.editor_width)
+                        .min_size(layout.editor_minimum)
+                        .max_size(layout.editor_maximum)
+                        .show(ui, |ui| {
+                            if content_view == ContentView::SplitAsset {
+                                self.show_asset_view(ui, frame);
+                            } else {
+                                self.show_editor(ui);
+                            }
+                        });
+                    egui::CentralPanel::default()
+                        .frame(theme::content_panel_frame(ui.style()))
+                        .show(ui, |ui| self.show_preview(ui, frame));
+                }
+                ContentView::Preview => {
+                    egui::CentralPanel::default()
+                        .frame(theme::content_panel_frame(ui.style()))
+                        .show(ui, |ui| self.show_preview(ui, frame));
+                }
             }
         }
         self.handle_dropped_file(&context);

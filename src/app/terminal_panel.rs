@@ -1,6 +1,47 @@
 use super::*;
 
 impl EditorApp {
+    pub(super) fn toggle_panel_maximized(&mut self, context: &egui::Context) {
+        self.bottom_panel.toggle_maximized();
+        self.sync_bottom_panel_focus(context);
+        context.request_repaint();
+    }
+
+    /// Separate identities preserve the user's normal height while maximized.
+    /// Return the layout used this frame, since a header click takes effect next frame.
+    pub(super) fn show_bottom_panel_container(&mut self, ui: &mut egui::Ui) -> bool {
+        if !self.bottom_panel.is_visible() {
+            return false;
+        }
+        let maximized = self.bottom_panel.is_maximized();
+        let id = crate::child_view::viewport_scoped_id(
+            ui.ctx(),
+            if maximized {
+                "bottom-panel-maximized"
+            } else {
+                "bottom-panel"
+            },
+        );
+        let available = ui.available_height().max(0.0);
+        let panel = egui::Panel::bottom(id);
+        let panel = if maximized {
+            panel.resizable(false).exact_size(available)
+        } else if matches!(
+            self.snapshot_scene,
+            Some(UiSnapshotScene::ProblemsPanel | UiSnapshotScene::TerminalPanel)
+        ) {
+            panel.resizable(false).exact_size(220.0_f32.min(available))
+        } else {
+            panel
+                .resizable(true)
+                .default_size(METRICS.chrome.bottom_panel_default_height)
+                .min_size(METRICS.chrome.bottom_panel_min_height.min(available))
+                .max_size(available)
+        };
+        panel.show(ui, |ui| self.show_bottom_panel(ui));
+        maximized || ui.available_height() < 1.0
+    }
+
     pub(super) fn toggle_panel(&mut self, context: &egui::Context) {
         self.bottom_panel.toggle_visibility();
         self.sync_bottom_panel_focus(context);
@@ -19,7 +60,6 @@ impl EditorApp {
         if terminal_visible {
             self.terminal.request_focus();
         } else {
-            egui::Popup::close_id(context, terminal_directory_popup_id(context));
             if context.memory(|memory| memory.has_focus(id)) {
                 context.memory_mut(|memory| memory.surrender_focus(id));
             }
@@ -70,6 +110,15 @@ impl EditorApp {
                 if panel_icon_button(ui, UiIcon::Close, "Close panel").clicked() {
                     self.bottom_panel.hide();
                 }
+                let (icon, label) = if self.bottom_panel.is_maximized() {
+                    (UiIcon::Restore, "Restore panel size")
+                } else {
+                    (UiIcon::Maximize, "Maximize panel")
+                };
+                if panel_icon_button(ui, icon, label).clicked() {
+                    self.bottom_panel.toggle_maximized();
+                    ui.ctx().request_repaint();
+                }
                 if self.bottom_panel.selected() == Some(PanelTab::Terminal)
                     && let Some(status) = self.terminal.status_text()
                 {
@@ -102,44 +151,22 @@ impl EditorApp {
         );
         ui.scope_builder(egui::UiBuilder::new().max_rect(actions), |ui| {
             ui.spacing_mut().item_spacing.y = 3.0;
-            if panel_icon_button(ui, UiIcon::Refresh, "Restart terminal").clicked() {
+            let restart =
+                square_icon_button(ui, UiIcon::Refresh, "Restart terminal", PANEL_ACTION_SIZE);
+            let detail = if restart.hovered() {
+                format!(
+                    "(start: {})",
+                    self.terminal
+                        .starting_directory(&self.workspace_root)
+                        .display()
+                )
+            } else {
+                String::new()
+            };
+            native_hover_text(restart.clone(), detail);
+            if restart.clicked() {
                 self.terminal.restart();
             }
-            let info = panel_icon_button(ui, UiIcon::Folder, "Starting directory");
-            if info.clicked() {
-                let id = terminal_id(ui.ctx());
-                ui.memory_mut(|memory| memory.surrender_focus(id));
-            }
-            let popup_width = 280.0_f32.min((grid.width() - 16.0).max(0.0));
-            egui::Popup::from_toggle_button_response(&info)
-                .id(terminal_directory_popup_id(ui.ctx()))
-                .at_position(Pos2::new(
-                    (grid.right() - popup_width - 16.0).max(grid.left()),
-                    grid.top(),
-                ))
-                .align(egui::RectAlign::BOTTOM_START)
-                .align_alternatives(&[])
-                .width(popup_width)
-                .show(|ui| {
-                    // Keep the popover inside the bottom panel, below native preview surfaces.
-                    egui::ScrollArea::vertical()
-                        .max_height((grid.height() - 16.0).max(0.0))
-                        .show(ui, |ui| {
-                            ui.label(RichText::new("Shell starting directory").small().strong());
-                            let path = self
-                                .terminal
-                                .starting_directory(&self.workspace_root)
-                                .display()
-                                .to_string();
-                            ui.add(
-                                egui::TextEdit::singleline(&mut path.as_str())
-                                    .desired_width(f32::INFINITY),
-                            );
-                            ui.label(
-                                RichText::new("Where the shell started; cd may change it.").small(),
-                            );
-                        });
-                });
         });
     }
 
@@ -167,6 +194,12 @@ impl EditorApp {
         // The terminal owns raw control keys, including editor defaults such
         // as Ctrl+R and Ctrl+W. Keep the panel/terminal toggles available, plus
         // Command-based host actions on macOS. Other platforms use the menus.
+        if let Some(shortcut) = shortcuts.egui(ShortcutAction::MaximizePanel)
+            && context.input_mut(|input| input.consume_shortcut(&shortcut))
+        {
+            self.toggle_panel_maximized(context);
+            return true;
+        }
         if let Some(shortcut) = shortcuts.egui(ShortcutAction::Terminal)
             && context.input_mut(|input| input.consume_shortcut(&shortcut))
         {
@@ -260,20 +293,11 @@ impl EditorApp {
 const PANEL_ACTION_SIZE: f32 = 22.0;
 const PANEL_ACTION_GAP: f32 = 6.0;
 
-fn terminal_directory_popup_id(context: &egui::Context) -> egui::Id {
-    crate::child_view::viewport_scoped_id(context, "terminal-directory-popup")
-}
-
 fn panel_icon_button(ui: &mut egui::Ui, icon: UiIcon, label: &str) -> egui::Response {
-    let response = ui.add_sized(Vec2::splat(PANEL_ACTION_SIZE), egui::Button::new(""));
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
-    paint_ui_icon(
-        ui.painter(),
-        response.rect.shrink(5.0),
-        icon,
-        ui.style().interact(&response).fg_stroke.color,
-    );
-    native_hover_text(response, label)
+    native_hover_text(
+        square_icon_button(ui, icon, label, PANEL_ACTION_SIZE),
+        label,
+    )
 }
 
 fn terminal_panel_rects(available: Rect) -> (Rect, Rect) {
@@ -289,6 +313,134 @@ fn terminal_panel_rects(available: Rect) -> (Rect, Rect) {
 mod tests {
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable as _};
+
+    #[test]
+    fn panel_maximize_restores_large_resized_height_and_terminal_shortcut_focus() {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_window_for_tests(
+            &context,
+            root.path().into(),
+            egui::ViewportId::ROOT,
+        );
+        theme::configure_editor_fonts(
+            &context,
+            Default::default(),
+            Default::default(),
+            false,
+            400,
+            400,
+            None,
+        );
+        app.bottom_panel.select(PanelTab::Terminal);
+        app.terminal
+            .prepare_fixture(b"terminal fixture", Path::new("/project"));
+        let mut initialized = false;
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(800.0, 720.0))
+            .build_ui_state(
+                move |ui, app: &mut EditorApp| {
+                    // A user-resized height above the former 320-point cap.
+                    if !initialized {
+                        theme::configure_editor_fonts(
+                            ui.ctx(),
+                            Default::default(),
+                            Default::default(),
+                            false,
+                            400,
+                            400,
+                            None,
+                        );
+                        let id = crate::child_view::viewport_scoped_id(ui.ctx(), "bottom-panel");
+                        ui.ctx().data_mut(|data| {
+                            data.insert_persisted(
+                                id,
+                                egui::PanelState {
+                                    outer_rect: Rect::from_min_size(
+                                        Pos2::ZERO,
+                                        Vec2::new(800.0, 450.0),
+                                    ),
+                                },
+                            )
+                        });
+                        initialized = true;
+                    }
+                    app.handle_shortcuts(ui.ctx(), None);
+                    app.process_native_menu_commands(ui.ctx(), None);
+                    if !app.show_bottom_panel_container(ui) {
+                        ui.label("Document content");
+                    }
+                },
+                app,
+            );
+        harness.run();
+        let original = harness.get_by_label("Terminal input").rect();
+        assert!(original.height() > 400.0);
+        harness.get_by_label("Maximize panel").click();
+        harness.run();
+        let maximized = harness.get_by_label("Terminal input").rect();
+        assert!(maximized.height() > 650.0);
+        assert!(harness.query_by_label("Document content").is_none());
+        harness.get_by_label("Restore panel size").click();
+        harness.run();
+        assert_eq!(harness.get_by_label("Terminal input").rect(), original);
+        harness.get_by_label("Terminal input").click();
+        harness.run();
+        let shortcut = harness
+            .state()
+            .settings
+            .effective_shortcuts()
+            .egui(ShortcutAction::MaximizePanel)
+            .unwrap();
+        harness.key_press_modifiers(shortcut.modifiers, shortcut.logical_key);
+        harness.run();
+        assert!(harness.state().bottom_panel.is_maximized());
+        assert_eq!(
+            harness.state().bottom_panel.selected(),
+            Some(PanelTab::Terminal)
+        );
+        harness.key_press_modifiers(shortcut.modifiers, shortcut.logical_key);
+        harness.run();
+        assert!(!harness.state().bottom_panel.is_maximized());
+        assert_eq!(harness.get_by_label("Terminal input").rect(), original);
+        harness
+            .state_mut()
+            .enqueue_native_menu_command(AppCommand::MaximizePanel);
+        harness.run();
+        assert!(harness.state().bottom_panel.is_maximized());
+        harness.set_size(Vec2::new(500.0, 350.0));
+        harness.run();
+        let small = harness.get_by_label("Terminal input").rect();
+        assert!(small.bottom() <= 350.0 && small.top() >= 0.0);
+    }
+
+    #[test]
+    fn restart_tooltip_only_shows_the_shell_start_path() {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        app.bottom_panel.select(PanelTab::Terminal);
+        app.terminal.prepare_fixture(b"test", Path::new("/project"));
+        let mut detail = None;
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(500.0, 200.0))
+            .build_ui_state(
+                move |ui, state: &mut (EditorApp, Option<Arc<str>>)| {
+                    tooltips::install_hover_runtime_config(ui.ctx(), Duration::ZERO);
+                    state.0.show_bottom_panel(ui);
+                    let id = native_hover_tooltip_id(ui.ctx());
+                    state.1 = ui.ctx().data(|data| {
+                        data.get_temp::<HoverTooltipOverlay>(id)
+                            .map(|hover| hover.detail)
+                    });
+                },
+                (app, detail.take()),
+            );
+        harness.get_by_label("Restart terminal").hover();
+        harness.run();
+        assert_eq!(harness.state().1.as_deref(), Some("(start: /project)"));
+        assert!(harness.query_by_label("Starting directory").is_none());
+    }
 
     #[test]
     fn switching_away_from_a_focused_terminal_releases_focus_without_locking() {
@@ -352,27 +504,10 @@ mod tests {
             "terminal header consumed the grid: {input_rect:?}"
         );
         let restart = harness.get_by_label("Restart terminal").rect();
-        let directory = harness.get_by_label("Starting directory").rect();
         assert_eq!(restart.size(), Vec2::splat(PANEL_ACTION_SIZE));
-        assert_eq!(directory.size(), restart.size());
         assert!(restart.left() > input_rect.right());
         assert_eq!(restart.top(), input_rect.top());
-        assert!(directory.top() > restart.bottom());
-        assert_eq!(directory.left(), restart.left());
-        assert!(harness.query_by_value("/project").is_none());
-        harness.get_by_label("Starting directory").click();
-        harness.run();
-        let path = harness
-            .get(
-                egui_kittest::kittest::by()
-                    .role(egui::accesskit::Role::TextInput)
-                    .value("/project"),
-            )
-            .rect();
-        assert!(input_rect.contains_rect(path));
-        harness.get_by_label("Where the shell started; cd may change it.");
-        harness.key_press(egui::Key::Escape);
-        harness.run();
+        assert!(harness.query_by_label("Starting directory").is_none());
         assert!(harness.query_by_value("/project").is_none());
         harness.get_by_label("Terminal input").click();
         harness.run();
@@ -414,46 +549,6 @@ mod tests {
             assert_eq!(actions.height(), available.height());
             assert!(actions.width() <= PANEL_ACTION_SIZE);
         }
-    }
-
-    #[test]
-    fn directory_popover_stays_in_a_short_panel_and_does_not_reopen_with_the_tab() {
-        let root = tempfile::tempdir().unwrap();
-        let context = egui::Context::default();
-        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
-        app.bottom_panel.select(PanelTab::Terminal);
-        let path = format!("/project/{}", "a-long-starting-directory-".repeat(20));
-        app.terminal.prepare_fixture(b"test", Path::new(&path));
-        let mut harness = Harness::builder()
-            .with_size(Vec2::new(320.0, 120.0))
-            .build_ui_state(|ui, app: &mut EditorApp| app.show_bottom_panel(ui), app);
-        harness.run();
-        let grid = harness.get_by_label("Terminal input").rect();
-        harness.get_by_label("Starting directory").click();
-        harness.run();
-        let field = harness
-            .get(
-                egui_kittest::kittest::by()
-                    .role(egui::accesskit::Role::TextInput)
-                    .value(path.as_str()),
-            )
-            .rect();
-        assert!(
-            grid.contains_rect(field),
-            "directory field escaped panel: {field:?} vs {grid:?}"
-        );
-        let explanation = harness
-            .get_by_label("Where the shell started; cd may change it.")
-            .rect();
-        assert!(
-            grid.contains_rect(explanation),
-            "directory explanation escaped panel: {explanation:?} vs {grid:?}"
-        );
-        harness.get_by_label("Problems").click();
-        harness.run();
-        harness.get_by_label("Terminal").click();
-        harness.run();
-        assert!(harness.query_by_label("Shell starting directory").is_none());
     }
 
     #[test]

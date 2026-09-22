@@ -9,7 +9,8 @@ pub(super) enum UiIcon {
     Close,
     Down,
     FitWidth,
-    Folder,
+    Maximize,
+    Restore,
     Panel,
     Next,
     Previous,
@@ -21,6 +22,33 @@ pub(super) enum UiIcon {
     Waiting,
     ZoomIn,
     ZoomOut,
+}
+
+pub(super) fn square_icon_button(
+    ui: &mut egui::Ui,
+    icon: UiIcon,
+    label: &str,
+    size: f32,
+) -> egui::Response {
+    // Allocate exactly: even an empty Button lays out a font-height row plus
+    // padding, which would silently grow dense Explorer headers.
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    let visuals = ui.style().interact(&response);
+    ui.painter().rect(
+        rect,
+        visuals.corner_radius,
+        visuals.weak_bg_fill,
+        visuals.bg_stroke,
+        egui::StrokeKind::Inside,
+    );
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    paint_ui_icon(
+        ui.painter(),
+        response.rect.shrink(5.0),
+        icon,
+        ui.style().interact(&response).fg_stroke.color,
+    );
+    response
 }
 
 pub(super) fn icon_button(ui: &mut egui::Ui, icon: UiIcon, tooltip: &str) -> egui::Response {
@@ -207,26 +235,22 @@ pub(super) fn paint_ui_icon(painter: &egui::Painter, rect: Rect, icon: UiIcon, c
             painter.line_segment(geometry.shaft, stroke);
             painter.line_segment(geometry.wing, stroke);
         }
-        UiIcon::Folder => {
-            let top = rect.top() + rect.height() * 0.2;
-            painter.add(egui::Shape::closed_line(
-                vec![
-                    rect.left_bottom(),
-                    rect.left_top(),
-                    Pos2::new(center.x - 1.0, rect.top()),
-                    Pos2::new(center.x + 1.0, top),
-                    Pos2::new(rect.right(), top),
-                    rect.right_bottom(),
-                ],
-                stroke,
-            ));
-            painter.line_segment(
-                [
-                    Pos2::new(rect.left(), top + 2.0),
-                    Pos2::new(rect.right(), top + 2.0),
-                ],
-                stroke,
+        UiIcon::Maximize => {
+            painter.rect_stroke(rect, 0.0, stroke, egui::StrokeKind::Inside);
+        }
+        UiIcon::Restore => {
+            let shift = Vec2::splat(rect.width() * 0.25);
+            let front = Rect::from_min_max(
+                rect.min + Vec2::new(0.0, shift.y),
+                rect.max - Vec2::new(shift.x, 0.0),
             );
+            let back = Rect::from_min_max(
+                rect.min + Vec2::new(shift.x, 0.0),
+                rect.max - Vec2::new(0.0, shift.y),
+            );
+            painter.line_segment([back.left_top(), back.right_top()], stroke);
+            painter.line_segment([back.right_top(), back.right_bottom()], stroke);
+            painter.rect_stroke(front, 0.0, stroke, egui::StrokeKind::Inside);
         }
         UiIcon::Panel => {
             painter.rect_stroke(rect, 1.0, stroke, egui::StrokeKind::Inside);

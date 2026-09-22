@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -33,6 +34,8 @@ pub(crate) struct TerminalPane {
     status: Option<Status>,
     wheel_remainder: f32,
     preedit: String,
+    glyphs: GlyphCache,
+    emoji: super::emoji::EmojiCache,
 }
 
 impl TerminalPane {
@@ -143,7 +146,7 @@ impl TerminalPane {
                 }
             });
         }
-        let font = FontId::monospace(13.0);
+        let font = crate::theme::terminal_font();
         let cell = ui.fonts_mut(|fonts| {
             Vec2::new(
                 fonts.glyph_width(&font, 'M'),
@@ -300,7 +303,18 @@ impl TerminalPane {
                 let index = cell_index(pos, rect, cell, grid);
                 self.selection = Some(selection_range(self.selection_anchor, index));
             }
-            paint(ui, outer, rect, cell, &font, grid, self.selection, focused);
+            paint(
+                ui,
+                outer,
+                rect,
+                cell,
+                &font,
+                grid,
+                self.selection,
+                focused,
+                &mut self.glyphs,
+                &mut self.emoji,
+            );
             if focused
                 && !self.preedit.is_empty()
                 && let Some(cursor) = &grid.cursor
@@ -388,6 +402,86 @@ fn same_cells(previous: Option<&Grid>, current: Option<&Grid>) -> bool {
     }
 }
 
+const GLYPH_CACHE_CAPACITY: usize = 256;
+
+#[derive(Default)]
+struct GlyphCache {
+    entries: HashMap<(usize, [u32; 2], bool), FittedGlyph>,
+}
+
+struct FittedGlyph {
+    // Retain the source so its pointer cannot be reused as another cache key.
+    _source: Arc<egui::Galley>,
+    galley: Arc<egui::Galley>,
+    offset: Vec2,
+}
+
+impl GlyphCache {
+    fn fit(
+        &mut self,
+        source: Arc<egui::Galley>,
+        size: Vec2,
+        bold: bool,
+    ) -> (Arc<egui::Galley>, Vec2) {
+        let (scale, offset) = glyph_placement(source.mesh_bounds, size, bold);
+        if scale == 1.0 && offset == Vec2::ZERO {
+            return (source, offset);
+        }
+        let key = (
+            Arc::as_ptr(&source) as usize,
+            [size.x.to_bits(), size.y.to_bits()],
+            bold,
+        );
+        if !self.entries.contains_key(&key) {
+            if self.entries.len() == GLYPH_CACHE_CAPACITY {
+                self.entries.clear();
+            }
+            let mut shape =
+                egui::epaint::TextShape::new(Pos2::ZERO, source.clone(), Color32::WHITE);
+            if scale < 1.0 {
+                shape.transform(egui::emath::TSTransform::from_scaling(scale));
+            }
+            self.entries.insert(
+                key,
+                FittedGlyph {
+                    _source: source,
+                    galley: shape.galley,
+                    offset,
+                },
+            );
+        }
+        let fitted = &self.entries[&key];
+        (fitted.galley.clone(), fitted.offset)
+    }
+}
+
+/// Font ink may exceed its advance (emoji, private-use icons and combining
+/// marks). Fit that ink into Ghostty's allocation; never invent column widths.
+fn glyph_placement(bounds: Rect, size: Vec2, bold: bool) -> (f32, Vec2) {
+    if !bounds.is_finite() || !bounds.is_positive() {
+        return (1.0, Vec2::ZERO);
+    }
+    let available = Vec2::new(
+        (size.x - if bold { 0.4 } else { 0.0 }).max(0.1),
+        size.y.max(0.1),
+    );
+    let scale = (available.x / bounds.width())
+        .min(available.y / bounds.height())
+        .min(1.0);
+    let scaled = bounds * scale;
+    let offset = Vec2::new(
+        0.0_f32.clamp(
+            -scaled.left(),
+            (available.x - scaled.right()).max(-scaled.left()),
+        ),
+        0.0_f32.clamp(
+            -scaled.top(),
+            (available.y - scaled.bottom()).max(-scaled.top()),
+        ),
+    );
+    (scale, offset)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn paint(
     ui: &egui::Ui,
@@ -398,6 +492,8 @@ fn paint(
     grid: &Grid,
     selection: Option<(usize, usize)>,
     focused: bool,
+    glyphs: &mut GlyphCache,
+    emoji: &mut super::emoji::EmojiCache,
 ) {
     ui.painter().rect_filled(outer, 0.0, grid.background);
     let painter = ui.painter().with_clip_rect(rect);
@@ -434,7 +530,27 @@ fn paint(
             } else {
                 cell.foreground
             };
-            if !cell.text.is_empty() {
+            if let Some(texture) = emoji.glyph(
+                ui.ctx(),
+                &cell.text,
+                cell.width,
+                font.size * ui.ctx().pixels_per_point(),
+            ) {
+                let size = texture.size_vec2();
+                let scale = (cell_rect.width() / size.x).min(cell_rect.height() / size.y);
+                let target = Rect::from_center_size(cell_rect.center(), size * scale);
+                let tint = if cell.style.faint {
+                    Color32::WHITE.gamma_multiply(0.65)
+                } else {
+                    Color32::WHITE
+                };
+                painter.with_clip_rect(cell_rect.intersect(rect)).image(
+                    texture.id(),
+                    target,
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                    tint,
+                );
+            } else if !cell.text.is_empty() {
                 let format = egui::TextFormat {
                     font_id: font.clone(),
                     color: foreground,
@@ -445,14 +561,15 @@ fn paint(
                     cell.text.clone(),
                     format,
                 ));
+                let (galley, offset) = glyphs.fit(galley, cell_rect.size(), cell.style.bold);
                 painter.with_clip_rect(cell_rect.intersect(rect)).galley(
-                    pos,
+                    pos + offset,
                     galley.clone(),
                     foreground,
                 );
                 if cell.style.bold {
                     painter.with_clip_rect(cell_rect.intersect(rect)).galley(
-                        pos + Vec2::new(0.4, 0.0),
+                        pos + offset + Vec2::new(0.4, 0.0),
                         galley,
                         foreground,
                     );
@@ -532,6 +649,235 @@ fn paint(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "local font probe: requires installed FiraCode and Symbols Nerd Font Mono"]
+    fn terminal_font_probe_installed_nerd_icons_have_ink_without_changing_ascii() {
+        for name in [
+            "FiraCodeNerdFontMono-Regular.ttf",
+            "SymbolsNerdFontMono-Regular.ttf",
+        ] {
+            let path = PathBuf::from(std::env::var_os("HOME").unwrap())
+                .join("Library/Fonts")
+                .join(name);
+            assert!(
+                path.is_file(),
+                "install the probe font first: {}",
+                path.display()
+            );
+            let catalog = crate::font_catalog::FontCatalog::single_font_fixture(&path);
+            let family = catalog
+                .terminal_symbols()
+                .expect("Nerd Font recognized from real OpenType family metadata");
+            let context = egui::Context::default();
+            crate::theme::configure_editor_fonts(
+                &context,
+                Default::default(),
+                Default::default(),
+                false,
+                400,
+                400,
+                Some(family),
+            );
+            context
+                .run_ui(Default::default(), |ui| {
+                    ui.fonts_mut(|fonts| {
+                        let font = crate::theme::terminal_font();
+                        let width = fonts.glyph_width(&font, 'M');
+                        for c in ' '..='~' {
+                            assert!((fonts.glyph_width(&font, c) - width).abs() < 0.01);
+                        }
+                        let missing =
+                            fonts.layout_no_wrap("\u{0378}".into(), font.clone(), Color32::WHITE);
+                        for c in ['\u{f120}', '\u{e0a0}', '\u{f07b}', '😀'] {
+                            let galley =
+                                fonts.layout_no_wrap(c.into(), font.clone(), Color32::WHITE);
+                            let uv = galley.rows[0].glyphs[0].uv_rect;
+                            assert_ne!(uv, missing.rows[0].glyphs[0].uv_rect, "missing {c}");
+                            let atlas = fonts.image();
+                            assert!(
+                                (uv.min[1]..uv.max[1]).any(|y| (uv.min[0]..uv.max[0])
+                                    .any(|x| atlas[(x as usize, y as usize)].a() != 0)),
+                                "invisible {c}"
+                            );
+                        }
+                    })
+                })
+                .drop_without_applying_deltas();
+        }
+    }
+
+    #[test]
+    #[ignore = "opt-in release microbenchmark; reports overhead, no wall-time assertion"]
+    fn terminal_font_probe_cached_fit_cost() {
+        use std::{hint::black_box, time::Instant};
+        let context = egui::Context::default();
+        let mut galleys = Vec::new();
+        context
+            .run_ui(Default::default(), |ui| {
+                for c in '!'..='~' {
+                    galleys.push(ui.painter().layout_no_wrap(
+                        c.into(),
+                        FontId::monospace(13.0),
+                        Color32::WHITE,
+                    ));
+                }
+                galleys.push(ui.painter().layout_no_wrap(
+                    "😀".into(),
+                    FontId::monospace(13.0),
+                    Color32::WHITE,
+                ));
+            })
+            .drop_without_applying_deltas();
+        let size = Vec2::new(7.82666, 16.0);
+        let mut cache = GlyphCache::default();
+        let cold = Instant::now();
+        for galley in &galleys {
+            black_box(cache.fit(galley.clone(), size, false));
+        }
+        let cold_ns = cold.elapsed().as_nanos();
+        const ROUNDS: usize = 10_000;
+        let baseline = Instant::now();
+        for _ in 0..ROUNDS {
+            for galley in &galleys {
+                black_box((galley.clone(), Vec2::ZERO));
+            }
+        }
+        let baseline_ns = baseline.elapsed().as_nanos();
+        let after = Instant::now();
+        for _ in 0..ROUNDS {
+            for galley in &galleys {
+                black_box(cache.fit(galley.clone(), size, false));
+            }
+        }
+        let after_ns = after.elapsed().as_nanos();
+        eprintln!(
+            "terminal glyph probe: profile={} os={} arch={} font=Hack/NotoEmoji 13pt cell=7.82666x16 ppp=1 color=white fixture={} glyphs rounds={ROUNDS} cold_ns={cold_ns} baseline_ns={baseline_ns} cached_fit_ns={after_ns} entries={}",
+            if cfg!(debug_assertions) {
+                "debug"
+            } else {
+                "release"
+            },
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            galleys.len(),
+            cache.entries.len()
+        );
+    }
+
+    #[test]
+    fn glyph_ink_fits_ghostty_cells_without_changing_column_allocation() {
+        for bounds in [
+            Rect::from_min_max(Pos2::new(-2.0, -1.0), Pos2::new(17.0, 18.0)),
+            Rect::from_min_max(Pos2::new(0.0, 3.0), Pos2::new(8.0, 15.0)),
+        ] {
+            for columns in [1.0, 2.0] {
+                for bold in [false, true] {
+                    let cell = Vec2::new(7.82666 * columns, 16.0);
+                    let (scale, offset) = glyph_placement(bounds, cell, bold);
+                    let ink = (bounds * scale).translate(offset);
+                    let available = Rect::from_min_size(Pos2::ZERO, cell).expand(0.001);
+                    assert!(available.contains_rect(ink));
+                    assert!(available.contains_rect(
+                        ink.translate(Vec2::new(if bold { 0.4 } else { 0.0 }, 0.0))
+                    ));
+                    assert!(scale > 0.0 && scale <= 1.0);
+                }
+            }
+        }
+        assert_eq!(
+            glyph_placement(Rect::NOTHING, Vec2::ZERO, false),
+            (1.0, Vec2::ZERO)
+        );
+    }
+
+    #[test]
+    fn glyph_cache_reuses_transforms_and_bounds_retained_work() {
+        let context = egui::Context::default();
+        context
+            .run_ui(Default::default(), |ui| {
+                let source = ui.painter().layout_no_wrap(
+                    "😀".into(),
+                    FontId::monospace(13.0),
+                    Color32::WHITE,
+                );
+                let original = source.mesh_bounds;
+                let mut cache = GlyphCache::default();
+                let size = Vec2::new(7.0, 16.0);
+                let first = cache.fit(source.clone(), size, false).0;
+                for _ in 0..100 {
+                    assert!(Arc::ptr_eq(
+                        &first,
+                        &cache.fit(source.clone(), size, false).0
+                    ));
+                }
+                assert_eq!(cache.entries.len(), 1);
+                let bold = cache.fit(source.clone(), size, true).0;
+                assert!(!Arc::ptr_eq(&first, &bold));
+                let recolored =
+                    ui.painter()
+                        .layout_no_wrap("😀".into(), FontId::monospace(13.0), Color32::RED);
+                assert!(!Arc::ptr_eq(&first, &cache.fit(recolored, size, false).0));
+                for index in 0..GLYPH_CACHE_CAPACITY * 2 {
+                    cache.fit(
+                        source.clone(),
+                        Vec2::new(1.0 + index as f32 / 100.0, 16.0),
+                        false,
+                    );
+                    assert!(cache.entries.len() <= GLYPH_CACHE_CAPACITY);
+                }
+                assert_eq!(
+                    source.mesh_bounds, original,
+                    "shared font layout must remain immutable"
+                );
+            })
+            .drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn terminal_ascii_keeps_one_cell_after_application_font_configuration() {
+        let context = egui::Context::default();
+        crate::theme::configure_editor_fonts(
+            &context,
+            Default::default(),
+            Default::default(),
+            false,
+            400,
+            400,
+            None,
+        );
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let mut input = egui::RawInput::default();
+            input
+                .viewports
+                .get_mut(&egui::ViewportId::ROOT)
+                .unwrap()
+                .native_pixels_per_point = Some(scale);
+            context
+                .run_ui(input, |ui| {
+                    let font = crate::theme::terminal_font();
+                    ui.fonts_mut(|fonts| {
+                        let width = fonts.glyph_width(&font, 'M');
+                        let missing = fonts.layout_no_wrap("\u{0378}".into(), font.clone(), Color32::WHITE);
+                        for text in ["😀", "🚀", "e\u{301}"] {
+                            let galley = fonts.layout_no_wrap(text.into(), font.clone(), Color32::WHITE);
+                            let uv = galley.rows[0].glyphs[0].uv_rect;
+                            assert_ne!(uv, missing.rows[0].glyphs[0].uv_rect, "missing {text}");
+                            let atlas = fonts.image();
+                            assert!((uv.min[1]..uv.max[1]).any(|y| (uv.min[0]..uv.max[0]).any(|x| atlas[(x as usize, y as usize)].a() != 0)), "{text} has no visible ink at {scale}x");
+                        }
+                        for character in ' '..='~' {
+                            let advance = fonts.glyph_width(&font, character);
+                            assert!(
+                                (advance - width).abs() < 0.01,
+                                "{character:?} advances {advance}, but terminal cells are {width} wide at scale {scale}"
+                            );
+                        }
+                    });
+                })
+                .drop_without_applying_deltas();
+        }
+    }
 
     #[test]
     fn grid_geometry_rounds_down_and_bounds_work() {

@@ -3336,6 +3336,7 @@ fn typst_override_grid_centers_headers_labels_samples_and_actions() {
                     false,
                     theme::FONT_WEIGHT_NORMAL,
                     theme::FONT_WEIGHT_NORMAL,
+                    None,
                 );
                 fonts_configured = true;
                 return;
@@ -4110,6 +4111,7 @@ fn reordered_explorer_keeps_body_identity_and_collapsed_state() {
                         heights: [44.0; 8],
                         filtered: false,
                         git_visible: true,
+                        maximized: None,
                     },
                     |ui, section| {
                         state.body_ids[section.index()] = Some(ui.id());
@@ -4141,6 +4143,82 @@ fn reordered_explorer_keeps_body_identity_and_collapsed_state() {
             );
         }
     }
+}
+
+#[test]
+fn explorer_maximize_hides_siblings_and_restores_collapsed_states_and_sizes() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    #[derive(Default)]
+    struct State {
+        panel: ExplorerPanelState,
+        layout: ExplorerSectionLayout,
+        bounds: [Option<Rect>; 8],
+    }
+    let mut initial = State::default();
+    initial.layout.weights = [2.0, 1.0, 3.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+    let weights = initial.layout.weights;
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(360.0, 800.0))
+        .build_ui_state(
+            |ui, state: &mut State| {
+                state.bounds.fill(None);
+                let defaults = std::array::from_fn(|i| ExplorerSection::ALL[i].default_open());
+                let open = explorer_section_open_states(ui, false, defaults);
+                let result = show_explorer_sections(
+                    ui,
+                    ExplorerSectionsSpec {
+                        order: ExplorerOrder::default(),
+                        defaults,
+                        open,
+                        heights: state.layout.body_heights(open, 400.0),
+                        filtered: false,
+                        git_visible: true,
+                        maximized: state.panel.maximized_section(true),
+                    },
+                    |ui, section| {
+                        state.bounds[section.index()] = Some(ui.max_rect());
+                        ui.label(format!("{} body", section.title()));
+                    },
+                );
+                if let Some(section) = result.toggle_maximized {
+                    state.panel.toggle_section_maximized(section);
+                    ui.ctx().request_repaint();
+                }
+            },
+            initial,
+        );
+    harness.run();
+    let original = harness.state().bounds;
+    assert!(harness.query_by_label("Tags body").is_none());
+    // A collapsed section can be expanded temporarily without opening it on restore.
+    harness.get_by_label("Maximize Tags section").click();
+    harness.run();
+    harness.get_by_label("Tags body");
+    for section in ExplorerSection::ALL {
+        if section != ExplorerSection::Tags {
+            assert!(harness.query_by_label(section.title()).is_none());
+            assert!(harness.state().bounds[section.index()].is_none());
+        }
+    }
+    let bounds = harness.state().bounds[ExplorerSection::Tags.index()].unwrap();
+    assert!(
+        bounds.height() > 700.0 && bounds.bottom() <= 800.0,
+        "{bounds:?}"
+    );
+    harness.get_by_label("Restore Tags section").click();
+    harness.run();
+    assert!(harness.query_by_label("Tags body").is_none());
+    assert_eq!(harness.state().bounds, original);
+    assert_eq!(harness.state().layout.weights, weights);
+    harness.get_by_label("Maximize Files section").click();
+    harness.run();
+    harness.set_size(Vec2::new(280.0, 250.0));
+    harness.run();
+    let bounds = harness.state().bounds[ExplorerSection::Files.index()].unwrap();
+    assert!(
+        bounds.bottom() <= 250.0 && bounds.right() <= 280.0,
+        "{bounds:?}"
+    );
 }
 
 #[test]
@@ -5271,6 +5349,7 @@ fn active_explorer_entry_keeps_the_inherited_font_size() {
         false,
         500,
         450,
+        None,
     );
     theme::configure_ui_font(&context, configuration.weighted_ui_loaded);
     context
@@ -6202,6 +6281,7 @@ fn text_edit_wrap_keeps_the_exact_unicode_source_mapping() {
             false,
             theme::FONT_WEIGHT_NORMAL,
             theme::FONT_WEIGHT_NORMAL,
+            None,
         );
         let mut source =
             "A deliberately long Typst markup line with 🦀 unicode that must wrap cleanly.\n#let x = 1"

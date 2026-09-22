@@ -7,12 +7,11 @@ is shared and resizable. Terminal also works in an empty workspace, without an
 open document. See [bottom-panel controls](bottom-panel.md).
 
 A window creates one login shell on first opening Terminal, in that window's
-workspace directory. The folder icon in the thin right-hand strip reveals the
-session's starting directory and a short explanation. Switching tabs, hiding
-the panel, opening files or changing the workspace does not restart the shell
-or change its working directory. Use `cd` normally; the refresh icon above the
-folder (**Restart terminal**) stops the current session and starts another in
-the currently selected workspace. An exited shell retains its last output.
+workspace directory. The refresh icon in the thin right-hand strip restarts the
+shell in the current workspace. Its tooltip shows only `(start: <path>)`, the
+session's starting directory; `cd` may change the live directory. Switching tabs,
+hiding or maximizing the panel, opening files or changing the workspace does
+not restart the shell. An exited shell retains its last output.
 Closing the editor window stops its shell and foreground job, including the
 retained hidden root window on macOS. Other windows own independent sessions.
 
@@ -40,6 +39,60 @@ programs, image protocols, hyperlinks, search and selection spanning multiple
 scrollback viewports are not implemented. Use the keyboard to operate TUI
 programs. macOS is the repository's supported native target; Linux and Windows
 are not certified by the local macOS checks.
+
+
+### Font rendering and fixed cells (todo 302)
+
+The clipped version numbers reported on 22 September 2026 came from the font
+fallback order. Apple Color Emoji was ahead of the primary text face and also
+claimed ordinary digits, spaces, `#` and `*`. Its 13-point advances did not fit
+the terminal's approximately 7.83-point cells at font size 13; the cell clip
+cut away part of those glyphs. Libghostty's stored text was intact.
+
+ASCII now uses the primary monospace face. Apple Color Emoji is excluded from
+egui's outline fallback chain because its bitmap glyphs rasterized to zero ink.
+On macOS, the terminal instead shapes each emoji grapheme with HarfRust and
+decodes its actual system-font color bitmap through skrifa. This preserves the
+normal Apple emoji artwork, including flags, skin tones, keycaps and ZWJ
+sequences. The read-only system font is mapped once on first use; its roughly
+180 MiB file is not copied into a heap buffer. A bundled Noto Emoji outline
+fallback preserves missing-glyph coverage in the editor/UI and on other platforms; their color emoji are not certified here.
+
+Ghostty remains authoritative for grapheme widths, spacer cells, wrapping,
+selection and cursor positions, including application-controlled DEC mode 2027
+for joined emoji sequences. Single emoji normally occupy two cells; private-use
+Nerd Font symbols usually occupy one. Glyph ink is fitted uniformly inside that
+allocation without changing the terminal's column count or stretching glyphs.
+The existing asynchronous font catalog supplies an installed Nerd Font fallback
+(prefer Symbols, then Mono); there is no runtime font download or installation.
+Primary ASCII and selected editor/UI faces keep their existing font choices.
+
+Transformed text layouts have a bounded 256-entry cache keyed by source layout,
+cell geometry and bold state. Color emoji have a separate 128-entry cache,
+including negative lookups, invalidated when pixel density changes. Warm frames
+reuse the layouts/textures; only cache misses decode or transform glyphs. No
+per-frame font reads, worker, idle timer or repaint loop was added. Regression tests cover ASCII metrics at
+four scales, visible ink, color sequences, cell fitting, cache bounds and reuse.
+The QA transcript includes versions, ANSI styles, emoji and CJK. Its synthetic
+font catalog deliberately avoids machine-dependent Nerd Font files; the
+installed-font probe checks real FiraCode and Symbols Nerd Font Mono metadata,
+ASCII metrics and private-use glyph ink instead.
+
+A local release microbenchmark on macOS 14.6.1 / aarch64 used the same 95
+pre-laid-out Hack/NotoEmoji glyphs, white at 13 pt and 1× density, with
+7.82666×16-point cells. After one warmup pass, 10,000 repetitions (950,000
+glyphs) took 3.50 ms for the previous clone-only paint input and 40.34 ms with
+cached fitting: about 39 ns added per glyph. The initial 95-glyph fitting pass
+took 70 µs; shaping/decoding seven system color emoji at 26 ppem (13 pt, 2×) on first use took 758 µs.
+These measure glyph preparation, not complete frames or native startup; they
+are not a cross-platform timing guarantee. Idle repaint behavior is unchanged.
+Metadata and raw results are retained in `.tiptoptyp/terminal-font-evidence/`
+(`font-probes.log`, `color-probe.log`). Reproduce with:
+
+```sh
+cargo test --release --bin tiptoptyp terminal_font_probe -- --ignored --nocapture
+cargo test --release --bin tiptoptyp system_emoji_sequences_render -- --nocapture
+```
 
 ## Native dependency and build
 

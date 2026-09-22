@@ -566,6 +566,7 @@ mod tests {
             false,
             theme::FONT_WEIGHT_NORMAL,
             theme::FONT_WEIGHT_NORMAL,
+            None,
         );
         let new_fonts = draw(&diff, &mut cache);
         assert!(!Arc::ptr_eq(&light, &new_fonts));

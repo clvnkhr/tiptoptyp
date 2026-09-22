@@ -130,6 +130,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn revealing_git_remains_visible_when_another_section_was_maximized() {
+        let mut panel = ExplorerPanelState::default();
+        panel.toggle_section_maximized(ExplorerSection::Files);
+        panel.set_git_reveal(true);
+        assert_eq!(panel.maximized_section(true), Some(ExplorerSection::Git));
+        panel.set_git_reveal(false);
+        assert_eq!(panel.maximized_section(false), None);
+        panel.set_git_reveal(true);
+        assert_eq!(panel.maximized_section(true), None);
+    }
+
+    #[test]
     fn every_move_preserves_each_panel_once_and_roundtrips() {
         for section in ExplorerSection::ALL {
             for destination in 0..8 {
@@ -229,6 +241,7 @@ pub(crate) struct ExplorerPanelState {
     focus_search: bool,
     reveal_git: bool,
     selected_path: Option<PathBuf>,
+    maximized: Option<ExplorerSection>,
 }
 impl Default for ExplorerPanelState {
     fn default() -> Self {
@@ -241,10 +254,23 @@ impl Default for ExplorerPanelState {
             focus_search: false,
             reveal_git: true,
             selected_path: None,
+            maximized: None,
         }
     }
 }
 impl ExplorerPanelState {
+    pub(crate) fn maximized_section(&self, git_visible: bool) -> Option<ExplorerSection> {
+        self.maximized
+            .filter(|section| *section != ExplorerSection::Git || git_visible)
+    }
+    pub(crate) fn toggle_section_maximized(&mut self, section: ExplorerSection) {
+        self.maximized = if self.maximized == Some(section) {
+            None
+        } else {
+            Some(section)
+        };
+    }
+
     pub(crate) fn focus_search(&mut self) {
         self.focus_search = true;
     }
@@ -253,6 +279,11 @@ impl ExplorerPanelState {
     }
     pub(crate) fn set_git_reveal(&mut self, reveal: bool) {
         self.reveal_git = reveal;
+        if reveal && self.maximized.is_some() {
+            self.maximized = Some(ExplorerSection::Git);
+        } else if !reveal && self.maximized == Some(ExplorerSection::Git) {
+            self.maximized = None;
+        }
     }
     pub(crate) fn take_git_reveal(&mut self) -> bool {
         std::mem::take(&mut self.reveal_git)

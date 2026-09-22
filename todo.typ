@@ -2438,6 +2438,34 @@ portable whole-system resource score.
   Vim, smooth-resize, and Explorer-drop-selection work needs a separate pass
   because each crosses an existing interaction or ownership boundary.
 
+= Terminal fonts and panel sizing (22 September 2026)
+
+302. [x] Fix clipped/mismatched terminal glyphs, especially prompt version
+  numbers. Check font fallback precedence against fixed terminal-cell metrics,
+  preserve normal/bold/italic text and Unicode fallbacks, and add metric
+  regressions plus a fresh terminal capture before closing this item. Keep normal
+  colored macOS emoji, respect Ghostty's two-cell graphemes, and fit installed
+  Nerd Font icons to their assigned cell width.
+303. [x] Remove the terminal folder button/popover. Put only `(start: <path>)`
+  in the restart button tooltip.
+304. [x] Remove the bottom panel height cap; add maximize/restore that returns
+  to its previous resized height, with a configurable shortcut.
+305. [x] Add maximize/restore controls to Explorer subpanels. Maximizing one
+  hides all siblings; restoring recovers their sizes and collapsed states.
+
+- Items 302–305 are complete. Apple Color Emoji had overridden ordinary ASCII
+  metrics and produced invisible outline glyphs. Text now keeps its monospace
+  face, macOS emoji use their actual color bitmaps, and installed Nerd Fonts
+  supply private-use symbols. Ghostty retains control of grapheme widths.
+- Panel maximize/restore is available in the View menu and on Command+Option+5
+  (Control+Alt+5 elsewhere). Normal panel height and Explorer section layout
+  survive a maximize/restore cycle. The restart tooltip is `(start: <path>)`.
+- Required formatting, all-target Clippy, 1,170 tests (20 opt-in tests ignored),
+  and 14 xtask tests pass. Installed-font and optimized glyph probes also pass.
+  Fresh terminal/maximized/Explorer framebuffers were inspected and the reduced
+  22-image gallery validated. See `docs/terminal.md` and `docs/bottom-panel.md`
+  for the measurements and native-composition limitation.
+
 = PDF.js defaults and raster retirement (22 September 2026)
 
 294. [x] Use PDF.js by default for opened PDFs, independently of the default

@@ -110,12 +110,14 @@ pub enum UiSnapshotScene {
     WorkspaceChooser,
     ProblemsPanel,
     TerminalPanel,
+    TerminalMaximized,
+    ExplorerMaximized,
     FindReplace,
     PreviewCompiling,
 }
 
 impl UiSnapshotScene {
-    pub const ALL: [Self; 46] = [
+    pub const ALL: [Self; 48] = [
         Self::TableEditor,
         Self::TableEditorNarrow,
         Self::Main,
@@ -160,6 +162,8 @@ impl UiSnapshotScene {
         Self::WorkspaceChooser,
         Self::ProblemsPanel,
         Self::TerminalPanel,
+        Self::TerminalMaximized,
+        Self::ExplorerMaximized,
         Self::FindReplace,
         Self::PreviewCompiling,
     ];
@@ -210,6 +214,8 @@ impl UiSnapshotScene {
             Self::WorkspaceChooser => "workspace-chooser",
             Self::ProblemsPanel => "problems-panel",
             Self::TerminalPanel => "terminal-panel",
+            Self::TerminalMaximized => "terminal-maximized",
+            Self::ExplorerMaximized => "explorer-maximized",
             Self::FindReplace => "find-replace",
             Self::PreviewCompiling => "preview-compiling",
         }
@@ -233,6 +239,8 @@ impl UiSnapshotScene {
             | Self::RainbowBrackets
             | Self::ProblemsPanel
             | Self::TerminalPanel
+            | Self::TerminalMaximized
+            | Self::ExplorerMaximized
             | Self::FindReplace
             | Self::PreviewCompiling => ROOT_VIEWPORT_NAME,
             Self::FileMenu
@@ -318,6 +326,8 @@ impl UiSnapshotScene {
             "workspace-chooser" => Self::WorkspaceChooser,
             "problems-panel" => Self::ProblemsPanel,
             "terminal-panel" => Self::TerminalPanel,
+            "terminal-maximized" => Self::TerminalMaximized,
+            "explorer-maximized" => Self::ExplorerMaximized,
             "find-replace" => Self::FindReplace,
             "preview-compiling" => Self::PreviewCompiling,
             _ => {

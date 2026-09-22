@@ -550,6 +550,10 @@ where
     })
 }
 
+pub(crate) fn terminal_font() -> FontId {
+    FontId::monospace(13.0)
+}
+
 /// Register editor weight roles and normal/strong weighted UI families while
 /// retaining every bundled glyph fallback.
 pub fn configure_editor_fonts(
@@ -559,6 +563,7 @@ pub fn configure_editor_fonts(
     ui_font_monospace: bool,
     ui_font_weight: u16,
     code_font_weight: u16,
+    terminal_symbols: Option<&CatalogFontFamily>,
 ) -> FontConfiguration {
     configure_editor_fonts_with_reader(
         context,
@@ -567,10 +572,12 @@ pub fn configure_editor_fonts(
         ui_font_monospace,
         ui_font_weight,
         code_font_weight,
+        terminal_symbols,
         |path| std::fs::read(path),
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn configure_editor_fonts_with_reader<F>(
     context: &egui::Context,
     ui_font: FontRequest<'_>,
@@ -578,6 +585,7 @@ fn configure_editor_fonts_with_reader<F>(
     ui_font_monospace: bool,
     ui_font_weight: u16,
     code_font_weight: u16,
+    terminal_symbols: Option<&CatalogFontFamily>,
     mut read_font: F,
 ) -> FontConfiguration
 where
@@ -601,36 +609,28 @@ where
     };
     let mut code_weight_support = None;
 
-    // epaint can rasterize the outline glyphs in Apple's system emoji
-    // collection, even though it cannot preserve Apple's color layers. Put
-    // that system fallback first so macOS development builds use the same
-    // emoji shapes as the rest of the platform while retaining the bundled
-    // monochrome fallbacks for platforms without the font.
-    #[cfg(target_os = "macos")]
-    {
-        const APPLE_EMOJI: &str = "tiptoptyp-apple-color-emoji";
-        let path = Path::new("/System/Library/Fonts/Apple Color Emoji.ttc");
-        if let Ok(bytes) = read_font(path)
-            && skrifa::FontRef::from_index(&bytes, 0).is_ok()
-        {
-            let mut data = egui::FontData::from_owned(bytes);
-            data.index = 0;
-            definitions
-                .font_data
-                .insert(APPLE_EMOJI.to_owned(), Arc::new(data));
-            for family in [FontFamily::Proportional, FontFamily::Monospace] {
-                definitions
-                    .families
-                    .entry(family)
-                    .or_default()
-                    .insert(0, APPLE_EMOJI.to_owned());
-            }
-            proportional_fallback.insert(0, APPLE_EMOJI.to_owned());
-            monospace_fallback.insert(0, APPLE_EMOJI.to_owned());
-        }
-    }
-
+    // Color-only emoji fonts can advertise glyphs that rasterize to zero ink.
+    // Keep the bundled outline emoji fallbacks behind the primary text faces.
     let mut prepared_files = FontFileCache::new(&mut read_font);
+
+    let mut terminal_fallback = monospace_fallback.clone();
+    if let Some(family) = terminal_symbols
+        && let Some(prepared) = prepare_requested_font(
+            FontRequest {
+                family: Some(family),
+                ..Default::default()
+            },
+            &mut prepared_files,
+        )
+        && let Some((data, _)) = prepared.weighted_data(FONT_WEIGHT_NORMAL)
+    {
+        const SYMBOLS: &str = "tiptoptyp-terminal-symbols";
+        definitions.font_data.insert(SYMBOLS.into(), Arc::new(data));
+        terminal_fallback.insert(1, SYMBOLS.into());
+    }
+    definitions
+        .families
+        .insert(terminal_font().family, terminal_fallback);
 
     let custom_editor_requested =
         editor_font.family.is_some() || editor_font.fallback_path.is_some();
@@ -887,7 +887,6 @@ pub struct ChromeMetrics {
     pub typst_overrides_min_size: Vec2,
     pub bottom_panel_default_height: f32,
     pub bottom_panel_min_height: f32,
-    pub bottom_panel_max_height: f32,
     pub explorer_default_width: f32,
     pub explorer_min_width: f32,
     pub split_editor_fraction: f32,
@@ -1148,7 +1147,6 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
         typst_overrides_min_size: Vec2::new(420.0, 300.0),
         bottom_panel_default_height: 220.0,
         bottom_panel_min_height: 120.0,
-        bottom_panel_max_height: 320.0,
         explorer_default_width: 230.0,
         explorer_min_width: crate::explorer::EXPLORER_MIN_WIDTH,
         split_editor_fraction: 0.52,
@@ -2053,8 +2051,15 @@ mod tests {
                 } else {
                     FontRequest::default()
                 };
-                let configuration =
-                    configure_editor_fonts(&context, request, request, monospace_ui, 500, 450);
+                let configuration = configure_editor_fonts(
+                    &context,
+                    request,
+                    request,
+                    monospace_ui,
+                    500,
+                    450,
+                    None,
+                );
                 let mut families = vec![
                     FontFamily::Proportional,
                     FontFamily::Monospace,
@@ -2136,6 +2141,7 @@ mod tests {
             false,
             FONT_WEIGHT_NORMAL,
             FONT_WEIGHT_NORMAL,
+            None,
         );
         assert!(configuration.custom_ui_loaded);
         configure_styles(&context);
@@ -2175,6 +2181,7 @@ mod tests {
             false,
             FONT_WEIGHT_NORMAL,
             FONT_WEIGHT_NORMAL,
+            None,
             |candidate| {
                 if candidate == path {
                     reads.set(reads.get() + 1);
@@ -2223,6 +2230,7 @@ mod tests {
             false,
             FONT_WEIGHT_NORMAL,
             FONT_WEIGHT_NORMAL,
+            None,
         );
         assert!(configuration.custom_editor_loaded);
 

@@ -2,7 +2,7 @@
 use super::{
     FileDropTarget, METRICS, TooltipPlacement, UiIcon, approximate_char_capacity,
     clipped_panel_content_ui, error_color, icon_button, native_hover_text, offer_asset_hover,
-    offer_file_drop_target, offer_folder_row_drop, static_icon, tail_elide,
+    offer_file_drop_target, offer_folder_row_drop, square_icon_button, static_icon, tail_elide,
 };
 use crate::workspace::{WorkspaceNode, WorkspaceSnapshot};
 use crate::{
@@ -192,7 +192,7 @@ pub(super) fn show(
     });
     let section_body_heights = section_layout.body_heights(open_sections, section_body_budget);
     let order = input.order;
-    let section_resize = show_explorer_sections(
+    let section_action = show_explorer_sections(
         ui,
         ExplorerSectionsSpec {
             order,
@@ -201,6 +201,7 @@ pub(super) fn show(
             open: open_sections,
             filtered: filter_active,
             git_visible: git_in_explorer,
+            maximized: state.maximized_section(git_in_explorer),
         },
         |ui, section| match section {
             ExplorerSection::Files => {
@@ -323,7 +324,11 @@ pub(super) fn show(
         },
     );
 
-    if let Some((section, delta)) = section_resize
+    if let Some(section) = section_action.toggle_maximized {
+        state.toggle_section_maximized(section);
+        output.repaint = true;
+    }
+    if let Some((section, delta)) = section_action.resize
         && section_layout.resize_after(open_sections, section_body_budget, order, section, delta)
     {
         ui.ctx()
@@ -907,6 +912,7 @@ pub(super) fn explorer_section(
             body_height,
             show_resize_handle: false,
             filtered: false,
+            maximized: false,
         },
         add_body,
     );
@@ -919,36 +925,61 @@ pub(super) struct ExplorerSectionsSpec {
     pub(super) open: [bool; 8],
     pub(super) filtered: bool,
     pub(super) git_visible: bool,
+    pub(super) maximized: Option<ExplorerSection>,
+}
+
+#[derive(Default)]
+pub(super) struct ExplorerSectionsOutput {
+    pub(super) resize: Option<(ExplorerSection, f32)>,
+    pub(super) toggle_maximized: Option<ExplorerSection>,
 }
 
 pub(super) fn show_explorer_sections(
     ui: &mut egui::Ui,
     spec: ExplorerSectionsSpec,
     mut add_body: impl FnMut(&mut egui::Ui, ExplorerSection),
-) -> Option<(ExplorerSection, f32)> {
-    let mut resize = None;
+) -> ExplorerSectionsOutput {
+    let mut output = ExplorerSectionsOutput::default();
     for section in spec.order.sections() {
-        if section == ExplorerSection::Git && !spec.git_visible {
+        if (section == ExplorerSection::Git && !spec.git_visible)
+            || spec.maximized.is_some_and(|maximized| maximized != section)
+        {
             continue;
         }
         let index = section.index();
-        let delta = explorer_section_resizable(
+        let maximized = spec.maximized == Some(section);
+        let (delta, toggle_maximized) = explorer_section_resizable(
             ui,
             ExplorerSectionRenderSpec {
                 id_salt: section.id(),
                 title: section.title(),
                 default_open: spec.defaults[index],
-                body_height: spec.heights[index],
-                show_resize_handle: spec.order.next_open(spec.open, section).is_some(),
+                body_height: if maximized {
+                    (ui.available_height()
+                        - METRICS.explorer.section_header_height
+                        - theme::explorer_section_frame(ui.style())
+                            .total_margin()
+                            .sum()
+                            .y)
+                        .max(0.0)
+                } else {
+                    spec.heights[index]
+                },
+                show_resize_handle: !maximized
+                    && spec.order.next_open(spec.open, section).is_some(),
                 filtered: spec.filtered,
+                maximized,
             },
             |ui| add_body(ui, section),
         );
         if delta.abs() > f32::EPSILON {
-            resize = Some((section, delta));
+            output.resize = Some((section, delta));
+        }
+        if toggle_maximized {
+            output.toggle_maximized = Some(section);
         }
     }
-    resize
+    output
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -959,17 +990,24 @@ pub(super) struct ExplorerSectionRenderSpec {
     pub(super) body_height: f32,
     pub(super) show_resize_handle: bool,
     pub(super) filtered: bool,
+    pub(super) maximized: bool,
 }
 
 pub(super) fn explorer_section_resizable(
     ui: &mut egui::Ui,
     spec: ExplorerSectionRenderSpec,
     add_body: impl FnOnce(&mut egui::Ui),
-) -> f32 {
+) -> (f32, bool) {
+    let state_id = explorer_section_state_id(ui, spec.id_salt, spec.filtered);
+    let state_id = if spec.maximized {
+        state_id.with("maximized")
+    } else {
+        state_id
+    };
     let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
         ui.ctx(),
-        explorer_section_state_id(ui, spec.id_salt, spec.filtered),
-        spec.default_open,
+        state_id,
+        spec.maximized || spec.default_open,
     );
     if spec.filtered {
         // Filtered results are transient and should always expose the sections
@@ -977,6 +1015,7 @@ pub(super) fn explorer_section_resizable(
         state.set_open(spec.default_open);
     }
     let mut resize_delta = 0.0;
+    let mut toggle_maximized = false;
     theme::explorer_section_frame(ui.style()).show(ui, |ui| {
         ui.set_width(ui.available_width().max(0.0));
         ui.spacing_mut().item_spacing.y = 0.0;
@@ -984,15 +1023,32 @@ pub(super) fn explorer_section_resizable(
         let mut header = state.show_header(ui, |ui| {
             let response = ui.add_sized(
                 [
-                    ui.available_width().max(0.0),
+                    (ui.available_width()
+                        - METRICS.explorer.section_header_height
+                        - ui.spacing().item_spacing.x)
+                        .max(0.0),
                     METRICS.explorer.section_header_height,
                 ],
                 egui::Button::new((RichText::new(spec.title).strong(), egui::Atom::grow()))
                     .frame(false),
             );
             title_clicked = response.clicked();
+            let (icon, verb) = if spec.maximized {
+                (UiIcon::Restore, "Restore")
+            } else {
+                (UiIcon::Maximize, "Maximize")
+            };
+            let label = format!("{verb} {} section", spec.title);
+            toggle_maximized = native_hover_text(
+                square_icon_button(ui, icon, &label, METRICS.explorer.section_header_height),
+                &label,
+            )
+            .clicked();
         });
-        if title_clicked {
+        if spec.maximized {
+            // Maximize is temporary: never write the normal collapsed state.
+            header.set_open(true);
+        } else if title_clicked {
             header.toggle();
         }
         header.body_unindented(|ui| {
@@ -1031,7 +1087,7 @@ pub(super) fn explorer_section_resizable(
             }
         });
     });
-    resize_delta
+    (resize_delta, toggle_maximized)
 }
 
 #[derive(Default)]

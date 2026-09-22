@@ -85,6 +85,7 @@ commands! {
     NewTable => ("New Table…", Edit, 4, NewTable, 211),
     EditTable => ("Edit Table…", Edit, 4, EditTable, 212),
     Panel => ("Panel", View, 0, Always, 300),
+    MaximizePanel => ("Maximize/Restore Panel", View, 0, Always, 308),
     Terminal => ("Terminal", View, 0, Always, 307),
     Explorer => ("Explorer", View, 0, Always, 301),
     Code => ("Code", View, 1, TypstDocument, 302),
@@ -748,6 +749,7 @@ mod tests {
             shortcuts,
             [
                 (AppCommand::Panel, egui::Key::Num5),
+                (AppCommand::MaximizePanel, egui::Key::Num5),
                 (AppCommand::Terminal, egui::Key::Backtick),
                 (AppCommand::Explorer, egui::Key::Num1),
                 (AppCommand::Code, egui::Key::Num2),

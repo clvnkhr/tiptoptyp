@@ -45,6 +45,9 @@ raw-window-handle = "0.6.2"
 wry = "0.57.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# Reuse the shaping and mapped-font dependencies already used by egui.
+harfrust = "0.12.0"
+memmap2 = "0.9.11"
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSImage", "NSMenu", "NSMenuItem", "NSEvent", "NSView", "NSWindow"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSArray", "NSData", "NSObject", "NSString", "NSURL"] }
@@ -95,6 +98,7 @@ external-binaries = ["toolchain/bin/typst", "toolchain/bin/tinymist"]
 resources = [
     { src = "THIRD_PARTY_NOTICES", target = "THIRD_PARTY_NOTICES" },
     { src = "toolchain/licenses", target = "licenses" },
+    { src = "assets/fonts/notoemoji/OFL.txt", target = "licenses/NotoEmoji-OFL.txt" },
     { src = "assets/fonts/notosanssymbols/OFL.txt", target = "licenses/NotoSansSymbols-OFL.txt" },
     { src = "assets/fonts/notosansmath/OFL.txt", target = "licenses/NotoSansMath-OFL.txt" },
     { src = "assets/fonts/notosanssymbols2/OFL.txt", target = "licenses/NotoSansSymbols2-OFL.txt" },

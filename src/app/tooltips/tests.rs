@@ -234,6 +234,7 @@ fn tooltip_document_render_cost_probe() {
             false,
             theme::FONT_WEIGHT_NORMAL,
             theme::FONT_WEIGHT_NORMAL,
+            None,
         );
         context
             .run_ui(egui::RawInput::default(), |_| {})

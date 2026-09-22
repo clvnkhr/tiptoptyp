@@ -251,6 +251,26 @@ impl FontCatalog {
         &self.families
     }
 
+    /// Prefer a symbols-only or mono Nerd Font for terminal private-use icons.
+    /// Called when the existing asynchronous font catalog changes, not per frame.
+    pub(crate) fn terminal_symbols(&self) -> Option<&FontFamily> {
+        self.families
+            .iter()
+            .filter_map(|family| {
+                let name = family.name.to_ascii_lowercase();
+                (!family.faces.is_empty() && name.contains("nerd font")).then_some((
+                    (
+                        !name.contains("symbols"),
+                        !name.contains("mono"),
+                        family.origin,
+                    ),
+                    family,
+                ))
+            })
+            .min_by_key(|(rank, _)| *rank)
+            .map(|(_, family)| family)
+    }
+
     pub(crate) fn workspace_directories(&self) -> &[PathBuf] {
         &self.workspace_directories
     }
@@ -448,6 +468,44 @@ pub(crate) fn ignored_workspace_directory(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_symbols_prefer_available_symbol_faces_then_mono_nerd_fonts() {
+        let family = |name: &str| FontFamily {
+            name: name.into(),
+            origin: FontOrigin::System,
+            faces: vec![FontFace {
+                path: PathBuf::from("fixture.ttf"),
+                index: 0,
+                weight: 400,
+                normal_style: true,
+                stretch_milli: 1000,
+                variable_weight: None,
+            }],
+        };
+        let mut catalog = FontCatalog::default();
+        catalog.families.push(family("Ordinary Mono"));
+        assert!(catalog.terminal_symbols().is_none());
+        catalog.families.push(family("Example Nerd Font"));
+        catalog.families.push(family("Example Nerd Font Mono"));
+        assert_eq!(
+            catalog.terminal_symbols().unwrap().name,
+            "Example Nerd Font Mono"
+        );
+        catalog.families.push(family("Symbols Nerd Font"));
+        assert_eq!(
+            catalog.terminal_symbols().unwrap().name,
+            "Symbols Nerd Font"
+        );
+        catalog.families.push(FontFamily {
+            faces: Vec::new(),
+            ..family("Symbols Nerd Font Mono")
+        });
+        assert_eq!(
+            catalog.terminal_symbols().unwrap().name,
+            "Symbols Nerd Font"
+        );
+    }
 
     #[test]
     fn workspace_scan_finds_supported_extensions_and_skips_build_trees() {

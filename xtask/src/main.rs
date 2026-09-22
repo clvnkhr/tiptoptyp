@@ -157,6 +157,7 @@ fn generate_third_party_notices() -> Result<(), String> {
         root.join("toolchain/licenses/tinymist-LICENSE"),
         root.join("toolchain/licenses/typst-LICENSE"),
         root.join("toolchain/licenses/typst-NOTICE"),
+        root.join("assets/fonts/notoemoji/OFL.txt"),
         root.join("assets/fonts/notosanssymbols/OFL.txt"),
         root.join("assets/fonts/notosansmath/OFL.txt"),
         root.join("assets/fonts/notosanssymbols2/OFL.txt"),
@@ -265,6 +266,7 @@ fn verify_package(target: &str) -> Result<(), String> {
         TYPST_NOTICE_SHA256,
     )?;
     for (directory, name) in [
+        ("notoemoji", "NotoEmoji"),
         ("notosanssymbols", "NotoSansSymbols"),
         ("notosansmath", "NotoSansMath"),
         ("notosanssymbols2", "NotoSansSymbols2"),

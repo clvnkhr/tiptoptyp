@@ -44,6 +44,7 @@ pub(crate) enum ShortcutAction {
     Format,
     SyncPreview,
     Panel,
+    MaximizePanel,
     Terminal,
     Explorer,
     Code,
@@ -95,7 +96,7 @@ pub(crate) enum ShortcutAction {
 }
 
 impl ShortcutAction {
-    pub(crate) const ALL: [Self; 79] = [
+    pub(crate) const ALL: [Self; 80] = [
         Self::Settings,
         Self::New,
         Self::NewWindow,
@@ -127,6 +128,7 @@ impl ShortcutAction {
         Self::Format,
         Self::SyncPreview,
         Self::Panel,
+        Self::MaximizePanel,
         Self::Terminal,
         Self::Explorer,
         Self::Code,
@@ -210,6 +212,7 @@ impl ShortcutAction {
             Self::Format => "edit.format",
             Self::SyncPreview => "edit.sync_preview",
             Self::Panel => "view.panel",
+            Self::MaximizePanel => "view.maximize_panel",
             Self::Terminal => "view.terminal",
             Self::Explorer => "view.explorer",
             Self::Code => "view.code",
@@ -298,6 +301,7 @@ impl ShortcutAction {
             Self::Format => "Format document",
             Self::SyncPreview => "Reveal in preview",
             Self::Panel => "Panel",
+            Self::MaximizePanel => "Maximize/Restore Panel",
             Self::Terminal => "Terminal",
             Self::Explorer => "Explorer",
             Self::Code => "Code view",
@@ -388,6 +392,7 @@ impl ShortcutAction {
             Self::Packages
             | Self::Git
             | Self::Panel
+            | Self::MaximizePanel
             | Self::Terminal
             | Self::Explorer
             | Self::Code
@@ -1197,6 +1202,7 @@ fn default_binding(action: ShortcutAction, platform: ShortcutPlatform) -> Option
         },
         Action::SyncPreview => ShortcutChord::primary(Key::J).shift(),
         Action::Panel => ShortcutChord::primary(Key::Num5),
+        Action::MaximizePanel => ShortcutChord::primary(Key::Num5).alt(),
         Action::Terminal => ShortcutChord::control(Key::Backtick),
         Action::Explorer => ShortcutChord::primary(Key::Num1),
         Action::Code => ShortcutChord::primary(Key::Num2),

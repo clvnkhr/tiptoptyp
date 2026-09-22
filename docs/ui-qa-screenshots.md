@@ -97,6 +97,8 @@ The accepted scenes and their framebuffer targets are:
 | `status-log` | `popup` | Recent compiler and document-status history |
 | `rename-dialog` | `rename` | Rename card |
 | `workspace-chooser` | `workspace` | Explicit workspace-root chooser |
+| `terminal-maximized` | `main` | Terminal filling available content height, with restore control |
+| `explorer-maximized` | `main` | Files section filling Explorer, with sibling sections hidden |
 | `terminal-panel` | `main` | Shared bottom panel with deterministic libghostty colors, Unicode and cursor; no shell is spawned |
 | `problems-panel` | `main` | Expanded Problems panel with diagnostics |
 | `find-replace` | `main` | Find and replace controls |

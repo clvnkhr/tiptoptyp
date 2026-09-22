@@ -1,6 +1,7 @@
 //! Privileged QA adapter: the only owner of fixture buffers and scene setup.
 //! Normal rendering consumes the same application state and components.
 use super::*;
+use crate::explorer::ExplorerSection;
 
 #[derive(Default)]
 pub(super) struct QaSession {
@@ -672,10 +673,21 @@ impl QaSession {
                 }
             }
             UiSnapshotScene::WorkspaceChooser => app.workspace_chooser_visible = true,
-            UiSnapshotScene::TerminalPanel => {
+            UiSnapshotScene::ExplorerMaximized => {
+                app.explorer.open();
+                app.view_mode = ViewMode::Code;
+                if app.explorer.maximized_section(true) != Some(ExplorerSection::Files) {
+                    app.explorer
+                        .toggle_section_maximized(ExplorerSection::Files);
+                }
+            }
+            UiSnapshotScene::TerminalPanel | UiSnapshotScene::TerminalMaximized => {
+                if scene == UiSnapshotScene::TerminalMaximized && !app.bottom_panel.is_maximized() {
+                    app.bottom_panel.toggle_maximized();
+                }
                 app.bottom_panel.select(PanelTab::Terminal);
                 app.terminal.prepare_fixture(
-                    "\x1b[32m~/project\x1b[0m $ typst compile notes.typ\r\n\x1b[32mCompilation finished\x1b[0m in 42 ms\r\n\r\n\x1b[1mGhostty terminal\x1b[0m  \x1b[31mred\x1b[0m  \x1b[34mblue\x1b[0m  \x1b[38;2;180;90;200mtrue color\x1b[0m\r\nUnicode: α + β = γ   é   界\r\n\x1b[32m~/project\x1b[0m $ ".as_bytes(),
+                    "\x1b[?2027h\x1b[32m~/project\x1b[0m $ typst compile notes.typ\r\n\x1b[32mCompilation finished\x1b[0m in 42 ms\r\n\x1b[1;35mgit_branch master\x1b[0m  \x1b[1;33mpackage v0.1.0\x1b[0m  \x1b[1;31mrust v1.98.1\x1b[0m\r\nDigits: 0123456789 #*  \x1b[1mbold 0123456789\x1b[0m  \x1b[3mitalic 0123456789\x1b[0m\r\n\x1b[1mGhostty terminal\x1b[0m  \x1b[31mred\x1b[0m  \x1b[34mblue\x1b[0m  \x1b[38;2;180;90;200mtrue color\x1b[0m\r\nUnicode: α + β = γ   é   界   😀 🦀 📦 👩‍💻 🇬🇧\r\n\x1b[32m~/project\x1b[0m $ ".as_bytes(),
                     Path::new("~/project"),
                 );
             }
@@ -743,6 +755,9 @@ impl QaSession {
         app.typst_overrides_visible = false;
         app.workspace_chooser_visible = false;
         app.bottom_panel = BottomPanel::default();
+        if let Some(section) = app.explorer.maximized_section(true) {
+            app.explorer.toggle_section_maximized(section);
+        }
         app.terminal = TerminalPane::default();
         app.find_bar.visible = false;
         app.find_bar.replace_visible = false;

@@ -296,6 +296,61 @@ mod tests {
     }
 
     #[test]
+    fn grapheme_widths_keep_emoji_wide_and_private_use_icons_narrow() {
+        let mut engine = engine(40, 2);
+        engine
+            .terminal
+            .vt_write("0😀界e\u{301}\u{f120}X".as_bytes());
+        let grid = engine.snapshot().unwrap();
+        let cells: Vec<_> = grid.rows[0]
+            .iter()
+            .take(8)
+            .map(|cell| (cell.text.as_str(), cell.width))
+            .collect();
+        assert_eq!(
+            cells,
+            [
+                ("0", 1),
+                ("😀", 2),
+                ("", 0),
+                ("界", 2),
+                ("", 0),
+                ("e\u{301}", 1),
+                ("\u{f120}", 1),
+                ("X", 1)
+            ]
+        );
+        assert_eq!(grid.cursor.unwrap().col, 8);
+    }
+
+    #[test]
+    fn emoji_sequences_keep_one_two_column_grapheme_and_the_next_cursor_position() {
+        for text in [
+            "🦀",
+            "📦",
+            "👩‍💻",
+            "🇬🇧",
+            "👍🏽",
+            "1\u{fe0f}\u{20e3}",
+            "❤\u{fe0f}",
+        ] {
+            let mut engine = engine(20, 2);
+            // Applications opt into grapheme clustering with DEC mode 2027.
+            engine
+                .terminal
+                .set_mode(Mode::GRAPHEME_CLUSTER, true)
+                .unwrap();
+            engine.terminal.vt_write(format!("{text}X").as_bytes());
+            let grid = engine.snapshot().unwrap();
+            assert_eq!(grid.rows[0][0].text, text);
+            assert_eq!(grid.rows[0][0].width, 2, "{text}");
+            assert_eq!(grid.rows[0][1].width, 0, "{text}");
+            assert_eq!(grid.rows[0][2].text, "X", "{text}");
+            assert_eq!(grid.cursor.unwrap().col, 3, "{text}");
+        }
+    }
+
+    #[test]
     fn unchanged_render_rows_are_shared_and_scrollback_is_bounded() {
         let mut engine = engine(80, 24);
         engine.terminal.vt_write(b"hello");
