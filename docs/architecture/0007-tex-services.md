@@ -119,3 +119,15 @@ The settings controls are covered with semantic egui tests. No screenshots were
 retaken, and this work does not claim fresh framebuffer/native composition QA.
 Local logs, binary hashes and matched optimized Typst measurements are retained
 in `.tiptoptyp/tex-services-evidence/` (ignored runtime evidence).
+
+Required checks pass: formatting, strict all-target Clippy, 1,198 tests (23 opt-in
+tests excluded from the normal suite), and all 14 xtask tests. The exact real-tool
+probes also pass. The ongoing edits to `todo.typ` in master are kept separate
+from this integration; the standard LaTeX follow-up is recorded above.
+
+The matched optimized Typst success/error/recovery cycle measured a median of
+1.050 s before and 1.041 s after (-0.8%). Each stage used one
+warmup and five samples with Rust 1.98.1, Typst 0.15.1 and the same fixture on
+macOS 14.6.1 arm64. This is a headless compiler-worker observation, not a GUI or
+cross-platform performance guarantee. No material Typst performance regression
+was observed. New TeX services have no pre-existing runtime baseline.
