@@ -833,7 +833,14 @@ GPU/texture-residency observation remain explicitly unavailable.
 306. [ ] comfy mode (typst only) - adjust black and white (+ background color) with default set rules to match theme
 307. [ ] language/grammar linting
 308. [ ] highlight invisible chars or chars commonly mistaken for other chars (e.g. cjk)
-309. [ ] weird chinese encoding -> utf-8 conversion
+309. [ ] weird chinese encoding -> utf-8 conversion (deferred until we have more details)
+310. [ ] full document templates
+311. [ ] snippet support
+312. [ ] allow passing flags to the various tools we use (tinymist, typst, etc)
+313. [ ] if nothing is staged but there are diffs, the greyed out Commit staged changes should be 'stage all and commit'.
+314. [ ] there should also be a revert/revert all button (with confirmation dialog)
+315. [ ] everything currently done with text should have a swanky icon, with text going into a small tooltip instead
+316. [ ] the maximize icon sucks, we should instead highlight/make more prominent the top part of the minimise icon, and the minimise icon should highlight/make more prominent the lower square.
 
 = Bounded PDF page residency (2026-09-18)
 
