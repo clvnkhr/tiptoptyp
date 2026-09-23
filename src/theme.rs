@@ -1652,17 +1652,7 @@ pub fn menu_card_frame(style: &egui::Style) -> egui::Frame {
 }
 
 pub fn popup_viewport_builder(title: impl Into<String>) -> egui::ViewportBuilder {
-    egui::ViewportBuilder::default()
-        .with_title(title)
-        .with_resizable(false)
-        .with_transparent(true)
-        .with_decorations(false)
-        .with_taskbar(false)
-        .with_close_button(false)
-        .with_minimize_button(false)
-        .with_maximize_button(false)
-        .with_has_shadow(false)
-        .with_always_on_top()
+    crate::window_policy::popup(title)
 }
 
 pub fn status_chip_frame(style: &egui::Style) -> egui::Frame {

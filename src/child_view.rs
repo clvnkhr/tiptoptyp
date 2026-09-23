@@ -145,7 +145,7 @@ impl ChildViewSpec {
 
     fn viewport(self) -> egui::ViewportBuilder {
         let viewport = match self.bounds {
-            ChildViewBounds::Persistent { inner, minimum } => egui::ViewportBuilder::default()
+            ChildViewBounds::Persistent { inner, minimum } => crate::window_policy::document()
                 .with_title(self.title)
                 .with_inner_size(inner)
                 .with_min_inner_size(minimum)

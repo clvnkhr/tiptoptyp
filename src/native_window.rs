@@ -1,11 +1,6 @@
-//! Access to the native window which currently owns keyboard focus.
-//!
-//! eframe exposes the root window through `Frame`, but its deferred child
-//! viewport callback does not carry a `Frame`. Both Wry and rfd only need a
-//! standards-based raw-window handle, so resolve the focused platform window
-//! while running inside that child callback. WebView creation is separately
-//! gated on the viewport reporting focused, which makes this association
-//! deterministic and avoids activating a background window.
+//! Retained native window handles. Prefer the host-supplied handle; keyboard
+//! focus is only a bootstrap fallback for deferred windows whose eframe
+//! callback does not expose its native handle.
 
 #[cfg(target_os = "macos")]
 mod platform {
@@ -26,6 +21,17 @@ mod platform {
     }
 
     impl ActiveWindowHandle {
+        pub(crate) fn from_owner(owner: &impl HasWindowHandle) -> Option<Self> {
+            let RawWindowHandle::AppKit(handle) = owner.window_handle().ok()?.as_raw() else {
+                return None;
+            };
+            let _marker = MainThreadMarker::new()?;
+            // SAFETY: HasWindowHandle guarantees a live NSView for this borrow.
+            // Retain it on AppKit's main thread before the borrow ends.
+            let view = unsafe { Retained::retain(handle.ns_view.as_ptr().cast::<NSView>()) }?;
+            Some(Self { view })
+        }
+
         #[cfg(test)]
         #[allow(dead_code)] // Also compiled by the opt-in native integration harness.
         pub(crate) fn from_test_view(view: Retained<NSView>) -> Self {
@@ -135,6 +141,13 @@ mod platform {
     }
 
     impl ActiveWindowHandle {
+        pub(crate) fn from_owner(owner: &impl HasWindowHandle) -> Option<Self> {
+            let RawWindowHandle::Win32(handle) = owner.window_handle().ok()?.as_raw() else {
+                return None;
+            };
+            Some(Self { hwnd: handle.hwnd })
+        }
+
         pub(crate) fn is_same_window(&self, other: &Self) -> bool {
             self.hwnd == other.hwnd
         }

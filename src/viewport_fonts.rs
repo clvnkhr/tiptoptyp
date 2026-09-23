@@ -32,7 +32,7 @@ pub(crate) fn show_deferred(
     }
     // Deferred painting has no nested parent/child texture-delta ordering to
     // repair, so it needs neither an atlas copy nor an extra upload here.
-    context.show_viewport_deferred(id, builder, body);
+    context.show_viewport_deferred(id, creation_options(builder, exists), body);
 }
 pub(crate) fn show_immediate(
     context: &egui::Context,
@@ -53,10 +53,21 @@ pub(crate) fn show_immediate(
         context.request_repaint();
         return;
     }
-    context.show_viewport_immediate(id, builder, body);
+    context.show_viewport_immediate(id, creation_options(builder, exists), body);
     if !context.embed_viewports() {
         after_immediate_viewport(context);
     }
+}
+
+/// `active` is a winit creation hint, not a live focus property. egui's
+/// builder patch recreates the native window when it changes. Preserve the
+/// surface across focus handoffs; callers use ViewportCommand::Focus for
+/// explicit user actions on an existing window.
+fn creation_options(mut builder: egui::ViewportBuilder, exists: bool) -> egui::ViewportBuilder {
+    if exists {
+        builder.active = None;
+    }
+    builder
 }
 
 fn after_immediate_viewport(context: &egui::Context) {
@@ -93,6 +104,25 @@ fn after_immediate_viewport(context: &egui::Context) {
 mod tests {
     use super::*;
     use std::{cell::RefCell, rc::Rc};
+
+    #[test]
+    fn focus_handoffs_never_recreate_existing_native_surfaces() {
+        for initial in [false, true] {
+            let mut native = creation_options(
+                crate::window_policy::popup("test").with_active(initial),
+                false,
+            );
+            assert_eq!(native.active, Some(initial));
+            for focused in [true, false, true, false] {
+                let (commands, recreate) = native.patch(creation_options(
+                    crate::window_policy::popup("test").with_active(focused),
+                    true,
+                ));
+                assert!(!recreate, "focus handoff must retain the native window");
+                assert!(commands.is_empty(), "painting must not steal focus");
+            }
+        }
+    }
 
     #[test]
     fn appearance_barrier_defers_only_new_children_for_one_frame() {

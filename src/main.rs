@@ -68,6 +68,7 @@ mod toolchain;
 mod unicode_fonts;
 mod viewport_fonts;
 mod window_logo;
+mod window_policy;
 mod windowing;
 mod worker;
 mod workflow;
@@ -75,7 +76,6 @@ mod workspace;
 mod workspace_service;
 mod writing;
 
-use eframe::egui;
 use launch::LaunchOptions;
 use screenshot::{CaptureController, ScreenshotApp};
 use shortcuts::ShortcutBindings;
@@ -240,19 +240,10 @@ fn invalid_launch_configuration(error: impl std::fmt::Display) -> eframe::Error 
 
 fn native_options(deterministic_snapshot: bool) -> eframe::NativeOptions {
     eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
+        viewport: window_policy::document()
             .with_icon(app_icon::runtime_icon())
             .with_inner_size(theme::METRICS.chrome.main_size)
-            .with_min_inner_size(theme::METRICS.chrome.main_min_size)
-            // Child popup viewports use real alpha so rounded cards can sit
-            // above WKWebView without opaque corner wedges.
-            .with_transparent(true)
-            // On macOS the normal title bar becomes part of the app toolbar. The
-            // traffic-light controls remain native, while the otherwise empty
-            // title strip no longer costs a row of vertical space.
-            .with_fullsize_content_view(true)
-            .with_title_shown(false)
-            .with_titlebar_shown(false),
+            .with_min_inner_size(theme::METRICS.chrome.main_min_size),
         // Visual-QA scenes must not inherit a developer's last window size.
         // Normal launches may restore the size, but never the position: eframe
         // does not clamp persisted positions on macOS, and a monitor-layout
@@ -271,6 +262,7 @@ mod tests {
     fn main_window_is_centered_even_when_size_persistence_is_enabled() {
         let normal = native_options(false);
         assert!(normal.persist_window);
+
         assert!(normal.centered);
         let icon = normal.viewport.icon.as_ref().expect("runtime icon");
         assert_eq!((icon.width, icon.height), (256, 256));

@@ -847,17 +847,10 @@ fn document_viewport_id(session_id: u64) -> egui::ViewportId {
 }
 
 fn document_viewport_builder(title: String, activate: bool) -> egui::ViewportBuilder {
-    let builder = egui::ViewportBuilder::default()
+    let builder = crate::window_policy::document()
         .with_title(title)
         .with_inner_size(theme::METRICS.chrome.main_size)
-        .with_min_inner_size(theme::METRICS.chrome.main_min_size)
-        // New document viewports need an opaque AppKit backing, like
-        // Settings. They never use window alpha; their popup children do.
-        .with_transparent(false)
-        .with_has_shadow(true)
-        .with_fullsize_content_view(true)
-        .with_title_shown(false)
-        .with_titlebar_shown(false);
+        .with_min_inner_size(theme::METRICS.chrome.main_min_size);
     if activate {
         // Activation is a one-shot creation hint. Reissuing it every frame
         // would steal focus during system appearance changes and background

@@ -8019,11 +8019,16 @@ impl EditorApp {
     }
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    fn refresh_native_window_parent(&mut self, context: &egui::Context) {
-        if context.input(|input| input.viewport().focused) != Some(true) {
+    fn refresh_native_window_parent(
+        &mut self,
+        context: &egui::Context,
+        frame: Option<&eframe::Frame>,
+    ) {
+        let supplied = frame.and_then(crate::native_window::ActiveWindowHandle::from_owner);
+        if supplied.is_none() && context.input(|input| input.viewport().focused) != Some(true) {
             return;
         }
-        let Some(parent) = crate::native_window::active_window_handle() else {
+        let Some(parent) = supplied.or_else(crate::native_window::active_window_handle) else {
             return;
         };
         let changed = self
@@ -8042,7 +8047,12 @@ impl EditorApp {
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    fn refresh_native_window_parent(&mut self, _context: &egui::Context) {}
+    fn refresh_native_window_parent(
+        &mut self,
+        _context: &egui::Context,
+        _frame: Option<&eframe::Frame>,
+    ) {
+    }
 
     pub(crate) fn has_settings_update(&self) -> bool {
         self.pending_settings.is_some()
@@ -8163,7 +8173,7 @@ impl EditorApp {
         // Capture the exact platform parent before opening any popup viewport
         // or consuming native menu commands. Each EditorApp retains its own
         // parent and consequently its own Tinymist child webview.
-        self.refresh_native_window_parent(&context);
+        self.refresh_native_window_parent(&context, frame);
         self.update_file_drag_pointer(&context);
         if self.captures.has_pending_for("settings") {
             self.settings_visible = true;
