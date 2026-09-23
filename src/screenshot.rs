@@ -113,6 +113,9 @@ pub enum UiSnapshotScene {
     TerminalPanel,
     TerminalMaximized,
     TerminalIcons,
+    Templates,
+    EncodingImport,
+    WritingChecks,
     ExplorerMaximized,
     ExplorerDrop,
     FindReplace,
@@ -121,7 +124,7 @@ pub enum UiSnapshotScene {
 }
 
 impl UiSnapshotScene {
-    pub const ALL: [Self; 52] = [
+    pub const ALL: [Self; 55] = [
         Self::TableEditor,
         Self::TableEditorNarrow,
         Self::Main,
@@ -169,6 +172,9 @@ impl UiSnapshotScene {
         Self::TerminalPanel,
         Self::TerminalMaximized,
         Self::TerminalIcons,
+        Self::Templates,
+        Self::EncodingImport,
+        Self::WritingChecks,
         Self::ExplorerMaximized,
         Self::ExplorerDrop,
         Self::FindReplace,
@@ -225,6 +231,9 @@ impl UiSnapshotScene {
             Self::TerminalPanel => "terminal-panel",
             Self::TerminalMaximized => "terminal-maximized",
             Self::TerminalIcons => "terminal-icons",
+            Self::Templates => "templates",
+            Self::EncodingImport => "encoding-import",
+            Self::WritingChecks => "writing-checks",
             Self::ExplorerMaximized => "explorer-maximized",
             Self::ExplorerDrop => "explorer-drop",
             Self::FindReplace => "find-replace",
@@ -236,6 +245,9 @@ impl UiSnapshotScene {
     /// Logical framebuffer target used by [`CaptureController`].
     pub const fn viewport_target(self) -> &'static str {
         match self {
+            Self::Templates => "templates",
+            Self::EncodingImport => "encoding-import",
+            Self::WritingChecks => ROOT_VIEWPORT_NAME,
             Self::TableEditor | Self::TableEditorNarrow => "table-editor",
             Self::Main
             | Self::Tabs
@@ -345,6 +357,9 @@ impl UiSnapshotScene {
             "terminal-panel" => Self::TerminalPanel,
             "terminal-maximized" => Self::TerminalMaximized,
             "terminal-icons" => Self::TerminalIcons,
+            "templates" => Self::Templates,
+            "encoding-import" => Self::EncodingImport,
+            "writing-checks" => Self::WritingChecks,
             "explorer-maximized" => Self::ExplorerMaximized,
             "explorer-drop" => Self::ExplorerDrop,
             "find-replace" => Self::FindReplace,

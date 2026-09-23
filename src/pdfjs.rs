@@ -13,6 +13,8 @@ use tiny_http::{Header, Method, Response, Server, StatusCode};
 
 static ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets/pdfjs");
 const HOST_SCRIPT: &[u8] = include_bytes!("pdfjs/host.js");
+const FRAME_SCRIPT: &[u8] = include_bytes!("pdfjs/frame.js");
+const HOST_HTML: &[u8] = include_bytes!("pdfjs/host.html");
 const HOST_STYLE: &[u8] = include_bytes!("pdfjs/host.css");
 
 #[derive(Clone, Serialize)]
@@ -144,7 +146,7 @@ fn reply(status: u16, mime: &str, bytes: Arc<[u8]>) -> HttpResponse {
         ("X-Content-Type-Options", "nosniff"),
         ("Referrer-Policy", "no-referrer"),
         ("Cross-Origin-Resource-Policy", "same-origin"),
-        ("Content-Security-Policy", "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' blob: data:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'"),
+        ("Content-Security-Policy", "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' blob: data:; object-src 'none'; frame-ancestors 'self'; base-uri 'self'"),
     ].into_iter().map(|(name, value)| Header::from_bytes(name, value).expect("static HTTP header")).collect();
     Response::new(
         StatusCode(status),
@@ -178,6 +180,17 @@ fn resource(url: &str, prefix: &str, snapshot: &Mutex<Option<Snapshot>>) -> Http
         // A stale request must never receive bytes from a newer build.
         return reply(409, "text/plain", Arc::from(&b"Superseded PDF"[..]));
     }
+    if path == "web/viewer.html" {
+        return reply(200, "text/html; charset=utf-8", HOST_HTML.into());
+    }
+    if path == "frame.js" {
+        return reply(200, "text/javascript", FRAME_SCRIPT.into());
+    }
+    let path = if path == "web/frame.html" {
+        "web/viewer.html"
+    } else {
+        path
+    };
     if path == "host.js" {
         return reply(200, "text/javascript", HOST_SCRIPT.into());
     }
@@ -187,7 +200,7 @@ fn resource(url: &str, prefix: &str, snapshot: &Mutex<Option<Snapshot>>) -> Http
     if let Some(file) = ASSETS.get_file(path) {
         if path == "web/viewer.html" {
             let html = std::str::from_utf8(file.contents()).expect("upstream viewer HTML");
-            let html = html.replace("<head>", "<head>\n<script src=\"../host.js\"></script>\n<link rel=\"stylesheet\" href=\"../host.css\">");
+            let html = html.replace("<head>", "<head>\n<script src=\"../frame.js\"></script>\n<link rel=\"stylesheet\" href=\"../host.css\">");
             return reply(200, "text/html; charset=utf-8", html.into_bytes().into());
         }
         let mime = match Path::new(path).extension().and_then(|e| e.to_str()) {
@@ -253,6 +266,8 @@ mod tests {
             "build/pdf.mjs",
             "build/pdf.worker.mjs",
             "host.js",
+            "frame.js",
+            "web/frame.html",
             "host.css",
         ] {
             assert_eq!(

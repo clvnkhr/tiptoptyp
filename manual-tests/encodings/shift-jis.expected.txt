@@ -1,0 +1,4 @@
+\documentclass{article}
+\begin{document}
+日本語の変換テストです。
+\end{document}

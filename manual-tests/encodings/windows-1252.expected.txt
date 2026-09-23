@@ -1,0 +1,4 @@
+\documentclass{article}
+\begin{document}
+A café costs €5 – naïve example.
+\end{document}

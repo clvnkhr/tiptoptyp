@@ -1,6 +1,9 @@
 mod build;
+mod encoding_import;
 pub(crate) mod icons;
+mod templates;
 mod tex;
+mod writing;
 use icons::{
     UiIcon, icon_button, icon_button_enabled, paint_ui_icon, square_icon_button, static_icon,
 };
@@ -873,6 +876,8 @@ enum SettingsTarget {
     LineNumbers,
     StickyContextRows,
     AutoPairDelimiters,
+    EnglishGrammar,
+    UnicodeWarnings,
     MitexDollars,
     GitDiffStyle,
     RainbowBrackets,
@@ -903,7 +908,7 @@ enum SettingsTarget {
 }
 
 impl SettingsTarget {
-    const ALL: [Self; 39] = [
+    const ALL: [Self; 41] = [
         Self::Appearance,
         Self::TypstSyntax,
         Self::LightTheme,
@@ -916,6 +921,8 @@ impl SettingsTarget {
         Self::LineNumbers,
         Self::StickyContextRows,
         Self::AutoPairDelimiters,
+        Self::EnglishGrammar,
+        Self::UnicodeWarnings,
         Self::MitexDollars,
         Self::GitDiffStyle,
         Self::RainbowBrackets,
@@ -959,6 +966,8 @@ impl SettingsTarget {
             Self::LineNumbers => "Line numbers",
             Self::StickyContextRows => "Sticky context rows",
             Self::AutoPairDelimiters => "Auto-close delimiters",
+            Self::EnglishGrammar => "Offline British English grammar (Typst / TeX)",
+            Self::UnicodeWarnings => "Flag invisible and confusable characters",
             Self::MitexDollars => "Auto-enable miTeX in compatible Typst documents",
             Self::GitDiffStyle => "Git diff style",
             Self::RainbowBrackets => "Rainbow brackets",
@@ -1003,6 +1012,8 @@ impl SettingsTarget {
             | Self::LineNumbers
             | Self::StickyContextRows
             | Self::AutoPairDelimiters
+            | Self::EnglishGrammar
+            | Self::UnicodeWarnings
             | Self::MitexDollars
             | Self::GitDiffStyle
             | Self::RainbowBrackets
@@ -1047,6 +1058,12 @@ impl SettingsTarget {
             Self::WrapLines => "editor soft wrapping",
             Self::LineNumbers => "editor gutter",
             Self::StickyContextRows => "editor headings scopes sections breadcrumbs",
+            Self::EnglishGrammar => {
+                "writing proofreading spelling grammar english harper offline tex typst"
+            }
+            Self::UnicodeWarnings => {
+                "unicode invisible characters confusable zero-width cjk lookalikes"
+            }
             Self::AutoPairDelimiters => {
                 "editor automatic pairing brackets quotes dollar backspace matching"
             }
@@ -1185,6 +1202,9 @@ pub struct EditorApp {
     tex_tools: crate::tex::tools::TexTools,
     tex_service: crate::tex::TexService,
     tex_diagnostics: [Vec<Diagnostic>; 2],
+    writing: writing::WritingState,
+    template_picker: Option<usize>,
+    encoding_import: Option<encoding_import::EncodingImport>,
     capabilities: CapabilityCache,
     workspace_root: PathBuf,
     git: crate::git::GitPanel,
@@ -1474,6 +1494,9 @@ impl EditorApp {
             tex_tools,
             tex_service: Default::default(),
             tex_diagnostics: Default::default(),
+            writing: Default::default(),
+            template_picker: None,
+            encoding_import: None,
             capabilities,
             workspace_root,
             git: crate::git::GitPanel::default(),
@@ -2460,7 +2483,7 @@ impl EditorApp {
             }
             match result.output {
                 Ok(mut pages) => {
-                    let dark = preview.dark;
+                    let dark = preview.render_dark();
                     // Admit the farthest speculative neighbours first and
                     // visible/adjacent pages last. If this batch crosses the
                     // process-wide budget, eviction keeps the nearest
@@ -3254,6 +3277,8 @@ impl EditorApp {
                 }
             }
             AppCommand::New => self.new_document(),
+            AppCommand::NewFromTemplate => self.template_picker = Some(0),
+            AppCommand::ComfyDocument => self.toggle_comfy(context),
             AppCommand::NewWindow => {
                 self.pending_window_requests
                     .push_back(EditorWindowRequest::New {
@@ -3383,6 +3408,7 @@ impl EditorApp {
             // Source-only editing commands must not mutate the document while
             // a find, settings, rename, package, or table field owns focus.
             AppCommand::ToggleComment
+            | AppCommand::ComfyDocument
             | AppCommand::Format
             | AppCommand::NewTable
             | AppCommand::EditTable => {}
@@ -3664,6 +3690,7 @@ impl EditorApp {
             self.restart_tinymist();
             self.schedule_compile_now();
         }
+        self.refresh_comfy_theme(context);
         self.presentation.commit(request);
     }
 
@@ -4156,7 +4183,14 @@ impl EditorApp {
         let kind = match crate::document::detect_document(&path, &bytes) {
             Ok(kind) => kind,
             Err(error) => {
-                self.show_file_error(error);
+                if crate::document::supports_path(&path)
+                    && crate::document::preview_kind_for_path(&path).is_none()
+                    && std::str::from_utf8(&bytes).is_err()
+                {
+                    self.encoding_import = Some(encoding_import::EncodingImport::new(path, bytes));
+                } else {
+                    self.show_file_error(error);
+                }
                 return false;
             }
         };
@@ -5292,8 +5326,11 @@ impl EditorApp {
         }
         config.command = self.tinymist_tool.command.clone();
         config.start_preview = start_preview;
-        config.preview.invert_colors =
-            tinymist_invert_colors(self.settings.document_theme, self.preview.dark);
+        config.preview.invert_colors = if self.preview_comfy() {
+            InvertColors::Never
+        } else {
+            tinymist_invert_colors(self.settings.document_theme, self.preview.dark)
+        };
         config.preview.refresh = tinymist_preview_refresh(self.compilation_paused);
         let source = match self.canonical_document_source() {
             Ok(source) => source,
@@ -8657,11 +8694,14 @@ impl EditorApp {
                 }
             }
         }
+        self.update_writing_checks(&context);
         self.handle_dropped_file(&context);
         self.update_asset_hover(&context);
         self.refresh_diagnostic_tooltip(&context);
         self.focus_requested_tooltip(&context);
         self.show_app_popup_window(&context);
+        self.show_template_picker(&context);
+        self.show_encoding_import(&context);
         self.show_rename_dialog(&context);
         self.show_table_editor_window(&context);
         self.show_app_modal_window(&context);
@@ -8695,6 +8735,8 @@ impl EditorApp {
             (self.shortcut_editor_visible, "tiptoptyp-shortcuts"),
             (self.typst_overrides_visible, "tiptoptyp-typst-overrides"),
             (self.packages_visible, "tiptoptyp-packages"),
+            (self.encoding_import.is_some(), "tiptoptyp-encoding-import"),
+            (self.template_picker.is_some(), "tiptoptyp-templates"),
             (self.app_popup.is_some(), "tiptoptyp-popup-overlay"),
             (self.asset_hover.is_some(), "asset-hover-overlay"),
             (
@@ -10627,6 +10669,7 @@ fn source_mutating_command(command: AppCommand) -> bool {
             | AppCommand::Paste
             | AppCommand::ToggleComment
             | AppCommand::Format
+            | AppCommand::ComfyDocument
             | AppCommand::NewTable
             | AppCommand::EditTable
     )

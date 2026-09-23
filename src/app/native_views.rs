@@ -86,9 +86,10 @@ impl EditorApp {
                             crate::window_logo::show(ui, &captures);
                             ui.label(RichText::new("Typst packages").strong());
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                refresh_requested |= ui
-                                    .add_enabled(!loading, egui::Button::new("Refresh"))
-                                    .clicked();
+                                refresh_requested |= crate::app::icons::action_button_enabled(
+                                    ui, !loading, "Refresh",
+                                )
+                                .clicked();
                                 #[cfg(not(target_os = "macos"))]
                                 if icon_button(ui, UiIcon::Close, "Close Packages").clicked() {
                                     close_requested = true;
@@ -283,8 +284,8 @@ impl EditorApp {
                         submit |= response.lost_focus()
                             && ui.input(|input| input.key_pressed(egui::Key::Enter));
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            submit |= ui.button("Rename").clicked();
-                            cancel |= ui.button("Cancel").clicked();
+                            submit |= crate::app::icons::action_button(ui, "Rename").clicked();
+                            cancel |= crate::app::icons::action_button(ui, "Cancel").clicked();
                         });
                     });
                 });
@@ -389,8 +390,10 @@ impl EditorApp {
                             }
                             ui.add_space(theme::SPACE.control);
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                choose_folder |= ui.button("Choose Folder…").clicked();
-                                cancel |= ui.button("Cancel").clicked();
+                                choose_folder |=
+                                    crate::app::icons::action_button(ui, "Choose Folder…")
+                                        .clicked();
+                                cancel |= crate::app::icons::action_button(ui, "Cancel").clicked();
                             });
                         });
                     });
@@ -504,50 +507,62 @@ impl EditorApp {
                                 Layout::right_to_left(Align::Center),
                                 |ui| match &modal {
                                     AppModal::Alert { .. } => {
-                                        if ui.button("OK").clicked() {
+                                        if crate::app::icons::action_button(ui, "OK").clicked() {
                                             choice = Some(AppModalChoice::Primary);
                                         }
                                     }
                                     AppModal::Unsaved { .. } => {
-                                        if ui.button("Save").clicked() {
+                                        if crate::app::icons::action_button(ui, "Save").clicked() {
                                             choice = Some(AppModalChoice::Primary);
                                         }
-                                        if ui.button("Discard").clicked() {
+                                        if crate::app::icons::action_button(ui, "Discard").clicked()
+                                        {
                                             choice = Some(AppModalChoice::Secondary);
                                         }
-                                        if ui.button("Cancel").clicked() {
+                                        if crate::app::icons::action_button(ui, "Cancel").clicked()
+                                        {
                                             choice = Some(AppModalChoice::Cancel);
                                         }
                                     }
                                     AppModal::UninstallPackage { .. } => {
-                                        if ui.button("Uninstall").clicked() {
+                                        if crate::app::icons::action_button(ui, "Uninstall")
+                                            .clicked()
+                                        {
                                             choice = Some(AppModalChoice::Primary);
                                         }
-                                        if ui.button("Cancel").clicked() {
+                                        if crate::app::icons::action_button(ui, "Cancel").clicked()
+                                        {
                                             choice = Some(AppModalChoice::Cancel);
                                         }
                                     }
                                     AppModal::DeleteFile { .. } => {
-                                        if ui.button("Delete").clicked() {
+                                        if crate::app::icons::action_button(ui, "Delete").clicked()
+                                        {
                                             choice = Some(AppModalChoice::Primary);
                                         }
-                                        if ui.button("Cancel").clicked() {
+                                        if crate::app::icons::action_button(ui, "Cancel").clicked()
+                                        {
                                             choice = Some(AppModalChoice::Cancel);
                                         }
                                     }
                                     AppModal::RevertGit { .. } => {
-                                        if ui.button("Revert").clicked() {
+                                        if crate::app::icons::action_button(ui, "Revert").clicked()
+                                        {
                                             choice = Some(AppModalChoice::Primary);
                                         }
-                                        if ui.button("Cancel").clicked() {
+                                        if crate::app::icons::action_button(ui, "Cancel").clicked()
+                                        {
                                             choice = Some(AppModalChoice::Cancel);
                                         }
                                     }
                                     AppModal::Overwrite { .. } => {
-                                        if ui.button("Overwrite").clicked() {
+                                        if crate::app::icons::action_button(ui, "Overwrite")
+                                            .clicked()
+                                        {
                                             choice = Some(AppModalChoice::Primary);
                                         }
-                                        if ui.button("Cancel").clicked() {
+                                        if crate::app::icons::action_button(ui, "Cancel").clicked()
+                                        {
                                             choice = Some(AppModalChoice::Cancel);
                                         }
                                     }

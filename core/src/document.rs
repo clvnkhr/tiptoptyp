@@ -247,6 +247,10 @@ impl<C> DocumentSession<C> {
         self.replace(source.into(), None, DocumentKind::Typst, None);
     }
 
+    pub fn replace_untitled_kind(&mut self, kind: DocumentKind) {
+        self.replace(String::new(), None, kind, None);
+    }
+
     pub fn replace_loaded(
         &mut self,
         source: String,

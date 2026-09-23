@@ -61,6 +61,7 @@ mod terminal;
 mod test_allocations;
 mod tex;
 mod tex_completion;
+mod text_encoding;
 mod theme;
 mod tinymist;
 mod tinymist_sync;
@@ -74,6 +75,7 @@ mod worker;
 mod workflow;
 mod workspace;
 mod workspace_service;
+mod writing;
 
 use eframe::egui;
 use launch::LaunchOptions;

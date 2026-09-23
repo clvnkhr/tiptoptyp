@@ -141,7 +141,9 @@ impl TerminalPane {
         if let Some(error) = self.error.clone() {
             ui.horizontal_wrapped(|ui| {
                 ui.colored_label(ui.visuals().error_fg_color, error);
-                if ui.small_button("Dismiss").clicked() {
+                if crate::app::icons::icon_button(ui, crate::app::icons::UiIcon::Close, "Dismiss")
+                    .clicked()
+                {
                     self.error = None;
                 }
             });

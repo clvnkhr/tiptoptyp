@@ -27,7 +27,7 @@ final class PdfJsProbe: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     }
 
     func ready() {
-        web.evaluateJavaScript("Boolean(window.PDFViewerApplication?.isInitialViewSet && document.querySelector('#viewer canvas'))") { value, error in
+        web.evaluateJavaScript("Boolean(window.tiptoptypPdf?.activeFrame?.contentWindow.PDFViewerApplication?.isInitialViewSet && window.tiptoptypPdf.activeFrame.contentDocument.querySelector('#viewer canvas'))") { value, error in
             if value as? Bool == true {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.exercise() }
             } else if self.attempts < 200 {
@@ -43,8 +43,17 @@ final class PdfJsProbe: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     }
 
     func exercise() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 40) {
+            self.web.evaluateJavaScript("JSON.stringify({status:document.getElementById('status')?.textContent, frames:[...document.querySelectorAll('iframe')].map(f=>({class:f.className,ready:f.contentDocument.readyState,pages:f.contentWindow.PDFViewerApplication?.pdfDocument?.numPages,inert:f.contentDocument.body?.inert,visible:f.contentWindow.PDFViewerApplication?.pdfViewer?._getVisiblePages().views.map(v=>({id:v.id,state:v.view.renderingState,text:!!v.view.textLayer?.div.querySelector('.endOfContent')}))}))})") { value, error in
+                let message = "Native reload timeout state: \(value ?? "missing") \(String(describing:error))\n"
+                FileHandle.standardError.write(Data(message.utf8))
+                exit(1)
+            }
+        }
         web.callAsyncJavaScript("""
-        const app = PDFViewerApplication;
+        const surface = window.tiptoptypPdf.activeFrame.contentWindow;
+        const document = surface.document;
+        let app = surface.PDFViewerApplication;
         app.pdfLinkService.setHash('page=12&zoom=150,0,400');
         await new Promise(resolve => setTimeout(resolve, 500));
         const before = app.pdfViewer.currentScale;
@@ -58,12 +67,41 @@ final class PdfJsProbe: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         const after = app.pdfViewer.currentScale;
         if (Math.abs(after / before - 1.2) > .01) throw new Error('Gesture scale did not reach PDF.js');
         if (container.scrollTop < 1000) throw new Error('Native viewer did not scroll');
+        let reloadBlankFrames = 0;
+        for (let reload = 0; reload < 3; reload++) {
+        const previous = window.tiptoptypPdf.activeFrame;
+        const saved = { page: app.pdfViewer.currentPageNumber, scale: app.pdfViewer.currentScale, top: app.pdfViewer.container.scrollTop };
+        const originalFetch = window.fetch;
+        // Exercise an actual staged replacement in WKWebView using the same
+        // fixture bytes under a fresh host revision; the fixture server is read-only here.
+        window.fetch = async (...args) => {
+          const response = await originalFetch(...args);
+          if (args[0] !== '../state.json') return response;
+          const state = await response.json();
+          return new Response(JSON.stringify({...state, revision: state.revision + 1000 + reload}));
+        };
+        let measuring = true;
+        function sample() {
+          if (!measuring) return;
+          const viewer = window.tiptoptypPdf.activeFrame.contentWindow.PDFViewerApplication.pdfViewer;
+          if (!viewer._getVisiblePages().views.some(({view}) => view.renderingState === 3)) reloadBlankFrames++;
+          requestAnimationFrame(sample);
+        }
+        requestAnimationFrame(sample);
+        try { await window.tiptoptypPdf.refresh(); }
+        finally { window.fetch = originalFetch; measuring = false; }
+        if (window.tiptoptypPdf.activeFrame === previous) throw new Error('Native replacement did not commit');
+        app = window.tiptoptypPdf.activeFrame.contentWindow.PDFViewerApplication;
+        const replacement = window.tiptoptypPdf.activeFrame.contentDocument.getElementById('viewerContainer');
+        if (app.pdfViewer.currentPageNumber !== saved.page || Math.abs(app.pdfViewer.currentScale - saved.scale) > .001 || Math.abs(replacement.scrollTop - saved.top) > 4) throw new Error('Native reload moved the viewport');
+        if (reloadBlankFrames) throw new Error('Native reload exposed blank frames');
+        }
         window.dispatchEvent(new CustomEvent('tiptoptyp-preview-zoom', {detail:'reset'}));
         app.pdfLinkService.setHash('page=1&zoom=page-width');
         await new Promise(resolve => setTimeout(resolve, 700));
         if (app.pdfViewer.currentScaleValue !== 'page-width') throw new Error('Zoom reset failed');
-        return JSON.stringify({pages:app.pdfDocument.numPages, before, after, scale:app.pdfViewer.currentScaleValue,
-          canvases:document.querySelectorAll('#viewer canvas').length, userAgent:navigator.userAgent});
+        return JSON.stringify({reloadCount:3, reloadBlankFrames, pages:app.pdfDocument.numPages, before, after, scale:app.pdfViewer.currentScaleValue,
+          canvases:window.tiptoptypPdf.activeFrame.contentDocument.querySelectorAll('#viewer canvas').length, userAgent:navigator.userAgent});
         """, arguments: [:], in: nil, in: .page) { result in
             switch result {
             case .success(let value):

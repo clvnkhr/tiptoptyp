@@ -188,10 +188,10 @@ pub(super) fn show(
                     .hint_text("Replace")
                     .desired_width(METRICS.editor.find_field_width),
             );
-            actions.replace_one |= ui
-                .add_enabled(editable, egui::Button::new("Replace"))
-                .clicked();
-            actions.replace_all |= ui.add_enabled(editable, egui::Button::new("All")).clicked();
+            actions.replace_one |=
+                crate::app::icons::action_button_enabled(ui, editable, "Replace").clicked();
+            actions.replace_all |=
+                crate::app::icons::action_button_enabled(ui, editable, "All").clicked();
         });
     }
 

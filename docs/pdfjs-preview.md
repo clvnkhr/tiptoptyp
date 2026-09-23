@@ -134,23 +134,25 @@ The sidebar can still be opened manually.
 
 ## Recompiled documents and seamless updates
 
-The native webview and viewer application persist across compilations. Our host
-fetches the new artifact and calls the pinned viewer's `open({ data })`, restoring
-page, zoom and scroll position. In the bundled `viewer.mjs`, `open` first awaits
-`close`, which clears page views and destroys the previous loading task, before
-calling `getDocument`. This can visibly blank the preview. PDF.js exposes no
-public API to mutate an existing document with arbitrary recompiled PDF bytes.
+The native webview is persistent. Its host keeps the successful PDF.js viewer
+interactive while a second, transparent full-size viewer parses and renders the
+new artifact. It swaps the frames only when the visible pages and their text
+layers are ready. Failed updates leave the old document available with a retry
+message. At most two frames exist; a newer build cancels and removes stale work.
+There is no idle polling.
 
-Identical bytes now retain the existing document revision even when compilation
-produces a new allocation. A one-time comparison adopts the new allocation;
-subsequent frames use the constant-time pointer check. Changed bytes still reload.
+The handoff preserves page, zoom, scroll, rotation, sidebar, scroll/spread modes,
+and search query/options. Navigation during staging is sampled again before the
+swap. Search initialization finishes before restoring position, so a search hit
+cannot subsequently jump the new document away from the user's position.
+Identical bytes retain the current revision and never create a staging viewer.
 
-Seamless changed-document updates require staging parsing/rendering offscreen
-while retaining the displayed pages, then committing a ready replacement and
-restoring navigation state. A persistent custom PDF.js page viewer could instead
-manage per-page replacement, at the cost of owning text/annotation/search and
-layout coordination. A different rendering engine would still require this
-presentation handoff. Neither architectural change is implemented yet.
+PDF.js still parses changed PDF bytes as a new document; it has no public API
+for mutating a loaded PDF. The staged presentation removes the visible blank
+interval without replacing PDF.js's search, text, links, or annotation layers.
+Transient peak memory includes both viewers, each with its existing bounded
+canvas buffer. Native WebKit and Chromium checks exercise the actual bundled
+viewer; deterministic host tests cover failed and superseded updates.
 
 ## Built-in PDF utilities
 

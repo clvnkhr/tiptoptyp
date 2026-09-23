@@ -62,6 +62,8 @@ macro_rules! commands {
 commands! {
     Settings => ("Settings…", Application, 0, Always, 1),
     New => ("New", File, 0, Always, 100),
+    NewFromTemplate => ("New from Template…", File, 0, Always, 180),
+    ComfyDocument => ("Toggle Typst Comfy Defaults", Edit, 2, TypesettingDocument, 181),
     NewWindow => ("New Window", File, 0, Always, 106),
     Open => ("Open…", File, 0, Always, 101),
     OpenInNewWindow => ("Open in New Window…", File, 0, Always, 107),

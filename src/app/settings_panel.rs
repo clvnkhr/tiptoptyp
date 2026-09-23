@@ -223,7 +223,7 @@ impl SettingsPanel<'_> {
                 ui.horizontal_wrapped(|ui| {
                     theme::apply_compact_control_spacing(ui);
                     ui.label(RichText::new(SettingsTarget::TypstSyntax.label()).strong());
-                    if ui.button("Overrides…").clicked() {
+                    if crate::app::icons::action_button(ui, "Overrides…").clicked() {
                         self.actions.push(SettingsAction::ShowOverrides { dark: effective_theme == egui::Theme::Dark });
                     }
                     ui.label(
@@ -295,7 +295,7 @@ impl SettingsPanel<'_> {
                             if let Some(path) = &imported_path {
                                 settings_hover_text(picker, path.clone());
                             }
-                            if ui.button("Import…").clicked() {
+                            if crate::app::icons::action_button(ui, "Import…").clicked() {
                                 self.actions.push(SettingsAction::ChooseTool(
                                     ToolPickerTarget::SublimeTheme {
                                         dark_mode: appearance == egui::Theme::Dark,
@@ -392,6 +392,10 @@ impl SettingsPanel<'_> {
                         );
                 });
                 settings_target_anchor(ui, SettingsTarget::AutoPairDelimiters, &mut settings_scroll_target);
+                settings_target_anchor(ui, SettingsTarget::EnglishGrammar, &mut settings_scroll_target);
+                ui.checkbox(&mut edited.english_grammar, SettingsTarget::EnglishGrammar.label()).on_hover_text("Offline checks after a short typing pause. Documents up to 2 MB; suggestions appear in Problems and inline diagnostics.");
+                settings_target_anchor(ui, SettingsTarget::UnicodeWarnings, &mut settings_scroll_target);
+                ui.checkbox(&mut edited.unicode_warnings, SettingsTarget::UnicodeWarnings.label());
                 ui.checkbox(&mut edited.auto_pair_delimiters, SettingsTarget::AutoPairDelimiters.label());
                 settings_target_anchor(ui, SettingsTarget::MitexDollars, &mut settings_scroll_target);
                 ui.checkbox(&mut edited.mitex_auto_enable, SettingsTarget::MitexDollars.label());
@@ -522,7 +526,7 @@ impl SettingsPanel<'_> {
                             }
                         }
                     }
-                    if ui.button("Choose…").clicked() {
+                    if crate::app::icons::action_button(ui, "Choose…").clicked() {
                         self.actions.push(SettingsAction::ChooseTool(ToolPickerTarget::UiFont));
                     }
                     ui.separator();
@@ -569,7 +573,7 @@ impl SettingsPanel<'_> {
                             }
                         }
                     }
-                    if ui.button("Choose…").clicked() {
+                    if crate::app::icons::action_button(ui, "Choose…").clicked() {
                         self.actions.push(SettingsAction::ChooseTool(ToolPickerTarget::CodeFont));
                     }
                     ui.separator();
@@ -794,7 +798,7 @@ impl SettingsPanel<'_> {
                 if !deterministic_settings
                     && self.status.requested_backend == PreviewPreference::Interactive
                     && !self.status.interactive_active
-                    && ui.button("Retry Tinymist").clicked()
+                    && crate::app::icons::action_button(ui, "Retry Tinymist").clicked()
                 {
                     self.actions.push(SettingsAction::RetryTinymist);
                 }
@@ -857,13 +861,13 @@ impl SettingsPanel<'_> {
                 );
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(SettingsTarget::UiScreenshots.label()).strong());
-                    if ui.button("Main").clicked() {
+                    if crate::app::icons::action_button(ui, "Main").clicked() {
                         self.captures.queue("main", "main");
                     }
-                    if ui.button("Settings").clicked() {
+                    if crate::app::icons::action_button(ui, "Settings").clicked() {
                         self.captures.queue("settings", "settings");
                     }
-                    if ui.button("Both").clicked() {
+                    if crate::app::icons::action_button(ui, "Both").clicked() {
                         self.captures.queue("main", "main");
                         self.captures.queue("settings", "settings");
                     }
@@ -964,12 +968,12 @@ pub(super) fn show_theme_color_controls(
 ) {
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(SettingsTarget::ThemeColors.label()).strong());
-        if ui
-            .add_enabled(
-                *transform != Default::default(),
-                egui::Button::new("Reset colors"),
-            )
-            .clicked()
+        if crate::app::icons::action_button_enabled(
+            ui,
+            *transform != Default::default(),
+            "Reset colors",
+        )
+        .clicked()
         {
             *transform = Default::default();
         }
@@ -1025,12 +1029,12 @@ pub(super) fn show_explorer_order_controls(ui: &mut egui::Ui, order: &mut Explor
         ui.horizontal(|ui| {
             ui.label(RichText::new(SettingsTarget::ExplorerOrder.label()).strong());
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .add_enabled(
-                        *order != ExplorerOrder::default(),
-                        egui::Button::new("Reset panel order"),
-                    )
-                    .clicked()
+                if crate::app::icons::action_button_enabled(
+                    ui,
+                    *order != ExplorerOrder::default(),
+                    "Reset panel order",
+                )
+                .clicked()
                 {
                     *order = ExplorerOrder::default();
                 }

@@ -5,6 +5,7 @@ pub(super) fn empty_workspace_command(command: AppCommand) -> bool {
     matches!(
         command,
         AppCommand::New
+            | AppCommand::NewFromTemplate
             | AppCommand::NewWindow
             | AppCommand::Open
             | AppCommand::OpenInNewWindow
@@ -120,13 +121,16 @@ impl EditorApp {
         ui.vertical_centered(|ui| {
             ui.heading(heading);
             ui.weak(help);
-            if workspace_available && ui.button("New document").clicked() {
+            if workspace_available && crate::app::icons::action_button(ui, "New document").clicked()
+            {
                 self.execute_app_command(AppCommand::New, ui.ctx(), frame);
             }
-            if !workspace_available && ui.button("Choose folder…").clicked() {
+            if !workspace_available
+                && crate::app::icons::action_button(ui, "Choose folder…").clicked()
+            {
                 self.execute_app_command(AppCommand::ChangeWorkspaceRoot, ui.ctx(), frame);
             }
-            if ui.button("Open file…").clicked() {
+            if crate::app::icons::action_button(ui, "Open file…").clicked() {
                 self.execute_app_command(AppCommand::Open, ui.ctx(), frame);
             }
         });

@@ -151,14 +151,17 @@ pub(super) fn show_package_browser_ui(
                                 .homepage
                                 .as_deref()
                                 .or(release.metadata.repository.as_deref())
-                        }) && ui.button("Website").clicked()
+                        }) && crate::app::icons::action_button(ui, "Website").clicked()
                         {
                             action.open_link = Some(website.to_owned());
                         }
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui
-                                .add_enabled(version.is_some(), egui::Button::new("Copy import"))
-                                .clicked()
+                            if crate::app::icons::action_button_enabled(
+                                ui,
+                                version.is_some(),
+                                "Copy import",
+                            )
+                            .clicked()
                                 && let Some(version) = version
                             {
                                 action.copied = Some(format!(
@@ -192,15 +195,13 @@ pub(super) fn show_package_browser_ui(
                             }
                         });
                         for installation in &local_release.installations {
-                            if ui
-                                .add_enabled(
-                                    !loading,
-                                    egui::Button::new(format!(
-                                        "Uninstall {}…",
-                                        local_release.version
-                                    )),
-                                )
-                                .clicked()
+                            if crate::app::icons::icon_button_enabled(
+                                ui,
+                                !loading,
+                                crate::app::icons::UiIcon::Trash,
+                                &format!("Uninstall {}…", local_release.version),
+                            )
+                            .clicked()
                             {
                                 action.uninstall = Some(installation.clone());
                             }

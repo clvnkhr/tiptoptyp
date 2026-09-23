@@ -518,6 +518,17 @@ impl EditorApp {
                 }
                 painter.set(delimiter_fill_slot, egui::Shape::Vec(backgrounds));
             }
+            for &index in self.writing.markers(document.key()) {
+                let rect = editor_char_range_rect(&output, &(index..index + 1));
+                if ui.is_rect_visible(rect) {
+                    ui.painter().rect_stroke(
+                        rect.expand(1.0),
+                        1.0,
+                        Stroke::new(1.0, ui.visuals().warn_fg_color),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+            }
             if let Some(tooltip) = paint_line_diagnostics(
                 ui,
                 &output,

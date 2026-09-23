@@ -124,7 +124,8 @@ fn picker_contents(ui: &mut egui::Ui, color: &mut Option<Color32>, width: f32) -
     }
     let mut done = false;
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        done = ui.button("Done").clicked();
+        done =
+            crate::app::icons::icon_button(ui, crate::app::icons::UiIcon::Check, "Done").clicked();
         if ui
             .add_enabled(color.is_some(), egui::Button::new("Reset"))
             .clicked()

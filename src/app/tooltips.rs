@@ -599,7 +599,7 @@ pub(super) fn show_recent_workspace_row(
     let menu_was_open = response.context_menu_opened();
     let mut remove = false;
     response.context_menu(|ui| {
-        if ui.button("Remove from Recents").clicked() {
+        if crate::app::icons::action_button(ui, "Remove from Recents").clicked() {
             remove = true;
             ui.close();
         }

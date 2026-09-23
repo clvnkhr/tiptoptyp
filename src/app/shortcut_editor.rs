@@ -45,7 +45,7 @@ pub(super) fn show(
                 .hint_text("Search actions or groups")
                 .desired_width(f32::INFINITY),
         );
-        if ui.button("Reset all").clicked() {
+        if crate::app::icons::action_button(ui, "Reset all").clicked() {
             selected_action = Some(ShortcutEditorAction::ResetAll);
         }
     });
@@ -131,16 +131,16 @@ pub(super) fn show(
                         selected_action
                             .get_or_insert(ShortcutEditorAction::BeginCapture(shortcut_action));
                     }
-                    if ui.button("Disable").clicked() {
+                    if crate::app::icons::action_button(ui, "Disable").clicked() {
                         selected_action
                             .get_or_insert(ShortcutEditorAction::Disable(shortcut_action));
                     }
-                    if ui
-                        .add_enabled(
-                            current.shortcut_overrides.get(shortcut_action).is_some(),
-                            egui::Button::new("Reset"),
-                        )
-                        .clicked()
+                    if crate::app::icons::action_button_enabled(
+                        ui,
+                        current.shortcut_overrides.get(shortcut_action).is_some(),
+                        "Reset",
+                    )
+                    .clicked()
                     {
                         selected_action.get_or_insert(ShortcutEditorAction::Reset(shortcut_action));
                     }

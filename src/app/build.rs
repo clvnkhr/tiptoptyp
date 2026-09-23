@@ -21,6 +21,7 @@ impl EditorApp {
                 return;
             }
         };
+        self.preview.source_colors = super::templates::without_comfy(&source).is_some();
         let source_dir = self.preview_source_directory();
         let display_name = preview_path
             .file_name()

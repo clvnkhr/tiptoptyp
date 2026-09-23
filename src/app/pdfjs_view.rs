@@ -100,7 +100,7 @@ impl EditorApp {
                 );
                 return;
             };
-            let dark = preview.dark;
+            let dark = preview.render_dark();
             let view = if asset {
                 &mut self.pdfjs_asset
             } else {
@@ -148,7 +148,7 @@ impl EditorApp {
                         .with_navigation_handler(move |candidate| {
                             // Only the viewer itself and in-document fragments
                             // may navigate this child; links go through the app.
-                            if candidate.split('#').next() == Some(navigation_url.as_str()) {
+                            if internal_pdfjs_navigation(&navigation_url, &candidate) {
                                 return true;
                             }
                             if safe_pdfjs_link(&candidate) && link_sender.send(candidate).is_ok() {
@@ -221,7 +221,7 @@ impl EditorApp {
                 ui.vertical_centered(|ui| {
                     ui.label("PDF.js preview could not load");
                     ui.add(egui::Label::new(error).wrap());
-                    if ui.button("Retry PDF.js").clicked() {
+                    if crate::app::icons::action_button(ui, "Retry PDF.js").clicked() {
                         view.clear();
                         ui.ctx().request_repaint();
                     }
@@ -255,6 +255,15 @@ fn webview_bounds(rect: NativeRect) -> wry::Rect {
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
+fn internal_pdfjs_navigation(viewer: &str, candidate: &str) -> bool {
+    let candidate = candidate.split('#').next().unwrap_or(candidate);
+    candidate == viewer
+        || viewer
+            .strip_suffix("viewer.html")
+            .is_some_and(|base| candidate.strip_prefix(base) == Some("frame.html"))
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn safe_pdfjs_link(target: &str) -> bool {
     url::Url::parse(target).is_ok_and(|url| matches!(url.scheme(), "http" | "https" | "mailto"))
 }
@@ -263,6 +272,24 @@ fn safe_pdfjs_link(target: &str) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn staging_frames_share_only_the_exact_capability_navigation() {
+        let viewer = "http://127.0.0.1:1234/secret/web/viewer.html";
+        for candidate in [
+            viewer,
+            "http://127.0.0.1:1234/secret/web/frame.html",
+            "http://127.0.0.1:1234/secret/web/frame.html#page=2",
+        ] {
+            assert!(internal_pdfjs_navigation(viewer, candidate));
+        }
+        for candidate in [
+            "http://127.0.0.1:1234/other/web/frame.html",
+            "https://example.com/frame.html",
+            "http://127.0.0.1:1234/secret/web/frame.html?other",
+        ] {
+            assert!(!internal_pdfjs_navigation(viewer, candidate));
+        }
+    }
     #[test]
     fn pdf_links_only_dispatch_supported_external_schemes() {
         for link in [

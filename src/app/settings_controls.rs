@@ -205,7 +205,7 @@ pub(super) fn show_font_weight_control(
             });
         }
     }
-    if ui.small_button("Reset").clicked() {
+    if crate::app::icons::action_button(ui, "Reset").clicked() {
         *weight = support.default_weight();
         *staged_weight = None;
     }
@@ -333,16 +333,7 @@ pub(super) fn show_typst_override_editor(
                         egui::Label::new(sample).truncate(),
                     );
 
-                    if ui
-                        .add_sized(
-                            [
-                                METRICS.settings.override_reset_width,
-                                METRICS.settings.override_row_height,
-                            ],
-                            egui::Button::new("Reset"),
-                        )
-                        .clicked()
-                    {
+                    if crate::app::icons::action_button(ui, "Reset").clicked() {
                         style_override = TypstStyleOverride::default();
                     }
                     overrides.set(role, style_override);
@@ -529,7 +520,7 @@ pub(super) fn tool_preference_editor(
                         .hint_text("/absolute/path/to/executable")
                         .desired_width(path_width),
                 );
-                browse |= ui.button("Browse…").clicked();
+                browse |= crate::app::icons::action_button(ui, "Browse…").clicked();
             });
         }
         egui::CollapsingHeader::new("Command customization").show(ui, |ui| {
@@ -546,8 +537,8 @@ pub(super) fn tool_preference_editor(
             ui.label("Working directory (blank uses the document/project directory)");
             ui.add(egui::TextEdit::singleline(&mut draft.directory).desired_width(f32::INFINITY));
             ui.horizontal(|ui| {
-                if ui.add_enabled(draft != preference.command, egui::Button::new("Apply command")).clicked() { preference.command = draft.clone(); }
-                if ui.button("Reset command").clicked() { draft = Default::default(); preference.command = draft.clone(); }
+                if crate::app::icons::action_button_enabled(ui, draft != preference.command, "Apply command").clicked() { preference.command = draft.clone(); }
+                if crate::app::icons::action_button(ui, "Reset command").clicked() { draft = Default::default(); preference.command = draft.clone(); }
             });
             ui.ctx().data_mut(|data| data.insert_temp(id,(preference.command.clone(),draft)));
         });

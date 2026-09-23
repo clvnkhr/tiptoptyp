@@ -1175,7 +1175,7 @@ pub(super) fn show_project_index_section(
             }
         }
         ExplorerSection::Packages => {
-            if ui.button("Browse packages…").clicked() {
+            if crate::app::icons::action_button(ui, "Browse packages…").clicked() {
                 outcome.open_package_manager = true;
             }
             ui.separator();

@@ -158,7 +158,7 @@ pub(super) fn show_pages(
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.set_min_size(Vec2::new(content_width, content_height));
-            let page_theme = theme::preview_palette(preview.dark);
+            let page_theme = theme::preview_palette(preview.render_dark());
             for (page, geometry) in preview.content.pages().iter().zip(&geometries) {
                 let left = ((content_width - geometry.size.x) * 0.5).max(PAGE_MARGIN);
                 let rect = Rect::from_min_size(

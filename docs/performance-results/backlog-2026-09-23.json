@@ -1,0 +1,68 @@
+{
+  "baseline": {
+    "elapsedMs": 118.89999997615814,
+    "blankFrames": 7,
+    "sampledFrames": 7
+  },
+  "staged": {
+    "elapsedMs": 205.60000002384186,
+    "blankFrames": 0,
+    "sampledFrames": 12,
+    "maxFrames": 2
+  },
+  "buildProfile": "release",
+  "fixture": "24 pages, 900x700, page-width, warm viewer",
+  "browser": "154.0.8037.57",
+  "platform": "darwin",
+  "arch": "arm64",
+  "beforeReload": {
+    "page": 13,
+    "pages": 24,
+    "scale": 1.75,
+    "scaleValue": "1.75",
+    "top": 15294,
+    "canvases": 9
+  },
+  "afterReload": {
+    "page": 13,
+    "pages": 24,
+    "scale": 1.75,
+    "scaleValue": "1.75",
+    "top": 15294,
+    "canvases": 5
+  },
+  "final": {
+    "page": 1,
+    "pages": 24,
+    "scale": 1.5357142857142858,
+    "scaleValue": "page-width",
+    "top": 10,
+    "canvases": 2
+  },
+  "errors": [],
+  "remote": [],
+  "date": "2026-09-23",
+  "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "fixtureSha256": "a2279eb45691d2d55089361daaf9a4f383d787125b0c4df82a86c4ed614826e3",
+  "deviceScaleFactor": 2,
+  "writing": {
+    "profile": "release",
+    "fixtureBytes": 1800,
+    "fixture": "40 repetitions of a prose sentence with duplicated article plus Typst math",
+    "disabledUs": 61,
+    "coldGrammarUs": 492691,
+    "warmGrammarUs": 16431,
+    "unicodeUs": 43,
+    "samplesPerCase": 1
+  },
+  "limitations": "Single local warm-browser comparison, not a cross-platform latency guarantee. Staging deliberately retains two viewers until commit. Native view snapshots do not prove composed desktop bounds.",
+  "nativeWebKit": {
+    "reloadCount": 3,
+    "reloadBlankFrames": 0,
+    "preservedPageZoomScroll": true,
+    "pinchBefore": 1.5,
+    "pinchAfter": 1.8,
+    "reset": "page-width",
+    "note": "One earlier standalone run timed out; an instrumented rerun and three consecutive staged replacements passed. The original timeout cause was not established."
+  }
+}

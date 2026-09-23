@@ -703,6 +703,24 @@ impl QaSession {
                         .toggle_section_maximized(ExplorerSection::Files);
                 }
             }
+            UiSnapshotScene::Templates => {
+                app.template_picker.get_or_insert(0);
+            }
+            UiSnapshotScene::EncodingImport => {
+                app.encoding_import.get_or_insert_with(|| super::encoding_import::EncodingImport::new(PathBuf::from("legacy-chinese.tex"), b"\\documentclass{article}\n\\begin{document}\n\xb1\xbe\xb3\xa3\xce\xca\xce\xca\xb4\xf0\xbc\xaf\n\\end{document}\n".to_vec()));
+            }
+            UiSnapshotScene::WritingChecks => {
+                const SOURCE: &str = "= Unicode review\n\nOrdinary Chinese: 普通中文\nInvisible: word\u{200b}word\nLookalike: аpple\nFull-width punctuation: ！\n";
+                if app.document().source() != SOURCE {
+                    app.document_mut().replace_unprojected_untitled(SOURCE);
+                }
+                app.view_mode = ViewMode::Code;
+                app.settings.unicode_warnings = true;
+                app.bottom_panel.select(PanelTab::Problems);
+                if app.writing.diagnostics.is_empty() {
+                    app.captures.defer_target("main");
+                }
+            }
             UiSnapshotScene::TerminalIcons => {
                 if !self.terminal_icons_prepared {
                     app.font_catalog = FontCatalog::discover(&app.workspace_root);

@@ -207,6 +207,12 @@ impl<C> Document<C> {
         self.active = None;
         self.canonical.get_mut().take();
     }
+    pub fn replace_untitled_kind(&mut self, kind: DocumentKind) {
+        self.editor.replace_untitled_kind(kind);
+        self.active = None;
+        self.canonical.get_mut().take();
+    }
+
     pub fn restore_saved_source(&mut self) -> Result<(), Error> {
         if let Some(active) = &mut self.active {
             // Reverting must restore literal spelling too, even if both

@@ -277,6 +277,10 @@ pub(crate) struct AppSettings {
     pub(crate) git_diff_style: GitDiffStyle,
     pub(crate) line_wrap: bool,
     pub(crate) line_numbers: bool,
+    #[serde(default)]
+    pub(crate) english_grammar: bool,
+    #[serde(default)]
+    pub(crate) unicode_warnings: bool,
     #[serde(default = "default_true")]
     pub(crate) sticky_context_rows: bool,
     #[serde(default = "default_true")]
@@ -353,6 +357,8 @@ impl Default for AppSettings {
             git_diff_style: GitDiffStyle::Unified,
             line_wrap: true,
             line_numbers: true,
+            english_grammar: false,
+            unicode_warnings: false,
             sticky_context_rows: true,
             auto_pair_delimiters: true,
             mitex_auto_enable: false,
@@ -420,6 +426,8 @@ impl AppSettings {
             git_diff_style,
             line_wrap,
             line_numbers,
+            english_grammar,
+            unicode_warnings,
             sticky_context_rows,
             auto_pair_delimiters,
             mitex_auto_enable,
@@ -766,6 +774,8 @@ mod tests {
             git_diff_style: GitDiffStyle::Unified,
             line_wrap: false,
             line_numbers: false,
+            english_grammar: false,
+            unicode_warnings: false,
             sticky_context_rows: false,
             auto_pair_delimiters: false,
             mitex_auto_enable: true,

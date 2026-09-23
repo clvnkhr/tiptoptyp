@@ -105,13 +105,13 @@ pub(super) fn show_table_editor_ui(
     ui.add(egui::Label::new(RichText::new("Draft changes · source is read-only until you apply or cancel. You can still scroll and copy code.").weak()).wrap());
     ui.add_space(8.0);
     ui.horizontal_wrapped(|ui| {
-        if ui.add_enabled(dialog.table.can_add_row(), egui::Button::new("Add row")).clicked() { dialog.table.add_row(); }
-        if ui.add_enabled(dialog.table.can_add_column(), egui::Button::new("Add column")).clicked() { dialog.table.add_column(); }
+        if crate::app::icons::action_button_enabled(ui, dialog.table.can_add_row(), "Add row").clicked() { dialog.table.add_row(); }
+        if crate::app::icons::action_button_enabled(ui, dialog.table.can_add_column(), "Add column").clicked() { dialog.table.add_column(); }
         ui.menu_button("Remove…", |ui| {
-            if ui.add_enabled(rows > 0, egui::Button::new("Selected row")).clicked() {
+            if crate::app::icons::action_button_enabled(ui, rows > 0, "Selected row").clicked() {
                 dialog.table.remove_row(dialog.ui.selection.focus.0); ui.close();
             }
-            if ui.add_enabled(columns > 1, egui::Button::new("Last column")).clicked() {
+            if crate::app::icons::action_button_enabled(ui, columns > 1, "Last column").clicked() {
                 dialog.table.remove_column(); ui.close();
             }
         });
@@ -131,7 +131,7 @@ pub(super) fn show_table_editor_ui(
             egui::ScrollArea::vertical().id_salt("markdown-import-scroll").max_height(110.0).show(ui, |ui| {
                 ui.add(egui::TextEdit::multiline(&mut dialog.ui.markdown).code_editor().desired_rows(4).desired_width(f32::INFINITY).hint_text("| Name | Value |\n| :--- | ---: |\n| Alpha | 42 |"));
             });
-            if ui.button("Replace draft from Markdown").clicked() {
+            if crate::app::icons::action_button(ui, "Replace draft from Markdown").clicked() {
                 match dialog.table.import_markdown(&dialog.ui.markdown) {
                     Ok(()) => { dialog.ui.selection = Default::default(); dialog.focus_first_cell = true; dialog.ui.importing = false; dialog.error = None; }
                     Err(error) => dialog.error = Some(error),
@@ -341,16 +341,11 @@ fn table_footer(ui: &mut egui::Ui, dialog: &TableEditorDialog) -> Option<TableEd
     ui.horizontal(|ui| {
         ui.label(RichText::new("Static Typst markup · Tab to move between cells").weak());
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui
-                .add_enabled(
-                    !dialog.ui.importing,
-                    egui::Button::new("Apply").fill(ui.visuals().selection.bg_fill),
-                )
-                .clicked()
+            if crate::app::icons::action_button_enabled(ui, !dialog.ui.importing, "Apply").clicked()
             {
                 action = Some(TableEditorUiAction::Apply);
             }
-            if ui.button("Cancel").clicked() {
+            if crate::app::icons::action_button(ui, "Cancel").clicked() {
                 action = Some(TableEditorUiAction::Cancel);
             }
         });

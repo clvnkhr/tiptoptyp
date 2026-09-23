@@ -428,12 +428,12 @@ impl EditorApp {
                             ui.selectable_value(&mut selected_dark, false, "Light");
                             ui.selectable_value(&mut selected_dark, true, "Dark");
                             ui.separator();
-                            if ui
-                                .add_enabled(
-                                    !edited.typst_overrides.for_dark(rendered_dark).is_empty(),
-                                    egui::Button::new("Reset this appearance"),
-                                )
-                                .clicked()
+                            if crate::app::icons::action_button_enabled(
+                                ui,
+                                !edited.typst_overrides.for_dark(rendered_dark).is_empty(),
+                                "Reset this appearance",
+                            )
+                            .clicked()
                             {
                                 edited.typst_overrides.for_dark_mut(rendered_dark).clear();
                             }

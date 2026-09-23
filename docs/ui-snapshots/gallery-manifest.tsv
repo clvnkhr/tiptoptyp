@@ -99,3 +99,6 @@ scene	explorer-drop	main	main-explorer-drop	targeted	-	-
 scene	settings-tools	settings	settings-settings-tools	targeted	transparent	-
 
 scene	terminal-icons	main	main-terminal-icons	targeted	-	-
+scene	templates	templates	templates	targeted	-	-
+scene	encoding-import	encoding-import	encoding-import	targeted	-	-
+scene	writing-checks	main	main-writing-checks	targeted	-	-

@@ -16,6 +16,8 @@ pub(crate) enum ShortcutAction {
     Settings,
     New,
     NewWindow,
+    NewFromTemplate,
+    ComfyDocument,
     Open,
     OpenInNewWindow,
     ChangeWorkspaceRoot,
@@ -96,10 +98,12 @@ pub(crate) enum ShortcutAction {
 }
 
 impl ShortcutAction {
-    pub(crate) const ALL: [Self; 80] = [
+    pub(crate) const ALL: [Self; 82] = [
         Self::Settings,
         Self::New,
         Self::NewWindow,
+        Self::NewFromTemplate,
+        Self::ComfyDocument,
         Self::Open,
         Self::OpenInNewWindow,
         Self::ChangeWorkspaceRoot,
@@ -184,6 +188,8 @@ impl ShortcutAction {
             Self::Settings => "application.settings",
             Self::New => "file.new",
             Self::NewWindow => "file.new_window",
+            Self::NewFromTemplate => "file.new_from_template",
+            Self::ComfyDocument => "edit.comfy_document",
             Self::Open => "file.open",
             Self::OpenInNewWindow => "file.open_in_new_window",
             Self::ChangeWorkspaceRoot => "file.change_workspace_root",
@@ -273,6 +279,8 @@ impl ShortcutAction {
             Self::Settings => "Settings",
             Self::New => "New document",
             Self::NewWindow => "New window",
+            Self::NewFromTemplate => "New from template",
+            Self::ComfyDocument => "Toggle Typst comfy defaults",
             Self::Open => "Open",
             Self::OpenInNewWindow => "Open in new window",
             Self::ChangeWorkspaceRoot => "Change workspace root",
@@ -364,6 +372,7 @@ impl ShortcutAction {
             | Self::NextHunk => "Git",
             Self::New
             | Self::NewWindow
+            | Self::NewFromTemplate
             | Self::Open
             | Self::OpenInNewWindow
             | Self::ChangeWorkspaceRoot
@@ -379,6 +388,7 @@ impl ShortcutAction {
             | Self::SelectAll
             | Self::ToggleComment
             | Self::NewTable
+            | Self::ComfyDocument
             | Self::EditTable
             | Self::Find
             | Self::FindReplace
@@ -1187,7 +1197,9 @@ fn default_binding(action: ShortcutAction, platform: ShortcutPlatform) -> Option
         Action::Paste => ShortcutChord::primary(Key::V),
         Action::SelectAll => ShortcutChord::primary(Key::A),
         Action::ToggleComment => ShortcutChord::primary(Key::Slash),
-        Action::NewTable | Action::EditTable => return None,
+        Action::NewTable | Action::EditTable | Action::NewFromTemplate | Action::ComfyDocument => {
+            return None;
+        }
         Action::Find => ShortcutChord::primary(Key::F),
         Action::FindReplace if platform == ShortcutPlatform::MacOs => {
             ShortcutChord::primary(Key::F).alt()
@@ -1286,12 +1298,16 @@ mod tests {
             let bindings = ShortcutBindings::defaults(platform);
             assert_eq!(bindings.iter().count(), ShortcutAction::ALL.len());
             assert!(bindings.conflicts().is_empty());
-            assert!(
-                ShortcutAction::ALL
-                    .into_iter()
-                    .all(|action| bindings.binding(action).is_some()
-                        || matches!(action, ShortcutAction::NewTable | ShortcutAction::EditTable))
-            );
+            assert!(ShortcutAction::ALL.into_iter().all(
+                |action| bindings.binding(action).is_some()
+                    || matches!(
+                        action,
+                        ShortcutAction::NewTable
+                            | ShortcutAction::EditTable
+                            | ShortcutAction::NewFromTemplate
+                            | ShortcutAction::ComfyDocument
+                    )
+            ));
         }
 
         assert_eq!(

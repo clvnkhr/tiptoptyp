@@ -218,3 +218,7 @@ The corresponding environment variables are
 `TIPTOPTYP_UI_SCREENSHOT_SUBDIR`, plus the scene variable
 `TIPTOPTYP_UI_SNAPSHOT_SCENE`. Custom output subdirectories are constrained to
 `.tiptoptyp`; only the fixed latest-gallery mode writes into `docs/`.
+
+The `templates` and `encoding-import` scenes capture their own child viewport;
+`writing-checks` captures the root editor with invisible/confusable character
+markers. These targeted scenes supplement the maintained gallery.

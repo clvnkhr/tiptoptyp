@@ -6,6 +6,11 @@ use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UiIcon {
     Check,
+    Save,
+    Document,
+    Copy,
+    Trash,
+    Link,
     Close,
     Down,
     FitWidth,
@@ -288,6 +293,99 @@ pub(crate) fn paint_ui_icon(painter: &egui::Painter, rect: Rect, icon: UiIcon, c
     let center = rect.center();
     let stroke = Stroke::new(1.25, color);
     match icon {
+        UiIcon::Save => {
+            painter.rect_stroke(rect, 1.5, stroke, egui::StrokeKind::Inside);
+            painter.rect_stroke(
+                Rect::from_min_max(
+                    rect.min + Vec2::new(3.0, 0.0),
+                    rect.min + Vec2::new(rect.width() - 3.0, rect.height() * 0.38),
+                ),
+                0.5,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            painter.rect_stroke(
+                Rect::from_min_max(
+                    rect.min + Vec2::new(3.0, rect.height() * 0.58),
+                    rect.max - Vec2::new(3.0, 0.0),
+                ),
+                0.5,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+        }
+        UiIcon::Document => {
+            painter.rect_stroke(
+                rect.shrink2(Vec2::new(2.0, 0.0)),
+                1.5,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            painter.line_segment(
+                [center - Vec2::new(3.0, 0.0), center + Vec2::new(3.0, 0.0)],
+                stroke,
+            );
+            painter.line_segment(
+                [center - Vec2::new(0.0, 3.0), center + Vec2::new(0.0, 3.0)],
+                stroke,
+            );
+        }
+        UiIcon::Copy => {
+            painter.rect_stroke(
+                Rect::from_min_max(rect.min, rect.max - Vec2::splat(4.0)),
+                1.5,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            let front = Rect::from_min_max(rect.min + Vec2::splat(4.0), rect.max);
+            painter.rect_filled(front, 1.5, Color32::TRANSPARENT);
+            painter.rect_stroke(front, 1.5, stroke, egui::StrokeKind::Inside);
+        }
+        UiIcon::Trash => {
+            painter.rect_stroke(
+                Rect::from_min_max(
+                    rect.min + Vec2::new(3.0, 4.0),
+                    rect.max - Vec2::new(3.0, 0.0),
+                ),
+                1.5,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            painter.line_segment(
+                [
+                    rect.min + Vec2::new(1.0, 3.0),
+                    rect.right_top() + Vec2::new(-1.0, 3.0),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    rect.min + Vec2::new(5.0, 0.0),
+                    rect.right_top() + Vec2::new(-5.0, 0.0),
+                ],
+                stroke,
+            );
+        }
+        UiIcon::Link => {
+            painter.rect_stroke(
+                Rect::from_min_max(
+                    rect.min + Vec2::new(0.0, 5.0),
+                    rect.max - Vec2::new(5.0, 0.0),
+                ),
+                1.5,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            painter.line_segment([center, rect.right_top()], stroke);
+            painter.line_segment(
+                [rect.right_top() + Vec2::new(-5.0, 0.0), rect.right_top()],
+                stroke,
+            );
+            painter.line_segment(
+                [rect.right_top() + Vec2::new(0.0, 5.0), rect.right_top()],
+                stroke,
+            );
+        }
         UiIcon::Search => {
             let radius = rect.width().min(rect.height()) * 0.32;
             let center = rect.min + Vec2::splat(radius + 1.0);
@@ -697,6 +795,44 @@ pub(crate) fn paint_ui_icon(painter: &egui::Painter, rect: Rect, icon: UiIcon, c
             painter.circle_filled(Pos2::new(center.x, rect.bottom() - 2.0), 1.0, color);
         }
     }
+}
+
+/// Compact actions retain a semantic accessible label and native hover text.
+pub(crate) fn action_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    action_button_enabled(ui, true, label)
+}
+pub(crate) fn action_button_enabled(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+) -> egui::Response {
+    let icon = match label {
+        "Cancel" | "Disable" => UiIcon::Close,
+        "Delete" | "Discard" | "Uninstall" | "Remove from Recents" => UiIcon::Trash,
+        "Save" | "Overwrite" => UiIcon::Save,
+        "Copy import" => UiIcon::Copy,
+        "Website" => UiIcon::Link,
+        "Create document" | "New document" | "Open converted copy" => UiIcon::Document,
+        "Add row" | "Add column" => UiIcon::Stage,
+        "Selected row" | "Last column" => UiIcon::Unstage,
+        "Apply" | "Apply command" | "OK" => UiIcon::Check,
+        "Refresh" | "Retry PDF.js" | "Retry Tinymist" => UiIcon::Refresh,
+        "Reset"
+        | "Reset all"
+        | "Reset command"
+        | "Reset colors"
+        | "Reset panel order"
+        | "Reset this appearance"
+        | "Revert" => UiIcon::Revert,
+        "Choose…" | "Choose Folder…" | "Choose folder…" | "Browse…" | "Open file…" | "Import…" => {
+            UiIcon::Explorer
+        }
+        "Replace" | "All" | "Replace draft from Markdown" => UiIcon::Diff,
+        "Main" => UiIcon::Code,
+        "Both" => UiIcon::Split,
+        _ => UiIcon::Spanner,
+    };
+    icon_button_enabled(ui, enabled, icon, label)
 }
 
 #[cfg(test)]

@@ -221,6 +221,7 @@ impl EditorApp {
             .tinymist_diagnostics
             .iter()
             .chain(self.tex_diagnostics.iter().flatten())
+            .chain(self.writing.diagnostics.iter())
             .cloned()
             .collect();
         normalize_diagnostics(&mut diagnostics);
