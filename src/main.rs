@@ -64,6 +64,7 @@ mod tex_completion;
 mod theme;
 mod tinymist;
 mod tinymist_sync;
+mod tool_command;
 mod toolchain;
 mod unicode_fonts;
 mod viewport_fonts;

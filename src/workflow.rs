@@ -195,6 +195,10 @@ pub(crate) struct PendingDocumentAction {
 
 #[derive(Debug, Clone)]
 pub(crate) enum AppModal {
+    RevertGit {
+        message: String,
+        request: crate::git::RevertRequest,
+    },
     DeleteFile {
         message: String,
         path: PathBuf,

@@ -85,6 +85,7 @@ pub enum UiSnapshotScene {
     SettingsWindow,
     SettingsColors,
     SettingsEditor,
+    SettingsTools,
     SettingsStatus,
     SettingsThemePicker,
     SettingsDarkThemePicker,
@@ -111,14 +112,16 @@ pub enum UiSnapshotScene {
     ProblemsPanel,
     TerminalPanel,
     TerminalMaximized,
+    TerminalIcons,
     ExplorerMaximized,
+    ExplorerDrop,
     FindReplace,
     FindStickyContext,
     PreviewCompiling,
 }
 
 impl UiSnapshotScene {
-    pub const ALL: [Self; 49] = [
+    pub const ALL: [Self; 52] = [
         Self::TableEditor,
         Self::TableEditorNarrow,
         Self::Main,
@@ -138,6 +141,7 @@ impl UiSnapshotScene {
         Self::SettingsWindow,
         Self::SettingsColors,
         Self::SettingsEditor,
+        Self::SettingsTools,
         Self::SettingsStatus,
         Self::SettingsThemePicker,
         Self::SettingsDarkThemePicker,
@@ -164,7 +168,9 @@ impl UiSnapshotScene {
         Self::ProblemsPanel,
         Self::TerminalPanel,
         Self::TerminalMaximized,
+        Self::TerminalIcons,
         Self::ExplorerMaximized,
+        Self::ExplorerDrop,
         Self::FindReplace,
         Self::FindStickyContext,
         Self::PreviewCompiling,
@@ -191,6 +197,7 @@ impl UiSnapshotScene {
             Self::SettingsWindow => "settings-window",
             Self::SettingsColors => "settings-colors",
             Self::SettingsEditor => "settings-editor",
+            Self::SettingsTools => "settings-tools",
             Self::SettingsStatus => "settings-status",
             Self::SettingsThemePicker => "settings-theme-picker",
             Self::SettingsDarkThemePicker => "settings-dark-theme-picker",
@@ -217,7 +224,9 @@ impl UiSnapshotScene {
             Self::ProblemsPanel => "problems-panel",
             Self::TerminalPanel => "terminal-panel",
             Self::TerminalMaximized => "terminal-maximized",
+            Self::TerminalIcons => "terminal-icons",
             Self::ExplorerMaximized => "explorer-maximized",
+            Self::ExplorerDrop => "explorer-drop",
             Self::FindReplace => "find-replace",
             Self::FindStickyContext => "find-sticky-context",
             Self::PreviewCompiling => "preview-compiling",
@@ -243,6 +252,8 @@ impl UiSnapshotScene {
             | Self::ProblemsPanel
             | Self::TerminalPanel
             | Self::TerminalMaximized
+            | Self::TerminalIcons
+            | Self::ExplorerDrop
             | Self::ExplorerMaximized
             | Self::FindReplace
             | Self::FindStickyContext
@@ -260,6 +271,7 @@ impl UiSnapshotScene {
             Self::WindowColor => "logo-color",
             Self::SettingsWindow
             | Self::SettingsColors
+            | Self::SettingsTools
             | Self::SettingsEditor
             | Self::SettingsStatus
             | Self::BracketSettings
@@ -305,6 +317,7 @@ impl UiSnapshotScene {
             "settings-window" => Self::SettingsWindow,
             "settings-colors" => Self::SettingsColors,
             "settings-editor" => Self::SettingsEditor,
+            "settings-tools" => Self::SettingsTools,
             "settings-status" => Self::SettingsStatus,
             "settings-theme-picker" => Self::SettingsThemePicker,
             "settings-dark-theme-picker" => Self::SettingsDarkThemePicker,
@@ -331,7 +344,9 @@ impl UiSnapshotScene {
             "problems-panel" => Self::ProblemsPanel,
             "terminal-panel" => Self::TerminalPanel,
             "terminal-maximized" => Self::TerminalMaximized,
+            "terminal-icons" => Self::TerminalIcons,
             "explorer-maximized" => Self::ExplorerMaximized,
+            "explorer-drop" => Self::ExplorerDrop,
             "find-replace" => Self::FindReplace,
             "find-sticky-context" => Self::FindStickyContext,
             "preview-compiling" => Self::PreviewCompiling,

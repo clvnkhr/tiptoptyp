@@ -94,3 +94,8 @@ scene	tabs-pdf	main	main-tabs-pdf	targeted	-	-
 scene	tabs-image	main	main-tabs-image	targeted	-	-
 scene	table-editor	table-editor	table-editor	targeted	-	-
 scene	table-editor-narrow	table-editor	table-editor-table-editor-narrow	targeted	-	-
+
+scene	explorer-drop	main	main-explorer-drop	targeted	-	-
+scene	settings-tools	settings	settings-settings-tools	targeted	transparent	-
+
+scene	terminal-icons	main	main-terminal-icons	targeted	-	-

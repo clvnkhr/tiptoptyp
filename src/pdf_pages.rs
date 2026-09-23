@@ -15,7 +15,7 @@ use std::{
 use tiptoptyp_core::preview::ArtifactKey;
 
 use crate::{
-    pdf::{PdfRasterMode, PreviewPage, rasterize_pdf_with_program},
+    pdf::{PdfRasterMode, PreviewPage, rasterize_pdf},
     worker::{LatestReceiver, LatestSender, RepaintTarget, latest_channel},
 };
 
@@ -187,10 +187,9 @@ fn worker_loop(
             shutdown.load(Ordering::Acquire)
                 || latest_token.load(Ordering::Acquire) != request.token
         };
-        let output = rasterize_pdf_with_program(
+        let output = rasterize_pdf(
             &request.pdf,
             &request.project_root,
-            std::path::Path::new("pdftoppm"),
             PdfRasterMode::PageRange {
                 first: request.key.first,
                 last: request.key.last,

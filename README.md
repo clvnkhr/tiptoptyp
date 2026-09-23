@@ -2,7 +2,7 @@
 
 `tiptoptyp` is a native Typst editor written in Rust. It uses Tinymist for an
 interactive vector preview, Typst for canonical PDF output, PDF.js for an
-embedded PDF viewer, and Poppler for a rasterised recovery viewer.
+embedded PDF viewer, and a built-in Rust renderer for thumbnails and raster previews.
 
 ## MVP features
 
@@ -80,8 +80,7 @@ The PDF.js backend and its validation are described in
   The first build fetches Ghostty and its Zig dependencies; packaged apps
   statically include the terminal library and need no Zig or Ghostty install.
 - `curl` and `tar` when fetching the pinned sidecars for a development build
-- Poppler's `pdftoppm` on `PATH` for native PDF rendering; `pdftohtml` from the
-  same package enables clickable link hotspots
+- PDF inspection, links and thumbnails are built into the application; no Poppler installation is needed.
 
 ### Set up Zig for source builds
 
@@ -149,7 +148,7 @@ cargo run --release
 
 On macOS and Windows, PDF.js displays opened PDFs and serves as the recovery
 viewer when Tinymist is unavailable or its embedded viewer fails. The retiring
-raster viewer remains available explicitly and requires Poppler. Tinymist server and preview-start failures first receive up to four
+raster viewer remains available explicitly and uses the built-in Rust renderer. Tinymist server and preview-start failures first receive up to four
 retries, one second apart; the fifth consecutive failure selects the fallback.
 Linux currently uses this route because the Wry child-view
 integration is limited to macOS and Windows in this MVP.
@@ -350,7 +349,7 @@ SVG rendering, source spans, hover behavior, and click mapping. tiptoptyp handle
 range.
 
 The fallback is intentionally a recovery viewer. egui has no built-in PDF
-renderer, so Poppler rasterizes the watched PDF at 144 DPI and extracts link
+renderer, so the built-in Rust renderer rasterizes the watched PDF at 144 DPI and extracts link
 rectangles for native interaction. It cannot recover Typst source spans, but it
 does provide continuous pages, stable scroll state, pinch zoom, explicit
 boundaries, and a preview-only dark transform. Exported PDF bytes are never
@@ -378,7 +377,7 @@ cargo test --manifest-path xtask/Cargo.toml
 ```
 
 The real watcher integration test is ignored by default because it requires
-Typst, Poppler, and native filesystem notifications:
+Typst and native filesystem notifications:
 
 ```sh
 TIPTOPTYP_IGNORE_SYSTEM_FONTS=1 \

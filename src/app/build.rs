@@ -48,10 +48,12 @@ impl EditorApp {
         }
         let engine = match engine {
             BuildEngineKind::Typst => EngineConfig::Typst(TypstOptions {
+                command: self.typst_tool.command.clone().into(),
                 executable: self.typst_tool.program.clone(),
                 font_paths: self.font_catalog.workspace_directories().to_vec(),
             }),
             BuildEngineKind::Tectonic => EngineConfig::Tectonic(TectonicOptions {
+                command: self.tex_tools.tectonic.command.clone().into(),
                 executable: self.tex_tools.tectonic.program.clone(),
                 only_cached: self.settings.tex.only_cached,
             }),

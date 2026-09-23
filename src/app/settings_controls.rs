@@ -1,6 +1,6 @@
 //! Reusable Settings controls operating on borrowed values, not the application.
 use super::{
-    approximate_char_capacity, error_color, info_color, neutral_color, success_color, tail_elide,
+    error_color, info_color, neutral_color, success_color,
     tooltips::{settings_hover_text, typst_overrides_hover_text},
     warning_color,
 };
@@ -12,7 +12,7 @@ use crate::{
     sublime_theme::Rgba,
     syntax_theme::{ResolvedTypstStyles, TypstStyleOverride, TypstStyleOverrides, TypstSyntaxRole},
     theme::{self, METRICS},
-    toolchain::{ToolOrigin, ToolResolution},
+    toolchain::ToolResolution,
 };
 use eframe::egui::{self, Align, Color32, Layout, RichText, Vec2};
 use std::path::Path;
@@ -500,61 +500,21 @@ pub(super) fn tool_preference_editor(
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(label).strong());
             for mode in ToolMode::ALL {
-                ui.selectable_value(&mut preference.mode, mode, mode.label());
-            }
-            ui.separator();
-            let (origin_label, color, full_path) = if deterministic_snapshot {
-                (
-                    "Bundled",
-                    success_color(ui.ctx()),
+                let response = ui.selectable_value(&mut preference.mode, mode, mode.label());
+                let hint = if deterministic_snapshot {
                     format!(
-                        "<packaged>/{} {}",
-                        resolution.kind.binary_name(),
-                        resolution.kind.bundled_version()
-                    ),
-                )
-            } else {
-                let color = match resolution.origin {
-                    ToolOrigin::Bundled | ToolOrigin::Custom => success_color(ui.ctx()),
-                    ToolOrigin::Environment | ToolOrigin::Path => warning_color(ui.ctx()),
-                    ToolOrigin::Missing => error_color(ui.ctx()),
-                };
-                (
-                    resolution.origin.label(),
-                    color,
-                    resolution.program.display().to_string(),
-                )
-            };
-            ui.label(
-                RichText::new(origin_label)
-                    .size(theme::TYPE.supporting)
-                    .strong()
-                    .color(color),
-            );
-            let path_width = ui
-                .available_width()
-                .max(METRICS.settings.tool_path_min_width);
-            let path_chars = approximate_char_capacity(
-                path_width,
-                METRICS.settings.tool_path_estimated_font_size,
-            );
-            let visible_path = tail_elide(&full_path, path_chars);
-            let elided = visible_path != full_path;
-            let path = ui.add_sized(
-                [path_width, METRICS.settings.tool_path_row_height],
-                egui::Label::new(
-                    RichText::new(visible_path)
-                        .size(theme::TYPE.supporting)
-                        .monospace(),
-                )
-                .truncate(),
-            );
-            if elided
-                || path
-                    .intrinsic_size()
-                    .is_some_and(|size| size.x > path.rect.width())
-            {
-                settings_hover_text(path, full_path);
+                        "{} {}\n<packaged>/{}",
+                        resolution.kind.label(),
+                        resolution.kind.bundled_version(),
+                        resolution.kind.binary_name()
+                    )
+                } else if mode == ToolMode::Bundled {
+                    resolution.bundled_program.as_ref().map_or_else(
+                        || format!("Bundled {} is unavailable\n{}", resolution.kind.label(), resolution.detail()),
+                        |path| format!("Bundled {} {}\n{}", resolution.kind.label(), resolution.kind.bundled_version(), path.display()),
+                    )
+                } else { resolution.detail() };
+                settings_hover_text(response, hint);
             }
         });
         if preference.mode == ToolMode::Custom {
@@ -572,6 +532,25 @@ pub(super) fn tool_preference_editor(
                 browse |= ui.button("Browse…").clicked();
             });
         }
+        egui::CollapsingHeader::new("Command customization").show(ui, |ui| {
+            let id = ui.id().with("command-draft");
+            let mut draft = ui.ctx().data_mut(|data| {
+                let cached = data.get_temp::<(crate::tool_command::CommandCustomization, crate::tool_command::CommandCustomization)>(id);
+                cached.filter(|(original,_)| original == &preference.command).map(|(_,draft)| draft).unwrap_or_else(|| preference.command.clone())
+            });
+            ui.label("Arguments (quoted values supported; no shell expansion)");
+            ui.add(egui::TextEdit::multiline(&mut draft.arguments).desired_rows(2).desired_width(f32::INFINITY));
+            ui.label(egui::RichText::new("{args} keeps generated arguments. {arg:N} inserts one generated argument (zero-based). Remove {args} to replace the command arguments entirely.").small());
+            ui.label("Environment (JSON object of strings)");
+            ui.add(egui::TextEdit::multiline(&mut draft.environment).desired_rows(2).desired_width(f32::INFINITY));
+            ui.label("Working directory (blank uses the document/project directory)");
+            ui.add(egui::TextEdit::singleline(&mut draft.directory).desired_width(f32::INFINITY));
+            ui.horizontal(|ui| {
+                if ui.add_enabled(draft != preference.command, egui::Button::new("Apply command")).clicked() { preference.command = draft.clone(); }
+                if ui.button("Reset command").clicked() { draft = Default::default(); preference.command = draft.clone(); }
+            });
+            ui.ctx().data_mut(|data| data.insert_temp(id,(preference.command.clone(),draft)));
+        });
     });
     browse
 }
@@ -587,21 +566,6 @@ pub(super) fn fallback_notice(ui: &mut egui::Ui, label: &str, reason: &str) {
         );
         ui.label(reason);
     });
-}
-
-pub(super) fn show_tool_status_chip(ui: &mut egui::Ui, name: &str, resolution: &ToolResolution) {
-    let color = match resolution.origin {
-        ToolOrigin::Bundled | ToolOrigin::Custom => success_color(ui.ctx()),
-        ToolOrigin::Environment | ToolOrigin::Path => warning_color(ui.ctx()),
-        ToolOrigin::Missing => error_color(ui.ctx()),
-    };
-    show_status_chip(
-        ui,
-        name,
-        resolution.origin.label(),
-        &resolution.detail(),
-        color,
-    );
 }
 
 pub(super) fn show_service_status_chip(ui: &mut egui::Ui, name: &str, state: &ServiceState) {

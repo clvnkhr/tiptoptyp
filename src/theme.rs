@@ -550,6 +550,13 @@ where
     })
 }
 
+pub(crate) fn terminal_icon_font(size: f32) -> FontId {
+    FontId::new(
+        size,
+        FontFamily::Name(Arc::from("tiptoptyp-terminal-icons")),
+    )
+}
+
 pub(crate) fn terminal_font() -> FontId {
     FontId::monospace(13.0)
 }
@@ -614,6 +621,7 @@ where
     let mut prepared_files = FontFileCache::new(&mut read_font);
 
     let mut terminal_fallback = monospace_fallback.clone();
+    let mut symbol_names = Vec::new();
     if let Some(family) = terminal_symbols
         && let Some(prepared) = prepare_requested_font(
             FontRequest {
@@ -624,10 +632,15 @@ where
         )
         && let Some((data, _)) = prepared.weighted_data(FONT_WEIGHT_NORMAL)
     {
-        const SYMBOLS: &str = "tiptoptyp-terminal-symbols";
-        definitions.font_data.insert(SYMBOLS.into(), Arc::new(data));
-        terminal_fallback.insert(1, SYMBOLS.into());
+        let name = "tiptoptyp-terminal-symbols".to_owned();
+        definitions.font_data.insert(name.clone(), Arc::new(data));
+        symbol_names.push(name);
     }
+    terminal_fallback.splice(1..1, symbol_names.iter().cloned());
+    symbol_names.extend(monospace_fallback.iter().cloned());
+    definitions
+        .families
+        .insert(terminal_icon_font(13.0).family, symbol_names);
     definitions
         .families
         .insert(terminal_font().family, terminal_fallback);

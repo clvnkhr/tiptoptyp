@@ -9,14 +9,14 @@ PDF.js is also the automatic fallback when Tinymist is unavailable, exhausts its
 five consecutive attempts, or its native view fails. The first four failures keep
 the existing retry behavior and any retained Tinymist surface. Fallback preserves
 the requested preference and reports **PDF.js · fallback** with the failure
-reason. It compiles canonical PDF bytes without Poppler page inspection or
+reason. It compiles canonical PDF bytes without raster page inspection or
 rasterization; explicit export uses the same bytes.
 
 Native PDF.js views are available on macOS and Windows. Other platforms report
 missing native web-view support rather than silently selecting raster. A PDF.js
 load failure exposes its error and retry button, without another backend switch.
 An explicit **Rasterised PDF** preference remains available for now and applies
-to both compiled previews and opened PDFs.
+to compiled Typst previews. TeX and opened PDFs use PDF.js.
 
 The bundled Mozilla generic viewer provides continuous scroll, horizontal pan
 when zoomed in, zoom buttons and percentage/fit controls, Cmd/Ctrl +/- and 0,
@@ -57,7 +57,7 @@ PDF bytes. JavaScript serializes loads and collapses superseded downloads. The
 upstream rendering queue and page buffer render the visible vicinity; individual
 canvases are capped at 16 Mi pixels. WebKit/Chromium and PDF.js still incur their
 own document/worker/canvas memory costs, outside the raster residency accounting.
-PDF.js mode disables Poppler compilation/catalog work and raster page requests.
+PDF.js mode disables raster compilation/catalog work and raster page requests.
 No cross-platform speed or physical gesture smoothness guarantee is implied.
 
 ## Raster preview retirement (todos 294–295)
@@ -71,11 +71,11 @@ features. PDF.js owns new PDF-viewing work. Removal has these boundaries:
 - Remove the raster preview setting, page/fit controls and shortcuts, PDF page
   demand workers and preview-only residency/texture state. Audit the shared code
   in `app/raster_view.rs`, `preview.rs`, `pdf_pages.rs`, and `pdf_residency.rs`.
-- Remove preview-only Poppler inspection, link extraction and rasterization from
+- Remove preview-only Rust raster inspection, link extraction and rendering from
   the compiler and asset loader. Retain the canonical PDF artifact/export path.
 - Separate image display and PDF hover thumbnails before deleting shared raster
   helpers in `asset.rs` and `pdf.rs`. Audit capability reporting and packaging;
-  do not remove Poppler while thumbnail consumers still require it.
+  keep the built-in Rust renderer for hover thumbnails.
 - Preserve PDF.js document replacement, retained page/zoom, theme handling,
   links, multi-window ownership and cancellation tests.
 
@@ -127,3 +127,44 @@ Manual acceptance: scroll far down, zoom and pan, follow the fixture's first/las
 page links, open an external link, and edit the source while scrolled down.
 Check that the new PDF keeps your position and zoom. Switch between Code/Split/
 Preview, open a PDF tab, resize the split divider and try a macOS trackpad pinch.
+
+PDF.js initializes with `sidebarViewOnLoad: 0`, so neither a saved sidebar state
+nor a document's outline page mode opens the table of contents automatically.
+The sidebar can still be opened manually.
+
+## Recompiled documents and seamless updates
+
+The native webview and viewer application persist across compilations. Our host
+fetches the new artifact and calls the pinned viewer's `open({ data })`, restoring
+page, zoom and scroll position. In the bundled `viewer.mjs`, `open` first awaits
+`close`, which clears page views and destroys the previous loading task, before
+calling `getDocument`. This can visibly blank the preview. PDF.js exposes no
+public API to mutate an existing document with arbitrary recompiled PDF bytes.
+
+Identical bytes now retain the existing document revision even when compilation
+produces a new allocation. A one-time comparison adopts the new allocation;
+subsequent frames use the constant-time pointer check. Changed bytes still reload.
+
+Seamless changed-document updates require staging parsing/rendering offscreen
+while retaining the displayed pages, then committing a ready replacement and
+restoring navigation state. A persistent custom PDF.js page viewer could instead
+manage per-page replacement, at the cost of owning text/annotation/search and
+layout coordination. A different rendering engine would still require this
+presentation handoff. Neither architectural change is implemented yet.
+
+## Built-in PDF utilities
+
+Hayro 0.7.1 replaces pdftoppm, pdfinfo and pdftohtml. Page geometry, rotation,
+link annotations and CPU thumbnails work without PATH tools or writable PDF
+staging directories. Rendering stays in the existing serial, latest-wins worker.
+Requests reject invalid page ranges, over 10,000 pages, unsupported dimensions
+and raster batches larger than 32 megapixels. Cancellation is checked before
+parsing, between pages and before publication; an in-progress page render cannot
+be interrupted. PDF.js remains the full viewer. Hayro does not cover every PDF
+feature, so unusual PDFs can differ in thumbnails; failed parsing is reported.
+
+The runtime process audit found only the six packaged document tools, Git,
+the user's terminal shell and platform URL/file openers. Git remains a host
+dependency. The packaged macOS tool binaries link only system libraries; no
+Homebrew dynamic-library paths were found. Source-build helpers (Zig, curl, tar,
+cargo-about) are development/packaging dependencies, not installed-app needs.

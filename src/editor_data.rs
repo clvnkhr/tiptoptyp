@@ -785,6 +785,7 @@ mod tests {
 
     fn diagnostic(path: &Path, line: usize, message: &str) -> Diagnostic {
         Diagnostic {
+            provider: None,
             severity: DiagnosticSeverity::Error,
             source: DiagnosticSource::File(path.to_owned()),
             location: Some(DiagnosticLocation { line, column: 1 }),

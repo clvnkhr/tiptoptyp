@@ -41,6 +41,8 @@ pub(crate) struct DiagnosticLocation {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Diagnostic {
+    /// Tool that produced this diagnostic, separate from its file location.
+    pub(crate) provider: Option<String>,
     pub(crate) severity: DiagnosticSeverity,
     pub(crate) source: DiagnosticSource,
     pub(crate) location: Option<DiagnosticLocation>,
@@ -124,6 +126,7 @@ impl Diagnostic {
         std::iter::once(self.message.as_str())
             .filter(|line| !line.is_empty())
             .chain(self.details.iter().map(String::as_str))
+            .chain(self.provider.as_deref())
     }
 }
 
@@ -157,6 +160,7 @@ pub(crate) fn normalize_diagnostics(diagnostics: &mut Vec<Diagnostic>) {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct DiagnosticIdentity {
+    provider: Option<String>,
     severity: DiagnosticSeverity,
     source: DiagnosticSource,
     location: Option<DiagnosticLocation>,
@@ -166,6 +170,7 @@ struct DiagnosticIdentity {
 impl From<&Diagnostic> for DiagnosticIdentity {
     fn from(diagnostic: &Diagnostic) -> Self {
         Self {
+            provider: diagnostic.provider.clone(),
             severity: diagnostic.severity,
             source: diagnostic.source.clone(),
             location: diagnostic.location,
@@ -289,6 +294,7 @@ pub(crate) struct DiagnosticReport {
 impl DiagnosticReport {
     pub(crate) fn error(raw: String) -> Self {
         let mut diagnostics = vec![Diagnostic {
+            provider: None,
             severity: DiagnosticSeverity::Error,
             source: DiagnosticSource::Global,
             location: None,
@@ -306,6 +312,7 @@ mod tests {
     #[test]
     fn normalizes_multiline_tinymist_messages_to_the_cli_display_shape() {
         let mut diagnostics = vec![Diagnostic {
+            provider: None,
             severity: DiagnosticSeverity::Error,
             source: DiagnosticSource::Main,
             location: Some(DiagnosticLocation {
@@ -356,6 +363,7 @@ mod tests {
     fn metadata_only_diagnostics_disappear_without_reordering_real_diagnostics() {
         let mut diagnostics = vec![
             Diagnostic {
+                provider: None,
                 severity: DiagnosticSeverity::Unknown,
                 source: DiagnosticSource::Global,
                 location: None,
@@ -363,6 +371,7 @@ mod tests {
                 details: vec![],
             },
             Diagnostic {
+                provider: None,
                 severity: DiagnosticSeverity::Error,
                 source: DiagnosticSource::Main,
                 location: None,

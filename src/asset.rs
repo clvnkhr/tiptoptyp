@@ -65,7 +65,7 @@ struct AssetRequest {
 
 /// Decodes images and reads opened PDFs away from egui's frame callback.
 /// PDF.js needs only bytes; explicit raster mode and captures also inspect
-/// pages with Poppler off the UI thread. Keep thumbnail decoding separate
+/// pages with the built-in Rust parser off the UI thread. Keep thumbnail decoding separate
 /// when retiring that optional inspection path (todo 295).
 pub struct AssetLoader {
     requests: Option<LatestSender<AssetRequest>>,
@@ -176,7 +176,7 @@ struct AssetThumbnailRequest {
 
 /// Loads small, single-page hover previews independently from the selected
 /// document loader. Work is serial and latest-wins so rapidly crossing files
-/// cannot accumulate a queue of image decodes or Poppler children.
+/// cannot accumulate a queue of image decodes or rendering jobs.
 pub(crate) struct AssetThumbnailLoader {
     requests: Option<LatestSender<AssetThumbnailRequest>>,
     results: Receiver<AssetThumbnailResult>,

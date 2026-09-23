@@ -50,6 +50,7 @@ test("offline initialization disables PDF scripting and preserves the location o
   assert.equal(f.options.enableScripting, false);
   assert.equal(f.options.isEvalSupported, false);
   assert.equal(f.options.defaultUrl, "");
+  assert.equal(f.options.sidebarViewOnLoad, 0);
   assert.equal(f.options.annotationEditorMode, -1);
   assert.deepEqual(f.opens, ["zoom=page-width"]);
   f.eventBus.dispatch("updateviewarea", { location: { pageNumber: 20, scale: 175, left: 30, top: 80 } });

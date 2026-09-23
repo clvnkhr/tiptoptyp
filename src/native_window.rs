@@ -35,6 +35,23 @@ mod platform {
             std::ptr::eq(&*self.view, &*other.view)
         }
 
+        /// AppKit's file-drag events do not supply winit CursorMoved events.
+        /// Query this retained document view, including while Finder has focus.
+        pub(crate) fn file_drag_pointer(&self, zoom: f32) -> Option<eframe::egui::Pos2> {
+            let window = self.view.window()?;
+            let point = self
+                .view
+                .convertPoint_fromView(window.mouseLocationOutsideOfEventStream(), None);
+            let bounds = self.view.bounds();
+            let x = point.x - bounds.origin.x;
+            let y = if self.view.isFlipped() {
+                point.y - bounds.origin.y
+            } else {
+                bounds.origin.y + bounds.size.height - point.y
+            };
+            Some(eframe::egui::pos2(x as f32 / zoom, y as f32 / zoom))
+        }
+
         pub(crate) fn suppress_titlebar_drag(&self) -> Option<TitlebarDragGuard> {
             let window = self.view.window()?;
             let was_movable = window.isMovable();

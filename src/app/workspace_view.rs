@@ -159,7 +159,7 @@ impl EditorApp {
             return;
         }
         self.pdfjs_asset.hide();
-        // A PDF opened without Poppler still needs a raster surrogate when a
+        // A PDF opened without raster inspection still needs a raster surrogate when a
         // framebuffer capture is explicitly requested. Queue it only once.
         if self.pdfjs_asset_requested()
             && self.document().kind() == DocumentKind::Pdf

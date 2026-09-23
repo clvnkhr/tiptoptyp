@@ -78,6 +78,7 @@
       disablePreferences: true,
       disableHistory: true,
       viewOnLoad: 1,
+      sidebarViewOnLoad: 0,
       scrollModeOnLoad: 0,
       spreadModeOnLoad: 0,
       enableScripting: false,

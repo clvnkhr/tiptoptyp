@@ -831,16 +831,57 @@ GPU/texture-residency observation remain explicitly unavailable.
 305. [x] Add maximize/restore controls to Explorer subpanels. Maximizing one
   hides all siblings; restoring recovers their sizes and collapsed states.
 306. [ ] comfy mode (typst only) - adjust black and white (+ background color) with default set rules to match theme
-307. [ ] language/grammar linting
+307. [ ] language/grammar linting for english (typst/tex aware)
 308. [ ] highlight invisible chars or chars commonly mistaken for other chars (e.g. cjk)
 309. [ ] weird chinese encoding -> utf-8 conversion (deferred until we have more details)
 310. [ ] full document templates
 311. [ ] snippet support
-312. [ ] allow passing flags to the various tools we use (tinymist, typst, etc)
-313. [ ] if nothing is staged but there are diffs, the greyed out Commit staged changes should be 'stage all and commit'.
-314. [ ] there should also be a revert/revert all button (with confirmation dialog)
+312. [x] Allow custom arguments, environment and working directory for bundled/custom document tools.
+313. [x] if nothing is staged but there are diffs, the greyed out Commit staged changes should be 'stage all and commit'.
+314. [x] there should also be a revert/revert all button (with confirmation dialog)
 315. [ ] everything currently done with text should have a swanky icon, with text going into a small tooltip instead
-316. [ ] the maximize icon sucks, we should instead highlight/make more prominent the top part of the minimise icon, and the minimise icon should highlight/make more prominent the lower square.
+316. [x] the maximize icon sucks, we should instead highlight/make more prominent the top part of the minimise icon, and the minimise icon should highlight/make more prominent the lower square.
+
+317. [x] Keep diagnostic providers right-aligned on the message line when they fit, and always in the hover tooltip.
+318. [x] Start PDF.js with the table of contents/sidebar closed.
+319. [x] Default Find, Pause/Resume, Compile, and Settings to icons; offer text, text-and-icons, and icons in settings, and animate the compiling gear.
+320. [x] Keep manual Typst and TeX preview and diagnostic fixtures in the repository.
+321. [x] Keep selected Explorer file icons visible.
+322. [x] Preserve repeated external drops while imports/dialogs are busy and track the native macOS drag position. Manual Finder acceptance remains to be checked.
+323. [x] Fit the Explorer drop hint to its text instead of the panel width.
+324. [x] Add panel-layout icons for Explorer, Code, Split, Preview and Panel.
+325. [x] Default Git actions to icons with descriptive hover tooltips.
+326. [x] Size toolbar icons to the UI font and use finer strokes.
+327. [x] Replay cached workspace trees after service resets so Explorer does not lose its root.
+328. [x] Clear stale selection and synchronize tab workspace when switching roots; cover opening a Typst source first.
+329. [x] Replace external PDF rasterization, metadata and link utilities with built-in Rust code; audit packaged binary dependencies.
+330. [x] Give Typst and TeX tools equal visibility and label Typst-only preview settings.
+331. [x] Move bundled executable paths into the Bundled button tooltip.
+332. [x] Keep useful service health/errors and remove redundant bundled status badges.
+333. [x] Expose complete command customization with explicit Apply and document direct subprocess execution.
+334. [x] Round both maximize and restore window icons.
+335. [x] Select the first compilable source for preview when earlier tabs are PDF/assets; retain a previously designated source.
+336. [x] Match the diff glyph border to the other Git action icons.
+337. [ ] Stage changed PDF.js documents offscreen and swap only when ready, preserving navigation and the last successful preview without a blank flash.
+338. [x] Fix current Nerd Font glyph priority and icon sizing; allow ink into a following blank cell without shifting terminal columns. No legacy-codepoint remapping or fallback.
+
+= Toolbar, workspace and packaged PDF follow-up (2026-09-23)
+
+- Items 312 and 324–334 are implemented. Workspace resubscription replays its
+  cached tree without rescanning, and root switches clear stale selection and
+  synchronize the active tab. Deterministic first-source-open coverage passes.
+- PDF metadata, links and raster thumbnails run in Rust without Poppler tools.
+  Git remains a host dependency; the six packaged macOS document tools have
+  only system dynamic-library dependencies. Unusual PDFs may render differently
+  in Hayro thumbnails; PDF.js remains the full viewer.
+- Tool commands support executable, argv, environment and working-directory
+  customization, applied explicitly. They launch directly without an implicit
+  shell. Details and examples are in `docs/editor-interactions.md`.
+- Formatting, strict Clippy, 1,212 Rust suite tests, 14 xtask tests and 5 PDF.js
+  host tests pass. Fresh toolbar/Git/settings/rounded-corner captures and the
+  regenerated 22-image gallery were inspected and validated. Native Finder and
+  installed-app interaction remain manual acceptance checks. Bounded PDF timing
+  evidence and its limitations are recorded in `docs/performance.md`.
 
 = Bounded PDF page residency (2026-09-18)
 
@@ -2678,3 +2719,27 @@ portable whole-system resource score.
   22-image gallery validated. The optimized 10,000-line geometry probe adds
   about 10.24 microseconds per resize, without another text layout; this is
   not a whole-frame or native smoothness measurement.
+
+= Git actions and UI follow-up (2026-09-23)
+
+- Items 313 and 314: empty-index repositories offer Stage all and commit;
+  staged subsets still offer Commit staged changes. Revert and Revert all
+  require confirmation and discard only unstaged changes, including unstaged
+  new files. Tracked files restore from the index, preserving staged content.
+  Ignored files, private app state and conflicted paths are excluded. Dirty
+  open tabs block destructive actions, and targets are revalidated by the worker.
+- Item 316 uses paired overlapping windows, emphasizing the upper window for
+  maximize and the lower window for restore. Items 317–323 cover the requested
+  diagnostic, PDF.js, toolbar, fixture, Explorer and file-drop follow-up.
+- Manual examples and instructions live in `manual-tests/`. The clean Typst and
+  TeX examples compile; the diagnostic examples produce their intentional
+  error and warning. Native Finder drag acceptance remains a manual check;
+  automated coverage exercises routing, native-pointer precedence, queuing,
+  event consumption, icon contrast and diagnostic-provider fit.
+- The broad app-wide icon conversion in item 315 remains open. This pass changes
+  the four specifically requested toolbar actions.
+- Final checks: formatting, strict Clippy, 1,218 Rust suite tests, 14 xtask tests
+  and 5 PDF.js host tests pass. Fresh light/dark provider rows, compact drop
+  hint, toolbar/settings, Git controls and panel icons were inspected. The
+  regenerated 22-image gallery validates. Native Finder drops remain a manual
+  acceptance check; no idle polling or extra concurrent import workers added.

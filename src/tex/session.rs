@@ -56,8 +56,12 @@ impl Session {
         if provider == Provider::Badness {
             command.arg("lsp");
         }
+        command.current_dir(&snapshot.root);
+        resolution
+            .command
+            .apply(&mut command)
+            .map_err(|e| e.to_string())?;
         command
-            .current_dir(&snapshot.root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(File::create(&log).map_err(|e| e.to_string())?);

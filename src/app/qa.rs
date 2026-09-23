@@ -10,6 +10,7 @@ pub(super) struct QaSession {
     git_fixture_prepared: bool,
     folding_prepared: bool,
     tabs_prepared: bool,
+    terminal_icons_prepared: bool,
     asset_fixture: Option<tempfile::TempDir>,
 }
 
@@ -443,12 +444,14 @@ impl QaSession {
                     Some(SettingsTarget::AutoPairDelimiters);
             }
             UiSnapshotScene::SettingsColors
+            | UiSnapshotScene::SettingsTools
             | UiSnapshotScene::SettingsEditor
             | UiSnapshotScene::SettingsStatus => {
                 app.settings_visible = true;
                 app.settings_window.lock().unwrap().ui.scroll_target = Some(match scene {
                     UiSnapshotScene::SettingsColors => SettingsTarget::ThemeColors,
                     UiSnapshotScene::SettingsEditor => SettingsTarget::AutoSaveDelay,
+                    UiSnapshotScene::SettingsTools => SettingsTarget::TypstCompiler,
                     _ => SettingsTarget::ToolchainStatus,
                 });
             }
@@ -687,6 +690,11 @@ impl QaSession {
                 }
             }
             UiSnapshotScene::WorkspaceChooser => app.workspace_chooser_visible = true,
+            UiSnapshotScene::ExplorerDrop => {
+                context.data_mut(|data| data.insert_temp(egui::Id::new("qa-explorer-drop"), true));
+                app.explorer.open();
+                app.view_mode = ViewMode::Code;
+            }
             UiSnapshotScene::ExplorerMaximized => {
                 app.explorer.open();
                 app.view_mode = ViewMode::Code;
@@ -694,6 +702,19 @@ impl QaSession {
                     app.explorer
                         .toggle_section_maximized(ExplorerSection::Files);
                 }
+            }
+            UiSnapshotScene::TerminalIcons => {
+                if !self.terminal_icons_prepared {
+                    app.font_catalog = FontCatalog::discover(&app.workspace_root);
+                    app.font_catalog_revision = app.font_catalog_revision.wrapping_add(1);
+                    self.terminal_icons_prepared = true;
+                }
+                app.bottom_panel.select(PanelTab::Terminal);
+                if !app.bottom_panel.is_maximized() {
+                    app.bottom_panel.toggle_maximized();
+                }
+                app.terminal.prepare_fixture(
+                    "\x1b[1;36mmytypst\x1b[0m on \x1b[1;35m\u{f418} git_branch master\x1b[0m is \x1b[1;33m\u{f03d7} packagev0.1.0\x1b[0m via \x1b[1;31m\u{e7a8} rustv1.98.1\x1b[0m\r\n\x1b[32m❯\x1b[0m cargo run --release\r\n\r\nIcons with space: \u{f418} branch   \u{f03d7} package   \u{e7a8} rust\r\nTight: a\u{f418}b a\u{f03d7}b a\u{e7a8}b\r\nASCII: MMMMM 0123456789  \x1b[1mbold 0123456789\x1b[0m  \x1b[3mitalic\x1b[0m\r\nUnicode: α β 界 😀 🦀 📦\r\n".as_bytes(), Path::new("~/project"));
             }
             UiSnapshotScene::TerminalPanel | UiSnapshotScene::TerminalMaximized => {
                 if scene == UiSnapshotScene::TerminalMaximized && !app.bottom_panel.is_maximized() {
@@ -709,6 +730,7 @@ impl QaSession {
                 app.bottom_panel.select(PanelTab::Problems);
                 app.preview.diagnostics = vec![
                     Diagnostic {
+                        provider: Some("Tectonic".into()),
                         severity: DiagnosticSeverity::Error,
                         source: DiagnosticSource::Main,
                         location: Some(DiagnosticLocation {
@@ -722,6 +744,7 @@ impl QaSession {
                         ],
                     },
                     Diagnostic {
+                        provider: Some("Tectonic".into()),
                         severity: DiagnosticSeverity::Warning,
                         source: DiagnosticSource::Main,
                         location: Some(DiagnosticLocation {
@@ -761,6 +784,7 @@ impl QaSession {
         context: &egui::Context,
     ) {
         crate::window_logo::clear_snapshot(context);
+        context.data_mut(|data| data.remove::<bool>(egui::Id::new("qa-explorer-drop")));
         self.git_fixture_prepared = false;
         app.git.visible = false;
         app.git_editor = crate::git::editor::GitEditorState::default();
@@ -825,6 +849,7 @@ impl QaSession {
         app.snapshot_scene = Some(step.scene);
         self.folding_prepared = false;
         self.tabs_prepared = false;
+        self.terminal_icons_prepared = false;
         self.asset_fixture = None;
         if matches!(
             step.scene,
@@ -941,6 +966,7 @@ mod tests {
                                 &mut content,
                                 false,
                                 crate::settings::GitDiffStyle::Unified,
+                                crate::settings::ToolbarStyle::Icons,
                             );
                         });
                 },

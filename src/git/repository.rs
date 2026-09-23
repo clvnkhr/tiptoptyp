@@ -32,6 +32,11 @@ impl Entry {
     pub(super) fn stageable(&self) -> bool {
         self.unstaged() && !private_artifact(&self.path)
     }
+    pub(super) fn revertible(&self) -> bool {
+        ((matches!(self.index, ' ' | 'M' | 'A' | 'T') && matches!(self.worktree, 'M' | 'D' | 'T'))
+            || (self.index == '?' && self.worktree == '?'))
+            && !private_artifact(&self.path)
+    }
 }
 
 /// Immutable status rows and their summary, prepared once by the Git worker.
@@ -42,6 +47,7 @@ pub(super) struct ChangeList {
     pub(super) staged: usize,
     pub(super) stageable: bool,
     pub(super) staged_private: bool,
+    pub(super) revertible: bool,
 }
 
 impl From<Vec<Entry>> for ChangeList {
@@ -51,6 +57,7 @@ impl From<Vec<Entry>> for ChangeList {
             list.staged += usize::from(entry.staged());
             list.stageable |= entry.stageable();
             list.staged_private |= entry.staged() && private_artifact(&entry.path);
+            list.revertible |= entry.revertible();
         }
         list.items = items;
         list
@@ -115,6 +122,8 @@ pub(super) enum Operation {
     StageAll,
     UnstageAll,
     Commit(String),
+    StageAllAndCommit(String),
+    Revert(Vec<PathBuf>),
     Diff(PathBuf, DiffKind),
     Fetch,
     Pull,
@@ -462,7 +471,10 @@ pub(super) fn perform_locked(workspace: &Path, operation: Operation) -> Result<R
     }
     let before = snapshot(workspace)?;
     let root = &before.root;
-    let committed = matches!(operation, Operation::Commit(_));
+    let committed = matches!(
+        operation,
+        Operation::Commit(_) | Operation::StageAllAndCommit(_)
+    );
     // Keep the NUL-delimited pathspec alive until Git has consumed it.
     let mut pathspec = None;
     let command = match operation {
@@ -478,27 +490,85 @@ pub(super) fn perform_locked(workspace: &Path, operation: Operation) -> Result<R
         }
         Operation::Unstage(path) => unstage_command(root, path, false),
         Operation::UnstageAll => unstage_command(root, PathBuf::from("."), true),
-        Operation::StageAll => {
-            let mut file = tempfile::NamedTempFile::new().map_err(|e| e.to_string())?;
-            let mut count = 0;
-            for entry in before.entries.iter().filter(|entry| entry.stageable()) {
-                file.write_all(entry.path.as_os_str().as_encoded_bytes())
+        Operation::Revert(paths) => {
+            // Restore only the paths covered by the confirmation. Never use
+            // `restore .`, which could discard changes added while it was open.
+            let eligible: std::collections::HashMap<_, _> = before
+                .entries
+                .iter()
+                .filter(|entry| entry.revertible())
+                .map(|entry| (&entry.path, entry))
+                .collect();
+            if paths.is_empty() || paths.iter().any(|path| !eligible.contains_key(path)) {
+                return Err("The working changes changed; review them before reverting".into());
+            }
+            let (untracked, tracked): (Vec<_>, Vec<_>) =
+                paths.iter().partition(|path| eligible[path].index == '?');
+            // A nested repository can appear as an untracked directory. Never
+            // recursively clean directories or paths beyond the confirmation.
+            for path in &untracked {
+                let full = root.join(path);
+                let parent = full
+                    .parent()
+                    .ok_or("Missing file parent")?
+                    .canonicalize()
                     .map_err(|e| e.to_string())?;
-                file.write_all(&[0]).map_err(|e| e.to_string())?;
-                count += 1;
+                if !parent.starts_with(root)
+                    || fs::symlink_metadata(&full)
+                        .map_err(|e| e.to_string())?
+                        .is_dir()
+                {
+                    return Err(
+                        "Revert only deletes individual new files; review directories separately"
+                            .into(),
+                    );
+                }
             }
-            if count == 0 {
-                return Err("No working changes to stage".into());
+            if !tracked.is_empty() {
+                let file = pathspec_file(tracked.iter().map(|path| path.as_path()))?;
+                let mut command = args(&[
+                    "restore",
+                    "--worktree",
+                    "--pathspec-file-nul",
+                    "--pathspec-from-file",
+                ]);
+                command.push(file.path().as_os_str().to_owned());
+                run(root, &command)?;
             }
-            file.flush().map_err(|e| e.to_string())?;
-            let mut command = args(&[
-                "add",
-                "--all",
-                "--pathspec-file-nul",
-                "--pathspec-from-file",
-            ]);
-            command.push(file.path().as_os_str().to_owned());
+            // Git rechecks index membership and ignore rules. No -d, -x or
+            // repository-wide pathspec: staged, ignored and private files survive.
+            for paths in untracked.chunks(128) {
+                let mut command = args(&["clean", "-f", "--"]);
+                command.extend(paths.iter().map(|path| path.as_os_str().to_owned()));
+                run(root, &command)?;
+            }
+            return Ok(ResultData {
+                workspace: workspace.to_owned(),
+                snapshot: snapshot(workspace)?,
+                output: format!("Reverted unstaged changes in {} files", paths.len()),
+                committed: false,
+                failed: false,
+                diff: None,
+            });
+        }
+        Operation::StageAll => {
+            let (command, file) = stage_all_command(&before)?;
             pathspec = Some(file);
+            command
+        }
+        Operation::StageAllAndCommit(message) => {
+            if message.trim().is_empty() {
+                return Err("Enter a commit message".into());
+            }
+            // Check again under the repository lease: another window may
+            // have staged a deliberate subset since the button was rendered.
+            if before.entries.staged > 0 {
+                return Err("The staging area changed; review it before committing".into());
+            }
+            let (command, _file) = stage_all_command(&before)?;
+            run(root, &command)?;
+            let mut command = args(&["commit", "-m"]);
+            command.push(message.into());
             command
         }
         Operation::Commit(message) => {
@@ -568,6 +638,42 @@ pub(super) fn perform_locked(workspace: &Path, operation: Operation) -> Result<R
         failed: false,
         diff: None,
     })
+}
+
+fn stage_all_command(
+    snapshot: &Snapshot,
+) -> Result<(Vec<OsString>, tempfile::NamedTempFile), String> {
+    if !snapshot.entries.stageable {
+        return Err("No working changes to stage".into());
+    }
+    let file = pathspec_file(
+        snapshot
+            .entries
+            .iter()
+            .filter(|entry| entry.stageable())
+            .map(|entry| entry.path.as_path()),
+    )?;
+    let mut command = args(&[
+        "add",
+        "--all",
+        "--pathspec-file-nul",
+        "--pathspec-from-file",
+    ]);
+    command.push(file.path().as_os_str().to_owned());
+    Ok((command, file))
+}
+
+fn pathspec_file<'a>(
+    paths: impl Iterator<Item = &'a Path>,
+) -> Result<tempfile::NamedTempFile, String> {
+    let mut file = tempfile::NamedTempFile::new().map_err(|e| e.to_string())?;
+    for path in paths {
+        file.write_all(path.as_os_str().as_encoded_bytes())
+            .map_err(|e| e.to_string())?;
+        file.write_all(&[0]).map_err(|e| e.to_string())?;
+    }
+    file.flush().map_err(|e| e.to_string())?;
+    Ok(file)
 }
 
 fn unstage_command(root: &Path, path: PathBuf, all: bool) -> Vec<OsString> {

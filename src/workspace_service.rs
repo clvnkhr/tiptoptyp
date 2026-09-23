@@ -332,7 +332,17 @@ impl WorkspaceClient {
             .canonicalize()
             .map_err(|error| format!("Could not use workspace {}: {error}", root.display()))?;
         if self.root.as_ref() == Some(&root) {
-            SERVICE.lock().unwrap().refresh(&root);
+            // A consumer may have reset its local tree. Replay the cached
+            // snapshot even when the directory contents have not changed.
+            SERVICE.lock().unwrap().subscribe(
+                root,
+                self.owner,
+                Subscriber {
+                    events: self.sender.clone(),
+                    repaint: self.repaint.clone(),
+                    subscription: self.subscription,
+                },
+            )?;
             return Ok(());
         }
         self.unsubscribe();
@@ -431,6 +441,21 @@ mod tests {
         let (updated, updated_serial) = next_snapshot(&second);
         assert!(updated.find("new.typ").is_some());
         assert!(updated_serial > second_serial);
+    }
+
+    #[test]
+    fn resubscribe_replays_unchanged_tree_without_rescanning() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("first.typ"), "= First").unwrap();
+        let mut client = WorkspaceClient::new(WindowSessionId::new(89), RepaintTarget::test());
+        client.subscribe(root.path()).unwrap();
+        let (original, serial) = next_snapshot(&client);
+        for _ in 0..3 {
+            client.subscribe(root.path()).unwrap();
+            let (replayed, next_serial) = next_snapshot(&client);
+            assert!(Arc::ptr_eq(&original, &replayed));
+            assert_eq!(serial, next_serial);
+        }
     }
 
     #[test]

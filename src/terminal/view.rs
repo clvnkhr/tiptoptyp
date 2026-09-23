@@ -406,7 +406,7 @@ const GLYPH_CACHE_CAPACITY: usize = 256;
 
 #[derive(Default)]
 struct GlyphCache {
-    entries: HashMap<(usize, [u32; 2], bool), FittedGlyph>,
+    entries: HashMap<(usize, [u32; 2], bool, bool), FittedGlyph>,
 }
 
 struct FittedGlyph {
@@ -423,7 +423,21 @@ impl GlyphCache {
         size: Vec2,
         bold: bool,
     ) -> (Arc<egui::Galley>, Vec2) {
-        let (scale, offset) = glyph_placement(source.mesh_bounds, size, bold);
+        self.fit_kind(source, size, bold, false)
+    }
+
+    fn fit_kind(
+        &mut self,
+        source: Arc<egui::Galley>,
+        size: Vec2,
+        bold: bool,
+        icon: bool,
+    ) -> (Arc<egui::Galley>, Vec2) {
+        let (scale, offset) = if icon {
+            icon_placement(source.mesh_bounds, size, bold)
+        } else {
+            glyph_placement(source.mesh_bounds, size, bold)
+        };
         if scale == 1.0 && offset == Vec2::ZERO {
             return (source, offset);
         }
@@ -431,6 +445,7 @@ impl GlyphCache {
             Arc::as_ptr(&source) as usize,
             [size.x.to_bits(), size.y.to_bits()],
             bold,
+            icon,
         );
         if !self.entries.contains_key(&key) {
             if self.entries.len() == GLYPH_CACHE_CAPACITY {
@@ -438,7 +453,7 @@ impl GlyphCache {
             }
             let mut shape =
                 egui::epaint::TextShape::new(Pos2::ZERO, source.clone(), Color32::WHITE);
-            if scale < 1.0 {
+            if scale != 1.0 {
                 shape.transform(egui::emath::TSTransform::from_scaling(scale));
             }
             self.entries.insert(
@@ -482,6 +497,44 @@ fn glyph_placement(bounds: Rect, size: Vec2, bold: bool) -> (f32, Vec2) {
     (scale, offset)
 }
 
+fn terminal_icon(text: &str) -> bool {
+    let mut chars = text.chars();
+    chars.next().is_some_and(|c| {
+        matches!(c as u32, 0xe000..=0xf8ff | 0xf0000..=0xffffd | 0x100000..=0x10fffd)
+            && !matches!(c as u32, 0xe0b0..=0xe0d4)
+    }) && chars.next().is_none()
+}
+
+// Symbols-only fonts have different ascenders and em sizes from the text face.
+// Normalize icon ink to the text's cap-height vicinity, preserving aspect ratio.
+fn icon_placement(bounds: Rect, size: Vec2, bold: bool) -> (f32, Vec2) {
+    if !bounds.is_finite() || !bounds.is_positive() {
+        return (1.0, Vec2::ZERO);
+    }
+    let width = (size.x - if bold { 0.4 } else { 0.0 }).max(0.1);
+    let scale = (width / bounds.width()).min(size.y * 0.75 / bounds.height());
+    let scaled = bounds * scale;
+    (
+        scale,
+        Vec2::new(
+            (width - scaled.width()) * 0.5 - scaled.left(),
+            (size.y - scaled.height()) * 0.5 - scaled.top(),
+        ),
+    )
+}
+
+fn icon_columns(cell: &super::engine::Cell, next: Option<&super::engine::Cell>) -> f32 {
+    if cell.width == 1
+        && next.is_some_and(|next| {
+            next.width == 1 && next.text == " " && next.background == cell.background
+        })
+    {
+        2.0
+    } else {
+        f32::from(cell.width.max(1))
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn paint(
     ui: &egui::Ui,
@@ -498,6 +551,33 @@ fn paint(
     ui.painter().rect_filled(outer, 0.0, grid.background);
     let painter = ui.painter().with_clip_rect(rect);
     let selected = selection.map(|(a, b)| a.min(b)..a.max(b));
+    // Paint backgrounds before glyphs so a symbol may use the following blank
+    // cell without its ink being erased by selection/background painting.
+    for (row_index, row) in grid.rows.iter().enumerate() {
+        for (col, cell) in row.iter().enumerate() {
+            if cell.width == 0 {
+                continue;
+            }
+            let selected = selected
+                .as_ref()
+                .is_some_and(|range| range.contains(&(row_index * usize::from(grid.cols) + col)));
+            let color = if selected {
+                ui.visuals().selection.bg_fill
+            } else {
+                cell.background
+            };
+            if color != grid.background {
+                painter.rect_filled(
+                    Rect::from_min_size(
+                        rect.min + cell_size * Vec2::new(col as f32, row_index as f32),
+                        Vec2::new(cell_size.x * f32::from(cell.width), cell_size.y),
+                    ),
+                    0.0,
+                    color,
+                );
+            }
+        }
+    }
     for (row_index, row) in grid.rows.iter().enumerate() {
         for (col, cell) in row.iter().enumerate() {
             if cell.width == 0 {
@@ -510,17 +590,6 @@ fn paint(
             );
             if !cell_rect.intersects(rect) {
                 continue;
-            }
-            let is_selected = selected
-                .as_ref()
-                .is_some_and(|range| range.contains(&(row_index * usize::from(grid.cols) + col)));
-            let background = if is_selected {
-                ui.visuals().selection.bg_fill
-            } else {
-                cell.background
-            };
-            if background != grid.background {
-                painter.rect_filled(cell_rect, 0.0, background);
             }
             if cell.style.invisible {
                 continue;
@@ -551,8 +620,24 @@ fn paint(
                     tint,
                 );
             } else if !cell.text.is_empty() {
+                let icon = terminal_icon(&cell.text);
+                let ink_rect = if icon {
+                    Rect::from_min_size(
+                        pos,
+                        Vec2::new(
+                            cell_size.x * icon_columns(cell, row.get(col + 1)),
+                            cell_size.y,
+                        ),
+                    )
+                } else {
+                    cell_rect
+                };
                 let format = egui::TextFormat {
-                    font_id: font.clone(),
+                    font_id: if icon {
+                        crate::theme::terminal_icon_font(font.size * 1.5)
+                    } else {
+                        font.clone()
+                    },
                     color: foreground,
                     italics: cell.style.italic,
                     ..Default::default()
@@ -561,14 +646,18 @@ fn paint(
                     cell.text.clone(),
                     format,
                 ));
-                let (galley, offset) = glyphs.fit(galley, cell_rect.size(), cell.style.bold);
-                painter.with_clip_rect(cell_rect.intersect(rect)).galley(
+                let (galley, offset) = if icon {
+                    glyphs.fit_kind(galley, ink_rect.size(), cell.style.bold, true)
+                } else {
+                    glyphs.fit(galley, ink_rect.size(), cell.style.bold)
+                };
+                painter.with_clip_rect(ink_rect.intersect(rect)).galley(
                     pos + offset,
                     galley.clone(),
                     foreground,
                 );
                 if cell.style.bold {
-                    painter.with_clip_rect(cell_rect.intersect(rect)).galley(
+                    painter.with_clip_rect(ink_rect.intersect(rect)).galley(
                         pos + offset + Vec2::new(0.4, 0.0),
                         galley,
                         foreground,
@@ -651,6 +740,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn icon_ink_is_normalized_without_overwriting_adjacent_text() {
+        for bold in [false, true] {
+            for width in [8.0, 16.0] {
+                let bounds = Rect::from_min_max(Pos2::new(2.0, 4.0), Pos2::new(7.0, 10.0));
+                let size = Vec2::new(width, 16.0);
+                let (scale, offset) = icon_placement(bounds, size, bold);
+                let ink = (bounds * scale).translate(offset);
+                assert!(
+                    Rect::from_min_size(Pos2::ZERO, size)
+                        .expand(0.001)
+                        .contains_rect(ink)
+                );
+                assert!(ink.height() > bounds.height());
+                if width == 16.0 {
+                    assert!((ink.height() - 12.0).abs() < 0.01);
+                }
+            }
+        }
+        assert!(terminal_icon("\u{f03d3}"));
+        assert!(terminal_icon("\u{f418}"));
+        assert!(!terminal_icon("\u{e0b0}"));
+        assert!(!terminal_icon("abc"));
+        let cell = super::super::engine::Cell {
+            text: "\u{f03d3}".into(),
+            width: 1,
+            foreground: Color32::WHITE,
+            background: Color32::BLACK,
+            style: Default::default(),
+        };
+        let mut next = cell.clone();
+        next.text = " ".into();
+        assert_eq!(icon_columns(&cell, Some(&next)), 2.0);
+        next.text = "x".into();
+        assert_eq!(icon_columns(&cell, Some(&next)), 1.0);
+        assert_eq!(icon_columns(&cell, None), 1.0);
+        next.text = " ".into();
+        next.background = Color32::RED;
+        assert_eq!(icon_columns(&cell, Some(&next)), 1.0);
+    }
+
+    #[test]
     #[ignore = "local font probe: requires installed FiraCode and Symbols Nerd Font Mono"]
     fn terminal_font_probe_installed_nerd_icons_have_ink_without_changing_ascii() {
         for name in [
@@ -689,9 +819,23 @@ mod tests {
                         }
                         let missing =
                             fonts.layout_no_wrap("\u{0378}".into(), font.clone(), Color32::WHITE);
-                        for c in ['\u{f120}', '\u{e0a0}', '\u{f07b}', '😀'] {
-                            let galley =
-                                fonts.layout_no_wrap(c.into(), font.clone(), Color32::WHITE);
+                        for c in ['\u{f418}', '\u{e7a8}', '\u{f03d3}', '\u{f03d7}'] {
+                            let galley = fonts.layout_no_wrap(
+                                c.into(),
+                                crate::theme::terminal_icon_font(font.size * 1.5),
+                                Color32::WHITE,
+                            );
+                            let (scale, offset) = icon_placement(
+                                galley.mesh_bounds,
+                                Vec2::new(width * 2.0, 16.0),
+                                true,
+                            );
+                            eprintln!(
+                                "{name} U+{:X} original={:?} fitted={:?}",
+                                c as u32,
+                                galley.mesh_bounds,
+                                (galley.mesh_bounds * scale).translate(offset)
+                            );
                             let uv = galley.rows[0].glyphs[0].uv_rect;
                             assert_ne!(uv, missing.rows[0].glyphs[0].uv_rect, "missing {c}");
                             let atlas = fonts.image();
@@ -812,6 +956,12 @@ mod tests {
                     ));
                 }
                 assert_eq!(cache.entries.len(), 1);
+                let icon = cache.fit_kind(source.clone(), size, false, true).0;
+                assert!(!Arc::ptr_eq(&first, &icon));
+                assert!(Arc::ptr_eq(
+                    &icon,
+                    &cache.fit_kind(source.clone(), size, false, true).0
+                ));
                 let bold = cache.fit(source.clone(), size, true).0;
                 assert!(!Arc::ptr_eq(&first, &bold));
                 let recolored =

@@ -21,6 +21,25 @@ use std::{
 pub(crate) mod repository;
 pub(crate) mod view;
 
+#[derive(Debug, Clone)]
+pub(crate) struct RevertRequest {
+    workspace: PathBuf,
+    paths: Vec<PathBuf>,
+}
+
+impl RevertRequest {
+    pub(crate) fn message(&self) -> String {
+        let target = if self.paths.len() == 1 {
+            self.paths[0].display().to_string()
+        } else {
+            format!("{} files", self.paths.len())
+        };
+        format!(
+            "Discard unstaged changes in {target}?\n\nTracked files will be restored from the staging area. Unstaged new files will be deleted. Staged changes are kept. This cannot be undone."
+        )
+    }
+}
+
 impl DiffKind {
     fn description(self) -> &'static str {
         match self {
@@ -81,6 +100,7 @@ pub(crate) struct GitPanel {
     diff: Option<DiffView>,
     refresh_requested: bool,
     pending_operation: Option<Operation>,
+    revert_request: Option<RevertRequest>,
     background_refresh: bool,
     status_changed: bool,
     view_cache: view::Cache,
@@ -104,6 +124,7 @@ impl Default for GitPanel {
             diff: None,
             refresh_requested: false,
             pending_operation: None,
+            revert_request: None,
             background_refresh: false,
             status_changed: false,
             view_cache: view::Cache::default(),
@@ -144,6 +165,7 @@ impl GitPanel {
             self.message.clear();
             self.diff = None;
             self.pending_operation = None;
+            self.revert_request = None;
             if !self.job.is_running() {
                 self.start_operation(context, Operation::Refresh, true);
             } else {
@@ -209,8 +231,11 @@ impl GitPanel {
             Ok(match result {
                 Ok(result) => result,
                 Err(error) => ResultData {
+                    snapshot: Repository::new(&workspace)
+                        .execute(Operation::Refresh)
+                        .map(|result| result.snapshot)
+                        .unwrap_or_default(),
                     workspace,
-                    snapshot: Snapshot::default(),
                     output: format!("Error: {error}"),
                     committed: false,
                     failed: true,
@@ -243,7 +268,7 @@ impl GitPanel {
                 self.status_changed |= snapshot_changed;
                 self.background_refresh = false;
                 self.failed = result.failed;
-                if !self.failed {
+                if !self.failed || result.snapshot.initialized {
                     self.snapshot = result.snapshot;
                 }
                 if let Some(result) = result.diff
@@ -295,6 +320,7 @@ impl GitPanel {
         ui: &mut egui::Ui,
         dirty: bool,
         diff_style: GitDiffStyle,
+        toolbar_style: crate::settings::ToolbarStyle,
     ) -> view::Output {
         // The app update loop polls independently of whether this body is open.
         // The view receives immutable model state and cannot start repository IO.
@@ -306,6 +332,7 @@ impl GitPanel {
         let output = view::show_panel(
             ui,
             view::Input {
+                toolbar_style,
                 snapshot: &self.snapshot,
                 message: &self.message,
                 commit_message: &self.commit_message,
@@ -335,9 +362,42 @@ impl GitPanel {
             diff.reveal = false;
         }
         if let Some(operation) = output.operation {
-            self.start(context, operation);
+            if let Operation::Revert(paths) = operation {
+                self.revert_request = Some(RevertRequest {
+                    workspace: self.workspace.clone(),
+                    paths,
+                });
+            } else {
+                self.start(context, operation);
+            }
             context.request_repaint();
         }
+    }
+
+    pub(crate) fn take_revert_request(&mut self) -> Option<RevertRequest> {
+        self.revert_request.take()
+    }
+
+    pub(crate) fn confirm_revert(
+        &mut self,
+        context: &egui::Context,
+        request: RevertRequest,
+        workspace: &Path,
+        dirty: bool,
+    ) {
+        if request.workspace != workspace || request.workspace != self.workspace || dirty {
+            self.failed = true;
+            self.message =
+                "The workspace or editor changes changed; review them before reverting".into();
+            return;
+        }
+        if (self.job.is_running() && !self.background_refresh) || self.pending_operation.is_some() {
+            self.failed = true;
+            self.message =
+                "Another Git operation is running; review the changes before reverting".into();
+            return;
+        }
+        self.start(context, Operation::Revert(request.paths));
     }
 
     pub(crate) fn snapshot_fixture() -> Self {
@@ -410,8 +470,120 @@ mod tests {
     };
 
     fn show_panel(ui: &mut egui::Ui, panel: &mut GitPanel) {
-        let output = panel.show(ui, false, crate::settings::GitDiffStyle::Unified);
+        let output = panel.show(
+            ui,
+            false,
+            crate::settings::GitDiffStyle::Unified,
+            crate::settings::ToolbarStyle::Icons,
+        );
         panel.apply_view_output(ui.ctx(), output);
+    }
+
+    #[test]
+    fn revert_buttons_request_confirmation_and_only_confirmed_requests_start_work() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        perform(root, Operation::Init).unwrap();
+        fs::write(root.join("new.typ"), "new file").unwrap();
+        let panel = GitPanel {
+            workspace: root.into(),
+            snapshot: snapshot(root).unwrap(),
+            ..Default::default()
+        };
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(560.0, 800.0))
+            .build_ui_state(
+                |ui, panel| {
+                    panel.poll(ui.ctx(), root);
+                    show_panel(ui, panel);
+                },
+                panel,
+            );
+        harness.run();
+        for label in ["Revert", "Revert all"] {
+            harness.get_by_label(label).click();
+            harness.run();
+            assert!(!harness.state().job.is_running());
+            let request = harness.state_mut().take_revert_request().unwrap();
+            assert_eq!(request.paths, [PathBuf::from("new.typ")]);
+            assert!(
+                request
+                    .message()
+                    .contains("Unstaged new files will be deleted")
+            );
+            assert!(root.join("new.typ").exists());
+            // Cancelling drops the request without starting a worker.
+            drop(request);
+        }
+        harness.get_by_label("Revert all").click();
+        harness.run();
+        let request = harness.state_mut().take_revert_request().unwrap();
+        harness
+            .state_mut()
+            .confirm_revert(&egui::Context::default(), request, root, false);
+        finish_ui_job(&mut harness);
+        assert!(!root.join("new.typ").exists());
+        assert!(harness.state().snapshot.entries.is_empty());
+    }
+
+    #[test]
+    fn revert_confirmation_rejects_workspace_switches_and_unsaved_edits() {
+        for (workspace, dirty) in [
+            ("/another-workspace", false),
+            ("/Projects/research-paper", true),
+        ] {
+            let mut panel = GitPanel::snapshot_fixture();
+            let request = RevertRequest {
+                workspace: panel.workspace.clone(),
+                paths: vec!["main.typ".into()],
+            };
+            panel.confirm_revert(
+                &egui::Context::default(),
+                request,
+                Path::new(workspace),
+                dirty,
+            );
+            assert!(panel.failed && !panel.job.is_running());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_combined_commit_keeps_message_and_refreshes_the_staged_selection() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        perform(root, Operation::Init).unwrap();
+        configure_identity(root);
+        fs::write(root.join("new.typ"), "new file").unwrap();
+        let hook = root.join(".git/hooks/pre-commit");
+        fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+        let context = egui::Context::default();
+        let mut panel = GitPanel {
+            workspace: root.into(),
+            snapshot: snapshot(root).unwrap(),
+            commit_message: "Keep my message".into(),
+            ..Default::default()
+        };
+        panel.start(
+            &context,
+            Operation::StageAllAndCommit(panel.commit_message.clone()),
+        );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while panel.job.is_running() {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(10));
+            panel.poll(&context, root);
+        }
+        assert!(panel.failed);
+        assert_eq!(panel.commit_message, "Keep my message");
+        assert_eq!(panel.snapshot.entries.staged, 1);
+        assert_eq!(
+            fs::read_to_string(root.join("new.typ")).unwrap(),
+            "new file"
+        );
     }
 
     #[test]
@@ -1107,10 +1279,14 @@ mod tests {
             );
             assert!(summary.left() >= 0.0 && summary.right() <= width);
             let mut columns = Vec::new();
-            for labels in [["Diff", "Staged diff"], ["Stage", "Unstage"]] {
-                let rects = harness
-                    .get_all_by_label(labels[0])
-                    .chain(harness.get_all_by_label(labels[1]))
+            for labels in [
+                &["Revert"][..],
+                &["Diff", "Staged diff"],
+                &["Stage", "Unstage"],
+            ] {
+                let rects = labels
+                    .iter()
+                    .flat_map(|label| harness.get_all_by_label(label))
                     .map(|node| node.rect())
                     .collect::<Vec<_>>();
                 assert_eq!(rects.len(), 4, "{labels:?}");

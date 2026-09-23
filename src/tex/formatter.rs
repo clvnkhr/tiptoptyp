@@ -35,9 +35,9 @@ impl Job {
                 .filter(|p| p.is_dir())
                 .unwrap_or(&snapshot.root);
             let mut command = Command::new(&snapshot.tools.tex_fmt.program);
+            command.args(["--stdin", "--quiet"]).current_dir(cwd);
+            snapshot.tools.tex_fmt.command.apply(&mut command)?;
             command
-                .args(["--stdin", "--quiet"])
-                .current_dir(cwd)
                 .stdin(File::open(input)?)
                 .stdout(File::create(&output)?)
                 .stderr(Stdio::from(File::create(&error)?));

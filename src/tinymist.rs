@@ -190,6 +190,7 @@ impl PreviewOptions {
 /// Configuration for one Tinymist process.
 #[derive(Debug, Clone)]
 pub struct TinymistConfig {
+    pub(crate) command: crate::tool_command::CommandCustomization,
     pub workspace_root: PathBuf,
     pub preview: PreviewOptions,
     /// Whether this LSP session should also launch Tinymist's interactive
@@ -208,6 +209,7 @@ pub struct TinymistConfig {
 impl TinymistConfig {
     pub fn new(workspace_root: impl Into<PathBuf>) -> Self {
         Self {
+            command: Default::default(),
             workspace_root: workspace_root.into(),
             preview: PreviewOptions::default(),
             start_preview: true,
@@ -1031,9 +1033,12 @@ impl Session {
             .to_owned();
 
         let mut command = Command::new(&config.program);
+        command.args(&config.arguments).current_dir(&root);
+        config
+            .command
+            .apply(&mut command)
+            .map_err(|e| e.to_string())?;
         command
-            .args(&config.arguments)
-            .current_dir(&root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

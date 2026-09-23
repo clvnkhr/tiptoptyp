@@ -194,6 +194,8 @@ mod tests {
                 },
             },
             typst_tool: ToolResolution {
+                bundled_program: None,
+                command: Default::default(),
                 kind: ToolKind::Typst,
                 program: "typst".into(),
                 origin: ToolOrigin::Bundled,
@@ -203,6 +205,8 @@ mod tests {
                 &crate::tex::settings::TexSettings::default(),
             ),
             tinymist_tool: ToolResolution {
+                bundled_program: None,
+                command: Default::default(),
                 kind: ToolKind::Tinymist,
                 program: "tinymist".into(),
                 origin: ToolOrigin::Bundled,

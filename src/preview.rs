@@ -895,6 +895,13 @@ impl PreviewController {
         interactive_source_supported: bool,
         platform_supported: bool,
     ) -> PreviewBackend {
+        if !interactive_source_supported {
+            return if platform_supported {
+                PreviewBackend::PdfJs
+            } else {
+                PreviewBackend::Raster
+            };
+        }
         match self.requested_backend {
             PreviewPreference::Native => PreviewBackend::Raster,
             PreviewPreference::PdfJs => PreviewBackend::PdfJs,

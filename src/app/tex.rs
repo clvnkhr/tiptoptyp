@@ -140,7 +140,7 @@ impl EditorApp {
                                     }),
                             );
                             diagnostic.location = location;
-                            diagnostic.details.push(provider.label().into());
+                            diagnostic.provider = Some(provider.label().into());
                             diagnostic
                         })
                         .collect();

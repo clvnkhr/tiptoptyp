@@ -62,10 +62,14 @@ pub(crate) fn show_chunk(
     shortcuts: &ShortcutBindings,
     busy: bool,
     diff_style: GitDiffStyle,
+    toolbar_style: crate::settings::ToolbarStyle,
 ) -> Option<Action> {
     let mut selected = None;
     ui.horizontal(|ui| {
-        ui.strong("Changes since last commit");
+        ui.add_sized(
+            [0.0, ui.spacing().interact_size.y],
+            egui::Label::new(egui::RichText::new("Changes since last commit").strong()),
+        );
         ui.separator();
         show_change_counts(
             ui,
@@ -74,7 +78,24 @@ pub(crate) fn show_chunk(
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             for action in HunkAction::ALL.into_iter().rev() {
                 let shortcut = shortcuts.display(action.shortcut()).unwrap_or_default();
-                let response = ui.add_enabled(!busy, egui::Button::new(action.label()).small());
+                use crate::app::icons::{self, UiIcon};
+                let icon = match action {
+                    HunkAction::Stage => UiIcon::Stage,
+                    HunkAction::Unstage => UiIcon::Unstage,
+                    HunkAction::Revert => UiIcon::Revert,
+                    HunkAction::Previous => UiIcon::Previous,
+                    HunkAction::Next => UiIcon::Next,
+                };
+                let response = icons::toolbar_button(
+                    ui,
+                    !busy,
+                    false,
+                    icon,
+                    action.label(),
+                    toolbar_style,
+                    false,
+                )
+                .on_hover_text(action.label());
                 response.widget_info(|| {
                     egui::WidgetInfo::labeled(egui::WidgetType::Button, !busy, action.label())
                 });
@@ -146,9 +167,14 @@ mod tests {
             .with_size(egui::vec2(620.0, 260.0))
             .build_ui_state(
                 move |ui, selected| {
-                    if let Some(action) =
-                        show_chunk(ui, &chunk, &shortcuts, false, GitDiffStyle::Unified)
-                    {
+                    if let Some(action) = show_chunk(
+                        ui,
+                        &chunk,
+                        &shortcuts,
+                        false,
+                        GitDiffStyle::Unified,
+                        crate::settings::ToolbarStyle::Icons,
+                    ) {
                         *selected = Some(action);
                     }
                 },

@@ -84,6 +84,33 @@ still applies. In MiTeX mode, canonical changes pass through the checked
 projection before committing displayed text; unrepresentable edits fail
 without changing the buffer. Ordinary tabs bypass that translation.
 
+## Repository commit and revert controls (todos 313–314)
+
+When nothing is staged and working changes exist, the commit button reads
+**Stage all and commit**. It stages eligible files and commits them with the
+entered message in one background operation. If anything is already staged,
+**Commit staged changes** commits only that selection. The combined action
+rechecks the staging area under the repository lock and asks for another review
+if a staged selection appeared in the meantime. A failed commit keeps the message
+and refreshes the staging display so it can be corrected and retried.
+
+Each change row has **Revert**, and **Revert all** covers the current unstaged
+changes. Both open the application's confirmation dialog. Confirmation restores
+tracked files from the index and deletes unstaged new files; it preserves staged
+content, ignored files and `.tiptoptyp` artifacts. It does not undo a Git commit.
+Only the paths included in the confirmation are eligible, so files added while
+the dialog is open are left alone. Conflicts and nested untracked repositories
+require separate handling. These disk operations cannot be undone through the
+editor's Undo command; gutter hunk reverts retain their existing undo behavior.
+
+Unsaved edits in any tab of the owning window disable staging, committing and
+reverting. Confirmation also rechecks the workspace and unsaved state. Work runs
+through the existing exclusive Git worker and repository lease. Eligibility
+counts are cached with status, and path lists are built only on a click; the
+unsaved guard reads tab metadata without file IO or source copies. No new idle
+repaints or background polling are introduced, and no material performance impact
+is expected.
+
 ## Verification
 
 Deterministic tests cover independent buffer/history/cursor state, preview

@@ -3,7 +3,7 @@
 use super::settings_controls::{
     FontPickerSelection, color_theme_choice_label, fallback_notice, settings_inline_value,
     settings_value_row, show_font_family_picker, show_font_weight_control,
-    show_service_status_chip, show_status_chip, show_tool_status_chip, tool_preference_editor,
+    show_service_status_chip, show_status_chip, tool_preference_editor,
 };
 use super::{
     SettingsSection, SettingsTarget, ToolPickerTarget, settings_heading, settings_hover_text,
@@ -464,6 +464,17 @@ impl SettingsPanel<'_> {
                         SettingsTarget::FixedTabWidth.label(),
                     );
                 });
+                settings_target_anchor(ui, SettingsTarget::ToolbarStyle, &mut settings_scroll_target);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(SettingsTarget::ToolbarStyle.label());
+                    egui::ComboBox::from_id_salt("toolbar-style")
+                        .selected_text(edited.toolbar_style.label())
+                        .show_ui(ui, |ui| {
+                            for style in crate::settings::ToolbarStyle::ALL {
+                                ui.selectable_value(&mut edited.toolbar_style, style, style.label());
+                            }
+                        });
+                });
                 settings_target_anchor(ui, SettingsTarget::UiFont, &mut settings_scroll_target);
                 settings_target_anchor(
                     ui,
@@ -641,6 +652,7 @@ impl SettingsPanel<'_> {
                     .size(theme::TYPE.supporting)
                     .color(ui.visuals().weak_text_color()),
                 );
+                ui.strong("Typst tools");
                 let staged_typst = self.typst_tool;
                 settings_target_anchor(
                     ui,
@@ -682,10 +694,10 @@ impl SettingsPanel<'_> {
                 {
                     fallback_notice(ui, "Binary fallback active", reason);
                 }
-                let reveal_tex = settings_scroll_target == Some(SettingsTarget::TexServices);
                 settings_target_anchor(ui, SettingsTarget::TexServices, &mut settings_scroll_target);
                 ui.add_space(theme::SPACE.small);
-                egui::CollapsingHeader::new("TeX tools").open(reveal_tex.then_some(true)).show(ui, |ui| {
+                ui.scope(|ui| {
+                    ui.strong("TeX tools");
                     show_tex_preferences(ui, &mut edited.tex);
                     for (kind, preference, resolution) in [
                         (crate::toolchain::ToolKind::Tectonic, &mut edited.tex.tectonic, &self.tex_tools.tectonic),
@@ -740,8 +752,8 @@ impl SettingsPanel<'_> {
                         )
                         .on_hover_text(match preference {
                             PreviewPreference::Interactive => "Typst uses Tinymist; opened PDFs and preview failures use PDF.js.",
-                            PreviewPreference::PdfJs => "Use PDF.js for compiled previews and opened PDFs.",
-                            PreviewPreference::Native => "Scheduled for removal. Prefer PDF.js; raster remains an explicit option for now.",
+                            PreviewPreference::PdfJs => "Use PDF.js for compiled Typst previews. TeX and opened PDFs always use PDF.js.",
+                            PreviewPreference::Native => "Use the built-in Rust raster renderer for Typst previews. Scheduled for removal; prefer PDF.js.",
                         });
                     }
                     ui.separator();
@@ -807,20 +819,10 @@ impl SettingsPanel<'_> {
                 ui.horizontal_wrapped(|ui| {
                     let syntax_color = success_color(ui.ctx());
                     if deterministic_settings {
-                        show_status_chip(ui, "Typst", "Bundled", "Packaged compiler", syntax_color);
-                        show_status_chip(
-                            ui,
-                            "Tinymist",
-                            "Bundled",
-                            "Packaged language server",
-                            syntax_color,
-                        );
                         for name in ["Editing", "LSP", "Interactive", "PDF", "Raster", "Links"] {
                             show_status_chip(ui, name, "Ready", "Ready", syntax_color);
                         }
                     } else {
-                        show_tool_status_chip(ui, "Typst", self.typst_tool);
-                        show_tool_status_chip(ui, "Tinymist", self.tinymist_tool);
                         let capabilities = &self.status.capabilities;
                         show_service_status_chip(ui, "Editing", &capabilities.editing);
                         show_service_status_chip(ui, "LSP", &capabilities.lsp);
@@ -1205,12 +1207,16 @@ mod tests {
             },
         };
         let typst = ToolResolution {
+            bundled_program: None,
+            command: Default::default(),
             kind: ToolKind::Typst,
             program: "typst".into(),
             origin: ToolOrigin::Bundled,
             fallback_reason: None,
         };
         let tinymist = ToolResolution {
+            bundled_program: None,
+            command: Default::default(),
             kind: ToolKind::Tinymist,
             program: "tinymist".into(),
             origin: ToolOrigin::Bundled,
@@ -1250,7 +1256,9 @@ mod tests {
                                 lsp: ServiceState::Failed("failure".into()),
                                 interactive_preview: ServiceState::Failed("failure".into()),
                                 pdf_generation: ServiceState::Ready("ready".into()),
-                                rasterization: ServiceState::Failed("pdftoppm unavailable".into()),
+                                rasterization: ServiceState::Failed(
+                                    "PDF page decoding failed".into(),
+                                ),
                                 link_extraction: ServiceState::Ready("ready".into()),
                             },
                         },
@@ -1275,7 +1283,9 @@ mod tests {
             harness.state().2.is_empty(),
             "idle Settings must not emit updates"
         );
-        harness.get_by_label("Follow edits in preview").click();
+        harness
+            .get_by_label("Follow Typst edits in preview")
+            .click();
         harness.run();
         assert!(harness.state().1.preview_follow_edits);
         assert!(harness.state().2.iter().any(|action| {

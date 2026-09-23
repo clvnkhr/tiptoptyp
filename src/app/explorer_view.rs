@@ -55,7 +55,11 @@ pub(super) fn show(
     mut show_git: impl FnMut(&mut egui::Ui) -> crate::git::view::Output,
 ) -> Output {
     let explorer_rect = ui.max_rect();
-    let file_drag_hovered = super::file_drag_hovered_over(ui.ctx(), explorer_rect);
+    let file_drag_hovered = super::file_drag_hovered_over(ui.ctx(), explorer_rect)
+        || ui.ctx().data(|data| {
+            data.get_temp::<bool>(egui::Id::new("qa-explorer-drop"))
+                .unwrap_or(false)
+        });
     offer_file_drop_target(
         ui,
         explorer_rect,
@@ -226,7 +230,11 @@ pub(super) fn show(
                             selected,
                         );
                     }
-                    if let Some(selected) = state.selected_path().or(active) {
+                    if let Some(selected) = state
+                        .selected_path()
+                        .or(active)
+                        .filter(|path| path.starts_with(&snapshot.root))
+                    {
                         // Keep the document shown in the editor selected so the
                         // entire explorer row gets the same kind of tint as the
                         // editor's active line. A completed file import may
@@ -299,7 +307,7 @@ pub(super) fn show(
                         ui.label(RichText::new("No matching files").weak());
                     }
                 } else {
-                    ui.label(RichText::new("No project folder").weak());
+                    ui.label(RichText::new("Loading workspace…").weak());
                 }
                 if let Some(error) = input.error {
                     ui.colored_label(error_color(ui.ctx()), error);
@@ -362,10 +370,12 @@ fn paint_file_drop_hint(ui: &egui::Ui) {
         StrokeKind::Inside,
     );
 
-    let banner = Rect::from_center_size(
-        rect.center(),
-        Vec2::new((rect.width() - 16.0).max(1.0), 40.0_f32.min(rect.height())),
+    let text = painter.layout_no_wrap(
+        "Drop to add file".into(),
+        theme::supporting_font(),
+        ui.visuals().strong_text_color(),
     );
+    let banner = file_drop_hint_rect(rect, text.size());
     painter.rect_filled(banner, theme::RADIUS.card as f32, ui.visuals().panel_fill);
     painter.rect_stroke(
         banner,
@@ -373,13 +383,18 @@ fn paint_file_drop_hint(ui: &egui::Ui) {
         Stroke::new(1.5, accent),
         StrokeKind::Inside,
     );
-    painter.text(
-        banner.center(),
-        egui::Align2::CENTER_CENTER,
-        "Drop to add file",
-        theme::supporting_font(),
+    painter.with_clip_rect(banner).galley(
+        banner.center() - text.size() * 0.5,
+        text,
         ui.visuals().strong_text_color(),
     );
+}
+
+pub(super) fn file_drop_hint_rect(available: Rect, text_size: Vec2) -> Rect {
+    Rect::from_center_size(
+        available.center(),
+        (text_size + Vec2::new(16.0, 12.0)).min(available.size()),
+    )
 }
 
 pub(super) fn add_workspace_nodes(
@@ -1286,7 +1301,9 @@ pub(super) fn paint_tree_icon(ui: &mut egui::Ui, folder: bool) {
     let rect = ui.available_rect_before_wrap().shrink(theme::SPACE.tight);
     let size = METRICS.explorer.tree_icon_size.min(rect.size());
     let rect = Rect::from_center_size(rect.center(), size);
-    let color = ui.visuals().widgets.noninteractive.fg_stroke.color;
+    // The tree derives its selected foreground from selection.stroke, which
+    // is transparent for our borderless rows. Read the theme foreground instead.
+    let color = ui.ctx().style_of(ui.ctx().theme()).visuals.text_color();
     let stroke = Stroke::new(METRICS.explorer.tree_icon_stroke, color);
     if folder {
         let body = Rect::from_min_max(

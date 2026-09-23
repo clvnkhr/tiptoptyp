@@ -1,19 +1,12 @@
 //! Cached application capabilities derived from resolved tools and live services.
 //!
-//! Optional host-tool discovery is deliberately confined to construction and
-//! explicit refresh. Deriving or reading a snapshot performs no filesystem,
-//! environment or process work, so Settings may request it during rendering.
+//! PDF parsing and rendering are built in. Deriving or reading a snapshot
+//! performs no filesystem, environment or process work.
 
 use crate::{
-    document::DocumentKind,
-    language_support::LanguageSupport,
-    preview::ServiceState,
-    toolchain::{PathProgramResolution, ToolResolution, resolve_path_program},
+    document::DocumentKind, language_support::LanguageSupport, preview::ServiceState,
+    toolchain::ToolResolution,
 };
-
-const RASTERIZER: &str = "pdftoppm";
-const PDF_INSPECTOR: &str = "pdfinfo";
-const LINK_EXTRACTOR: &str = "pdftohtml";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CapabilitySnapshot {
@@ -41,9 +34,6 @@ pub(crate) struct CapabilityInputs {
 
 #[derive(Debug)]
 pub(crate) struct CapabilityCache {
-    rasterizer: PathProgramResolution,
-    pdf_inspector: PathProgramResolution,
-    link_extractor: PathProgramResolution,
     cached: Option<(CapabilityInputs, CapabilitySnapshot)>,
     #[cfg(test)]
     derivations: usize,
@@ -51,37 +41,18 @@ pub(crate) struct CapabilityCache {
 
 impl CapabilityCache {
     pub(crate) fn discover() -> Self {
-        Self::discover_with(resolve_path_program)
-    }
-
-    fn discover_with(mut resolve: impl FnMut(&'static str) -> PathProgramResolution) -> Self {
         Self {
-            rasterizer: resolve(RASTERIZER),
-            pdf_inspector: resolve(PDF_INSPECTOR),
-            link_extractor: resolve(LINK_EXTRACTOR),
             cached: None,
             #[cfg(test)]
             derivations: 0,
         }
     }
-
-    /// Invalidates derived state without repeating host-tool discovery.
     pub(crate) fn invalidate(&mut self) {
         self.cached = None;
     }
-
-    /// Repeats optional host-tool discovery only for an explicit tool refresh.
     pub(crate) fn refresh_tools(&mut self) {
-        self.refresh_with(resolve_path_program);
-    }
-
-    fn refresh_with(&mut self, mut resolve: impl FnMut(&'static str) -> PathProgramResolution) {
-        self.rasterizer = resolve(RASTERIZER);
-        self.pdf_inspector = resolve(PDF_INSPECTOR);
-        self.link_extractor = resolve(LINK_EXTRACTOR);
         self.invalidate();
     }
-
     pub(crate) fn snapshot(&mut self, inputs: CapabilityInputs) -> CapabilitySnapshot {
         if let Some((cached_inputs, snapshot)) = self.cached.as_ref()
             && cached_inputs == &inputs
@@ -89,12 +60,7 @@ impl CapabilityCache {
             return snapshot.clone();
         }
 
-        let snapshot = derive_snapshot(
-            &inputs,
-            &self.rasterizer,
-            &self.pdf_inspector,
-            &self.link_extractor,
-        );
+        let snapshot = derive_snapshot(&inputs);
         #[cfg(test)]
         {
             self.derivations += 1;
@@ -104,12 +70,7 @@ impl CapabilityCache {
     }
 }
 
-fn derive_snapshot(
-    inputs: &CapabilityInputs,
-    rasterizer: &PathProgramResolution,
-    pdf_inspector: &PathProgramResolution,
-    link_extractor: &PathProgramResolution,
-) -> CapabilitySnapshot {
+fn derive_snapshot(inputs: &CapabilityInputs) -> CapabilitySnapshot {
     let editor = LanguageSupport::for_document(inputs.document);
     let preview = LanguageSupport::for_document(inputs.preview_document);
     CapabilitySnapshot {
@@ -149,24 +110,9 @@ fn derive_snapshot(
                 "No PDF build engine is implemented for this document type".to_owned(),
             )
         },
-        rasterization: require_pdf_preview_programs(
-            rasterizer,
-            pdf_inspector,
-            inputs.rasterization.clone(),
-        ),
-        link_extraction: path_program_state(link_extractor, "PDF link extraction"),
+        rasterization: inputs.rasterization.clone(),
+        link_extraction: ServiceState::Ready("Built-in Rust PDF link extraction".into()),
     }
-}
-
-fn require_pdf_preview_programs(
-    rasterizer: &PathProgramResolution,
-    inspector: &PathProgramResolution,
-    available_state: ServiceState,
-) -> ServiceState {
-    if !inspector.is_available() {
-        return missing_path_program(inspector, "PDF page inspection");
-    }
-    require_path_program(rasterizer, "PDF rasterization", available_state)
 }
 
 fn require_tool(
@@ -188,45 +134,16 @@ fn require_tool(
         ServiceState::Failed(format!("{capability} is unavailable: {reason}"))
     }
 }
-
-fn require_path_program(
-    resolution: &PathProgramResolution,
-    capability: &str,
-    available_state: ServiceState,
-) -> ServiceState {
-    if resolution.is_available() {
-        available_state
-    } else {
-        missing_path_program(resolution, capability)
-    }
-}
-
-fn path_program_state(resolution: &PathProgramResolution, capability: &str) -> ServiceState {
-    match resolution.program() {
-        Some(program) => ServiceState::Ready(format!(
-            "{capability} uses `{}` at {}",
-            resolution.binary(),
-            program.display()
-        )),
-        None => missing_path_program(resolution, capability),
-    }
-}
-
-fn missing_path_program(resolution: &PathProgramResolution, capability: &str) -> ServiceState {
-    ServiceState::Failed(format!(
-        "{capability} is unavailable because `{}` was not found on PATH",
-        resolution.binary()
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::toolchain::{ToolKind, ToolOrigin};
-    use std::{cell::Cell, path::PathBuf};
+    use std::path::PathBuf;
 
     fn tool(kind: ToolKind, available: bool) -> ToolResolution {
         ToolResolution {
+            bundled_program: None,
+            command: Default::default(),
             kind,
             program: PathBuf::from(kind.binary_name()),
             origin: if available {
@@ -254,106 +171,18 @@ mod tests {
     }
 
     #[test]
-    fn partial_availability_is_reported_per_capability() {
-        let mut cache = CapabilityCache::discover_with(|binary| match binary {
-            RASTERIZER => PathProgramResolution::from_program(binary, None),
-            PDF_INSPECTOR => {
-                PathProgramResolution::from_program(binary, Some(PathBuf::from("/tools/pdfinfo")))
-            }
-            LINK_EXTRACTOR => {
-                PathProgramResolution::from_program(binary, Some(PathBuf::from("/tools/pdftohtml")))
-            }
-            _ => unreachable!(),
-        });
-        let mut inputs = inputs();
-        inputs.build_tool = tool(ToolKind::Typst, false);
-        inputs.interactive_preview_supported = false;
-
-        let snapshot = cache.snapshot(inputs);
-
-        assert!(snapshot.editing.is_ready());
-        assert!(snapshot.lsp.is_ready());
-        assert!(matches!(
-            snapshot.interactive_preview,
-            ServiceState::Unsupported(_)
-        ));
-        assert!(matches!(snapshot.pdf_generation, ServiceState::Failed(_)));
-        assert!(matches!(snapshot.rasterization, ServiceState::Failed(_)));
-        assert!(snapshot.link_extraction.is_ready());
-    }
-
-    #[test]
-    fn snapshots_do_not_probe_and_invalidation_is_distinct_from_refresh() {
-        let probes = Cell::new(0);
-        let resolver = |binary| {
-            probes.set(probes.get() + 1);
-            PathProgramResolution::from_program(
-                binary,
-                Some(PathBuf::from(format!("/tools/{binary}"))),
-            )
-        };
-        let mut cache = CapabilityCache::discover_with(resolver);
-        assert_eq!(probes.get(), 3);
-
-        let current = inputs();
-        assert!(cache.snapshot(current.clone()).editing.is_ready());
-        assert!(cache.snapshot(current.clone()).editing.is_ready());
-        assert_eq!(cache.derivations, 1);
-        assert_eq!(probes.get(), 3, "render-time reads must not probe PATH");
-
-        cache.invalidate();
-        cache.snapshot(current.clone());
-        assert_eq!(cache.derivations, 2);
-        assert_eq!(
-            probes.get(),
-            3,
-            "preference invalidation is derivation-only"
-        );
-
-        cache.refresh_with(resolver);
-        assert_eq!(probes.get(), 6, "explicit refresh re-probes optional tools");
-        cache.snapshot(current);
-        assert_eq!(cache.derivations, 3);
-    }
-
-    #[test]
-    fn rasterization_requires_page_inspection_as_well_as_pixel_rendering() {
-        let mut cache = CapabilityCache::discover_with(|binary| {
-            PathProgramResolution::from_program(
-                binary,
-                (binary != PDF_INSPECTOR).then(|| PathBuf::from(format!("/tools/{binary}"))),
-            )
-        });
-
-        let snapshot = cache.snapshot(inputs());
-        assert!(matches!(snapshot.rasterization, ServiceState::Failed(_)));
-        assert!(snapshot.rasterization.detail().contains("pdfinfo"));
-    }
-
-    #[test]
-    fn tex_editing_and_a_pinned_typst_preview_have_independent_capabilities() {
-        let mut cache = CapabilityCache::discover_with(|binary| {
-            PathProgramResolution::from_program(binary, None)
-        });
+    fn built_in_pdf_capabilities_do_not_depend_on_path() {
+        let mut cache = CapabilityCache::discover();
         let mut input = inputs();
-        input.document = DocumentKind::Tex;
-        input.preview_document = DocumentKind::Tex;
-        let tex = cache.snapshot(input.clone());
-        assert!(tex.editing.is_ready());
-        assert!(tex.lsp.is_ready());
-        assert!(tex.pdf_generation.is_ready());
-        assert!(matches!(
-            tex.interactive_preview,
-            ServiceState::Unsupported(_)
-        ));
-        input.preview_document = DocumentKind::Typst;
-        let pinned = cache.snapshot(input);
-        assert!(pinned.lsp.is_ready());
-        assert!(pinned.pdf_generation.is_ready());
-        assert!(pinned.interactive_preview.is_ready());
-        assert_eq!(
-            cache.derivations, 2,
-            "document routing belongs in the cache key"
-        );
+        input.build_tool = tool(ToolKind::Typst, false);
+        let state = cache.snapshot(input.clone());
+        assert!(state.rasterization.is_ready());
+        assert!(state.link_extraction.is_ready());
+        assert!(matches!(state.pdf_generation, ServiceState::Failed(_)));
+        assert_eq!(cache.snapshot(input), state);
+        assert_eq!(cache.derivations, 1);
+        cache.refresh_tools();
+        cache.snapshot(inputs());
+        assert_eq!(cache.derivations, 2);
     }
 }

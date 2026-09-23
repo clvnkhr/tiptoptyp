@@ -66,7 +66,7 @@ impl EditorApp {
 
     pub(super) fn pdfjs_asset_requested(&self) -> bool {
         self.document().kind() == DocumentKind::Pdf
-            && self.settings.preview_preference != PreviewPreference::Native
+            && cfg!(any(target_os = "macos", target_os = "windows"))
     }
 
     pub(super) fn clear_pdfjs_views(&mut self) {

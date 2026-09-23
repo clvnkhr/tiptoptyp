@@ -13,6 +13,7 @@ use eframe::egui;
 use std::{ops::Range, path::PathBuf, sync::Arc};
 
 pub(super) struct Input<'a> {
+    pub(super) toolbar_style: crate::settings::ToolbarStyle,
     pub(super) snapshot: &'a Snapshot,
     pub(super) message: &'a str,
     pub(super) commit_message: &'a str,
@@ -665,15 +666,14 @@ pub(super) fn show_panel(ui: &mut egui::Ui, input: Input<'_>, cache: &mut Cache)
                                 Operation::Fetch,
                             ),
                         ] {
-                            if ui
-                                .add_enabled(!input.dirty, egui::Button::new(label))
+                            if action_button(ui, !input.dirty, label, input.toolbar_style)
                                 .on_hover_text(hint)
                                 .clicked()
                             {
                                 output.operation = Some(operation);
                             }
                         }
-                    } else if ui.button("Initialize repository").clicked() {
+                    } else if action_button(ui, true, "Initialize repository", input.toolbar_style).clicked() {
                         output.operation = Some(Operation::Init);
                     }
                     ui.with_layout(
@@ -692,7 +692,7 @@ pub(super) fn show_panel(ui: &mut egui::Ui, input: Input<'_>, cache: &mut Cache)
             if input.dirty {
                 ui.colored_label(
                     palette.warning,
-                    "Save editor changes before staging or committing. Git uses files on disk.",
+                    "Save editor changes before staging, committing or reverting. Git uses files on disk.",
                 );
             }
             ui.add_space(theme::SPACE.content);
@@ -706,20 +706,22 @@ pub(super) fn show_panel(ui: &mut egui::Ui, input: Input<'_>, cache: &mut Cache)
                             "{} files · {staged} staged",
                             input.snapshot.entries.len()
                         ));
+                        if action_button(ui, !input.dirty && input.snapshot.entries.revertible, "Revert all", input.toolbar_style)
+                        .on_hover_text("Discard unstaged changes and delete unstaged new files after confirmation. Keep staged changes.")
+                        .clicked() {
+                            output.operation = Some(Operation::Revert(input.snapshot.entries.iter()
+                                .filter(|entry| entry.revertible())
+                                .map(|entry| entry.path.clone()).collect()));
+                        }
                     });
                     right_action_row(ui, |ui| {
-                        if ui
-                            .add_enabled(staged > 0, egui::Button::new("Unstage all"))
+                        if action_button(ui, staged > 0, "Unstage all", input.toolbar_style)
                             .on_hover_text("Remove all changes from the staging area. Keep all working files and edits.")
                             .clicked()
                         {
                             output.operation = Some(Operation::UnstageAll);
                         }
-                        if ui
-                            .add_enabled(
-                                !input.dirty && input.snapshot.entries.stageable,
-                                egui::Button::new("Stage all"),
-                            )
+                        if action_button(ui, !input.dirty && input.snapshot.entries.stageable, "Stage all", input.toolbar_style)
                             .on_hover_text("Stage all working changes, excluding .tiptoptyp temporary files.")
                             .clicked()
                         {
@@ -736,7 +738,7 @@ pub(super) fn show_panel(ui: &mut egui::Ui, input: Input<'_>, cache: &mut Cache)
                             change_row_height(ui),
                             input.snapshot.entries.len(),
                             |ui, rows| {
-                                let buttons = ChangeButtons::for_ui(ui);
+                                let buttons = ChangeButtons::for_ui(ui, input.toolbar_style);
                                 for row in rows {
                                     let entry = &input.snapshot.entries[row];
                                     #[cfg(test)]
@@ -827,17 +829,15 @@ pub(super) fn show_panel(ui: &mut egui::Ui, input: Input<'_>, cache: &mut Cache)
                     output.commit_message = Some(cache.commit_message.clone());
                 }
                 right_action_row(ui, |ui| {
-                    if ui
-                        .add_enabled(
-                            !input.busy
-                                && !input.dirty
-                                && staged > 0
-                                && !cache.commit_message.trim().is_empty(),
-                            egui::Button::new("Commit staged changes"),
-                        )
+                    let stage_all = staged == 0 && input.snapshot.entries.stageable;
+                    if action_button(ui, !input.busy && !input.dirty && (staged > 0 || stage_all) && !cache.commit_message.trim().is_empty(), if stage_all { "Stage all and commit" } else { "Commit staged changes" }, input.toolbar_style)
                         .clicked()
                     {
-                        output.operation = Some(Operation::Commit(cache.commit_message.clone()));
+                        output.operation = Some(if stage_all {
+                            Operation::StageAllAndCommit(cache.commit_message.clone())
+                        } else {
+                            Operation::Commit(cache.commit_message.clone())
+                        });
                     }
                 });
                 egui::CollapsingHeader::new("Recent commits").show(ui, |ui| {
@@ -960,33 +960,12 @@ fn change_row_height(ui: &egui::Ui) -> f32 {
 }
 
 struct ChangeButtons {
-    widths: [f32; 2],
-    abbreviated: bool,
+    style: crate::settings::ToolbarStyle,
 }
-
 impl ChangeButtons {
-    fn for_ui(ui: &egui::Ui) -> Self {
-        let font = egui::TextStyle::Button.resolve(ui.style());
-        let width = |label: &str| {
-            ui.painter()
-                .layout_no_wrap(label.into(), font.clone(), ui.visuals().text_color())
-                .size()
-                .x
-                + ui.spacing().button_padding.x * 2.0
-        };
-        let full = [
-            width("Unstage").max(width("Stage")),
-            width("Staged diff").max(width("Diff")),
-        ];
-        let abbreviated = ui.available_width()
-            < full.iter().sum::<f32>() + 128.0 + 2.0 * ui.spacing().item_spacing.x;
-        let compact = width("S").max(width("U")).max(width("D")).max(24.0);
-        Self {
-            widths: if abbreviated { [compact; 2] } else { full },
-            abbreviated,
-        }
+    fn for_ui(_ui: &egui::Ui, style: crate::settings::ToolbarStyle) -> Self {
+        Self { style }
     }
-
     fn show(&self, ui: &mut egui::Ui, entry: &Entry, dirty: bool) -> Option<Operation> {
         let staged = entry.staged();
         let actions = if staged {
@@ -1021,15 +1000,14 @@ impl ChangeButtons {
             ]
         };
         let mut selected = None;
-        for ((label, enabled, hint, operation), width) in actions.into_iter().zip(self.widths) {
-            let text = if self.abbreviated { &label[..1] } else { label };
-            let response = ui.add_enabled(
-                enabled,
-                egui::Button::new(text).min_size(egui::vec2(width, 24.0)),
-            );
-            response.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label)
-            });
+        let revert = (
+            "Revert",
+            !dirty && entry.revertible(),
+            "Discard unstaged changes or delete this unstaged new file after confirmation. Keep staged changes.",
+            (|path| Operation::Revert(vec![path])) as fn(PathBuf) -> Operation,
+        );
+        for (label, enabled, hint, operation) in actions.into_iter().chain([revert]) {
+            let response = action_button(ui, enabled, label, self.style);
             if response.on_hover_text(format!("{label}: {hint}")).clicked() {
                 selected = Some(operation(entry.path.clone()));
             }
@@ -1052,10 +1030,150 @@ pub(crate) fn show_colored_diff(ui: &mut egui::Ui, content: &str, diff_style: Gi
     }
 }
 
+fn action_button(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    style: crate::settings::ToolbarStyle,
+) -> egui::Response {
+    use crate::app::icons::{self, UiIcon};
+    let icon = match label {
+        "Push" => UiIcon::Push,
+        "Pull" => UiIcon::Pull,
+        "Fetch" => UiIcon::Fetch,
+        "Initialize repository" => UiIcon::InitializeGit,
+        "Stage" | "Stage all" => UiIcon::Stage,
+        "Unstage" | "Unstage all" => UiIcon::Unstage,
+        "Revert" | "Revert all" => UiIcon::Revert,
+        "Diff" | "Staged diff" => UiIcon::Diff,
+        _ => UiIcon::Commit,
+    };
+    icons::toolbar_button(ui, enabled, false, icon, label, style, false).on_hover_text(label)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable as _};
+
+    #[test]
+    fn commit_action_uses_unstaged_fallback_but_respects_staged_dirty_busy_and_empty_states() {
+        for (staged, unstaged, dirty, busy, message, allowed) in [
+            (false, true, false, false, "Commit", true),
+            (true, true, false, false, "Commit", true),
+            (false, true, true, false, "Commit", false),
+            (false, true, false, true, "Commit", false),
+            (false, true, false, false, " \n", false),
+            (false, false, false, false, "Commit", false),
+        ] {
+            let snapshot = Snapshot {
+                initialized: true,
+                entries: if staged || unstaged {
+                    vec![Entry {
+                        path: "main.typ".into(),
+                        index: if staged { 'M' } else { ' ' },
+                        worktree: if unstaged { 'M' } else { ' ' },
+                    }]
+                    .into()
+                } else {
+                    Default::default()
+                },
+                ..Default::default()
+            };
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(560.0, 800.0))
+                .build_ui_state(
+                    move |ui, state: &mut (Cache, Option<Operation>)| {
+                        let output = show_panel(
+                            ui,
+                            Input {
+                                toolbar_style: crate::settings::ToolbarStyle::Icons,
+                                snapshot: &snapshot,
+                                message: "Ready",
+                                commit_message: message,
+                                failed: false,
+                                diff: None,
+                                diff_style: GitDiffStyle::Unified,
+                                busy,
+                                dirty,
+                            },
+                            &mut state.0,
+                        );
+                        if output.operation.is_some() {
+                            state.1 = output.operation;
+                        }
+                    },
+                    (Cache::default(), None),
+                );
+            harness.run_steps(3);
+            let label = if !staged && unstaged {
+                "Stage all and commit"
+            } else {
+                "Commit staged changes"
+            };
+            harness.get_by_label(label).click();
+            harness.run_steps(3);
+            assert_eq!(
+                harness.state().1.is_some(),
+                allowed,
+                "{staged}/{unstaged}/{dirty}/{busy}/{message:?}"
+            );
+            if allowed {
+                assert_eq!(
+                    matches!(harness.state().1, Some(Operation::StageAllAndCommit(_))),
+                    !staged
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn revert_controls_disable_while_busy_dirty_or_only_staged() {
+        for (dirty, busy, worktree) in [(true, false, 'M'), (false, true, 'M'), (false, false, ' ')]
+        {
+            let snapshot = Snapshot {
+                initialized: true,
+                entries: vec![Entry {
+                    path: "main.typ".into(),
+                    index: 'M',
+                    worktree,
+                }]
+                .into(),
+                ..Default::default()
+            };
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(560.0, 800.0))
+                .build_ui_state(
+                    move |ui, state: &mut (Cache, Option<Operation>)| {
+                        let output = show_panel(
+                            ui,
+                            Input {
+                                toolbar_style: crate::settings::ToolbarStyle::Icons,
+                                snapshot: &snapshot,
+                                message: "Ready",
+                                commit_message: "",
+                                failed: false,
+                                diff: None,
+                                diff_style: GitDiffStyle::Unified,
+                                busy,
+                                dirty,
+                            },
+                            &mut state.0,
+                        );
+                        if output.operation.is_some() {
+                            state.1 = output.operation;
+                        }
+                    },
+                    (Cache::default(), None),
+                );
+            harness.run_steps(3);
+            for label in ["Revert", "Revert all"] {
+                harness.get_by_label(label).click();
+                harness.run_steps(3);
+                assert!(harness.state().1.is_none());
+            }
+        }
+    }
 
     #[test]
     fn side_by_side_rows_pair_replacements_and_keep_git_headers_full_width() {
@@ -1153,6 +1271,7 @@ mod tests {
                     let output = show_panel(
                         ui,
                         Input {
+                            toolbar_style: crate::settings::ToolbarStyle::Icons,
                             snapshot: &snapshot,
                             message: "Ready",
                             commit_message: "",

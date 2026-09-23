@@ -487,6 +487,7 @@ impl EditorApp {
                                     ("warning", message.as_str(), warning_color(ui.ctx()))
                                 }
                                 AppModal::UninstallPackage { message, .. }
+                                | AppModal::RevertGit { message, .. }
                                 | AppModal::DeleteFile { message, .. }
                                 | AppModal::Overwrite { message, .. } => {
                                     ("warning", message.as_str(), warning_color(ui.ctx()))
@@ -534,6 +535,14 @@ impl EditorApp {
                                             choice = Some(AppModalChoice::Cancel);
                                         }
                                     }
+                                    AppModal::RevertGit { .. } => {
+                                        if ui.button("Revert").clicked() {
+                                            choice = Some(AppModalChoice::Primary);
+                                        }
+                                        if ui.button("Cancel").clicked() {
+                                            choice = Some(AppModalChoice::Cancel);
+                                        }
+                                    }
                                     AppModal::Overwrite { .. } => {
                                         if ui.button("Overwrite").clicked() {
                                             choice = Some(AppModalChoice::Primary);
@@ -565,6 +574,12 @@ impl EditorApp {
         context.send_viewport_cmd(egui::ViewportCommand::Focus);
         match (modal, choice) {
             (AppModal::Alert { .. }, _) => {}
+            (AppModal::RevertGit { request, .. }, AppModalChoice::Primary) => {
+                let dirty = self.tabs.has_unsaved_changes();
+                self.git
+                    .confirm_revert(context, request, &self.workspace_root, dirty);
+            }
+            (AppModal::RevertGit { .. }, _) => {}
             (AppModal::UninstallPackage { installation, .. }, AppModalChoice::Primary) => {
                 self.package_catalog_job.supersede();
                 if let Err(error) = self.package_uninstall.start_and_repaint(
@@ -1210,6 +1225,7 @@ impl EditorApp {
                                         &shortcuts,
                                         self.git_hunk_job.is_running(),
                                         self.settings.git_diff_style,
+                                        self.settings.toolbar_style,
                                     ) {
                                         action = Some(AppPopupAction::GitHunk(
                                             selected,

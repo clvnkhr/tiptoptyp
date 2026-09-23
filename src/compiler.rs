@@ -6,7 +6,7 @@ mod typst;
 use crate::{
     diagnostics::DiagnosticReport,
     language_support::BuildEngineKind,
-    pdf::{PdfDocumentCatalog, inspect_pdf_with_program},
+    pdf::{PdfDocumentCatalog, inspect_pdf},
     worker::{LatestReceiver, LatestSender, latest_channel},
 };
 use std::{
@@ -408,7 +408,6 @@ fn publish_engine_result(
                 rasterize,
                 shutdown,
                 latest_revision,
-                Path::new("pdfinfo"),
                 results,
                 context,
             );
@@ -437,7 +436,6 @@ fn publish_compiled_artifact(
     rasterize: bool,
     shutdown: &AtomicBool,
     latest_revision: &AtomicU64,
-    inspector: &Path,
     results: &ResultSender,
     context: &crate::worker::RepaintTarget,
 ) {
@@ -461,7 +459,7 @@ fn publish_compiled_artifact(
         return;
     }
 
-    let event = match inspect_pdf_with_program(&pdf, project_root, inspector, || {
+    let event = match inspect_pdf(&pdf, project_root, || {
         shutdown.load(Ordering::Acquire)
             || !results.is_current()
             || latest_revision.load(Ordering::Acquire) != key.revision
@@ -560,6 +558,7 @@ mod tests {
                     display_name: "paper.tex".to_owned(),
                 },
                 engine: EngineConfig::Typst(TypstOptions {
+                    command: Default::default(),
                     executable: "must-not-run".into(),
                     font_paths: Vec::new(),
                 }),
@@ -677,6 +676,7 @@ mod tests {
                             },
 
                             engine: EngineConfig::Typst(TypstOptions {
+                                command: Default::default(),
                                 executable: PathBuf::from("unused-typst"),
                                 font_paths: Vec::new(),
                             }),
@@ -729,7 +729,6 @@ mod tests {
             true,
             &shutdown,
             &latest_revision,
-            &project.path().join("missing-pdfinfo"),
             &result_tx,
             &crate::worker::RepaintTarget::test(),
         );
@@ -745,35 +744,20 @@ mod tests {
         assert!(matches!(
             &results[1].event,
             CompileEvent::RasterFailed { key, error }
-                if key == &artifact.key && error.contains("Poppler was not found")
+                if key == &artifact.key && error.contains("Could not read PDF")
         ));
     }
 
     #[cfg(unix)]
     #[test]
     fn a_new_artifact_can_recover_after_a_metadata_failure() {
-        use std::os::unix::fs::PermissionsExt;
-
         let project = tempfile::tempdir().unwrap();
-        let pdf_path = project.path().join("compiled.pdf");
-        fs::write(&pdf_path, b"%PDF-stable-snapshot").unwrap();
-        let inspector = project.path().join("fake-pdfinfo");
-        fs::write(
-            &inspector,
-            "#!/bin/sh\nprintf 'Pages: 1\\nPage 1 size: 1 x 0.5 pts\\n'\n",
-        )
-        .unwrap();
-        fs::set_permissions(&inspector, fs::Permissions::from_mode(0o700)).unwrap();
-
         let (result_tx, result_rx) = mpsc::channel();
         let shutdown = AtomicBool::new(false);
         let latest_revision = AtomicU64::new(7);
-        for (generation, program) in [
-            (11, project.path().join("missing-pdfinfo")),
-            (12, inspector),
-        ] {
+        for (generation, bytes) in [(11, b"invalid".to_vec()), (12, crate::pdf::test_pdf())] {
             publish_compiled_artifact(
-                Arc::from(fs::read(&pdf_path).unwrap()),
+                Arc::from(bytes),
                 project.path(),
                 DiagnosticReport::default(),
                 ArtifactKey {
@@ -784,7 +768,6 @@ mod tests {
                 true,
                 &shutdown,
                 &latest_revision,
-                &program,
                 &super::ResultSender::from(result_tx.clone()),
                 &crate::worker::RepaintTarget::test(),
             );
@@ -809,12 +792,12 @@ mod tests {
             CompileEvent::Catalog { key, catalog }
                 if key.generation == 12
                     && catalog.pages.len() == 1
-                    && catalog.pages[0].size == [2, 1]
+                    && catalog.pages[0].size == [400, 200]
         ));
     }
 
     #[test]
-    #[ignore = "requires typst, pdftoppm, and real filesystem notifications"]
+    #[ignore = "requires typst and real filesystem notifications"]
     fn persistent_watcher_compiles_errors_and_recovers() {
         let root = tempfile::tempdir().unwrap();
         let compiler = Compiler::new(crate::worker::RepaintTarget::test());
@@ -834,6 +817,7 @@ mod tests {
             },
 
             engine: EngineConfig::Typst(TypstOptions {
+                command: Default::default(),
                 executable: typst_executable.clone(),
                 font_paths: Vec::new(),
             }),

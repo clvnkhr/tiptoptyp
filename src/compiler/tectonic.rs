@@ -23,6 +23,7 @@ const BUILD_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TectonicOptions {
+    pub(crate) command: std::sync::Arc<crate::tool_command::CommandCustomization>,
     pub(crate) executable: PathBuf,
     pub(crate) only_cached: bool,
 }
@@ -174,13 +175,15 @@ impl Session {
             .arg(&output)
             .arg(mirror.path())
             .current_dir(mirror.path().parent().unwrap())
-            .env("NO_COLOR", "1")
-            .stdin(Stdio::null())
-            .stdout(logs.try_clone()?)
-            .stderr(logs);
+            .env("NO_COLOR", "1");
         if options.only_cached {
             command.arg("--only-cached");
         }
+        options.command.apply(&mut command)?;
+        command
+            .stdin(Stdio::null())
+            .stdout(logs.try_clone()?)
+            .stderr(logs);
         let child = crate::process::OwnedChild::spawn(&mut command)?;
         Ok(Self {
             child,
@@ -253,11 +256,12 @@ fn diagnostics(raw: &str, entry: &Path, source: &str) -> DiagnosticReport {
             break;
         }
         diagnostics.push(Diagnostic {
+            provider: Some("Tectonic".into()),
             severity,
             source: origin,
             location,
             message: headline.into(),
-            details: vec!["Tectonic".into()],
+            details: Vec::new(),
         });
     }
     // A fatal TeX error often has `l.12` on a later log line.
@@ -335,6 +339,7 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
         .unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
         let options = TectonicOptions {
+            command: Default::default(),
             executable,
             only_cached: true,
         };
@@ -427,6 +432,7 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
                 display_name: "main.tex".into(),
             },
             engine: super::super::EngineConfig::Tectonic(TectonicOptions {
+                command: Default::default(),
                 executable: crate::toolchain::resolve_tool(
                     crate::toolchain::ToolKind::Tectonic,
                     &crate::settings::ToolPreference::default(),

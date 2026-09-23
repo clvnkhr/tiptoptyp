@@ -92,8 +92,11 @@ impl PdfJsServer {
         let same_document = snapshot.as_ref().is_some_and(|old| old.path == path);
         if let Some(old) = snapshot.as_mut()
             && same_document
-            && Arc::ptr_eq(&old.pdf, &pdf)
+            && (Arc::ptr_eq(&old.pdf, &pdf) || old.pdf == pdf)
         {
+            // Compare bytes only once per new artifact allocation. Subsequent
+            // frames retain the O(1) identity fast path, even after a no-op build.
+            old.pdf = pdf;
             let changed = old.state.dark != dark;
             old.state.dark = dark;
             return changed;
@@ -215,6 +218,13 @@ mod tests {
             assert!(!server.publish(Path::new("a.typ"), pdf.clone(), false));
         }
         assert_eq!(server.revision, 1);
+        let identical: Arc<[u8]> = b"first PDF".as_slice().into();
+        assert!(!server.publish(Path::new("a.typ"), identical.clone(), false));
+        assert!(Arc::ptr_eq(
+            &server.snapshot.lock().unwrap().as_ref().unwrap().pdf,
+            &identical
+        ));
+        assert_eq!(server.revision, 1);
         assert!(server.publish(Path::new("a.typ"), pdf, true));
         assert_eq!(server.revision, 1);
         assert!(server.publish(Path::new("a.typ"), b"new PDF".as_slice().into(), true));
@@ -284,7 +294,13 @@ mod tests {
             match line.unwrap().as_str() {
                 "quit" => break,
                 "reload" => {
-                    server.publish(&path, original.clone().into(), false);
+                    // A changed artifact with identical layout exercises a real
+                    // reload; byte-identical builds are deliberately ignored.
+                    let mut rebuilt = original.clone();
+                    rebuilt.extend_from_slice(
+                        format!("\n% rebuilt revision {}\n", server.revision + 1).as_bytes(),
+                    );
+                    server.publish(&path, rebuilt.into(), false);
                 }
                 "switch" => {
                     server.publish(

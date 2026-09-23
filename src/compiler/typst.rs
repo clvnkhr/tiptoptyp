@@ -23,6 +23,7 @@ use std::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TypstOptions {
+    pub(crate) command: std::sync::Arc<crate::tool_command::CommandCustomization>,
     pub(crate) executable: PathBuf,
     pub(crate) font_paths: Vec<PathBuf>,
 }
@@ -36,6 +37,7 @@ static TRACE_WATCH: LazyLock<bool> = LazyLock::new(|| std::env::var_os(TRACE_WAT
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WatchContext {
+    command: std::sync::Arc<crate::tool_command::CommandCustomization>,
     source_dir: PathBuf,
     project_root: PathBuf,
     typst_executable: PathBuf,
@@ -73,6 +75,7 @@ impl WatchContext {
         font_paths.sort();
         font_paths.dedup();
         Ok(Self {
+            command: options.command.clone(),
             source_dir,
             project_root,
             typst_executable: options.executable.clone(),
@@ -156,12 +159,17 @@ impl WatchSession {
             command.arg("--ignore-system-fonts");
         }
         let shadow_path = shadow.path();
-        let mut child = command
+        command
             .arg("--root")
             .arg(&context.project_root)
             .arg(shadow_path)
             .arg(&pdf_path)
-            .current_dir(&context.source_dir)
+            .current_dir(&context.source_dir);
+        context
+            .command
+            .apply(&mut command)
+            .map_err(|e| e.to_string())?;
+        let mut child = command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -525,6 +533,7 @@ mod tests {
         )).unwrap();
         fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
         let options = TypstOptions {
+            command: Default::default(),
             executable: script,
             font_paths: Vec::new(),
         };
@@ -631,6 +640,7 @@ mod tests {
             display_name: "main.typ".to_owned(),
         };
         let mut options = TypstOptions {
+            command: Default::default(),
             executable: PathBuf::from("/tools/typst-bundled"),
             font_paths: Vec::new(),
         };
@@ -654,6 +664,7 @@ mod tests {
             display_name: "main.typ".to_owned(),
         };
         let options = TypstOptions {
+            command: Default::default(),
             executable: PathBuf::from("typst"),
             font_paths: vec![
                 fonts.clone(),
@@ -684,6 +695,7 @@ mod tests {
             display_name: "main.typ".to_owned(),
         };
         let options = TypstOptions {
+            command: Default::default(),
             executable: PathBuf::from("/tools/typst"),
             font_paths: Vec::new(),
         };

@@ -1,5 +1,5 @@
 mod build;
-mod icons;
+pub(crate) mod icons;
 mod tex;
 use icons::{
     UiIcon, icon_button, icon_button_enabled, paint_ui_icon, square_icon_button, static_icon,
@@ -746,6 +746,7 @@ pub(crate) enum EditorWindowRequest {
 }
 
 struct FileImportResult {
+    workspace: PathBuf,
     message: String,
     imported: Vec<PathBuf>,
     warning: Option<String>,
@@ -852,8 +853,8 @@ impl SettingsSection {
             Self::Appearance => "Appearance",
             Self::Editor => "Editor",
             Self::Tools => "Tool binaries",
-            Self::Preview => "Preview backend",
-            Self::Status => "Toolchain status",
+            Self::Preview => "Typst preview backend",
+            Self::Status => "Service status",
         }
     }
 }
@@ -881,6 +882,7 @@ enum SettingsTarget {
     ExplorerOrder,
     InterfaceScale,
     TitleBarMenus,
+    ToolbarStyle,
     FixedTabWidth,
     UiFont,
     UiFontWeight,
@@ -901,7 +903,7 @@ enum SettingsTarget {
 }
 
 impl SettingsTarget {
-    const ALL: [Self; 38] = [
+    const ALL: [Self; 39] = [
         Self::Appearance,
         Self::TypstSyntax,
         Self::LightTheme,
@@ -923,6 +925,7 @@ impl SettingsTarget {
         Self::ExplorerOrder,
         Self::InterfaceScale,
         Self::TitleBarMenus,
+        Self::ToolbarStyle,
         Self::FixedTabWidth,
         Self::UiFont,
         Self::UiFontWeight,
@@ -956,7 +959,7 @@ impl SettingsTarget {
             Self::LineNumbers => "Line numbers",
             Self::StickyContextRows => "Sticky context rows",
             Self::AutoPairDelimiters => "Auto-close delimiters",
-            Self::MitexDollars => "Auto-enable miTeX for compatible documents",
+            Self::MitexDollars => "Auto-enable miTeX in compatible Typst documents",
             Self::GitDiffStyle => "Git diff style",
             Self::RainbowBrackets => "Rainbow brackets",
             Self::AutoSave => "Auto-save",
@@ -965,21 +968,22 @@ impl SettingsTarget {
             Self::ExplorerOrder => "Explorer panel order",
             Self::InterfaceScale => "Interface scale",
             Self::TitleBarMenus => "Show title-bar menus",
+            Self::ToolbarStyle => "Toolbar buttons",
             Self::FixedTabWidth => "Fixed tab width",
             Self::UiFont => "UI font",
             Self::UiFontWeight => "UI font weight",
             Self::CodeFont => "Code font",
             Self::CodeFontWeight => "Code font weight",
-            Self::PreviewJump => "Preview jump",
+            Self::PreviewJump => "Typst preview jump",
             Self::HoverDelay => "Hover delay",
             Self::TypstCompiler => "Typst compiler",
             Self::TexServices => "TeX tools",
-            Self::TinymistLanguageServer => "Tinymist language server",
+            Self::TinymistLanguageServer => "Tinymist (Typst language server)",
             Self::RefreshBinaryStatus => "Refresh binary status",
             Self::BrowseTypstPackages => "Browse Typst packages…",
-            Self::PreviewBackend => "Preview backend",
-            Self::PreviewFollowEdits => "Follow edits in preview",
-            Self::ToolchainStatus => "Toolchain status",
+            Self::PreviewBackend => "Typst preview backend",
+            Self::PreviewFollowEdits => "Follow Typst edits in preview",
+            Self::ToolchainStatus => "Service status",
             Self::ProjectRoot => "Project root",
             Self::UiScreenshots => "UI screenshots",
         }
@@ -1008,6 +1012,7 @@ impl SettingsTarget {
             | Self::ExplorerOrder
             | Self::InterfaceScale
             | Self::TitleBarMenus
+            | Self::ToolbarStyle
             | Self::FixedTabWidth
             | Self::UiFont
             | Self::UiFontWeight
@@ -1062,6 +1067,7 @@ impl SettingsTarget {
             }
             Self::InterfaceScale => "editor ui zoom percent size",
             Self::TitleBarMenus => "editor titlebar file edit view chrome",
+            Self::ToolbarStyle => "toolbar icons text labels find pause resume compile settings",
             Self::FixedTabWidth => "editor tabs documents fixed width size equal drag reorder",
             Self::UiFont => "editor interface family system choose",
             Self::UiFontWeight => "editor interface bold variable",
@@ -1192,6 +1198,7 @@ pub struct EditorApp {
     workspace: Option<WorkspaceTree>,
     workspace_error: Option<String>,
     file_import: crate::worker::ExclusiveJob<FileImportResult>,
+    queued_file_drops: VecDeque<PendingFileDrop>,
     package_uninstall: crate::worker::ExclusiveJob<String>,
     workspace_service: WorkspaceClient,
     project_index: ProjectIndex,
@@ -1477,6 +1484,7 @@ impl EditorApp {
             workspace: None,
             workspace_error: None,
             file_import: Default::default(),
+            queued_file_drops: VecDeque::new(),
             package_uninstall: Default::default(),
             workspace_service: WorkspaceClient::new(
                 owner,
@@ -3613,7 +3621,7 @@ impl EditorApp {
         let refresh_tools = std::mem::take(&mut self.tool_refresh_requested);
         if refresh_tools || changes.typst {
             let next_typst = resolve_tool(ToolKind::Typst, &request.typst);
-            let typst_program_changed = next_typst.program != self.typst_tool.program;
+            let typst_program_changed = next_typst != self.typst_tool;
             self.typst_tool = next_typst;
             if refresh_tools || typst_program_changed {
                 self.schedule_compile_now();
@@ -3623,7 +3631,7 @@ impl EditorApp {
         let mut tinymist_program_changed = false;
         if refresh_tools || changes.tinymist {
             let next_tinymist = resolve_tool(ToolKind::Tinymist, &request.tinymist);
-            tinymist_program_changed = next_tinymist.program != self.tinymist_tool.program;
+            tinymist_program_changed = next_tinymist != self.tinymist_tool;
             self.tinymist_tool = next_tinymist;
         }
 
@@ -3702,10 +3710,14 @@ impl EditorApp {
         match self.file_import.poll() {
             LatestJobPoll::Ready(result) => {
                 let FileImportResult {
+                    workspace,
                     message,
                     imported,
                     warning,
                 } = result;
+                if workspace != self.workspace_root {
+                    return;
+                }
                 if let Some(path) = imported.last() {
                     self.explorer.select_path(path.clone());
                 }
@@ -3733,45 +3745,76 @@ impl EditorApp {
 
     fn handle_dropped_file(&mut self, context: &egui::Context) {
         self.poll_file_import();
-        if self.document_flow_busy() || self.file_import.is_running() {
-            return;
-        }
         let id = viewport_scoped_id(context, "file-drop-target");
-        let paths = context.input(|input| {
-            input
-                .raw
-                .dropped_files
-                .iter()
+        let paths: Vec<_> = context.input_mut(|input| {
+            std::mem::take(&mut input.raw.dropped_files)
+                .into_iter()
                 .map(|file| file.path().to_path_buf())
                 .collect::<Vec<_>>()
         });
         let file_drag_active = context.input(|input| !input.raw.hovered_files.is_empty());
-        let (current_target, target) = context.data_mut(|data| {
+        let now = context.input(|input| input.time);
+        let pointer = file_drop_pointer(context);
+        let target = context.data_mut(|data| {
             let current = data.get_temp::<FileDropTarget>(id);
-            let target = current.clone().or_else(|| {
-                data.get_persisted::<RememberedFileDropTarget>(id)
-                    .map(|remembered| remembered.0)
-            });
-            (current, target)
-        });
-        if paths.is_empty() {
-            if !file_drag_active && current_target.is_none() {
-                context.data_mut(|data| data.remove::<RememberedFileDropTarget>(id));
+            let remembered = data.get_temp::<RememberedFileDropTarget>(id);
+            if remembered
+                .as_ref()
+                .is_some_and(|target| now - target.seen > 1.0)
+                && !file_drag_active
+            {
+                data.remove::<RememberedFileDropTarget>(id);
             }
+            current.or_else(|| {
+                remembered
+                    .filter(|target| pointer.is_none() && now - target.seen <= 1.0)
+                    .map(|target| target.target)
+            })
+        });
+        if !paths.is_empty() {
+            context.data_mut(|data| {
+                data.remove::<FileDropTarget>(id);
+                data.remove::<RememberedFileDropTarget>(id);
+            });
+            if let Some(target) = target {
+                if self.queued_file_drops.len() < 64 {
+                    self.queued_file_drops.push_back(PendingFileDrop {
+                        workspace: self.workspace_root.clone(),
+                        target,
+                        paths,
+                    });
+                } else {
+                    self.show_file_error(
+                        "Too many pending file drops; wait for imports to finish".into(),
+                    );
+                }
+            }
+        }
+        if self.document_flow_busy() || self.file_import.is_running() {
             return;
         }
-        // A drop is a one-shot event. Do not let its remembered target affect
-        // a later drop after the OS has cleared the hovered-file state.
-        context.data_mut(|data| {
-            data.remove::<FileDropTarget>(id);
-            data.remove::<RememberedFileDropTarget>(id);
-        });
+        let Some(PendingFileDrop {
+            workspace,
+            target,
+            paths,
+        }) = self.queued_file_drops.pop_front()
+        else {
+            return;
+        };
+        if workspace != self.workspace_root {
+            self.show_file_error(
+                "The workspace changed before this file drop could be processed; drop it again"
+                    .into(),
+            );
+            context.request_repaint();
+            return;
+        }
         match target {
-            Some(FileDropTarget::Editor) => {
+            FileDropTarget::Editor => {
                 self.queued_open_requests.extend(paths);
                 context.request_repaint();
             }
-            Some(FileDropTarget::Folder(directory)) => {
+            FileDropTarget::Folder(directory) => {
                 let root = self.workspace_root.clone();
                 if let Err(error) =
                     self.file_import
@@ -3796,6 +3839,7 @@ impl EditorApp {
                             let message =
                                 format!("Imported {imported} file(s) into {}", directory.display());
                             Ok(FileImportResult {
+                                workspace: root,
                                 message,
                                 imported: imported_paths,
                                 warning: (!errors.is_empty()).then(|| errors.join("\n")),
@@ -3805,7 +3849,36 @@ impl EditorApp {
                     self.show_file_error(error);
                 }
             }
-            None => {}
+        }
+        if !self.queued_file_drops.is_empty() && !self.file_import.is_running() {
+            context.request_repaint();
+        }
+    }
+
+    fn update_file_drag_pointer(&self, context: &egui::Context) {
+        let id = viewport_scoped_id(context, "native-file-drag-pointer");
+        context.data_mut(|data| data.remove::<Pos2>(id));
+        #[cfg(target_os = "macos")]
+        {
+            let (hovering, dropped) = context.input(|input| {
+                (
+                    !input.raw.hovered_files.is_empty(),
+                    !input.raw.dropped_files.is_empty(),
+                )
+            });
+            if (hovering || dropped)
+                && let Some(pointer) = self
+                    .native_window_parent
+                    .as_ref()
+                    .and_then(|parent| parent.file_drag_pointer(context.zoom_factor()))
+            {
+                context.data_mut(|data| data.insert_temp(id, pointer));
+                if hovering {
+                    // Native file drags do not produce pointer-move events.
+                    // Poll only during the OS drag, never while idle.
+                    context.request_repaint_after(Duration::from_millis(33));
+                }
+            }
         }
     }
 
@@ -3976,6 +4049,11 @@ impl EditorApp {
             return;
         }
         self.workspace_root = root.clone();
+        self.explorer.clear_selection();
+        self.tabs.current_record_mut().workspace = root.clone();
+        self.workspace = None;
+        self.workspace_error = None;
+        self.request_workspace_scan(root.clone());
         self.remember_workspace(&root);
         if self
             .document()
@@ -4095,7 +4173,14 @@ impl EditorApp {
             .path()
             .as_ref()
             .is_some_and(|current| same_path(current, &path));
-        let keep_designated_preview = self.should_keep_designated_preview(&path);
+        let adopt_source_preview = LanguageSupport::for_document(kind).build.is_some()
+            && self.tab_preview_document().is_none_or(|document| {
+                LanguageSupport::for_document(document.kind())
+                    .build
+                    .is_none()
+            });
+        let keep_designated_preview =
+            !adopt_source_preview && self.should_keep_designated_preview(&path);
         let workspace_root_changed = !path.starts_with(&self.workspace_root);
         let preserve_workspace_snapshot = preserve_workspace_snapshot_for_open(
             self.workspace.as_ref().map(WorkspaceTree::root),
@@ -4109,6 +4194,9 @@ impl EditorApp {
             kind,
             disk_fingerprint,
         );
+        if adopt_source_preview {
+            self.tabs.adopt_active_preview();
+        }
         if (retain_tex || self.settings.mitex_auto_enable) && kind.is_typst() {
             self.activate_preferred_tex();
         }
@@ -4116,6 +4204,7 @@ impl EditorApp {
             self.workspace_root = canonical_or_absolute(&discover_project_root(parent));
         }
         let workspace_root = self.workspace_root.clone();
+        self.tabs.current_record_mut().workspace = workspace_root.clone();
         self.remember_workspace(&workspace_root);
 
         self.set_active_autosave_deadline(None);
@@ -5201,6 +5290,7 @@ impl EditorApp {
         {
             config = config.with_entry_path(entry_path);
         }
+        config.command = self.tinymist_tool.command.clone();
         config.start_preview = start_preview;
         config.preview.invert_colors =
             tinymist_invert_colors(self.settings.document_theme, self.preview.dark);
@@ -6001,29 +6091,15 @@ impl EditorApp {
 
             let tex_available = self.tex_mode_available();
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let panel = ui.add_enabled(
+                let panel = icons::toolbar_button(
+                    ui,
                     self.native_command_enabled(AppCommand::Panel),
-                    egui::Button::selectable(
-                        self.bottom_panel.is_visible(),
-                        if compact { "" } else { "Panel" },
-                    )
-                    .min_size(if compact {
-                        METRICS.icon.button_size
-                    } else {
-                        Vec2::ZERO
-                    }),
+                    self.bottom_panel.is_visible(),
+                    UiIcon::Panel,
+                    "Panel",
+                    self.settings.toolbar_style,
+                    false,
                 );
-                if compact {
-                    paint_ui_icon(
-                        ui.painter(),
-                        panel.rect.shrink(4.0),
-                        UiIcon::Panel,
-                        ui.style().interact(&panel).fg_stroke.color,
-                    );
-                    panel.widget_info(|| {
-                        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Panel")
-                    });
-                }
                 if native_hover_text(
                     panel,
                     shortcut_tooltip("Toggle bottom panel", &shortcuts, ShortcutAction::Panel),
@@ -6034,26 +6110,30 @@ impl EditorApp {
                 }
                 ui.add_enabled_ui(view_mode_enabled, |ui| {
                     for (mode, command, hint) in [
-                        (
-                            ViewMode::Preview,
-                            AppCommand::Preview,
-                            "Preview (Typst documents only)",
-                        ),
+                        (ViewMode::Preview, AppCommand::Preview, "Preview"),
                         (
                             ViewMode::Split,
                             AppCommand::Split,
-                            "Split (Typst documents only)",
+                            "Split editor and preview",
                         ),
-                        (
-                            ViewMode::Code,
-                            AppCommand::Code,
-                            "Code (Typst documents only)",
-                        ),
+                        (ViewMode::Code, AppCommand::Code, "Code editor"),
                     ] {
                         let title = command_spec(command).title;
-                        let label = if compact { &title[..1] } else { title };
+                        let icon = match mode {
+                            ViewMode::Code => UiIcon::Code,
+                            ViewMode::Split => UiIcon::Split,
+                            ViewMode::Preview => UiIcon::Preview,
+                        };
                         if native_hover_text(
-                            ui.selectable_label(self.view_mode == mode, label),
+                            icons::toolbar_button(
+                                ui,
+                                true,
+                                self.view_mode == mode,
+                                icon,
+                                title,
+                                self.settings.toolbar_style,
+                                false,
+                            ),
                             hint,
                         )
                         .clicked()
@@ -6062,9 +6142,16 @@ impl EditorApp {
                         }
                     }
                 });
-                let explorer_label = if compact { "Files" } else { "Explorer" };
                 if native_hover_text(
-                    ui.selectable_label(self.explorer.panel_visible(), explorer_label),
+                    icons::toolbar_button(
+                        ui,
+                        true,
+                        self.explorer.panel_visible(),
+                        UiIcon::Explorer,
+                        "Explorer",
+                        self.settings.toolbar_style,
+                        false,
+                    ),
                     "Toggle the file explorer",
                 )
                 .clicked()
@@ -6072,7 +6159,15 @@ impl EditorApp {
                     self.execute_app_command(AppCommand::Explorer, ui.ctx(), frame);
                 }
                 if native_hover_text(
-                    ui.selectable_label(false, if compact { "Set" } else { "Settings" }),
+                    icons::toolbar_button(
+                        ui,
+                        true,
+                        false,
+                        UiIcon::Spanner,
+                        "Settings",
+                        self.settings.toolbar_style,
+                        false,
+                    ),
                     "Open Settings in a separate window",
                 )
                 .clicked()
@@ -6082,9 +6177,15 @@ impl EditorApp {
 
                 ui.separator();
                 if native_hover_text(
-                    ui.add_enabled(
+                    icons::toolbar_button(
+                        ui,
                         self.source_preview_available(),
-                        egui::Button::new("Compile"),
+                        false,
+                        UiIcon::Compile,
+                        "Compile",
+                        self.settings.toolbar_style,
+                        matches!(self.status_preview().status, PreviewStatus::Compiling)
+                            && self.snapshot_scene.is_none(),
                     ),
                     shortcut_tooltip(
                         "Compile PDF beside the Typst source",
@@ -6099,9 +6200,18 @@ impl EditorApp {
 
                 let (pause_label, pause_hint) = compilation_toggle_copy(self.compilation_paused);
                 if native_hover_text(
-                    ui.add_enabled(
+                    icons::toolbar_button(
+                        ui,
                         self.source_preview_available(),
-                        egui::Button::new(pause_label).selected(self.compilation_paused),
+                        self.compilation_paused,
+                        if self.compilation_paused {
+                            UiIcon::Play
+                        } else {
+                            UiIcon::Pause
+                        },
+                        pause_label,
+                        self.settings.toolbar_style,
+                        false,
                     ),
                     shortcut_tooltip(pause_hint, &shortcuts, ShortcutAction::ToggleCompilation),
                 )
@@ -6110,7 +6220,15 @@ impl EditorApp {
                     self.toggle_compilation_paused();
                 }
                 if native_hover_text(
-                    ui.add_enabled(!self.tabs.is_empty(), egui::Button::new("Find")),
+                    icons::toolbar_button(
+                        ui,
+                        !self.tabs.is_empty(),
+                        false,
+                        UiIcon::Search,
+                        "Find",
+                        self.settings.toolbar_style,
+                        false,
+                    ),
                     shortcut_tooltip("Find", &shortcuts, ShortcutAction::Find),
                 )
                 .clicked()
@@ -6874,12 +6992,12 @@ impl EditorApp {
         if self.raster_content_freshness() == Some(RasterContentFreshness::Current) {
             return if preview.has_resident_pages() {
                 ServiceState::Ready(format!(
-                    "Poppler has {} page(s); visible pages render on demand",
+                    "Rust PDF renderer has {} page(s); visible pages render on demand",
                     preview.content.pages().len()
                 ))
             } else {
                 ServiceState::Starting(format!(
-                    "Poppler found {} page(s); rendering the visible range",
+                    "Rust PDF renderer found {} page(s); rendering the visible range",
                     preview.content.pages().len()
                 ))
             };
@@ -6919,7 +7037,7 @@ impl EditorApp {
                 .unwrap_or_else(|| self.project_root().display().to_string())
         };
         let preview = self.designated_preview_path();
-        let dirty = self.document().is_dirty();
+        let dirty = self.tabs.has_unsaved_changes();
         let output = explorer_view::show(
             ui,
             explorer_view::Input {
@@ -6936,7 +7054,14 @@ impl EditorApp {
                 git_visible: self.git.visible,
             },
             &mut self.explorer,
-            |ui| self.git.show(ui, dirty, self.settings.git_diff_style),
+            |ui| {
+                self.git.show(
+                    ui,
+                    dirty,
+                    self.settings.git_diff_style,
+                    self.settings.toolbar_style,
+                )
+            },
         );
         if output.change_root {
             self.open_workspace_chooser();
@@ -6949,6 +7074,12 @@ impl EditorApp {
         }
         if let Some(git) = output.git {
             self.git.apply_view_output(ui.ctx(), git);
+            if let Some(request) = self.git.take_revert_request() {
+                self.document_workflow.set_modal(AppModal::RevertGit {
+                    message: request.message(),
+                    request,
+                });
+            }
         }
         if output.packages {
             self.open_package_manager(ui.ctx());
@@ -7708,11 +7839,37 @@ impl EditorApp {
                                         .selectable(true),
                                     );
                                 }
-                                ui.add(
+                                // Wrapping labels inherit the first row's height,
+                                // including the monospace location label.
+                                let line_height = ui
+                                    .cursor()
+                                    .height()
+                                    .max(ui.text_style_height(&egui::TextStyle::Body));
+                                let message = ui.add(
                                     egui::Label::new(&diagnostic.message)
                                         .selectable(true)
                                         .wrap(),
                                 );
+                                if let Some(provider) = &diagnostic.provider {
+                                    let galley = ui.painter().layout_no_wrap(
+                                        provider.clone(),
+                                        theme::supporting_font(),
+                                        ui.visuals().weak_text_color(),
+                                    );
+                                    if let Some(rect) = problem_provider_rect(
+                                        message.rect,
+                                        ui.max_rect().right(),
+                                        galley.size(),
+                                        ui.spacing().item_spacing.x,
+                                        line_height,
+                                    ) {
+                                        ui.painter().galley(
+                                            rect.min,
+                                            galley,
+                                            ui.visuals().weak_text_color(),
+                                        );
+                                    }
+                                }
                             });
                             for detail in &diagnostic.details {
                                 ui.horizontal(|ui| {
@@ -7755,18 +7912,23 @@ impl EditorApp {
                             ),
                         );
                     }
-                    if diagnostic.location.is_some() {
-                        let hover = ui.interact(
-                            row.rect,
-                            ui.id().with(("problem-row-hover", index)),
-                            Sense::hover(),
-                        );
-                        native_hover_text(hover, "Double-click to open this location");
-                        if let Some(diagnostic) =
-                            problem_row_jump_target(diagnostic, problem_row_double_clicked(&row))
-                        {
-                            jump_target = Some(diagnostic);
+                    let hover = ui.interact(
+                        row.rect,
+                        ui.id().with(("problem-row-hover", index)),
+                        Sense::hover(),
+                    );
+                    if hover.hovered() {
+                        let mut hint = diagnostic.full_message();
+                        if diagnostic.location.is_some() {
+                            hint.push_str("\n\nDouble-click to open this location");
                         }
+                        native_hover_text(hover, hint);
+                    }
+                    if diagnostic.location.is_some()
+                        && let Some(diagnostic) =
+                            problem_row_jump_target(diagnostic, problem_row_double_clicked(&row))
+                    {
+                        jump_target = Some(diagnostic);
                     }
                 }
                 if !self.preview.raw_diagnostics.is_empty() {
@@ -8232,6 +8394,7 @@ impl EditorApp {
         // or consuming native menu commands. Each EditorApp retains its own
         // parent and consequently its own Tinymist child webview.
         self.refresh_native_window_parent(&context);
+        self.update_file_drag_pointer(&context);
         if self.captures.has_pending_for("settings") {
             self.settings_visible = true;
         }
@@ -9643,40 +9806,55 @@ fn sticky_context_scroll_anchor(lines: &[StickyContextScrollLine], boundary: f32
     Some(lines.get(index)?.anchor)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum FileDropTarget {
     Editor,
     Folder(PathBuf),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
-struct RememberedFileDropTarget(FileDropTarget);
+struct PendingFileDrop {
+    workspace: PathBuf,
+    target: FileDropTarget,
+    paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct RememberedFileDropTarget {
+    target: FileDropTarget,
+    seen: f64,
+}
+
+fn file_drop_pointer(context: &egui::Context) -> Option<Pos2> {
+    let id = viewport_scoped_id(context, "native-file-drag-pointer");
+    context
+        .data(|data| data.get_temp::<Pos2>(id))
+        .or_else(|| context.pointer_latest_pos())
+}
 
 fn offer_file_drop_target(ui: &egui::Ui, rect: Rect, target: FileDropTarget) {
     if file_drop_target_contains_pointer(ui, rect) {
         let id = viewport_scoped_id(ui.ctx(), "file-drop-target");
+        let (hovering, now) = ui.input(|input| (!input.raw.hovered_files.is_empty(), input.time));
         ui.ctx().data_mut(|data| {
             data.insert_temp(id, target.clone());
             // macOS can deliver the final DroppedFile event after the
             // temporary per-frame target has been cleared and without a new
             // pointer position. Remember the target while the pointer is over
             // it, then consume it when the drop arrives.
-            data.insert_persisted(id, RememberedFileDropTarget(target));
+            if hovering {
+                data.insert_temp(id, RememberedFileDropTarget { target, seen: now });
+            }
         });
     }
 }
 
 fn file_drop_target_contains_pointer(ui: &egui::Ui, rect: Rect) -> bool {
-    ui.ctx()
-        .pointer_latest_pos()
-        .is_some_and(|pos| rect.intersect(ui.clip_rect()).contains(pos))
+    file_drop_pointer(ui.ctx()).is_some_and(|pos| rect.intersect(ui.clip_rect()).contains(pos))
 }
 
 fn file_drag_hovered_over(context: &egui::Context, rect: Rect) -> bool {
     context.input(|input| !input.raw.hovered_files.is_empty())
-        && context
-            .pointer_latest_pos()
-            .is_some_and(|pos| rect.contains(pos))
+        && file_drop_pointer(context).is_some_and(|pos| rect.contains(pos))
 }
 
 fn offer_folder_row_drop(ui: &egui::Ui, row: Rect, directory: &Path) {
@@ -10186,13 +10364,12 @@ fn tinymist_diagnostic(diagnostic: LspDiagnostic, source: DiagnosticSource) -> D
         Some(LspDiagnosticSeverity::Other(_)) | None => DiagnosticSeverity::Unknown,
     };
     let mut details = Vec::new();
-    // The editor is Typst-specific, so repeating Tinymist's provider name in
-    // every diagnostic is noise.
-    let _provider = diagnostic.source;
+    let provider = diagnostic.source;
     if let Some(code) = diagnostic.code {
         details.push(format!("code: {code}"));
     }
     Diagnostic {
+        provider,
         severity,
         source,
         location: Some(DiagnosticLocation {
@@ -10206,6 +10383,23 @@ fn tinymist_diagnostic(diagnostic: LspDiagnostic, source: DiagnosticSource) -> D
 
 fn revision_as_i32(revision: u64) -> i32 {
     revision.min(i32::MAX as u64) as i32
+}
+
+fn problem_provider_rect(
+    message: Rect,
+    right: f32,
+    provider: Vec2,
+    gap: f32,
+    line_height: f32,
+) -> Option<Rect> {
+    (message.height() <= line_height + 1.0 && message.right() + gap + provider.x <= right).then(
+        || {
+            Rect::from_min_size(
+                Pos2::new(right - provider.x, message.center().y - provider.y * 0.5),
+                provider,
+            )
+        },
+    )
 }
 
 fn approximate_char_capacity(width: f32, font_size: f32) -> usize {

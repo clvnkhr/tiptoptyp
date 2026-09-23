@@ -14,6 +14,7 @@ fn retained_diagnostic_tooltip_tracks_edits_and_resolved_diagnostics() {
         let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
         app.document_mut().replace_unprojected_untitled("#broken");
         app.preview.diagnostics = vec![Diagnostic {
+            provider: None,
             severity: DiagnosticSeverity::Error,
             source: DiagnosticSource::Main,
             location: Some(crate::diagnostics::DiagnosticLocation { line: 1, column: 1 }),
@@ -508,6 +509,7 @@ fn navigation_entry_points_focus_only_their_owner_and_keep_mac_arrow_shortcuts()
             match route {
                 "index" => app.navigate_file_location(path, None, Some((1, 1)), "index test"),
                 "problems" => app.jump_to_diagnostic(Diagnostic {
+                    provider: None,
                     severity: DiagnosticSeverity::Error,
                     source: DiagnosticSource::Main,
                     location: Some(DiagnosticLocation { line: 1, column: 1 }),
@@ -1349,10 +1351,10 @@ fn file_drop_target_survives_the_os_drop_frame() {
         .drop_without_applying_deltas();
     context.data_mut(|data| data.remove::<FileDropTarget>(id));
     assert_eq!(
-        context.data_mut(|data| data.get_persisted::<RememberedFileDropTarget>(id)),
-        Some(RememberedFileDropTarget(FileDropTarget::Folder(
-            PathBuf::from("/workspace"),
-        )))
+        context.data(|data| data
+            .get_temp::<RememberedFileDropTarget>(id)
+            .map(|target| target.target)),
+        Some(FileDropTarget::Folder(PathBuf::from("/workspace")))
     );
 }
 
@@ -5836,6 +5838,7 @@ fn workspace_colors_use_the_same_extension_policy_as_document_detection() {
 #[test]
 fn problems_row_double_click_dispatches_only_located_diagnostics() {
     let located = Diagnostic {
+        provider: None,
         severity: DiagnosticSeverity::Error,
         source: DiagnosticSource::File(PathBuf::from("chapter.typ")),
         location: Some(DiagnosticLocation {
@@ -5849,6 +5852,7 @@ fn problems_row_double_click_dispatches_only_located_diagnostics() {
     assert_eq!(problem_row_jump_target(&located, true), Some(located));
 
     let unlocated = Diagnostic {
+        provider: None,
         severity: DiagnosticSeverity::Error,
         source: DiagnosticSource::Global,
         location: None,
@@ -7017,12 +7021,16 @@ fn light_and_dark_styles_have_identical_layout_geometry() {
 fn bottom_status_collects_every_non_preview_fallback() {
     let settings = AppSettings::default();
     let typst = ToolResolution {
+        bundled_program: None,
+        command: Default::default(),
         kind: ToolKind::Typst,
         program: PathBuf::from("typst"),
         origin: ToolOrigin::Path,
         fallback_reason: Some("bundled Typst is missing; using PATH".to_owned()),
     };
     let tinymist = ToolResolution {
+        bundled_program: None,
+        command: Default::default(),
         kind: ToolKind::Tinymist,
         program: PathBuf::from("tinymist"),
         origin: ToolOrigin::Missing,
@@ -7126,7 +7134,7 @@ fn projected_application_toolbar_order_and_right_alignment_survive_resizing() {
                 app,
             );
         harness.run_steps(3);
-        let compact = harness.query_by_label("Settings").is_none();
+        let compact = harness.query_by_label("Files").is_some();
         let labels = [
             "Window color",
             "File",
@@ -7137,7 +7145,7 @@ fn projected_application_toolbar_order_and_right_alignment_survive_resizing() {
             "Find",
             "Pause",
             "Compile",
-            if compact { "Set" } else { "Settings" },
+            "Settings",
             if compact { "Files" } else { "Explorer" },
             if compact { "C" } else { "Code" },
             if compact { "S" } else { "Split" },
@@ -7768,6 +7776,7 @@ fn projected_application_diagnostics_and_preview_selection_map_canonical_unicode
     app.set_diagnostics(DiagnosticReport {
         raw: format!("{name}:{canonical_line}:{canonical_column}: warning: CLI test"),
         diagnostics: vec![Diagnostic {
+            provider: None,
             severity: DiagnosticSeverity::Warning,
             source: DiagnosticSource::Main,
             location: Some(crate::diagnostics::DiagnosticLocation {
@@ -8024,7 +8033,10 @@ fn editor_diagnostics_become_one_based_inline_diagnostics() {
     assert_eq!(converted.severity, DiagnosticSeverity::Warning);
     assert_eq!(converted.location.unwrap().line, 5);
     assert_eq!(converted.location.unwrap().column, 8);
-    assert_eq!(converted.full_message(), "old syntax\ncode: \"deprecated\"");
+    assert_eq!(
+        converted.full_message(),
+        "old syntax\ncode: \"deprecated\"\ntinymist"
+    );
 }
 
 #[test]
@@ -8199,4 +8211,241 @@ fn dormant_settings_surface_survives_document_resume_and_close() {
         );
         output.textures_delta.clear();
     }
+}
+
+#[test]
+fn problem_provider_stays_on_one_line_or_disappears() {
+    let message = Rect::from_min_size(Pos2::new(20.0, 10.0), Vec2::new(100.0, 20.0));
+    let provider = Vec2::new(70.0, 16.0);
+    let rect = problem_provider_rect(message, 300.0, provider, 8.0, 20.0).unwrap();
+    assert_eq!(rect.right(), 300.0);
+    assert_eq!(rect.center().y, message.center().y);
+    assert!(problem_provider_rect(message, 190.0, provider, 8.0, 20.0).is_none());
+    assert!(
+        problem_provider_rect(
+            message.expand2(Vec2::new(0.0, 10.0)),
+            300.0,
+            provider,
+            8.0,
+            20.0
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn drop_banner_fits_text_and_stays_inside_small_panels() {
+    for width in [80.0, 240.0, 1000.0] {
+        let available = Rect::from_min_size(Pos2::new(20.0, 30.0), Vec2::new(width, 400.0));
+        let banner = explorer_view::file_drop_hint_rect(available, Vec2::new(120.0, 18.0));
+        assert_eq!(banner.width(), width.min(136.0));
+        assert_eq!(banner.height(), 30.0);
+        assert_eq!(banner.center(), available.center());
+        assert!(available.contains_rect(banner));
+    }
+}
+
+#[derive(Debug)]
+struct TestDroppedFile(PathBuf);
+impl egui::DroppedFile for TestDroppedFile {
+    fn path(&self) -> &Path {
+        &self.0
+    }
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        unreachable!("routing does not read file bytes")
+    }
+}
+
+#[test]
+fn repeated_drops_queue_while_a_dialog_is_open_and_are_consumed_once() {
+    let context = egui::Context::default();
+    let root = tempfile::tempdir().unwrap();
+    let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+    app.rename_dialog = Some(RenameDialog {
+        path: root.path().join("old.typ"),
+        name: "new.typ".into(),
+        focus: false,
+    });
+    for name in ["first.typ", "second.typ", "third.typ"] {
+        context
+            .run_ui(
+                egui::RawInput {
+                    dropped_files: vec![std::sync::Arc::new(TestDroppedFile(
+                        root.path().join(name),
+                    ))],
+                    ..Default::default()
+                },
+                |ui| {
+                    let id = viewport_scoped_id(ui.ctx(), "file-drop-target");
+                    ui.ctx()
+                        .data_mut(|data| data.insert_temp(id, FileDropTarget::Editor));
+                    app.handle_dropped_file(ui.ctx());
+                    app.handle_dropped_file(ui.ctx());
+                },
+            )
+            .drop_without_applying_deltas();
+    }
+    assert_eq!(app.queued_file_drops.len(), 3);
+    assert!(app.queued_open_requests.is_empty());
+    app.rename_dialog = None;
+    for _ in 0..3 {
+        app.handle_dropped_file(&context);
+    }
+    assert!(app.queued_file_drops.is_empty());
+    assert_eq!(
+        app.queued_open_requests
+            .iter()
+            .map(|p| p.file_name().unwrap().to_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["first.typ", "second.typ", "third.typ"]
+    );
+}
+
+#[test]
+fn native_drag_position_overrides_a_stale_egui_pointer() {
+    let context = egui::Context::default();
+    context
+        .run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::PointerMoved(Pos2::new(10.0, 10.0))],
+                ..Default::default()
+            },
+            |ui| {
+                let id = viewport_scoped_id(ui.ctx(), "native-file-drag-pointer");
+                ui.ctx()
+                    .data_mut(|data| data.insert_temp(id, Pos2::new(250.0, 80.0)));
+                assert_eq!(file_drop_pointer(ui.ctx()), Some(Pos2::new(250.0, 80.0)));
+            },
+        )
+        .drop_without_applying_deltas();
+}
+
+#[test]
+fn toolbar_styles_preserve_accessible_actions() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    for style in crate::settings::ToolbarStyle::ALL {
+        let mut harness = Harness::new_ui(|ui| {
+            for (icon, label) in [
+                (UiIcon::Search, "Find"),
+                (UiIcon::Pause, "Pause"),
+                (UiIcon::Play, "Resume"),
+                (UiIcon::Compile, "Compile"),
+                (UiIcon::Spanner, "Settings"),
+            ] {
+                icons::toolbar_button(ui, true, false, icon, label, style, false);
+            }
+        });
+        harness.run();
+        for label in ["Find", "Pause", "Resume", "Compile", "Settings"] {
+            assert!(harness.get_by_label(label).rect().width() > 0.0);
+        }
+    }
+}
+
+#[test]
+fn selected_tree_icons_keep_visible_theme_strokes() {
+    for folder in [false, true] {
+        let context = egui::Context::default();
+        let output = context.run_ui(egui::RawInput::default(), |ui| {
+            ui.visuals_mut().widgets.noninteractive.fg_stroke = egui::Stroke::NONE;
+            ui.visuals_mut().widgets.inactive.fg_stroke = egui::Stroke::NONE;
+            let mut child = ui.new_child(
+                egui::UiBuilder::new().max_rect(Rect::from_min_size(Pos2::ZERO, Vec2::splat(24.0))),
+            );
+            explorer_view::paint_tree_icon(&mut child, folder);
+        });
+        let strokes: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect) => Some(rect.stroke),
+                egui::Shape::LineSegment { stroke, .. } => Some(*stroke),
+                _ => None,
+            })
+            .collect();
+        assert!(strokes.len() >= 3);
+        assert!(
+            strokes
+                .iter()
+                .all(|stroke| stroke.width > 0.0 && stroke.color.a() > 0)
+        );
+        output.drop_without_applying_deltas();
+    }
+}
+
+#[test]
+fn toolbar_style_defaults_to_icons_and_roundtrips_each_choice() {
+    assert_eq!(
+        AppSettings::default().toolbar_style,
+        crate::settings::ToolbarStyle::Icons
+    );
+    for toolbar_style in crate::settings::ToolbarStyle::ALL {
+        let settings = AppSettings {
+            toolbar_style,
+            ..Default::default()
+        };
+        let restored: AppSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored.toolbar_style, toolbar_style);
+    }
+}
+
+#[test]
+fn problems_paints_provider_beside_a_taller_location_label() {
+    let context = egui::Context::default();
+    let root = tempfile::tempdir().unwrap();
+    let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+    app.preview.diagnostics = vec![Diagnostic {
+        provider: Some("Tectonic".into()),
+        severity: DiagnosticSeverity::Warning,
+        source: DiagnosticSource::Main,
+        location: Some(DiagnosticLocation {
+            line: 173,
+            column: 1,
+        }),
+        message: "Overfull box".into(),
+        details: Vec::new(),
+    }];
+    let output = context.run_ui(
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 200.0))),
+            ..Default::default()
+        },
+        |ui| {
+            ui.style_mut()
+                .text_styles
+                .insert(egui::TextStyle::Monospace, egui::FontId::monospace(24.0));
+            app.show_problems(ui);
+        },
+    );
+    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+        egui::Shape::Text(text) if text.galley.text() == "Tectonic")));
+    output.drop_without_applying_deltas();
+}
+
+#[test]
+fn workspace_switch_opens_source_first_without_a_pdf_detour() {
+    let context = egui::Context::default();
+    let old = tempfile::tempdir().unwrap();
+    let new = tempfile::tempdir().unwrap();
+    let source = new.path().join("first.typ");
+    std::fs::write(&source, "= First after switching").unwrap();
+    let pdf = old.path().join("previous.pdf");
+    std::fs::write(&pdf, crate::pdf::test_pdf()).unwrap();
+    let mut app = EditorApp::dormant_for_tests(&context, old.path().into());
+    assert!(app.load_path(pdf));
+    app.explorer.select_path(old.path().join("stale.typ"));
+    app.finish_open_folder_selection(new.path().into());
+    assert!(app.explorer.selected_path().is_none());
+    assert_eq!(
+        app.tabs.current_record().workspace,
+        new.path().canonicalize().unwrap()
+    );
+    app.queue_open_path(source.clone());
+    app.execute_pending_document_action(&context, None);
+    assert_eq!(
+        app.document().path().as_deref(),
+        Some(source.canonicalize().unwrap().as_path())
+    );
+    assert!(app.document().kind().is_typst());
 }

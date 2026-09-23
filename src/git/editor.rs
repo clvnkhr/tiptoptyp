@@ -1238,6 +1238,7 @@ mod tests {
                             ),
                             false,
                             crate::settings::GitDiffStyle::Unified,
+                            crate::settings::ToolbarStyle::Icons,
                         );
                     }
                 },

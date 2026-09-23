@@ -249,11 +249,21 @@ fn command_toolbar_menu_and_shortcut_effects_agree_once_per_owner() {
         for (command, label, compact_label, view) in [
             (AppCommand::Find, "Find", "Find", ViewMode::Split),
             (AppCommand::Panel, "Panel", "Panel", ViewMode::Split),
-            (AppCommand::Explorer, "Explorer", "Files", ViewMode::Split),
-            (AppCommand::Settings, "Settings", "Set", ViewMode::Split),
-            (AppCommand::Code, "Code", "C", ViewMode::Code),
-            (AppCommand::Split, "Split", "S", ViewMode::Split),
-            (AppCommand::Preview, "Preview", "P", ViewMode::Preview),
+            (
+                AppCommand::Explorer,
+                "Explorer",
+                "Explorer",
+                ViewMode::Split,
+            ),
+            (
+                AppCommand::Settings,
+                "Settings",
+                "Settings",
+                ViewMode::Split,
+            ),
+            (AppCommand::Code, "Code", "Code", ViewMode::Code),
+            (AppCommand::Split, "Split", "Split", ViewMode::Split),
+            (AppCommand::Preview, "Preview", "Preview", ViewMode::Preview),
         ] {
             for route in [
                 Route::Shortcut,

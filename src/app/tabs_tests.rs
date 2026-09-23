@@ -1,6 +1,38 @@
 use super::*;
 
 #[test]
+fn first_source_after_pdf_becomes_preview_and_later_sources_preserve_it() {
+    for extension in ["typ", "tex"] {
+        let context = egui::Context::default();
+        let root = tempfile::tempdir().unwrap();
+        let mut app = fixture(&context, root.path());
+        app.lifecycle = DocumentLifecycle::Active;
+        app.preview = PreviewController::new(false, PreviewPreference::Native);
+        let pdf = root.path().join("first.pdf");
+        fs::write(&pdf, crate::pdf::test_pdf()).unwrap();
+        assert!(app.load_path(pdf));
+        let asset = app.tabs.active_id().unwrap();
+        let source = root.path().join(format!("main.{extension}"));
+        fs::write(&source, "source").unwrap();
+        assert!(app.open_tab_path(source.clone(), &context));
+        let entry = app.tabs.active_id().unwrap();
+        assert_ne!(entry, asset);
+        assert_eq!(app.tabs.preview_id(), Some(entry));
+        assert_eq!(app.preview_document_path(), source.canonicalize().unwrap());
+        assert!(app.current_is_preview_document());
+        assert!(app.preview_language_support().build.is_some());
+        assert!(app.compile_deadline.is_some());
+        let other = root.path().join("other.typ");
+        fs::write(&other, "other").unwrap();
+        assert!(app.open_tab_path(other, &context));
+        assert_eq!(app.tabs.preview_id(), Some(entry));
+        app.activate_tab(asset, &context);
+        app.activate_tab(entry, &context);
+        assert_eq!(app.tabs.preview_id(), Some(entry));
+    }
+}
+
+#[test]
 fn opening_tex_preserves_native_source_and_never_requests_typst_services() {
     let context = egui::Context::default();
     let root = tempfile::tempdir().unwrap();
@@ -951,6 +983,10 @@ fn closing_checks_dirty_background_tabs_without_discarding_on_cancel() {
     app.append_tab(&context);
     assert!(!app.is_dirty());
     assert!(app.is_dirty_for_close());
+    assert!(
+        app.tabs.has_unsaved_changes(),
+        "Git must also guard inactive unsaved tabs"
+    );
     assert!(app.begin_process_close());
     let process_key = app.document_key();
     app.execute_pending_document_action(&context, None);
@@ -1146,7 +1182,7 @@ fn opened_pdfs_default_to_pdfjs_without_poppler_even_beside_a_typst_preview() {
     );
     app.append_tab(&context);
     let path = root.path().join("reference.pdf");
-    // Invalid for Poppler: success proves that PDF.js owns parsing this asset.
+    // Invalid PDF: success proves that PDF.js owns parsing this asset.
     fs::write(&path, b"PDF.js parses these bytes").unwrap();
     app.document_mut().replace_loaded_unprojected(
         String::new(),
@@ -1183,8 +1219,8 @@ fn opened_pdfs_default_to_pdfjs_without_poppler_even_beside_a_typst_preview() {
     );
     app.settings.preview_preference = PreviewPreference::Native;
     assert!(
-        !app.pdfjs_asset_requested(),
-        "explicit raster selection remains available"
+        app.pdfjs_asset_requested(),
+        "Typst backend preferences do not change opened PDF tabs"
     );
 }
 
@@ -1290,6 +1326,7 @@ fn pinned_typst_diagnostics_do_not_replace_the_active_tex_providers() {
         None,
     );
     app.tex_diagnostics[0] = vec![crate::diagnostics::Diagnostic {
+        provider: None,
         severity: crate::diagnostics::DiagnosticSeverity::Warning,
         source: DiagnosticSource::File(root.path().join("main.tex")),
         location: None,

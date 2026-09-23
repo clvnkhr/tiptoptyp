@@ -58,6 +58,7 @@ pub(crate) fn parse_typst_short_output(output: &str, main_path: Option<&Path>) -
             previous.details.push(detail.to_owned());
         } else {
             diagnostics.push(Diagnostic {
+                provider: None,
                 severity: DiagnosticSeverity::Unknown,
                 source: DiagnosticSource::Global,
                 location: None,
@@ -137,6 +138,7 @@ fn parse_structured_line(line: &str, main_path: Option<&Path>) -> Option<ParsedL
         if let Some(message) = line.strip_prefix(pattern.prefix) {
             return Some(ParsedLine {
                 diagnostic: Diagnostic {
+                    provider: None,
                     severity: pattern.severity,
                     source: DiagnosticSource::Global,
                     location: None,
@@ -160,6 +162,7 @@ fn parse_structured_line(line: &str, main_path: Option<&Path>) -> Option<ParsedL
             let message = line[marker_start + pattern.marker.len()..].trim_start();
             return Some(ParsedLine {
                 diagnostic: Diagnostic {
+                    provider: None,
                     severity: pattern.severity,
                     source: classify_source(path, main_path),
                     location: Some(location),

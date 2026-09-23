@@ -131,6 +131,11 @@ impl Tabs {
     pub(super) fn is_empty(&self) -> bool {
         self.order.is_empty()
     }
+    pub(super) fn has_unsaved_changes(&self) -> bool {
+        self.records
+            .values()
+            .any(|record| record.document.is_dirty())
+    }
     pub(super) fn empty_after(&self) -> Self {
         let owner = self.active_record().map_or_else(
             || self.empty_record.document.key().owner,
@@ -210,6 +215,11 @@ impl Tabs {
 
     pub(super) fn uses_designated_preview(&self) -> bool {
         self.len() > 1 || self.preview_explicit
+    }
+
+    pub(super) fn adopt_active_preview(&mut self) {
+        self.preview = self.active;
+        self.preview_explicit = false;
     }
     pub(super) fn id_at(&self, index: usize) -> Option<u64> {
         self.order.get(index).copied()

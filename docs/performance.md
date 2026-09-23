@@ -1,5 +1,26 @@
 # Performance workflow
 
+## Built-in PDF thumbnail probe (23 September 2026)
+
+On macOS 14.6.1 arm64, the same three-page `manual-tests/typst-preview.typ`
+PDF was rendered at a 720-pixel long edge, white background, four consecutive
+runs with warm filesystem caches. The old external Poppler executable plus PNG
+output took 79.75, 55.69, 55.62 and 56.16 ms. The in-process Hayro path in an
+optimized Rust release test took 3.96, 2.24, 2.13 and 2.04 ms. Both produce
+508 × 720 pixels; the new path returns RGBA and avoids process/PNG transport.
+Thus these are timings of the respective utility operations, not isolated
+renderer benchmarks or whole-app latency measurements. The first Hayro run
+is cold within the process; later runs warm code/data caches but create a new
+PDF and render cache. No desktop viewport/theme applies to this worker probe.
+
+The fixture PDF/hash, baseline metadata, complete after log and bundled-library
+audit are retained in `.tiptoptyp/profiles/pdf-utilities-followup/`; the rendered
+PNG was inspected. Repeat with `TIPTOPTYP_PDF_PROBE=/absolute/file.pdf cargo test
+--release --bin tiptoptyp pdf::probes::thumbnail_probe -- --ignored --nocapture`.
+This small document establishes neither large-document throughput nor a
+cross-platform performance guarantee. Cancellation remains between pages, not
+within an active page render. No extra worker or idle repaint loop was added.
+
 Performance is a continuing review requirement; see [the working agreement](../AGENTS.md#performance-working-agreement).
 Measure before optimizing, preserve comparable evidence, and protect the cause
 with deterministic tests. Completing the profiling setup does not mean every
@@ -10,7 +31,7 @@ For failed tab gestures, use the bounded, opt-in [tab drag diagnostics](tab-drag
 ## One-command native runs
 
 Prerequisites: a desktop session, the normal Rust development dependencies,
-Poppler (`pdftoppm` on `PATH`), and the pinned sidecars installed by
+the pinned sidecars installed by
 `cargo xtask fetch-sidecars`. The runner checks prerequisites; it does not download
 tools or silently switch to a different sampler when one fails.
 
@@ -206,7 +227,7 @@ On Linux/Windows `auto` selects `none`; `--sampler none` works without a native
 CPU sampler and produces wall-time summaries only. Native attachment has been
 validated locally on macOS, not Linux/Windows.
 
-App CPU samples do **not** include the separate Typst, Tinymist, Poppler or WebKit
+App CPU samples do **not** include the separate Typst, Tinymist or WebKit
 processes. Attach a suitable profiler to those processes when investigating
 compiler, server or preview costs. The runner is not a GPU, allocation, memory
 leak, or end-to-end compile-latency profiler.

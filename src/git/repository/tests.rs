@@ -1,5 +1,171 @@
 use super::*;
 
+#[test]
+fn stage_all_and_commit_handles_new_modified_deleted_and_literal_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    initialize(root, "original\n");
+    fs::write(root.join("deleted.typ"), "delete me").unwrap();
+    perform(root, Operation::StageAllAndCommit("Add file".into())).unwrap();
+    fs::remove_file(root.join("deleted.typ")).unwrap();
+    fs::write(root.join("main.typ"), "changed\n").unwrap();
+    fs::write(root.join(":(glob)*.typ"), "literal new file").unwrap();
+    fs::create_dir(root.join(".tiptoptyp")).unwrap();
+    fs::write(root.join(".tiptoptyp/private.typ"), "private").unwrap();
+    let result = perform(root, Operation::StageAllAndCommit("All changes".into())).unwrap();
+    assert!(result.committed && result.snapshot.entries.is_empty());
+    assert_eq!(
+        text_run(root, &["show", "HEAD:main.typ"]).unwrap(),
+        "changed"
+    );
+    assert_eq!(
+        text_run(root, &["show", "HEAD::(glob)*.typ"]).unwrap(),
+        "literal new file"
+    );
+    assert!(text_run(root, &["show", "HEAD:deleted.typ"]).is_err());
+    assert!(text_run(root, &["show", "HEAD:.tiptoptyp/private.typ"]).is_err());
+    assert_eq!(
+        text_run(root, &["log", "-1", "--format=%s"]).unwrap(),
+        "All changes"
+    );
+}
+
+#[test]
+fn stage_all_and_commit_rejects_blank_messages_and_newly_staged_subsets() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    initialize(root, "original\n");
+    fs::write(root.join("main.typ"), "changed\n").unwrap();
+    assert!(perform(root, Operation::StageAllAndCommit(" \n".into())).is_err());
+    assert_eq!(snapshot(root).unwrap().entries.staged, 0);
+    fs::write(root.join("selected.typ"), "selected").unwrap();
+    perform(root, Operation::Stage("selected.typ".into())).unwrap();
+    assert!(perform(root, Operation::StageAllAndCommit("Unsafe subset".into())).is_err());
+    assert_eq!(snapshot(root).unwrap().entries.staged, 1);
+    perform(root, Operation::Commit("Selected only".into())).unwrap();
+    assert_eq!(
+        text_run(root, &["show", "HEAD:main.typ"]).unwrap(),
+        "original"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("main.typ")).unwrap(),
+        "changed\n"
+    );
+}
+
+#[test]
+fn revert_preserves_index_removes_only_confirmed_new_files_and_restores_deletions() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    initialize(root, "original\n");
+    fs::write(root.join("deleted.typ"), "restore me").unwrap();
+    perform(root, Operation::StageAllAndCommit("Add file".into())).unwrap();
+    fs::write(root.join("main.typ"), "staged\n").unwrap();
+    fs::write(root.join("staged-new.typ"), "staged new").unwrap();
+    perform(root, Operation::StageAll).unwrap();
+    let index = text_run(root, &["write-tree"]).unwrap();
+    fs::write(root.join("main.typ"), "unstaged\n").unwrap();
+    fs::write(root.join("staged-new.typ"), "unstaged new").unwrap();
+    fs::remove_file(root.join("deleted.typ")).unwrap();
+    let new_path = "space and\n:(glob)*.typ";
+    fs::write(root.join(new_path), "unstaged new file").unwrap();
+    fs::create_dir(root.join(".tiptoptyp")).unwrap();
+    fs::write(root.join(".tiptoptyp/private.typ"), "private").unwrap();
+    let paths = snapshot(root)
+        .unwrap()
+        .entries
+        .iter()
+        .filter(|entry| entry.revertible())
+        .map(|entry| entry.path.clone())
+        .collect();
+    fs::write(root.join("later.typ"), "not confirmed").unwrap();
+    perform(root, Operation::Revert(paths)).unwrap();
+    assert_eq!(text_run(root, &["write-tree"]).unwrap(), index);
+    assert_eq!(
+        fs::read_to_string(root.join("main.typ")).unwrap(),
+        "staged\n"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("staged-new.typ")).unwrap(),
+        "staged new"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("deleted.typ")).unwrap(),
+        "restore me"
+    );
+    assert!(!root.join(new_path).exists());
+    assert!(root.join("later.typ").exists());
+    assert!(root.join(".tiptoptyp/private.typ").exists());
+}
+
+#[test]
+fn reverting_one_new_file_works_before_first_commit_and_cannot_delete_a_staged_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    perform(root, Operation::Init).unwrap();
+    fs::write(root.join("new.typ"), "new").unwrap();
+    fs::write(root.join("other.typ"), "other").unwrap();
+    perform(root, Operation::Revert(vec!["new.typ".into()])).unwrap();
+    assert!(!root.join("new.typ").exists());
+    assert!(root.join("other.typ").exists());
+    perform(root, Operation::Stage("other.typ".into())).unwrap();
+    assert!(perform(root, Operation::Revert(vec!["other.typ".into()])).is_err());
+    assert_eq!(fs::read_to_string(root.join("other.typ")).unwrap(), "other");
+}
+
+#[test]
+fn revert_rejects_stale_conflicted_private_and_directory_targets_before_mutation() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    initialize(root, "original\n");
+    fs::write(root.join("main.typ"), "changed\n").unwrap();
+    fs::create_dir(root.join("nested")).unwrap();
+    text_run(&root.join("nested"), &["init"]).unwrap();
+    fs::write(root.join("nested/new.typ"), "nested").unwrap();
+    for bad in [
+        "missing.typ",
+        "../outside.typ",
+        ".tiptoptyp/private.typ",
+        "nested/",
+    ] {
+        assert!(
+            perform(root, Operation::Revert(vec!["main.typ".into(), bad.into()])).is_err(),
+            "{bad}"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("main.typ")).unwrap(),
+            "changed\n"
+        );
+    }
+    for (index, worktree) in [('U', 'U'), ('A', 'A'), ('D', 'D'), ('A', 'U'), ('U', 'D')] {
+        assert!(
+            !Entry {
+                path: "main.typ".into(),
+                index,
+                worktree
+            }
+            .revertible()
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn reverting_an_untracked_symlink_does_not_follow_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    initialize(root, "original\n");
+    fs::write(outside.path().join("keep.typ"), "keep").unwrap();
+    std::os::unix::fs::symlink(outside.path(), root.join("link")).unwrap();
+    perform(root, Operation::Revert(vec!["link".into()])).unwrap();
+    assert!(fs::symlink_metadata(root.join("link")).is_err());
+    assert_eq!(
+        fs::read_to_string(outside.path().join("keep.typ")).unwrap(),
+        "keep"
+    );
+}
+
 pub(super) fn initialize(root: &Path, source: &str) {
     text_run(root, &["init"]).unwrap();
     for (name, value) in [

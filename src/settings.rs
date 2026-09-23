@@ -188,6 +188,8 @@ impl ToolMode {
 /// selected makes it possible to switch between the two without re-browsing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ToolPreference {
+    #[serde(default)]
+    pub(crate) command: crate::tool_command::CommandCustomization,
     pub(crate) mode: ToolMode,
     pub(crate) custom_path: String,
 }
@@ -195,6 +197,7 @@ pub(crate) struct ToolPreference {
 impl Default for ToolPreference {
     fn default() -> Self {
         Self {
+            command: Default::default(),
             mode: ToolMode::Bundled,
             custom_path: String::new(),
         }
@@ -230,6 +233,26 @@ impl GitDiffStyle {
         match self {
             Self::Unified => "Single column",
             Self::SideBySide => "Side-by-side",
+        }
+    }
+}
+
+/// Persisted user choices for the current settings schema.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum ToolbarStyle {
+    Text,
+    TextAndIcons,
+    #[default]
+    Icons,
+}
+
+impl ToolbarStyle {
+    pub(crate) const ALL: [Self; 3] = [Self::Text, Self::TextAndIcons, Self::Icons];
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Text => "Text only",
+            Self::TextAndIcons => "Text and icons",
+            Self::Icons => "Icons only",
         }
     }
 }
@@ -295,6 +318,8 @@ pub(crate) struct AppSettings {
     /// Keep the in-window File/Edit/View controls visible beside the document
     /// title. Native macOS menus remain available when this is disabled.
     pub(crate) titlebar_menus: bool,
+    #[serde(default)]
+    pub(crate) toolbar_style: ToolbarStyle,
     /// Give every document tab the same width instead of sizing it to its name.
     #[serde(default)]
     pub(crate) fixed_tab_width: bool,
@@ -350,6 +375,7 @@ impl Default for AppSettings {
             code_font_face_index: 0,
             code_font_weight: DEFAULT_UI_FONT_WEIGHT,
             titlebar_menus: true,
+            toolbar_style: ToolbarStyle::default(),
             fixed_tab_width: false,
             shortcut_overrides: ShortcutOverrides::default(),
             typst_overrides: TypstOverrideThemes::default(),
@@ -416,6 +442,7 @@ impl AppSettings {
             code_font_face_index,
             code_font_weight,
             titlebar_menus,
+            toolbar_style,
             fixed_tab_width,
             shortcut_overrides,
             typst_overrides,
@@ -768,6 +795,7 @@ mod tests {
             code_font_face_index: 1,
             code_font_weight: 450,
             titlebar_menus: false,
+            toolbar_style: ToolbarStyle::Icons,
             fixed_tab_width: true,
             shortcut_overrides: ShortcutOverrides::default(),
             typst_overrides,
@@ -777,10 +805,12 @@ mod tests {
             )]),
             recent_workspaces: vec!["/workspace".to_owned()],
             typst: ToolPreference {
+                command: Default::default(),
                 mode: ToolMode::Custom,
                 custom_path: "/opt/typst".to_owned(),
             },
             tinymist: ToolPreference {
+                command: Default::default(),
                 mode: ToolMode::Custom,
                 custom_path: "/opt/tinymist".to_owned(),
             },
