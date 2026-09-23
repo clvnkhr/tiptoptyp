@@ -40,3 +40,4 @@ file-associations = [
 
 [macos]
 signing-identity = "-"
+entitlements = "packaging/macos-local.entitlements.plist"

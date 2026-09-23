@@ -92,6 +92,15 @@ fn main() -> eframe::Result {
         println!("{}", build_info::VERSION);
         return Ok(());
     }
+    if std::env::args_os().len() == 2
+        && std::env::args_os()
+            .nth(1)
+            .is_some_and(|arg| arg == "--check-runtime")
+    {
+        validate_runtime()?;
+        println!("PDF runtime initialized successfully");
+        return Ok(());
+    }
     let profile = performance::Session::from_env()
         .map_err(|error| eframe::Error::AppCreation(std::io::Error::other(error).into()))?;
     let result = run(profile.persistence_path());
@@ -101,8 +110,15 @@ fn main() -> eframe::Result {
     result.and(recorded)
 }
 
+fn validate_runtime() -> eframe::Result {
+    pdfium::validate().map_err(|error| {
+        eframe::Error::AppCreation(
+            std::io::Error::other(format!("Could not initialize PDF renderer: {error}")).into(),
+        )
+    })
+}
+
 fn run(profile_storage: Option<std::path::PathBuf>) -> eframe::Result {
-    pdfium::validate().map_err(invalid_launch_configuration)?;
     let launch =
         LaunchOptions::from_process(profile_storage).map_err(invalid_launch_configuration)?;
     if let Some(profile) = &launch.theme_profile
@@ -123,6 +139,7 @@ fn run(profile_storage: Option<std::path::PathBuf>) -> eframe::Result {
             step.theme.name
         )));
     }
+    validate_runtime()?;
     let launch_mode = launch.mode;
     let initial_path = launch.initial_path;
     let theme_profile = launch.theme_profile;

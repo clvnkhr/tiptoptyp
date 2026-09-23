@@ -268,7 +268,7 @@ cargo packager --release
 cargo run --manifest-path xtask/Cargo.toml -- verify-package
 ```
 
-The installer builds and launches the production `tiptoptyp.app` bundle. The
+The installer builds, verifies and installs the production `tiptoptyp.app` bundle. The
 default direct Cargo build remains the visibly marked development app with its
 amber `DEV` icon badge.
 
@@ -289,19 +289,23 @@ TIPTOPTYP_PACKAGE_TARGET=x86_64-apple-darwin \
 ```
 
 macOS packages are ad-hoc signed by default so the app, sidecars, and sealed
-resources form a valid local bundle. Public distribution must replace `-` in
-the packager signing configuration with a Developer ID Application identity
-and provide notarization credentials.
+resources form a valid local bundle. Local ad-hoc builds use
+`packaging/macos-local.entitlements.plist` to allow the bundled PDFium library
+under hardened runtime; ad-hoc signatures have no Team ID. Package verification
+runs `tiptoptyp --check-runtime` to load PDFium without opening a window, in
+addition to checking signatures and sidecar versions. Public distribution should
+sign the app and library with the same Developer ID Application identity, omit
+the local library-validation entitlement, and provide notarization credentials.
 
-For a local macOS build that installs the verified bundle into `/Applications`
-and launches it, run:
+For a local macOS build that installs the verified bundle into `/Applications`, run:
 
 ```sh
 scripts/install-macos-app.sh
 ```
 
-Set `TIPTOPTYP_APPLICATIONS_DIR="$HOME/Applications"` to install into a
-user-owned Applications directory instead.
+The installer does not quit an existing app or open the installed app. Launch it
+manually when ready. Set `TIPTOPTYP_APPLICATIONS_DIR="$HOME/Applications"` to install
+into a user-owned Applications directory instead.
 
 ## Keyboard shortcuts
 

@@ -29,20 +29,6 @@ if [ ! -d "$source_app" ]; then
     exit 1
 fi
 
-if pgrep -f -- "$installed_app/Contents/MacOS/tiptoptyp" >/dev/null 2>&1; then
-    echo "Closing the previously installed tiptoptyp"
-    osascript -e 'tell application id "dev.tiptoptyp.editor" to quit'
-    i=0
-    while pgrep -f -- "$installed_app/Contents/MacOS/tiptoptyp" >/dev/null 2>&1; do
-        i=$((i + 1))
-        if [ "$i" -ge 20 ]; then
-            echo "the previously installed tiptoptyp did not quit" >&2
-            exit 1
-        fi
-        sleep 0.25
-    done
-fi
-
 mkdir -p "$applications_dir"
 if [ -e "$installed_app" ]; then
     rm -rf -- "$installed_app"
@@ -50,16 +36,3 @@ fi
 ditto --rsrc --extattr "$source_app" "$installed_app"
 
 echo "Installed $installed_app"
-open "$installed_app"
-
-i=0
-while ! pgrep -f -- "$installed_app/Contents/MacOS/tiptoptyp" >/dev/null 2>&1; do
-    i=$((i + 1))
-    if [ "$i" -ge 20 ]; then
-        echo "tiptoptyp did not start from $installed_app" >&2
-        exit 1
-    fi
-    sleep 0.25
-done
-
-echo "Running $installed_app"

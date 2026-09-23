@@ -122,6 +122,7 @@ file-associations = [
 # Produces a locally runnable, internally consistent bundle. Distribution
 # builds should replace this with their Developer ID identity and notarize.
 signing-identity = "-"
+entitlements = "packaging/macos-local.entitlements.plist"
 
 # macOS surface identity must include the thread-current OpenGL context.
 [patch.crates-io]

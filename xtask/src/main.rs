@@ -340,6 +340,11 @@ fn verify_package(target: &str) -> Result<(), String> {
         "verifying the packaged app signature",
     )?;
 
+    run_status(
+        Command::new(executable_dir.join("tiptoptyp")).arg("--check-runtime"),
+        "initializing the packaged PDF runtime",
+    )?;
+
     println!("verified {}", app.display());
     Ok(())
 }

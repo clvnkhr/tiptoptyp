@@ -59,3 +59,26 @@ fn unknown_flags_exit_unsuccessfully_instead_of_becoming_document_paths() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn runtime_probe_loads_renderer_without_initializing_gui_or_profiling() {
+    let output = Command::new(env!("CARGO_BIN_EXE_tiptoptyp"))
+        .arg("--check-runtime")
+        .env("TIPTOPTYP_PROFILE_SECONDS", "invalid")
+        .output()
+        .unwrap();
+    if output.status.success() {
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "PDF runtime initialized successfully"
+        );
+    } else {
+        // CI without a downloaded library must fail explicitly, not silently
+        // skip the load as --version does or enter GUI/profiling initialization.
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("Could not initialize PDF renderer:"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
