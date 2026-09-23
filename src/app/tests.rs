@@ -197,6 +197,33 @@ fn pdfjs_compiles_canonical_bytes_without_starting_svg_or_raster_work() {
 }
 
 #[test]
+fn pdfium_routes_canonical_artifacts_without_hayro_or_webview_work() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+    app.settings.preview_preference = PreviewPreference::Pdfium;
+    app.preview.set_requested_backend(PreviewPreference::Pdfium);
+    assert!(app.pdfium_preview_requested());
+    assert!(app.preview_processing_enabled());
+    assert!(!app.pdfjs_preview_requested());
+    assert!(!app.raster_preview_required());
+    assert!(!app.interactive_preview_requested());
+    assert_eq!(app.preview_status_snapshot().backend_label(), "PDFium");
+    for interactive_source in [true, false] {
+        for native_supported in [true, false] {
+            let status = app
+                .preview
+                .status_snapshot(interactive_source, true, native_supported, 0);
+            assert_eq!(
+                status.effective_backend,
+                crate::preview::PreviewBackend::Pdfium
+            );
+            assert!(status.fallback_reason().is_none());
+        }
+    }
+}
+
+#[test]
 fn file_navigation_to_untitled_backing_reuses_the_editor() {
     let root = tempfile::tempdir().unwrap();
     let context = egui::Context::default();

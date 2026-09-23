@@ -39,6 +39,7 @@ mod package_catalog;
 mod pdf;
 mod pdf_pages;
 mod pdf_residency;
+mod pdfium;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod pdfjs;
 mod performance;

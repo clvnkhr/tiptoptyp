@@ -5,4 +5,5 @@
 /toolchain/cache/
 /toolchain/licenses/
 /toolchain/provenance/
+/toolchain/pdfium-bundle/
 /xtask/target/

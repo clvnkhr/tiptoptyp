@@ -121,10 +121,11 @@ pub enum UiSnapshotScene {
     FindReplace,
     FindStickyContext,
     PreviewCompiling,
+    PdfiumPreview,
 }
 
 impl UiSnapshotScene {
-    pub const ALL: [Self; 55] = [
+    pub const ALL: [Self; 56] = [
         Self::TableEditor,
         Self::TableEditorNarrow,
         Self::Main,
@@ -180,6 +181,7 @@ impl UiSnapshotScene {
         Self::FindReplace,
         Self::FindStickyContext,
         Self::PreviewCompiling,
+        Self::PdfiumPreview,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -239,6 +241,7 @@ impl UiSnapshotScene {
             Self::FindReplace => "find-replace",
             Self::FindStickyContext => "find-sticky-context",
             Self::PreviewCompiling => "preview-compiling",
+            Self::PdfiumPreview => "pdfium-preview",
         }
     }
 
@@ -269,7 +272,8 @@ impl UiSnapshotScene {
             | Self::ExplorerMaximized
             | Self::FindReplace
             | Self::FindStickyContext
-            | Self::PreviewCompiling => ROOT_VIEWPORT_NAME,
+            | Self::PreviewCompiling
+            | Self::PdfiumPreview => ROOT_VIEWPORT_NAME,
             Self::FileMenu
             | Self::EditMenu
             | Self::EditorContextMenu
@@ -365,6 +369,7 @@ impl UiSnapshotScene {
             "find-replace" => Self::FindReplace,
             "find-sticky-context" => Self::FindStickyContext,
             "preview-compiling" => Self::PreviewCompiling,
+            "pdfium-preview" => Self::PdfiumPreview,
             _ => {
                 let choices = Self::ALL
                     .iter()
@@ -1591,7 +1596,7 @@ mod tests {
         let default_output_count = contract.themes.len()
             + component_count * contract.scene_themes.len()
             + contract.variants.len();
-        assert_eq!(default_output_count, 70);
+        assert_eq!(default_output_count, 72);
     }
 
     #[test]

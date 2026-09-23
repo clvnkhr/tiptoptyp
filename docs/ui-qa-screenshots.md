@@ -104,6 +104,7 @@ The accepted scenes and their framebuffer targets are:
 | `find-replace` | `main` | Find and replace controls |
 | `find-sticky-context` | `main` | Find/replace above scrolled sticky rows, with the current match count |
 | `preview-compiling` | `main` | Compiling status and empty preview state |
+| `pdfium-preview` | `main` | Actual bundled PDFium pixels and native egui controls; requires `fetch-pdfium` |
 
 A capture batch retains its initial document separately from scene-specific
 buffers. Returning from a scene that replaces the document restores that fixture

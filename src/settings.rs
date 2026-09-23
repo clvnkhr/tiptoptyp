@@ -134,6 +134,7 @@ pub(crate) enum PreviewPreference {
     #[default]
     Interactive,
     PdfJs,
+    Pdfium,
     /// Explicit opt-in only; pending removal with its capture surrogate (todo 295).
     Native,
 }
@@ -205,12 +206,13 @@ impl Default for ToolPreference {
 }
 
 impl PreviewPreference {
-    pub(crate) const ALL: [Self; 3] = [Self::Interactive, Self::PdfJs, Self::Native];
+    pub(crate) const ALL: [Self; 4] = [Self::Interactive, Self::Pdfium, Self::PdfJs, Self::Native];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Interactive => "Interactive (Tinymist)",
             Self::PdfJs => "PDF.js",
+            Self::Pdfium => "PDFium (comparison)",
             Self::Native => "Rasterised PDF",
         }
     }

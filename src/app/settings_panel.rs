@@ -756,7 +756,8 @@ impl SettingsPanel<'_> {
                         )
                         .on_hover_text(match preference {
                             PreviewPreference::Interactive => "Typst uses Tinymist; opened PDFs and preview failures use PDF.js.",
-                            PreviewPreference::PdfJs => "Use PDF.js for compiled Typst previews. TeX and opened PDFs always use PDF.js.",
+                            PreviewPreference::PdfJs => "Use PDF.js for compiled Typst and TeX previews and opened PDFs.",
+                            PreviewPreference::Pdfium => "Compare native PDFium for Typst, TeX and opened PDFs. Retains pages during updates; includes text selection, search and links. PDF.js remains available.",
                             PreviewPreference::Native => "Use the built-in Rust raster renderer for Typst previews. Scheduled for removal; prefer PDF.js.",
                         });
                     }

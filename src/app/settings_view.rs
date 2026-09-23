@@ -129,6 +129,7 @@ impl EditorApp {
         } else {
             match self.document().kind() {
                 DocumentKind::Pdf if self.pdfjs_asset_requested() => "PDF.js",
+                DocumentKind::Pdf if self.pdfium_asset_requested() => "PDFium",
                 DocumentKind::Pdf => "Rasterised PDF",
                 DocumentKind::Image => "Image",
                 DocumentKind::Tex | DocumentKind::Text => "Text editor",

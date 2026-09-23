@@ -55,6 +55,7 @@ use crate::terminal::{BottomPanel, PanelTab, TerminalPane, terminal_id};
 mod workspace_view;
 use lifecycle::DocumentLifecycle;
 mod native_views;
+mod pdfium_view;
 mod pdfjs_view;
 mod preview_follow;
 mod settings_panel;
@@ -856,7 +857,7 @@ impl SettingsSection {
             Self::Appearance => "Appearance",
             Self::Editor => "Editor",
             Self::Tools => "Tool binaries",
-            Self::Preview => "Typst preview backend",
+            Self::Preview => "Preview backend",
             Self::Status => "Service status",
         }
     }
@@ -990,7 +991,7 @@ impl SettingsTarget {
             Self::TinymistLanguageServer => "Tinymist (Typst language server)",
             Self::RefreshBinaryStatus => "Refresh binary status",
             Self::BrowseTypstPackages => "Browse Typst packages…",
-            Self::PreviewBackend => "Typst preview backend",
+            Self::PreviewBackend => "Preview backend",
             Self::PreviewFollowEdits => "Follow Typst edits in preview",
             Self::ToolchainStatus => "Service status",
             Self::ProjectRoot => "Project root",
@@ -1099,7 +1100,7 @@ impl SettingsTarget {
             Self::TinymistLanguageServer => "tools binary lsp custom bundled path",
             Self::RefreshBinaryStatus => "tools rescan reload",
             Self::BrowseTypstPackages => "tools package manager registry installed published",
-            Self::PreviewBackend => "interactive raster pdf tinymist native retry",
+            Self::PreviewBackend => "interactive raster pdf pdfium pdf.js tinymist native retry",
             Self::PreviewFollowEdits => "automatic scroll jump sync source typing changes",
             Self::ToolchainStatus => "tools typst tinymist lsp vector watcher pdf syntax ready",
             Self::ProjectRoot => "workspace folder directory path",
@@ -1285,6 +1286,8 @@ pub struct EditorApp {
     web_link_sender: mpsc::Sender<String>,
     pdfjs_preview: pdfjs_view::PdfJsView,
     pdfjs_asset: pdfjs_view::PdfJsView,
+    pdfium_preview: pdfium_view::PdfiumView,
+    pdfium_asset: pdfium_view::PdfiumView,
     web_link_receiver: mpsc::Receiver<String>,
     browser_launch: Option<mpsc::Receiver<Result<String, String>>>,
     browser_repaint: crate::worker::RepaintTarget,
@@ -1343,6 +1346,9 @@ impl EditorApp {
         window_host: EditorWindowHost,
         lifecycle: DocumentLifecycle,
     ) -> Self {
+        if snapshot_scene == Some(UiSnapshotScene::PdfiumPreview) {
+            settings.preview_preference = PreviewPreference::Pdfium;
+        }
         if snapshot_scene.is_some() {
             settings.ui_font_weight = DEFAULT_UI_FONT_WEIGHT;
             settings.code_font_weight = DEFAULT_UI_FONT_WEIGHT;
@@ -1580,6 +1586,8 @@ impl EditorApp {
             web_link_sender,
             pdfjs_preview: pdfjs_view::PdfJsView::default(),
             pdfjs_asset: pdfjs_view::PdfJsView::default(),
+            pdfium_preview: pdfium_view::PdfiumView::default(),
+            pdfium_asset: pdfium_view::PdfiumView::default(),
             web_link_receiver,
             browser_launch: None,
             browser_repaint: crate::worker::RepaintTarget::new(context, viewport),
@@ -2539,7 +2547,7 @@ impl EditorApp {
             && self.raster_preview_required();
         let asset_visible = self.document().kind().preview_only()
             && (self.document().kind() != DocumentKind::Pdf
-                || !self.pdfjs_asset_requested()
+                || (!self.pdfjs_asset_requested() && !self.pdfium_asset_requested())
                 || self.captures.has_pending_for("main"));
         let owner = self.document().key().owner;
         let visible = raster_document_visible
@@ -3107,7 +3115,11 @@ impl EditorApp {
                 consume_preview_zoom_shortcut(input, &shortcuts)
             })
         {
-            if self.pdfjs_asset_requested() {
+            if self.pdfium_asset_requested() {
+                self.pdfium_asset.zoom(action);
+            } else if self.pdfium_preview_requested() && !self.document().kind().preview_only() {
+                self.pdfium_preview.zoom(action);
+            } else if self.pdfjs_asset_requested() {
                 self.pdfjs_asset.zoom(action);
             } else if self.pdfjs_preview_requested() && !self.document().kind().preview_only() {
                 self.pdfjs_preview.zoom(action);
@@ -3252,6 +3264,20 @@ impl EditorApp {
         context: &egui::Context,
         frame: Option<&eframe::Frame>,
     ) {
+        if self.preview_visible()
+            && ((self.pdfium_asset_requested()
+                && self
+                    .pdfium_asset
+                    .command(command, context, !self.source_preview_available()))
+                || (self.pdfium_preview_requested()
+                    && self.pdfium_preview.command(
+                        command,
+                        context,
+                        self.view_mode == ViewMode::Preview,
+                    )))
+        {
+            return;
+        }
         if command_spec(command).menu == CommandMenu::File && self.document_flow_busy() {
             self.notice = Some(Notice {
                 message: "Finish the current file operation before starting another".to_owned(),
@@ -5963,11 +5989,12 @@ impl EditorApp {
         self.source_preview_available()
             && (self.document_workflow.pending_export.is_some()
                 || self.pdfjs_preview_requested()
+                || self.pdfium_preview_requested()
                 || self.raster_preview_required())
     }
 
     fn raster_preview_required(&self) -> bool {
-        self.captures.has_pending_for("main")
+        (self.captures.has_pending_for("main") && !self.pdfium_preview_requested())
             || self.preview_status_snapshot().effective_backend
                 == crate::preview::PreviewBackend::Raster
     }
@@ -7718,6 +7745,12 @@ impl EditorApp {
             self.show_asset_view(ui, frame);
             return;
         }
+        if self.pdfium_preview_requested() {
+            self.hide_webview();
+            self.pdfjs_preview.hide();
+            self.show_pdfium_view(ui, false);
+            return;
+        }
         if self.pdfjs_preview_requested() && !self.captures.has_pending_for("main") {
             self.hide_webview();
             self.show_pdfjs_view(ui, frame, false);
@@ -8644,6 +8677,12 @@ impl EditorApp {
                 self.source_preview_available(),
                 self.view_mode,
             );
+            if !self.pdfium_preview_requested() {
+                self.pdfium_preview = Default::default();
+            }
+            if !self.pdfium_asset_requested() {
+                self.pdfium_asset = Default::default();
+            }
             if !self.pdfjs_preview_requested() {
                 self.pdfjs_preview.clear();
             } else if !matches!(

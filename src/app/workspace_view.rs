@@ -144,7 +144,8 @@ impl EditorApp {
             self.asset_token,
             path,
             self.document().kind(),
-            !self.pdfjs_asset_requested() || self.captures.has_pending_for("main"),
+            !self.pdfium_asset_requested()
+                && (!self.pdfjs_asset_requested() || self.captures.has_pending_for("main")),
         ) {
             self.asset_preview.status = PreviewStatus::Error;
             self.notice = Some(Notice {
@@ -155,6 +156,11 @@ impl EditorApp {
     }
 
     pub(super) fn show_asset_view(&mut self, ui: &mut egui::Ui, frame: Option<&eframe::Frame>) {
+        if self.pdfium_asset_requested() {
+            self.pdfjs_asset.hide();
+            self.show_pdfium_view(ui, true);
+            return;
+        }
         if self.pdfjs_asset_requested()
             && self.document().kind() == DocumentKind::Pdf
             && !self.captures.has_pending_for("main")

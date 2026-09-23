@@ -114,6 +114,7 @@ impl ServiceState {
 pub(crate) enum PreviewBackend {
     Interactive,
     PdfJs,
+    Pdfium,
     Raster,
 }
 
@@ -140,6 +141,7 @@ impl PreviewStatusSnapshot<'_> {
                 "PDF.js · fallback"
             }
             PreviewBackend::PdfJs => "PDF.js",
+            PreviewBackend::Pdfium => "PDFium",
             PreviewBackend::Raster => "Rasterised PDF",
         }
     }
@@ -901,6 +903,9 @@ impl PreviewController {
         interactive_source_supported: bool,
         platform_supported: bool,
     ) -> PreviewBackend {
+        if self.requested_backend == PreviewPreference::Pdfium {
+            return PreviewBackend::Pdfium;
+        }
         if !interactive_source_supported {
             return if platform_supported {
                 PreviewBackend::PdfJs
@@ -911,6 +916,7 @@ impl PreviewController {
         match self.requested_backend {
             PreviewPreference::Native => PreviewBackend::Raster,
             PreviewPreference::PdfJs => PreviewBackend::PdfJs,
+            PreviewPreference::Pdfium => PreviewBackend::Pdfium,
             PreviewPreference::Interactive
                 if self.interactive_requested(interactive_source_supported, platform_supported)
                     && !self.interactive_unavailable() =>
@@ -1644,6 +1650,8 @@ mod tests {
                     status.effective_backend,
                     if preference == PreviewPreference::Native {
                         PreviewBackend::Raster
+                    } else if preference == PreviewPreference::Pdfium {
+                        PreviewBackend::Pdfium
                     } else {
                         PreviewBackend::PdfJs
                     }

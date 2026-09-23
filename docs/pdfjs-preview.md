@@ -5,6 +5,10 @@ preview. Typst documents still default to Tinymist for source/preview
 synchronization. Select **Settings → Preview → PDF.js** to use PDF.js for compiled
 Typst output too, in Split or Preview view.
 
+**PDFium (comparison)** is also available in the same selector for compiled
+Typst/TeX output and opened PDFs. PDF.js and Tinymist defaults are unchanged;
+switch back to **PDF.js** for direct comparison. See [PDFium preview](pdfium-preview.md).
+
 PDF.js is also the automatic fallback when Tinymist is unavailable, exhausts its
 five consecutive attempts, or its native view fails. The first four failures keep
 the existing retry behavior and any retained Tinymist surface. Fallback preserves
@@ -16,7 +20,7 @@ Native PDF.js views are available on macOS and Windows. Other platforms report
 missing native web-view support rather than silently selecting raster. A PDF.js
 load failure exposes its error and retry button, without another backend switch.
 An explicit **Rasterised PDF** preference remains available for now and applies
-to compiled Typst previews. TeX and opened PDFs use PDF.js.
+to compiled Typst previews. TeX and opened PDFs use PDF.js unless PDFium is selected.
 
 The bundled Mozilla generic viewer provides continuous scroll, horizontal pan
 when zoomed in, zoom buttons and percentage/fit controls, Cmd/Ctrl +/- and 0,

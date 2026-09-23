@@ -1,0 +1,1198 @@
+{
+  "date": "2026-09-23",
+  "kind": "engine-only feasibility probe",
+  "compiler": "typst 0.15.1 (9dfd3a08)",
+  "fixture_source": "#set page(width: 420pt, height: 550pt, margin: 32pt)\n#set text(size: 13pt)\n#let pages = int(sys.inputs.at(\"pages\", default: \"24\"))\n= PDF.js preview check\n\n#link(<last>)[Jump to the last page]\n\n#link(\"https://example.com/pdfjs-check\")[Open external link]\n\nSelect this text. Maths: $x^2 + y^2 = z^2$.\n\n#for n in range(1, pages) {\n  pagebreak()\n  heading[Page #(n + 1)]\n  [Scroll freely, zoom, and select text on page #(n + 1).]\n  parbreak()\n  lorem(80)\n}\n\n== Last page <last>\n\n#link((page: 1, x: 0pt, y: 0pt))[Back to page one]\n",
+  "revision_b_change": [
+    "Scroll freely",
+    "Updated freely"
+  ],
+  "generation": "Compile a.typ and b.typ with bundled Typst, --input pages=24 and --input pages=240. Read both PDFs before timing. Each engine runs sequentially in its own process.",
+  "probe_sha256": "07b8228e7a90161054338f89def9bf7abe215e0251e26be37dd126d5976004cf",
+  "runs": [
+    {
+      "engine": "mupdf",
+      "binding_version": "1.26.5",
+      "native_version": "1.26.10",
+      "platform": "macOS-14.6.1-arm64-arm-64bit",
+      "python": "3.9.6 (default, Nov 11 2024, 03:15:38) \n[Clang 16.0.0 (clang-1600.0.26.6)]",
+      "architecture": "arm64",
+      "pages": 24,
+      "page_index": 12,
+      "pixel_dimensions": [
+        1800,
+        2358,
+        3
+      ],
+      "warmups": 5,
+      "measured_iterations": 40,
+      "source_paths": [
+        "/private/tmp/tiptoptyp-pdf-candidate-fixtures/a24.pdf",
+        "/private/tmp/tiptoptyp-pdf-candidate-fixtures/b24.pdf"
+      ],
+      "sha256": [
+        "d301305d880f421641b8f9a9051dbb79295b2317032636827bb6d01b30f34ef5",
+        "a753b5c1db43607f8e188ecf02b517cf213c5a8ccea18979dc1e724e27c03b9f"
+      ],
+      "bytes": [
+        65064,
+        65235
+      ],
+      "first_iteration": {
+        "open_page_ms": 1.303125,
+        "render_ms": 7.799375,
+        "text_ms": 1.708125,
+        "total_ms": 10.810625
+      },
+      "summary": {
+        "open_page_ms": {
+          "p50": 0.33529200000000003,
+          "p95": 0.486916
+        },
+        "render_ms": {
+          "p50": 2.0385415,
+          "p95": 2.37475
+        },
+        "text_ms": {
+          "p50": 0.4831045,
+          "p95": 0.591
+        },
+        "total_ms": {
+          "p50": 2.9001665,
+          "p95": 3.377416
+        }
+      },
+      "samples": [
+        {
+          "open_page_ms": 0.459041,
+          "render_ms": 2.37475,
+          "text_ms": 0.543625,
+          "total_ms": 3.377416
+        },
+        {
+          "open_page_ms": 0.374875,
+          "render_ms": 2.179333,
+          "text_ms": 0.530917,
+          "total_ms": 3.085125
+        },
+        {
+          "open_page_ms": 0.368708,
+          "render_ms": 2.192417,
+          "text_ms": 0.550875,
+          "total_ms": 3.112
+        },
+        {
+          "open_page_ms": 0.407833,
+          "render_ms": 2.362917,
+          "text_ms": 0.562625,
+          "total_ms": 3.333375
+        },
+        {
+          "open_page_ms": 0.379167,
+          "render_ms": 2.417333,
+          "text_ms": 0.660667,
+          "total_ms": 3.457167
+        },
+        {
+          "open_page_ms": 0.47725,
+          "render_ms": 2.676333,
+          "text_ms": 0.565709,
+          "total_ms": 3.719292
+        },
+        {
+          "open_page_ms": 0.408417,
+          "render_ms": 2.142708,
+          "text_ms": 0.508167,
+          "total_ms": 3.059292
+        },
+        {
+          "open_page_ms": 0.357375,
+          "render_ms": 2.068042,
+          "text_ms": 0.499375,
+          "total_ms": 2.924792
+        },
+        {
+          "open_page_ms": 0.346875,
+          "render_ms": 2.0775,
+          "text_ms": 0.499042,
+          "total_ms": 2.923417
+        },
+        {
+          "open_page_ms": 0.497375,
+          "render_ms": 2.092167,
+          "text_ms": 0.459958,
+          "total_ms": 3.0495
+        },
+        {
+          "open_page_ms": 0.3315,
+          "render_ms": 1.916375,
+          "text_ms": 0.479166,
+          "total_ms": 2.727041
+        },
+        {
+          "open_page_ms": 0.335542,
+          "render_ms": 1.997583,
+          "text_ms": 0.479292,
+          "total_ms": 2.812417
+        },
+        {
+          "open_page_ms": 0.333834,
+          "render_ms": 2.009166,
+          "text_ms": 0.466542,
+          "total_ms": 2.809542
+        },
+        {
+          "open_page_ms": 0.324709,
+          "render_ms": 1.930458,
+          "text_ms": 0.463958,
+          "total_ms": 2.719125
+        },
+        {
+          "open_page_ms": 0.321792,
+          "render_ms": 1.919666,
+          "text_ms": 0.474167,
+          "total_ms": 2.715625
+        },
+        {
+          "open_page_ms": 0.320916,
+          "render_ms": 1.934334,
+          "text_ms": 0.529875,
+          "total_ms": 2.785125
+        },
+        {
+          "open_page_ms": 0.478167,
+          "render_ms": 2.21625,
+          "text_ms": 0.490583,
+          "total_ms": 3.185
+        },
+        {
+          "open_page_ms": 0.354042,
+          "render_ms": 2.005333,
+          "text_ms": 0.485042,
+          "total_ms": 2.844417
+        },
+        {
+          "open_page_ms": 0.335042,
+          "render_ms": 1.960541,
+          "text_ms": 0.464709,
+          "total_ms": 2.760292
+        },
+        {
+          "open_page_ms": 0.333541,
+          "render_ms": 2.183834,
+          "text_ms": 0.497166,
+          "total_ms": 3.014541
+        },
+        {
+          "open_page_ms": 0.347209,
+          "render_ms": 1.947916,
+          "text_ms": 0.4625,
+          "total_ms": 2.757625
+        },
+        {
+          "open_page_ms": 0.321583,
+          "render_ms": 1.930583,
+          "text_ms": 0.481167,
+          "total_ms": 2.733333
+        },
+        {
+          "open_page_ms": 0.316959,
+          "render_ms": 2.133416,
+          "text_ms": 0.634084,
+          "total_ms": 3.084459
+        },
+        {
+          "open_page_ms": 0.511042,
+          "render_ms": 2.062208,
+          "text_ms": 0.473708,
+          "total_ms": 3.046958
+        },
+        {
+          "open_page_ms": 0.331292,
+          "render_ms": 1.926792,
+          "text_ms": 0.465708,
+          "total_ms": 2.723792
+        },
+        {
+          "open_page_ms": 0.322291,
+          "render_ms": 1.90675,
+          "text_ms": 0.458709,
+          "total_ms": 2.68775
+        },
+        {
+          "open_page_ms": 0.486916,
+          "render_ms": 2.297,
+          "text_ms": 0.538125,
+          "total_ms": 3.322041
+        },
+        {
+          "open_page_ms": 0.321375,
+          "render_ms": 1.989875,
+          "text_ms": 0.46075,
+          "total_ms": 2.772
+        },
+        {
+          "open_page_ms": 0.318917,
+          "render_ms": 1.919791,
+          "text_ms": 0.457,
+          "total_ms": 2.695708
+        },
+        {
+          "open_page_ms": 0.320167,
+          "render_ms": 2.286083,
+          "text_ms": 0.550042,
+          "total_ms": 3.156292
+        },
+        {
+          "open_page_ms": 0.439875,
+          "render_ms": 2.291125,
+          "text_ms": 0.507584,
+          "total_ms": 3.238584
+        },
+        {
+          "open_page_ms": 0.343,
+          "render_ms": 1.982167,
+          "text_ms": 0.466,
+          "total_ms": 2.791167
+        },
+        {
+          "open_page_ms": 0.32375,
+          "render_ms": 2.1935,
+          "text_ms": 0.591,
+          "total_ms": 3.10825
+        },
+        {
+          "open_page_ms": 0.314833,
+          "render_ms": 1.966333,
+          "text_ms": 0.462125,
+          "total_ms": 2.743291
+        },
+        {
+          "open_page_ms": 0.318042,
+          "render_ms": 1.903375,
+          "text_ms": 0.456375,
+          "total_ms": 2.677792
+        },
+        {
+          "open_page_ms": 0.3165,
+          "render_ms": 1.894875,
+          "text_ms": 0.453875,
+          "total_ms": 2.66525
+        },
+        {
+          "open_page_ms": 0.419667,
+          "render_ms": 2.358208,
+          "text_ms": 0.561792,
+          "total_ms": 3.339667
+        },
+        {
+          "open_page_ms": 0.394666,
+          "render_ms": 2.014875,
+          "text_ms": 0.467375,
+          "total_ms": 2.876916
+        },
+        {
+          "open_page_ms": 0.322959,
+          "render_ms": 1.905666,
+          "text_ms": 0.456667,
+          "total_ms": 2.685292
+        },
+        {
+          "open_page_ms": 0.317833,
+          "render_ms": 2.23475,
+          "text_ms": 0.554417,
+          "total_ms": 3.107
+        }
+      ],
+      "limitations": "Engine-only binary-wheel probe; one simple Typst fixture family. Excludes compilation, disk reads, teardown, presentation, UI/text-layer construction, full search and memory measurement. First iteration excludes imports. Not comparable to browser end-to-end results. No visual fidelity verification."
+    },
+    {
+      "engine": "pdfium",
+      "binding_version": "5.13.0",
+      "native_version": "153.0.7999.0",
+      "platform": "macOS-14.6.1-arm64-arm-64bit",
+      "python": "3.9.6 (default, Nov 11 2024, 03:15:38) \n[Clang 16.0.0 (clang-1600.0.26.6)]",
+      "architecture": "arm64",
+      "pages": 24,
+      "page_index": 12,
+      "pixel_dimensions": [
+        1800,
+        2358,
+        3
+      ],
+      "warmups": 5,
+      "measured_iterations": 40,
+      "source_paths": [
+        "/private/tmp/tiptoptyp-pdf-candidate-fixtures/a24.pdf",
+        "/private/tmp/tiptoptyp-pdf-candidate-fixtures/b24.pdf"
+      ],
+      "sha256": [
+        "d301305d880f421641b8f9a9051dbb79295b2317032636827bb6d01b30f34ef5",
+        "a753b5c1db43607f8e188ecf02b517cf213c5a8ccea18979dc1e724e27c03b9f"
+      ],
+      "bytes": [
+        65064,
+        65235
+      ],
+      "first_iteration": {
+        "open_page_ms": 1.958833,
+        "render_ms": 7.140167,
+        "text_ms": 0.579042,
+        "total_ms": 9.678042
+      },
+      "summary": {
+        "open_page_ms": {
+          "p50": 0.96475,
+          "p95": 1.124334
+        },
+        "render_ms": {
+          "p50": 5.484854,
+          "p95": 6.412625
+        },
+        "text_ms": {
+          "p50": 0.1665625,
+          "p95": 0.232166
+        },
+        "total_ms": {
+          "p50": 6.6380625,
+          "p95": 7.560834
+        }
+      },
+      "samples": [
+        {
+          "open_page_ms": 1.095,
+          "render_ms": 6.530584,
+          "text_ms": 0.220041,
+          "total_ms": 7.845625
+        },
+        {
+          "open_page_ms": 1.005083,
+          "render_ms": 5.736,
+          "text_ms": 0.177834,
+          "total_ms": 6.918917
+        },
+        {
+          "open_page_ms": 0.9905,
+          "render_ms": 5.656625,
+          "text_ms": 0.1655,
+          "total_ms": 6.812625
+        },
+        {
+          "open_page_ms": 0.947875,
+          "render_ms": 5.76075,
+          "text_ms": 0.153542,
+          "total_ms": 6.862167
+        },
+        {
+          "open_page_ms": 0.912,
+          "render_ms": 5.386459,
+          "text_ms": 0.183416,
+          "total_ms": 6.481875
+        },
+        {
+          "open_page_ms": 1.291958,
+          "render_ms": 5.416625,
+          "text_ms": 0.166542,
+          "total_ms": 6.875125
+        },
+        {
+          "open_page_ms": 0.929417,
+          "render_ms": 5.524458,
+          "text_ms": 0.163459,
+          "total_ms": 6.617334
+        },
+        {
+          "open_page_ms": 0.934375,
+          "render_ms": 5.555334,
+          "text_ms": 0.157458,
+          "total_ms": 6.647167
+        },
+        {
+          "open_page_ms": 0.919042,
+          "render_ms": 5.174708,
+          "text_ms": 0.1525,
+          "total_ms": 6.24625
+        },
+        {
+          "open_page_ms": 0.920375,
+          "render_ms": 6.412625,
+          "text_ms": 0.227834,
+          "total_ms": 7.560834
+        },
+        {
+          "open_page_ms": 1.108625,
+          "render_ms": 5.84025,
+          "text_ms": 0.397834,
+          "total_ms": 7.346709
+        },
+        {
+          "open_page_ms": 1.069334,
+          "render_ms": 5.310041,
+          "text_ms": 0.165834,
+          "total_ms": 6.545209
+        },
+        {
+          "open_page_ms": 1.098541,
+          "render_ms": 5.203375,
+          "text_ms": 0.152375,
+          "total_ms": 6.454291
+        },
+        {
+          "open_page_ms": 0.912958,
+          "render_ms": 5.764334,
+          "text_ms": 0.157333,
+          "total_ms": 6.834625
+        },
+        {
+          "open_page_ms": 0.920209,
+          "render_ms": 5.195791,
+          "text_ms": 0.150334,
+          "total_ms": 6.266334
+        },
+        {
+          "open_page_ms": 0.995791,
+          "render_ms": 5.256542,
+          "text_ms": 0.158833,
+          "total_ms": 6.411166
+        },
+        {
+          "open_page_ms": 0.919625,
+          "render_ms": 5.924583,
+          "text_ms": 0.216042,
+          "total_ms": 7.06025
+        },
+        {
+          "open_page_ms": 0.924417,
+          "render_ms": 5.217833,
+          "text_ms": 0.148375,
+          "total_ms": 6.290625
+        },
+        {
+          "open_page_ms": 0.96075,
+          "render_ms": 5.484542,
+          "text_ms": 0.153708,
+          "total_ms": 6.599
+        },
+        {
+          "open_page_ms": 0.898417,
+          "render_ms": 5.261833,
+          "text_ms": 0.148042,
+          "total_ms": 6.308292
+        },
+        {
+          "open_page_ms": 0.906958,
+          "render_ms": 5.221,
+          "text_ms": 0.150167,
+          "total_ms": 6.278125
+        },
+        {
+          "open_page_ms": 0.898583,
+          "render_ms": 6.690042,
+          "text_ms": 0.225583,
+          "total_ms": 7.814208
+        },
+        {
+          "open_page_ms": 0.906291,
+          "render_ms": 6.038875,
+          "text_ms": 0.261334,
+          "total_ms": 7.2065
+        },
+        {
+          "open_page_ms": 1.005042,
+          "render_ms": 5.14275,
+          "text_ms": 0.181083,
+          "total_ms": 6.328875
+        },
+        {
+          "open_page_ms": 1.124334,
+          "render_ms": 5.340125,
+          "text_ms": 0.1515,
+          "total_ms": 6.615959
+        },
+        {
+          "open_page_ms": 0.901208,
+          "render_ms": 5.845292,
+          "text_ms": 0.204,
+          "total_ms": 6.9505
+        },
+        {
+          "open_page_ms": 0.944834,
+          "render_ms": 5.443833,
+          "text_ms": 0.224875,
+          "total_ms": 6.613542
+        },
+        {
+          "open_page_ms": 1.108375,
+          "render_ms": 5.612875,
+          "text_ms": 0.177417,
+          "total_ms": 6.898667
+        },
+        {
+          "open_page_ms": 0.982667,
+          "render_ms": 5.477541,
+          "text_ms": 0.160417,
+          "total_ms": 6.620625
+        },
+        {
+          "open_page_ms": 1.018458,
+          "render_ms": 5.392167,
+          "text_ms": 0.218333,
+          "total_ms": 6.628958
+        },
+        {
+          "open_page_ms": 1.0445,
+          "render_ms": 5.216375,
+          "text_ms": 0.156667,
+          "total_ms": 6.417542
+        },
+        {
+          "open_page_ms": 0.925875,
+          "render_ms": 5.223,
+          "text_ms": 0.152208,
+          "total_ms": 6.301083
+        },
+        {
+          "open_page_ms": 0.907541,
+          "render_ms": 5.275209,
+          "text_ms": 0.212666,
+          "total_ms": 6.395416
+        },
+        {
+          "open_page_ms": 1.126958,
+          "render_ms": 5.631167,
+          "text_ms": 0.183792,
+          "total_ms": 6.941917
+        },
+        {
+          "open_page_ms": 1.011584,
+          "render_ms": 5.485166,
+          "text_ms": 0.171834,
+          "total_ms": 6.668584
+        },
+        {
+          "open_page_ms": 0.96875,
+          "render_ms": 5.564709,
+          "text_ms": 0.166583,
+          "total_ms": 6.700042
+        },
+        {
+          "open_page_ms": 1.103708,
+          "render_ms": 5.221667,
+          "text_ms": 0.153375,
+          "total_ms": 6.47875
+        },
+        {
+          "open_page_ms": 0.915667,
+          "render_ms": 6.187917,
+          "text_ms": 0.232166,
+          "total_ms": 7.33575
+        },
+        {
+          "open_page_ms": 1.059834,
+          "render_ms": 5.570291,
+          "text_ms": 0.169375,
+          "total_ms": 6.7995
+        },
+        {
+          "open_page_ms": 0.969833,
+          "render_ms": 5.585292,
+          "text_ms": 0.169542,
+          "total_ms": 6.724667
+        }
+      ],
+      "limitations": "Engine-only binary-wheel probe; one simple Typst fixture family. Excludes compilation, disk reads, teardown, presentation, UI/text-layer construction, full search and memory measurement. First iteration excludes imports. Not comparable to browser end-to-end results. No visual fidelity verification."
+    },
+    {
+      "engine": "mupdf",
+      "binding_version": "1.26.5",
+      "native_version": "1.26.10",
+      "platform": "macOS-14.6.1-arm64-arm-64bit",
+      "python": "3.9.6 (default, Nov 11 2024, 03:15:38) \n[Clang 16.0.0 (clang-1600.0.26.6)]",
+      "architecture": "arm64",
+      "pages": 240,
+      "page_index": 120,
+      "pixel_dimensions": [
+        1800,
+        2358,
+        3
+      ],
+      "warmups": 5,
+      "measured_iterations": 40,
+      "source_paths": [
+        "/private/tmp/tiptoptyp-pdf-candidate-fixtures/a240.pdf",
+        "/private/tmp/tiptoptyp-pdf-candidate-fixtures/b240.pdf"
+      ],
+      "sha256": [
+        "b84510e0c32300451f92f1b7023f4ce974d551d7b7c95da71e24e6bd1a917840",
+        "370df330d6c525de0dee7bfa99a95ea55bfbdf4081e9bc15e973e7d9cf93ecfc"
+      ],
+      "bytes": [
+        488477,
+        490155
+      ],
+      "first_iteration": {
+        "open_page_ms": 1.412125,
+        "render_ms": 5.617,
+        "text_ms": 1.032958,
+        "total_ms": 8.062083
+      },
+      "summary": {
+        "open_page_ms": {
+          "p50": 1.356667,
+          "p95": 1.445375
+        },
+        "render_ms": {
+          "p50": 2.1717295,
+          "p95": 2.431625
+        },
+        "text_ms": {
+          "p50": 0.519521,
+          "p95": 0.589083
+        },
+        "total_ms": {
+          "p50": 4.055270999999999,
+          "p95": 4.417917
+        }
+      },
+      "samples": [
+        {
+          "open_page_ms": 1.35125,
+          "render_ms": 2.753084,
+          "text_ms": 0.589083,
+          "total_ms": 4.693417
+        },
+        {
+          "open_page_ms": 1.417417,
+          "render_ms": 2.247291,
+          "text_ms": 0.548417,
+          "total_ms": 4.213125
+        },
+        {
+          "open_page_ms": 1.407,
+          "render_ms": 2.151458,
+          "text_ms": 0.505959,
+          "total_ms": 4.064417
+        },
+        {
+          "open_page_ms": 1.36475,
+          "render_ms": 2.162834,
+          "text_ms": 0.521583,
+          "total_ms": 4.049167
+        },
+        {
+          "open_page_ms": 1.374,
+          "render_ms": 2.1455,
+          "text_ms": 0.503833,
+          "total_ms": 4.023333
+        },
+        {
+          "open_page_ms": 1.310208,
+          "render_ms": 2.123125,
+          "text_ms": 0.498083,
+          "total_ms": 3.931416
+        },
+        {
+          "open_page_ms": 1.37325,
+          "render_ms": 2.265,
+          "text_ms": 0.485209,
+          "total_ms": 4.123459
+        },
+        {
+          "open_page_ms": 1.28525,
+          "render_ms": 2.262708,
+          "text_ms": 0.525125,
+          "total_ms": 4.073083
+        },
+        {
+          "open_page_ms": 1.331625,
+          "render_ms": 2.294,
+          "text_ms": 0.571875,
+          "total_ms": 4.1975
+        },
+        {
+          "open_page_ms": 1.355209,
+          "render_ms": 2.06525,
+          "text_ms": 0.477583,
+          "total_ms": 3.898042
+        },
+        {
+          "open_page_ms": 1.266709,
+          "render_ms": 2.15875,
+          "text_ms": 0.532166,
+          "total_ms": 3.957625
+        },
+        {
+          "open_page_ms": 1.307292,
+          "render_ms": 2.023166,
+          "text_ms": 0.46975,
+          "total_ms": 3.800208
+        },
+        {
+          "open_page_ms": 1.3755,
+          "render_ms": 2.107625,
+          "text_ms": 0.491792,
+          "total_ms": 3.974917
+        },
+        {
+          "open_page_ms": 1.394292,
+          "render_ms": 2.203583,
+          "text_ms": 0.481833,
+          "total_ms": 4.079708
+        },
+        {
+          "open_page_ms": 1.264667,
+          "render_ms": 2.10825,
+          "text_ms": 0.4765,
+          "total_ms": 3.849417
+        },
+        {
+          "open_page_ms": 1.294417,
+          "render_ms": 2.245208,
+          "text_ms": 0.617834,
+          "total_ms": 4.157459
+        },
+        {
+          "open_page_ms": 1.254708,
+          "render_ms": 2.065833,
+          "text_ms": 0.48225,
+          "total_ms": 3.802791
+        },
+        {
+          "open_page_ms": 1.275041,
+          "render_ms": 2.050792,
+          "text_ms": 0.535167,
+          "total_ms": 3.861
+        },
+        {
+          "open_page_ms": 1.4825,
+          "render_ms": 2.431625,
+          "text_ms": 0.543667,
+          "total_ms": 4.457792
+        },
+        {
+          "open_page_ms": 1.383958,
+          "render_ms": 2.30375,
+          "text_ms": 0.5375,
+          "total_ms": 4.225208
+        },
+        {
+          "open_page_ms": 1.367667,
+          "render_ms": 2.168292,
+          "text_ms": 0.502541,
+          "total_ms": 4.0385
+        },
+        {
+          "open_page_ms": 1.321708,
+          "render_ms": 2.212125,
+          "text_ms": 0.538375,
+          "total_ms": 4.072208
+        },
+        {
+          "open_page_ms": 1.451042,
+          "render_ms": 2.21325,
+          "text_ms": 0.51775,
+          "total_ms": 4.182042
+        },
+        {
+          "open_page_ms": 1.352625,
+          "render_ms": 2.161833,
+          "text_ms": 0.538917,
+          "total_ms": 4.053375
+        },
+        {
+          "open_page_ms": 1.414542,
+          "render_ms": 2.068875,
+          "text_ms": 0.480375,
+          "total_ms": 3.963792
+        },
+        {
+          "open_page_ms": 1.255833,
+          "render_ms": 2.0025,
+          "text_ms": 0.464542,
+          "total_ms": 3.722875
+        },
+        {
+          "open_page_ms": 1.435458,
+          "render_ms": 2.358333,
+          "text_ms": 0.529917,
+          "total_ms": 4.323708
+        },
+        {
+          "open_page_ms": 1.420542,
+          "render_ms": 2.030792,
+          "text_ms": 0.470583,
+          "total_ms": 3.921917
+        },
+        {
+          "open_page_ms": 1.383375,
+          "render_ms": 2.384667,
+          "text_ms": 0.521292,
+          "total_ms": 4.289334
+        },
+        {
+          "open_page_ms": 1.358125,
+          "render_ms": 2.151166,
+          "text_ms": 0.498584,
+          "total_ms": 4.007875
+        },
+        {
+          "open_page_ms": 1.340167,
+          "render_ms": 2.184166,
+          "text_ms": 0.532834,
+          "total_ms": 4.057167
+        },
+        {
+          "open_page_ms": 1.35,
+          "render_ms": 2.184542,
+          "text_ms": 0.505541,
+          "total_ms": 4.040083
+        },
+        {
+          "open_page_ms": 1.320959,
+          "render_ms": 2.106875,
+          "text_ms": 0.491541,
+          "total_ms": 3.919375
+        },
+        {
+          "open_page_ms": 1.323875,
+          "render_ms": 2.3005,
+          "text_ms": 0.703416,
+          "total_ms": 4.327791
+        },
+        {
+          "open_page_ms": 1.360875,
+          "render_ms": 2.160375,
+          "text_ms": 0.481583,
+          "total_ms": 4.002833
+        },
+        {
+          "open_page_ms": 1.303458,
+          "render_ms": 2.2185,
+          "text_ms": 0.573,
+          "total_ms": 4.094958
+        },
+        {
+          "open_page_ms": 1.414334,
+          "render_ms": 2.44375,
+          "text_ms": 0.559833,
+          "total_ms": 4.417917
+        },
+        {
+          "open_page_ms": 1.303083,
+          "render_ms": 2.147875,
+          "text_ms": 0.52425,
+          "total_ms": 3.975208
+        },
+        {
+          "open_page_ms": 1.445375,
+          "render_ms": 2.29525,
+          "text_ms": 0.558166,
+          "total_ms": 4.298791
+        },
+        {
+          "open_page_ms": 1.397917,
+          "render_ms": 2.175167,
+          "text_ms": 0.484166,
+          "total_ms": 4.05725
+        }
+      ],
+      "limitations": "Engine-only binary-wheel probe; one simple Typst fixture family. Excludes compilation, disk reads, teardown, presentation, UI/text-layer construction, full search and memory measurement. First iteration excludes imports. Not comparable to browser end-to-end results. No visual fidelity verification."
+    },
+    {
+      "engine": "pdfium",
+      "binding_version": "5.13.0",
+      "native_version": "153.0.7999.0",
+      "platform": "macOS-14.6.1-arm64-arm-64bit",
+      "python": "3.9.6 (default, Nov 11 2024, 03:15:38) \n[Clang 16.0.0 (clang-1600.0.26.6)]",
+      "architecture": "arm64",
+      "pages": 240,
+      "page_index": 120,
+      "pixel_dimensions": [
+        1800,
+        2358,
+        3
+      ],
+      "warmups": 5,
+      "measured_iterations": 40,
+      "source_paths": [
+        "/private/tmp/tiptoptyp-pdf-candidate-fixtures/a240.pdf",
+        "/private/tmp/tiptoptyp-pdf-candidate-fixtures/b240.pdf"
+      ],
+      "sha256": [
+        "b84510e0c32300451f92f1b7023f4ce974d551d7b7c95da71e24e6bd1a917840",
+        "370df330d6c525de0dee7bfa99a95ea55bfbdf4081e9bc15e973e7d9cf93ecfc"
+      ],
+      "bytes": [
+        488477,
+        490155
+      ],
+      "first_iteration": {
+        "open_page_ms": 1.994,
+        "render_ms": 8.815292,
+        "text_ms": 0.4635,
+        "total_ms": 11.272792
+      },
+      "summary": {
+        "open_page_ms": {
+          "p50": 1.498083,
+          "p95": 1.65775
+        },
+        "render_ms": {
+          "p50": 5.4884375,
+          "p95": 6.283875
+        },
+        "text_ms": {
+          "p50": 0.17375000000000002,
+          "p95": 0.232583
+        },
+        "total_ms": {
+          "p50": 7.222479,
+          "p95": 7.907917
+        }
+      },
+      "samples": [
+        {
+          "open_page_ms": 1.65775,
+          "render_ms": 5.545958,
+          "text_ms": 0.187792,
+          "total_ms": 7.3915
+        },
+        {
+          "open_page_ms": 1.518459,
+          "render_ms": 5.172375,
+          "text_ms": 0.157166,
+          "total_ms": 6.848
+        },
+        {
+          "open_page_ms": 1.424333,
+          "render_ms": 6.283875,
+          "text_ms": 0.185834,
+          "total_ms": 7.894042
+        },
+        {
+          "open_page_ms": 1.585417,
+          "render_ms": 5.778583,
+          "text_ms": 0.260417,
+          "total_ms": 7.624417
+        },
+        {
+          "open_page_ms": 1.535,
+          "render_ms": 5.921292,
+          "text_ms": 0.177,
+          "total_ms": 7.633292
+        },
+        {
+          "open_page_ms": 1.708208,
+          "render_ms": 5.273625,
+          "text_ms": 0.163625,
+          "total_ms": 7.145458
+        },
+        {
+          "open_page_ms": 1.4585,
+          "render_ms": 5.714375,
+          "text_ms": 0.1605,
+          "total_ms": 7.333375
+        },
+        {
+          "open_page_ms": 1.447375,
+          "render_ms": 5.274416,
+          "text_ms": 0.156667,
+          "total_ms": 6.878458
+        },
+        {
+          "open_page_ms": 1.445959,
+          "render_ms": 5.212,
+          "text_ms": 0.17875,
+          "total_ms": 6.836709
+        },
+        {
+          "open_page_ms": 1.497708,
+          "render_ms": 5.643917,
+          "text_ms": 0.190166,
+          "total_ms": 7.331791
+        },
+        {
+          "open_page_ms": 1.493917,
+          "render_ms": 5.614291,
+          "text_ms": 0.185959,
+          "total_ms": 7.294167
+        },
+        {
+          "open_page_ms": 1.55975,
+          "render_ms": 6.195708,
+          "text_ms": 0.217583,
+          "total_ms": 7.973041
+        },
+        {
+          "open_page_ms": 1.437667,
+          "render_ms": 5.296583,
+          "text_ms": 0.157042,
+          "total_ms": 6.891292
+        },
+        {
+          "open_page_ms": 1.658708,
+          "render_ms": 5.67975,
+          "text_ms": 0.171625,
+          "total_ms": 7.510083
+        },
+        {
+          "open_page_ms": 1.498458,
+          "render_ms": 6.458,
+          "text_ms": 0.167542,
+          "total_ms": 8.124
+        },
+        {
+          "open_page_ms": 1.471667,
+          "render_ms": 5.49625,
+          "text_ms": 0.220458,
+          "total_ms": 7.188375
+        },
+        {
+          "open_page_ms": 1.626625,
+          "render_ms": 5.32975,
+          "text_ms": 0.168833,
+          "total_ms": 7.125208
+        },
+        {
+          "open_page_ms": 1.58825,
+          "render_ms": 5.474833,
+          "text_ms": 0.156125,
+          "total_ms": 7.219208
+        },
+        {
+          "open_page_ms": 1.440709,
+          "render_ms": 5.588208,
+          "text_ms": 0.154375,
+          "total_ms": 7.183292
+        },
+        {
+          "open_page_ms": 1.433667,
+          "render_ms": 5.442375,
+          "text_ms": 0.2185,
+          "total_ms": 7.094542
+        },
+        {
+          "open_page_ms": 1.620583,
+          "render_ms": 5.537208,
+          "text_ms": 0.167417,
+          "total_ms": 7.325208
+        },
+        {
+          "open_page_ms": 1.52575,
+          "render_ms": 5.409125,
+          "text_ms": 0.300042,
+          "total_ms": 7.234917
+        },
+        {
+          "open_page_ms": 1.438375,
+          "render_ms": 5.88175,
+          "text_ms": 0.210041,
+          "total_ms": 7.530166
+        },
+        {
+          "open_page_ms": 1.513916,
+          "render_ms": 5.390584,
+          "text_ms": 0.166375,
+          "total_ms": 7.070875
+        },
+        {
+          "open_page_ms": 1.497666,
+          "render_ms": 5.480625,
+          "text_ms": 0.185125,
+          "total_ms": 7.163416
+        },
+        {
+          "open_page_ms": 1.476625,
+          "render_ms": 5.56775,
+          "text_ms": 0.225,
+          "total_ms": 7.269375
+        },
+        {
+          "open_page_ms": 1.563292,
+          "render_ms": 5.449375,
+          "text_ms": 0.164875,
+          "total_ms": 7.177542
+        },
+        {
+          "open_page_ms": 1.564875,
+          "render_ms": 5.499459,
+          "text_ms": 0.161416,
+          "total_ms": 7.22575
+        },
+        {
+          "open_page_ms": 1.480416,
+          "render_ms": 6.180834,
+          "text_ms": 0.232583,
+          "total_ms": 7.893833
+        },
+        {
+          "open_page_ms": 1.609125,
+          "render_ms": 5.463709,
+          "text_ms": 0.179583,
+          "total_ms": 7.252417
+        },
+        {
+          "open_page_ms": 1.553083,
+          "render_ms": 5.508792,
+          "text_ms": 0.175875,
+          "total_ms": 7.23775
+        },
+        {
+          "open_page_ms": 1.584583,
+          "render_ms": 5.310083,
+          "text_ms": 0.179,
+          "total_ms": 7.073666
+        },
+        {
+          "open_page_ms": 1.457625,
+          "render_ms": 5.261042,
+          "text_ms": 0.184875,
+          "total_ms": 6.903542
+        },
+        {
+          "open_page_ms": 1.461833,
+          "render_ms": 5.2385,
+          "text_ms": 0.160917,
+          "total_ms": 6.86125
+        },
+        {
+          "open_page_ms": 1.525125,
+          "render_ms": 5.219041,
+          "text_ms": 0.157334,
+          "total_ms": 6.9015
+        },
+        {
+          "open_page_ms": 1.42625,
+          "render_ms": 5.382875,
+          "text_ms": 0.157583,
+          "total_ms": 6.966708
+        },
+        {
+          "open_page_ms": 1.436542,
+          "render_ms": 5.434458,
+          "text_ms": 0.182417,
+          "total_ms": 7.053417
+        },
+        {
+          "open_page_ms": 1.514292,
+          "render_ms": 5.875333,
+          "text_ms": 0.166042,
+          "total_ms": 7.555667
+        },
+        {
+          "open_page_ms": 1.466333,
+          "render_ms": 5.337667,
+          "text_ms": 0.160125,
+          "total_ms": 6.964125
+        },
+        {
+          "open_page_ms": 1.450875,
+          "render_ms": 6.286584,
+          "text_ms": 0.170458,
+          "total_ms": 7.907917
+        }
+      ],
+      "limitations": "Engine-only binary-wheel probe; one simple Typst fixture family. Excludes compilation, disk reads, teardown, presentation, UI/text-layer construction, full search and memory measurement. First iteration excludes imports. Not comparable to browser end-to-end results. No visual fidelity verification."
+    }
+  ]
+}

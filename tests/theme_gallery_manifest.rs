@@ -421,8 +421,8 @@ fn missing_successful_capture_is_detected_and_restores_the_complete_set() {
 #[test]
 fn default_gallery_manifest_has_the_maintained_shape_and_order_boundaries() {
     let actual = lines(manifest_command().output().expect("run gallery manifest"));
-    assert_eq!(actual.len(), 22);
-    assert_eq!(actual.iter().collect::<BTreeSet<_>>().len(), 22);
+    assert_eq!(actual.len(), 23);
+    assert_eq!(actual.iter().collect::<BTreeSet<_>>().len(), 23);
     assert_eq!(actual.first().unwrap(), "main--catppuccin-latte.png");
     assert_eq!(
         actual
@@ -629,7 +629,7 @@ fn manifest_reader_keeps_an_unterminated_final_record() {
 
     let output = harness.print_manifest();
     let outputs = lines(output);
-    assert_eq!(outputs.len(), 22);
+    assert_eq!(outputs.len(), 23);
     assert_eq!(
         outputs.last().unwrap(),
         "workspace-workspace-chooser--catppuccin-latte.png"

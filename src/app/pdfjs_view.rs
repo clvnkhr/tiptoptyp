@@ -66,12 +66,15 @@ impl EditorApp {
 
     pub(super) fn pdfjs_asset_requested(&self) -> bool {
         self.document().kind() == DocumentKind::Pdf
+            && self.settings.preview_preference != PreviewPreference::Pdfium
             && cfg!(any(target_os = "macos", target_os = "windows"))
     }
 
     pub(super) fn clear_pdfjs_views(&mut self) {
         self.pdfjs_preview.clear();
         self.pdfjs_asset.clear();
+        self.pdfium_preview = Default::default();
+        self.pdfium_asset = Default::default();
     }
 
     pub(super) fn show_pdfjs_view(

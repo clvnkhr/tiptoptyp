@@ -230,6 +230,18 @@ impl QaSession {
         }
         let toolbar_anchor = Pos2::new(theme::SPACE.content, METRICS.chrome.toolbar_height);
         match scene {
+            UiSnapshotScene::PdfiumPreview => {
+                app.settings.preview_preference = PreviewPreference::Pdfium;
+                app.preview.set_requested_backend(PreviewPreference::Pdfium);
+                app.view_mode = ViewMode::Split;
+                if !app.pdfium_preview.ready()
+                    || !app.preview_status_snapshot().canonical_artifact_available
+                {
+                    app.captures.defer_target("main");
+                } else {
+                    app.preview.status = PreviewStatus::Ready(Duration::ZERO);
+                }
+            }
             UiSnapshotScene::TableEditor | UiSnapshotScene::TableEditorNarrow => {
                 if app.table_editor.is_none() {
                     const SOURCE: &str = "= Quarterly review\n\n#table(\n  columns: (2fr, 1fr, 1fr),\n  inset: 8pt,\n  stroke: 0.5pt,\n  table.cell(colspan: 3, fill: rgb(\"#dbeafe\"))[Research programme · 2026],\n  [*Milestone*], [*Owner*], [*Status*],\n  [Literature review], [Ada], [Complete],\n  [Field study], [René], [In progress],\n  [Final report], [Sam], [Planned],\n)\n\nThe code remains selectable and scrollable while the table draft is open.\n";
@@ -865,6 +877,13 @@ impl QaSession {
         }
         app.theme_override = Some(step.theme.clone());
         app.snapshot_scene = Some(step.scene);
+        app.settings.preview_preference = if step.scene == UiSnapshotScene::PdfiumPreview {
+            PreviewPreference::Pdfium
+        } else {
+            PreviewPreference::Interactive
+        };
+        app.preview
+            .set_requested_backend(app.settings.preview_preference);
         self.folding_prepared = false;
         self.tabs_prepared = false;
         self.terminal_icons_prepared = false;

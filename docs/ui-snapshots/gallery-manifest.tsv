@@ -52,6 +52,7 @@ scene	problems-panel	main	main-problems-panel	component	-	-
 scene	find-replace	main	main-find-replace	component	-	-
 scene	find-sticky-context	main	main-find-sticky-context	targeted	-	-
 scene	preview-compiling	main	main-preview-compiling	component	-	-
+scene	pdfium-preview	main	main-pdfium-preview	component	-	-
 scene	file-menu	popup	popup-file-menu	component	transparent	-
 scene	edit-menu	popup	popup-edit-menu	component	transparent	-
 scene	editor-context-menu	popup	popup-editor-context-menu	component	transparent	-

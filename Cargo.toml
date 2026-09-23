@@ -36,6 +36,7 @@ pulldown-cmark = { version = "0.13.1", default-features = false }
 ureq = "3.4.2"
 url = "2.5"
 hayro = "0.7.1"
+pdfium-render = { version = "=0.9.4", default-features = false, features = ["pdfium_7881", "thread_safe"] }
 shlex = "1.3"
 encoding_rs = "0.8.41"
 harper-core = "2.11.0"
@@ -101,6 +102,7 @@ icons = [
 before-packaging-command = "cargo run --manifest-path xtask/Cargo.toml -- package-build --prod"
 external-binaries = ["toolchain/bin/typst", "toolchain/bin/tinymist", "toolchain/bin/tectonic", "toolchain/bin/texlab", "toolchain/bin/badness", "toolchain/bin/tex-fmt"]
 resources = [
+    { src = "toolchain/pdfium-bundle", target = "pdfium" },
     { src = "THIRD_PARTY_NOTICES", target = "THIRD_PARTY_NOTICES" },
     { src = "toolchain/licenses", target = "licenses" },
     { src = "assets/fonts/notoemoji/OFL.txt", target = "licenses/NotoEmoji-OFL.txt" },
