@@ -223,3 +223,10 @@ The corresponding environment variables are
 The `templates` and `encoding-import` scenes capture their own child viewport;
 `writing-checks` captures the root editor with invisible/confusable character
 markers. These targeted scenes supplement the maintained gallery.
+
+## PDF viewer capture policy
+
+PDFium is drawn directly into the egui framebuffer. Deterministic scene sessions
+explicitly select PDFium, even for Typst fixtures, and wait for the current PDF
+revision. They do not use a secondary raster renderer or a runtime fallback.
+These captures do not verify Tinymist's native child-view composition.

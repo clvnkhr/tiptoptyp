@@ -1,8 +1,7 @@
 # tiptoptyp
 
 `tiptoptyp` is a native Typst editor written in Rust. It uses Tinymist for an
-interactive vector preview, Typst for canonical PDF output, PDF.js for an
-embedded PDF viewer, and a built-in Rust renderer for thumbnails and raster previews.
+interactive vector preview, Typst for canonical PDF output, PDFium for PDF viewing, and a built-in Rust renderer for hover thumbnails.
 
 ## MVP features
 
@@ -10,13 +9,10 @@ embedded PDF viewer, and a built-in Rust renderer for thumbnails and raster prev
 - Debounced canonical PDF compilation with project-local private artifacts
 - Tinymist SVG preview on macOS and Windows, including hover feedback and
   bidirectional preview/source navigation
-- Offline PDF.js preview on macOS and Windows: continuous scrolling, zoom,
-  text selection, search, internal PDF destinations and external links.
-  Choose **Settings → Preview → PDF.js**. Recompiles retain the page position
-  and zoom. PDF tabs use this mode too; Poppler is not required.
-- Continuous multi-page rasterised fallback with trackpad pinch zoom,
-  pointer-anchored scaling, visible page edges, clickable PDF links, and
-  dark-page rendering
+- PDFium preview for TeX and opened PDFs: continuous scrolling, zoom, within-page
+  text selection, page-based search, outlines and links. Recompiles retain the
+  previous page until replacement pixels are ready. Typst defaults to Tinymist;
+  **Settings → Typst preview backend → PDFium** selects compiled-PDF preview.
 - Editable UTF-8 text files with Syntect highlighting, direct image previews,
   and direct native PDF viewing
 - A resizable [table workbench](docs/table-editor.md) with spans, keyboard
@@ -70,8 +66,8 @@ The decisions behind the dual preview pipeline are recorded in
 [`docs/architecture/0002-interactive-editor.md`](docs/architecture/0002-interactive-editor.md)
 and
 [`docs/architecture/0003-bundled-toolchain.md`](docs/architecture/0003-bundled-toolchain.md).
-The PDF.js backend and its validation are described in
-[`docs/pdfjs-preview.md`](docs/pdfjs-preview.md).
+The PDFium backend and its validation are described in
+[`docs/pdfium-preview.md`](docs/pdfium-preview.md).
 
 ## Requirements
 
@@ -146,12 +142,11 @@ TIPTOPTYP_TINYMIST=/absolute/path/to/tinymist \
 cargo run --release
 ```
 
-On macOS and Windows, PDF.js displays opened PDFs and serves as the recovery
-viewer when Tinymist is unavailable or its embedded viewer fails. The retiring
-raster viewer remains available explicitly and uses the built-in Rust renderer. Tinymist server and preview-start failures first receive up to four
-retries, one second apart; the fifth consecutive failure selects the fallback.
-Linux currently uses this route because the Wry child-view
-integration is limited to macOS and Windows in this MVP.
+Tinymist is the default Typst preview on supported platforms. TeX output and
+opened PDFs always use PDFium. Tinymist may retry its own service, but failure
+never activates another renderer. Select PDFium explicitly for Typst on platforms
+without native Tinymist webviews. The bundled PDFium library is required and
+validated at startup; source builds prepare it with `cargo xtask fetch-pdfium`.
 
 ### Native TeX
 
@@ -159,7 +154,7 @@ Open a `.tex` document, edit it, and use the existing preview and PDF export
 commands. Tectonic builds the current main buffer in a private project mirror;
 included files are read from disk. Save an included file or build explicitly to
 refresh its PDF. Build output never replaces a user PDF until Compile/Export is
-requested. PDF.js displays canonical output on macOS and Windows.
+requested. PDFium displays canonical output.
 
 In **Settings → Tools → TeX tools**, choose the build engine, toggle TexLab
 completion/hover/diagnostics, select Badness or tex-fmt formatting, and toggle
@@ -328,7 +323,7 @@ user-owned Applications directory instead.
 | Settings | Cmd/Ctrl-Comma |
 | Compile PDF beside source | Cmd/Ctrl-R |
 | Interface scale | Cmd/Ctrl-Plus or Minus |
-| Rasterised preview zoom | Cmd/Ctrl-Option/Alt-Plus, Minus, or 0 |
+| PDF/image preview zoom | Cmd/Ctrl-Option/Alt-Plus, Minus, or 0 |
 | App-only UI screenshot | Cmd/Ctrl-Shift-F12 |
 
 ## Preview architecture
@@ -348,12 +343,11 @@ SVG rendering, source spans, hover behavior, and click mapping. tiptoptyp handle
 `window/showDocument` to reveal and select the corresponding native editor
 range.
 
-The fallback is intentionally a recovery viewer. egui has no built-in PDF
-renderer, so the built-in Rust renderer rasterizes the watched PDF at 144 DPI and extracts link
-rectangles for native interaction. It cannot recover Typst source spans, but it
-does provide continuous pages, stable scroll state, pinch zoom, explicit
-boundaries, and a preview-only dark transform. Exported PDF bytes are never
-rasterized or colour-modified.
+PDFium owns PDF viewing through a retained native worker and egui textures.
+Updates stage visible pages before replacing the displayed batch. PDFium does
+not provide Typst source spans; select Tinymist for that interaction. Exported
+PDF bytes are never rasterized or colour-modified. Backend errors are reported
+without automatic renderer substitution.
 
 The shadow source, formatting backing files, PDF render data, and screenshots
 all live below `.tiptoptyp`; ephemeral sessions remove themselves normally and

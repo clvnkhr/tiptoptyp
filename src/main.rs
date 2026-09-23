@@ -25,6 +25,7 @@ mod font_preview;
 mod generic_highlight;
 mod git;
 mod highlight;
+mod image_residency;
 mod index_jobs;
 mod language_support;
 mod launch;
@@ -37,11 +38,7 @@ mod native_window;
 mod open_requests;
 mod package_catalog;
 mod pdf;
-mod pdf_pages;
-mod pdf_residency;
 mod pdfium;
-#[cfg(any(target_os = "macos", target_os = "windows", test))]
-mod pdfjs;
 mod performance;
 mod presentation;
 mod preview;
@@ -105,6 +102,7 @@ fn main() -> eframe::Result {
 }
 
 fn run(profile_storage: Option<std::path::PathBuf>) -> eframe::Result {
+    pdfium::validate().map_err(invalid_launch_configuration)?;
     let launch =
         LaunchOptions::from_process(profile_storage).map_err(invalid_launch_configuration)?;
     if let Some(profile) = &launch.theme_profile

@@ -520,25 +520,19 @@ fn pdf_service_is_shared_without_compiler_or_view_ownership() {
 fn pdf_pixels_are_viewport_requested_and_process_budgeted() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let compiler = fs::read_to_string(root.join("compiler.rs")).unwrap();
-    assert!(compiler.contains("PdfDocumentCatalog"));
+    assert!(!compiler.contains("PdfDocumentCatalog"));
     assert!(!compiler.contains("Vec<PreviewPage>"));
     assert!(!compiler.contains("PdfRasterMode"));
 
-    let pages = fs::read_to_string(root.join("pdf_pages.rs")).unwrap();
-    for required in [
-        "MAX_PAGES_PER_REQUEST",
-        "ADJACENT_PAGE_PREFETCH",
-        "PdfRasterMode::PageRange",
-        "latest_token",
-        "bounded_prefetch_range",
-    ] {
+    let pages = fs::read_to_string(root.join("pdfium.rs")).unwrap();
+    for required in ["MAX_PIXELS", "MAX_PAGES", "serial", "Condvar", "retained"] {
         assert!(
             pages.contains(required),
             "missing PDF demand rule {required}"
         );
     }
 
-    let residency = fs::read_to_string(root.join("pdf_residency.rs")).unwrap();
+    let residency = fs::read_to_string(root.join("image_residency.rs")).unwrap();
     for required in [
         "DECODED_PIXEL_BUDGET",
         "TEXTURE_BUDGET",

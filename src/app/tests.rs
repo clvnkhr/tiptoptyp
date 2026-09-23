@@ -183,20 +183,6 @@ fn find_overlay_stays_above_sticky_rows_after_sticky_layer_promotion() {
 }
 
 #[test]
-fn pdfjs_compiles_canonical_bytes_without_starting_svg_or_raster_work() {
-    let directory = tempfile::tempdir().unwrap();
-    let context = egui::Context::default();
-    let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
-    app.settings.preview_preference = PreviewPreference::PdfJs;
-    app.preview.set_requested_backend(PreviewPreference::PdfJs);
-    assert!(app.pdfjs_preview_requested());
-    assert!(app.preview_processing_enabled());
-    assert!(!app.raster_preview_required());
-    assert!(!app.interactive_preview_requested());
-    assert_eq!(app.preview_status_snapshot().backend_label(), "PDF.js");
-}
-
-#[test]
 fn pdfium_routes_canonical_artifacts_without_hayro_or_webview_work() {
     let directory = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
@@ -205,8 +191,6 @@ fn pdfium_routes_canonical_artifacts_without_hayro_or_webview_work() {
     app.preview.set_requested_backend(PreviewPreference::Pdfium);
     assert!(app.pdfium_preview_requested());
     assert!(app.preview_processing_enabled());
-    assert!(!app.pdfjs_preview_requested());
-    assert!(!app.raster_preview_required());
     assert!(!app.interactive_preview_requested());
     assert_eq!(app.preview_status_snapshot().backend_label(), "PDFium");
     for interactive_source in [true, false] {
@@ -218,7 +202,7 @@ fn pdfium_routes_canonical_artifacts_without_hayro_or_webview_work() {
                 status.effective_backend,
                 crate::preview::PreviewBackend::Pdfium
             );
-            assert!(status.fallback_reason().is_none());
+            assert!(status.failure_reason().is_none());
         }
     }
 }
@@ -2116,43 +2100,9 @@ fn designated_typst_entry_remains_visible_while_editing_other_file_kinds() {
     ));
 }
 
-#[test]
-fn pdfjs_fallback_does_not_duplicate_raster_work_and_captures_remain_explicit() {
-    let root = tempfile::tempdir().unwrap();
-    let context = egui::Context::default();
-    let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
-    app.preview = PreviewController::new(false, PreviewPreference::Interactive);
-    if cfg!(any(target_os = "macos", target_os = "windows")) {
-        assert!(
-            !app.preview_processing_enabled(),
-            "wait for Tinymist startup"
-        );
-    }
-    app.preview.tinymist_state = ServiceState::Failed("unavailable".into());
-    assert!(app.pdfjs_preview_requested());
-    assert!(app.preview_processing_enabled());
-    assert!(!app.raster_preview_required());
-    assert_eq!(
-        app.preview_status_snapshot().backend_label(),
-        "PDF.js · fallback"
-    );
-    assert_eq!(
-        app.preview.requested_backend,
-        PreviewPreference::Interactive
-    );
-    let mut config = crate::screenshot::CaptureConfig::for_working_directory(root.path());
-    config.enabled = true;
-    app.captures = CaptureController::new(config);
-    app.captures.queue("main", "routing-test").unwrap();
-    assert!(
-        app.raster_preview_required(),
-        "explicit capture keeps its surrogate"
-    );
-}
-
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 #[test]
-fn local_webview_failure_schedules_pdfjs_once_and_respects_pause() {
+fn local_webview_failure_is_explicit_and_never_switches_renderers() {
     for paused in [false, true] {
         let root = tempfile::tempdir().unwrap();
         let context = egui::Context::default();
@@ -2169,11 +2119,10 @@ fn local_webview_failure_schedules_pdfjs_once_and_respects_pause() {
         );
         app.compilation_paused = paused;
         app.fail_local_webview("child webview could not load".into());
-        assert!(app.pdfjs_preview_requested());
-        assert!(!app.raster_preview_required());
-        assert_eq!(app.compile_deadline.is_some(), !paused);
+        assert!(!app.pdfium_preview_requested());
+        assert!(app.compile_deadline.is_none());
         assert_eq!(
-            app.preview_fallback_reason(),
+            app.preview_status_snapshot().failure_reason(),
             Some("Failed: child webview could not load".into())
         );
         app.compile_deadline = None;
@@ -2183,60 +2132,6 @@ fn local_webview_failure_schedules_pdfjs_once_and_respects_pause() {
             "same failure cannot enqueue another build"
         );
     }
-}
-
-#[test]
-fn raster_results_require_the_matching_current_artifact() {
-    let old = ArtifactKey {
-        revision: 9,
-        generation: 41,
-    };
-    let newer_same_revision = ArtifactKey {
-        revision: 9,
-        generation: 42,
-    };
-    assert!(raster_result_matches_artifact(
-        newer_same_revision,
-        9,
-        Some(newer_same_revision)
-    ));
-    assert!(!raster_result_matches_artifact(
-        old,
-        9,
-        Some(newer_same_revision)
-    ));
-    assert!(!raster_result_matches_artifact(old, 10, Some(old)));
-    assert!(!raster_result_matches_artifact(old, 9, None));
-}
-
-#[test]
-fn same_revision_raster_from_an_older_artifact_is_stale_for_ui_actions() {
-    let old = ArtifactKey {
-        revision: 9,
-        generation: 41,
-    };
-    let newer_same_revision = ArtifactKey {
-        revision: 9,
-        generation: 42,
-    };
-
-    assert_eq!(
-        raster_content_freshness(true, Some(old), 9, Some(newer_same_revision)),
-        Some(RasterContentFreshness::Stale)
-    );
-    assert_eq!(
-        raster_content_freshness(
-            true,
-            Some(newer_same_revision),
-            9,
-            Some(newer_same_revision)
-        ),
-        Some(RasterContentFreshness::Current)
-    );
-    assert_eq!(
-        raster_content_freshness(false, Some(old), 9, Some(newer_same_revision)),
-        None
-    );
 }
 
 #[test]
@@ -2357,45 +2252,6 @@ fn raster_gated_snapshot_scenes_do_not_clobber_an_in_flight_build() {
         settled_snapshot_preview_status(UiSnapshotScene::ProblemsPanel, true),
         Some(PreviewStatus::Error)
     );
-}
-
-#[test]
-fn pending_main_capture_queues_only_one_build_while_waiting_for_its_raster() {
-    assert!(capture_preview_build_needed(
-        true,
-        false,
-        false,
-        PreviewStatus::Waiting,
-        false,
-    ));
-    assert!(!capture_preview_build_needed(
-        true,
-        false,
-        true,
-        PreviewStatus::Waiting,
-        false,
-    ));
-    assert!(!capture_preview_build_needed(
-        true,
-        false,
-        false,
-        PreviewStatus::Compiling,
-        false,
-    ));
-    assert!(!capture_preview_build_needed(
-        true,
-        false,
-        false,
-        PreviewStatus::Ready(Duration::ZERO),
-        true,
-    ));
-    assert!(!capture_preview_build_needed(
-        true,
-        false,
-        false,
-        PreviewStatus::Error,
-        false,
-    ));
 }
 
 #[test]
@@ -5672,7 +5528,7 @@ fn settings_search_indexes_every_visible_setting_label() {
         vec![SettingsTarget::TypstCompiler]
     );
     assert_eq!(
-        settings_search_results("raster pdf"),
+        settings_search_results("pdfium"),
         vec![SettingsTarget::PreviewBackend]
     );
     assert_eq!(
@@ -8475,4 +8331,21 @@ fn workspace_switch_opens_source_first_without_a_pdf_detour() {
         Some(source.canonicalize().unwrap().as_path())
     );
     assert!(app.document().kind().is_typst());
+}
+
+#[test]
+fn failed_tinymist_never_starts_a_pdf_renderer() {
+    let root = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+    app.preview = PreviewController::new(false, PreviewPreference::Interactive);
+    app.preview.tinymist_state = ServiceState::Failed("unavailable".into());
+    assert!(!app.pdfium_preview_requested());
+    assert!(!app.preview_processing_enabled());
+    assert!(
+        app.preview_status_snapshot()
+            .failure_reason()
+            .unwrap()
+            .contains("unavailable")
+    );
 }

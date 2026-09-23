@@ -204,13 +204,14 @@ impl QaSession {
                 | UiSnapshotScene::ProblemsPanel
                 | UiSnapshotScene::TerminalPanel
                 | UiSnapshotScene::FindReplace
-        ) && !app.preview.has_resident_pages()
+        ) && !app.pdfium_preview.ready_for(app.preview.content.pdf())
         {
             app.captures.defer_target("main");
         }
-        if let Some(status) =
-            settled_snapshot_preview_status(scene, app.preview.has_resident_pages())
-        {
+        if let Some(status) = settled_snapshot_preview_status(
+            scene,
+            app.pdfium_preview.ready_for(app.preview.content.pdf()),
+        ) {
             app.preview.status = status;
         }
         if matches!(
@@ -234,7 +235,7 @@ impl QaSession {
                 app.settings.preview_preference = PreviewPreference::Pdfium;
                 app.preview.set_requested_backend(PreviewPreference::Pdfium);
                 app.view_mode = ViewMode::Split;
-                if !app.pdfium_preview.ready()
+                if !app.pdfium_preview.ready_for(app.preview.content.pdf())
                     || !app.preview_status_snapshot().canonical_artifact_available
                 {
                     app.captures.defer_target("main");
@@ -259,7 +260,7 @@ impl QaSession {
             }
             UiSnapshotScene::TabsPdf | UiSnapshotScene::TabsImage => {
                 if !self.tabs_prepared {
-                    if !app.preview.has_resident_pages() {
+                    if !app.pdfium_preview.ready_for(app.preview.content.pdf()) {
                         return;
                     }
                     let (path, kind) = if scene == UiSnapshotScene::TabsPdf {
@@ -281,7 +282,11 @@ impl QaSession {
                     app.prepare_asset_tab_fixture(context, path, kind);
                     self.tabs_prepared = true;
                 }
-                if !app.asset_preview.has_resident_pages() {
+                if !(if app.pdfium_asset_requested() {
+                    app.pdfium_asset.ready_for(app.asset_preview.content.pdf())
+                } else {
+                    app.asset_preview.has_resident_pages()
+                }) {
                     app.captures.defer_target("main");
                 }
             }
@@ -877,11 +882,7 @@ impl QaSession {
         }
         app.theme_override = Some(step.theme.clone());
         app.snapshot_scene = Some(step.scene);
-        app.settings.preview_preference = if step.scene == UiSnapshotScene::PdfiumPreview {
-            PreviewPreference::Pdfium
-        } else {
-            PreviewPreference::Interactive
-        };
+        app.settings.preview_preference = PreviewPreference::Pdfium;
         app.preview
             .set_requested_backend(app.settings.preview_preference);
         self.folding_prepared = false;
@@ -904,7 +905,7 @@ impl QaSession {
                 | UiSnapshotScene::ProblemsPanel
                 | UiSnapshotScene::TerminalPanel
                 | UiSnapshotScene::FindReplace
-        ) && !app.preview.has_resident_pages()
+        ) && !app.pdfium_preview.ready_for(app.preview.content.pdf())
         {
             app.schedule_compile_now();
         }

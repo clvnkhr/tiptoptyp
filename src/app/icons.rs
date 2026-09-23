@@ -816,7 +816,7 @@ pub(crate) fn action_button_enabled(
         "Add row" | "Add column" => UiIcon::Stage,
         "Selected row" | "Last column" => UiIcon::Unstage,
         "Apply" | "Apply command" | "OK" => UiIcon::Check,
-        "Refresh" | "Retry PDF.js" | "Retry Tinymist" => UiIcon::Refresh,
+        "Refresh" | "Retry Tinymist" => UiIcon::Refresh,
         "Reset"
         | "Reset all"
         | "Reset command"

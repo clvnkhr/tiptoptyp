@@ -140,13 +140,10 @@ impl EditorApp {
         self.asset_preview.status = PreviewStatus::Compiling;
         self.asset_preview.dark =
             self.preview.dark && self.document().kind() != DocumentKind::Image;
-        if let Err(error) = self.asset_loader.request(
-            self.asset_token,
-            path,
-            self.document().kind(),
-            !self.pdfium_asset_requested()
-                && (!self.pdfjs_asset_requested() || self.captures.has_pending_for("main")),
-        ) {
+        if let Err(error) =
+            self.asset_loader
+                .request(self.asset_token, path, self.document().kind())
+        {
             self.asset_preview.status = PreviewStatus::Error;
             self.notice = Some(Notice {
                 message: error,
@@ -155,72 +152,38 @@ impl EditorApp {
         }
     }
 
-    pub(super) fn show_asset_view(&mut self, ui: &mut egui::Ui, frame: Option<&eframe::Frame>) {
+    pub(super) fn show_asset_view(&mut self, ui: &mut egui::Ui) {
         if self.pdfium_asset_requested() {
-            self.pdfjs_asset.hide();
             self.show_pdfium_view(ui, true);
             return;
         }
-        if self.pdfjs_asset_requested()
-            && self.document().kind() == DocumentKind::Pdf
-            && !self.captures.has_pending_for("main")
-        {
-            self.show_pdfjs_view(ui, frame, true);
-            return;
-        }
-        self.pdfjs_asset.hide();
-        // A PDF opened without raster inspection still needs a raster surrogate when a
-        // framebuffer capture is explicitly requested. Queue it only once.
-        if self.pdfjs_asset_requested()
-            && self.document().kind() == DocumentKind::Pdf
-            && self.captures.has_pending_for("main")
-            && self.asset_preview.content.pages().is_empty()
-            && matches!(self.asset_preview.status, PreviewStatus::Ready(_))
-            && let Some(path) = self.document().path().clone()
-        {
-            self.request_asset(path);
-        }
-        let fresh = self
-            .asset_preview
-            .raster_freshness(self.document().revision())
-            == Some(RasterContentFreshness::Current);
-        let target = ui
-            .push_id(
-                (
-                    "asset-tab",
-                    self.tabs
-                        .active_id()
-                        .expect("asset view requires an active tab"),
-                ),
-                |ui| {
-                    theme::panel_header(ui, "asset-header", |ui| {
-                        raster_view::show_controls(ui, &mut self.asset_preview, fresh, false)
-                    });
-                    if self.asset_preview.content.pages().is_empty() {
-                        let failed = self.asset_preview.status == PreviewStatus::Error;
-                        show_centered_preview_message(
-                            ui,
-                            if failed {
-                                "Could not load file"
-                            } else {
-                                "Loading file…"
-                            },
-                            !failed,
-                        );
-                        return None;
-                    }
-                    raster_view::show_pages(ui, &mut self.asset_preview, fresh, false)
-                },
-            )
-            .inner;
-        if let Some(target) = target {
-            if let Some(page) = internal_pdf_page_target(&target) {
-                self.asset_preview.requested_page =
-                    Some(page.min(self.asset_preview.content.pages().len().saturating_sub(1)));
-            } else {
-                self.follow_preview_link_from(&target, self.current_directory());
-            }
-        }
+        ui.push_id(
+            (
+                "asset-tab",
+                self.tabs
+                    .active_id()
+                    .expect("asset view requires an active tab"),
+            ),
+            |ui| {
+                theme::panel_header(ui, "asset-header", |ui| {
+                    image_view::show_controls(ui, &mut self.asset_preview)
+                });
+                if self.asset_preview.content.pages().is_empty() {
+                    let failed = self.asset_preview.status == PreviewStatus::Error;
+                    show_centered_preview_message(
+                        ui,
+                        if failed {
+                            "Could not load file"
+                        } else {
+                            "Loading file…"
+                        },
+                        !failed,
+                    );
+                    return;
+                }
+                image_view::show_pages(ui, &mut self.asset_preview)
+            },
+        );
     }
 }
 

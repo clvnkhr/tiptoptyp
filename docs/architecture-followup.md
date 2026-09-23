@@ -2,6 +2,11 @@
 
 ## Bounded PDF page residency (198–200, completed 2026-09-18)
 
+Historical implementation: the PDF viewer described in this section was removed
+on 23 September. Its image accounting remains in `src/image_residency.rs`;
+[PDFium preview](pdfium-preview.md) documents the current PDF path. The old probe
+below requires an earlier checkout.
+
 PDF inspection now produces a lightweight all-page catalog of 144-DPI layout
 dimensions and normalized links. Decoded RGBA buffers and uploaded egui textures
 are separate resident resources keyed by artifact generation, page, requested
@@ -159,7 +164,7 @@ egui repaint APIs remain in their platform/UI adapters.
 Service failures, recovery ticks, explicit restarts, preview-entry changes,
 pause changes, stop and render requests use this path. A failure emits each
 cleanup/repaint/render effect once; a duplicate terminal event emits nothing,
-the fifth consecutive failure schedules one PDF.js fallback compile, and exhausted or
+the fifth consecutive failure stops automatic retries without changing the renderer, and exhausted or
 inactive recovery emits no idle repaint. Tests also cover retained late
 readiness, pause/restart, export rendering during recovery and entry changes.
 

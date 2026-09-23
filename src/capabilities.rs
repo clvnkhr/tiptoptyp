@@ -14,7 +14,7 @@ pub(crate) struct CapabilitySnapshot {
     pub(crate) lsp: ServiceState,
     pub(crate) interactive_preview: ServiceState,
     pub(crate) pdf_generation: ServiceState,
-    pub(crate) rasterization: ServiceState,
+    pub(crate) pdf_rendering: ServiceState,
     pub(crate) link_extraction: ServiceState,
 }
 
@@ -28,7 +28,7 @@ pub(crate) struct CapabilityInputs {
     pub(crate) lsp: ServiceState,
     pub(crate) interactive_preview: ServiceState,
     pub(crate) pdf_generation: ServiceState,
-    pub(crate) rasterization: ServiceState,
+    pub(crate) pdf_rendering: ServiceState,
     pub(crate) interactive_preview_supported: bool,
 }
 
@@ -110,7 +110,7 @@ fn derive_snapshot(inputs: &CapabilityInputs) -> CapabilitySnapshot {
                 "No PDF build engine is implemented for this document type".to_owned(),
             )
         },
-        rasterization: inputs.rasterization.clone(),
+        pdf_rendering: inputs.pdf_rendering.clone(),
         link_extraction: ServiceState::Ready("Built-in Rust PDF link extraction".into()),
     }
 }
@@ -165,7 +165,7 @@ mod tests {
             lsp: ServiceState::Ready("LSP connected".into()),
             interactive_preview: ServiceState::Ready("Preview connected".into()),
             pdf_generation: ServiceState::Ready("PDF ready".into()),
-            rasterization: ServiceState::Ready("Pages ready".into()),
+            pdf_rendering: ServiceState::Ready("Pages ready".into()),
             interactive_preview_supported: true,
         }
     }
@@ -176,7 +176,7 @@ mod tests {
         let mut input = inputs();
         input.build_tool = tool(ToolKind::Typst, false);
         let state = cache.snapshot(input.clone());
-        assert!(state.rasterization.is_ready());
+        assert!(state.pdf_rendering.is_ready());
         assert!(state.link_extraction.is_ready());
         assert!(matches!(state.pdf_generation, ServiceState::Failed(_)));
         assert_eq!(cache.snapshot(input), state);

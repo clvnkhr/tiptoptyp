@@ -47,7 +47,7 @@ pub(super) enum SettingsAction {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct SettingsStatus {
     pub(super) backend_label: &'static str,
-    pub(super) fallback_reason: Option<String>,
+    pub(super) preview_failure: Option<String>,
     pub(super) requested_backend: PreviewPreference,
     pub(super) interactive_active: bool,
     pub(super) capabilities: CapabilitySnapshot,
@@ -755,10 +755,8 @@ impl SettingsPanel<'_> {
                             preference.label(),
                         )
                         .on_hover_text(match preference {
-                            PreviewPreference::Interactive => "Typst uses Tinymist; opened PDFs and preview failures use PDF.js.",
-                            PreviewPreference::PdfJs => "Use PDF.js for compiled Typst and TeX previews and opened PDFs.",
-                            PreviewPreference::Pdfium => "Compare native PDFium for Typst, TeX and opened PDFs. Retains pages during updates; includes text selection, search and links. PDF.js remains available.",
-                            PreviewPreference::Native => "Use the built-in Rust raster renderer for Typst previews. Scheduled for removal; prefer PDF.js.",
+                            PreviewPreference::Interactive => "Tinymist provides interactive Typst preview and source navigation. TeX and opened PDFs always use PDFium. Errors do not switch renderers.",
+                            PreviewPreference::Pdfium => "PDFium displays compiled Typst and TeX output and opened PDFs, retaining the previous page while an update renders.",
                         });
                     }
                     ui.separator();
@@ -772,17 +770,11 @@ impl SettingsPanel<'_> {
                         },
                     );
                 });
+                ui.label("TeX and opened PDFs always use PDFium.");
                 if !deterministic_settings
-                    && let Some(reason) = self.status.fallback_reason.as_ref()
+                    && let Some(reason) = self.status.preview_failure.as_ref()
                 {
-                    fallback_notice(ui, "Preview fallback active", reason);
-                }
-                if edited.preview_preference == PreviewPreference::PdfJs {
-                    ui.add(egui::Label::new(if cfg!(any(target_os = "macos", target_os = "windows")) {
-                        "PDF.js supports scrolling, zooming, text selection and PDF links. Source-to-preview jumps require the Tinymist mode."
-                    } else {
-                        "PDF.js requires native web-view support (macOS or Windows). Rasterised PDF remains an explicit option for now."
-                    }).wrap());
+                    ui.colored_label(ui.visuals().error_fg_color, reason);
                 }
                 settings_target_anchor(
                     ui,
@@ -794,7 +786,7 @@ impl SettingsPanel<'_> {
                     SettingsTarget::PreviewFollowEdits.label(),
                 )
                 .on_hover_text(
-                    "Automatically scroll the Tinymist preview to your edit after compilation. Does not move the editor cursor. PDF.js and raster previews do not support source jumps.",
+                    "Automatically scroll the Tinymist preview to your edit after compilation. Does not move the editor cursor. PDFium previews do not support source jumps.",
                 );
                 if !deterministic_settings
                     && self.status.requested_backend == PreviewPreference::Interactive
@@ -824,7 +816,7 @@ impl SettingsPanel<'_> {
                 ui.horizontal_wrapped(|ui| {
                     let syntax_color = success_color(ui.ctx());
                     if deterministic_settings {
-                        for name in ["Editing", "LSP", "Interactive", "PDF", "Raster", "Links"] {
+                        for name in ["Editing", "LSP", "Interactive", "PDF", "Rendering", "Links"] {
                             show_status_chip(ui, name, "Ready", "Ready", syntax_color);
                         }
                     } else {
@@ -837,7 +829,7 @@ impl SettingsPanel<'_> {
                             &capabilities.interactive_preview,
                         );
                         show_service_status_chip(ui, "PDF", &capabilities.pdf_generation);
-                        show_service_status_chip(ui, "Raster", &capabilities.rasterization);
+                        show_service_status_chip(ui, "Rendering", &capabilities.pdf_rendering);
                         show_service_status_chip(ui, "Links", &capabilities.link_extraction);
                     }
                 });
@@ -1252,8 +1244,8 @@ mod tests {
                             &crate::tex::settings::TexSettings::default(),
                         ),
                         status: SettingsStatus {
-                            backend_label: "Rasterised PDF",
-                            fallback_reason: None,
+                            backend_label: "PDFium",
+                            preview_failure: None,
                             requested_backend: PreviewPreference::Interactive,
                             interactive_active: false,
                             capabilities: CapabilitySnapshot {
@@ -1261,7 +1253,7 @@ mod tests {
                                 lsp: ServiceState::Failed("failure".into()),
                                 interactive_preview: ServiceState::Failed("failure".into()),
                                 pdf_generation: ServiceState::Ready("ready".into()),
-                                rasterization: ServiceState::Failed(
+                                pdf_rendering: ServiceState::Failed(
                                     "PDF page decoding failed".into(),
                                 ),
                                 link_extraction: ServiceState::Ready("ready".into()),
@@ -1281,7 +1273,7 @@ mod tests {
                 ),
             );
         harness.run();
-        for capability in ["Editing", "LSP", "Interactive", "PDF", "Raster", "Links"] {
+        for capability in ["Editing", "LSP", "Interactive", "PDF", "Rendering", "Links"] {
             harness.get_by_label(capability);
         }
         assert!(

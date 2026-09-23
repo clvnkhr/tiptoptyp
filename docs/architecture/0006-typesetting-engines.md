@@ -24,7 +24,7 @@ Inspection before this refactor found four concerns conflated at the boundary:
 
 Keep stable tab/document keys, protected save receipts, window-owned services,
 the existing preview recovery controller, and canonical immutable PDF artifacts.
-The retiring raster viewer gains no new responsibilities. No per-tab services,
+PDFium owns PDF viewing; thumbnails are a separate utility. No per-tab services,
 plugin registry, generic LSP framework, or second background executor is needed.
 
 ## Boundaries
@@ -37,7 +37,7 @@ plugin registry, generic LSP framework, or second background executor is needed.
 | Compiler service | One latest-request queue and worker per window; pause/shutdown, backend dispatch, artifact generations and optional PDF inspection. The queue, cancellation and artifact lifetime contracts remain shared. |
 | Typst build adapter | Typst configuration, root/font validation, private mirror, watcher lifetime/reuse, log classification, diagnostic parsing and completed-output snapshot. No GUI or preview policy. |
 | Diagnostic model | Engine-independent severity, source, one-based Unicode-scalar location, headline/details, and raw output. Adapters convert their native formats before crossing into the application. |
-| Preview/PDF services | Consume immutable canonical PDF bytes and artifact keys. PDF.js handles future TeX output without knowing its compiler. Tinymist's interactive transport remains Typst-specific. |
+| Preview/PDF services | Consume immutable canonical PDF bytes and artifact keys. PDFium handles future TeX output without knowing its compiler. Tinymist's interactive transport remains Typst-specific. |
 
 Use a closed configuration enum for implemented engines and concrete adapters.
 Adding an engine requires an explicit dispatch arm and support-policy change;
@@ -91,7 +91,7 @@ The next implementation must define and test:
   overlaid for CLI builds; imported files are read from disk. Do not silently
   imply a full multi-buffer overlay;
 - log-to-diagnostic conversion with real Unicode/file-location fixtures;
-- PDF.js output delivery and optional SyncTeX source navigation. PDF production
+- PDFium output delivery and optional SyncTeX source navigation. PDF production
   alone does not imply forward/inverse search or interactive Tinymist support;
 - language intelligence as a separate adapter, retaining existing document,
   version and generation checks. Share transport only where protocols agree.
@@ -115,13 +115,13 @@ miTeX rejection, Tinymist admission, a TeX editor beside a pinned Typst preview,
 capability-cache invalidation, language/engine mismatch before effects, latest
 request/pause replacement, late watcher logs, private-session cleanup, immutable
 output after replacement/deletion, and separate generations for dependency
-rebuilds at one revision. A PDF-only capability selects PDF.js without reporting
+rebuilds at one revision. A PDF-only capability selects PDFium without reporting
 a nonexistent interactive-service failure. The established command, native-view,
 multi-window and protected-save suites remain in place.
 
 Validation on macOS arm64: formatting, strict Clippy, all 1,187 non-ignored tests
 (21 opt-in tests remain ignored in the normal suite), and all 14 xtask tests pass.
-The first sandboxed app-only run could not open the PDF.js test's local socket;
+The first sandboxed app-only run could not open the PDFium test's local socket;
 the full suite with local socket/PTY permissions passes. No layout, framebuffer
 or native-view composition changed, so no screenshots were captured. This does
 not claim a new native visual acceptance or Linux/Windows runtime validation.

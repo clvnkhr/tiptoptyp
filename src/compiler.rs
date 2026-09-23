@@ -6,11 +6,10 @@ mod typst;
 use crate::{
     diagnostics::DiagnosticReport,
     language_support::BuildEngineKind,
-    pdf::{PdfDocumentCatalog, inspect_pdf},
     worker::{LatestReceiver, LatestSender, latest_channel},
 };
 use std::{
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -51,8 +50,6 @@ pub(crate) struct CompileInput {
 #[derive(Debug, Clone)]
 pub(crate) struct CompileRequest {
     pub(crate) revision: u64,
-    /// Export/PDF.js builds publish canonical bytes without PDF inspection.
-    pub(crate) rasterize: bool,
     pub(crate) input: CompileInput,
     pub(crate) engine: EngineConfig,
 }
@@ -84,14 +81,6 @@ pub(crate) enum CompileEvent {
     Started,
     Failed(DiagnosticReport),
     Artifact(CompileArtifact),
-    Catalog {
-        key: ArtifactKey,
-        catalog: PdfDocumentCatalog,
-    },
-    RasterFailed {
-        key: ArtifactKey,
-        error: String,
-    },
 }
 
 #[derive(Debug)]
@@ -112,7 +101,6 @@ pub(crate) struct Compiler {
     results: Receiver<CompileResult>,
     disconnected: AtomicBool,
     worker: Option<thread::JoinHandle<()>>,
-    shutdown: Arc<AtomicBool>,
     latest_revision: Arc<AtomicU64>,
     latest_request: Arc<AtomicU64>,
 }
@@ -121,25 +109,13 @@ impl Compiler {
     pub(crate) fn new(context: crate::worker::RepaintTarget) -> Self {
         let (request_tx, request_rx) = latest_channel::<CompilerCommand>();
         let (result_tx, result_rx) = mpsc::channel::<CompileResult>();
-        let shutdown = Arc::new(AtomicBool::new(false));
         let latest_revision = Arc::new(AtomicU64::new(0));
         let latest_request = Arc::new(AtomicU64::new(0));
         let worker_latest_request = latest_request.clone();
-        let worker_shutdown = shutdown.clone();
-        let worker_latest_revision = latest_revision.clone();
 
         let worker = thread::Builder::new()
             .name("tiptoptyp-compiler".to_owned())
-            .spawn(move || {
-                worker_loop(
-                    request_rx,
-                    result_tx,
-                    context,
-                    worker_shutdown,
-                    worker_latest_revision,
-                    worker_latest_request,
-                )
-            })
+            .spawn(move || worker_loop(request_rx, result_tx, context, worker_latest_request))
             .ok();
 
         Self {
@@ -147,7 +123,6 @@ impl Compiler {
             results: result_rx,
             disconnected: AtomicBool::new(false),
             worker,
-            shutdown,
             latest_revision,
             latest_request,
         }
@@ -208,7 +183,6 @@ impl Drop for Compiler {
     fn drop(&mut self) {
         // Closing the only request sender wakes the worker. Joining guarantees
         // the backend drops and reaps its process before the app exits.
-        self.shutdown.store(true, Ordering::Release);
         self.requests.take();
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
@@ -227,9 +201,7 @@ enum EngineEvent {
     Failed(DiagnosticReport),
     Pdf {
         pdf: Arc<[u8]>,
-        project_root: PathBuf,
         diagnostics: DiagnosticReport,
-        rasterize: bool,
     },
 }
 
@@ -304,8 +276,6 @@ fn worker_loop(
     requests: LatestReceiver<CompilerCommand>,
     results: Sender<CompileResult>,
     context: crate::worker::RepaintTarget,
-    shutdown: Arc<AtomicBool>,
-    latest_revision: Arc<AtomicU64>,
     latest_request: Arc<AtomicU64>,
 ) {
     let mut results = ResultSender {
@@ -323,8 +293,6 @@ fn worker_loop(
                         result,
                         &results,
                         &context,
-                        &shutdown,
-                        &latest_revision,
                         &mut next_artifact_generation,
                     );
                 }
@@ -378,8 +346,6 @@ fn publish_engine_result(
     result: EngineResult,
     results: &ResultSender,
     context: &crate::worker::RepaintTarget,
-    shutdown: &AtomicBool,
-    latest_revision: &AtomicU64,
     next_artifact_generation: &mut u64,
 ) {
     if !results.is_current() {
@@ -388,29 +354,13 @@ fn publish_engine_result(
     let event = match result.event {
         EngineEvent::Started => CompileEvent::Started,
         EngineEvent::Failed(report) => CompileEvent::Failed(report),
-        EngineEvent::Pdf {
-            pdf,
-            project_root,
-            diagnostics,
-            rasterize,
-        } => {
+        EngineEvent::Pdf { pdf, diagnostics } => {
             let key = ArtifactKey {
                 revision: result.revision,
                 generation: *next_artifact_generation,
             };
             *next_artifact_generation = (*next_artifact_generation).wrapping_add(1).max(1);
-            publish_compiled_artifact(
-                pdf,
-                &project_root,
-                diagnostics,
-                key,
-                result.elapsed,
-                rasterize,
-                shutdown,
-                latest_revision,
-                results,
-                context,
-            );
+            publish_compiled_artifact(pdf, diagnostics, key, result.elapsed, results, context);
             return;
         }
     };
@@ -426,21 +376,15 @@ fn publish_engine_result(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
 fn publish_compiled_artifact(
     pdf: Arc<[u8]>,
-    project_root: &Path,
     diagnostics: DiagnosticReport,
     key: ArtifactKey,
     elapsed: Duration,
-    rasterize: bool,
-    shutdown: &AtomicBool,
-    latest_revision: &AtomicU64,
     results: &ResultSender,
     context: &crate::worker::RepaintTarget,
 ) {
-    // The backend already snapshotted its output. Export and optional page
-    // inspection share these bytes even if a later build replaces the file.
+    // Publish canonical compiler bytes once; PDFium owns all viewer parsing.
     send_result(
         results,
         context,
@@ -450,31 +394,9 @@ fn publish_compiled_artifact(
             elapsed,
             event: CompileEvent::Artifact(CompileArtifact {
                 key,
-                pdf: pdf.clone(),
+                pdf,
                 diagnostics,
             }),
-        },
-    );
-    if !rasterize {
-        return;
-    }
-
-    let event = match inspect_pdf(&pdf, project_root, || {
-        shutdown.load(Ordering::Acquire)
-            || !results.is_current()
-            || latest_revision.load(Ordering::Acquire) != key.revision
-    }) {
-        Ok(catalog) => CompileEvent::Catalog { key, catalog },
-        Err(error) => CompileEvent::RasterFailed { key, error },
-    };
-    send_result(
-        results,
-        context,
-        CompileResult {
-            request_generation: 0,
-            revision: key.revision,
-            elapsed,
-            event,
         },
     );
 }
@@ -493,17 +415,13 @@ fn send_result(
 mod tests {
     use super::{
         ArtifactKey, CompileEvent, CompileInput, CompileRequest, CompileResult, Compiler,
-        CompilerCommand, EngineConfig, TypstOptions, publish_compiled_artifact, worker_loop,
+        CompilerCommand, EngineConfig, TypstOptions, worker_loop,
     };
     use crate::{diagnostics::DiagnosticReport, worker::latest_channel};
     use std::{
         fs,
         path::PathBuf,
-        sync::{
-            Arc,
-            atomic::{AtomicBool, AtomicU64},
-            mpsc,
-        },
+        sync::{Arc, atomic::AtomicU64, mpsc},
         time::{Duration, Instant},
     };
     use tiptoptyp_core::document::TypesettingLanguage;
@@ -549,7 +467,6 @@ mod tests {
             0,
             CompileRequest {
                 revision: 19,
-                rasterize: false,
                 input: CompileInput {
                     language: TypesettingLanguage::Tex,
                     source: "\\documentclass{article}".to_owned(),
@@ -570,8 +487,6 @@ mod tests {
             rx,
             results,
             crate::worker::RepaintTarget::test(),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicU64::new(19)),
             Arc::new(AtomicU64::new(0)),
         );
         let result = received.recv().unwrap();
@@ -601,15 +516,11 @@ mod tests {
                     elapsed: Duration::from_millis(4),
                     event: EngineEvent::Pdf {
                         pdf: pdf.clone(),
-                        project_root: PathBuf::from("missing-no-inspection-allowed"),
                         diagnostics: DiagnosticReport::default(),
-                        rasterize: false,
                     },
                 },
                 &super::ResultSender::from(tx.clone()),
                 &crate::worker::RepaintTarget::test(),
-                &AtomicBool::new(false),
-                &AtomicU64::new(7),
                 &mut generation,
             );
         }
@@ -617,7 +528,7 @@ mod tests {
         assert_eq!(
             results.len(),
             2,
-            "PDF.js/export must not invoke optional metadata tools"
+            "PDF export must not invoke optional metadata tools"
         );
         for (result, expected) in results.iter().zip([12, 13]) {
             let CompileEvent::Artifact(artifact) = &result.event else {
@@ -664,7 +575,6 @@ mod tests {
                         0,
                         CompileRequest {
                             revision,
-                            rasterize: false,
                             input: CompileInput {
                                 language: TypesettingLanguage::Typst,
 
@@ -690,8 +600,6 @@ mod tests {
                 request_rx,
                 result_tx,
                 crate::worker::RepaintTarget::test(),
-                Arc::new(AtomicBool::new(false)),
-                Arc::new(AtomicU64::new(0)),
                 Arc::new(AtomicU64::new(0)),
             );
             let results = result_rx.try_iter().collect::<Vec<_>>();
@@ -704,99 +612,6 @@ mod tests {
     }
 
     #[test]
-    fn successful_artifact_is_published_before_missing_metadata_failure() {
-        let project = tempfile::tempdir().unwrap();
-        let pdf_path = project.path().join("compiled.pdf");
-        let expected = b"%PDF-exact-artifact\0bytes";
-        fs::write(&pdf_path, expected).unwrap();
-        let (result_tx, result_rx) = mpsc::channel();
-        let result_tx: super::ResultSender = result_tx.into();
-        let shutdown = AtomicBool::new(false);
-        let latest_revision = AtomicU64::new(7);
-
-        publish_compiled_artifact(
-            Arc::from(fs::read(&pdf_path).unwrap()),
-            project.path(),
-            DiagnosticReport {
-                raw: "warning diagnostic".to_owned(),
-                diagnostics: Vec::new(),
-            },
-            ArtifactKey {
-                revision: 7,
-                generation: 11,
-            },
-            Duration::from_millis(12),
-            true,
-            &shutdown,
-            &latest_revision,
-            &result_tx,
-            &crate::worker::RepaintTarget::test(),
-        );
-
-        let results = result_rx.try_iter().collect::<Vec<_>>();
-        assert_eq!(results.len(), 2);
-        let CompileEvent::Artifact(artifact) = &results[0].event else {
-            panic!("artifact must be published before rasterization")
-        };
-        assert_eq!(artifact.pdf.as_ref(), expected);
-        assert_eq!(artifact.key.generation, 11);
-        assert_eq!(artifact.diagnostics.raw, "warning diagnostic");
-        assert!(matches!(
-            &results[1].event,
-            CompileEvent::RasterFailed { key, error }
-                if key == &artifact.key && error.contains("Could not read PDF")
-        ));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_new_artifact_can_recover_after_a_metadata_failure() {
-        let project = tempfile::tempdir().unwrap();
-        let (result_tx, result_rx) = mpsc::channel();
-        let shutdown = AtomicBool::new(false);
-        let latest_revision = AtomicU64::new(7);
-        for (generation, bytes) in [(11, b"invalid".to_vec()), (12, crate::pdf::test_pdf())] {
-            publish_compiled_artifact(
-                Arc::from(bytes),
-                project.path(),
-                DiagnosticReport::default(),
-                ArtifactKey {
-                    revision: 7,
-                    generation,
-                },
-                Duration::ZERO,
-                true,
-                &shutdown,
-                &latest_revision,
-                &super::ResultSender::from(result_tx.clone()),
-                &crate::worker::RepaintTarget::test(),
-            );
-        }
-
-        let results = result_rx.try_iter().collect::<Vec<_>>();
-        assert_eq!(results.len(), 4);
-        assert!(matches!(
-            &results[0].event,
-            CompileEvent::Artifact(artifact) if artifact.key.generation == 11
-        ));
-        assert!(matches!(
-            &results[1].event,
-            CompileEvent::RasterFailed { key, .. } if key.generation == 11
-        ));
-        assert!(matches!(
-            &results[2].event,
-            CompileEvent::Artifact(artifact) if artifact.key.generation == 12
-        ));
-        assert!(matches!(
-            &results[3].event,
-            CompileEvent::Catalog { key, catalog }
-                if key.generation == 12
-                    && catalog.pages.len() == 1
-                    && catalog.pages[0].size == [400, 200]
-        ));
-    }
-
-    #[test]
     #[ignore = "requires typst and real filesystem notifications"]
     fn persistent_watcher_compiles_errors_and_recovers() {
         let root = tempfile::tempdir().unwrap();
@@ -806,7 +621,6 @@ mod tests {
             .unwrap_or_else(|| PathBuf::from("typst"));
         let request = |revision, source: &str| CompileRequest {
             revision,
-            rasterize: true,
             input: CompileInput {
                 language: TypesettingLanguage::Typst,
 
@@ -831,14 +645,6 @@ mod tests {
             first_artifact.event,
             CompileEvent::Artifact(artifact) if artifact.pdf.starts_with(b"%PDF")
         ));
-        let first_raster = wait_for_revision(&compiler, 1, |event| {
-            matches!(event, CompileEvent::Catalog { .. })
-        });
-        assert!(matches!(
-            first_raster.event,
-            CompileEvent::Catalog { catalog, .. } if catalog.pages.len() == 1
-        ));
-
         compiler.request(request(2, "#let broken =")).unwrap();
         let failed = wait_for_revision(&compiler, 2, |event| {
             matches!(event, CompileEvent::Failed(_))
@@ -852,11 +658,11 @@ mod tests {
             .request(request(3, "= Recovered\n#pagebreak()\n= Page two"))
             .unwrap();
         let recovered = wait_for_revision(&compiler, 3, |event| {
-            matches!(event, CompileEvent::Catalog { .. })
+            matches!(event, CompileEvent::Artifact(_))
         });
         assert!(matches!(
             recovered.event,
-            CompileEvent::Catalog { catalog, .. } if catalog.pages.len() == 2
+            CompileEvent::Artifact(artifact) if artifact.pdf.starts_with(b"%PDF")
         ));
     }
 

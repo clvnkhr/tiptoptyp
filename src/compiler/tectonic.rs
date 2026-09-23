@@ -35,7 +35,6 @@ struct Session {
     log: PathBuf,
     pdf: PathBuf,
     revision: u64,
-    rasterize: bool,
     root: PathBuf,
     source: String,
     started: Instant,
@@ -119,9 +118,7 @@ impl Backend {
             Ok(status) if status.success() => match read_pdf(&session.pdf) {
                 Ok(pdf) => EngineEvent::Pdf {
                     pdf,
-                    project_root: session.root.clone(),
                     diagnostics: report,
-                    rasterize: session.rasterize,
                 },
                 Err(error) => EngineEvent::Failed(DiagnosticReport::error(error)),
             },
@@ -191,7 +188,6 @@ impl Session {
             log,
             pdf,
             revision: request.revision,
-            rasterize: request.rasterize,
             root: private.project_root().to_owned(),
             source: request.input.source.clone(),
             started: Instant::now(),
@@ -345,7 +341,6 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
         };
         let mut request = CompileRequest {
             revision: 1,
-            rasterize: false,
             input: super::super::CompileInput {
                 language: tiptoptyp_core::document::TypesettingLanguage::Tex,
                 source: "WAIT".into(),
@@ -423,7 +418,6 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
         let source = "\\documentclass{article}\n\\begin{document}\nHello é. \\input{sub/part}\n\\end{document}\n";
         let mut request = CompileRequest {
             revision: 1,
-            rasterize: false,
             input: super::super::CompileInput {
                 language: tiptoptyp_core::document::TypesettingLanguage::Tex,
                 source: source.into(),

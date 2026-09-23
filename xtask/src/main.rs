@@ -196,18 +196,6 @@ fn generate_third_party_notices() -> Result<(), String> {
         root.join("docs/licenses/hayro-foxit.txt"),
         root.join("docs/licenses/hayro-cgats.txt"),
         root.join("docs/licenses/hayro-cmaps.txt"),
-        root.join("assets/pdfjs/PROVENANCE.md"),
-        root.join("assets/pdfjs/LICENSE"),
-        root.join("assets/pdfjs/web/cmaps/LICENSE"),
-        root.join("assets/pdfjs/web/iccs/LICENSE"),
-        root.join("assets/pdfjs/web/standard_fonts/LICENSE_FOXIT"),
-        root.join("assets/pdfjs/web/standard_fonts/LICENSE_LIBERATION"),
-        root.join("assets/pdfjs/web/wasm/LICENSE_OPENJPEG"),
-        root.join("assets/pdfjs/web/wasm/LICENSE_PDFJS_OPENJPEG"),
-        root.join("assets/pdfjs/web/wasm/LICENSE_QCMS"),
-        root.join("assets/pdfjs/web/wasm/LICENSE_PDFJS_QCMS"),
-        root.join("assets/pdfjs/web/wasm/LICENSE_JBIG2"),
-        root.join("assets/pdfjs/web/wasm/LICENSE_PDFJS_JBIG2"),
     ] {
         let name = path
             .strip_prefix(&root)

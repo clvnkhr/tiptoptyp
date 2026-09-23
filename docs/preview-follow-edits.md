@@ -16,7 +16,7 @@ An explicit preview jump supersedes a pending automatic jump.
 Hidden and paused previews do not follow edits. Changing the active document,
 revision, Tinymist session, backend or toggle discards pending work. Automatic
 following does not focus the editor or open the preview from Code view.
-PDF.js and raster previews lack source mapping and keep their existing behavior.
+PDFium previews lack source mapping and keep their existing behavior.
 Source that produces no rendered location, such as a comment, may have no jump
 target. Tinymist compile reports are unversioned; the adapter admits only reports
 for the current session/preview entry received after the edit and waits through

@@ -1,16 +1,15 @@
-# PDFium comparison backend
+# PDFium preview
 
-Select **Settings → Preview backend → PDFium (comparison)** to use native PDFium
-for compiled Typst/TeX output and opened PDF tabs. Select **PDF.js** to compare.
-Defaults remain unchanged: Tinymist for Typst, PDF.js for TeX/opened PDFs. The
-comparison setting is persisted and applies to both source previews and PDF tabs.
-Export always uses the original compiler PDF bytes; PDFium does not rewrite them.
+PDFium is the sole PDF viewer for TeX output and opened PDFs. Typst defaults to
+Tinymist for interactive source navigation; select **Settings → Typst preview
+backend → PDFium** to view its compiled PDF instead. A selected backend failure
+is reported explicitly and never switches renderers. There are no PDF.js or
+legacy raster-viewer settings, adapters or assets.
 
-This is an additional viewer, not a replacement of PDF.js. It paints in the egui
-viewport, so it works without a PDF webview and its pixels are included in app
-framebuffer captures. Native libraries are pinned for macOS, Linux and Windows,
-arm64 and x64; the implementation has been exercised on macOS arm64. Other
-platforms need packaged smoke tests before making a support/performance claim.
+Export uses the original compiler PDF bytes. PDFium paints in the egui viewport,
+so framebuffer captures include the actual PDF viewer. Native libraries are
+pinned for macOS, Linux and Windows, arm64 and x64. The implementation has been
+exercised on macOS arm64; other platforms need packaged smoke tests.
 
 ## Usage
 
@@ -22,11 +21,11 @@ matching pages. With a PDF page focused, Find, Copy and Select All target the PD
 Select All selects the current page. Source synchronization remains a Tinymist
 feature. Search results report matching pages, not individual match counts.
 
-Comparison limitations: PDF.js still supplies the richer viewer (thumbnails,
-cross-page selection, individual search-result navigation and viewer rotation
-controls). PDFium respects rotation already encoded in a PDF. No form editing or
-PDF JavaScript is enabled. A failed PDFium update retains old content and shows a
-retry message; it never silently changes engines. Password entry is not implemented.
+Current limitations: selection is within one page; search navigation advances
+between matching pages. There is no thumbnail strip, cross-page selection,
+individual-match navigation, rotation control, form editing, PDF JavaScript or
+password-entry UI. Rotation encoded in the PDF is respected. Failed updates
+retain the last good page and show an error with an explicit retry action.
 
 ## Reload and scheduling
 
@@ -68,7 +67,7 @@ paired with `pdfium-render = 0.9.4` and its `pdfium_7881` ABI feature. The downl
 has a per-target SHA-256 pin in `xtask/src/pdfium.rs`; extraction validates archive
 paths and entry types. The library, provenance and dependency licenses are included
 in the app's `pdfium` resources, and notices are included in THIRD_PARTY_NOTICES.
-Runtime loading only checks app resource locations and, in development builds,
+Startup validates the native library before opening the editor. Runtime loading only checks app resource locations and, in development builds,
 the repository's generated bundle. There is no PATH/system library fallback or
 runtime download. MuPDF is not an application dependency.
 
@@ -79,7 +78,7 @@ cargo test --bin tiptoptyp pdfium -- --include-ignored --skip native_fixture_pro
 cargo run --release -- --ui-theme catppuccin-latte \
   --ui-snapshot-scene pdfium-preview \
   --ui-screenshot-subdir screenshots/agent-review/pdfium \
-  --ui-screenshot-exit scripts/fixtures/pdfjs.typ
+  --ui-screenshot-exit scripts/fixtures/pdf-preview.typ
 ```
 
 Native regressions check actual pixels, link extraction, document reuse,
@@ -87,13 +86,6 @@ superseded requests, failure recovery, and retention of the displayed texture
 through a changed/failed document. Pure tests cover visible-page demand, pixel
 limits, Unicode search mapping and routing without Tinymist/Hayro duplication.
 The maintained gallery includes the actual PDFium viewport scene.
-
-For a fair interactive comparison, use the same file, viewport, theme, page and
-zoom in both backends, then edit while scrolled down. Check page additions/removals,
-selection, search, links and failed compilation. Distinguish compilation latency
-from rendering. The earlier Python engine probe is not an end-to-end benchmark
-of this viewer, and no speedup over the existing staged PDF.js viewer is claimed
-from those numbers.
 
 The optimized macOS arm64 worker probe measured 9.03 ms median / 9.49 ms p95
 for changed PDFs and 7.30 / 7.75 ms for retained-document viewport requests.
@@ -103,7 +95,7 @@ GPU upload and presentation. Raw samples and metadata are retained in
 [the worker results](performance-results/pdfium-worker-2026-09-23.json).
 The ignored `native_fixture_probe` test reproduces the measurement with
 `TIPTOPTYP_PDFIUM_PROBE_A` and `TIPTOPTYP_PDFIUM_PROBE_B` pointing to the two
-24-page fixture PDFs.
+fixture PDFs (`TIPTOPTYP_PDFIUM_PROBE_PAGES` defaults to 24).
 
 A native WebKit/PDFium comparison is now available in
 [the reload performance report](pdf-reload-performance.md), with matched engine

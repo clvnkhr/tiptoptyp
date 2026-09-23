@@ -96,7 +96,11 @@ end-to-end UI speedup. Initial WKWebView readiness is reported separately, with
 50 ms polling granularity. Native process first-request latency is also separate;
 neither is an OS-cold-cache startup benchmark.
 
-## Reproduction
+## Reproduction at the rollback checkpoint
+
+The comparison code and PDF.js assets were removed after this measurement.
+Check out commit `00abc5f` in a separate worktree to reproduce the commands below.
+The current tree contains only the PDFium viewer.
 
 ```sh
 cargo test --release --bin tiptoptyp --no-run

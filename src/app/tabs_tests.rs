@@ -7,7 +7,7 @@ fn first_source_after_pdf_becomes_preview_and_later_sources_preserve_it() {
         let root = tempfile::tempdir().unwrap();
         let mut app = fixture(&context, root.path());
         app.lifecycle = DocumentLifecycle::Active;
-        app.preview = PreviewController::new(false, PreviewPreference::Native);
+        app.preview = PreviewController::new(false, PreviewPreference::Pdfium);
         let pdf = root.path().join("first.pdf");
         fs::write(&pdf, crate::pdf::test_pdf()).unwrap();
         assert!(app.load_path(pdf));
@@ -530,18 +530,6 @@ fn assets_keep_typst_output_and_reject_late_results_after_closing() {
             token,
             output: Ok(LoadedAsset::Pdf {
                 bytes: b"asset pdf".to_vec(),
-                catalog: Some(crate::pdf::PdfDocumentCatalog {
-                    pages: vec![
-                        crate::pdf::PdfPageMetadata {
-                            size: [2, 2],
-                            links: Vec::new(),
-                        },
-                        crate::pdf::PdfPageMetadata {
-                            size: [2, 2],
-                            links: Vec::new(),
-                        },
-                    ],
-                }),
             }),
         },
     );
@@ -555,7 +543,7 @@ fn assets_keep_typst_output_and_reject_late_results_after_closing() {
         Some(b"asset pdf".as_slice())
     );
     app.apply_editor_location(Some(1), None);
-    assert_eq!(app.asset_preview.requested_page, Some(1));
+    assert_eq!(app.pdfium_asset.requested_page(), Some(1));
     assert!(app.preview.requested_page.is_none());
     app.empty_workspace(&context);
     app.accept_asset_result(
@@ -565,7 +553,6 @@ fn assets_keep_typst_output_and_reject_late_results_after_closing() {
             output: Ok(LoadedAsset::Image(PreviewPage {
                 size: [2, 2],
                 rgba: vec![255; 16],
-                links: Vec::new(),
             })),
         },
     );
@@ -1166,7 +1153,7 @@ fn all_dirty_tabs_must_be_approved_and_later_edits_revoke_window_close() {
 }
 
 #[test]
-fn opened_pdfs_default_to_pdfjs_without_poppler_even_beside_a_typst_preview() {
+fn opened_pdfs_default_to_pdfium_without_poppler_even_beside_a_typst_preview() {
     let root = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
     let mut app = fixture(&context, root.path());
@@ -1182,8 +1169,8 @@ fn opened_pdfs_default_to_pdfjs_without_poppler_even_beside_a_typst_preview() {
     );
     app.append_tab(&context);
     let path = root.path().join("reference.pdf");
-    // Invalid PDF: success proves that PDF.js owns parsing this asset.
-    fs::write(&path, b"PDF.js parses these bytes").unwrap();
+    // Invalid PDF: success proves that PDFium owns parsing this asset.
+    fs::write(&path, b"PDFium parses these bytes").unwrap();
     app.document_mut().replace_loaded_unprojected(
         String::new(),
         path.clone(),
@@ -1191,14 +1178,14 @@ fn opened_pdfs_default_to_pdfjs_without_poppler_even_beside_a_typst_preview() {
         None,
     );
     app.clear_preview_for_document(true);
-    assert!(app.pdfjs_asset_requested());
+    assert!(app.pdfium_asset_requested());
     assert!(app.source_preview_available());
     // The dormant fixture has no sidecar. Model its normal startup state.
     app.preview.tinymist_state = ServiceState::Starting("Launching Tinymist".into());
     app.preview.webview_state = ServiceState::Starting("Waiting for preview".into());
     if cfg!(any(target_os = "macos", target_os = "windows")) {
         assert!(
-            !app.pdfjs_preview_requested(),
+            !app.pdfium_preview_requested(),
             "the designated Typst pane still uses Tinymist"
         );
     }
@@ -1210,16 +1197,16 @@ fn opened_pdfs_default_to_pdfjs_without_poppler_even_beside_a_typst_preview() {
     }
     assert_eq!(
         app.asset_preview.content.pdf().map(|pdf| pdf.as_ref()),
-        Some(b"PDF.js parses these bytes".as_slice())
+        Some(b"PDFium parses these bytes".as_slice())
     );
     assert!(app.asset_preview.content.pages().is_empty());
     assert_eq!(
         app.preview.content.pdf().map(|pdf| pdf.as_ref()),
         Some(b"retained Typst PDF".as_slice())
     );
-    app.settings.preview_preference = PreviewPreference::Native;
+    app.settings.preview_preference = PreviewPreference::Pdfium;
     assert!(
-        app.pdfjs_asset_requested(),
+        app.pdfium_asset_requested(),
         "Typst backend preferences do not change opened PDF tabs"
     );
 }

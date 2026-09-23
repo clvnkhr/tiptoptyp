@@ -100,10 +100,8 @@ struct WatchSession {
     child: Child,
     reader: Option<thread::JoinHandle<()>>,
     pending_revision: u64,
-    pending_rasterize: bool,
     pending_display_name: String,
     active_revision: Option<u64>,
-    active_rasterize: bool,
     active_display_name: String,
     active_started: Instant,
     diagnostics: Vec<String>,
@@ -112,7 +110,6 @@ struct WatchSession {
 
 struct PendingCompletion {
     revision: u64,
-    rasterize: bool,
     elapsed: Duration,
     succeeded: bool,
     quiet_since: Instant,
@@ -216,10 +213,8 @@ impl WatchSession {
             child,
             reader: Some(reader),
             pending_revision: request.revision,
-            pending_rasterize: request.rasterize,
             pending_display_name: request.input.display_name.clone(),
             active_revision: None,
-            active_rasterize: request.rasterize,
             active_display_name: request.input.display_name.clone(),
             active_started: Instant::now(),
             diagnostics: Vec::new(),
@@ -232,7 +227,6 @@ impl WatchSession {
             format!("Could not update the private live-preview document: {error}")
         })?;
         self.pending_revision = request.revision;
-        self.pending_rasterize = request.rasterize;
         self.pending_display_name
             .clone_from(&request.input.display_name);
         Ok(())
@@ -377,7 +371,6 @@ fn drain_watch_logs(
                 // that result no longer represents the live output path.
                 current.pending_completion = None;
                 current.active_revision = Some(current.pending_revision);
-                current.active_rasterize = current.pending_rasterize;
                 current
                     .active_display_name
                     .clone_from(&current.pending_display_name);
@@ -396,7 +389,6 @@ fn drain_watch_logs(
                     .unwrap_or(current.pending_revision);
                 current.pending_completion = Some(PendingCompletion {
                     revision,
-                    rasterize: current.active_rasterize,
                     elapsed: current.active_started.elapsed(),
                     succeeded: true,
                     quiet_since: Instant::now(),
@@ -409,7 +401,6 @@ fn drain_watch_logs(
                     .unwrap_or(current.pending_revision);
                 current.pending_completion = Some(PendingCompletion {
                     revision,
-                    rasterize: current.active_rasterize,
                     elapsed: current.active_started.elapsed(),
                     succeeded: false,
                     quiet_since: Instant::now(),
@@ -445,9 +436,7 @@ fn finish_settled_completion(session: &mut Option<WatchSession>, results: &mut V
         match fs::read(&current.pdf_path) {
             Ok(pdf) => EngineEvent::Pdf {
                 pdf: pdf.into(),
-                project_root: current.context.project_root.clone(),
                 diagnostics,
-                rasterize: completion.rasterize,
             },
             Err(error) => EngineEvent::Failed(DiagnosticReport::error(format!(
                 "Could not snapshot the compiled PDF: {error}"
@@ -539,7 +528,6 @@ mod tests {
         };
         let request = CompileRequest {
             revision: 7,
-            rasterize: false,
             input: CompileInput {
                 language: TypesettingLanguage::Typst,
                 source: "= Test".to_owned(),

@@ -58,7 +58,7 @@ jobs:
       - name: Application and core tests
         run: cargo +1.98.1 test --locked --no-fail-fast
       - name: Embedded preview interaction tests
-        run: node --test scripts/test-preview-navigation.mjs scripts/test-pdfjs-host.mjs
+        run: node --test scripts/test-preview-navigation.mjs
       - name: Packaging tests
         run: cargo +1.98.1 test --locked --manifest-path xtask/Cargo.toml
       - name: Profiling infrastructure checks
@@ -87,10 +87,10 @@ jobs:
           tool: cargo-about
       - name: Validate dependency notice generation
         run: cargo about generate --manifest-path Cargo.toml about.hbs > "$RUNNER_TEMP/THIRD_PARTY_RUST_NOTICES"
-      - name: Install Poppler
-        run: brew install poppler
       - name: Fetch hash-verified pinned sidecars
         run: cargo +1.98.1 run --locked --manifest-path xtask/Cargo.toml -- fetch-sidecars
+      - name: Fetch hash-verified PDFium
+        run: cargo +1.98.1 run --locked --manifest-path xtask/Cargo.toml -- fetch-pdfium
       - name: Run real-tool integration tests
         shell: bash
         run: |
@@ -100,4 +100,5 @@ jobs:
           export TIPTOPTYP_TEST_TINYMIST="$PWD/toolchain/bin/tinymist-$target"
           test -x "$TIPTOPTYP_TEST_TYPST"
           test -x "$TIPTOPTYP_TEST_TINYMIST"
-          cargo +1.98.1 test --locked --bin tiptoptyp -- --ignored --test-threads=1
+          cargo +1.98.1 test --locked -p glutin --lib native_thread_current_context -- --ignored
+          cargo +1.98.1 test --locked --bin tiptoptyp -- --ignored --skip native_fixture_probe --test-threads=1

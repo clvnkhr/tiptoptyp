@@ -4,9 +4,7 @@ pub(crate) mod icons;
 mod templates;
 mod tex;
 mod writing;
-use icons::{
-    UiIcon, icon_button, icon_button_enabled, paint_ui_icon, square_icon_button, static_icon,
-};
+use icons::{UiIcon, icon_button, paint_ui_icon, square_icon_button, static_icon};
 #[cfg(test)]
 use icons::{closed_eye_icon_geometry, eye_icon_geometry, refresh_icon_geometry};
 mod completion_popup;
@@ -45,9 +43,9 @@ use table_editor::show_table_editor_ui;
 mod extra_shortcuts;
 mod find_bar;
 mod git_actions;
+mod image_view;
 mod lifecycle;
 mod mitex_mode;
-mod raster_view;
 mod saves;
 mod tabs;
 mod terminal_panel;
@@ -56,7 +54,6 @@ mod workspace_view;
 use lifecycle::DocumentLifecycle;
 mod native_views;
 mod pdfium_view;
-mod pdfjs_view;
 mod preview_follow;
 mod settings_panel;
 mod settings_view;
@@ -73,7 +70,6 @@ use qa::{QaSession, source_editor_snapshot_scroll_offset};
 use qa::{STICKY_CONTEXT_SNAPSHOT_SOURCE, SceneDocument, prepare_sticky_context_snapshot_document};
 
 use std::{
-    cmp::Reverse,
     collections::{BTreeMap, VecDeque},
     fs,
     ops::Range,
@@ -131,7 +127,6 @@ use crate::{
     },
     package_catalog::{PackageCatalogLoad, PackageRoots},
     pdf::PreviewPage,
-    pdf_pages::{PdfPageLoader, PdfSurface, RasterPageRequestKey},
     presentation::{
         ActiveThemeRequest, AppliedPresentation, ResolvedPresentationRequest,
         active_theme_preference, active_theme_request, load_active_theme_or_fallback,
@@ -140,9 +135,8 @@ use crate::{
     preview::{
         PAGE_GAP, PAGE_MARGIN, PDF_POINTS_PER_PREVIEW_PIXEL, PreviewController, PreviewEffect,
         PreviewStatus, PreviewStatusSnapshot, PreviewTexture, PreviewTransition,
-        PreviewTransitionEvent, RasterContentFreshness, ResidentPreviewTexture, ServiceState,
-        dark_preview_rgba, page_stack_geometry, stack_height, visible_page, visible_page_range,
-        zoom_anchored_offset,
+        PreviewTransitionEvent, ResidentPreviewTexture, ServiceState, dark_preview_rgba,
+        page_stack_geometry, stack_height, visible_page, zoom_anchored_offset,
     },
     project_index::ProjectIndex,
     screenshot::{CaptureController, CaptureThemeProfile, UiCaptureStep, UiSnapshotScene},
@@ -176,8 +170,6 @@ use crate::{
 use crate::editor_features::{StickyContextKind, sticky_context_rows};
 #[cfg(test)]
 use crate::presentation::{ThemeSourceRequest, load_active_theme};
-#[cfg(test)]
-use crate::preview::{raster_content_freshness, raster_result_matches_artifact};
 
 const COMPILE_DEBOUNCE: Duration = Duration::from_millis(60);
 const AUTOSAVE_RETRY_DELAY: Duration = Duration::from_secs(2);
@@ -405,20 +397,6 @@ const fn settled_snapshot_preview_status(
         UiSnapshotScene::ProblemsPanel => Some(PreviewStatus::Error),
         _ => None,
     }
-}
-
-const fn capture_preview_build_needed(
-    main_capture_pending: bool,
-    has_pages: bool,
-    compile_scheduled: bool,
-    status: PreviewStatus,
-    has_artifact: bool,
-) -> bool {
-    main_capture_pending
-        && !has_pages
-        && !compile_scheduled
-        && !has_artifact
-        && !matches!(status, PreviewStatus::Compiling | PreviewStatus::Error)
 }
 
 const fn retain_preview_surface_for_restart(
@@ -857,7 +835,7 @@ impl SettingsSection {
             Self::Appearance => "Appearance",
             Self::Editor => "Editor",
             Self::Tools => "Tool binaries",
-            Self::Preview => "Preview backend",
+            Self::Preview => "Typst preview backend",
             Self::Status => "Service status",
         }
     }
@@ -991,7 +969,7 @@ impl SettingsTarget {
             Self::TinymistLanguageServer => "Tinymist (Typst language server)",
             Self::RefreshBinaryStatus => "Refresh binary status",
             Self::BrowseTypstPackages => "Browse Typst packages…",
-            Self::PreviewBackend => "Preview backend",
+            Self::PreviewBackend => "Typst preview backend",
             Self::PreviewFollowEdits => "Follow Typst edits in preview",
             Self::ToolchainStatus => "Service status",
             Self::ProjectRoot => "Project root",
@@ -1100,7 +1078,7 @@ impl SettingsTarget {
             Self::TinymistLanguageServer => "tools binary lsp custom bundled path",
             Self::RefreshBinaryStatus => "tools rescan reload",
             Self::BrowseTypstPackages => "tools package manager registry installed published",
-            Self::PreviewBackend => "interactive raster pdf pdfium pdf.js tinymist native retry",
+            Self::PreviewBackend => "pdf pdfium tinymist preview retry",
             Self::PreviewFollowEdits => "automatic scroll jump sync source typing changes",
             Self::ToolchainStatus => "tools typst tinymist lsp vector watcher pdf syntax ready",
             Self::ProjectRoot => "workspace folder directory path",
@@ -1155,8 +1133,6 @@ pub struct EditorApp {
 
     compiler: Compiler,
     asset_loader: AssetLoader,
-    preview_page_loader: PdfPageLoader,
-    asset_page_loader: PdfPageLoader,
     asset_preview: PreviewController,
     asset_token: crate::asset::AssetToken,
     asset_thumbnail_loader: AssetThumbnailLoader,
@@ -1284,8 +1260,6 @@ pub struct EditorApp {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     webview_applied: Option<native_views::WebviewAppliedState>,
     web_link_sender: mpsc::Sender<String>,
-    pdfjs_preview: pdfjs_view::PdfJsView,
-    pdfjs_asset: pdfjs_view::PdfJsView,
     pdfium_preview: pdfium_view::PdfiumView,
     pdfium_asset: pdfium_view::PdfiumView,
     web_link_receiver: mpsc::Receiver<String>,
@@ -1346,7 +1320,7 @@ impl EditorApp {
         window_host: EditorWindowHost,
         lifecycle: DocumentLifecycle,
     ) -> Self {
-        if snapshot_scene == Some(UiSnapshotScene::PdfiumPreview) {
+        if snapshot_scene.is_some() && captures.has_pending() {
             settings.preview_preference = PreviewPreference::Pdfium;
         }
         if snapshot_scene.is_some() {
@@ -1447,13 +1421,7 @@ impl EditorApp {
             generic_highlighter,
             compiler: Compiler::new(crate::worker::RepaintTarget::new(context, viewport)),
             asset_loader: AssetLoader::new(crate::worker::RepaintTarget::new(context, viewport)),
-            preview_page_loader: PdfPageLoader::new(crate::worker::RepaintTarget::new(
-                context, viewport,
-            )),
-            asset_page_loader: PdfPageLoader::new(crate::worker::RepaintTarget::new(
-                context, viewport,
-            )),
-            asset_preview: PreviewController::new(false, PreviewPreference::Native),
+            asset_preview: PreviewController::new(false, PreviewPreference::Pdfium),
             asset_token: Default::default(),
             asset_thumbnail_loader: AssetThumbnailLoader::new(crate::worker::RepaintTarget::new(
                 context, viewport,
@@ -1584,8 +1552,6 @@ impl EditorApp {
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             webview_applied: None,
             web_link_sender,
-            pdfjs_preview: pdfjs_view::PdfJsView::default(),
-            pdfjs_asset: pdfjs_view::PdfJsView::default(),
             pdfium_preview: pdfium_view::PdfiumView::default(),
             pdfium_asset: pdfium_view::PdfiumView::default(),
             web_link_receiver,
@@ -1830,7 +1796,7 @@ impl EditorApp {
         self.stop_tinymist_session();
         self.preview.suspend_document("No document window is open");
         self.discard_webview();
-        self.clear_pdfjs_views();
+        self.clear_pdf_views();
         self.compile_deadline = None;
         self.project_index_deadline.clear();
         self.project_index_job.supersede();
@@ -1916,10 +1882,6 @@ impl EditorApp {
         // Drain canceled service results without accepting them or retrying.
         while self.compiler.try_recv().is_some() {}
         while self.asset_loader.try_recv().is_some() {}
-        self.preview_page_loader.cancel();
-        self.asset_page_loader.cancel();
-        while self.preview_page_loader.try_recv().is_some() {}
-        while self.asset_page_loader.try_recv().is_some() {}
         while self.asset_thumbnail_loader.try_recv().is_some() {}
         while self.tinymist.try_recv().is_some() {}
         self.record_notice_transition();
@@ -2368,7 +2330,7 @@ impl EditorApp {
             .is_some()
         {
             // Tinymist sees unsaved edits in every open source file. The CLI
-            // fallback can only see an imported subfile after it is saved, so
+            // PDF compiler can only see an imported subfile after it is saved, so
             // avoid rebuilding the designated main entry with stale disk data.
             self.compile_deadline = (self.current_is_preview_document()
                 && self.preview_processing_enabled()
@@ -2466,130 +2428,30 @@ impl EditorApp {
         self.preview.mark_diagnostics_changed();
     }
 
+    fn update_image_residency(&mut self) {
+        let visible = if self.document().kind() == DocumentKind::Image {
+            self.asset_preview
+                .content
+                .pages()
+                .iter()
+                .filter_map(|page| page.resident.as_ref().map(|resident| resident.lease.id()))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        crate::image_residency::set_owner_visible(self.document().key().owner, visible);
+        if self.document().kind() == DocumentKind::Image
+            && !self.asset_preview.has_resident_pages()
+            && matches!(self.asset_preview.status, PreviewStatus::Ready(_))
+            && let Some(path) = self.document().path().clone()
+        {
+            self.request_asset(path);
+        }
+    }
+
     fn receive_asset_results(&mut self, context: &egui::Context) {
         while let Some(result) = self.asset_loader.try_recv() {
             self.accept_asset_result(context, result);
-        }
-    }
-
-    fn receive_pdf_page_results(&mut self, context: &egui::Context) {
-        let mut results = Vec::new();
-        while let Some(result) = self.preview_page_loader.try_recv() {
-            results.push(result);
-        }
-        while let Some(result) = self.asset_page_loader.try_recv() {
-            results.push(result);
-        }
-        let owner = self.document().key().owner;
-        for result in results {
-            let preview = match result.surface {
-                PdfSurface::Document => &mut self.preview,
-                PdfSurface::Asset => &mut self.asset_preview,
-            };
-            if !preview.accepts_page_key(result.key) {
-                continue;
-            }
-            match result.output {
-                Ok(mut pages) => {
-                    let dark = preview.render_dark();
-                    // Admit the farthest speculative neighbours first and
-                    // visible/adjacent pages last. If this batch crosses the
-                    // process-wide budget, eviction keeps the nearest
-                    // contiguous pages instead of leaving scattered gaps.
-                    pages.sort_by_key(|(index, _)| Reverse(preview.page_demand_distance(*index)));
-                    let mut residents = Vec::with_capacity(pages.len());
-                    for (index, page) in pages {
-                        let size = page.size;
-                        let visible = preview.page_is_demanded(index);
-                        let resident = make_preview_resident(
-                            context,
-                            owner,
-                            PreviewResidentInput {
-                                request: result.key,
-                                index,
-                                size,
-                                rgba: page.rgba,
-                                dark,
-                                visible,
-                            },
-                        );
-                        // Admission can evict an earlier page in this same
-                        // result. Drop its decoded bytes and texture now rather
-                        // than retaining the whole over-budget batch until the
-                        // next frame.
-                        residents.retain(|(_, resident): &(usize, ResidentPreviewTexture)| {
-                            resident.lease.is_resident()
-                        });
-                        preview.prune_evicted_pages();
-                        residents.push((index, resident));
-                    }
-                    preview.accept_page_residents(result.key, residents);
-                }
-                Err(error) => {
-                    preview
-                        .content
-                        .fail_raster(result.key.artifact, error.clone());
-                    self.notice = Some(Notice {
-                        message: format!("PDF page preview is unavailable: {error}"),
-                        kind: NoticeKind::Error,
-                    });
-                }
-            }
-        }
-    }
-
-    fn tick_pdf_page_requests(&mut self) {
-        self.preview.prune_evicted_pages();
-        self.asset_preview.prune_evicted_pages();
-
-        let raster_document_visible = self.source_preview_available()
-            && self.view_mode.shows_preview()
-            && self.raster_preview_required();
-        let asset_visible = self.document().kind().preview_only()
-            && (self.document().kind() != DocumentKind::Pdf
-                || (!self.pdfjs_asset_requested() && !self.pdfium_asset_requested())
-                || self.captures.has_pending_for("main"));
-        let owner = self.document().key().owner;
-        let visible = raster_document_visible
-            .then(|| self.preview.visible_residency_ids())
-            .into_iter()
-            .flatten()
-            .chain(
-                asset_visible
-                    .then(|| self.asset_preview.visible_residency_ids())
-                    .into_iter()
-                    .flatten(),
-            )
-            .collect::<Vec<_>>();
-        crate::pdf_residency::set_owner_visible(owner, visible);
-
-        if raster_document_visible {
-            let root = self.tab_preview_root().to_path_buf();
-            if let Err(error) = request_pdf_pages(
-                &mut self.preview,
-                &self.preview_page_loader,
-                PdfSurface::Document,
-                root,
-            ) {
-                self.notice = Some(Notice {
-                    message: error,
-                    kind: NoticeKind::Error,
-                });
-            }
-        }
-        if asset_visible {
-            let root = self.project_root();
-            if let Err(error) = request_pdf_pages(
-                &mut self.asset_preview,
-                &self.asset_page_loader,
-                PdfSurface::Asset,
-                root,
-            ) {
-                self.notice = Some(Notice {
-                    message: error,
-                    kind: NoticeKind::Error,
-                });
-            }
         }
     }
 
@@ -2613,18 +2475,12 @@ impl EditorApp {
                 ];
                 self.asset_preview.replace_asset(key, None, vec![texture]);
             }
-            Ok(LoadedAsset::Pdf { bytes, catalog }) => {
+            Ok(LoadedAsset::Pdf { bytes }) => {
                 let key = ArtifactKey::unversioned(self.document().revision());
-                if let Some(catalog) = catalog {
-                    self.asset_preview
-                        .replace_pdf_asset(key, bytes.into(), catalog);
-                } else {
-                    self.asset_preview
-                        .replace_asset(key, Some(bytes.into()), Vec::new());
-                }
+                self.asset_preview
+                    .replace_asset(key, Some(bytes.into()), Vec::new());
                 if let Some(page) = self.pending_asset_page.take() {
-                    self.asset_preview.requested_page =
-                        Some(page.min(self.asset_preview.content.pages().len().saturating_sub(1)));
+                    self.pdfium_asset.go_to_page(page);
                 }
                 self.complete_pending_export();
             }
@@ -2851,9 +2707,9 @@ impl EditorApp {
     }
 
     fn clear_preview_for_document(&mut self, preserve_designated_preview: bool) {
-        self.pdfjs_asset.clear();
+        self.pdfium_asset = Default::default();
         if !preserve_designated_preview {
-            self.pdfjs_preview.clear();
+            self.pdfium_preview = Default::default();
         }
         self.manual_format_revision = None;
         self.format_request_key = None;
@@ -2866,8 +2722,6 @@ impl EditorApp {
             .and_then(|path| external_file_stamp(path).ok());
         self.asset_token.advance();
         self.asset_loader.cancel_before(self.asset_token);
-        self.preview_page_loader.cancel();
-        self.asset_page_loader.cancel();
         self.asset_preview
             .clear_for_document(self.document().revision(), false);
         self.preview
@@ -3119,10 +2973,6 @@ impl EditorApp {
                 self.pdfium_asset.zoom(action);
             } else if self.pdfium_preview_requested() && !self.document().kind().preview_only() {
                 self.pdfium_preview.zoom(action);
-            } else if self.pdfjs_asset_requested() {
-                self.pdfjs_asset.zoom(action);
-            } else if self.pdfjs_preview_requested() && !self.document().kind().preview_only() {
-                self.pdfjs_preview.zoom(action);
             } else if self.interactive_preview_active() && !self.document().kind().preview_only() {
                 #[cfg(any(target_os = "macos", target_os = "windows"))]
                 if let Some(webview) = &self.webview {
@@ -3143,7 +2993,7 @@ impl EditorApp {
                 } else {
                     &mut self.preview
                 };
-                raster_view::request_zoom(preview, action);
+                image_view::request_zoom(preview, action);
             }
         }
 
@@ -3579,7 +3429,7 @@ impl EditorApp {
         );
         let changes = self.presentation.changes(&request);
         if changes.preview_preference {
-            self.clear_pdfjs_views();
+            self.clear_pdf_views();
             if self.document().kind() == DocumentKind::Pdf
                 && let Some(path) = self.document().path().clone()
             {
@@ -4301,8 +4151,8 @@ impl EditorApp {
             && (reloading_current_document
                 || tabs::switch_needs_compile(
                     keep_designated_preview,
-                    self.raster_preview_required(),
-                    !self.preview.content.pages().is_empty(),
+                    self.pdfium_preview_requested(),
+                    self.preview.content.pdf().is_some(),
                     matches!(
                         self.preview.status,
                         PreviewStatus::Waiting | PreviewStatus::Compiling
@@ -5987,30 +5837,12 @@ impl EditorApp {
 
     fn preview_processing_enabled(&self) -> bool {
         self.source_preview_available()
-            && (self.document_workflow.pending_export.is_some()
-                || self.pdfjs_preview_requested()
-                || self.pdfium_preview_requested()
-                || self.raster_preview_required())
+            && (self.document_workflow.pending_export.is_some() || self.pdfium_preview_requested())
     }
 
-    fn raster_preview_required(&self) -> bool {
-        (self.captures.has_pending_for("main") && !self.pdfium_preview_requested())
-            || self.preview_status_snapshot().effective_backend
-                == crate::preview::PreviewBackend::Raster
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn fail_local_webview(&mut self, message: String) {
-        let compile_was_required = self.preview_processing_enabled();
         self.discard_webview();
         self.preview.webview_state = ServiceState::Failed(message);
-        if !compile_was_required && self.preview_processing_enabled() && self.may_run_compilation()
-        {
-            let transition = self
-                .preview
-                .transition(PreviewTransitionEvent::RenderRequested);
-            self.apply_preview_transition(transition, None);
-        }
     }
 
     fn sync_preview_visibility(&mut self) {
@@ -6080,10 +5912,6 @@ impl EditorApp {
 
     fn interactive_preview_active(&self) -> bool {
         self.preview_status_snapshot().native_ready
-    }
-
-    fn preview_fallback_reason(&self) -> Option<String> {
-        self.preview_status_snapshot().fallback_reason()
     }
 
     fn non_preview_fallback_details(&self, system_theme: Option<egui::Theme>) -> Vec<String> {
@@ -7038,56 +6866,14 @@ impl EditorApp {
         }
     }
 
-    fn rasterizer_service_state(&self) -> ServiceState {
-        let preview = self.status_preview();
-        if matches!(
-            self.document().kind(),
-            DocumentKind::Tex | DocumentKind::Text
-        ) && !self.source_preview_available()
-        {
-            return ServiceState::Disabled("Text files do not need a preview renderer".to_owned());
+    fn pdf_renderer_service_state(&self) -> ServiceState {
+        if self.pdfium_asset_requested() {
+            self.pdfium_asset.service_state()
+        } else if self.pdfium_preview_requested() {
+            self.pdfium_preview.service_state()
+        } else {
+            ServiceState::Disabled("Tinymist renders the selected Typst preview".into())
         }
-        if self.document().kind() == DocumentKind::Image
-            && !self.source_preview_available()
-            && !preview.content.pages().is_empty()
-        {
-            return ServiceState::Ready("The selected image decoded successfully".to_owned());
-        }
-        if self.raster_content_freshness() == Some(RasterContentFreshness::Current) {
-            return if preview.has_resident_pages() {
-                ServiceState::Ready(format!(
-                    "Rust PDF renderer has {} page(s); visible pages render on demand",
-                    preview.content.pages().len()
-                ))
-            } else {
-                ServiceState::Starting(format!(
-                    "Rust PDF renderer found {} page(s); rendering the visible range",
-                    preview.content.pages().len()
-                ))
-            };
-        }
-        if self.raster_content_freshness() == Some(RasterContentFreshness::Stale) {
-            return ServiceState::Degraded(format!(
-                "Showing {} page(s) from the last successful build",
-                preview.content.pages().len()
-            ));
-        }
-        if let Some(error) = preview.content.error() {
-            return ServiceState::Degraded(error.to_owned());
-        }
-        match preview.status {
-            PreviewStatus::Error => {
-                ServiceState::Failed("No rasterized pages are available".to_owned())
-            }
-            PreviewStatus::Waiting | PreviewStatus::Compiling | PreviewStatus::Ready(_) => {
-                ServiceState::Starting("Waiting for the watched PDF to render".to_owned())
-            }
-        }
-    }
-
-    fn raster_content_freshness(&self) -> Option<RasterContentFreshness> {
-        self.status_preview()
-            .raster_freshness(self.document().revision())
     }
 
     fn show_workspace(&mut self, ui: &mut egui::Ui) {
@@ -7742,58 +7528,20 @@ impl EditorApp {
     fn show_preview(&mut self, ui: &mut egui::Ui, frame: Option<&eframe::Frame>) {
         if self.document().kind().preview_only() && !self.source_preview_available() {
             self.hide_webview();
-            self.show_asset_view(ui, frame);
+            self.show_asset_view(ui);
             return;
         }
         if self.pdfium_preview_requested() {
             self.hide_webview();
-            self.pdfjs_preview.hide();
-            self.show_pdfium_view(ui, false);
-            return;
-        }
-        if self.pdfjs_preview_requested() && !self.captures.has_pending_for("main") {
-            self.hide_webview();
-            self.show_pdfjs_view(ui, frame, false);
-            return;
-        }
-        self.pdfjs_preview.hide();
-        let status = self.preview_status_snapshot();
-        let native_ready = status.native_ready;
-        let native_transitioning = status.interactive_transitioning;
-        let should_attempt_native = status.should_attempt_native;
-        let canonical_artifact_available = status.canonical_artifact_available;
-        // The interactive viewer needs no toolbar, so its content aligns
-        // exactly with the code panel. Raster-only page controls get one fixed
-        // row and never change height with build status.
-        if !native_ready && !native_transitioning {
-            theme::panel_header(ui, "preview-header", |ui| {
-                self.show_preview_header_controls(ui, native_ready);
-            });
-        }
-
-        // WKWebView is a separate native layer and cannot be read by egui's
-        // app-window framebuffer capture. Use the matching rasterised page for
-        // this one QA frame; no desktop capture API is involved.
-        let main_capture_pending = self.captures.has_pending_for("main");
-        if main_capture_pending {
-            if capture_preview_build_needed(
-                main_capture_pending,
-                self.preview.has_resident_pages(),
-                self.compile_deadline.is_some(),
-                self.preview.status,
-                canonical_artifact_available,
-            ) {
-                self.schedule_compile_now();
+            if snapshot_scene_hides_preview_pages(self.snapshot_scene) {
+                show_centered_preview_message(ui, "Building preview…", true);
+            } else {
+                self.show_pdfium_view(ui, false);
             }
-            self.hide_webview();
-            self.show_native_preview(ui);
             return;
         }
-
-        if should_attempt_native {
-            // The interactive viewer is a native child view, so it does not
-            // inherit egui's clip rectangle. Keep its bounds inside the
-            // preview pane or it can draw over the editor after a resize.
+        let status = self.preview_status_snapshot();
+        if status.should_attempt_native {
             let available = ui.available_rect_before_wrap();
             let clip = ui.clip_rect();
             let rect = clipped_preview_rect(available, clip);
@@ -7812,57 +7560,14 @@ impl EditorApp {
             ) {
                 ui.allocate_rect(rect, Sense::hover());
                 ui.painter().rect_filled(rect, 0.0, preview_background(ui));
-            } else if self.pdfjs_preview_requested() {
-                // Creation/navigation can fail during this frame. Route the
-                // failure straight to PDF.js, including before the next repaint.
-                self.hide_webview();
-                self.show_pdfjs_view(ui, frame, false);
-            } else if native_transitioning {
-                self.hide_webview();
-                #[cfg(any(target_os = "macos", target_os = "windows"))]
-                let waiting_for_focus = self.webview.is_none()
-                    && !may_create_window_webview(
-                        self.window_host,
-                        cfg!(target_os = "macos"),
-                        ui.ctx().input(|input| input.viewport().focused),
-                    );
-                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-                let waiting_for_focus = false;
-                show_preview_transition(ui, waiting_for_focus);
-            } else {
-                self.hide_webview();
-                self.show_native_preview(ui);
+                return;
             }
-        } else if native_transitioning {
-            self.hide_webview();
-            show_preview_transition(ui, false);
+        }
+        self.hide_webview();
+        if let Some(reason) = self.preview_status_snapshot().failure_reason() {
+            show_centered_preview_message(ui, &reason, false);
         } else {
-            self.hide_webview();
-            self.show_native_preview(ui);
-        }
-    }
-
-    fn show_preview_header_controls(&mut self, ui: &mut egui::Ui, native_ready: bool) {
-        if !native_ready {
-            let fresh = self.raster_content_freshness() == Some(RasterContentFreshness::Current);
-            raster_view::show_controls(
-                ui,
-                &mut self.preview,
-                fresh,
-                snapshot_scene_hides_preview_pages(self.snapshot_scene),
-            );
-        }
-    }
-
-    fn show_native_preview(&mut self, ui: &mut egui::Ui) {
-        let fresh = self.raster_content_freshness() == Some(RasterContentFreshness::Current);
-        if let Some(target) = raster_view::show_pages(
-            ui,
-            &mut self.preview,
-            fresh,
-            snapshot_scene_hides_preview_pages(self.snapshot_scene),
-        ) {
-            self.follow_preview_link(&target);
+            show_preview_transition(ui, false);
         }
     }
 
@@ -8152,16 +7857,11 @@ impl EditorApp {
         self.record_notice_transition();
         self.prepare_editor_source_data();
         let source_metrics = self.editor_data.source_metrics();
-        let mut fallbacks = if self.snapshot_scene.is_some() {
+        let fallbacks = if self.snapshot_scene.is_some() {
             Vec::new()
         } else {
             self.non_preview_fallback_details(ui.ctx().system_theme())
         };
-        if self.snapshot_scene.is_none()
-            && let Some(reason) = self.preview_fallback_reason()
-        {
-            fallbacks.insert(0, format!("Preview: {reason}"));
-        }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if self.document().kind().is_editable() {
                 // This is intentionally the first right-to-left item: its
@@ -8334,7 +8034,7 @@ impl EditorApp {
             // A recreated native viewport needs a fresh child WKWebView. The
             // Tinymist process and preview URL remain owned by this session.
             self.discard_webview();
-            self.clear_pdfjs_views();
+            self.clear_pdf_views();
             self.preview.webview_state =
                 ServiceState::Starting("Attaching preview to this document window".to_owned());
         }
@@ -8551,7 +8251,7 @@ impl EditorApp {
         self.sync_runtime_settings(&context);
         self.receive_compile_results();
         self.receive_asset_results(&context);
-        self.receive_pdf_page_results(&context);
+        self.update_image_residency();
         self.receive_asset_thumbnail_results(&context);
         self.poll_export_dialog(&context);
         self.poll_tool_picker(&context);
@@ -8632,8 +8332,6 @@ impl EditorApp {
         let content_hidden = self.show_bottom_panel_container(ui);
         if content_hidden {
             self.hide_webview();
-            self.pdfjs_preview.hide();
-            self.pdfjs_asset.hide();
         } else {
             if self.explorer.panel_visible() {
                 let panel_id = explorer_panel_id(&context);
@@ -8683,19 +8381,6 @@ impl EditorApp {
             if !self.pdfium_asset_requested() {
                 self.pdfium_asset = Default::default();
             }
-            if !self.pdfjs_preview_requested() {
-                self.pdfjs_preview.clear();
-            } else if !matches!(
-                content_view,
-                ContentView::SplitSource | ContentView::SplitAsset | ContentView::Preview
-            ) {
-                self.pdfjs_preview.hide();
-            }
-            if !self.pdfjs_asset_requested() {
-                self.pdfjs_asset.clear();
-            } else if !matches!(content_view, ContentView::Asset | ContentView::SplitAsset) {
-                self.pdfjs_asset.hide();
-            }
             match content_view {
                 ContentView::Empty | ContentView::Source | ContentView::Asset => {
                     self.hide_webview();
@@ -8703,7 +8388,7 @@ impl EditorApp {
                         .frame(theme::content_panel_frame(ui.style()))
                         .show(ui, |ui| match content_view {
                             ContentView::Empty => self.show_empty_workspace(ui, frame),
-                            ContentView::Asset => self.show_asset_view(ui, frame),
+                            ContentView::Asset => self.show_asset_view(ui),
                             _ => self.show_editor(ui),
                         });
                 }
@@ -8717,7 +8402,7 @@ impl EditorApp {
                         .max_size(layout.editor_maximum)
                         .show(ui, |ui| {
                             if content_view == ContentView::SplitAsset {
-                                self.show_asset_view(ui, frame);
+                                self.show_asset_view(ui);
                             } else {
                                 self.show_editor(ui);
                             }
@@ -8759,7 +8444,6 @@ impl EditorApp {
         self.tick_preview_follow(&context);
         self.tick_autosave(&context);
         self.tick_compile(&context);
-        self.tick_pdf_page_requests();
     }
 
     fn reconcile_child_view_lifecycles(&self, context: &egui::Context) {
@@ -8790,23 +8474,6 @@ impl EditorApp {
     }
 }
 
-fn request_pdf_pages(
-    preview: &mut PreviewController,
-    loader: &PdfPageLoader,
-    surface: PdfSurface,
-    project_root: PathBuf,
-) -> Result<(), String> {
-    let Some(key) = preview.raster_request_key() else {
-        return Ok(());
-    };
-    let Some(pdf) = preview.content.pdf().cloned() else {
-        return Ok(());
-    };
-    loader.request(surface, key, pdf, project_root)?;
-    preview.record_page_request(key);
-    Ok(())
-}
-
 fn make_preview_texture(
     context: &egui::Context,
     owner: tiptoptyp_core::document::WindowSessionId,
@@ -8815,56 +8482,7 @@ fn make_preview_texture(
     page: PreviewPage,
     dark: bool,
 ) -> PreviewTexture {
-    let PreviewPage { size, rgba, links } = page;
-    let request = RasterPageRequestKey {
-        artifact: key,
-        first: index,
-        last: index,
-        dpi: crate::pdf::PREVIEW_DPI as u32,
-        appearance_revision: 1,
-    };
-    let resident = make_preview_resident(
-        context,
-        owner,
-        PreviewResidentInput {
-            request,
-            index,
-            size,
-            rgba,
-            dark,
-            visible: true,
-        },
-    );
-    PreviewTexture {
-        size,
-        links,
-        resident: Some(resident),
-    }
-}
-
-struct PreviewResidentInput {
-    request: RasterPageRequestKey,
-    index: usize,
-    size: [usize; 2],
-    rgba: Vec<u8>,
-    dark: bool,
-    visible: bool,
-}
-
-fn make_preview_resident(
-    context: &egui::Context,
-    owner: tiptoptyp_core::document::WindowSessionId,
-    input: PreviewResidentInput,
-) -> ResidentPreviewTexture {
-    let PreviewResidentInput {
-        request,
-        index,
-        size,
-        rgba,
-        dark,
-        visible,
-    } = input;
-    let key = request.page_key(index);
+    let PreviewPage { size, rgba } = page;
     let rgba: Arc<[u8]> = rgba.into();
     let pixels = if dark {
         dark_preview_rgba(&rgba)
@@ -8872,26 +8490,25 @@ fn make_preview_resident(
         rgba.to_vec()
     };
     let texture = context.load_texture(
-        format!(
-            "preview-{}-{}-{index}-{}-{}",
-            key.artifact.revision, key.artifact.generation, key.dpi, key.appearance_revision
-        ),
+        format!("image-{}-{}-{index}", key.revision, key.generation),
         preview_color_image(size, &pixels),
         TextureOptions::LINEAR,
     );
-    let lease = crate::pdf_residency::admit(
+    let lease = crate::image_residency::admit(
         owner,
         rgba.len(),
         pixels.len(),
         crate::worker::RepaintTarget::current(context),
-        visible,
+        true,
     );
-    ResidentPreviewTexture {
-        key,
-        raster_size: size,
-        rgba,
-        texture,
-        lease,
+    PreviewTexture {
+        size,
+        resident: Some(ResidentPreviewTexture {
+            raster_size: size,
+            rgba,
+            texture,
+            lease,
+        }),
     }
 }
 

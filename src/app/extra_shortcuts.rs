@@ -389,8 +389,8 @@ mod tests {
     fn raster_shortcuts_are_bounded_and_do_not_touch_the_other_controller() {
         let context = egui::Context::default();
         let key = ArtifactKey::unversioned(0);
-        let mut asset = PreviewController::new(false, PreviewPreference::Native);
-        let pinned = PreviewController::new(false, PreviewPreference::Native);
+        let mut asset = PreviewController::new(false, PreviewPreference::Pdfium);
+        let pinned = PreviewController::new(false, PreviewPreference::Pdfium);
         asset.replace_asset(
             key,
             None,
@@ -404,7 +404,6 @@ mod tests {
                         PreviewPage {
                             size: [2, 2],
                             rgba: vec![255; 16],
-                            links: vec![],
                         },
                         false,
                     )

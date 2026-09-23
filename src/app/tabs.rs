@@ -716,8 +716,8 @@ impl EditorApp {
         if self.source_preview_available()
             && switch_needs_compile(
                 preserve_preview,
-                self.raster_preview_required(),
-                !self.preview.content.pages().is_empty(),
+                self.pdfium_preview_requested(),
+                self.preview.content.pdf().is_some(),
                 matches!(
                     self.preview.status,
                     PreviewStatus::Compiling | PreviewStatus::Waiting

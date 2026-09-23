@@ -112,7 +112,7 @@ impl EditorApp {
                 },
                 interactive_preview: self.preview.webview_state.clone(),
                 pdf_generation: self.compiler_service_state(),
-                rasterization: self.rasterizer_service_state(),
+                pdf_rendering: self.pdf_renderer_service_state(),
                 interactive_preview_supported: cfg!(any(
                     target_os = "macos",
                     target_os = "windows"
@@ -128,15 +128,13 @@ impl EditorApp {
             preview_status.backend_label()
         } else {
             match self.document().kind() {
-                DocumentKind::Pdf if self.pdfjs_asset_requested() => "PDF.js",
-                DocumentKind::Pdf if self.pdfium_asset_requested() => "PDFium",
-                DocumentKind::Pdf => "Rasterised PDF",
+                DocumentKind::Pdf => "PDFium",
                 DocumentKind::Image => "Image",
                 DocumentKind::Tex | DocumentKind::Text => "Text editor",
                 DocumentKind::Typst => preview_status.backend_label(),
             }
         };
-        let fallback_reason = preview_status.fallback_reason();
+        let preview_failure = preview_status.failure_reason();
         let requested_backend = preview_status.requested_backend;
         let interactive_active = preview_status.native_ready;
         let input = SettingsWindowInput {
@@ -153,7 +151,7 @@ impl EditorApp {
             tex_tools: self.tex_tools.clone(),
             status: SettingsStatus {
                 backend_label,
-                fallback_reason,
+                preview_failure,
                 requested_backend,
                 interactive_active,
                 capabilities,

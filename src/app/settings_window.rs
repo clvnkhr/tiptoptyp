@@ -214,7 +214,7 @@ mod tests {
             },
             status: SettingsStatus {
                 backend_label: "Interactive",
-                fallback_reason: None,
+                preview_failure: None,
                 requested_backend: PreviewPreference::Interactive,
                 interactive_active: true,
                 capabilities: crate::capabilities::CapabilitySnapshot {
@@ -222,7 +222,7 @@ mod tests {
                     lsp: ServiceState::Ready("ready".into()),
                     interactive_preview: ServiceState::Ready("ready".into()),
                     pdf_generation: ServiceState::Ready("ready".into()),
-                    rasterization: ServiceState::Ready("ready".into()),
+                    pdf_rendering: ServiceState::Ready("ready".into()),
                     link_extraction: ServiceState::Ready("ready".into()),
                 },
             },

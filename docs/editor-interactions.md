@@ -1,5 +1,9 @@
 # Source editor interaction regressions
 
+This dated worklog includes results for viewers that have since been removed.
+Current routing and validation are documented in [PDFium preview](pdfium-preview.md):
+Tinymist defaults for Typst, PDFium for TeX and PDF tabs, with no renderer fallback.
+
 The 22 September 2026 newest-first pass closes todos 301–296.
 
 Diagnostic hover cards carry their document revision, diagnostics generation,
@@ -49,7 +53,7 @@ The full suite passes: formatting, all-target Clippy with warnings denied,
 The real Chrome PDF.js probe also confirms that older todos 118 and 1 are already
 implemented: 23 search matches, all 24 thumbnail entries, a decoded thumbnail,
 thumbnail navigation and exact same-document page/zoom/scroll restoration. See
-`docs/pdfjs-preview.md` for the viewer's ownership and platform limits.
+`docs/pdfium-preview.md` for the viewer's ownership and platform limits.
 
 Verification logs are under `.tiptoptyp/todo-evidence/`. The new
 `find-sticky-context` capture is targeted-only; the maintained gallery remains
@@ -130,8 +134,7 @@ selection and update the active tab's workspace before opening another source.
 Explorer shows Loading workspace during a scan, with errors if scanning fails.
 
 Typst and TeX tools have equally visible groups in Settings. The Typst preview
-backend preference controls Typst; TeX and opened PDFs use PDF.js on supported
-platforms. Bundled paths appear in the Bundled button's hover. Service status
+backend preference controls Typst; TeX and opened PDFs always use PDFium. Bundled paths appear in the Bundled button's hover. Service status
 retains actual service errors/recovery state; duplicate Bundled badges are gone.
 
 ### Command customization
@@ -182,7 +185,7 @@ The fresh Git framebuffer was inspected under
 `.tiptoptyp/screenshots/agent-review/pdf-first/`. The real PDF.js browser probe
 also passes after changing its rebuild fixture to use changed PDF bytes:
 identical-byte rebuilds are now ignored. Seamless changed-document replacement
-is tracked separately in todo 337 and `docs/pdfjs-preview.md`.
+is tracked separately in todo 337 and `docs/pdfium-preview.md`.
 The full gallery command timed out twice after the Save dialog scenes (67-second
 watchdog). A separate four-dialog batch restored the missing generated files;
 all 22 files decode and the contact sheet was inspected, but this is not a

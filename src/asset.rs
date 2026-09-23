@@ -14,7 +14,7 @@ use std::{
 
 use crate::{
     document::DocumentKind,
-    pdf::{PdfDocumentCatalog, PreviewPage, inspect_pdf, rasterize_pdf_first_page},
+    pdf::{PreviewPage, rasterize_pdf_first_page},
     private_workspace::project_root_for_path,
 };
 
@@ -43,10 +43,7 @@ pub(crate) const ASSET_THUMBNAIL_MAX_DIMENSION: u32 = 720;
 #[derive(Debug)]
 pub enum LoadedAsset {
     Image(PreviewPage),
-    Pdf {
-        bytes: Vec<u8>,
-        catalog: Option<PdfDocumentCatalog>,
-    },
+    Pdf { bytes: Vec<u8> },
 }
 
 #[derive(Debug)]
@@ -60,13 +57,10 @@ struct AssetRequest {
     token: AssetToken,
     path: PathBuf,
     kind: DocumentKind,
-    inspect_pages: bool,
 }
 
 /// Decodes images and reads opened PDFs away from egui's frame callback.
-/// PDF.js needs only bytes; explicit raster mode and captures also inspect
-/// pages with the built-in Rust parser off the UI thread. Keep thumbnail decoding separate
-/// when retiring that optional inspection path (todo 295).
+/// Load images and immutable PDF bytes off the UI thread.
 pub struct AssetLoader {
     requests: Option<LatestSender<AssetRequest>>,
     results: Receiver<AssetResult>,
@@ -111,19 +105,13 @@ impl AssetLoader {
         token: AssetToken,
         path: PathBuf,
         kind: DocumentKind,
-        inspect_pages: bool,
     ) -> Result<(), String> {
         debug_assert!(kind.preview_only());
         self.latest_token.store(token.0, Ordering::Release);
         self.requests
             .as_ref()
             .ok_or_else(|| "The image/PDF loader has stopped".to_owned())?
-            .send(AssetRequest {
-                token,
-                path,
-                kind,
-                inspect_pages,
-            })
+            .send(AssetRequest { token, path, kind })
             .map_err(|_| "The image/PDF loader stopped unexpectedly".to_owned())
     }
 
@@ -485,7 +473,7 @@ fn worker_loop(
         };
         let output = match request.kind {
             DocumentKind::Image => load_image(&request.path, &cancelled),
-            DocumentKind::Pdf => load_pdf(&request.path, request.inspect_pages, cancelled),
+            DocumentKind::Pdf => load_pdf(&request.path, cancelled),
             DocumentKind::Typst | DocumentKind::Tex | DocumentKind::Text => {
                 Err("Only binary preview assets use the asset loader".to_owned())
             }
@@ -526,37 +514,16 @@ fn load_image(path: &Path, cancelled: &impl Fn() -> bool) -> Result<LoadedAsset,
     Ok(LoadedAsset::Image(PreviewPage {
         size: [width as usize, height as usize],
         rgba: decoded.into_raw(),
-        links: Vec::new(),
     }))
 }
 
-fn load_pdf(
-    path: &Path,
-    inspect_pages: bool,
-    mut cancelled: impl FnMut() -> bool,
-) -> Result<LoadedAsset, String> {
+fn load_pdf(path: &Path, cancelled: impl Fn() -> bool) -> Result<LoadedAsset, String> {
     let bytes = fs::read(path)
         .map_err(|error| format!("Could not read PDF {}: {error}", path.display()))?;
     if cancelled() {
-        return Err("PDF loading was superseded by another file".to_owned());
+        return Err("PDF loading was superseded by another file".into());
     }
-    if !inspect_pages {
-        return Ok(LoadedAsset::Pdf {
-            bytes,
-            catalog: None,
-        });
-    }
-    let project_root = project_root_for_path(path).map_err(|error| {
-        format!(
-            "Could not locate private workspace storage for {}: {error}",
-            path.display()
-        )
-    })?;
-    let catalog = inspect_pdf(&bytes, &project_root, &mut cancelled)?;
-    Ok(LoadedAsset::Pdf {
-        bytes,
-        catalog: Some(catalog),
-    })
+    Ok(LoadedAsset::Pdf { bytes })
 }
 
 #[cfg(test)]
@@ -564,17 +531,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pdfjs_assets_load_bytes_without_poppler_or_workspace_staging() {
+    fn pdfium_assets_load_bytes_without_poppler_or_workspace_staging() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("fixture.pdf");
-        std::fs::write(&path, b"PDF.js owns parsing, including password prompts").unwrap();
-        let LoadedAsset::Pdf { bytes, catalog } = load_pdf(&path, false, || false).unwrap() else {
+        std::fs::write(&path, b"PDFium owns parsing, including password prompts").unwrap();
+        let LoadedAsset::Pdf { bytes } = load_pdf(&path, || false).unwrap() else {
             panic!("PDF asset")
         };
-        assert_eq!(bytes, b"PDF.js owns parsing, including password prompts");
-        assert!(catalog.is_none());
+        assert_eq!(bytes, b"PDFium owns parsing, including password prompts");
         assert!(!directory.path().join(".tiptoptyp").exists());
-        assert!(load_pdf(&path, false, || true).is_err());
+        assert!(load_pdf(&path, || true).is_err());
     }
 
     fn request(token: u64) -> AssetRequest {
@@ -582,7 +548,6 @@ mod tests {
             token: AssetToken(token),
             path: PathBuf::from(format!("asset-{token}.pdf")),
             kind: DocumentKind::Pdf,
-            inspect_pages: true,
         }
     }
 
@@ -645,7 +610,6 @@ mod tests {
         let page = PreviewPage {
             size: [120, 60],
             rgba: vec![255; 120 * 60 * 4],
-            links: Vec::new(),
         };
 
         let thumbnail = thumbnail_from_preview_page(page, 40).unwrap();

@@ -300,8 +300,7 @@ mod tests {
             |app: &mut EditorApp| app.settings.preview_follow_edits = false,
             |app: &mut EditorApp| app.view_mode = ViewMode::Code,
             |app: &mut EditorApp| app.compilation_paused = true,
-            |app: &mut EditorApp| app.settings.preview_preference = PreviewPreference::PdfJs,
-            |app: &mut EditorApp| app.settings.preview_preference = PreviewPreference::Native,
+            |app: &mut EditorApp| app.settings.preview_preference = PreviewPreference::Pdfium,
             |app: &mut EditorApp| {
                 app.document_mut().replace_loaded_unprojected(
                     "plain".into(),

@@ -16,13 +16,10 @@ execution details in decisions 1–3:
   distinct. Document windows also repaint independently, while native UI remains
   on its required thread.
 - Interactive preview does not require a parallel CLI compile for every edit.
-  The CLI artifact path runs when PDF.js, explicit raster preview, deterministic
-  capture or an explicit PDF export needs it. Export still uses canonical PDF bytes, never
-  rendered screen pixels. Recovery preserves the requested backend and permits
-  four delayed retries before PDF.js fallback on the fifth failure. Opened PDFs
-  default to PDF.js independently of the Typst preference. Raster preview is
-  retained only for explicit selection and deterministic captures, pending
-  [removal](../pdfjs-preview.md#raster-preview-retirement-todos-294295).
+  The CLI artifact path runs for PDFium preview, explicit PDF export and
+  deterministic PDFium captures. Tinymist recovery never changes the renderer.
+  TeX output and opened PDFs always use PDFium. The legacy PDF viewers were
+  removed; see [PDFium preview](../pdfium-preview.md).
 - Optional miTeX editing is enabled in the application: displayed TeX dollar
   notation maps to canonical Typst/MiTeX source at save and service boundaries.
   Ordinary documents bypass that projection. CLI compilation still reads imported
@@ -81,7 +78,7 @@ The following upstream implementations were inspected before this decision:
 
 The toolbar, status bar, optional filesystem panel, editor/preview split, and
 explicitly toggled Problems panel are the only widgets allowed to consume
-layout space. Build, stale, error, and fallback state belongs in the fixed
+layout space. Build, stale, and error state belongs in the fixed
 bottom status bar; the fixed-height preview header contains controls only.
 Transient state must never insert or remove content above the preview.
 Settings is a dedicated in-app view rather than another side panel. Opening it
@@ -89,7 +86,7 @@ temporarily hides the workspace while preserving the preview panel and scroll
 state; closing it restores the same preview geometry instead of resizing or
 displacing the document.
 
-The native fallback uses one persistent scroll area containing every page with
+The PDFium viewer uses one persistent scroll area containing every page with
 fixed margins and gaps. Recompilation keeps its scroll offset. Zoom is anchored
 under the pointer and a pinch exits fit-to-width mode.
 
@@ -107,8 +104,8 @@ The app consumes only documented LSP commands and Tinymist's own served
 frontend; it does not copy or depend on Tinymist's private vector-diff protocol.
 
 The child-webview route is initially supported on macOS and Windows. Wry child
-views on Linux require X11 or additional GTK integration, so Linux retains the
-native fallback until that work is completed.
+views on Linux require X11 or additional GTK integration. Select PDFium explicitly
+for Typst there; unsupported Tinymist preview reports an error.
 
 ### 3. `typst watch` remains authoritative
 
@@ -121,8 +118,8 @@ for buffer edits because dot-directory changes are suppressed.
 
 Running both pipelines costs extra memory when interactive preview is enabled,
 but separates concerns cleanly: Tinymist supplies interaction while the stock
-Typst CLI supplies the canonical artifact. The rasterised PDF fallback is retained
-for machines without Tinymist and for recovery if its preview server fails.
+Typst CLI supplies canonical artifacts when PDFium or explicit export requests
+them. Tinymist failures never activate another renderer.
 
 ### 4. Syntax highlighting comes from Typst
 
@@ -161,18 +158,15 @@ next raw-input hook, before egui constructs that frame's root UI, which prevents
 a half-light/half-dark frame. Native window decorations stay synchronized.
 
 Document appearance is a separate persisted setting: Follow interface, Light
-pages, or Dark pages. PDF fallback inversion affects preview pixels only, never
+pages, or Dark pages. PDFium preview inversion affects preview pixels only, never
 exported bytes.
 
-### 7. Fallbacks preserve intent and are always observable
+### 7. Preview failures preserve the selected renderer
 
-The requested preview backend and effective backend are separate state. A
-Tinymist, preview-server, or embedded-webview failure must never rewrite the
-user's Interactive preference to Rasterised PDF. While the watched-PDF viewer is
-being used automatically, only the fixed bottom status bar shows the live
-fallback badge and reason; the preview header contains controls only. Settings
-reports the requested and effective backends plus structured service status.
-Explicitly choosing Rasterised PDF is not classified as a fallback.
+Tinymist is the default for Typst. TeX and PDF files always use PDFium.
+Failures are explicit; service recovery never switches to another renderer.
+Settings expose the selected backend and its service error. Startup validates
+PDFium's bundled native library before opening the editor.
 
 ## Rejected alternatives
 

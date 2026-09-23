@@ -131,12 +131,9 @@ impl DocumentTheme {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum PreviewPreference {
+    Pdfium,
     #[default]
     Interactive,
-    PdfJs,
-    Pdfium,
-    /// Explicit opt-in only; pending removal with its capture surrogate (todo 295).
-    Native,
 }
 
 /// Mouse gesture used for an explicit source-to-preview jump.
@@ -206,14 +203,12 @@ impl Default for ToolPreference {
 }
 
 impl PreviewPreference {
-    pub(crate) const ALL: [Self; 4] = [Self::Interactive, Self::Pdfium, Self::PdfJs, Self::Native];
+    pub(crate) const ALL: [Self; 2] = [Self::Interactive, Self::Pdfium];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::Interactive => "Interactive (Tinymist)",
-            Self::PdfJs => "PDF.js",
-            Self::Pdfium => "PDFium (comparison)",
-            Self::Native => "Rasterised PDF",
+            Self::Interactive => "Tinymist (Typst only)",
+            Self::Pdfium => "PDFium",
         }
     }
 }
@@ -659,6 +654,17 @@ mod tests {
     }
 
     #[test]
+    fn preview_backends_have_no_retired_compatibility_aliases() {
+        assert_eq!(PreviewPreference::default(), PreviewPreference::Interactive);
+        for retired in ["PdfJs", "Native"] {
+            assert!(
+                serde_json::from_value::<PreviewPreference>(serde_json::json!(retired)).is_err()
+            );
+        }
+        assert_eq!(PreviewPreference::ALL.len(), 2);
+    }
+
+    #[test]
     fn defaults_follow_the_system_and_interface() {
         let settings = AppSettings::default();
         assert_eq!(settings.interface_theme, InterfaceTheme::System);
@@ -772,7 +778,7 @@ mod tests {
                 saturation: 80,
             },
             document_theme: DocumentTheme::Dark,
-            preview_preference: PreviewPreference::Native,
+            preview_preference: PreviewPreference::Pdfium,
             git_diff_style: GitDiffStyle::Unified,
             line_wrap: false,
             line_numbers: false,

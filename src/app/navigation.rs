@@ -138,11 +138,10 @@ impl EditorApp {
         source_position: Option<(usize, usize)>,
     ) {
         if self.document().kind() == DocumentKind::Pdf {
-            if self.asset_preview.content.pages().is_empty() {
+            if self.asset_preview.content.pdf().is_none() {
                 self.pending_asset_page = page;
             } else if let Some(page) = page {
-                self.asset_preview.requested_page =
-                    Some(page.min(self.asset_preview.content.pages().len().saturating_sub(1)));
+                self.pdfium_asset.go_to_page(page);
             }
         } else if self.document().kind().is_editable()
             && let Some((line, column)) = source_position

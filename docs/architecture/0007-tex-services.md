@@ -33,7 +33,7 @@ session is retired, and canonical PDF bytes are snapshotted before cleanup.
 
 Edits replace queued builds. Switching engines, roots or settings retires the
 previous child. Failed or cancelled builds cannot publish an earlier PDF.
-The existing compiler publication, artifact-generation and PDF.js paths remain
+The existing compiler publication, artifact-generation and PDFium paths remain
 responsible for preview/export. Standard LaTeX has a typed settings slot and a
 clear unsupported result, without pretending that a different executable can
 reuse Tectonic's command line. SyncTeX navigation is separate future work.

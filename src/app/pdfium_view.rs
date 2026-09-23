@@ -114,6 +114,23 @@ impl PdfiumView {
             _ => false,
         }
     }
+    pub(super) fn service_state(&self) -> ServiceState {
+        if let Some(error) = &self.error {
+            ServiceState::Failed(error.clone())
+        } else if self.ready() {
+            ServiceState::Ready("PDFium preview ready".into())
+        } else {
+            ServiceState::Starting("Preparing PDFium preview".into())
+        }
+    }
+
+    pub(super) fn ready_for(&self, bytes: Option<&Arc<[u8]>>) -> bool {
+        self.ready()
+            && bytes
+                .zip(self.bytes.as_ref())
+                .is_some_and(|(expected, displayed)| Arc::ptr_eq(expected, displayed))
+    }
+
     pub(super) fn ready(&self) -> bool {
         self.bytes.is_some()
             && self.active_revision == self.revision
@@ -126,6 +143,15 @@ impl PdfiumView {
                     })
             })
     }
+    #[cfg(test)]
+    pub(super) fn requested_page(&self) -> Option<usize> {
+        self.goto
+    }
+
+    pub(super) fn go_to_page(&mut self, page: usize) {
+        self.goto = Some(page);
+    }
+
     pub(super) fn zoom(&mut self, action: PreviewZoomAction) {
         match action {
             PreviewZoomAction::Reset => self.fit = true,
@@ -235,7 +261,6 @@ impl PdfiumView {
         }
         let mut link = None;
         ui.horizontal_wrapped(|ui| {
-            ui.label("PDFium");
             if icon_button(ui, UiIcon::Previous, "Previous page").clicked() {
                 self.goto = Some(self.page.saturating_sub(1));
             }
@@ -309,7 +334,7 @@ impl PdfiumView {
             ui.horizontal_wrapped(|ui| {
                 ui.colored_label(
                     ui.visuals().error_fg_color,
-                    format!("PDFium update failed; previous preview retained: {error}"),
+                    format!("PDF update failed; previous preview retained: {error}"),
                 );
                 if ui.button("Retry").clicked() {
                     self.requested = None;
@@ -506,7 +531,7 @@ impl PdfiumView {
                 }
             });
         } else {
-            show_centered_preview_message(ui, "Preparing PDFium preview…", self.error.is_none());
+            show_centered_preview_message(ui, "Preparing PDF preview…", self.error.is_none());
         }
         let key = RequestKey {
             revision: self.revision,
@@ -601,12 +626,16 @@ fn matching_characters(chars: &[Character], query: &str) -> Vec<std::ops::Range<
 }
 
 impl EditorApp {
+    pub(super) fn clear_pdf_views(&mut self) {
+        self.pdfium_preview = Default::default();
+        self.pdfium_asset = Default::default();
+    }
+
     pub(super) fn pdfium_preview_requested(&self) -> bool {
         self.preview_status_snapshot().effective_backend == crate::preview::PreviewBackend::Pdfium
     }
     pub(super) fn pdfium_asset_requested(&self) -> bool {
         self.document().kind() == DocumentKind::Pdf
-            && self.settings.preview_preference == PreviewPreference::Pdfium
     }
     pub(super) fn show_pdfium_view(&mut self, ui: &mut egui::Ui, asset: bool) {
         let path = if asset {
@@ -730,6 +759,11 @@ mod tests {
             draw(&mut view, bytes);
         }
         let old_id = view.residents[&0].texture.id();
+        assert!(view.ready_for(view.bytes.as_ref()));
+        assert!(
+            !view.ready_for(Some(&green)),
+            "new artifacts must wait before capture"
+        );
         draw(&mut view, green.clone());
         assert_eq!(view.residents[&0].texture.id(), old_id);
         while !view.ready() {
@@ -738,6 +772,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(2));
             draw(&mut view, green.clone());
         }
+        assert!(view.ready_for(Some(&green)));
         let good_id = view.residents[&0].texture.id();
         assert_ne!(good_id, old_id);
         let bad: Arc<[u8]> = Arc::from(&b"not a PDF"[..]);

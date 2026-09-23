@@ -35,6 +35,10 @@ pub(crate) fn library_path() -> Result<PathBuf, String> {
         "Bundled PDFium is missing. Source builds: run cargo run --manifest-path xtask/Cargo.toml -- fetch-pdfium. Packaged builds: reinstall the complete app.".into())
 }
 
+pub(crate) fn validate() -> Result<(), String> {
+    engine().map(|_| ())
+}
+
 fn engine() -> Result<&'static Pdfium, String> {
     static ENGINE: OnceLock<Result<Pdfium, String>> = OnceLock::new();
     ENGINE

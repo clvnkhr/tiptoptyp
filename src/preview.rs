@@ -1,5 +1,4 @@
 use std::{
-    ops::RangeInclusive,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -7,13 +6,8 @@ use std::{
 use eframe::egui::{TextureHandle, Vec2};
 
 use crate::{
-    compiler::ArtifactKey,
-    diagnostics::Diagnostic,
-    pdf::{PREVIEW_DPI, PdfDocumentCatalog, PdfPageMetadata, PreviewLink},
-    pdf_pages::{RasterPageKey, RasterPageRequestKey},
-    pdf_residency::ResidencyLease,
-    settings::PreviewPreference,
-    theme::METRICS,
+    compiler::ArtifactKey, diagnostics::Diagnostic, image_residency::ResidencyLease,
+    pdf::PREVIEW_DPI, settings::PreviewPreference, theme::METRICS,
 };
 
 pub const PDF_POINTS_PER_PREVIEW_PIXEL: f32 = 72.0 / PREVIEW_DPI;
@@ -29,7 +23,6 @@ pub(crate) enum PreviewStatus {
 }
 
 pub(crate) struct ResidentPreviewTexture {
-    pub(crate) key: RasterPageKey,
     pub(crate) raster_size: [usize; 2],
     pub(crate) rgba: Arc<[u8]>,
     pub(crate) texture: TextureHandle,
@@ -52,24 +45,7 @@ pub(crate) struct PreviewTexture {
     /// Logical layout size. Images may deliberately differ from PDF raster
     /// pixels so one image pixel maps to one UI point at 100%.
     pub(crate) size: [usize; 2],
-    pub(crate) links: Vec<PreviewLink>,
     pub(crate) resident: Option<ResidentPreviewTexture>,
-}
-
-impl PreviewTexture {
-    fn from_metadata(page: PdfPageMetadata) -> Self {
-        Self {
-            size: page.size,
-            links: page.links,
-            resident: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RasterContentFreshness {
-    Current,
-    Stale,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,9 +89,7 @@ impl ServiceState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PreviewBackend {
     Interactive,
-    PdfJs,
     Pdfium,
-    Raster,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,27 +101,19 @@ pub(crate) struct PreviewStatusSnapshot<'a> {
     pub(crate) native_ready: bool,
     pub(crate) canonical_artifact_available: bool,
     pub(crate) interactive_transitioning: bool,
-    fallback_state: Option<&'a ServiceState>,
+    failure_state: Option<&'a ServiceState>,
 }
 
 impl PreviewStatusSnapshot<'_> {
     pub(crate) fn backend_label(&self) -> &'static str {
         match self.effective_backend {
-            PreviewBackend::Interactive => "Interactive",
-            PreviewBackend::PdfJs
-                if self.requested_backend == PreviewPreference::Interactive
-                    && (self.interactive_requested || self.fallback_state.is_some()) =>
-            {
-                "PDF.js · fallback"
-            }
-            PreviewBackend::PdfJs => "PDF.js",
+            PreviewBackend::Interactive => "Tinymist",
             PreviewBackend::Pdfium => "PDFium",
-            PreviewBackend::Raster => "Rasterised PDF",
         }
     }
 
-    pub(crate) fn fallback_reason(&self) -> Option<String> {
-        self.fallback_state
+    pub(crate) fn failure_reason(&self) -> Option<String> {
+        self.failure_state
             .map(|state| format!("{}: {}", state.label(), state.detail()))
     }
 }
@@ -190,37 +156,9 @@ pub(crate) struct PreviewTransition {
     pub(crate) effects: Vec<PreviewEffect>,
 }
 
-pub(crate) fn raster_result_matches_artifact(
-    raster_key: ArtifactKey,
-    document_revision: u64,
-    artifact_key: Option<ArtifactKey>,
-) -> bool {
-    raster_key.revision == document_revision && artifact_key == Some(raster_key)
-}
-
-pub(crate) fn raster_content_freshness(
-    has_pages: bool,
-    raster_key: Option<ArtifactKey>,
-    document_revision: u64,
-    artifact_key: Option<ArtifactKey>,
-) -> Option<RasterContentFreshness> {
-    if !has_pages {
-        return None;
-    }
-    Some(
-        if raster_key
-            .is_some_and(|key| raster_result_matches_artifact(key, document_revision, artifact_key))
-        {
-            RasterContentFreshness::Current
-        } else {
-            RasterContentFreshness::Stale
-        },
-    )
-}
-
-/// Owns preview artifacts, generation-aware raster state, diagnostics, and
-/// navigation requests. Artifact/raster comparisons always use the complete
-/// `ArtifactKey`, so a previous dependency build with the same editor revision
+/// Owns compiled artifacts, image textures, diagnostics, and navigation requests.
+/// Artifact comparisons use the complete `ArtifactKey`, so a previous dependency
+/// build with the same editor revision
 /// cannot become current again.
 pub(crate) struct PreviewController {
     pub(crate) recovery:
@@ -247,10 +185,6 @@ pub(crate) struct PreviewController {
     pub(crate) dark: bool,
     pub(crate) source_colors: bool,
     was_visible: bool,
-    pending_catalog: Option<(ArtifactKey, PdfDocumentCatalog)>,
-    page_demand: Option<RangeInclusive<usize>>,
-    last_page_request: Option<RasterPageRequestKey>,
-    appearance_revision: u64,
 }
 
 impl PreviewController {
@@ -349,7 +283,6 @@ impl PreviewController {
                     Failure::Exhausted => vec![
                         PreviewEffect::StopAttempt(event.generation()),
                         PreviewEffect::DiscardLanguageRequests,
-                        PreviewEffect::ScheduleCompile,
                     ],
                 }
             }
@@ -503,10 +436,6 @@ impl PreviewController {
             dark,
             source_colors: false,
             was_visible: false,
-            pending_catalog: None,
-            page_demand: None,
-            last_page_request: None,
-            appearance_revision: 1,
         }
     }
 
@@ -522,35 +451,6 @@ impl PreviewController {
 
     pub(crate) fn accept_artifact(&mut self, key: ArtifactKey, pdf: Arc<[u8]>) {
         self.content.accept_artifact(key, pdf);
-        self.pending_catalog = None;
-        self.last_page_request = None;
-    }
-
-    pub(crate) fn accepts_raster(&self, key: ArtifactKey, document_revision: u64) -> bool {
-        raster_result_matches_artifact(key, document_revision, self.content.artifact_key())
-    }
-
-    pub(crate) fn accept_catalog(&mut self, key: ArtifactKey, catalog: PdfDocumentCatalog) -> bool {
-        if self.content.artifact_key() != Some(key) || catalog.pages.is_empty() {
-            return false;
-        }
-        let page_count = catalog.pages.len();
-        self.visible_page = self.visible_page.min(page_count.saturating_sub(1));
-        self.page_demand = Some(self.visible_page..=self.visible_page);
-        self.last_page_request = None;
-        if self.content.pages().is_empty() {
-            self.content.accept_raster(
-                key,
-                catalog
-                    .pages
-                    .into_iter()
-                    .map(PreviewTexture::from_metadata)
-                    .collect(),
-            );
-        } else {
-            self.pending_catalog = Some((key, catalog));
-        }
-        true
     }
 
     pub(crate) fn replace_asset(
@@ -564,147 +464,6 @@ impl PreviewController {
             .visible_page
             .min(self.content.pages().len().saturating_sub(1));
         self.status = PreviewStatus::Ready(Duration::ZERO);
-        self.page_demand = (!self.content.pages().is_empty()).then_some(0..=0);
-        self.last_page_request = None;
-    }
-
-    pub(crate) fn replace_pdf_asset(
-        &mut self,
-        key: ArtifactKey,
-        pdf: Arc<[u8]>,
-        catalog: PdfDocumentCatalog,
-    ) {
-        let pages = catalog
-            .pages
-            .into_iter()
-            .map(PreviewTexture::from_metadata)
-            .collect::<Vec<_>>();
-        self.content.replace_asset(key, Some(pdf), pages);
-        self.visible_page = self
-            .visible_page
-            .min(self.content.pages().len().saturating_sub(1));
-        self.page_demand = Some(self.visible_page..=self.visible_page);
-        self.last_page_request = None;
-        self.pending_catalog = None;
-        self.status = PreviewStatus::Ready(Duration::ZERO);
-    }
-
-    pub(crate) fn set_page_demand(&mut self, demand: RangeInclusive<usize>) {
-        if self.page_demand.as_ref() != Some(&demand) {
-            self.page_demand = Some(demand);
-            self.last_page_request = None;
-        }
-    }
-
-    pub(crate) fn page_is_demanded(&self, page: usize) -> bool {
-        self.page_demand
-            .as_ref()
-            .is_some_and(|demand| demand.contains(&page))
-    }
-
-    /// Distance from the currently visible page range. Raster batches are
-    /// admitted from farthest to nearest so a process-wide budget evicts
-    /// speculative outer pages first and never leaves a scattered gap beside
-    /// the viewport.
-    pub(crate) fn page_demand_distance(&self, page: usize) -> usize {
-        let Some(demand) = &self.page_demand else {
-            return usize::MAX;
-        };
-        if page < *demand.start() {
-            demand.start().saturating_sub(page)
-        } else if page > *demand.end() {
-            page.saturating_sub(*demand.end())
-        } else {
-            0
-        }
-    }
-
-    pub(crate) fn raster_request_key(&self) -> Option<RasterPageRequestKey> {
-        self.content.pdf()?;
-        let artifact = self.content.artifact_key()?;
-        let page_count = self
-            .pending_catalog
-            .as_ref()
-            .filter(|(key, _)| *key == artifact)
-            .map(|(_, catalog)| catalog.pages.len())
-            .unwrap_or_else(|| self.content.pages().len());
-        let demand = self.page_demand.clone()?;
-        let range = crate::pdf_pages::bounded_prefetch_range(demand, page_count)?;
-        let dpi = (PREVIEW_DPI * self.zoom.clamp(1.0, 2.0)).round() as u32;
-        let key = RasterPageRequestKey {
-            artifact,
-            first: *range.start(),
-            last: *range.end(),
-            dpi,
-            appearance_revision: self.appearance_revision,
-        };
-        if self.last_page_request == Some(key) || self.range_is_resident(key) {
-            None
-        } else {
-            Some(key)
-        }
-    }
-
-    fn range_is_resident(&self, key: RasterPageRequestKey) -> bool {
-        self.content.raster_key() == Some(key.artifact)
-            && (key.first..=key.last).all(|page| {
-                self.content
-                    .pages()
-                    .get(page)
-                    .and_then(|page| page.resident.as_ref())
-                    .is_some_and(|resident| {
-                        resident.key == key.page_key(page) && resident.lease.is_resident()
-                    })
-            })
-    }
-
-    pub(crate) fn record_page_request(&mut self, key: RasterPageRequestKey) {
-        self.last_page_request = Some(key);
-    }
-
-    pub(crate) fn accepts_page_key(&self, key: RasterPageRequestKey) -> bool {
-        self.content.artifact_key() == Some(key.artifact)
-            && key.appearance_revision == self.appearance_revision
-    }
-
-    pub(crate) fn accept_page_residents(
-        &mut self,
-        key: RasterPageRequestKey,
-        pages: Vec<(usize, ResidentPreviewTexture)>,
-    ) -> bool {
-        if self.content.artifact_key() != Some(key.artifact)
-            || key.appearance_revision != self.appearance_revision
-        {
-            return false;
-        }
-        if self
-            .pending_catalog
-            .as_ref()
-            .is_some_and(|(pending, _)| *pending == key.artifact)
-        {
-            let (_, catalog) = self.pending_catalog.take().unwrap();
-            if !self.content.accept_raster(
-                key.artifact,
-                catalog
-                    .pages
-                    .into_iter()
-                    .map(PreviewTexture::from_metadata)
-                    .collect(),
-            ) {
-                return false;
-            }
-        }
-        if self.content.raster_key() != Some(key.artifact) {
-            return false;
-        }
-        for (index, resident) in pages {
-            if resident.key == key.page_key(index)
-                && let Some(page) = self.content.pages_mut().get_mut(index)
-            {
-                page.resident = Some(resident);
-            }
-        }
-        true
     }
 
     pub(crate) fn render_dark(&self) -> bool {
@@ -713,48 +472,6 @@ impl PreviewController {
 
     pub(crate) fn bump_appearance(&mut self, dark: bool) {
         self.dark = dark;
-        self.appearance_revision = self.appearance_revision.wrapping_add(1).max(1);
-        self.last_page_request = None;
-        if !self.content.pages().is_empty() {
-            self.page_demand = Some(self.visible_page..=self.visible_page);
-        }
-    }
-
-    pub(crate) fn prune_evicted_pages(&mut self) {
-        let mut demand_evicted = false;
-        for (index, page) in self.content.pages_mut().iter_mut().enumerate() {
-            if page
-                .resident
-                .as_ref()
-                .is_some_and(|resident| !resident.lease.is_resident())
-            {
-                page.resident = None;
-                demand_evicted |= self
-                    .page_demand
-                    .as_ref()
-                    .is_some_and(|range| range.contains(&index));
-            }
-        }
-        if demand_evicted {
-            self.last_page_request = None;
-        }
-    }
-
-    pub(crate) fn visible_residency_ids(&self) -> Vec<u64> {
-        let Some(range) = &self.page_demand else {
-            return Vec::new();
-        };
-        range
-            .clone()
-            .filter_map(|index| {
-                self.content
-                    .pages()
-                    .get(index)
-                    .and_then(|page| page.resident.as_ref())
-                    .filter(|resident| resident.lease.is_resident())
-                    .map(|resident| resident.lease.id())
-            })
-            .collect()
     }
 
     pub(crate) fn has_resident_pages(&self) -> bool {
@@ -778,9 +495,6 @@ impl PreviewController {
         }
 
         self.content.clear();
-        self.pending_catalog = None;
-        self.page_demand = None;
-        self.last_page_request = None;
         self.compile_started = None;
         self.visible_page = 0;
         self.raw_diagnostics.clear();
@@ -788,18 +502,6 @@ impl PreviewController {
         self.editor_diagnostics.clear();
         self.tinymist_diagnostics.clear();
         self.mark_diagnostics_changed();
-    }
-
-    pub(crate) fn raster_freshness(
-        &self,
-        document_revision: u64,
-    ) -> Option<RasterContentFreshness> {
-        raster_content_freshness(
-            !self.content.pages().is_empty(),
-            self.content.raster_key(),
-            document_revision,
-            self.content.artifact_key(),
-        )
     }
 
     pub(crate) fn set_requested_backend(&mut self, preference: PreviewPreference) {
@@ -868,8 +570,7 @@ impl PreviewController {
             self.interactive_requested(interactive_source_supported, platform_supported);
         PreviewStatusSnapshot {
             requested_backend: self.requested_backend,
-            effective_backend: self
-                .effective_backend(interactive_source_supported, platform_supported),
+            effective_backend: self.effective_backend(interactive_source_supported),
             interactive_requested,
             should_attempt_native: self
                 .should_attempt_interactive(interactive_source_supported, platform_supported),
@@ -881,49 +582,35 @@ impl PreviewController {
                     .is_some_and(|key| key.revision == document_revision),
             interactive_transitioning: self
                 .interactive_transitioning(interactive_source_supported, platform_supported),
-            fallback_state: if interactive_source_supported
+            failure_state: if interactive_source_supported
                 && preview_visible
                 && self.requested_backend == PreviewPreference::Interactive
-                && self.effective_backend(interactive_source_supported, platform_supported)
-                    == PreviewBackend::PdfJs
+                && self.effective_backend(interactive_source_supported)
+                    == PreviewBackend::Interactive
+                && self.interactive_unavailable()
             {
-                Some(if self.connection.endpoint().is_some() {
-                    &self.webview_state
-                } else {
-                    &self.tinymist_state
-                })
+                Some(
+                    if matches!(
+                        self.webview_state,
+                        ServiceState::Failed(_) | ServiceState::Unsupported(_)
+                    ) {
+                        &self.webview_state
+                    } else {
+                        &self.tinymist_state
+                    },
+                )
             } else {
                 None
             },
         }
     }
 
-    fn effective_backend(
-        &self,
-        interactive_source_supported: bool,
-        platform_supported: bool,
-    ) -> PreviewBackend {
-        if self.requested_backend == PreviewPreference::Pdfium {
-            return PreviewBackend::Pdfium;
-        }
-        if !interactive_source_supported {
-            return if platform_supported {
-                PreviewBackend::PdfJs
-            } else {
-                PreviewBackend::Raster
-            };
-        }
-        match self.requested_backend {
-            PreviewPreference::Native => PreviewBackend::Raster,
-            PreviewPreference::PdfJs => PreviewBackend::PdfJs,
-            PreviewPreference::Pdfium => PreviewBackend::Pdfium,
-            PreviewPreference::Interactive
-                if self.interactive_requested(interactive_source_supported, platform_supported)
-                    && !self.interactive_unavailable() =>
-            {
-                PreviewBackend::Interactive
-            }
-            PreviewPreference::Interactive => PreviewBackend::PdfJs,
+    fn effective_backend(&self, interactive_source_supported: bool) -> PreviewBackend {
+        if interactive_source_supported && self.requested_backend == PreviewPreference::Interactive
+        {
+            PreviewBackend::Interactive
+        } else {
+            PreviewBackend::Pdfium
         }
     }
 
@@ -1000,24 +687,6 @@ pub fn visible_page(pages: &[PageGeometry], scroll_y: f32, viewport_height: f32)
         .map_or(0, |page| page.index)
 }
 
-pub fn visible_page_range(
-    pages: &[PageGeometry],
-    scroll_y: f32,
-    viewport_height: f32,
-) -> Option<RangeInclusive<usize>> {
-    let bottom = scroll_y + viewport_height.max(0.0);
-    let first = pages
-        .iter()
-        .find(|page| page.bottom() >= scroll_y)
-        .map(|page| page.index)?;
-    let last = pages
-        .iter()
-        .rev()
-        .find(|page| page.top <= bottom)
-        .map(|page| page.index)?;
-    Some(first..=last.max(first))
-}
-
 /// Keeps the content point under the pointer fixed while the scale changes.
 pub fn zoom_anchored_offset(
     old_offset: Vec2,
@@ -1087,10 +756,7 @@ mod tests {
                 fatal: false,
             };
             let transition = preview.transition(PreviewTransitionEvent::Failure(&failure, now));
-            assert_eq!(
-                transition.effects.contains(&PreviewEffect::ScheduleCompile),
-                attempt == 5
-            );
+            assert!(!transition.effects.contains(&PreviewEffect::ScheduleCompile));
             assert!(
                 preview
                     .transition(PreviewTransitionEvent::Failure(&failure, now))
@@ -1257,7 +923,7 @@ mod tests {
     }
 
     #[test]
-    fn protocol_failures_wait_and_only_the_fifth_selects_fallback() {
+    fn protocol_failures_exhaust_without_changing_the_selected_backend() {
         use crate::tinymist::{Generation, TinymistEvent};
         use tiptoptyp_core::recovery::{Failure, RETRY_DELAY};
         let mut preview = PreviewController::new(false, PreviewPreference::Interactive);
@@ -1293,11 +959,7 @@ mod tests {
                 preview
                     .status_snapshot(true, true, true, 0)
                     .effective_backend,
-                if attempt < 5 {
-                    PreviewBackend::Interactive
-                } else {
-                    PreviewBackend::PdfJs
-                },
+                PreviewBackend::Interactive,
             );
             if attempt < 5 {
                 assert!(matches!(result, Failure::Waiting { .. }));
@@ -1433,7 +1095,7 @@ mod tests {
                         .iter()
                         .filter(|effect| matches!(effect, PreviewEffect::ScheduleCompile))
                         .count(),
-                    1
+                    0
                 );
                 assert!(
                     !transition
@@ -1527,29 +1189,6 @@ mod tests {
     }
 
     #[test]
-    fn visible_range_reports_every_intersecting_page() {
-        let pages = page_stack_geometry([[100, 100], [100, 100], [100, 100]], 1.0);
-        assert_eq!(visible_page_range(&pages, 0.0, 60.0), Some(0..=0));
-        assert_eq!(
-            visible_page_range(&pages, pages[0].bottom() - 1.0, PAGE_GAP + 2.0),
-            Some(0..=1)
-        );
-        assert_eq!(visible_page_range(&[], 0.0, 100.0), None);
-    }
-
-    #[test]
-    fn page_demand_distance_orders_outer_pages_before_adjacent_pages() {
-        let mut preview = PreviewController::new(false, PreviewPreference::Native);
-        preview.page_demand = Some(5..=6);
-        assert_eq!(preview.page_demand_distance(5), 0);
-        assert_eq!(preview.page_demand_distance(6), 0);
-        assert_eq!(preview.page_demand_distance(4), 1);
-        assert_eq!(preview.page_demand_distance(7), 1);
-        assert_eq!(preview.page_demand_distance(0), 5);
-        assert_eq!(preview.page_demand_distance(12), 6);
-    }
-
-    #[test]
     fn anchored_zoom_preserves_pointer_content_point() {
         let pointer = Vec2::new(75.0, 120.0);
         let old_offset = Vec2::new(30.0, 500.0);
@@ -1571,59 +1210,8 @@ mod tests {
     }
 
     #[test]
-    fn same_revision_raster_from_an_older_artifact_is_stale() {
-        let mut preview = PreviewController::new(false, PreviewPreference::Native);
-        preview
-            .content
-            .accept_artifact(key(9, 3), Arc::from(&b"old"[..]));
-        preview.content.accept_raster(key(9, 3), vec![]);
-        preview
-            .content
-            .accept_artifact(key(9, 4), Arc::from(&b"new"[..]));
-        assert!(!preview.accepts_raster(key(9, 3), 9));
-    }
-
-    #[test]
-    fn catalog_replacement_retains_old_layout_and_rejects_stale_artifact_and_appearance() {
-        let catalog = |size| PdfDocumentCatalog {
-            pages: vec![PdfPageMetadata {
-                size,
-                links: Vec::new(),
-            }],
-        };
-        let mut preview = PreviewController::new(false, PreviewPreference::Native);
-        let old = key(9, 3);
-        let new = key(9, 4);
-        preview.accept_artifact(old, Arc::from(&b"old"[..]));
-        assert!(preview.accept_catalog(old, catalog([100, 200])));
-        assert_eq!(preview.content.raster_key(), Some(old));
-        assert_eq!(preview.content.pages()[0].size, [100, 200]);
-
-        preview.accept_artifact(new, Arc::from(&b"new"[..]));
-        assert!(preview.accept_catalog(new, catalog([300, 400])));
-        assert_eq!(preview.content.raster_key(), Some(old));
-        assert_eq!(preview.content.pages()[0].size, [100, 200]);
-        let request = preview.raster_request_key().unwrap();
-        assert_eq!(request.artifact, new);
-        assert!(!preview.accepts_page_key(RasterPageRequestKey {
-            artifact: old,
-            ..request
-        }));
-
-        preview.bump_appearance(true);
-        assert!(!preview.accepts_page_key(request));
-        let replacement = preview.raster_request_key().unwrap();
-        assert_eq!(
-            replacement.appearance_revision,
-            request.appearance_revision + 1
-        );
-        assert!(preview.accepts_page_key(replacement));
-        assert_eq!(preview.content.pages()[0].size, [100, 200]);
-    }
-
-    #[test]
     fn rebinding_a_designated_preview_does_not_promote_an_old_generation() {
-        let mut preview = PreviewController::new(false, PreviewPreference::Native);
+        let mut preview = PreviewController::new(false, PreviewPreference::Pdfium);
         preview
             .content
             .accept_artifact(key(4, 11), Arc::from(&b"old"[..]));
@@ -1636,11 +1224,11 @@ mod tests {
 
         assert_eq!(preview.content.artifact_key(), Some(key(5, 12)));
         assert_eq!(preview.content.raster_key(), Some(key(5, 11)));
-        assert!(!preview.accepts_raster(key(5, 11), 5));
     }
 
     #[test]
-    fn raster_is_only_an_explicit_choice_even_without_native_webview_support() {
+    fn selected_backend_never_changes_on_failure_or_platform_capability() {
+        assert_eq!(PreviewPreference::default(), PreviewPreference::Interactive);
         for supported in [false, true] {
             for preference in PreviewPreference::ALL {
                 let mut preview = PreviewController::new(false, preference);
@@ -1648,34 +1236,38 @@ mod tests {
                 let status = preview.status_snapshot(true, true, supported, 0);
                 assert_eq!(
                     status.effective_backend,
-                    if preference == PreviewPreference::Native {
-                        PreviewBackend::Raster
-                    } else if preference == PreviewPreference::Pdfium {
-                        PreviewBackend::Pdfium
+                    if preference == PreviewPreference::Interactive {
+                        PreviewBackend::Interactive
                     } else {
-                        PreviewBackend::PdfJs
+                        PreviewBackend::Pdfium
                     }
                 );
                 assert_eq!(
-                    status.fallback_reason().is_some(),
+                    status.failure_reason().is_some(),
                     preference == PreviewPreference::Interactive
+                );
+                assert_eq!(
+                    preview
+                        .status_snapshot(false, true, supported, 0)
+                        .effective_backend,
+                    PreviewBackend::Pdfium
                 );
             }
         }
     }
 
     #[test]
-    fn requested_and_effective_backends_expose_fallback_state() {
+    fn requested_and_effective_backends_expose_failure_state() {
         let mut preview = PreviewController::new(false, PreviewPreference::Interactive);
         preview.tinymist_state = ServiceState::Failed("server stopped".to_owned());
         preview.accept_artifact(key(7, 1), Arc::from(&b"pdf"[..]));
         let status = preview.status_snapshot(true, true, true, 0);
-        assert_eq!(status.effective_backend, PreviewBackend::PdfJs);
+        assert_eq!(status.effective_backend, PreviewBackend::Interactive);
         assert!(!status.canonical_artifact_available);
-        assert_eq!(status.backend_label(), "PDF.js · fallback");
+        assert_eq!(status.backend_label(), "Tinymist");
         assert!(
             status
-                .fallback_reason()
+                .failure_reason()
                 .is_some_and(|reason| reason.contains("server stopped"))
         );
 
@@ -1692,7 +1284,7 @@ mod tests {
         preview.webview_state = ServiceState::Ready("loaded".to_owned());
         let status = preview.status_snapshot(true, true, true, 0);
         assert_eq!(status.effective_backend, PreviewBackend::Interactive);
-        assert!(status.fallback_reason().is_none());
+        assert!(status.failure_reason().is_none());
 
         preview.recovery.started(crate::tinymist::Generation(2));
         let failure = crate::tinymist::TinymistEvent::Stopped {
@@ -1712,16 +1304,16 @@ mod tests {
     }
 
     #[test]
-    fn a_pdf_only_engine_uses_pdfjs_without_claiming_an_interactive_failure() {
+    fn a_pdf_only_engine_uses_pdfium_without_claiming_an_interactive_failure() {
         let mut preview = PreviewController::new(false, PreviewPreference::Interactive);
         preview.accept_artifact(key(7, 1), Arc::from(&b"pdf"[..]));
         let status = preview.status_snapshot(false, true, true, 7);
-        assert_eq!(status.effective_backend, PreviewBackend::PdfJs);
-        assert_eq!(status.backend_label(), "PDF.js");
+        assert_eq!(status.effective_backend, PreviewBackend::Pdfium);
+        assert_eq!(status.backend_label(), "PDFium");
         assert!(status.canonical_artifact_available);
         assert!(!status.interactive_requested);
         assert!(!status.should_attempt_native);
         assert!(!status.interactive_transitioning);
-        assert!(status.fallback_reason().is_none());
+        assert!(status.failure_reason().is_none());
     }
 }

@@ -61,7 +61,6 @@ impl EditorApp {
         };
         let request = CompileRequest {
             revision: self.document().revision(),
-            rasterize: self.raster_preview_required(),
             input: CompileInput {
                 language,
                 source,
@@ -139,23 +138,6 @@ impl EditorApp {
                     self.preview.status = PreviewStatus::Ready(result.elapsed);
                     self.complete_pending_export();
                 }
-                CompileEvent::Catalog { key, catalog }
-                    if self.preview.accepts_raster(key, self.document().revision()) =>
-                {
-                    self.preview.accept_catalog(key, catalog);
-                }
-                CompileEvent::RasterFailed { key, error }
-                    if self.preview.accepts_raster(key, self.document().revision()) =>
-                {
-                    self.preview.content.fail_raster(key, error.clone());
-                    self.notice = Some(Notice {
-                        message: format!(
-                            "Preview is ready, but its raster preview is unavailable: {error}"
-                        ),
-                        kind: NoticeKind::Error,
-                    });
-                }
-                CompileEvent::Catalog { .. } | CompileEvent::RasterFailed { .. } => {}
             }
         }
     }

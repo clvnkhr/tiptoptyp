@@ -103,7 +103,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn five_failed_attempts_have_four_delayed_restarts_then_fallback() {
+    fn five_failed_attempts_have_four_delayed_restarts_then_exhaust() {
         let mut recovery = Recovery::default();
         let mut now = Duration::ZERO;
         for generation in 1..=5 {

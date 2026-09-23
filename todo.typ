@@ -111,8 +111,6 @@ a second controller. Depends on 246 and relevant native gates 234/237.
   overlay cannot steal editor/preview input. Add deterministic frame/state
   tests and a native geometry trace before enabling it by default.
 
-295. [ ] Delete the rasterised PDF preview after its remaining dependencies are
-  separated: replace the viewport-capture surrogate, retire PDF raster controls
-  and settings, and remove preview-only Poppler work/residency. Preserve image
-  viewing, PDF thumbnails, canonical PDF export and PDF.js. Do not add features
-  to the retiring viewer. Track the removal boundary in `docs/pdfjs-preview.md`.
+295. [x] Removed the legacy raster PDF viewer and PDF.js, including their settings,
+  adapters, assets, render workers and capture surrogate. PDFium owns PDF viewing
+  and framebuffer captures; image viewing and hover thumbnails remain separate.
