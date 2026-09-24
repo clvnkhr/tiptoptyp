@@ -26,20 +26,10 @@ impl EditorApp {
         };
         if close {
             self.settings_visible = false;
-            // Restore focus after native close without waking the owner for
-            // ordinary child pointer/scroll frames.
-            let target = if self.shortcut_editor_visible {
-                scoped_child_viewport_id(context, "tiptoptyp-shortcuts")
-            } else {
-                context.viewport_id()
-            };
-            if self.lifecycle.allows_document_work() || self.shortcut_editor_visible {
-                crate::window_host::focus(
-                    context,
-                    target,
-                    crate::window_host::FocusCause::UserAction,
-                );
-            }
+            crate::window_host::return_from_closed_window(
+                context,
+                scoped_child_viewport_id(context, "tiptoptyp-settings"),
+            );
         }
     }
 

@@ -74,3 +74,16 @@ fn ns_view_from_handle(handle: &AppKitWindowHandle) -> Option<&NSView> {
         }
     }
 }
+
+/// Reveal a prepared popup without making it key. winit's set_visible(true)
+/// always makes a macOS window key, unlike its initial active=false creation.
+pub(crate) fn show_without_activating(window: &winit::window::Window) {
+    use raw_window_handle::HasWindowHandle;
+    if let Ok(handle) = window.window_handle()
+        && let RawWindowHandle::AppKit(handle) = handle.as_raw()
+        && let Some(view) = ns_view_from_handle(&handle)
+        && let Some(window) = view.window()
+    {
+        window.orderFront(None);
+    }
+}

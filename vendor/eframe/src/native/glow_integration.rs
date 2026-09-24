@@ -123,6 +123,10 @@ struct Viewport {
     class: ViewportClass,
     builder: ViewportBuilder,
     deferred_commands: Vec<egui::viewport::ViewportCommand>,
+    /// Transparent children are revealed only after their first buffer swap.
+    pending_initial_visibility: Option<bool>,
+    initial_frame_presented: bool,
+    initial_active: bool,
     info: ViewportInfo,
     actions_requested: Vec<egui_winit::ActionRequested>,
 
@@ -150,6 +154,19 @@ impl Viewport {
         self.deferred_commands.append(&mut commands);
 
         if let Some(window) = &self.window {
+            if let Some(visible) = &mut self.pending_initial_visibility {
+                self.deferred_commands.retain(|command| {
+                    if let egui::ViewportCommand::Visible(requested) = command {
+                        *visible = *requested;
+                        if *requested {
+                            egui_ctx.request_repaint_of(self.ids.this);
+                        }
+                        false
+                    } else {
+                        true
+                    }
+                });
+            }
             egui_winit::process_viewport_commands(
                 egui_ctx,
                 &mut self.info,
@@ -157,6 +174,20 @@ impl Viewport {
                 window,
                 &mut self.actions_requested,
             );
+            // Apply the latest visibility intent, including commands emitted by
+            // the first UI callback, only after its contents were presented.
+            if self.initial_frame_presented
+                && let Some(visible) = self.pending_initial_visibility.take()
+            {
+                #[cfg(target_os = "macos")]
+                if visible && !self.initial_active {
+                    super::macos::show_without_activating(window);
+                } else {
+                    window.set_visible(visible);
+                }
+                #[cfg(not(target_os = "macos"))]
+                window.set_visible(visible);
+            }
         }
     }
 }
@@ -612,7 +643,9 @@ impl GlowWinitRunning<'_> {
             };
             egui_winit::update_viewport_info(&mut viewport.info, &egui_ctx, window, false);
 
-            let is_visible = viewport.info.visible().unwrap_or(true);
+            let is_visible = viewport
+                .pending_initial_visibility
+                .unwrap_or_else(|| viewport.info.visible().unwrap_or(true));
 
             let Some(egui_winit) = viewport.egui_winit.as_mut() else {
                 return Ok(EventResult::Wait);
@@ -852,6 +885,7 @@ impl GlowWinitRunning<'_> {
                 })?;
 
                 gl_surface.swap_buffers(context)?;
+                viewport.initial_frame_presented = true;
                 frame_timer.resume();
             }
 
@@ -1075,7 +1109,11 @@ impl GlutinWindowContext {
             .prefer_hardware_accelerated(hardware_acceleration)
             .with_depth_size(native_options.depth_buffer)
             .with_stencil_size(native_options.stencil_buffer)
-            .with_transparency(native_options.viewport.transparent.unwrap_or(false));
+            .with_transparency(
+                // CGL shares this context across every viewport. An opaque root
+                // must not disable alpha for transparent child windows.
+                cfg!(target_os = "macos") || native_options.viewport.transparent.unwrap_or(false),
+            );
         // we don't know if multi sampling option is set. so, check if its more than 0.
         let config_template_builder = if native_options.multisampling > 0 {
             config_template_builder.with_multisampling(
@@ -1199,6 +1237,9 @@ impl GlutinWindowContext {
                 class: ViewportClass::Root,
                 builder: viewport_builder,
                 deferred_commands: vec![],
+                pending_initial_visibility: None,
+                initial_frame_presented: false,
+                initial_active: true,
                 info: viewport_info,
                 actions_requested: Default::default(),
                 pending_delta: Default::default(),
@@ -1265,7 +1306,7 @@ impl GlutinWindowContext {
             window
         } else {
             log::debug!("Creating a window for viewport {viewport_id:?}");
-            let window_attributes = egui_winit::apply_monitor_to_window_attributes(
+            let mut window_attributes = egui_winit::apply_monitor_to_window_attributes(
                 egui_winit::create_winit_window_attributes(
                     &self.egui_ctx,
                     viewport.builder.clone(),
@@ -1273,6 +1314,13 @@ impl GlutinWindowContext {
                 &viewport.builder,
                 event_loop,
             );
+            viewport.initial_frame_presented = false;
+            viewport.initial_active = window_attributes.active;
+            if viewport_id != ViewportId::ROOT && window_attributes.transparent() {
+                viewport.pending_initial_visibility =
+                    Some(viewport.builder.visible.unwrap_or(true));
+                window_attributes = window_attributes.with_visible(false);
+            }
             if window_attributes.transparent()
                 && self.gl_config.supports_transparency() == Some(false)
                 && !cfg!(target_os = "windows")
@@ -1305,6 +1353,9 @@ impl GlutinWindowContext {
                 &viewport.builder,
             );
 
+            if viewport.pending_initial_visibility.is_some() {
+                window.set_visible(false);
+            }
             egui_winit::update_viewport_info(&mut viewport.info, &self.egui_ctx, &window, true);
             viewport.window.insert(Arc::new(window))
         };
@@ -1542,6 +1593,9 @@ fn initialize_or_update_viewport(
                 class,
                 builder,
                 deferred_commands: vec![],
+                pending_initial_visibility: None,
+                initial_frame_presented: false,
+                initial_active: true,
                 info: Default::default(),
                 actions_requested: Default::default(),
                 pending_delta: Default::default(),
@@ -1737,8 +1791,11 @@ fn render_immediate_viewport(
 
     {
         profiling::scope!("swap_buffers");
-        if let Err(err) = gl_surface.swap_buffers(current_gl_context) {
-            log::error!("swap_buffers failed: {err}");
+        match gl_surface.swap_buffers(current_gl_context) {
+            Ok(()) => {
+                viewport.initial_frame_presented = true;
+            }
+            Err(err) => log::error!("swap_buffers failed: {err}"),
         }
     }
 

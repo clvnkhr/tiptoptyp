@@ -47,6 +47,7 @@ pub(crate) struct Registry {
     dormant_owners: HashSet<Id>,
     next_close: u64,
     next_generation: u64,
+    focus_history: Vec<Id>,
 }
 
 impl Registry {
@@ -183,12 +184,35 @@ impl Registry {
         closed
     }
 
+    fn record_focus(&mut self, id: Id) {
+        if self.current(id).is_some() && self.focus_history.last() != Some(&id) {
+            self.focus_history.retain(|previous| *previous != id);
+            self.focus_history.push(id);
+        }
+    }
+
+    fn focus_return_target(
+        &mut self,
+        closed: Id,
+        mut eligible: impl FnMut(Id) -> bool,
+    ) -> Option<Id> {
+        self.focus_history.retain(|id| *id != closed);
+        self.focus_history.iter().rev().copied().find(|id| {
+            self.entries
+                .get(id)
+                .is_some_and(|entry| entry.state == Lifecycle::Visible)
+                && eligible(*id)
+        })
+    }
+
     pub(crate) fn collect_retired(&mut self, mut active: impl FnMut(Id) -> bool) {
         self.entries.retain(|id, entry| {
             active(*id)
                 || (entry.state != Lifecycle::DurablyClosed && entry.native_identity.is_none())
         });
         self.dormant_owners.retain(|owner| active(*owner));
+        self.focus_history
+            .retain(|id| self.entries.contains_key(id));
     }
 
     pub(crate) fn resume_owner(&mut self, owner: Id) {
@@ -432,6 +456,50 @@ pub(crate) fn flush_focus(context: &egui::Context) {
     }
 }
 
+/// Record actual activation, not a requested focus or a child's ownership.
+pub(crate) fn observe_focus(context: &egui::Context, raw: &egui::RawInput) {
+    // Focus can change before the newly focused child has its own repaint.
+    // Observe all live native bindings at input admission, not just the viewport
+    // whose event happened to wake the loop.
+    let mut native = false;
+    let focused = raw
+        .viewports
+        .keys()
+        .copied()
+        .find(|id| {
+            eframe::window_host::window(context, *id).is_some_and(|window| {
+                native = true;
+                // Transient cards can become key during OS handoffs; they are
+                // not durable return destinations for closing a tool window.
+                window.has_focus() && window.is_decorated()
+            })
+        })
+        .or_else(|| (!native && raw.viewport().focused == Some(true)).then_some(raw.viewport_id));
+    if let Some(id) = focused {
+        with_registry(context, |registry| registry.record_focus(id));
+    }
+}
+
+/// Explicit tool-window close returns to the most recently used surviving window.
+pub(crate) fn return_from_closed_window(context: &egui::Context, closed: Id) {
+    let target = with_registry(context, |registry| {
+        registry.focus_return_target(closed, |id| {
+            if let Some(window) = eframe::window_host::window(context, id) {
+                window.is_visible() != Some(false) && window.is_minimized() != Some(true)
+            } else {
+                context.input(|input| {
+                    input.raw.viewports.get(&id).is_some_and(|info| {
+                        info.visible() != Some(false) && info.minimized != Some(true)
+                    })
+                })
+            }
+        })
+    });
+    if let Some(target) = target {
+        focus(context, target, FocusCause::ReturnFromChild);
+    }
+}
+
 pub(crate) fn return_focus(context: &egui::Context) {
     focus(context, context.viewport_id(), FocusCause::ReturnFromChild);
 }
@@ -441,6 +509,63 @@ mod tests {
     use super::*;
     fn id(n: u64) -> Id {
         Id::from_hash_of(n)
+    }
+
+    #[test]
+    fn focus_history_returns_to_recent_surviving_windows_without_duplicates() {
+        let mut r = Registry::default();
+        for n in 1..=4 {
+            r.show(id(n), id(n), true, false);
+        }
+        for n in [1, 2, 1, 3, 2, 4, 4] {
+            r.record_focus(id(n));
+        }
+        assert_eq!(r.focus_history, vec![id(1), id(3), id(2), id(4)]);
+        assert_eq!(r.focus_return_target(id(4), |_| true), Some(id(2)));
+        r.transition(id(2), Lifecycle::DurablyClosed);
+        assert_eq!(r.focus_return_target(id(4), |_| true), Some(id(3)));
+        assert_eq!(
+            r.focus_return_target(id(4), |candidate| candidate != id(3)),
+            Some(id(1))
+        );
+        r.transition(id(1), Lifecycle::TemporarilyHidden);
+        assert_eq!(r.focus_return_target(id(4), |_| false), None);
+        r.collect_retired(|_| false);
+        assert!(r.focus_history.iter().all(|id| r.entries.contains_key(id)));
+    }
+
+    #[test]
+    fn settings_close_returns_to_recent_document_and_never_steals_background_focus() {
+        for (background, minimized, expected) in [
+            (false, false, Some(id(2))),
+            (false, true, Some(Id::ROOT)),
+            (true, false, None),
+        ] {
+            let context = egui::Context::default();
+            let mut raw = egui::RawInput::default();
+            for target in [Id::ROOT, id(2), id(3)] {
+                show(&context, target, target, true, false);
+                raw.viewports.entry(target).or_default();
+                with_registry(&context, |registry| registry.record_focus(target));
+            }
+            raw.viewports.get_mut(&id(2)).unwrap().minimized = Some(minimized);
+            for info in raw.viewports.values_mut() {
+                info.focused = Some(false);
+            }
+            raw.viewports.get_mut(&id(3)).unwrap().focused = Some(!background);
+            let output =
+                context.run_logic(&raw, |context| return_from_closed_window(context, id(3)));
+            let focused: Vec<_> = output
+                .viewport_commands
+                .iter()
+                .filter_map(|(id, commands)| {
+                    commands
+                        .contains(&egui::ViewportCommand::Focus)
+                        .then_some(*id)
+                })
+                .collect();
+            assert_eq!(focused, expected.into_iter().collect::<Vec<_>>());
+        }
     }
 
     #[test]
@@ -631,6 +756,7 @@ mod tests {
                     dormant_owners: r.dormant_owners.clone(),
                     next_close: r.next_close,
                     next_generation: r.next_generation,
+                    focus_history: r.focus_history.clone(),
                 };
                 let mut retired = retired.clone();
                 let token = next.current(id(2));

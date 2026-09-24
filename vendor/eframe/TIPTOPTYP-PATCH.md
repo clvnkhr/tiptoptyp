@@ -16,3 +16,21 @@ A second narrow correction allows a close request to run its owning UI callback
 when a viewport is hidden/minimized. Deferred viewports otherwise have no logic
 callback in which to cancel/commit close. Both native renderers use the same
 `requires_ui` predicate; hidden idle windows remain on the logic-only path.
+
+On macOS, the shared CGL configuration always supports transparency, even when
+its root NSWindow is opaque. Glutin uses this configuration to set
+`kCGLCPSurfaceOpacity` and to finalize every child window; deriving it from the
+root's opacity disabled popup alpha. Individual document/popup window opacity
+continues to follow its viewport builder.
+
+Transparent Glow children start hidden and become visible only after a successful
+first buffer swap. Initial visibility commands update the pending intent and
+schedule its first render; explicit hidden children remain hidden. This prevents
+an uninitialized surface from flashing black before preview-card content appears.
+The native contract asserts the CGL opacity, per-window AppKit opacity, and
+hidden-before-first-paint/visible-after-present lifecycle.
+
+On AppKit, a deferred reveal of an inactive child uses `orderFront`, preserving
+its creation-time non-activating behavior; winit's `set_visible(true)` otherwise
+makes it key. Visibility intent emitted by the first callback is applied before
+reveal, so first-frame dismissal cannot briefly show the child.

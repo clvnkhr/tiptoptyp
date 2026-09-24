@@ -165,3 +165,45 @@ was launched through the desktop controller. Its report at
 This verifies the native contract described above; it is not screenshot evidence
 or a remote CI result. No preview geometry or maintained screenshot contract was
 changed by the shared-host refactor.
+
+## Alpha regression correction (2026-09-24)
+
+The opaque document policy exposed a renderer dependency missed by the original
+native tests: eframe selected its shared CGL configuration from root transparency.
+Glutin then set the whole context opaque and finalized transparent child windows
+without alpha. Transparent popup padding consequently appeared black. The native
+regression reproduced `kCGLCPSurfaceOpacity = 1` with an opaque document root.
+The macOS renderer now requests alpha support independently of root NSWindow
+opacity. Documents keep opaque native windows and shadows; popups preserve alpha.
+
+New transparent child surfaces stay hidden until their first successful buffer
+swap, addressing the unpainted first-open flash. Visibility changes before that
+swap update the pending intent, including explicitly hidden children. No idle
+repaint loop or delay is added. Native tests now cover the actual CGL setting and
+NSWindow opacity, plus initial hidden/revealed state, rather than relying on
+viewport builders or framebuffer pixels alone.
+
+Settings close previously focused its hosting root, regardless of which document
+was used last. The shared host now records actual window activation in a unique
+recency list and returns to the latest visible, restored, live document or tool
+window. Transient undecorated cards are excluded. Focus is read from all live
+native bindings because activation can precede the destination’s own repaint. Explicit
+close removes the closed window from that history; application deactivation
+still prevents focus stealing. Regressions cover repeated activation, retired
+and minimized candidates, secondary-document return, and background close.
+
+The final native bundle report
+`.tiptoptyp/native-window-tests/run-0r89jt1h/result.txt` records
+`completed=true cancellations=1 closed=true failure=None`. It includes Settings
+return to the secondary document, then fallback to the surviving root after the
+secondary closes, without initial activation of the passive popup. The fresh
+function-tooltip framebuffer at
+`.tiptoptyp/screenshots/alpha-fix-final/1790237500021-0001-diagnostic-function-tooltip.png`
+was inspected: the rounded card and text are intact, outside pixels are RGBA
+`(0, 0, 0, 0)`, and its interior is opaque. This is framebuffer evidence combined
+with native opacity/first-presentation checks, not a high-speed desktop recording
+of every possible preview-loading flash. The change adds no timers or idle
+repaints; focus history is bounded by live windows and read at input admission.
+
+Final checks: 1,233 standard tests and 15 packaging tests passed, along with
+formatting and strict all-targets Clippy (including the native test feature).

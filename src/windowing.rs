@@ -885,8 +885,7 @@ impl eframe::App for AppShell {
             raw_input,
             self.primary.borrow().profile_tab_centers(),
         );
-        #[cfg(not(feature = "profiling"))]
-        let _ = (context, raw_input);
+        crate::window_host::observe_focus(context, raw_input);
         crate::window_host::flush_focus(context);
         self.synchronize_settings(context);
     }

@@ -25,6 +25,7 @@ fn child(n: u64) -> egui::ViewportId {
 struct State {
     identities: HashMap<egui::ViewportId, u64>,
     canceled: usize,
+    popup_presented: bool,
     allow_close: bool,
     document_closed: bool,
     settings_visible: bool,
@@ -41,11 +42,22 @@ struct Fixture {
 fn inspect(context: &egui::Context, id: egui::ViewportId, popup: bool, state: &mut State) {
     let window = eframe::window_host::window(context, id).expect("callback has its native binding");
     let identity = eframe::window_host::identity(context, id).unwrap();
-    if let Some(previous) = state.identities.insert(id, identity) {
+    let previous_identity = state.identities.insert(id, identity);
+    if let Some(previous) = previous_identity {
         assert_eq!(
             identity, previous,
             "focus, hide and minimize must retain native identity"
         );
+    }
+    if popup {
+        if !state.popup_presented && window.has_focus() {
+            state.failure = Some("inactive popup stole focus when first presented".to_owned());
+        }
+        let visible = window.is_visible() == Some(true);
+        if previous_identity.is_none() && visible {
+            state.failure = Some("popup was visible before its first buffer swap".to_owned());
+        }
+        state.popup_presented |= visible;
     }
     assert_eq!(window.is_decorated(), !popup);
     assert_eq!(
@@ -64,11 +76,24 @@ fn inspect(context: &egui::Context, id: egui::ViewportId, popup: bool, state: &m
     {
         use winit::platform::macos::WindowExtMacOS;
         assert_eq!(window.has_shadow(), !popup);
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let RawWindowHandle::AppKit(handle) = window.window_handle().unwrap().as_raw() else {
+            panic!("expected AppKit window");
+        };
+        // SAFETY: this callback runs on the main thread and holds the live window.
+        let view = unsafe { handle.ns_view.cast::<objc2_app_kit::NSView>().as_ref() };
+        if view.window().unwrap().isOpaque() == popup {
+            state.failure = Some("native opacity does not follow the viewport role".to_owned());
+        }
     }
 }
 impl eframe::App for Fixture {
     fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         let mut state = self.state.lock().unwrap();
+        if state.failure.is_some() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
         if self.started.elapsed() > Duration::from_secs(20) {
             state.failure = Some(format!(
                 "native lifecycle timed out in phase {}; native state {:?}; app active {:?}",
@@ -92,7 +117,7 @@ impl eframe::App for Fixture {
         let document = eframe::window_host::window(ctx, child(1));
         let settings = eframe::window_host::window(ctx, child(2));
         match self.phase {
-            0 if state.identities.len() == 4 => {
+            0 if state.identities.len() == 4 && state.popup_presented => {
                 let unique: std::collections::HashSet<_> = state.identities.values().collect();
                 assert_eq!(unique.len(), 4, "native windows must not share ownership");
                 root.set_minimized(true);
@@ -118,6 +143,16 @@ impl eframe::App for Fixture {
                 self.phase = 3;
             }
             3 if document.as_ref().is_some_and(|w| w.has_focus()) => {
+                window_host::focus(ctx, child(2), window_host::FocusCause::UserAction);
+                self.phase = 30;
+            }
+            30 if settings.as_ref().is_some_and(|w| w.has_focus()) => {
+                state.settings_visible = false;
+                ctx.send_viewport_cmd_to(child(2), egui::ViewportCommand::Visible(false));
+                window_host::return_from_closed_window(ctx, child(2));
+                self.phase = 31;
+            }
+            31 if document.as_ref().is_some_and(|w| w.has_focus()) => {
                 document.unwrap().set_minimized(true);
                 self.phase = 4;
             }
@@ -151,6 +186,12 @@ impl eframe::App for Fixture {
                 .as_ref()
                 .is_some_and(|w| w.is_visible() == Some(true) && w.has_focus()) =>
             {
+                state.settings_visible = false;
+                ctx.send_viewport_cmd_to(child(2), egui::ViewportCommand::Visible(false));
+                window_host::return_from_closed_window(ctx, child(2));
+                self.phase = 9;
+            }
+            9 if root.has_focus() => {
                 state.done = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
@@ -220,6 +261,7 @@ impl eframe::App for Fixture {
         }
     }
     fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        window_host::observe_focus(ctx, input);
         window_host::flush_focus(ctx);
         if input.viewport_id == child(1) && input.viewport().close_requested() {
             window_host::observe_close(ctx, child(1), child(1));
@@ -229,6 +271,31 @@ impl eframe::App for Fixture {
         false
     }
 }
+#[cfg(target_os = "macos")]
+fn alpha_context_error() -> Option<String> {
+    use std::ffi::c_void;
+    #[link(name = "OpenGL", kind = "framework")]
+    unsafe extern "C" {
+        fn CGLGetCurrentContext() -> *mut c_void;
+        fn CGLGetParameter(context: *mut c_void, parameter: u32, value: *mut i32) -> i32;
+    }
+    // SAFETY: eframe makes the root GL context current before its app creator.
+    // 236 is Apple's kCGLCPSurfaceOpacity; the output points to a live GLint.
+    unsafe {
+        let context = CGLGetCurrentContext();
+        if context.is_null() {
+            return Some("native test requires a current CGL context".to_owned());
+        }
+        let mut opacity = -1;
+        let error = CGLGetParameter(context, 236, &mut opacity);
+        (error != 0 || opacity != 0).then(|| {
+            format!(
+                "opaque root disabled shared renderer alpha: CGL error={error}, opacity={opacity}"
+            )
+        })
+    }
+}
+
 fn main() {
     let state = Arc::new(Mutex::new(State {
         settings_visible: true,
@@ -243,6 +310,10 @@ fn main() {
             ..Default::default()
         },
         Box::new(move |_| {
+            #[cfg(target_os = "macos")]
+            {
+                shared.lock().unwrap().failure = alpha_context_error();
+            }
             Ok(Box::new(Fixture {
                 state: shared,
                 started: Instant::now(),
