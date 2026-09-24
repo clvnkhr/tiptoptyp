@@ -230,3 +230,18 @@ PDFium is drawn directly into the egui framebuffer. Deterministic scene sessions
 explicitly select PDFium, even for Typst fixtures, and wait for the current PDF
 revision. They do not use a secondary raster renderer or a runtime fallback.
 These captures do not verify Tinymist's native child-view composition.
+
+## Native window lifecycle contract
+
+Run `python3 scripts/test-native-windows.py` in an unlocked macOS desktop session.
+This dedicated lane exercises real window ownership, focus, minimize/restore,
+close/cancel/commit and tool-window hide/reopen; it does not use pixel matching.
+The fixture and result are retained under `.tiptoptyp/native-window-tests/`.
+`--prepare-only` creates the app for an external desktop controller. The
+`native_windows` workflow-dispatch input enables the same lane in CI.
+
+The runner builds a real app bundle because direct `cargo test` activation can
+be refused by macOS. It fails on absent/incomplete native evidence instead of
+reporting an opt-in test as passed without running it. The suite's normal
+headless tests remain the fast default. See
+[the host audit](architecture/0008-window-lifecycle.md) for coverage and limits.

@@ -10,6 +10,7 @@ repository = "https://github.com/calvinkhor/tiptoptyp"
 [features]
 production = []
 profiling = []
+native-ui-tests = []
 
 [dependencies]
 tiptoptyp-core = { path = "core" }
@@ -65,6 +66,11 @@ egui_kittest = "0.36.1"
 [[test]]
 name = "native_window_drag"
 harness = false
+
+[[test]]
+name = "native_window_lifecycle"
+harness = false
+required-features = ["native-ui-tests"]
 
 [workspace]
 members = ["core"]
@@ -127,3 +133,6 @@ entitlements = "packaging/macos-local.entitlements.plist"
 # macOS surface identity must include the thread-current OpenGL context.
 [patch.crates-io]
 glutin = { path = "vendor/glutin" }
+
+# Bind deferred viewports to their native windows without focus-based discovery.
+eframe = { path = "vendor/eframe" }

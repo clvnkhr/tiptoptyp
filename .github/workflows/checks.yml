@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      native_windows:
+        description: Run the real macOS desktop window contract
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -102,3 +107,28 @@ jobs:
           test -x "$TIPTOPTYP_TEST_TINYMIST"
           cargo +1.98.1 test --locked -p glutin --lib native_thread_current_context -- --ignored
           cargo +1.98.1 test --locked --bin tiptoptyp -- --ignored --skip native_fixture_probe --test-threads=1
+
+  native-windows:
+    name: Native macOS window contract
+    if: github.event_name == 'workflow_dispatch' && inputs.native_windows
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+      - name: Install Rust
+        run: rustup toolchain install 1.98.1 --profile minimal
+      - name: Real native lifecycle and ownership
+        run: python3 scripts/test-native-windows.py
+      - name: Retain native evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-window-contract
+          path: .tiptoptyp/native-window-tests/**/result.txt
+          include-hidden-files: true
+          if-no-files-found: warn

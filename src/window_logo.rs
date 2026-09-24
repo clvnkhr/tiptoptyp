@@ -104,7 +104,11 @@ pub(crate) fn show(ui: &mut egui::Ui, captures: &CaptureController) {
         }
         if done {
             state.open = false;
-            context.send_viewport_cmd_to(owner_id, egui::ViewportCommand::Focus);
+            crate::window_host::focus(
+                &context,
+                owner_id,
+                crate::window_host::FocusCause::ReturnFromChild,
+            );
         }
     }
     if !state.open {

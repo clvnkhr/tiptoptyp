@@ -423,7 +423,11 @@ impl AppShell {
                 self.show_primary(context);
             }
             self.active = ActiveSession::Primary;
-            context.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
+            crate::window_host::focus(
+                context,
+                egui::ViewportId::ROOT,
+                crate::window_host::FocusCause::UserAction,
+            );
             self.primary.borrow_mut().begin_process_close()
         } else if let Some(window) = self
             .secondary
@@ -446,7 +450,9 @@ impl AppShell {
         context.request_repaint();
     }
     fn guard_process_close(&mut self, context: &egui::Context) {
-        if !context.input(|input| input.viewport().close_requested()) {
+        if !context.input(|input| input.viewport().close_requested())
+            && !crate::window_host::close_requested(context, context.viewport_id())
+        {
             return;
         }
         if keeps_running_after_root_close(
@@ -510,6 +516,12 @@ impl AppShell {
     }
 
     fn retire_primary_window(&mut self, context: &egui::Context) {
+        crate::window_host::acknowledge_close(context, egui::ViewportId::ROOT);
+        crate::window_host::transition(
+            context,
+            egui::ViewportId::ROOT,
+            crate::window_host::Lifecycle::DurablyClosed,
+        );
         context.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::CancelClose);
         context.send_viewport_cmd_to(
             egui::ViewportId::ROOT,
@@ -525,6 +537,14 @@ impl AppShell {
     }
 
     fn show_primary(&mut self, context: &egui::Context) {
+        crate::window_host::resume_owner(context, egui::ViewportId::ROOT);
+        crate::window_host::show(
+            context,
+            egui::ViewportId::ROOT,
+            egui::ViewportId::ROOT,
+            true,
+            false,
+        );
         self.primary.borrow_mut().request_window_resume();
         if !self.primary_visible {
             context
@@ -534,7 +554,11 @@ impl AppShell {
             egui::ViewportId::ROOT,
             egui::ViewportCommand::Minimized(false),
         );
-        context.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
+        crate::window_host::focus(
+            context,
+            egui::ViewportId::ROOT,
+            crate::window_host::FocusCause::UserAction,
+        );
         self.primary_visible = true;
         self.active = ActiveSession::Primary;
     }
@@ -609,7 +633,11 @@ impl AppShell {
             ActiveSession::Secondary(id) => {
                 let viewport = document_viewport_id(id);
                 context.send_viewport_cmd_to(viewport, egui::ViewportCommand::Minimized(false));
-                context.send_viewport_cmd_to(viewport, egui::ViewportCommand::Focus);
+                crate::window_host::focus(
+                    context,
+                    viewport,
+                    crate::window_host::FocusCause::UserAction,
+                );
             }
         }
     }
@@ -689,6 +717,7 @@ impl AppShell {
     fn show_secondary_windows(&mut self, context: &egui::Context) {
         for window in &mut self.secondary {
             let viewport_id = window.viewport_id();
+            crate::window_host::show(context, viewport_id, viewport_id, true, false);
             let activate = std::mem::take(&mut window.activate_once);
             let builder =
                 document_viewport_builder(window.editor.borrow().window_title(), activate);
@@ -714,6 +743,7 @@ impl AppShell {
 
 impl eframe::App for AppShell {
     fn logic(&mut self, context: &egui::Context, frame: &mut eframe::Frame) {
+        crate::window_host::ensure(context, egui::ViewportId::ROOT, egui::ViewportId::ROOT);
         // eframe skips ui entirely when the root and all children are hidden.
         // This path must neither paint nor consume the previous frame's input.
         self.primary.apply_settings(context);
@@ -722,7 +752,7 @@ impl eframe::App for AppShell {
         self.refresh_active_window(context);
         self.dispatch_process_requests(context);
         self.guard_process_close(context);
-        let completions = crate::worker::take_detached_completions();
+        let completions = crate::worker::take_detached_completions(context);
         if !completions.is_empty() {
             self.active_editor_mut()
                 .show_window_notice(completions.join("\n"));
@@ -762,7 +792,8 @@ impl eframe::App for AppShell {
         let context = ui.ctx().clone();
         let profile_close_requested = crate::performance::take_no_window_request();
         self.advance_capture_batch(&context);
-        let primary_close_requested = context.input(|input| input.viewport().close_requested());
+        let primary_close_requested = context.input(|input| input.viewport().close_requested())
+            || crate::window_host::close_requested(&context, egui::ViewportId::ROOT);
         if self.primary_visible {
             self.primary.borrow_mut().ui_in_window(ui, Some(frame));
         } else {
@@ -830,6 +861,24 @@ impl eframe::App for AppShell {
     }
 
     fn raw_input_hook(&mut self, context: &egui::Context, raw_input: &mut egui::RawInput) {
+        crate::window_host::collect_retired(context, raw_input);
+        let id = raw_input.viewport_id;
+        let document = id == egui::ViewportId::ROOT
+            || self
+                .secondary
+                .iter()
+                .any(|window| window.viewport_id() == id);
+        if document
+            && raw_input.viewport().close_requested()
+            && crate::window_host::observe_close(context, id, id)
+            && raw_input.viewport().visible() == Some(false)
+        {
+            // A native close can arrive while no UI pass is eligible to run.
+            // Retain it and reveal its owner once so save/discard can complete.
+            context.send_viewport_cmd_to(id, egui::ViewportCommand::Visible(true));
+            context.send_viewport_cmd_to(id, egui::ViewportCommand::Minimized(false));
+            context.request_repaint_of(id);
+        }
         #[cfg(feature = "profiling")]
         crate::performance::inject_profile_input(
             context,
@@ -838,6 +887,7 @@ impl eframe::App for AppShell {
         );
         #[cfg(not(feature = "profiling"))]
         let _ = (context, raw_input);
+        crate::window_host::flush_focus(context);
         self.synchronize_settings(context);
     }
 }

@@ -1,8 +1,5 @@
 use eframe::egui::{self, Pos2, Rect, Vec2};
-use std::{
-    collections::{HashMap, HashSet},
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use crate::{screenshot::CaptureController, theme};
 
@@ -12,6 +9,17 @@ pub(crate) enum ChildViewRole {
     Modal,
     DismissOnBlur,
     Tooltip,
+}
+
+impl ChildViewRole {
+    fn focus_policy(self) -> FocusPolicy {
+        match self {
+            Self::Persistent => FocusPolicy::Preserve,
+            Self::Modal => FocusPolicy::SuspendOnBlur,
+            Self::DismissOnBlur => FocusPolicy::DismissOnBlur,
+            Self::Tooltip => FocusPolicy::InteractiveHandoff,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,7 +41,6 @@ pub(crate) struct ChildViewSpec {
     id_salt: &'static str,
     title: &'static str,
     role: ChildViewRole,
-    focus: FocusPolicy,
     bounds: ChildViewBounds,
     capture_target: &'static str,
     active: bool,
@@ -54,7 +61,6 @@ impl ChildViewSpec {
             id_salt,
             title,
             role: ChildViewRole::Persistent,
-            focus: FocusPolicy::Preserve,
             bounds: ChildViewBounds::Persistent {
                 inner: inner.into(),
                 minimum: minimum.into(),
@@ -77,7 +83,6 @@ impl ChildViewSpec {
             id_salt,
             title,
             role: ChildViewRole::Modal,
-            focus: FocusPolicy::SuspendOnBlur,
             bounds: ChildViewBounds::Fixed {
                 position: owner.min,
                 size: owner.size(),
@@ -101,7 +106,6 @@ impl ChildViewSpec {
             id_salt,
             title,
             role: ChildViewRole::DismissOnBlur,
-            focus: FocusPolicy::DismissOnBlur,
             bounds: ChildViewBounds::Fixed { position, size },
             capture_target,
             active: true,
@@ -123,7 +127,6 @@ impl ChildViewSpec {
             id_salt,
             title,
             role: ChildViewRole::Tooltip,
-            focus: FocusPolicy::InteractiveHandoff,
             bounds: ChildViewBounds::Fixed { position, size },
             capture_target,
             active,
@@ -149,9 +152,6 @@ impl ChildViewSpec {
                 .with_title(self.title)
                 .with_inner_size(inner)
                 .with_min_inner_size(minimum)
-                .with_fullsize_content_view(true)
-                .with_title_shown(false)
-                .with_titlebar_shown(false)
                 .with_maximize_button(false)
                 .with_maximized(false)
                 .with_fullscreen(false),
@@ -178,87 +178,59 @@ pub(crate) struct ChildViewInput {
 
 pub(crate) struct ChildViewHost;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ChildViewLifecycle {
-    Visible,
-    TemporarilyHidden,
-    DurablyClosed,
-    DormantHosted,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct LifecycleEntry {
-    owner: egui::ViewportId,
-    generation: u64,
-    state: ChildViewLifecycle,
-    dormant_host: bool,
-}
-
-#[derive(Clone, Default)]
-struct LifecycleRegistry {
-    entries: HashMap<egui::ViewportId, LifecycleEntry>,
-    dormant_owners: HashSet<egui::ViewportId>,
-}
-
-#[derive(Clone, Copy)]
-struct LifecycleToken {
-    id: egui::ViewportId,
-    generation: u64,
-}
-
-fn registry_id() -> egui::Id {
-    egui::Id::new("child-view-lifecycle-registry")
-}
+pub(crate) use crate::window_host::Lifecycle as ChildViewLifecycle;
+use crate::window_host::Token as LifecycleToken;
 
 fn begin_lifecycle(
     context: &egui::Context,
     id: egui::ViewportId,
     spec: ChildViewSpec,
 ) -> Option<LifecycleToken> {
-    let owner = context.viewport_id();
-    context.data_mut(|data| {
-        let registry = data.get_temp_mut_or_default::<LifecycleRegistry>(registry_id());
-        let dormant = registry.dormant_owners.contains(&owner);
-        let state = if dormant {
-            if spec.dormant_host {
-                ChildViewLifecycle::DormantHosted
-            } else {
-                ChildViewLifecycle::DurablyClosed
-            }
-        } else if spec.visible == Some(false) {
-            ChildViewLifecycle::TemporarilyHidden
-        } else {
-            ChildViewLifecycle::Visible
-        };
-        let entry = registry.entries.entry(id).or_insert(LifecycleEntry {
-            owner,
-            generation: 1,
-            state,
-            dormant_host: spec.dormant_host,
-        });
-        entry.owner = owner;
-        entry.state = state;
-        entry.dormant_host = spec.dormant_host;
-        (state != ChildViewLifecycle::DurablyClosed).then_some(LifecycleToken {
-            id,
-            generation: entry.generation,
-        })
-    })
+    crate::window_host::show(
+        context,
+        id,
+        context.viewport_id(),
+        spec.visible != Some(false),
+        spec.dormant_host,
+    )
+}
+fn callback_is_live(context: &egui::Context, token: LifecycleToken) -> bool {
+    crate::window_host::live(context, token)
 }
 
-fn callback_is_live(context: &egui::Context, token: LifecycleToken) -> bool {
-    context.data(|data| {
-        data.get_temp::<LifecycleRegistry>(registry_id())
-            .and_then(|registry| registry.entries.get(&token.id).copied())
-            .is_some_and(|entry| {
-                entry.generation == token.generation
-                    && (matches!(
-                        entry.state,
-                        ChildViewLifecycle::Visible | ChildViewLifecycle::DormantHosted
-                    ) || (entry.state == ChildViewLifecycle::TemporarilyHidden
-                        && entry.dormant_host))
-            })
-    })
+struct ChildPaint {
+    token: LifecycleToken,
+    spec: ChildViewSpec,
+    appearance: egui::Theme,
+    captures: CaptureController,
+    style: std::sync::Arc<egui::Style>,
+}
+impl ChildPaint {
+    fn paint(
+        &self,
+        ui: &mut egui::Ui,
+        class: egui::ViewportClass,
+        mut body: impl FnMut(&mut egui::Ui, ChildViewInput),
+    ) {
+        if !callback_is_live(ui.ctx(), self.token) {
+            return;
+        }
+        let _span = crate::performance::span(self.spec.capture_target);
+        self.captures
+            .begin_viewport(ui.ctx(), self.spec.capture_target);
+        ui.set_style(self.style.clone());
+        if class != egui::ViewportClass::EmbeddedWindow {
+            sync_native_theme(ui.ctx(), self.appearance);
+        }
+        let input = ui.ctx().input(|input| ChildViewInput {
+            focused: input.viewport().focused,
+            close_requested: input.viewport().close_requested(),
+            escape_pressed: input.key_pressed(egui::Key::Escape),
+        });
+        body(ui, input);
+        self.captures
+            .end_glow_viewport(ui, self.spec.capture_target);
+    }
 }
 
 impl ChildViewHost {
@@ -277,25 +249,15 @@ impl ChildViewHost {
         let Some(token) = begin_lifecycle(context, id, spec) else {
             return;
         };
-        let captures = captures.clone();
-        let style = style.clone();
+        let paint = ChildPaint {
+            token,
+            spec,
+            appearance,
+            captures: captures.clone(),
+            style: style.clone(),
+        };
         crate::viewport_fonts::show_deferred(context, id, spec.viewport(), move |ui, class| {
-            if !callback_is_live(ui.ctx(), token) {
-                return;
-            }
-            let _span = crate::performance::span(spec.capture_target);
-            captures.begin_viewport(ui.ctx(), spec.capture_target);
-            ui.set_style(style.clone());
-            if class != egui::ViewportClass::EmbeddedWindow {
-                sync_native_theme(ui.ctx(), appearance);
-            }
-            let input = ui.ctx().input(|input| ChildViewInput {
-                focused: input.viewport().focused,
-                close_requested: input.viewport().close_requested(),
-                escape_pressed: input.key_pressed(egui::Key::Escape),
-            });
-            body(ui, input);
-            captures.end_glow_viewport(ui, spec.capture_target);
+            paint.paint(ui, class, |ui, input| body(ui, input));
         });
     }
 
@@ -311,7 +273,7 @@ impl ChildViewHost {
         mut body: impl FnMut(&mut egui::Ui, ChildViewInput),
     ) {
         debug_assert!(matches!(
-            (spec.role, spec.focus),
+            (spec.role, spec.role.focus_policy()),
             (ChildViewRole::Persistent, FocusPolicy::Preserve)
                 | (ChildViewRole::Modal, FocusPolicy::SuspendOnBlur)
                 | (ChildViewRole::DismissOnBlur, FocusPolicy::DismissOnBlur)
@@ -322,36 +284,28 @@ impl ChildViewHost {
             return;
         };
         let viewport = spec.viewport();
+        let paint = ChildPaint {
+            token,
+            spec,
+            appearance,
+            captures: captures.clone(),
+            style: style.clone(),
+        };
         crate::viewport_fonts::show_immediate(context, id, viewport, |ui, class| {
-            if !callback_is_live(ui.ctx(), token) {
-                return;
-            }
-            let _span = crate::performance::span(spec.capture_target);
-            captures.begin_viewport(ui.ctx(), spec.capture_target);
-            ui.set_style(style.clone());
-            if class != egui::ViewportClass::EmbeddedWindow {
-                sync_native_theme(ui.ctx(), appearance);
-            }
-            let input = ui.ctx().input(|input| ChildViewInput {
-                focused: input.viewport().focused,
-                close_requested: input.viewport().close_requested(),
-                escape_pressed: input.key_pressed(egui::Key::Escape),
-            });
-            body(ui, input);
-            captures.end_glow_viewport(ui, spec.capture_target);
+            paint.paint(ui, class, &mut body);
         });
     }
 
     pub(crate) fn hide(context: &egui::Context, salt: &'static str) {
         let id = scoped_child_viewport_id(context, salt);
-        if transition_lifecycle(context, id, ChildViewLifecycle::TemporarilyHidden, false) {
+        if crate::window_host::transition(context, id, ChildViewLifecycle::TemporarilyHidden) {
             context.send_viewport_cmd_to(id, egui::ViewportCommand::Visible(false));
         }
     }
 
     pub(crate) fn close(context: &egui::Context, salt: &'static str) {
         let id = scoped_child_viewport_id(context, salt);
-        if transition_lifecycle(context, id, ChildViewLifecycle::DurablyClosed, true) {
+        if crate::window_host::transition(context, id, ChildViewLifecycle::DurablyClosed) {
             context.send_viewport_cmd_to(id, egui::ViewportCommand::Close);
             crate::font_preview::dispose_viewport(context, id);
         }
@@ -359,26 +313,7 @@ impl ChildViewHost {
 
     pub(crate) fn dormant_owner(context: &egui::Context) {
         let owner = context.viewport_id();
-        let closed = context.data_mut(|data| {
-            let registry = data.get_temp_mut_or_default::<LifecycleRegistry>(registry_id());
-            if !registry.dormant_owners.insert(owner) {
-                return Vec::new();
-            }
-            let mut closed = Vec::new();
-            for (id, entry) in &mut registry.entries {
-                if entry.owner != owner {
-                    continue;
-                }
-                if entry.dormant_host {
-                    entry.state = ChildViewLifecycle::DormantHosted;
-                } else {
-                    entry.state = ChildViewLifecycle::DurablyClosed;
-                    entry.generation = entry.generation.wrapping_add(1);
-                    closed.push(*id);
-                }
-            }
-            closed
-        });
+        let closed = crate::window_host::retire_owner(context, owner);
         for id in closed {
             context.send_viewport_cmd_to(id, egui::ViewportCommand::Close);
             crate::font_preview::dispose_viewport(context, id);
@@ -387,34 +322,8 @@ impl ChildViewHost {
 
     pub(crate) fn resume_owner(context: &egui::Context) {
         let owner = context.viewport_id();
-        context.data_mut(|data| {
-            data.get_temp_mut_or_default::<LifecycleRegistry>(registry_id())
-                .dormant_owners
-                .remove(&owner);
-        });
+        crate::window_host::resume_owner(context, owner);
     }
-}
-
-fn transition_lifecycle(
-    context: &egui::Context,
-    id: egui::ViewportId,
-    state: ChildViewLifecycle,
-    invalidate_callbacks: bool,
-) -> bool {
-    context.data_mut(|data| {
-        let registry = data.get_temp_mut_or_default::<LifecycleRegistry>(registry_id());
-        let Some(entry) = registry.entries.get_mut(&id) else {
-            return false;
-        };
-        if entry.state == state {
-            return false;
-        }
-        entry.state = state;
-        if invalidate_callbacks {
-            entry.generation = entry.generation.wrapping_add(1);
-        }
-        true
-    })
 }
 
 fn sync_native_theme(context: &egui::Context, appearance: egui::Theme) {
@@ -658,7 +567,7 @@ mod tests {
         };
         assert_eq!(position, owner.min);
         assert_eq!(size, owner.size());
-        assert_eq!(spec.focus, FocusPolicy::SuspendOnBlur);
+        assert_eq!(spec.role.focus_policy(), FocusPolicy::SuspendOnBlur);
     }
 
     #[test]
@@ -675,7 +584,7 @@ mod tests {
         };
         assert_eq!(inner, Vec2::new(800.0, 700.0));
         assert_eq!(minimum, Vec2::new(480.0, 360.0));
-        assert_eq!(spec.focus, FocusPolicy::Preserve);
+        assert_eq!(spec.role.focus_policy(), FocusPolicy::Preserve);
     }
 
     #[test]

@@ -415,16 +415,17 @@ fn workspace_snapshots_are_shared_and_notifications_replace_frame_polling() {
 fn child_resources_follow_explicit_lifecycle_and_native_properties_are_diffed() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let child = fs::read_to_string(root.join("child_view.rs")).unwrap();
-    for required in [
-        "TemporarilyHidden",
-        "DurablyClosed",
-        "DormantHosted",
-        "callback_is_live",
-        "dispose_viewport",
-    ] {
+    let host = fs::read_to_string(root.join("window_host.rs")).unwrap();
+    for required in ["TemporarilyHidden", "DurablyClosed", "DormantHosted"] {
+        assert!(
+            host.contains(required),
+            "missing shared lifecycle {required}"
+        );
+    }
+    for required in ["window_host::", "callback_is_live", "dispose_viewport"] {
         assert!(
             child.contains(required),
-            "missing child lifecycle {required}"
+            "child bypasses shared lifecycle {required}"
         );
     }
     let native = fs::read_to_string(root.join("app/native_views.rs")).unwrap();
@@ -649,4 +650,32 @@ fn screenshot_fixtures_have_one_owner_and_git_has_no_capture_only_window() {
             .unwrap()
             .contains("struct QaSession")
     );
+}
+
+#[test]
+fn native_identity_and_focus_have_single_owners() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let native = fs::read_to_string(root.join("native_window.rs")).unwrap();
+    for forbidden in ["keyWindow(", "GetActiveWindow", "active_window_handle"] {
+        assert!(
+            !native.contains(forbidden),
+            "native identity inferred from focus"
+        );
+    }
+    for relative in [
+        "app.rs",
+        "app/native_views.rs",
+        "app/settings_view.rs",
+        "app/editor_view.rs",
+        "app/tooltips.rs",
+        "window_logo.rs",
+        "windowing.rs",
+    ] {
+        let source = fs::read_to_string(root.join(relative)).unwrap();
+        let production = source.split("#[cfg(test)]\nmod tests").next().unwrap();
+        assert!(
+            !production.contains("ViewportCommand::Focus"),
+            "{relative} bypasses focus admission"
+        );
+    }
 }

@@ -1,8 +1,16 @@
 //! Mutations cannot be superseded. Completion outlives the initiating window.
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
-static DETACHED: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+use std::sync::{Arc, Mutex};
+
+fn detached(context: &egui::Context) -> Arc<Mutex<Vec<String>>> {
+    context.data_mut(|data| {
+        data.get_temp_mut_or_default::<Arc<Mutex<Vec<String>>>>(egui::Id::new(
+            "detached-operation-completions",
+        ))
+        .clone()
+    })
+}
 static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) fn has_active_operations() -> bool {
@@ -24,18 +32,17 @@ impl Drop for ActiveOperation {
     }
 }
 
-pub(crate) fn take_detached_completions() -> Vec<String> {
-    std::mem::take(
-        &mut *DETACHED
-            .get_or_init(Default::default)
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()),
-    )
+pub(crate) fn take_detached_completions(context: &egui::Context) -> Vec<String> {
+    std::mem::take(&mut *detached(context).lock().unwrap_or_else(|e| e.into_inner()))
 }
 
 #[cfg(test)]
-pub(crate) fn take_matching_detached_completion(needle: &str) -> Option<String> {
-    let mut messages = DETACHED.get_or_init(Default::default).lock().unwrap();
+pub(crate) fn take_matching_detached_completion(
+    context: &egui::Context,
+    needle: &str,
+) -> Option<String> {
+    let queue = detached(context);
+    let mut messages = queue.lock().unwrap();
     let index = messages
         .iter()
         .position(|message| message.contains(needle))?;
@@ -57,7 +64,11 @@ impl OperationSummary for () {
     }
 }
 
-fn retain_completion<T: OperationSummary>(name: &str, result: Result<T, String>) {
+fn retain_completion<T: OperationSummary>(
+    context: &egui::Context,
+    name: &str,
+    result: Result<T, String>,
+) {
     let message = match result {
         Ok(value) => format!(
             "{name} completed after its window closed: {}",
@@ -65,8 +76,7 @@ fn retain_completion<T: OperationSummary>(name: &str, result: Result<T, String>)
         ),
         Err(error) => format!("{name} failed after its window closed: {error}"),
     };
-    DETACHED
-        .get_or_init(Default::default)
+    detached(context)
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .push(message);
@@ -124,7 +134,7 @@ impl<T: OperationSummary + Send + 'static> ExclusiveJob<T> {
                     drop(completion);
                     owner.request_repaint();
                 } else {
-                    retain_completion(&name, result);
+                    retain_completion(&shell.context, &name, result);
                     drop(completion);
                     shell.request_repaint();
                 }
@@ -162,11 +172,11 @@ impl<T: OperationSummary> Drop for ExclusiveJob<T> {
         if let Some(active) = self.active.take() {
             let mut completion = active.lock().unwrap_or_else(|e| e.into_inner());
             completion.owner_open = false;
-            if let Some(result) = completion.result.take() {
-                retain_completion(&self.name, result);
-                if let Some(shell) = &self.shell {
-                    shell.request_repaint();
-                }
+            if let Some(result) = completion.result.take()
+                && let Some(shell) = &self.shell
+            {
+                retain_completion(&shell.context, &self.name, result);
+                shell.request_repaint();
             }
         }
     }
@@ -175,6 +185,23 @@ impl<T: OperationSummary> Drop for ExclusiveJob<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn detached_completions_belong_to_their_application_context() {
+        let first = egui::Context::default();
+        let second = egui::Context::default();
+        retain_completion(&first, "first", Ok(()));
+        retain_completion(&second, "second", Ok(()));
+        assert_eq!(
+            take_detached_completions(&first),
+            vec!["first completed after its window closed: Done"]
+        );
+        assert!(take_detached_completions(&first).is_empty());
+        assert_eq!(
+            take_detached_completions(&second),
+            vec!["second completed after its window closed: Done"]
+        );
+    }
+
     #[test]
     fn second_mutation_is_rejected_and_closed_owner_completion_reaches_shell() {
         let context = egui::Context::default();
@@ -202,6 +229,9 @@ mod tests {
                 .unwrap(),
             egui::ViewportId::ROOT
         );
-        assert!(take_matching_detached_completion("exclusive-test-mutation completed").is_some());
+        assert!(
+            take_matching_detached_completion(&context, "exclusive-test-mutation completed")
+                .is_some()
+        );
     }
 }

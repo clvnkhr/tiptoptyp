@@ -113,7 +113,7 @@ impl EditorApp {
         );
         if close_requested {
             self.packages_visible = false;
-            context.send_viewport_cmd(egui::ViewportCommand::Focus);
+            crate::window_host::return_focus(context);
         }
         if refresh_requested {
             self.request_package_catalog(context);
@@ -196,7 +196,7 @@ impl EditorApp {
         match requested_action {
             Some(TableEditorUiAction::Cancel) => {
                 self.table_editor = None;
-                context.send_viewport_cmd(egui::ViewportCommand::Focus);
+                crate::window_host::return_focus(context);
             }
             Some(TableEditorUiAction::Apply) => {
                 let mut dialog = self.table_editor.take().expect("table editor exists");
@@ -218,7 +218,7 @@ impl EditorApp {
                             message: "Updated table".to_owned(),
                             kind: NoticeKind::Success,
                         });
-                        context.send_viewport_cmd(egui::ViewportCommand::Focus);
+                        crate::window_host::return_focus(context);
                     }
                     Err(error) => {
                         dialog.error = Some(error);
@@ -298,12 +298,12 @@ impl EditorApp {
             self.rename_dialog = None;
             self.rename_overlay_had_focus = false;
             self.rename_overlay_suspended = false;
-            context.send_viewport_cmd(egui::ViewportCommand::Focus);
+            crate::window_host::return_focus(context);
         } else if submit {
             let dialog = self.rename_dialog.take().expect("rename dialog exists");
             self.rename_overlay_had_focus = false;
             self.rename_overlay_suspended = false;
-            context.send_viewport_cmd(egui::ViewportCommand::Focus);
+            crate::window_host::return_focus(context);
             self.commit_rename(dialog.path, dialog.name, context);
         }
     }
@@ -406,15 +406,15 @@ impl EditorApp {
             context.request_repaint();
         } else if let Some(path) = selected {
             self.workspace_chooser_visible = false;
-            context.send_viewport_cmd(egui::ViewportCommand::Focus);
+            crate::window_host::return_focus(context);
             self.queue_open_path(path);
         } else if choose_folder {
             self.workspace_chooser_visible = false;
-            context.send_viewport_cmd(egui::ViewportCommand::Focus);
+            crate::window_host::return_focus(context);
             self.open_folder_dialog();
         } else if cancel || dismiss {
             self.workspace_chooser_visible = false;
-            context.send_viewport_cmd(egui::ViewportCommand::Focus);
+            crate::window_host::return_focus(context);
         }
     }
 
@@ -586,7 +586,7 @@ impl EditorApp {
             .take_modal()
             .expect("modal exists while handling its choice");
         self.document_workflow.clear_modal();
-        context.send_viewport_cmd(egui::ViewportCommand::Focus);
+        crate::window_host::return_focus(context);
         match (modal, choice) {
             (AppModal::Alert { .. }, _) => {}
             (AppModal::RevertGit { request, .. }, AppModalChoice::Primary) => {
@@ -905,7 +905,11 @@ impl EditorApp {
                     pointer_inside_viewport,
                 );
                 if popup_interacted {
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
+                    crate::window_host::focus(
+                        ui.ctx(),
+                        ui.ctx().viewport_id(),
+                        crate::window_host::FocusCause::UserAction,
+                    );
                 }
             },
         );
@@ -1270,7 +1274,7 @@ impl EditorApp {
         // Only an in-app menu selection should return keyboard focus to the
         // editor; reclaiming it on blur makes tiptoptyp steal activation.
         if action_selected {
-            context.send_viewport_cmd(egui::ViewportCommand::Focus);
+            crate::window_host::return_focus(context);
         }
         if let Some(action) = action {
             self.pending_app_popup_action = Some(action);
@@ -1319,7 +1323,9 @@ impl EditorApp {
             visible,
         };
         if self.webview.is_none() {
-            let focused = context.input(|input| input.viewport().focused);
+            let focused = eframe::window_host::window(context, context.viewport_id())
+                .map(|window| window.has_focus())
+                .or_else(|| context.input(|input| input.viewport().focused));
             let may_create =
                 may_create_window_webview(self.window_host, cfg!(target_os = "macos"), focused);
             if !may_create {

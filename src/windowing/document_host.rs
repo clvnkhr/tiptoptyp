@@ -139,10 +139,19 @@ impl DocumentToken {
             state.focused = focused;
             let editor = &mut state.editor;
             let before = editor.shell_signal();
-            let close_requested = ui.ctx().input(|input| input.viewport().close_requested());
+            let close_requested = ui.ctx().input(|input| input.viewport().close_requested())
+                || crate::window_host::close_requested(ui.ctx(), ui.ctx().viewport_id());
             editor.ui_in_window(ui, None);
             state.closed = !editor.process_close_pending()
                 && (editor.close_accepted() || (close_requested && !editor.is_dirty_for_close()));
+            if state.closed {
+                crate::window_host::acknowledge_close(ui.ctx(), ui.ctx().viewport_id());
+                crate::window_host::transition(
+                    ui.ctx(),
+                    ui.ctx().viewport_id(),
+                    crate::window_host::Lifecycle::DurablyClosed,
+                );
+            }
             if state.closed
                 || focus_changed
                 || editor.shell_signal() != before

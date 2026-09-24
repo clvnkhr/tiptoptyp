@@ -23,8 +23,7 @@ proof that all three symptoms have one cause.
 3. The root document rediscovered its native parent from AppKit's key window,
    despite eframe supplying its exact window handle. It now retains the supplied
    handle even while inactive. This prevents a stale egui focus observation from
-   attaching root previews or dialogs to a popup or another document. Deferred
-   document callbacks still lack a supplied handle; that gap remains explicit.
+   attaching root previews or dialogs to a popup or another document. The shared-host implementation below also binds deferred documents directly.
 
 ## What the tests actually establish
 
@@ -45,63 +44,94 @@ owner-routing and pure geometry coverage. However:
   native coverage while occluded/minimized. eframe's logic-only path preserves
   pending input, so absence of a UI pass alone is not proof of a dropped event.
 
-## Architecture direction
+## Implemented shared host
 
-Use one **WindowHost** per real top-level window and one process-level registry.
-The host owns native identity, creation policy and lifetime; views return typed
-intents instead of issuing arbitrary window commands. Build on the existing
-ChildViewHost generation registry, rather than introducing a second registry.
+`window_host` is the single registry for document and child-window lifetimes.
+`ChildViewHost` delegates to it; immediate and deferred rendering share
+`ChildPaint` for style, native theme, input and capture handling. Document and
+persistent-tool creation share `window_policy::document`; transient surfaces
+share the popup policy. The old independent child registry is removed.
 
-The registry key is `(ViewportId, generation)`, bound by the platform integration
-when a native window is created, never inferred from keyboard focus. A retained
-handle alone is insufficient: it can keep an obsolete view alive after recreation.
-Use owner tokens to admit preview attachments, file dialogs and focus requests;
-reject tokens from earlier generations. Root handle binding is implemented here;
-complete deferred binding requires an eframe integration hook, not matching
-window titles or enumerating whichever NSWindow happens to be key.
+The small eframe patch binds each viewport to its actual native window before
+calling its UI. Bindings are weak and renderer-assigned, with monotonic native
+identities. Both native renderers publish them. `native_window::for_viewport`
+uses this exact binding for root/deferred previews and Settings file dialogs;
+key-window/active-window identity discovery is removed. No native handle is
+inferred from keyboard focus. The bundled real-window test checks four distinct
+owners and invariant identities through focus, minimize and visibility changes.
 
-Model lifetime, visibility and activation separately. Minimization and app
-inactivity do not destroy a document; close is an acknowledged transaction with
-an owner and request identifier. UI painting cannot consume the only copy of a
-close request. Keep pending close work until canceled or committed, including
-when no UI pass runs. Effects such as Reveal, Focus and Retire are emitted once
-from transitions. Background completion and ordinary repaint cannot activate a
-window. Modal dismissal can return focus only while the application remains
-active and the owner generation still exists.
+Host tokens include a registry-wide, non-reused generation. Closing or replacing
+a native surface invalidates callbacks and pending results. Retired entries are
+pruned after native removal; reusing an egui ID cannot resurrect an old token.
+Native bindings retain no windows; callback validation rejects expired bindings.
 
-Reduce the number of real windows. Menus, tooltips and modal cards should ideally
-be egui layers inside their owner. Native previews are the reason those layers
-currently need separate windows. For texture-backed previews, use in-window
-overlays directly. For native previews, put composition behind a PreviewSurface
-interface: either render into the owner, or temporarily replace the native view
-with its retained snapshot while an overlay is open. Do not switch until
-selection, scrolling, accessibility, IME and snapshot freshness are validated.
-Settings and independent documents remain true windows. Removing native popup
-windows eliminates their activation/reparenting/shadow bugs by construction.
+Close requests have sequence numbers and remain pending until the document
+accepts delivery into its existing revision-checked save/discard transaction.
+The input hook admits them before painting. A busy document retains its request.
+The eframe adapter also dispatches close to hidden/minimized deferred viewports:
+those have no separate logic callback to answer it. Hidden idle windows still
+skip UI. Native tests cancel and then commit close while a document is minimized.
 
-## Acceptance gates for the next host migration
+All production native focus commands go through the host. Requests distinguish
+user activation from a return after child dismissal. Returning focus requires a
+live, visible, restored owner and current platform application activation.
+Explicit activation waits for asynchronous restoration to make the window
+visible before dispatch; it is consumed once on native input, without a timer
+or idle repaint loop. A pending request started while active is canceled if the
+application becomes inactive. Native recreation/retirement cancels old requests.
+Preview creation uses current native focus, rather than delayed egui focus input.
 
-- Sequence tests: create, focus, blur, minimize, restore, popup handoff, dirty
-  close/cancel, close/commit, stale callback, recreate, sibling close and quit.
-  Generate event permutations and assert no cross-owner effect, no resurrection,
-  exactly one close result, and no activation from repaint/background work.
-- Adapter tests assert native identity survives visibility/focus changes, and
-  generation changes exactly once on genuine recreation. Test actual builder
-  patches, not only expected builder values.
-- A dedicated native desktop lane must launch an isolated fixture with isolated
-  preferences, then exercise Cmd+M, Cmd+Tab/return, restore, traffic-light close,
-  Cmd+W, dirty cancel, two documents and Settings. A missing desktop is reported
-  as unavailable, not as a passing native test. Verify visible focus and shadow
-  with whole-window observation; retain viewport images only for their scope.
-- Keep the existing fast tests. Do not replace them with brittle pixel matching
-  or broad source-string assertions. Source checks enforce boundaries, not
-  behavioral correctness.
+## Tests and native lane
 
-The present changes add no timers, workers, per-frame I/O or unbounded buffers.
-They remove accidental native recreation during focus changes. No timing or
-cross-platform performance claim is made.
+- Enumerate all 100,000 five-event sequences over ten lifecycle operations:
+  show, hide, retire, close request, acknowledgement, owner retirement/resume,
+  native replacement, stale callback and duplicate close. Assert sibling
+  isolation, irreversible token invalidation and exactly-once acknowledgement.
+- Exhaust every focus-policy input combination. Test pending restore delivery,
+  stale focus after reopen, hidden close delivery, generation changes, and
+  bounded registry storage over 1,000 close/reopen/prune cycles.
+- Exercise egui's actual builder patching, existing child-lifecycle and semantic
+  window tests. Architecture checks enforce the shared registry and focus
+  boundary; these checks do not substitute for behavioral tests.
+- `python3 scripts/test-native-windows.py` builds a dedicated macOS app bundle,
+  launches it, and requires its fresh success report. It uses a copied executable,
+  unique bundle ID and output directory. A bare command-line test can remain
+  inactive on macOS; treating that as an app-bundle acceptance test is unreliable.
+  `--prepare-only` prepares the same fixture for a desktop controller.
+- The native fixture checks document/tool/popup decorations, buttons and native
+  shadow properties, distinct exact owners, stable identity, minimize/restore,
+  focus handoff, minimized close/cancel/commit and Settings hide/reopen. It has
+  a 20-second internal deadline and the runner has a 45-second external watchdog.
+  Missing desktop access, timeout or a missing report fails; none silently pass.
+  The manually selected `native_windows` CI job runs this lane separately from
+  the ordinary headless suite and retains its report.
 
-## Validation evidence from this pass
+These are exhaustive bounded model checks, not a proof about every possible
+OS event sequence. Actual Cmd+Tab keyboard routing, IME/accessibility behavior
+inside native previews, and the WindowServer's visible exterior shadow still
+need desktop observation. Native `has_shadow` is a property assertion, not a
+pixel-level claim.
+
+## Further simplification
+
+Moving transient cards into their owner's egui layers remains a separate preview
+composition migration. Native Tinymist child views currently cover egui layers.
+Removing their overlay windows requires a tested texture/snapshot composition
+interface, including selection, scrolling, IME and accessibility. This change
+keeps their existing composition and makes their native ownership/lifetime
+explicit; it does not silently replace interactive previews with screenshots.
+
+The host adds no workers, timers, per-frame I/O or unbounded event queues. Weak
+bindings and registry access clone an Arc rather than the complete window map.
+Detached operation completions are scoped to the application context, so an
+independent shell cannot drain another shell’s queue. A parallel profiling test
+exposed the former process-global queue race; the isolation regression exercises
+two contexts and exactly-once draining.
+
+Retired entries are collected; ordinary repaint cannot issue focus or recreate
+windows. No CPU/FPS or cross-platform performance improvement is claimed.
+
+## Initial audit evidence (before shared-host implementation)
 
 Required format, strict Clippy, 1,219 Rust tests and 15 xtask tests passed (27
 Rust tests ignored by the normal suite).
@@ -118,3 +148,20 @@ status 0. The accessibility tree did not establish whether minimize/app-switch
 transitions completed; this is a close smoke check, not a reproduction of the
 reported failure. The observation crop excludes exterior shadow, which remains
 unverified. No native preview bounds change was made.
+
+## Shared-host validation (2026-09-24)
+
+On macOS arm64 14.6.1, Rust 1.98.1, the standard suite passed 1,231 tests and
+profiling passed 1,239, with 27 explicitly ignored in each configuration.
+The packaging suite passed all 15 tests. Formatting and strict all-targets
+Clippy were checked, including profiling and the native fixture feature.
+The final rebuild disabled incremental compilation after the local disk filled;
+only this worktree's disposable incremental cache was removed.
+
+The fresh bundle prepared by `scripts/test-native-windows.py --prepare-only`
+was launched through the desktop controller. Its report at
+`.tiptoptyp/native-window-tests/run-26de3sog/result.txt` was:
+`completed=true cancellations=1 closed=true failure=None`.
+This verifies the native contract described above; it is not screenshot evidence
+or a remote CI result. No preview geometry or maintained screenshot contract was
+changed by the shared-host refactor.

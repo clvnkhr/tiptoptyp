@@ -764,8 +764,8 @@ fn may_create_window_webview(
         EditorWindowHost::Root => {
             may_create_embedded_webview(prevent_background_activation, focused)
         }
-        // The active platform handle is only an exact match for a secondary
-        // child viewport while egui reports that same viewport focused.
+        // Delay secondary preview creation until the user activates it.
+        // Native parent identity is independently supplied by the renderer.
         EditorWindowHost::Secondary => focused == Some(true),
     }
 }
@@ -1248,7 +1248,7 @@ pub struct EditorApp {
     tinymist_sync: crate::tinymist_sync::Coordinator,
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    native_window_parent: Option<crate::native_window::ActiveWindowHandle>,
+    native_window_parent: Option<crate::native_window::NativeWindowHandle>,
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     webview: Option<wry::WebView>,
     #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -1876,7 +1876,11 @@ impl EditorApp {
                 .send_viewport_cmd_to(child, egui::ViewportCommand::Visible(self.settings_visible));
             if self.settings_visible {
                 context.send_viewport_cmd_to(child, egui::ViewportCommand::Minimized(false));
-                context.send_viewport_cmd_to(child, egui::ViewportCommand::Focus);
+                crate::window_host::focus(
+                    context,
+                    child,
+                    crate::window_host::FocusCause::UserAction,
+                );
             }
         }
         // Drain canceled service results without accepting them or retrying.
@@ -3333,7 +3337,7 @@ impl EditorApp {
             crate::child_view::child_viewport_id(egui::ViewportId::ROOT, "tiptoptyp-settings");
         context.send_viewport_cmd_to(child, egui::ViewportCommand::Visible(true));
         context.send_viewport_cmd_to(child, egui::ViewportCommand::Minimized(false));
-        context.send_viewport_cmd_to(child, egui::ViewportCommand::Focus);
+        crate::window_host::focus(context, child, crate::window_host::FocusCause::UserAction);
         context.request_repaint_of(egui::ViewportId::ROOT);
         context.request_repaint_of(child);
     }
@@ -3822,7 +3826,8 @@ impl EditorApp {
             context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             return;
         }
-        let close_requested = context.input(|input| input.viewport().close_requested());
+        let close_requested = context.input(|input| input.viewport().close_requested())
+            || crate::window_host::close_requested(context, context.viewport_id());
         if close_request_requires_confirmation(
             close_requested,
             self.is_dirty_for_close(),
@@ -3830,11 +3835,12 @@ impl EditorApp {
             self.snapshot_scene.is_some(),
         ) {
             context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            if self.document_workflow.modal().is_none() {
+            if self.document_workflow.modal().is_none() && !self.document_flow_busy() {
                 self.request_document_replacement(
                     DeferredDocumentAction::CloseWindow,
                     "closing tiptoptyp",
                 );
+                crate::window_host::acknowledge_close(context, context.viewport_id());
             }
         }
     }
@@ -3895,20 +3901,25 @@ impl EditorApp {
             return Some(dialog.set_parent(frame));
         }
 
-        self.show_file_error(
-            "The active document window is not available yet; focus it and try again".to_owned(),
-        );
+        self.show_file_error("The document window is not available yet; try again".to_owned());
         None
     }
 
-    fn settings_file_dialog(&mut self, _frame: Option<&eframe::Frame>) -> Option<AsyncFileDialog> {
+    fn settings_file_dialog(
+        &mut self,
+        _frame: Option<&eframe::Frame>,
+        context: &egui::Context,
+    ) -> Option<AsyncFileDialog> {
         let dialog = AsyncFileDialog::new();
 
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
-            let Some(parent) = crate::native_window::active_window_handle() else {
+            let Some(parent) = crate::native_window::for_viewport(
+                context,
+                crate::child_view::child_viewport_id(egui::ViewportId::ROOT, "tiptoptyp-settings"),
+            ) else {
                 self.show_file_error(
-                    "The Settings window is not active yet; focus it and try again".to_owned(),
+                    "The Settings window is not available yet; try again".to_owned(),
                 );
                 return None;
             };
@@ -4336,7 +4347,7 @@ impl EditorApp {
             ToolPickerTarget::UiFont => "Choose UI font",
             ToolPickerTarget::CodeFont => "Choose code font",
         };
-        let Some(dialog) = self.settings_file_dialog(frame) else {
+        let Some(dialog) = self.settings_file_dialog(frame, settings_context) else {
             return;
         };
         let mut dialog = dialog.set_title(title);
@@ -7043,7 +7054,11 @@ impl EditorApp {
                 data.insert_temp(id, state);
             }
         });
-        context.send_viewport_cmd(egui::ViewportCommand::Focus);
+        crate::window_host::focus(
+            context,
+            context.viewport_id(),
+            crate::window_host::FocusCause::UserAction,
+        );
     }
 
     fn focus_requested_tooltip(&mut self, context: &egui::Context) {
@@ -8024,11 +8039,9 @@ impl EditorApp {
         context: &egui::Context,
         frame: Option<&eframe::Frame>,
     ) {
-        let supplied = frame.and_then(crate::native_window::ActiveWindowHandle::from_owner);
-        if supplied.is_none() && context.input(|input| input.viewport().focused) != Some(true) {
-            return;
-        }
-        let Some(parent) = supplied.or_else(crate::native_window::active_window_handle) else {
+        let parent = crate::native_window::for_viewport(context, context.viewport_id())
+            .or_else(|| frame.and_then(crate::native_window::NativeWindowHandle::from_owner));
+        let Some(parent) = parent else {
             return;
         };
         let changed = self

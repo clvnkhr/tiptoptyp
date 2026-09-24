@@ -34,7 +34,11 @@ impl EditorApp {
                 context.viewport_id()
             };
             if self.lifecycle.allows_document_work() || self.shortcut_editor_visible {
-                context.send_viewport_cmd_to(target, egui::ViewportCommand::Focus);
+                crate::window_host::focus(
+                    context,
+                    target,
+                    crate::window_host::FocusCause::UserAction,
+                );
             }
         }
     }
@@ -253,7 +257,7 @@ impl EditorApp {
             } else {
                 context.viewport_id()
             };
-            context.send_viewport_cmd_to(target, egui::ViewportCommand::Focus);
+            crate::window_host::focus(context, target, crate::window_host::FocusCause::UserAction);
         }
     }
 

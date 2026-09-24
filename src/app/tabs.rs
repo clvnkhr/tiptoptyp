@@ -71,7 +71,7 @@ impl Tabs {
     #[cfg(target_os = "macos")]
     pub(super) fn suppress_native_drag(
         &mut self,
-        parent: Option<&crate::native_window::ActiveWindowHandle>,
+        parent: Option<&crate::native_window::NativeWindowHandle>,
         suppress: bool,
     ) {
         if !suppress || parent.is_none() {

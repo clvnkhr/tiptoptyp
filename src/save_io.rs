@@ -146,7 +146,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             if let Some(message) =
-                crate::worker::take_matching_detached_completion("slow-save-test")
+                crate::worker::take_matching_detached_completion(&context, "slow-save-test")
             {
                 assert!(message.contains("Saved"));
                 assert!(message.contains("after its window closed"));

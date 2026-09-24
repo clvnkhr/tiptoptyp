@@ -464,7 +464,11 @@ impl EditorApp {
                     // child. Move native keyboard ownership back to the root
                     // before focusing TextEdit, otherwise macOS continues to
                     // deliver Option+Arrow word navigation to the WebView.
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
+                    crate::window_host::focus(
+                        ui.ctx(),
+                        ui.ctx().viewport_id(),
+                        crate::window_host::FocusCause::UserAction,
+                    );
                     output.response.request_focus();
                 }
                 let cursor_rect = output

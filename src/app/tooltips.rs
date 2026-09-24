@@ -1098,7 +1098,11 @@ pub(super) fn show_native_tooltip_card(
                 pointer_inside_viewport,
             );
             if popup_interacted && !dismiss_requested {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
+                crate::window_host::focus(
+                    ui.ctx(),
+                    ui.ctx().viewport_id(),
+                    crate::window_host::FocusCause::UserAction,
+                );
             }
         },
     );

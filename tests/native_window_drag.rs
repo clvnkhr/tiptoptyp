@@ -40,9 +40,9 @@ fn check() {
     let second = make_window();
     first.setMovable(true);
     second.setMovable(true);
-    let parent = native_window::ActiveWindowHandle::from_test_view(first.contentView().unwrap());
-    let other = native_window::ActiveWindowHandle::from_test_view(second.contentView().unwrap());
-    let retained = native_window::ActiveWindowHandle::from_owner(&parent).unwrap();
+    let parent = native_window::NativeWindowHandle::from_test_view(first.contentView().unwrap());
+    let other = native_window::NativeWindowHandle::from_test_view(second.contentView().unwrap());
+    let retained = native_window::NativeWindowHandle::from_owner(&parent).unwrap();
     assert!(retained.is_same_window(&parent));
     assert!(!retained.is_same_window(&other));
 

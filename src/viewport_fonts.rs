@@ -32,13 +32,23 @@ pub(crate) fn show_deferred(
     }
     // Deferred painting has no nested parent/child texture-delta ordering to
     // repair, so it needs neither an atlas copy nor an extra upload here.
-    context.show_viewport_deferred(id, creation_options(builder, exists), body);
+    let Some(token) = crate::window_host::ensure(context, id, context.viewport_id()) else {
+        return;
+    };
+    let owner = context.viewport_id();
+    context.show_viewport_deferred(id, creation_options(builder, exists), move |ui, class| {
+        if crate::window_host::live(ui.ctx(), token) {
+            body(ui, class);
+        } else {
+            ui.ctx().request_repaint_of(owner);
+        }
+    });
 }
 pub(crate) fn show_immediate(
     context: &egui::Context,
     id: egui::ViewportId,
     builder: egui::ViewportBuilder,
-    body: impl FnMut(&mut egui::Ui, egui::ViewportClass),
+    mut body: impl FnMut(&mut egui::Ui, egui::ViewportClass),
 ) {
     let changed =
         context.data(|data| data.get_temp::<u64>(egui::Id::new("native-appearance-frame")));
@@ -53,7 +63,14 @@ pub(crate) fn show_immediate(
         context.request_repaint();
         return;
     }
-    context.show_viewport_immediate(id, creation_options(builder, exists), body);
+    let Some(token) = crate::window_host::ensure(context, id, context.viewport_id()) else {
+        return;
+    };
+    context.show_viewport_immediate(id, creation_options(builder, exists), |ui, class| {
+        if crate::window_host::live(ui.ctx(), token) {
+            body(ui, class);
+        }
+    });
     if !context.embed_viewports() {
         after_immediate_viewport(context);
     }

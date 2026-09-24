@@ -1,13 +1,11 @@
-//! Retained native window handles. Prefer the host-supplied handle; keyboard
-//! focus is only a bootstrap fallback for deferred windows whose eframe
-//! callback does not expose its native handle.
+//! Native ownership comes from the renderer's viewport binding, never focus.
 
 #[cfg(target_os = "macos")]
 mod platform {
     use std::{ffi::c_void, ptr::NonNull};
 
     use objc2::{MainThreadMarker, rc::Retained};
-    use objc2_app_kit::{NSApplication, NSView, NSWindow};
+    use objc2_app_kit::{NSView, NSWindow};
     use raw_window_handle::{
         AppKitWindowHandle, DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle,
         RawWindowHandle, WindowHandle,
@@ -16,11 +14,11 @@ mod platform {
     /// A retained AppKit content view keeps the borrowed raw handle valid for
     /// the complete Wry/rfd construction call.
     #[derive(Clone)]
-    pub(crate) struct ActiveWindowHandle {
+    pub(crate) struct NativeWindowHandle {
         view: Retained<NSView>,
     }
 
-    impl ActiveWindowHandle {
+    impl NativeWindowHandle {
         pub(crate) fn from_owner(owner: &impl HasWindowHandle) -> Option<Self> {
             let RawWindowHandle::AppKit(handle) = owner.window_handle().ok()?.as_raw() else {
                 return None;
@@ -75,13 +73,13 @@ mod platform {
     /// Retains the exact document window and restores its previous policy on
     /// pointer exit, focus loss, viewport replacement, or session destruction.
     pub(crate) struct TitlebarDragGuard {
-        parent: ActiveWindowHandle,
+        parent: NativeWindowHandle,
         window: Retained<NSWindow>,
         was_movable: bool,
     }
 
     impl TitlebarDragGuard {
-        pub(crate) fn matches_parent(&self, parent: &ActiveWindowHandle) -> bool {
+        pub(crate) fn matches_parent(&self, parent: &NativeWindowHandle) -> bool {
             self.parent.is_same_window(parent)
         }
     }
@@ -92,7 +90,7 @@ mod platform {
         }
     }
 
-    impl HasWindowHandle for ActiveWindowHandle {
+    impl HasWindowHandle for NativeWindowHandle {
         fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
             let view = NonNull::from(&*self.view).cast::<c_void>();
             let raw = RawWindowHandle::AppKit(AppKitWindowHandle::new(view));
@@ -103,44 +101,28 @@ mod platform {
         }
     }
 
-    impl HasDisplayHandle for ActiveWindowHandle {
+    impl HasDisplayHandle for NativeWindowHandle {
         fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
             Ok(DisplayHandle::appkit())
         }
-    }
-
-    pub(crate) fn active_window_handle() -> Option<ActiveWindowHandle> {
-        let marker = MainThreadMarker::new()?;
-        let application = NSApplication::sharedApplication(marker);
-        if !application.isActive() {
-            return None;
-        }
-        let window = application.keyWindow()?;
-        let view = window.contentView()?;
-        Some(ActiveWindowHandle { view })
     }
 }
 
 #[cfg(target_os = "windows")]
 mod platform {
-    use std::{ffi::c_void, num::NonZeroIsize};
+    use std::num::NonZeroIsize;
 
     use raw_window_handle::{
         DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawWindowHandle,
         Win32WindowHandle, WindowHandle,
     };
 
-    #[link(name = "user32")]
-    unsafe extern "system" {
-        fn GetActiveWindow() -> *mut c_void;
-    }
-
     #[derive(Clone, Copy)]
-    pub(crate) struct ActiveWindowHandle {
+    pub(crate) struct NativeWindowHandle {
         hwnd: NonZeroIsize,
     }
 
-    impl ActiveWindowHandle {
+    impl NativeWindowHandle {
         pub(crate) fn from_owner(owner: &impl HasWindowHandle) -> Option<Self> {
             let RawWindowHandle::Win32(handle) = owner.window_handle().ok()?.as_raw() else {
                 return None;
@@ -153,7 +135,7 @@ mod platform {
         }
     }
 
-    impl HasWindowHandle for ActiveWindowHandle {
+    impl HasWindowHandle for NativeWindowHandle {
         fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
             let raw = RawWindowHandle::Win32(Win32WindowHandle::new(self.hwnd));
             // SAFETY: the foreground HWND remains owned by the running winit
@@ -162,23 +144,15 @@ mod platform {
         }
     }
 
-    impl HasDisplayHandle for ActiveWindowHandle {
+    impl HasDisplayHandle for NativeWindowHandle {
         fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
             Ok(DisplayHandle::windows())
         }
     }
-
-    pub(crate) fn active_window_handle() -> Option<ActiveWindowHandle> {
-        // SAFETY: this is a read-only Win32 query. A null pointer means the
-        // current event-loop thread has no active window and is handled
-        // without constructing a raw handle.
-        let hwnd = unsafe { GetActiveWindow() } as isize;
-        NonZeroIsize::new(hwnd).map(|hwnd| ActiveWindowHandle { hwnd })
-    }
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-pub(crate) use platform::{ActiveWindowHandle, active_window_handle};
+pub(crate) use platform::NativeWindowHandle;
 
 #[cfg(target_os = "macos")]
 pub(crate) use platform::TitlebarDragGuard;
@@ -200,26 +174,48 @@ pub(crate) fn enable_native_webview_magnification(webview: &wry::WebView) {
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[derive(Clone, Copy)]
-pub(crate) struct ActiveWindowHandle;
+pub(crate) struct NativeWindowHandle;
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-impl ActiveWindowHandle {
+impl NativeWindowHandle {
     pub(crate) fn is_same_window(&self, _other: &Self) -> bool {
         true
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub(crate) fn active_window_handle() -> Option<ActiveWindowHandle> {
-    None
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub(crate) fn for_viewport(
+    context: &eframe::egui::Context,
+    id: eframe::egui::ViewportId,
+) -> Option<NativeWindowHandle> {
+    let window = eframe::window_host::window(context, id)?;
+    NativeWindowHandle::from_owner(window.as_ref())
+}
+
+/// Fresh platform activation beats delayed egui focus observations. Headless
+/// tests have no native binding and deliberately use their injected input.
+pub(crate) fn application_active(context: &eframe::egui::Context) -> Option<bool> {
+    eframe::window_host::window(context, context.viewport_id())?;
+    #[cfg(target_os = "macos")]
+    {
+        let marker = objc2::MainThreadMarker::new()?;
+        Some(objc2_app_kit::NSApplication::sharedApplication(marker).isActive())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let ids = context.input(|input| input.raw.viewports.keys().copied().collect::<Vec<_>>());
+        Some(ids.into_iter().any(|id| {
+            eframe::window_host::window(context, id).is_some_and(|window| window.has_focus())
+        }))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn platform_handle_api_is_non_panicking_without_a_window() {
-        // Merely exercising the symbol in unit-test mode catches target-gated
-        // import and raw-window-handle drift. No application window is created.
-        let _ = super::active_window_handle();
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    fn absent_viewport_never_falls_back_to_another_window() {
+        let context = eframe::egui::Context::default();
+        assert!(super::for_viewport(&context, eframe::egui::ViewportId::ROOT).is_none());
     }
 }
