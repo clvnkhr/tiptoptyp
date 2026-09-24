@@ -61,9 +61,9 @@ impl UiCaptureStep {
 /// Deterministic app state used by launch-time visual QA.
 ///
 /// Each variant names one themed component family. The target identifies the
-/// framebuffer that actually contains it: menus and cards rendered above the
-/// native preview live in transparent child viewports, while panels and the
-/// find bar remain in the root app viewport.
+/// framebuffer that actually contains it: menus, cards, and find/replace above
+/// the native preview live in transparent child viewports; ordinary panels
+/// remain in the root app viewport.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum UiSnapshotScene {
     TableEditor,
@@ -270,8 +270,6 @@ impl UiSnapshotScene {
             | Self::TerminalIcons
             | Self::ExplorerDrop
             | Self::ExplorerMaximized
-            | Self::FindReplace
-            | Self::FindStickyContext
             | Self::PreviewCompiling
             | Self::PdfiumPreview => ROOT_VIEWPORT_NAME,
             Self::FileMenu
@@ -280,6 +278,7 @@ impl UiSnapshotScene {
             | Self::ExplorerContextMenu
             | Self::DocumentFontSelector
             | Self::StatusLog => "popup",
+            Self::FindReplace | Self::FindStickyContext => "find-replace",
             Self::AssetPreview => "asset-hover",
             Self::GitPanel => ROOT_VIEWPORT_NAME,
             Self::GitEditor => ROOT_VIEWPORT_NAME,

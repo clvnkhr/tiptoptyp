@@ -1096,23 +1096,111 @@ impl EditorApp {
             ui.ctx().request_repaint();
         }
 
-        // Find/Replace sits above the sticky rows without reserving layout space.
-        if self.find_bar.visible {
-            let context = ui.ctx().clone();
-            let overlay_width = (scroll_output.inner_rect.width() - 4.0 * theme::SPACE.content)
-                .clamp(1.0, METRICS.editor.find_overlay_max_width);
-            let anchor = scroll_output.inner_rect.left_top()
-                + egui::vec2(theme::SPACE.content, theme::SPACE.content);
-            egui::Area::new(viewport_scoped_id(&context, "find-replace-overlay"))
+        self.show_find_overlay(ui, scroll_output.inner_rect);
+    }
+
+    fn show_find_overlay(&mut self, ui: &mut egui::Ui, editor: Rect) {
+        let context = ui.ctx().clone();
+        let owner_id = context.viewport_id();
+        if !self.find_bar.visible {
+            ChildViewHost::close(&context, find_bar::VIEWPORT_SALT);
+            return;
+        }
+        if self.snapshot_scene.is_none()
+            && context.input(|input| input.viewport().focused) == Some(false)
+            && !owner_has_focused_viewport(&context, owner_id, true)
+        {
+            // A modeless tool remains open logically, but must not float above
+            // another document or application when its owner loses focus.
+            ChildViewHost::close(&context, find_bar::VIEWPORT_SALT);
+            return;
+        }
+        let owner = context.content_rect();
+        let bounds =
+            find_bar::overlay_bounds(owner, editor, self.find_bar.native_height.unwrap_or(120.0));
+        // Embedded integrations have no native child views to cover. Preserve
+        // an ordinary foreground Area for their accessibility and input routing.
+        if context.embed_viewports() {
+            egui::Area::new(viewport_scoped_id(&context, find_bar::VIEWPORT_SALT))
                 .order(egui::Order::Foreground)
-                .fixed_pos(anchor)
-                .constrain_to(ui.clip_rect())
+                .fixed_pos(bounds.min)
+                .constrain_to(owner)
                 .show(&context, |ui| {
                     theme::popup_card_frame(ui.style()).show(ui, |ui| {
-                        ui.set_max_width(overlay_width);
+                        ui.set_max_width(bounds.width());
                         self.show_find_bar(ui);
                     });
                 });
+            return;
+        }
+        let Some(window) = context.input(|input| input.viewport().inner_rect) else {
+            return;
+        };
+        let appearance = context.theme();
+        let style = context.style_of(appearance);
+        let frame = theme::tooltip_card_frame(&style);
+        let focus = self.find_bar.focus;
+        let child = scoped_child_viewport_id(&context, find_bar::VIEWPORT_SALT);
+        let spec = ChildViewSpec::modeless_popup(
+            find_bar::VIEWPORT_SALT,
+            "tiptoptyp Find/Replace",
+            bounds.translate(window.min.to_vec2()),
+            focus,
+            "find-replace",
+        );
+        if focus {
+            crate::window_host::focus(&context, child, crate::window_host::FocusCause::UserAction);
+        }
+        let mut actions = find_bar::FindBarActions::default();
+        let source = self.tabs.current_record().document.source();
+        let key = self.document().key();
+        let editable = self.table_editor.is_none();
+        ChildViewHost::show(
+            &context,
+            &self.captures,
+            spec,
+            appearance,
+            &style,
+            |ui, input| {
+                if input.escape_pressed || input.close_requested {
+                    self.find_bar.close();
+                    actions.closed = true;
+                    return;
+                }
+                let response = frame.show(ui, |ui| {
+                    ui.set_width((bounds.width() - frame.total_margin().sum().x).max(1.0));
+                    actions = find_bar::show(ui, &mut self.find_bar, source, key, editable);
+                });
+                let height = response
+                    .response
+                    .rect
+                    .height()
+                    .ceil()
+                    .min(owner.height() - 2.0 * theme::SPACE.content)
+                    .max(1.0);
+                if self.find_bar.native_height != Some(height) {
+                    self.find_bar.native_height = Some(height);
+                    context.request_repaint_of(owner_id);
+                }
+            },
+        );
+        // Document edits and cursor history belong to the owner, not the child.
+        self.apply_find_actions(
+            &context,
+            actions.previous,
+            actions.next,
+            actions.replace_one,
+            actions.replace_all,
+        );
+        if actions.closed {
+            ChildViewHost::close(&context, find_bar::VIEWPORT_SALT);
+            crate::window_host::focus(
+                &context,
+                context.viewport_id(),
+                crate::window_host::FocusCause::UserAction,
+            );
+            let editor_id = source_editor_id(&context);
+            context.memory_mut(|memory| memory.request_focus(editor_id));
         }
     }
 

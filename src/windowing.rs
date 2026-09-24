@@ -94,6 +94,17 @@ impl AppShell {
         open_requests: OpenRequestReceiver,
         native_menu_commands: NativeMenuReceiver,
     ) -> Self {
+        // Queue before constructing the document: deterministic preview setup
+        // depends on a pending capture, including the first serial batch step.
+        let mut remaining = VecDeque::from(capture_steps);
+        let capture_batch = remaining.pop_front().map(|first| CaptureBatch {
+            active_request: captures
+                .queue_step(&first)
+                .expect("a screenshot batch enables its capture controller"),
+            active_scene: first.scene,
+            remaining,
+            close_when_finished: captures.closes_after_captures(),
+        });
         let primary = EditorApp::new(
             context,
             initial_path,
@@ -113,15 +124,6 @@ impl AppShell {
             VecDeque::new()
         };
         open_requests.set_repaint_context(context.egui_ctx.clone());
-        let mut remaining = VecDeque::from(capture_steps);
-        let capture_batch = remaining.pop_front().map(|first| CaptureBatch {
-            active_request: captures
-                .queue_step(&first)
-                .expect("a screenshot batch enables its capture controller"),
-            active_scene: first.scene,
-            remaining,
-            close_when_finished: captures.closes_after_captures(),
-        });
         Self {
             primary: DocumentHost::new(primary),
             closing: Default::default(),

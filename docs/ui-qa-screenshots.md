@@ -101,8 +101,8 @@ The accepted scenes and their framebuffer targets are:
 | `explorer-maximized` | `main` | Files section filling Explorer, with sibling sections hidden |
 | `terminal-panel` | `main` | Shared bottom panel with deterministic libghostty colors, Unicode and cursor; no shell is spawned |
 | `problems-panel` | `main` | Expanded Problems panel with diagnostics |
-| `find-replace` | `main` | Find and replace controls |
-| `find-sticky-context` | `main` | Find/replace above scrolled sticky rows, with the current match count |
+| `find-replace` | `find-replace` | Find and replace controls |
+| `find-sticky-context` | `find-replace` | Find/replace controls and match count for the scrolled sticky-context fixture |
 | `preview-compiling` | `main` | Compiling status and empty preview state |
 | `pdfium-preview` | `main` | Actual bundled PDFium pixels and native egui controls; requires `fetch-pdfium` |
 

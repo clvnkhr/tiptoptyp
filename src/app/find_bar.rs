@@ -17,6 +17,7 @@ pub(super) struct FindBarState {
     pub(super) case_sensitive: bool,
     pub(super) regex: bool,
     pub(super) focus: bool,
+    pub(super) native_height: Option<f32>,
 }
 
 impl Default for FindBarState {
@@ -30,8 +31,34 @@ impl Default for FindBarState {
             case_sensitive: true,
             regex: false,
             focus: false,
+            native_height: None,
         }
     }
+}
+
+pub(super) const VIEWPORT_SALT: &str = "find-replace-overlay";
+
+/// Owner-local bounds may cross the editor/preview divider, never the window edge.
+pub(super) fn overlay_bounds(owner: egui::Rect, editor: egui::Rect, height: f32) -> egui::Rect {
+    let inset = theme::SPACE
+        .content
+        .min(owner.width().min(owner.height()).max(0.0) * 0.25);
+    let available = owner.shrink(inset);
+    let width = METRICS
+        .editor
+        .find_overlay_max_width
+        .min(available.width())
+        .max(1.0);
+    let height = height.min(available.height()).max(1.0);
+    let x = (editor.left() + inset).clamp(
+        available.left(),
+        (available.right() - width).max(available.left()),
+    );
+    let y = (editor.top() + inset).clamp(
+        available.top(),
+        (available.bottom() - height).max(available.top()),
+    );
+    egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(width, height))
 }
 
 pub(super) fn query_id(context: &egui::Context) -> egui::Id {
@@ -50,6 +77,16 @@ pub(super) fn overlay_layer(context: &egui::Context) -> egui::LayerId {
 }
 
 pub(super) fn has_focus(context: &egui::Context) -> bool {
+    let child = crate::child_view::scoped_child_viewport_id(context, VIEWPORT_SALT);
+    if context.input(|input| {
+        input
+            .raw
+            .viewports
+            .get(&child)
+            .is_some_and(|info| info.focused == Some(true))
+    }) {
+        return true;
+    }
     let focused = context.memory(|memory| memory.focused());
     focused.is_some_and(|id| {
         id == query_id(context)
@@ -204,6 +241,24 @@ pub(super) fn show(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlay_crosses_the_editor_divider_but_stays_inside_its_owner() {
+        let owner = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 600.0));
+        let editor = egui::Rect::from_min_max(egui::pos2(200.0, 60.0), egui::pos2(480.0, 550.0));
+        let bounds = overlay_bounds(owner, editor, 100.0);
+        assert!(bounds.right() > editor.right());
+        assert!(owner.contains_rect(bounds));
+        assert_eq!(bounds.width(), METRICS.editor.find_overlay_max_width);
+        for size in [egui::vec2(320.0, 200.0), egui::vec2(1.0, 1.0)] {
+            let owner = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+            let bounds = overlay_bounds(owner, owner, 500.0);
+            assert!(bounds.is_finite() && bounds.is_positive());
+            if size.x > 1.0 {
+                assert!(owner.contains_rect(bounds));
+            }
+        }
+    }
 
     #[test]
     fn default_bar_is_closed_and_keeps_search_state_local() {

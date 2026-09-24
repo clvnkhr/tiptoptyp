@@ -136,6 +136,27 @@ impl ChildViewSpec {
         }
     }
 
+    /// A fixed, modeless tool surface above native document content.
+    pub(crate) fn modeless_popup(
+        id_salt: &'static str,
+        title: &'static str,
+        bounds: Rect,
+        active: bool,
+        capture_target: &'static str,
+    ) -> Self {
+        Self {
+            role: ChildViewRole::Persistent,
+            ..Self::tooltip(
+                id_salt,
+                title,
+                bounds.min,
+                bounds.size(),
+                active,
+                capture_target,
+            )
+        }
+    }
+
     pub(crate) fn with_visible(mut self, visible: bool) -> Self {
         self.visible = Some(visible);
         self
@@ -395,6 +416,22 @@ pub(crate) fn popup_focus_should_close(
 mod tests {
     use super::*;
     use std::{cell::RefCell, rc::Rc};
+
+    #[test]
+    fn modeless_tool_surfaces_use_popup_alpha_without_blur_dismissal() {
+        let spec = ChildViewSpec::modeless_popup(
+            "find",
+            "Find",
+            Rect::from_min_size(Pos2::ZERO, Vec2::new(620.0, 90.0)),
+            false,
+            "find-replace",
+        );
+        assert_eq!(spec.role.focus_policy(), FocusPolicy::Preserve);
+        let viewport = spec.viewport();
+        assert_eq!(viewport.transparent, Some(true));
+        assert_eq!(viewport.decorations, Some(false));
+        assert_eq!(viewport.active, Some(false));
+    }
 
     #[test]
     fn deferred_tooltip_does_not_paint_during_parent_frames() {

@@ -49,8 +49,8 @@ scene	terminal-panel	main	main-terminal-panel	component	-	-
 scene	terminal-maximized	main	main-terminal-maximized	targeted	-	-
 scene	explorer-maximized	main	main-explorer-maximized	targeted	-	-
 scene	problems-panel	main	main-problems-panel	component	-	-
-scene	find-replace	main	main-find-replace	component	-	-
-scene	find-sticky-context	main	main-find-sticky-context	targeted	-	-
+scene	find-replace	find-replace	find-replace	component	transparent	-
+scene	find-sticky-context	find-replace	find-replace-find-sticky-context	targeted	transparent	-
 scene	preview-compiling	main	main-preview-compiling	component	-	-
 scene	pdfium-preview	main	main-pdfium-preview	component	-	-
 scene	file-menu	popup	popup-file-menu	component	transparent	-

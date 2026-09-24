@@ -8349,3 +8349,133 @@ fn failed_tinymist_never_starts_a_pdf_renderer() {
             .contains("unavailable")
     );
 }
+
+#[test]
+fn native_find_child_routes_query_and_escape_to_its_owner() {
+    use std::{cell::RefCell, rc::Rc};
+    let context = egui::Context::default();
+    context.set_embed_viewports(false);
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let child_events = events.clone();
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let child_seen = seen.clone();
+    egui::Context::set_immediate_viewport_renderer(move |context, mut child| {
+        child_seen
+            .borrow_mut()
+            .push((child.ids.this, child.ids.parent, child.builder.inner_size));
+        let mut input = egui::RawInput {
+            viewport_id: child.ids.this,
+            screen_rect: Some(Rect::from_min_size(
+                Pos2::ZERO,
+                child.builder.inner_size.unwrap(),
+            )),
+            events: std::mem::take(&mut *child_events.borrow_mut()),
+            ..Default::default()
+        };
+        input.viewports.insert(
+            child.ids.this,
+            egui::ViewportInfo {
+                parent: Some(child.ids.parent),
+                focused: Some(true),
+                ..Default::default()
+            },
+        );
+        context
+            .run_ui(input, |ui| (child.viewport_ui_cb)(ui))
+            .drop_without_applying_deltas();
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+    app.document_mut()
+        .replace_unprojected_untitled("alpha beta alpha");
+    app.snapshot_scene = None;
+    app.open_find(false);
+    let frame = |app: &mut EditorApp| {
+        let mut input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 600.0))),
+            ..Default::default()
+        };
+        input
+            .viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .unwrap()
+            .inner_rect = input.screen_rect;
+        context
+            .run_ui(input, |ui| {
+                ui.set_max_width(300.0);
+                app.show_editor(ui);
+            })
+            .drop_without_applying_deltas();
+    };
+    frame(&mut app);
+    events.borrow_mut().push(egui::Event::Text("alpha".into()));
+    frame(&mut app);
+    assert_eq!(app.find_bar.query, "alpha");
+    assert_eq!(app.find_bar.search.selected_ordinal(), Some(1));
+    assert_eq!(app.document().source(), "alpha beta alpha");
+    assert!(seen.borrow().iter().any(|(id, parent, size)| *id
+        == crate::child_view::child_viewport_id(egui::ViewportId::ROOT, find_bar::VIEWPORT_SALT)
+        && *parent == egui::ViewportId::ROOT
+        && size.unwrap().x > 300.0));
+    let paints = seen.borrow().len();
+    let mut inactive = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 600.0))),
+        ..Default::default()
+    };
+    inactive
+        .viewports
+        .get_mut(&egui::ViewportId::ROOT)
+        .unwrap()
+        .focused = Some(false);
+    context
+        .run_ui(inactive, |ui| app.show_editor(ui))
+        .drop_without_applying_deltas();
+    assert_eq!(
+        seen.borrow().len(),
+        paints,
+        "inactive owner must hide its floating surface"
+    );
+    assert!(
+        app.find_bar.visible,
+        "hiding must retain the search session"
+    );
+    assert_eq!(app.find_bar.query, "alpha");
+    events.borrow_mut().push(egui::Event::Key {
+        key: egui::Key::Escape,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    });
+    frame(&mut app);
+    assert!(!app.find_bar.visible);
+    assert_eq!(
+        context.memory(|memory| memory.focused()),
+        Some(source_editor_id(&context))
+    );
+}
+
+#[test]
+fn native_find_edit_commands_do_not_target_the_still_focused_source_widget() {
+    let context = egui::Context::default();
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+    let child =
+        crate::child_view::child_viewport_id(egui::ViewportId::ROOT, find_bar::VIEWPORT_SALT);
+    let mut input = egui::RawInput::default();
+    input.viewports.insert(
+        child,
+        egui::ViewportInfo {
+            parent: Some(egui::ViewportId::ROOT),
+            focused: Some(true),
+            ..Default::default()
+        },
+    );
+    context.run_ui(input, |ui| {
+        let editor = source_editor_id(ui.ctx());
+        ui.ctx().memory_mut(|memory| memory.request_focus(editor));
+        assert_eq!(focused_input_viewport(ui.ctx()), child);
+        assert!(app.route_edit_command_to_focused_widget(AppCommand::SelectAll, ui.ctx(), child));
+        assert!(ui.ctx().input_for(child, |input| input.events.iter().any(|event| matches!(event, egui::Event::Key { key: egui::Key::A, modifiers, .. } if modifiers.command))));
+    }).drop_without_applying_deltas();
+}

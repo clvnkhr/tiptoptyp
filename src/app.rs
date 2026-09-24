@@ -2819,7 +2819,8 @@ impl EditorApp {
             self.pending_widget_paste = None;
         }
         let editor_id = source_editor_id(context);
-        let source_focused = context.memory(|memory| memory.focused()) == Some(editor_id);
+        let source_focused = shortcut_viewport == context.viewport_id()
+            && context.memory(|memory| memory.focused()) == Some(editor_id);
         self.handle_editor_completion_keys(context);
         let completion_requested = source_focused
             && shortcuts
@@ -2852,7 +2853,9 @@ impl EditorApp {
                 });
             }
         }
-        let other_text_input_focused = !source_focused && context.egui_wants_keyboard_input();
+        let other_text_input_focused = shortcut_viewport
+            == scoped_child_viewport_id(context, find_bar::VIEWPORT_SALT)
+            || (!source_focused && context.egui_wants_keyboard_input());
         let can_sync_preview =
             self.document().kind().is_typst() && self.interactive_preview_active();
         let global_command = context.input_mut_for(shortcut_viewport, |input| {
@@ -3259,7 +3262,10 @@ impl EditorApp {
             return true;
         }
         let focused = context.memory(|memory| memory.focused());
-        if focused == Some(source_editor_id(context)) || !context.egui_wants_keyboard_input() {
+        let find_child = viewport == scoped_child_viewport_id(context, find_bar::VIEWPORT_SALT);
+        if !find_child
+            && (focused == Some(source_editor_id(context)) || !context.egui_wants_keyboard_input())
+        {
             return false;
         }
         match command {
@@ -3377,6 +3383,12 @@ impl EditorApp {
             && (!replace || self.find_bar.replace_visible)
         {
             self.find_bar.close();
+            ChildViewHost::close(context, find_bar::VIEWPORT_SALT);
+            crate::window_host::focus(
+                context,
+                context.viewport_id(),
+                crate::window_host::FocusCause::UserAction,
+            );
             let editor = source_editor_id(context);
             context.memory_mut(|memory| memory.request_focus(editor));
         } else {
@@ -10169,10 +10181,11 @@ fn source_editor_id(context: &egui::Context) -> egui::Id {
     viewport_scoped_id(context, "tiptoptyp-source-editor")
 }
 
-fn owned_input_viewports(current: egui::ViewportId) -> [egui::ViewportId; 12] {
+fn owned_input_viewports(current: egui::ViewportId) -> [egui::ViewportId; 13] {
     use crate::child_view::child_viewport_id;
     [
         current,
+        child_viewport_id(current, find_bar::VIEWPORT_SALT),
         child_viewport_id(current, "tiptoptyp-packages"),
         child_viewport_id(current, "tiptoptyp-table-editor"),
         child_viewport_id(current, "tiptoptyp-rename-overlay"),
