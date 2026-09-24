@@ -2433,16 +2433,14 @@ impl EditorApp {
     }
 
     fn update_image_residency(&mut self) {
-        let visible = if self.document().kind() == DocumentKind::Image {
-            self.asset_preview
-                .content
-                .pages()
-                .iter()
-                .filter_map(|page| page.resident.as_ref().map(|resident| resident.lease.id()))
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
+        let is_image = self.document().kind() == DocumentKind::Image;
+        let visible = self
+            .asset_preview
+            .content
+            .pages()
+            .iter()
+            .take(if is_image { usize::MAX } else { 0 })
+            .filter_map(|page| page.resident.as_ref().map(|resident| resident.lease.id()));
         crate::image_residency::set_owner_visible(self.document().key().owner, visible);
         if self.document().kind() == DocumentKind::Image
             && !self.asset_preview.has_resident_pages()

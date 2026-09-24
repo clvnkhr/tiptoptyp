@@ -1,0 +1,58 @@
+{
+  "date": "2026-09-24",
+  "host": "macOS 14.6.1 arm64 Apple M2 Max",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "build": "rustc -O scripts/probes/editor-allocation.rs -o /tmp/editor-allocation",
+  "baseline": "original copy/clone primitives",
+  "after": "borrow and move/restore primitives",
+  "warmup_per_sample": 100,
+  "iterations_per_sample": 2000,
+  "scope": "Warm headless primitive microbenchmark; both variants in same optimized binary with same fixtures; no task build/test running. Excludes parsing, layout, active editing, startup, GUI. No viewport/theme. Match ranges represent byte and character pairs.",
+  "samples": [
+    {
+      "sample": 0,
+      "bytes": 1120000,
+      "matches": 10000,
+      "source_copy_ns": 74274,
+      "source_borrow_ns": 58801,
+      "matches_clone_ns": 6768,
+      "matches_move_ns": 6
+    },
+    {
+      "sample": 1,
+      "bytes": 1120000,
+      "matches": 10000,
+      "source_copy_ns": 94988,
+      "source_borrow_ns": 61267,
+      "matches_clone_ns": 7005,
+      "matches_move_ns": 6
+    },
+    {
+      "sample": 2,
+      "bytes": 1120000,
+      "matches": 10000,
+      "source_copy_ns": 107069,
+      "source_borrow_ns": 61553,
+      "matches_clone_ns": 8646,
+      "matches_move_ns": 5
+    },
+    {
+      "sample": 3,
+      "bytes": 1120000,
+      "matches": 10000,
+      "source_copy_ns": 99670,
+      "source_borrow_ns": 64148,
+      "matches_clone_ns": 6861,
+      "matches_move_ns": 10
+    },
+    {
+      "sample": 4,
+      "bytes": 1120000,
+      "matches": 10000,
+      "source_copy_ns": 104474,
+      "source_borrow_ns": 61896,
+      "matches_clone_ns": 7286,
+      "matches_move_ns": 6
+    }
+  ]
+}

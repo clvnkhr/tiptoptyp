@@ -61,7 +61,6 @@ impl EditorApp {
                 .map(|matched| EditorSelection::Search(matched.char_range.clone()));
         }
         if replace_one && self.table_editor.is_none() {
-            let before = self.document().source().clone();
             let snapshot = self.editor_snapshot(context);
             let find_query = &self.find_bar.query;
             let replacement = &self.find_bar.replacement;
@@ -79,19 +78,19 @@ impl EditorApp {
                     find_regex,
                 )
             });
+            let changed = document.key() != search_revision;
             if replaced {
                 self.pending_editor_selection = self
                     .find_bar
                     .search
                     .selected()
                     .map(|matched| EditorSelection::Search(matched.char_range.clone()));
-                if *self.document().source() != before {
+                if changed {
                     self.mark_edited();
                 }
             }
         }
         if replace_all && self.table_editor.is_none() {
-            let before = self.document().source().clone();
             let snapshot = self.editor_snapshot(context);
             let find_query = &self.find_bar.query;
             let replacement = &self.find_bar.replacement;
@@ -109,7 +108,8 @@ impl EditorApp {
                     find_regex,
                 )
             });
-            if count > 0 && *self.document().source() != before {
+            let changed = document.key() != search_revision;
+            if count > 0 && changed {
                 self.notice = Some(Notice {
                     message: format!("Replaced {count} matches"),
                     kind: NoticeKind::Success,
@@ -194,9 +194,17 @@ impl EditorApp {
         );
         let fold_marker_width = fold_marker.size().x + 8.0;
         self.folding_mut().set_marker_width(fold_marker_width);
-        let highlight_path = self.document().path().clone();
-        let asset_source_path = self.document().path().clone();
-        let asset_workspace_root = self.workspace_root.clone();
+        let highlight_path = (!document_kind.is_typst())
+            .then(|| self.document().path().clone())
+            .flatten();
+        let asset_source_path = document_kind
+            .typesetting_language()
+            .is_some()
+            .then(|| self.document().path().clone())
+            .flatten();
+        let asset_workspace_root = asset_source_path
+            .as_ref()
+            .map(|_| self.workspace_root.clone());
         let source_preview_trigger = self.settings.source_preview_trigger;
         let preview_jump_enabled = document_kind.is_typst() && self.interactive_preview_active();
         let sticky_context_enabled = document_kind.is_typst()
@@ -660,10 +668,11 @@ impl EditorApp {
                 && let Some((char_index, pointer)) = hover_position
             {
                 let asset_target = asset_source_path.as_deref().and_then(|source_path| {
+                    let workspace_root = asset_workspace_root.as_deref()?;
                     self.editor_data.literal_asset_target_at(
                         char_index,
                         source_path,
-                        &asset_workspace_root,
+                        workspace_root,
                     )
                 });
                 if let Some(target) = asset_target

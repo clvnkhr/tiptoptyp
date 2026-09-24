@@ -63,17 +63,17 @@ impl GenericSyntaxHighlighter {
     pub fn highlight(&mut self, source: &str, path: Option<&Path>, dark_mode: bool) -> LayoutJob {
         let extension = path
             .and_then(Path::extension)
-            .and_then(|extension| extension.to_str())
-            .map(str::to_ascii_lowercase);
+            .and_then(|extension| extension.to_str());
         if self.has_cache
             && self.cached_source == source
-            && self.cached_extension == extension
+            && extensions_match(self.cached_extension.as_deref(), extension)
             && self.cached_dark_mode == dark_mode
         {
             return self.cached_job.clone();
         }
 
-        let syntax = extension
+        let normalized_extension = extension.map(str::to_ascii_lowercase);
+        let syntax = normalized_extension
             .as_deref()
             .and_then(|extension| self.syntaxes.find_syntax_by_extension(extension))
             .or_else(|| {
@@ -87,7 +87,7 @@ impl GenericSyntaxHighlighter {
 
         self.cached_source.clear();
         self.cached_source.push_str(source);
-        self.cached_extension = extension;
+        self.cached_extension = normalized_extension;
         self.cached_dark_mode = dark_mode;
         self.cached_job = job.clone();
         self.has_cache = true;
@@ -139,6 +139,14 @@ impl GenericSyntaxHighlighter {
     }
 }
 
+fn extensions_match(cached: Option<&str>, current: Option<&str>) -> bool {
+    match (cached, current) {
+        (None, None) => true,
+        (Some(cached), Some(current)) => cached.eq_ignore_ascii_case(current),
+        _ => false,
+    }
+}
+
 fn syntect_format(style: Style, theme: &Theme) -> TextFormat {
     let color = syntect_color(style.foreground);
     // Syntect resolves the theme's global editor background into every style.
@@ -183,6 +191,19 @@ fn plain_format(dark_mode: bool) -> TextFormat {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extension_case_changes_preserve_highlighting() {
+        let mut highlighter = GenericSyntaxHighlighter::default();
+        let source = "fn main() { let value = 42; }";
+        let lower = highlighter.highlight(source, Some(Path::new("main.rs")), true);
+        let upper = highlighter.highlight(source, Some(Path::new("main.RS")), true);
+        assert_eq!(lower, upper);
+        let unknown = highlighter.highlight(source, Some(Path::new("main.unknown")), true);
+        assert_ne!(lower.sections, unknown.sections);
+        let no_extension = highlighter.highlight(source, Some(Path::new("main")), true);
+        assert_eq!(unknown, no_extension);
+    }
 
     #[test]
     fn highlighted_text_preserves_editor_byte_mapping() {

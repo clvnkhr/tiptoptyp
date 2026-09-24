@@ -328,7 +328,11 @@ impl SearchSession {
         if self.results.is_empty() {
             return 0;
         }
-        let matches = self.results.matches.clone();
+        // The cached matches are consumed while constructing the replacement
+        // buffer and are rebuilt by `prepare` below. Moving them avoids a
+        // second allocation proportional to the number of matches.
+        let matches = std::mem::take(&mut self.results.matches);
+        let match_count = matches.len();
         let mut result = String::with_capacity(text.len());
         let mut copied_until = 0;
         for matched in &matches {
@@ -339,15 +343,16 @@ impl SearchSession {
         result.push_str(&text[copied_until..]);
         let changed = result != *text;
         *text = result;
-        let next_document = if changed {
-            document.after_edit()
+        if changed {
+            self.prepare(text, document.after_edit(), query, case_sensitive, regex);
         } else {
-            document
-        };
-        self.prepare(text, next_document, query, case_sensitive, regex);
+            // `prepare` would return early for the unchanged document key;
+            // restore the moved cache instead of leaving a false empty result.
+            self.results.matches = matches;
+        }
         self.selected = None;
         self.anchored_selection = None;
-        matches.len()
+        match_count
     }
 
     fn prepare(
@@ -912,6 +917,25 @@ mod tests {
             4
         );
         assert_eq!(text, "aa baanaanaa");
+    }
+
+    #[test]
+    fn unchanged_replace_all_keeps_the_cached_matches() {
+        let mut text = "one two one".to_owned();
+        let mut search = SearchSession::default();
+        assert_eq!(
+            search.results(&text, revision(0), "one", true, false).len(),
+            2
+        );
+
+        assert_eq!(
+            search.replace_all(&mut text, revision(0), "one", "one", true, false,),
+            2
+        );
+        assert_eq!(
+            search.results(&text, revision(0), "one", true, false).len(),
+            2
+        );
     }
 
     #[test]

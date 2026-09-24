@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use eframe::egui::{
     Color32,
     text::{ByteIndex, LayoutJob, LayoutSection},
@@ -102,11 +104,13 @@ impl SyntaxHighlighter {
     ) -> LayoutJob {
         let _span = crate::performance::span("highlight.total");
         let parse_source = if code_mode {
-            typst_code_parse_source(source)
+            Cow::Owned(typst_code_parse_source(source))
         } else {
-            source.to_owned()
+            Cow::Borrowed(source)
         };
-        let source_changed = self.parsed_source.text() != parse_source;
+        // TextEdit may mutate its buffer before the document revision advances.
+        // Compare text even on cache hits, without copying the whole document.
+        let source_changed = self.parsed_source.text() != parse_source.as_ref();
         let syntect_revision = syntect.theme_revision();
         if self.has_cache
             && !source_changed
@@ -126,7 +130,7 @@ impl SyntaxHighlighter {
             // `replace` computes the common prefix/suffix and reparses only the
             // changed syntax-tree region. It is the incremental API supplied by
             // Typst itself.
-            self.parsed_source.replace(&parse_source);
+            self.parsed_source.replace(parse_source.as_ref());
         }
 
         #[cfg(test)]
@@ -941,6 +945,30 @@ fn contrast_text(background: Color32) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn highlighting_observes_buffer_edits_before_the_transaction_commits() {
+        use tiptoptyp_core::document::{DocumentKind, DocumentSession, WindowSessionId};
+        let mut document = DocumentSession::new(
+            WindowSessionId::new(1),
+            "#let value = 1",
+            DocumentKind::Typst,
+        );
+        let mut highlighter = SyntaxHighlighter::default();
+        let syntect = GenericSyntaxHighlighter::default();
+        let before = document.key();
+        document.edit((), |source| {
+            let original = highlighter.highlight(source, true, &syntect);
+            source.push_str("23");
+            let edited = highlighter.highlight(source, true, &syntect);
+            assert_eq!(edited.text, *source);
+            assert_ne!(original.text, edited.text);
+            assert_eq!(highlighter.cache_builds, 2);
+            assert_eq!(edited, highlighter.highlight(source, true, &syntect));
+            assert_eq!(highlighter.cache_builds, 2);
+        });
+        assert_ne!(document.key(), before);
+    }
     use crate::{
         sublime_theme::Rgba,
         syntax_theme::{TypstStyleOverrides, TypstSyntaxRole},
