@@ -207,3 +207,36 @@ repaints; focus history is bounded by live windows and read at input admission.
 
 Final checks: 1,233 standard tests and 15 packaging tests passed, along with
 formatting and strict all-targets Clippy (including the native test feature).
+
+## Find and empty-workspace corrections (2026-09-24)
+
+Find/replace keeps its native host across focus handoffs and temporarily hides
+it when the owner and tool both lose focus. A bounded 150 ms grace period lets
+native focus events arrive without repeatedly destroying and reopening the
+popup. Creation-only activation options also check the live native binding,
+because a parent's input snapshot can omit its child. Find shortcuts are
+consumed in the child's input pass; explicit close returns focus to the editor.
+Modeless controls resize without stale minimum/maximum constraints fighting
+Replace expansion. The card is capped at 460 logical pixels with smaller padding.
+
+Closing the last tab clears document popups and retires pending writing checks.
+Previously the writing-check debounce could request an active-tab path from an
+empty tab set and panic, taking the window down. The empty workspace remains
+open and does not grant a window-close request.
+
+Regressions cover repeated native Cmd+F closure, hidden-host registration,
+search retention, single-click Replace expansion/collapse and close, focus
+handoff grace, unconstrained modeless resizing, and the expired writing-check
+deadline after closing the last tab. Activity tests also verify identical label
+positions across every state. These changes add no recurring idle timer or
+background work; focus handoff schedules only a bounded follow-up repaint.
+
+Validation: formatting, strict all-target Clippy, the full Rust suite (including
+1,069 application unit tests), and all 15 tooling tests passed. The 23-image
+maintained gallery regenerated in one session and validated. Fresh framebuffers
+`.tiptoptyp/screenshots/panel-fixes/1790265410193-0001-find-replace.png` and
+`1790265410482-0003-main-activity-panel.png` were inspected: the Find controls fit
+on one compact row, Replace adds one row, and Activity labels wrap without state
+suffixes. The trace is retained beside them. This offline fixture uses PDFium
+and emits no native preview bounds; these captures verify individual viewports,
+not composed desktop overlap or every native focus transition.

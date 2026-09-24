@@ -176,13 +176,20 @@ impl ChildViewSpec {
                 .with_maximize_button(false)
                 .with_maximized(false)
                 .with_fullscreen(false),
-            ChildViewBounds::Fixed { position, size } => theme::popup_viewport_builder(self.title)
-                .with_position(position)
-                .with_inner_size(size)
-                .with_min_inner_size(size)
-                .with_max_inner_size(size)
-                .with_active(self.active)
-                .with_mouse_passthrough(self.mouse_passthrough),
+            ChildViewBounds::Fixed { position, size } => {
+                let builder = theme::popup_viewport_builder(self.title)
+                    .with_position(position)
+                    .with_inner_size(size)
+                    .with_active(self.active)
+                    .with_mouse_passthrough(self.mouse_passthrough);
+                // Modeless controls resize with their content. Conflicting old
+                // min/max constraints must not fight an expand/collapse update.
+                if self.role == ChildViewRole::Persistent {
+                    builder
+                } else {
+                    builder.with_min_inner_size(size).with_max_inner_size(size)
+                }
+            }
         };
         let mut viewport = decorate_child_viewport(viewport);
         viewport.visible = self.visible;
@@ -431,6 +438,9 @@ mod tests {
         assert_eq!(viewport.transparent, Some(true));
         assert_eq!(viewport.decorations, Some(false));
         assert_eq!(viewport.active, Some(false));
+        assert_eq!(viewport.min_inner_size, None);
+        assert_eq!(viewport.max_inner_size, None);
+        assert_eq!(viewport.resizable, Some(false));
     }
 
     #[test]

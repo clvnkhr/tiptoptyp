@@ -1106,21 +1106,30 @@ impl EditorApp {
             ChildViewHost::close(&context, find_bar::VIEWPORT_SALT);
             return;
         }
-        if self.snapshot_scene.is_none()
-            && context.input(|input| input.viewport().focused) == Some(false)
-            && !owner_has_focused_viewport(&context, owner_id, true)
-        {
-            // A modeless tool remains open logically, but must not float above
-            // another document or application when its owner loses focus.
-            ChildViewHost::close(&context, find_bar::VIEWPORT_SALT);
-            return;
+        let owner_focused = context.input(|input| input.viewport().focused) != Some(false);
+        let present =
+            self.snapshot_scene.is_some() || self.find_bar.present(owner_focused, Instant::now());
+        if self.find_bar.blur_started.is_some() && present {
+            context.request_repaint_after(Duration::from_millis(150));
         }
         let owner = context.content_rect();
-        let bounds =
-            find_bar::overlay_bounds(owner, editor, self.find_bar.native_height.unwrap_or(120.0));
+        let bounds = find_bar::overlay_bounds(
+            owner,
+            editor,
+            self.find_bar
+                .native_height
+                .unwrap_or(if self.find_bar.replace_visible {
+                    68.0
+                } else {
+                    40.0
+                }),
+        );
         // Embedded integrations have no native child views to cover. Preserve
         // an ordinary foreground Area for their accessibility and input routing.
         if context.embed_viewports() {
+            if !present {
+                return;
+            }
             egui::Area::new(viewport_scoped_id(&context, find_bar::VIEWPORT_SALT))
                 .order(egui::Order::Foreground)
                 .fixed_pos(bounds.min)
@@ -1138,7 +1147,9 @@ impl EditorApp {
         };
         let appearance = context.theme();
         let style = context.style_of(appearance);
-        let frame = theme::tooltip_card_frame(&style);
+        let frame = theme::popup_card_frame(&style)
+            .outer_margin(egui::Margin::same(2))
+            .inner_margin(egui::Margin::same(6));
         let focus = self.find_bar.focus;
         let child = scoped_child_viewport_id(&context, find_bar::VIEWPORT_SALT);
         let spec = ChildViewSpec::modeless_popup(
@@ -1147,7 +1158,9 @@ impl EditorApp {
             bounds.translate(window.min.to_vec2()),
             focus,
             "find-replace",
-        );
+        )
+        .with_visible(present)
+        .with_dormant_hosting(true);
         if focus {
             crate::window_host::focus(&context, child, crate::window_host::FocusCause::UserAction);
         }
@@ -1155,6 +1168,7 @@ impl EditorApp {
         let source = self.tabs.current_record().document.source();
         let key = self.document().key();
         let editable = self.table_editor.is_none();
+        let shortcuts = self.settings.effective_shortcuts();
         ChildViewHost::show(
             &context,
             &self.captures,
@@ -1162,7 +1176,35 @@ impl EditorApp {
             appearance,
             &style,
             |ui, input| {
-                if input.escape_pressed || input.close_requested {
+                let child_focused = present && input.focused == Some(true);
+                if self.find_bar.child_focused != child_focused {
+                    self.find_bar.child_focused = child_focused;
+                    context.request_repaint_of(owner_id);
+                }
+                if !present {
+                    return;
+                }
+                let shortcut = ui.ctx().input_mut(|input| {
+                    consume_shortcut_action(input, &shortcuts, |action| {
+                        matches!(
+                            action,
+                            ShortcutAction::Find
+                                | ShortcutAction::FindReplace
+                                | ShortcutAction::CloseTab
+                                | ShortcutAction::CloseWindow
+                        )
+                    })
+                });
+                let close_shortcut = match shortcut {
+                    Some(ShortcutAction::FindReplace) if !self.find_bar.replace_visible => {
+                        self.find_bar.replace_visible = true;
+                        self.find_bar.native_height = None;
+                        false
+                    }
+                    Some(_) => true,
+                    None => false,
+                };
+                if input.escape_pressed || input.close_requested || close_shortcut {
                     self.find_bar.close();
                     actions.closed = true;
                     return;

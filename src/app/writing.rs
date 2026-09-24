@@ -30,6 +30,18 @@ impl WritingState {
 }
 impl EditorApp {
     pub(super) fn update_writing_checks(&mut self, context: &egui::Context) {
+        if self.tabs.is_empty() {
+            self.writing.job.supersede();
+            self.writing.deadline = None;
+            self.writing.observed = None;
+            self.writing.skipped = Some("No document is open");
+            if !self.writing.diagnostics.is_empty() || !self.writing.markers.is_empty() {
+                self.writing.diagnostics.clear();
+                self.writing.markers.clear();
+                self.update_tex_diagnostics();
+            }
+            return;
+        }
         let key = self.document().key();
         let identity = (
             key,
@@ -112,5 +124,35 @@ impl EditorApp {
         {
             self.show_file_error(error);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn closing_the_last_tab_retires_writing_checks_without_requesting_a_document_path() {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_window_for_tests(
+            &context,
+            root.path().into(),
+            egui::ViewportId::ROOT,
+        );
+        app.lifecycle = DocumentLifecycle::Active;
+        app.settings.english_grammar = true;
+        app.settings.unicode_warnings = true;
+        app.finish_close_tab(&context);
+        app.writing.observed = Some((app.document().key(), true, true));
+        app.writing.deadline = Some(Instant::now() - Duration::from_secs(1));
+        app.update_writing_checks(&context);
+        assert!(app.tabs.is_empty());
+        assert!(!app.close_accepted());
+        assert!(app.writing.deadline.is_none());
+        assert!(!app.writing.job.is_running());
+        assert!(matches!(
+            app.writing.activity(),
+            crate::activity::Activity::Inactive(_)
+        ));
     }
 }

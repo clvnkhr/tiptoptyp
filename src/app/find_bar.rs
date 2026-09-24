@@ -18,6 +18,8 @@ pub(super) struct FindBarState {
     pub(super) regex: bool,
     pub(super) focus: bool,
     pub(super) native_height: Option<f32>,
+    pub(super) child_focused: bool,
+    pub(super) blur_started: Option<std::time::Instant>,
 }
 
 impl Default for FindBarState {
@@ -32,6 +34,8 @@ impl Default for FindBarState {
             regex: false,
             focus: false,
             native_height: None,
+            child_focused: false,
+            blur_started: None,
         }
     }
 }
@@ -98,8 +102,20 @@ pub(super) fn has_focus(context: &egui::Context) -> bool {
 }
 
 impl FindBarState {
+    pub(super) fn present(&mut self, owner_focused: bool, now: std::time::Instant) -> bool {
+        if self.focus || self.child_focused || owner_focused {
+            self.blur_started = None;
+            true
+        } else {
+            let since = *self.blur_started.get_or_insert(now);
+            now.saturating_duration_since(since) < std::time::Duration::from_millis(150)
+        }
+    }
+
     pub(super) fn close(&mut self) {
         self.visible = false;
+        self.child_focused = false;
+        self.blur_started = None;
         self.replace_visible = false;
         self.focus = false;
         // Closing changes presentation only. The revision/query-keyed session
@@ -208,6 +224,7 @@ pub(super) fn show(
             .clicked()
         {
             state.replace_visible = !state.replace_visible;
+            state.native_height = None;
         }
         actions.previous |= icon_button(ui, UiIcon::Up, "Previous match · Shift+Enter").clicked();
         actions.next |= icon_button(ui, UiIcon::Down, "Next match · Enter").clicked();
@@ -286,6 +303,60 @@ mod tests {
                 assert!(!harness.state().1);
             }
         }
+    }
+
+    #[test]
+    fn replace_toggle_and_close_need_only_one_click() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(460.0, 160.0))
+            .build_ui_state(
+                |ui, state: &mut FindBarState| {
+                    show(
+                        ui,
+                        state,
+                        "alpha",
+                        DocumentKey::new(tiptoptyp_core::document::WindowSessionId::new(1), 0, 0),
+                        true,
+                    );
+                },
+                FindBarState {
+                    visible: true,
+                    ..Default::default()
+                },
+            );
+        harness.run();
+        for expected in [true, false, true, false] {
+            harness
+                .get_all_by_role_and_label(egui::accesskit::Role::Button, "Replace")
+                .next()
+                .unwrap()
+                .click();
+            harness.run();
+            assert_eq!(harness.state().replace_visible, expected);
+        }
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::Button, "Close · Esc")
+            .click();
+        harness.run();
+        assert!(!harness.state().visible);
+    }
+
+    #[test]
+    fn native_focus_handoff_is_not_a_close_and_external_blur_hides_after_grace() {
+        let mut state = FindBarState {
+            visible: true,
+            ..Default::default()
+        };
+        let now = std::time::Instant::now();
+        assert!(state.present(false, now));
+        state.child_focused = true;
+        assert!(state.present(false, now + std::time::Duration::from_secs(1)));
+        state.child_focused = false;
+        assert!(state.present(false, now + std::time::Duration::from_secs(2)));
+        assert!(!state.present(false, now + std::time::Duration::from_secs(3)));
+        assert!(state.visible);
+        assert!(state.present(true, now + std::time::Duration::from_secs(4)));
     }
 
     #[test]

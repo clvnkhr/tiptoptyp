@@ -4,7 +4,9 @@ Open the bottom panel and select **Activity**, after Problems and Terminal.
 Compact status chips wrap horizontally, with their own remembered panel height
 (default 120 logical pixels, minimum 54). Hover a chip for its role, precise
 pending state, or failure reason. Maximize/restore and close work like the other
-tabs. Colours come from the theme; the state is also written in text.
+tabs. Labels stay fixed when states change; colour carries the state. The
+Activity tab tooltip explains the colours, and each source tooltip explains its
+purpose and current state.
 
 - Green: healthy, up to date, or idle with no requested work.
 - Yellow: stale, queued/debouncing, starting, or working.
@@ -69,7 +71,7 @@ Activity is visible; storage/work is bounded by the fixed source inventory.
 No throughput or startup improvement is claimed.
 
 Deterministic tests cover freshness, retained failures/recovery, worker panics,
-compact wrapping at 320/800/1400 px, semantic tab switching and hidden terminal
+compact wrapping at 320/800/1400 px, unchanged label positions across states, semantic tab switching and hidden terminal
 output versus lifecycle notifications. The `activity-panel` snapshot scene
 supplies mixed states without launching tools to simulate failures.
 
@@ -77,7 +79,7 @@ supplies mixed states without launching tools to simulate failures.
 viewport framebuffer with deterministic example states, not a live process
 sample or a composed desktop screenshot.
 
-Validation (2026-09-24): full Rust suite, final 1,065 application unit tests,
+Validation (2026-09-24): full Rust suite, final 1,069 application unit tests,
 15 tooling tests, formatting and strict all-target Clippy passed. The release
 Activity framebuffer was inspected; the 23-image maintained gallery was
 regenerated in one session and decoded successfully.

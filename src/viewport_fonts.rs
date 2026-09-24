@@ -19,7 +19,8 @@ pub(crate) fn show_deferred(
 ) {
     let changed =
         context.data(|data| data.get_temp::<u64>(egui::Id::new("native-appearance-frame")));
-    let exists = context.input(|input| input.raw.viewports.contains_key(&id));
+    let exists = context.input(|input| input.raw.viewports.contains_key(&id))
+        || eframe::window_host::identity(context, id).is_some();
     if !context.embed_viewports()
         && defer_new_child(
             changed,
@@ -52,7 +53,8 @@ pub(crate) fn show_immediate(
 ) {
     let changed =
         context.data(|data| data.get_temp::<u64>(egui::Id::new("native-appearance-frame")));
-    let exists = context.input(|input| input.raw.viewports.contains_key(&id));
+    let exists = context.input(|input| input.raw.viewports.contains_key(&id))
+        || eframe::window_host::identity(context, id).is_some();
     if !context.embed_viewports()
         && defer_new_child(
             changed,

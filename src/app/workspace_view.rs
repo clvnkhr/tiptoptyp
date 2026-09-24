@@ -98,8 +98,11 @@ impl EditorApp {
         self.editor_attention = None;
         self.editor_completion = None;
         self.last_editor_caret = None;
-        self.find_bar.visible = false;
-        self.find_bar.replace_visible = false;
+        self.find_bar.close();
+        ChildViewHost::close(context, find_bar::VIEWPORT_SALT);
+        self.diagnostic_tooltip = None;
+        self.clear_editor_hover();
+        self.clear_asset_hover();
         self.document_workflow.revoke_close();
         let editor_id = source_editor_id(context);
         context.memory_mut(|memory| memory.surrender_focus(editor_id));

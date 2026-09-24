@@ -2878,12 +2878,14 @@ impl EditorApp {
             || (!source_focused && context.egui_wants_keyboard_input());
         let can_sync_preview =
             self.document().kind().is_typst() && self.interactive_preview_active();
+        let find_viewport = scoped_child_viewport_id(context, find_bar::VIEWPORT_SALT);
         let global_command = context.input_mut_for(shortcut_viewport, |input| {
             consume_shortcut(input, &shortcuts, |command| {
                 matches!(
                     command_spec(command).menu,
                     CommandMenu::Application | CommandMenu::File | CommandMenu::View
-                ) || matches!(command, AppCommand::Find | AppCommand::FindReplace)
+                ) || (shortcut_viewport != find_viewport
+                    && matches!(command, AppCommand::Find | AppCommand::FindReplace))
                     || (can_sync_preview && command == AppCommand::SyncPreview)
                     || (!other_text_input_focused
                         && matches!(
@@ -3399,7 +3401,7 @@ impl EditorApp {
 
     fn toggle_find(&mut self, replace: bool, context: &egui::Context) {
         if self.find_bar.visible
-            && find_bar::has_focus(context)
+            && (self.find_bar.child_focused || find_bar::has_focus(context))
             && (!replace || self.find_bar.replace_visible)
         {
             self.find_bar.close();

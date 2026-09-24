@@ -91,7 +91,7 @@ impl EditorApp {
         );
         add(
             "Typst",
-            "Typst CLI PDF compilation, separate from Tinymist's live preview.",
+            "Builds a PDF from your Typst document.",
             if self.preview_document_kind() == DocumentKind::Typst {
                 build.clone()
             } else {
@@ -100,7 +100,7 @@ impl EditorApp {
         );
         add(
             "Tectonic",
-            "TeX PDF compilation after edits or a manual build.",
+            "Builds a PDF from your TeX document.",
             if self.preview_document_kind() == DocumentKind::Tex && self.settings.tex.build_enabled
             {
                 build
@@ -116,7 +116,7 @@ impl EditorApp {
         };
         add(
             "Tinymist",
-            "Typst language server: editor intelligence and document synchronization.",
+            "Provides Typst suggestions, hover help, and error checks.",
             if matches!(tinymist, Activity::Idle) {
                 if intelligence_busy || self.format_request_key.is_some() {
                     Activity::Running
@@ -131,7 +131,7 @@ impl EditorApp {
         );
         add(
             "Live preview",
-            "Tinymist's interactive compilation, independent of PDF export.",
+            "Updates the live document preview as you type.",
             if typst && self.preview.tinymist_preview_enabled {
                 if self.compilation_paused {
                     Activity::Inactive("Paused")
@@ -144,7 +144,7 @@ impl EditorApp {
         );
         add(
             "Typst diagnostics",
-            "Freshness of error/warning results, not the number of document errors. Servers may omit document versions.",
+            "Checks your Typst document for errors and warnings.",
             if matches!(tinymist, Activity::Idle) {
                 freshness(self.activity.diagnostics[0], key)
             } else {
@@ -174,7 +174,11 @@ impl EditorApp {
             };
             add(
                 name,
-                "TeX language service. Yellow means starting or awaiting current diagnostics; red means a service failure.",
+                if index == 1 {
+                    "Provides TeX suggestions, hover help, and error checks."
+                } else {
+                    "Checks TeX style and tidies its formatting."
+                },
                 if !tex || !enabled {
                     inactive.clone()
                 } else if let Some(error) = error {
@@ -206,7 +210,7 @@ impl EditorApp {
         };
         add(
             formatter,
-            "Explicit formatting or formatting after manual save.",
+            "Tidies source layout when you format or save.",
             if !typst && !tex
                 || tex && self.settings.tex.formatter == crate::tex::settings::Formatter::Disabled
             {
@@ -221,7 +225,7 @@ impl EditorApp {
         );
         add(
             "Compiler diagnostics",
-            "Build errors and warnings are current when their build finishes. A failed build remains red.",
+            "Collects errors and warnings from PDF builds.",
             if self
                 .preview_document_kind()
                 .typesetting_language()
@@ -238,22 +242,22 @@ impl EditorApp {
         );
         add(
             "Renderer",
-            "Native interactive preview / PDF.js view readiness.",
+            "Displays the live preview or PDF in the preview pane.",
             service(&self.preview.webview_state),
         );
         add(
             "PDFium",
-            "PDFium pages and text search. Only active when this renderer is in use.",
+            "Draws PDF pages and searches their text when PDFium is selected.",
             self.pdfium_preview.activity(),
         );
         add(
             "PDF viewer",
-            "Standalone PDF pages and text search.",
+            "Draws opened PDF files and searches their text.",
             self.pdfium_asset.activity(),
         );
         add(
             "Asset loading",
-            "Loads the current PDF or decodes its image.",
+            "Opens PDFs and images for viewing.",
             if self.document().kind().preview_only() {
                 preview_work(self.asset_preview.status)
             } else {
@@ -262,27 +266,27 @@ impl EditorApp {
         );
         add(
             "Hover preview",
-            "Decodes the image or PDF thumbnail under the pointer.",
+            "Shows a small image or PDF preview when you hover.",
             self.hover_activity(),
         );
         add(
             "Git status",
-            "Repository scan, staging, commits, fetch, pull and push.",
+            "Checks changed files and handles Git repository actions.",
             self.git.activity(),
         );
         add(
             "Git hunks",
-            "Recomputes gutter changes against the current editor buffer.",
+            "Marks changed lines beside your source code.",
             self.git_editor.activity(),
         );
         add(
             "Git mutation",
-            "Applies a selected hunk or file change.",
+            "Stages, unstages, or discards selected changes.",
             self.git_hunk_job.activity(),
         );
         add(
             "Workspace",
-            "Filesystem watcher and coalesced workspace scans.",
+            "Refreshes the workspace file list when files change.",
             if self.workspace_service.is_subscribed() {
                 self.activity.workspace.clone()
             } else {
@@ -291,7 +295,7 @@ impl EditorApp {
         );
         add(
             "File watcher",
-            "Receives filesystem changes; watcher failure is separate from scan results.",
+            "Notices files changed outside the app.",
             if self.workspace_service.is_subscribed() {
                 self.activity.watcher.clone()
             } else {
@@ -300,7 +304,7 @@ impl EditorApp {
         );
         add(
             "Project index",
-            "Rebuilds symbols, references and the project outline.",
+            "Finds headings, labels, and references across your project.",
             Activity::work(
                 self.project_index_job.is_running(),
                 self.project_index_deadline.is_pending(),
@@ -318,7 +322,7 @@ impl EditorApp {
         );
         add(
             "Unicode",
-            "Checks suspicious Unicode characters.",
+            "Flags invisible or easily confused characters.",
             if self.settings.unicode_warnings {
                 self.writing.activity()
             } else {
@@ -327,12 +331,12 @@ impl EditorApp {
         );
         add(
             "Fonts",
-            "Scans workspace fonts.",
+            "Finds fonts available in your workspace.",
             self.font_catalog_scan.activity(),
         );
         add(
             "Packages",
-            "Loads the package catalog.",
+            "Loads the list of available Typst packages.",
             if self.package_catalog_job.is_running() {
                 Activity::Running
             } else if let Some(error) = self
@@ -361,7 +365,7 @@ impl EditorApp {
         );
         add(
             "Terminal",
-            "Shell/session health. Green means the terminal is connected; it does not infer whether a shell command is busy.",
+            "Runs your shell. Green means connected; commands may still be running.",
             self.terminal.activity(),
         );
         rows
@@ -397,16 +401,9 @@ fn show_indicators(ui: &mut egui::Ui, rows: &[Indicator]) {
                         Activity::Failed(_) => palette.error,
                         Activity::Inactive(_) => ui.visuals().weak_text_color(),
                     };
-                    let state = match row.state {
-                        Activity::Idle => "idle",
-                        Activity::Running => "busy",
-                        Activity::Pending(_) => "pending",
-                        Activity::Failed(_) => "failed",
-                        Activity::Inactive(_) => "off",
-                    };
                     let response = ui.add(
                         egui::Label::new(
-                            RichText::new(format!("● {} · {state}", row.name))
+                            RichText::new(format!("● {}", row.name))
                                 .color(color)
                                 .size(theme::TYPE.supporting),
                         )
@@ -479,30 +476,52 @@ mod tests {
                 .with_size(Vec2::new(width, 250.0))
                 .build_ui(|ui| show_indicators(ui, &fixture_indicators()));
             harness.run();
-            let save = harness.get_by_label("● Save · pending").rect();
-            let typst = harness.get_by_label("● Typst · busy").rect();
+            let save = harness.get_by_label("● Save").rect();
+            let typst = harness.get_by_label("● Typst").rect();
             assert_eq!(save.min.y, typst.min.y, "indicators should share rows");
             for row in fixture_indicators() {
-                let state = match row.state {
-                    Activity::Idle => "idle",
-                    Activity::Running => "busy",
-                    Activity::Pending(_) => "pending",
-                    Activity::Failed(_) => "failed",
-                    Activity::Inactive(_) => "off",
-                };
-                let rect = harness
-                    .get_by_label(&format!("● {} · {state}", row.name))
-                    .rect();
+                let rect = harness.get_by_label(&format!("● {}", row.name)).rect();
                 assert!(
                     rect.min.x >= 0.0 && rect.max.x <= width,
                     "{rect:?} at width {width}"
                 );
             }
             if width >= 800.0 {
-                assert!(harness.get_by_label("● Terminal · idle").rect().max.y < 160.0);
+                assert!(harness.get_by_label("● Terminal").rect().max.y < 160.0);
             }
         }
     }
+    #[test]
+    fn activity_state_changes_cannot_move_any_label() {
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(800.0, 250.0))
+            .build_ui_state(|ui, rows| show_indicators(ui, rows), fixture_indicators());
+        harness.run();
+        let before: Vec<_> = harness
+            .state()
+            .iter()
+            .map(|row| harness.get_by_label(&format!("● {}", row.name)).rect())
+            .collect();
+        for state in [
+            Activity::Idle,
+            Activity::Running,
+            Activity::Pending("Queued"),
+            Activity::Failed("failure".into()),
+            Activity::Inactive("Disabled"),
+        ] {
+            for row in harness.state_mut().iter_mut() {
+                row.state = state.clone();
+            }
+            harness.run();
+            for (row, before) in harness.state().iter().zip(&before) {
+                assert_eq!(
+                    harness.get_by_label(&format!("● {}", row.name)).rect(),
+                    *before
+                );
+            }
+        }
+    }
+
     #[test]
     fn freshness_requires_the_exact_document_revision_and_owner() {
         let key = DocumentKey::new(tiptoptyp_core::document::WindowSessionId::new(1), 2, 3);

@@ -8358,9 +8358,12 @@ fn native_find_child_routes_query_and_escape_to_its_owner() {
     let seen = Rc::new(RefCell::new(Vec::new()));
     let child_seen = seen.clone();
     egui::Context::set_immediate_viewport_renderer(move |context, mut child| {
-        child_seen
-            .borrow_mut()
-            .push((child.ids.this, child.ids.parent, child.builder.inner_size));
+        child_seen.borrow_mut().push((
+            child.ids.this,
+            child.ids.parent,
+            child.builder.inner_size,
+            child.builder.visible,
+        ));
         let mut input = egui::RawInput {
             viewport_id: child.ids.this,
             screen_rect: Some(Rect::from_min_size(
@@ -8411,11 +8414,13 @@ fn native_find_child_routes_query_and_escape_to_its_owner() {
     assert_eq!(app.find_bar.query, "alpha");
     assert_eq!(app.find_bar.search.selected_ordinal(), Some(1));
     assert_eq!(app.document().source(), "alpha beta alpha");
-    assert!(seen.borrow().iter().any(|(id, parent, size)| *id
+    assert!(seen.borrow().iter().any(|(id, parent, size, _)| *id
         == crate::child_view::child_viewport_id(egui::ViewportId::ROOT, find_bar::VIEWPORT_SALT)
         && *parent == egui::ViewportId::ROOT
         && size.unwrap().x > 300.0));
     let paints = seen.borrow().len();
+    app.find_bar.child_focused = false;
+    app.find_bar.blur_started = Some(Instant::now() - Duration::from_secs(1));
     let mut inactive = egui::RawInput {
         screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 600.0))),
         ..Default::default()
@@ -8425,14 +8430,20 @@ fn native_find_child_routes_query_and_escape_to_its_owner() {
         .get_mut(&egui::ViewportId::ROOT)
         .unwrap()
         .focused = Some(false);
+    inactive
+        .viewports
+        .get_mut(&egui::ViewportId::ROOT)
+        .unwrap()
+        .inner_rect = inactive.screen_rect;
     context
         .run_ui(inactive, |ui| app.show_editor(ui))
         .drop_without_applying_deltas();
     assert_eq!(
         seen.borrow().len(),
-        paints,
-        "inactive owner must hide its floating surface"
+        paints + 1,
+        "hidden native host stays registered"
     );
+    assert_eq!(seen.borrow().last().unwrap().3, Some(false));
     assert!(
         app.find_bar.visible,
         "hiding must retain the search session"
@@ -8447,6 +8458,22 @@ fn native_find_child_routes_query_and_escape_to_its_owner() {
     });
     frame(&mut app);
     assert!(!app.find_bar.visible);
+    for _ in 0..3 {
+        app.open_find(false);
+        frame(&mut app);
+        events.borrow_mut().push(egui::Event::Key {
+            key: egui::Key::F,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::COMMAND,
+        });
+        frame(&mut app);
+        assert!(
+            !app.find_bar.visible,
+            "one Cmd+F closes the focused native popup"
+        );
+    }
     assert_eq!(
         context.memory(|memory| memory.focused()),
         Some(source_editor_id(&context))

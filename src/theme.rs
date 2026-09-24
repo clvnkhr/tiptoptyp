@@ -1212,7 +1212,7 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
     },
     editor: EditorMetrics {
         find_field_width: 180.0,
-        find_overlay_max_width: 620.0,
+        find_overlay_max_width: 460.0,
         wrapped_minimum_width: 24.0,
         source_character_width: 8.5,
         diagnostic_character_width: 7.2,

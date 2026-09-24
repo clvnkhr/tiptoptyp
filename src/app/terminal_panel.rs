@@ -120,12 +120,9 @@ impl EditorApp {
             {
                 self.bottom_panel.select(PanelTab::Terminal);
             }
-            if ui
-                .selectable_label(
-                    self.bottom_panel.selected() == Some(PanelTab::Activity),
-                    "Activity",
-                )
-                .clicked()
+            if native_hover_text(ui.selectable_label(
+                    self.bottom_panel.selected() == Some(PanelTab::Activity), "Activity"),
+                    "App activity: green = ready or idle; yellow = waiting or working; red = failed; grey = not in use. Hover a name for details.").clicked()
             {
                 self.bottom_panel.select(PanelTab::Activity);
             }
