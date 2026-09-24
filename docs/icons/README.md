@@ -28,20 +28,38 @@ capacity. The scene is also registered as a targeted screenshot-gallery scene.
 
 ## Visual audit — 2026-09-24
 
-Inspected native captures at 1× and 4× and refined:
+The revised sheet contains 44 vector icons and both application identities.
 
-- **Copy:** exposed back-page edges instead of two intersecting full outlines.
-- **Fit Width:** complete, symmetric outward arrowheads with clear side rails.
-- **Folder:** a flat tab instead of a roof-shaped peak.
-- **File:** portrait proportions that distinguish a document from a text field.
+- Checkmarks, chevrons, refresh arrows, magnifiers, eye outlines, and rounded
+  window edges use continuous paths rather than separately rasterized segments.
+  Separate paths remain for genuinely separate parts or branches, such as a
+  pupil, crossed strokes, or the trash handle meeting its lid.
+- Warning has an inset, rounded, explicitly closed triangle and a smaller dot.
+- Trash now has a connected handle, lid, and tapered body; the spanner uses a
+  rounded continuous outline. Copy and folder corners are rounded consistently.
+- Directional chevrons, ticks, crosses, and plus/minus marks are about half their
+  previous reference size. Hit targets are unchanged; already-small tab crosses
+  are not shrunk twice.
+- Diff uses two opposing replacement arrows. DiffAll adds a second arrowhead
+  to each arrow; its base geometry remains identical. Neither icon shares a
+  box with Stage/Unstage. Both appear side by side in the sheet. Replace All
+  has an explicit accessible label.
+- Compiling rotates a filled gear with a transparent axle hole. The idle gear
+  remains an outline. Both variants appear in the sheet.
 
-The remaining glyphs and app identities retain their existing designs. The sheet
-uses unclipped per-icon layers so strokes at the reference-box edge are visible.
-There are no new dependencies or recurring runtime tasks. Production changes
-only affect a handful of small vector paths; no material performance impact is
-expected.
+The sheet uses unclipped per-icon layers so strokes at the reference-box edge
+are visible. No dependencies or recurring runtime tasks were added. The existing
+visible-only 33 ms compilation animation is retained; geometry changes are
+bounded to small vector paths and a 128-triangle gear ring.
 
-Validation: 1,241 tests, strict all-target Clippy, 15 xtask tests, formatting, and
-the 23-image stable gallery. The final native contact sheet was inspected at
-1400×900 pixels. Baseline and intermediate captures remain in the ignored
-`.tiptoptyp/screenshots/icon-audit-*` directories.
+Regression coverage checks finite ink and control bounds, single-path contours,
+small-mark size and centering, the filled compilation state and transparent
+axle, Replace All semantics/read-only behavior, and sheet capacity.
+
+Baseline and intermediate captures remain in the ignored
+`.tiptoptyp/screenshots/icon-audit-*` and `icon-revision-*` directories.
+
+Validation: formatting and strict Clippy checks passed; 1,247 Rust tests and
+15 tooling tests passed. The optimized native contact sheet was freshly captured
+and inspected at 1×/4×. The complete 23-image gallery was regenerated and decoded;
+the replacement controls were also inspected in their popup framebuffer.

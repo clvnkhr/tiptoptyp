@@ -28,12 +28,12 @@ pub(super) fn show(ui: &mut egui::Ui) {
     text(
         egui::pos2(24.0, 44.0),
         13.0,
-        "Each pair: 1× (14 px) + 4× (56 px). Native vector rendering; no bitmap enlargement.",
+        "Each pair: 1× / 4× · 14 px reference box · all ink stays inside the box.",
     );
     for (index, icon) in UiIcon::ALL.iter().copied().enumerate() {
         let origin = egui::pos2(
             24.0 + (index % 6) as f32 * 220.0,
-            76.0 + (index / 6) as f32 * 88.0,
+            76.0 + (index / 6) as f32 * 80.0,
         );
         text(origin, 12.0, &format!("{icon:?}"));
         for (slot, scale) in [1.0, 4.0].into_iter().enumerate() {
@@ -41,7 +41,7 @@ pub(super) fn show(ui: &mut egui::Ui) {
                 egui::Order::Foreground,
                 egui::Id::new(("icon-audit", index, slot)),
             );
-            let painter = ctx.layer_painter(layer).with_clip_rect(Rect::EVERYTHING);
+            let painter = egui::Painter::new(ctx.clone(), layer, Rect::EVERYTHING);
             let size = if matches!(icon, UiIcon::Folder | UiIcon::File) {
                 METRICS.explorer.tree_icon_size
             } else {
@@ -66,7 +66,7 @@ pub(super) fn show(ui: &mut egui::Ui) {
             );
         }
     }
-    let y = 76.0 + UiIcon::ALL.len().div_ceil(6) as f32 * 88.0;
+    let y = 76.0 + UiIcon::ALL.len().div_ceil(6) as f32 * 80.0;
     for (index, (name, small, large)) in [
         (
             "Application / production · 32 px / 128 px",

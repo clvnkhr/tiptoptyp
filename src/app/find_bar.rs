@@ -228,7 +228,7 @@ pub(super) fn show(
             actions.replace_one |=
                 crate::app::icons::action_button_enabled(ui, editable, "Replace").clicked();
             actions.replace_all |=
-                crate::app::icons::action_button_enabled(ui, editable, "All").clicked();
+                crate::app::icons::action_button_enabled(ui, editable, "Replace all").clicked();
         });
     }
 
@@ -241,6 +241,52 @@ pub(super) fn show(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replace_all_has_its_own_accessible_action_and_respects_read_only() {
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT as _, Queryable as _},
+        };
+        for editable in [true, false] {
+            let state = FindBarState {
+                replace_visible: true,
+                query: "alpha".into(),
+                ..Default::default()
+            };
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(620.0, 160.0))
+                .build_ui_state(
+                    move |ui, (state, replaced): &mut (FindBarState, bool)| {
+                        let actions = show(
+                            ui,
+                            state,
+                            "alpha alpha",
+                            DocumentKey::new(
+                                tiptoptyp_core::document::WindowSessionId::new(1),
+                                0,
+                                0,
+                            ),
+                            editable,
+                        );
+                        *replaced |= actions.replace_all;
+                        assert!(!actions.replace_one);
+                    },
+                    (state, false),
+                );
+            harness.run();
+            let button =
+                harness.get_by_role_and_label(egui::accesskit::Role::Button, "Replace all");
+            if editable {
+                button.click();
+                harness.run();
+                assert!(harness.state().1);
+            } else {
+                assert!(button.accesskit_node().is_disabled());
+                assert!(!harness.state().1);
+            }
+        }
+    }
 
     #[test]
     fn overlay_crosses_the_editor_divider_but_stays_inside_its_owner() {

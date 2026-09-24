@@ -30,8 +30,9 @@ ui_icons! {
     Preview,
     Stage,
     Unstage,
-    Commit,
     Diff,
+    DiffAll,
+    Commit,
     Push,
     Pull,
     Fetch,
@@ -40,6 +41,7 @@ ui_icons! {
     Pause,
     Play,
     Compile,
+    CompileFilled,
     Spanner,
     Maximize,
     Restore,
@@ -174,7 +176,7 @@ pub(crate) fn toolbar_button(
         } else {
             0.0
         };
-        paint_compile_icon(ui.painter(), rect, color, angle);
+        paint_compile_icon(ui.painter(), rect, color, angle, compiling);
         if compiling && ui.is_rect_visible(response.rect) {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(33));
@@ -195,17 +197,116 @@ pub(crate) fn toolbar_button(
     response
 }
 
-fn paint_compile_icon(painter: &egui::Painter, rect: Rect, color: Color32, angle: f32) {
-    let radius = rect.width().min(rect.height()) * 0.45;
-    let points = (0..32)
+/// Round a contour as one path, so joins never depend on independently
+/// rasterized line/curve endpoints. Deliberate branches remain separate paths.
+fn rounded_contour(points: &[Pos2], closed: bool, radius: f32) -> Vec<Pos2> {
+    let mut result = Vec::with_capacity(points.len() * 5);
+    for (index, &corner) in points.iter().enumerate() {
+        if !closed && (index == 0 || index + 1 == points.len()) {
+            result.push(corner);
+            continue;
+        }
+        let before = points[(index + points.len() - 1) % points.len()] - corner;
+        let after = points[(index + 1) % points.len()] - corner;
+        let distance = radius.min(before.length() * 0.5).min(after.length() * 0.5);
+        let start = corner + before.normalized() * distance;
+        let end = corner + after.normalized() * distance;
+        for step in 0..=4 {
+            let t = step as f32 / 4.0;
+            result.push(
+                ((1.0 - t).powi(2) * start.to_vec2()
+                    + 2.0 * (1.0 - t) * t * corner.to_vec2()
+                    + t * t * end.to_vec2())
+                .to_pos2(),
+            );
+        }
+    }
+    result
+}
+
+fn curved_path(
+    painter: &egui::Painter,
+    points: &[Pos2],
+    closed: bool,
+    radius: f32,
+    stroke: Stroke,
+) {
+    painter.add(egui::epaint::PathShape {
+        points: rounded_contour(points, closed, radius),
+        closed,
+        fill: Color32::TRANSPARENT,
+        stroke: stroke.into(),
+    });
+}
+
+fn plus_minus(painter: &egui::Painter, center: Pos2, extent: f32, plus: bool, color: Color32) {
+    let stroke = Stroke::new(1.0, color);
+    painter.line_segment(
+        [
+            center - Vec2::new(extent, 0.0),
+            center + Vec2::new(extent, 0.0),
+        ],
+        stroke,
+    );
+    if plus {
+        painter.line_segment(
+            [
+                center - Vec2::new(0.0, extent),
+                center + Vec2::new(0.0, extent),
+            ],
+            stroke,
+        );
+    }
+}
+
+fn cubic_points(points: [Pos2; 4]) -> Vec<Pos2> {
+    (0..=20)
+        .map(|step| {
+            let t = step as f32 / 20.0;
+            let s = 1.0 - t;
+            (points[0].to_vec2() * s.powi(3)
+                + points[1].to_vec2() * (3.0 * s * s * t)
+                + points[2].to_vec2() * (3.0 * s * t * t)
+                + points[3].to_vec2() * t.powi(3))
+            .to_pos2()
+        })
+        .collect()
+}
+
+fn paint_compile_icon(
+    painter: &egui::Painter,
+    rect: Rect,
+    color: Color32,
+    angle: f32,
+    filled: bool,
+) {
+    let radius = rect.width().min(rect.height()) * 0.43;
+    let points: Vec<_> = (0..64)
         .map(|i| {
-            let theta = angle + i as f32 * std::f32::consts::TAU / 32.0;
-            let r = radius * if i % 4 < 2 { 1.0 } else { 0.75 };
+            let theta = angle + i as f32 * std::f32::consts::TAU / 64.0;
+            let r = radius * [0.78, 0.80, 0.97, 1.0, 1.0, 0.97, 0.80, 0.78][i % 8];
             rect.center() + Vec2::angled(theta) * r
         })
         .collect();
+    let hole_radius = radius * 0.32;
+    if filled {
+        // A triangulated ring preserves the transparent axle hole on every
+        // button background. Convex-polygon filling is invalid for gear teeth.
+        let mut mesh = egui::Mesh::default();
+        for (i, &outer) in points.iter().enumerate() {
+            let theta = angle + i as f32 * std::f32::consts::TAU / 64.0;
+            mesh.colored_vertex(outer, color);
+            mesh.colored_vertex(rect.center() + Vec2::angled(theta) * hole_radius, color);
+        }
+        for i in 0..64u32 {
+            let next = (i + 1) % 64;
+            mesh.add_triangle(i * 2, next * 2, i * 2 + 1);
+            mesh.add_triangle(i * 2 + 1, next * 2, next * 2 + 1);
+        }
+        painter.add(mesh);
+    }
     painter.add(egui::Shape::closed_line(points, Stroke::new(1.2, color)));
-    painter.circle_stroke(rect.center(), radius * 0.32, Stroke::new(1.2, color));
+    painter.circle_stroke(rect.center(), hole_radius, Stroke::new(1.2, color));
 }
 
 pub(crate) struct RefreshIconGeometry {
@@ -335,56 +436,49 @@ pub(crate) fn paint_ui_icon(painter: &egui::Painter, rect: Rect, icon: UiIcon, c
                 stroke,
                 egui::StrokeKind::Inside,
             );
-            painter.line_segment(
-                [center - Vec2::new(3.0, 0.0), center + Vec2::new(3.0, 0.0)],
-                stroke,
-            );
-            painter.line_segment(
-                [center - Vec2::new(0.0, 3.0), center + Vec2::new(0.0, 3.0)],
-                stroke,
-            );
+            plus_minus(painter, center, 1.5, true, color);
         }
         UiIcon::Copy => {
             // Only paint the exposed edge of the back sheet. A transparent
             // foreground fill cannot erase lines already painted behind it.
             let back =
                 Rect::from_min_max(rect.min + Vec2::splat(0.625), rect.max - Vec2::splat(4.0));
-            painter.add(egui::Shape::line(
-                vec![
+            curved_path(
+                painter,
+                &[
                     Pos2::new(back.left(), rect.bottom() - 4.0),
                     back.left_top(),
                     back.right_top(),
                     Pos2::new(back.right(), rect.top() + 2.0),
                 ],
+                false,
+                1.0,
                 stroke,
-            ));
+            );
             let front = Rect::from_min_max(rect.min + Vec2::splat(3.5), rect.max);
             painter.rect_stroke(front, 1.5, stroke, egui::StrokeKind::Inside);
         }
         UiIcon::Trash => {
-            painter.rect_stroke(
-                Rect::from_min_max(
-                    rect.min + Vec2::new(3.0, 4.0),
-                    rect.max - Vec2::new(3.0, 0.0),
-                ),
-                1.5,
-                stroke,
-                egui::StrokeKind::Inside,
-            );
-            painter.line_segment(
-                [
-                    rect.min + Vec2::new(1.0, 3.0),
-                    rect.right_top() + Vec2::new(-1.0, 3.0),
-                ],
+            let p = |x, y| rect.min + rect.size() * Vec2::new(x, y);
+            curved_path(
+                painter,
+                &[p(0.23, 0.27), p(0.28, 0.92), p(0.72, 0.92), p(0.77, 0.27)],
+                false,
+                0.8,
                 stroke,
             );
-            painter.line_segment(
-                [
-                    rect.min + Vec2::new(5.0, 0.0),
-                    rect.right_top() + Vec2::new(-5.0, 0.0),
-                ],
+            // The handle and can meet the lid exactly; no floating fragments.
+            curved_path(
+                painter,
+                &[p(0.36, 0.27), p(0.36, 0.08), p(0.64, 0.08), p(0.64, 0.27)],
+                false,
+                0.5,
                 stroke,
             );
+            painter.line_segment([p(0.12, 0.27), p(0.88, 0.27)], stroke);
+            for x in [0.43, 0.57] {
+                painter.line_segment([p(x, 0.43), p(x, 0.76)], Stroke::new(0.9, color));
+            }
         }
         UiIcon::Link => {
             painter.rect_stroke(
@@ -396,27 +490,23 @@ pub(crate) fn paint_ui_icon(painter: &egui::Painter, rect: Rect, icon: UiIcon, c
                 stroke,
                 egui::StrokeKind::Inside,
             );
-            painter.line_segment([center, rect.right_top()], stroke);
-            painter.line_segment(
-                [rect.right_top() + Vec2::new(-5.0, 0.0), rect.right_top()],
+            let tip = rect.right_top() + Vec2::new(-1.0, 1.0);
+            painter.line_segment([center, tip], stroke);
+            painter.add(egui::Shape::line(
+                vec![tip + Vec2::new(-5.0, 0.0), tip, tip + Vec2::new(0.0, 5.0)],
                 stroke,
-            );
-            painter.line_segment(
-                [rect.right_top() + Vec2::new(0.0, 5.0), rect.right_top()],
-                stroke,
-            );
+            ));
         }
         UiIcon::Search => {
             let radius = rect.width().min(rect.height()) * 0.32;
             let center = rect.min + Vec2::splat(radius + 1.0);
-            painter.circle_stroke(center, radius, stroke);
-            painter.line_segment(
-                [
-                    center + Vec2::splat(radius * 0.7),
-                    rect.max - Vec2::splat(1.0),
-                ],
-                stroke,
-            );
+            let anchor_angle = std::f32::consts::FRAC_PI_4;
+            let mut points = vec![rect.max - Vec2::splat(1.0)];
+            points.extend((0..=40).map(|i| {
+                center
+                    + Vec2::angled(anchor_angle + i as f32 * std::f32::consts::TAU / 40.0) * radius
+            }));
+            painter.add(egui::Shape::line(points, stroke));
         }
         UiIcon::Pause => {
             for x in [0.28, 0.72] {
@@ -440,90 +530,60 @@ pub(crate) fn paint_ui_icon(painter: &egui::Painter, rect: Rect, icon: UiIcon, c
                 Stroke::NONE,
             ));
         }
-        UiIcon::Compile => paint_compile_icon(painter, rect, color, 0.0),
+        UiIcon::Compile | UiIcon::CompileFilled => {
+            paint_compile_icon(painter, rect, color, 0.0, icon == UiIcon::CompileFilled)
+        }
         UiIcon::Spanner => {
             let points = [
-                (0.55, 0.08),
-                (0.48, 0.28),
-                (0.53, 0.43),
-                (0.09, 0.80),
-                (0.09, 0.91),
-                (0.20, 0.91),
-                (0.61, 0.50),
-                (0.77, 0.52),
-                (0.94, 0.39),
-                (0.95, 0.22),
-                (0.76, 0.36),
-                (0.64, 0.24),
-                (0.76, 0.06),
+                (0.60, 0.08),
+                (0.45, 0.18),
+                (0.43, 0.34),
+                (0.47, 0.44),
+                (0.11, 0.78),
+                (0.08, 0.87),
+                (0.13, 0.93),
+                (0.22, 0.91),
+                (0.59, 0.54),
+                (0.73, 0.56),
+                (0.88, 0.49),
+                (0.94, 0.35),
+                (0.93, 0.24),
+                (0.76, 0.38),
+                (0.62, 0.25),
+                (0.74, 0.07),
             ]
-            .into_iter()
-            .map(|(x, y)| rect.min + rect.size() * Vec2::new(x, y))
-            .collect();
-            painter.add(egui::Shape::closed_line(points, stroke));
+            .map(|(x, y)| rect.min + rect.size() * Vec2::new(x, y));
+            curved_path(painter, &points, true, 0.8, stroke);
         }
-        UiIcon::Check => {
-            painter.line_segment(
-                [
-                    Pos2::new(rect.left() + rect.width() * 0.12, center.y),
-                    Pos2::new(rect.left() + rect.width() * 0.42, rect.bottom() - 2.0),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(rect.left() + rect.width() * 0.42, rect.bottom() - 2.0),
-                    Pos2::new(rect.right() - 1.0, rect.top() + 2.0),
-                ],
-                stroke,
-            );
-        }
-        UiIcon::Close => {
-            painter.line_segment([rect.left_top(), rect.right_bottom()], stroke);
-            painter.line_segment([rect.right_top(), rect.left_bottom()], stroke);
-        }
-        UiIcon::Up | UiIcon::Previous => {
-            let (a, b, c) = if icon == UiIcon::Up {
-                (
-                    Pos2::new(rect.left() + 1.0, rect.bottom() - 2.0),
-                    Pos2::new(center.x, rect.top() + 2.0),
-                    Pos2::new(rect.right() - 1.0, rect.bottom() - 2.0),
-                )
-            } else {
-                (
-                    Pos2::new(rect.right() - 2.0, rect.top() + 1.0),
-                    Pos2::new(rect.left() + 2.0, center.y),
-                    Pos2::new(rect.right() - 2.0, rect.bottom() - 1.0),
-                )
+        UiIcon::Check
+        | UiIcon::Close
+        | UiIcon::Up
+        | UiIcon::Down
+        | UiIcon::Next
+        | UiIcon::Previous => {
+            // Half-size marks in unchanged hit targets. Already compact tab
+            // crosses use the same small glyph rather than shrinking twice.
+            let small = Rect::from_center_size(center, rect.size().min(Vec2::splat(7.0)));
+            let p = |x, y| small.min + small.size() * Vec2::new(x, y);
+            let points = match icon {
+                UiIcon::Check => vec![p(0.12, 0.50), p(0.42, 0.86), p(0.93, 0.14)],
+                UiIcon::Up => vec![p(0.07, 0.86), p(0.50, 0.14), p(0.93, 0.86)],
+                UiIcon::Down => vec![p(0.07, 0.14), p(0.50, 0.86), p(0.93, 0.14)],
+                UiIcon::Next => vec![p(0.14, 0.07), p(0.86, 0.50), p(0.14, 0.93)],
+                UiIcon::Previous => vec![p(0.86, 0.07), p(0.14, 0.50), p(0.86, 0.93)],
+                _ => {
+                    painter.line_segment([small.left_top(), small.right_bottom()], stroke);
+                    painter.line_segment([small.right_top(), small.left_bottom()], stroke);
+                    return;
+                }
             };
-            painter.line_segment([a, b], stroke);
-            painter.line_segment([b, c], stroke);
-        }
-        UiIcon::Down | UiIcon::Next => {
-            let (a, b, c) = if icon == UiIcon::Down {
-                (
-                    Pos2::new(rect.left() + 1.0, rect.top() + 2.0),
-                    Pos2::new(center.x, rect.bottom() - 2.0),
-                    Pos2::new(rect.right() - 1.0, rect.top() + 2.0),
-                )
-            } else {
-                (
-                    Pos2::new(rect.left() + 2.0, rect.top() + 1.0),
-                    Pos2::new(rect.right() - 2.0, center.y),
-                    Pos2::new(rect.left() + 2.0, rect.bottom() - 1.0),
-                )
-            };
-            painter.line_segment([a, b], stroke);
-            painter.line_segment([b, c], stroke);
+            painter.add(egui::Shape::line(points, stroke));
         }
         UiIcon::Refresh => {
-            // Continue the arc into one side of the arrowhead, then place its
-            // outer wing beyond the circle. This keeps the small glyph open
-            // instead of layering a large chevron over its own body.
             let geometry = refresh_icon_geometry(rect);
-            painter.add(egui::Shape::line(geometry.arc, stroke));
-            painter.line_segment(geometry.shaft, stroke);
-            painter.line_segment(geometry.wing, stroke);
+            let mut points = geometry.arc;
+            points.extend([geometry.shaft[1], geometry.wing[1]]);
+            painter.add(egui::Shape::line(points, stroke));
         }
         UiIcon::Maximize | UiIcon::Restore => {
             let [back, front] = panel_size_icon_rects(rect);
@@ -534,28 +594,14 @@ pub(crate) fn paint_ui_icon(painter: &egui::Painter, rect: Rect, icon: UiIcon, c
             } else {
                 (quiet, strong)
             };
-            // The same overlapping windows describe both actions. Emphasize
-            // the upper window to expand, the lower window to restore.
-            let inset = back_stroke.width * 0.5;
-            let back = back.shrink(inset);
-            let r = 1.8;
-            let top_end = egui::pos2(back.right() - r, back.top());
-            let right_start = egui::pos2(back.right(), back.top() + r);
-            painter.line_segment([back.left_top(), top_end], back_stroke);
-            painter.add(egui::Shape::CubicBezier(
-                egui::epaint::CubicBezierShape::from_points_stroke(
-                    [
-                        top_end,
-                        top_end + Vec2::new(r * 0.5523, 0.0),
-                        right_start - Vec2::new(0.0, r * 0.5523),
-                        right_start,
-                    ],
-                    false,
-                    Color32::TRANSPARENT,
-                    back_stroke,
-                ),
-            ));
-            painter.line_segment([right_start, back.right_bottom()], back_stroke);
+            let back = back.shrink(back_stroke.width * 0.5);
+            curved_path(
+                painter,
+                &[back.left_top(), back.right_top(), back.right_bottom()],
+                false,
+                1.8,
+                back_stroke,
+            );
             painter.rect_stroke(front, 2.0, front_stroke, egui::StrokeKind::Inside);
         }
         UiIcon::Panel | UiIcon::Explorer | UiIcon::Code | UiIcon::Split | UiIcon::Preview => {
@@ -612,16 +658,7 @@ pub(crate) fn paint_ui_icon(painter: &egui::Painter, rect: Rect, icon: UiIcon, c
                 Stroke::new(1.0, color.gamma_multiply(0.4)),
                 egui::StrokeKind::Inside,
             );
-            painter.line_segment(
-                [center - Vec2::new(3.5, 0.0), center + Vec2::new(3.5, 0.0)],
-                stroke,
-            );
-            if icon == UiIcon::Stage {
-                painter.line_segment(
-                    [center - Vec2::new(0.0, 3.5), center + Vec2::new(0.0, 3.5)],
-                    stroke,
-                );
-            }
+            plus_minus(painter, center, 1.75, icon == UiIcon::Stage, color);
         }
         UiIcon::Push | UiIcon::Pull | UiIcon::Fetch => {
             let up = icon == UiIcon::Push;
@@ -644,36 +681,73 @@ pub(crate) fn paint_ui_icon(painter: &egui::Painter, rect: Rect, icon: UiIcon, c
                 stroke,
             ));
             if icon == UiIcon::Fetch {
-                painter.line_segment([rect.left_bottom(), rect.right_bottom()], stroke);
+                painter.line_segment(
+                    [
+                        rect.left_bottom() + Vec2::new(0.75, -0.75),
+                        rect.right_bottom() - Vec2::splat(0.75),
+                    ],
+                    stroke,
+                );
             }
         }
         UiIcon::Commit => {
-            painter.line_segment([rect.left_center(), center - Vec2::new(3.0, 0.0)], stroke);
-            painter.line_segment([center + Vec2::new(3.0, 0.0), rect.right_center()], stroke);
-            painter.circle_stroke(center, 3.0, stroke);
-        }
-        UiIcon::Diff => {
-            painter.rect_stroke(
-                rect.shrink(1.0),
-                2.0,
-                Stroke::new(1.0, color.gamma_multiply(0.4)),
-                egui::StrokeKind::Inside,
-            );
             painter.line_segment(
                 [
-                    center + Vec2::new(-3.0, -2.0),
-                    center + Vec2::new(3.0, -2.0),
+                    rect.left_center() + Vec2::new(0.75, 0.0),
+                    center - Vec2::new(3.0, 0.0),
                 ],
                 stroke,
             );
             painter.line_segment(
-                [center + Vec2::new(-3.0, 2.0), center + Vec2::new(3.0, 2.0)],
+                [
+                    center + Vec2::new(3.0, 0.0),
+                    rect.right_center() - Vec2::new(0.75, 0.0),
+                ],
                 stroke,
             );
-            painter.line_segment(
-                [center + Vec2::new(0.0, 0.0), center + Vec2::new(0.0, 4.0)],
-                stroke,
-            );
+            painter.circle_stroke(center, 3.0, stroke);
+        }
+        UiIcon::Diff | UiIcon::DiffAll => {
+            // Opposing replacement arrows are independent of the boxed
+            // stage/unstage controls. All adds a second head, never a smaller
+            // or shifted base symbol.
+            let arrow_stroke = Stroke::new(1.1, color);
+            let heads = [
+                (Pos2::new(rect.right() - 2.0, center.y - 2.5), -1.0),
+                (Pos2::new(rect.left() + 2.0, center.y + 2.5), 1.0),
+            ];
+            for (tip, direction) in heads {
+                let tail = Pos2::new(
+                    if direction < 0.0 {
+                        rect.left() + 2.0
+                    } else {
+                        rect.right() - 2.0
+                    },
+                    tip.y,
+                );
+                painter.line_segment([tail, tip], arrow_stroke);
+                painter.add(egui::Shape::line(
+                    vec![
+                        tip + Vec2::new(direction * 2.0, -2.0),
+                        tip,
+                        tip + Vec2::new(direction * 2.0, 2.0),
+                    ],
+                    arrow_stroke,
+                ));
+            }
+            if icon == UiIcon::DiffAll {
+                for (tip, direction) in heads {
+                    let tip = tip + Vec2::new(direction * 3.0, 0.0);
+                    painter.add(egui::Shape::line(
+                        vec![
+                            tip + Vec2::new(direction * 2.0, -2.0),
+                            tip,
+                            tip + Vec2::new(direction * 2.0, 2.0),
+                        ],
+                        arrow_stroke,
+                    ));
+                }
+            }
         }
         UiIcon::Revert => {
             painter.add(egui::Shape::line(
@@ -708,55 +782,28 @@ pub(crate) fn paint_ui_icon(painter: &egui::Painter, rect: Rect, icon: UiIcon, c
         }
         UiIcon::Eye => {
             let geometry = eye_icon_geometry(rect);
-            painter.add(egui::Shape::CubicBezier(
-                egui::epaint::CubicBezierShape::from_points_stroke(
-                    geometry.upper,
-                    false,
-                    Color32::TRANSPARENT,
-                    stroke,
-                ),
-            ));
-            painter.add(egui::Shape::CubicBezier(
-                egui::epaint::CubicBezierShape::from_points_stroke(
-                    geometry.lower,
-                    false,
-                    Color32::TRANSPARENT,
-                    stroke,
-                ),
-            ));
+            let mut points = cubic_points(geometry.upper);
+            let mut lower = cubic_points(geometry.lower);
+            lower.reverse();
+            points.extend(lower.into_iter().skip(1).take(19));
+            painter.add(egui::Shape::closed_line(points, stroke));
             painter.circle_filled(center, geometry.pupil_radius, color);
         }
         UiIcon::EyeClosed => {
             let (lid, lashes) = closed_eye_icon_geometry(rect);
-            painter.add(egui::Shape::CubicBezier(
-                egui::epaint::CubicBezierShape::from_points_stroke(
-                    lid,
-                    false,
-                    Color32::TRANSPARENT,
-                    stroke,
-                ),
-            ));
+            painter.add(egui::Shape::line(cubic_points(lid), stroke));
             for lash in lashes {
                 painter.line_segment(lash, stroke);
             }
         }
         UiIcon::ZoomIn | UiIcon::ZoomOut => {
-            painter.line_segment(
-                [
-                    Pos2::new(rect.left() + 1.0, center.y),
-                    Pos2::new(rect.right() - 1.0, center.y),
-                ],
-                stroke,
+            plus_minus(
+                painter,
+                center,
+                (rect.width().min(rect.height()) - 2.0) * 0.25,
+                icon == UiIcon::ZoomIn,
+                color,
             );
-            if icon == UiIcon::ZoomIn {
-                painter.line_segment(
-                    [
-                        Pos2::new(center.x, rect.top() + 1.0),
-                        Pos2::new(center.x, rect.bottom() - 1.0),
-                    ],
-                    stroke,
-                );
-            }
         }
         UiIcon::FitWidth => {
             for x in [rect.left() + 0.625, rect.right() - 0.625] {
@@ -783,23 +830,30 @@ pub(crate) fn paint_ui_icon(painter: &egui::Painter, rect: Rect, icon: UiIcon, c
             }
         }
         UiIcon::Warning => {
-            painter.add(egui::Shape::convex_polygon(
-                vec![
-                    Pos2::new(center.x, rect.top()),
-                    rect.right_bottom(),
-                    rect.left_bottom(),
+            let inset = rect.shrink(1.5);
+            curved_path(
+                painter,
+                &[
+                    Pos2::new(center.x, inset.top()),
+                    inset.right_bottom(),
+                    inset.left_bottom(),
                 ],
-                Color32::TRANSPARENT,
+                true,
+                0.8,
                 stroke,
-            ));
+            );
             painter.line_segment(
                 [
-                    Pos2::new(center.x, rect.top() + 4.0),
-                    Pos2::new(center.x, rect.bottom() - 4.0),
+                    Pos2::new(center.x, rect.top() + rect.height() * 0.36),
+                    Pos2::new(center.x, rect.top() + rect.height() * 0.58),
                 ],
                 stroke,
             );
-            painter.circle_filled(Pos2::new(center.x, rect.bottom() - 2.0), 1.0, color);
+            painter.circle_filled(
+                Pos2::new(center.x, rect.top() + rect.height() * 0.74),
+                0.65,
+                color,
+            );
         }
     }
 }
@@ -834,7 +888,8 @@ pub(crate) fn action_button_enabled(
         "Choose…" | "Choose Folder…" | "Choose folder…" | "Browse…" | "Open file…" | "Import…" => {
             UiIcon::Explorer
         }
-        "Replace" | "All" | "Replace draft from Markdown" => UiIcon::Diff,
+        "Replace" | "Replace draft from Markdown" => UiIcon::Diff,
+        "Replace all" => UiIcon::DiffAll,
         "Main" => UiIcon::Code,
         "Both" => UiIcon::Split,
         _ => UiIcon::Spanner,
@@ -847,8 +902,9 @@ fn paint_tree_glyph(painter: &egui::Painter, rect: Rect, folder: bool, color: Co
     if folder {
         // A flat tab reads as a folder even at 14×12; avoid a peaked roof.
         let outline = rect.shrink(stroke.width * 0.5);
-        painter.add(egui::Shape::closed_line(
-            vec![
+        curved_path(
+            painter,
+            &[
                 outline.left_bottom(),
                 outline.left_top(),
                 Pos2::new(outline.left() + 4.0, outline.top()),
@@ -856,12 +912,14 @@ fn paint_tree_glyph(painter: &egui::Painter, rect: Rect, folder: bool, color: Co
                 Pos2::new(outline.right(), outline.top() + 3.0),
                 outline.right_bottom(),
             ],
+            true,
+            0.8,
             stroke,
-        ));
+        );
         painter.line_segment(
             [
                 Pos2::new(outline.left(), outline.top() + 3.0),
-                Pos2::new(outline.left() + 6.0, outline.top() + 3.0),
+                Pos2::new(outline.left() + 6.8, outline.top() + 3.0),
             ],
             stroke,
         );
@@ -889,6 +947,157 @@ fn paint_tree_glyph(painter: &egui::Painter, rect: Rect, folder: bool, color: Co
 mod tests {
     use super::*;
 
+    fn glyph_shapes(icon: UiIcon) -> Vec<egui::Shape> {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            paint_ui_icon(
+                &ui.ctx().layer_painter(egui::LayerId::background()),
+                Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::splat(14.0)),
+                icon,
+                Color32::BLACK,
+            );
+        });
+        output.textures_delta.clear();
+        output.shapes.into_iter().map(|shape| shape.shape).collect()
+    }
+
+    #[test]
+    fn replace_all_adds_arrowheads_without_scaling_or_moving_diff() {
+        let single = glyph_shapes(UiIcon::Diff);
+        let all = glyph_shapes(UiIcon::DiffAll);
+        assert_eq!(all.len(), single.len() + 2);
+        assert_eq!(&all[..single.len()], single.as_slice());
+        assert!(
+            all.iter()
+                .all(|shape| !matches!(shape, egui::Shape::Rect(_))),
+            "replacement icons must not reuse stage/unstage boxes"
+        );
+    }
+
+    #[test]
+    fn replacement_arrows_and_warning_keep_their_entire_stroke_inside_the_icon_box() {
+        let safe = Rect::from_min_max(egui::pos2(20.5, 20.5), egui::pos2(33.5, 33.5));
+        for icon in [UiIcon::Diff, UiIcon::DiffAll, UiIcon::Warning] {
+            for shape in glyph_shapes(icon) {
+                assert!(
+                    safe.contains_rect(shape.visual_bounding_rect()),
+                    "{icon:?} reaches the icon boundary"
+                );
+            }
+        }
+        let warning = glyph_shapes(UiIcon::Warning);
+        let egui::Shape::Path(outline) = &warning[0] else {
+            panic!("warning requires a path outline")
+        };
+        assert!(
+            outline.closed,
+            "the warning contour must join its final edge"
+        );
+        assert_eq!(outline.fill.a(), 0);
+    }
+
+    #[test]
+    fn continuous_contours_are_never_split_into_independent_strokes() {
+        for icon in [
+            UiIcon::Check,
+            UiIcon::Up,
+            UiIcon::Down,
+            UiIcon::Next,
+            UiIcon::Previous,
+            UiIcon::Refresh,
+            UiIcon::Search,
+            UiIcon::Spanner,
+        ] {
+            let shapes = glyph_shapes(icon);
+            assert_eq!(shapes.len(), 1, "{icon:?} must be one joined path");
+            assert!(matches!(shapes[0], egui::Shape::Path(_)));
+        }
+        assert_eq!(
+            glyph_shapes(UiIcon::Eye).len(),
+            2,
+            "one closed eyelid + pupil"
+        );
+        assert_eq!(
+            glyph_shapes(UiIcon::Maximize).len(),
+            2,
+            "one contour per window"
+        );
+    }
+
+    #[test]
+    fn small_marks_stay_centered_and_leave_the_button_hit_target_alone() {
+        for icon in [
+            UiIcon::Check,
+            UiIcon::Close,
+            UiIcon::Up,
+            UiIcon::Down,
+            UiIcon::Next,
+            UiIcon::Previous,
+            UiIcon::ZoomIn,
+            UiIcon::ZoomOut,
+        ] {
+            let bounds = glyph_shapes(icon)
+                .iter()
+                .fold(Rect::NOTHING, |bounds, shape| {
+                    bounds.union(shape.visual_bounding_rect())
+                });
+            assert!(
+                bounds.width() <= 8.5 && bounds.height() <= 8.5,
+                "{icon:?}: {bounds:?}"
+            );
+            assert!(
+                bounds.center().distance(egui::pos2(27.0, 27.0)) < 1.0,
+                "{icon:?}: {bounds:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn compiling_toolbar_uses_filled_geometry_and_keeps_its_axle_transparent() {
+        for compiling in [false, true] {
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                toolbar_button(
+                    ui,
+                    true,
+                    false,
+                    UiIcon::Compile,
+                    "Compile",
+                    crate::settings::ToolbarStyle::Icons,
+                    compiling,
+                );
+            });
+            output.textures_delta.clear();
+            let meshes: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Mesh(mesh) => Some(mesh),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(meshes.len(), usize::from(compiling));
+            if let Some(mesh) = meshes.first() {
+                let center = mesh.calc_bounds().center();
+                assert!(mesh.is_valid());
+                for indices in mesh.indices.as_chunks::<3>().0 {
+                    let points: [Pos2; 3] =
+                        std::array::from_fn(|i| mesh.vertices[indices[i] as usize].pos);
+                    let mut signs = [0.0; 3];
+                    for i in 0..3 {
+                        let edge = points[(i + 1) % 3] - points[i];
+                        let relative = center - points[i];
+                        signs[i] = edge.x * relative.y - edge.y * relative.x;
+                    }
+                    assert!(
+                        signs.iter().any(|s| *s < 0.0) && signs.iter().any(|s| *s > 0.0),
+                        "a gear triangle fills the axle hole"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn every_registered_icon_has_finite_bounded_ink_at_control_sizes() {
         for size in [Vec2::new(14.0, 12.0), Vec2::splat(14.0)] {
@@ -905,7 +1114,7 @@ mod tests {
                     let bounds = shape.shape.visual_bounding_rect();
                     assert!(bounds.is_finite(), "{icon:?}: {bounds:?}");
                     assert!(
-                        rect.expand(1.0).contains_rect(bounds),
+                        rect.expand(0.001).contains_rect(bounds),
                         "{icon:?}: {bounds:?} outside {rect:?}"
                     );
                 }
@@ -920,7 +1129,17 @@ mod tests {
             .build_ui(super::super::icon_sheet::show);
         harness.run();
         assert_eq!(harness.ctx.pixels_per_point(), 1.0);
-        assert!(76.0 + UiIcon::ALL.len().div_ceil(6) as f32 * 88.0 + 152.0 < 900.0);
+        for clipped in &harness.output().shapes {
+            if matches!(clipped.shape, egui::Shape::Path(_)) {
+                assert!(
+                    clipped
+                        .clip_rect
+                        .contains_rect(clipped.shape.visual_bounding_rect()),
+                    "the sheet must not clip ink outside the icon's local origin"
+                );
+            }
+        }
+        assert!(76.0 + UiIcon::ALL.len().div_ceil(6) as f32 * 80.0 + 152.0 < 900.0);
     }
 
     #[test]
