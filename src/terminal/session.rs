@@ -69,10 +69,12 @@ impl Shared {
         if let Some(grid) = grid {
             snapshot.grid = Some(Arc::new(grid));
         }
+        let status_changed =
+            std::mem::discriminant(&snapshot.status) != std::mem::discriminant(&status);
         snapshot.status = status;
         snapshot.revision += 1;
         drop(snapshot);
-        if self.visible.load(Ordering::Acquire)
+        if (status_changed || self.visible.load(Ordering::Acquire))
             && !self.repaint_pending.swap(true, Ordering::AcqRel)
             && !self.stopped.load(Ordering::Acquire)
         {
@@ -555,7 +557,7 @@ mod tests {
         let shared = Shared {
             snapshot: Mutex::new(Snapshot {
                 grid: None,
-                status: Status::Starting,
+                status: Status::Running,
                 revision: 0,
             }),
             stopped: AtomicBool::new(false),
@@ -568,6 +570,12 @@ mod tests {
             shared.publish(None, Status::Running);
         }
         assert!(!shared.repaint_pending.load(Ordering::Acquire));
+        shared.publish(None, Status::Failed("shell failed".into()));
+        assert!(
+            shared.repaint_pending.load(Ordering::Acquire),
+            "hidden health changes must wake Activity"
+        );
+        shared.repaint_pending.store(false, Ordering::Release);
         shared.visible.store(true, Ordering::Release);
         shared.publish(None, Status::Running);
         assert!(shared.repaint_pending.load(Ordering::Acquire));

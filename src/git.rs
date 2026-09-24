@@ -135,6 +135,13 @@ impl Default for GitPanel {
 }
 
 impl GitPanel {
+    pub(crate) fn activity(&self) -> crate::activity::Activity {
+        crate::activity::Activity::work(
+            self.job.is_running(),
+            self.refresh_requested || self.pending_operation.is_some(),
+            self.failed.then_some(self.message.as_str()),
+        )
+    }
     /// Queue a status scan for the next panel frame. The request is retained
     /// while a Git operation is running, so filesystem updates cannot be lost
     /// behind an in-flight stage, commit, or diff operation.

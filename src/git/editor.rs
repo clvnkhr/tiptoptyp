@@ -194,6 +194,15 @@ impl Default for GitEditorState {
 }
 
 impl GitEditorState {
+    pub(crate) fn activity(&self) -> crate::activity::Activity {
+        if self.refresh_requested
+            && !matches!(self.job.activity(), crate::activity::Activity::Failed(_))
+        {
+            crate::activity::Activity::Pending("Hunks stale; waiting for edits to settle")
+        } else {
+            self.job.activity()
+        }
+    }
     pub(crate) fn clear_document(&mut self) {
         self.hunks.clear();
         self.chunk = None;

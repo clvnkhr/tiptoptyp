@@ -118,6 +118,20 @@ impl TerminalPane {
         }
     }
 
+    pub(crate) fn activity(&mut self) -> crate::activity::Activity {
+        use crate::activity::Activity;
+        self.sync_snapshot();
+        if let Some(error) = &self.error {
+            return Activity::Failed(error.clone());
+        }
+        match self.status.as_ref() {
+            Some(Status::Starting) => Activity::Running,
+            Some(Status::Failed(error)) => Activity::Failed(error.clone()),
+            Some(Status::Exited(_)) => Activity::Inactive("Shell exited"),
+            Some(Status::Running) => Activity::Idle,
+            None => Activity::Inactive("Not started"),
+        }
+    }
     pub(crate) fn status_text(&self) -> Option<&str> {
         match self.status.as_ref()? {
             Status::Starting => Some("Starting shell…"),

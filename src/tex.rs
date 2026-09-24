@@ -248,8 +248,14 @@ impl TexService {
             }
             match &event {
                 Event::Ready { provider, .. } => match provider {
-                    Provider::Texlab => self.texlab_ready = true,
-                    Provider::Badness => self.badness_ready = true,
+                    Provider::Texlab => {
+                        self.texlab_ready = true;
+                        self.texlab_error = None;
+                    }
+                    Provider::Badness => {
+                        self.badness_ready = true;
+                        self.badness_error = None;
+                    }
                 },
                 Event::Failed {
                     provider, message, ..

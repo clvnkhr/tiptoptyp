@@ -70,11 +70,15 @@ pub(crate) enum LatestJobPoll<T> {
 /// rather than being mistaken for an indefinitely pending job.
 pub(crate) struct LatestJob<T> {
     receiver: Option<Receiver<Result<T, String>>>,
+    last_error: Option<String>,
 }
 
 impl<T> Default for LatestJob<T> {
     fn default() -> Self {
-        Self { receiver: None }
+        Self {
+            receiver: None,
+            last_error: None,
+        }
     }
 }
 
@@ -108,10 +112,12 @@ impl<T: Send + 'static> LatestJob<T> {
         // Replacing the receiver first makes a failed spawn terminal too: the
         // caller never remains stuck polling an obsolete request.
         self.receiver = None;
+        self.last_error = None;
         let (sender, receiver) = mpsc::channel();
         let spawned = thread::Builder::new().name(name.into()).spawn(move || {
             let _span = crate::performance::span("worker.job");
-            let result = work();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+                .unwrap_or_else(|_| Err("background worker panicked".into()));
             if sender.send(result).is_ok()
                 && let Some(target) = repaint
             {
@@ -133,7 +139,9 @@ impl<T: Send + 'static> LatestJob<T> {
             }
             Err(error) => {
                 self.receiver = None;
-                Err(format!("could not start background job: {error}"))
+                let message = format!("could not start background job: {error}");
+                self.last_error = Some(message.clone());
+                Err(message)
             }
         }
     }
@@ -149,14 +157,21 @@ impl<T: Send + 'static> LatestJob<T> {
             }
             Ok(Err(error)) => {
                 self.receiver = None;
+                self.last_error = Some(error.clone());
                 LatestJobPoll::Failed(error)
             }
             Err(TryRecvError::Empty) => LatestJobPoll::Pending,
             Err(TryRecvError::Disconnected) => {
                 self.receiver = None;
-                LatestJobPoll::Failed("background worker stopped unexpectedly".to_owned())
+                let error = "background worker stopped unexpectedly".to_owned();
+                self.last_error = Some(error.clone());
+                LatestJobPoll::Failed(error)
             }
         }
+    }
+
+    pub(crate) fn activity(&self) -> crate::activity::Activity {
+        crate::activity::Activity::work(self.is_running(), false, self.last_error.as_deref())
     }
 
     pub(crate) fn is_running(&self) -> bool {
@@ -165,6 +180,7 @@ impl<T: Send + 'static> LatestJob<T> {
 
     /// Supersede acceptance; this does not promise to interrupt running code.
     pub(crate) fn supersede(&mut self) {
+        self.last_error = None;
         self.receiver = None;
     }
 }
@@ -267,16 +283,55 @@ mod tests {
     }
 
     #[test]
+    fn activity_retains_failure_and_recovers_on_a_new_successful_job() {
+        use crate::activity::Activity;
+        let mut job = LatestJob::<()>::default();
+        job.start("activity-failure", || Err("failed".into()))
+            .unwrap();
+        assert_eq!(job.activity(), Activity::Running);
+        assert!(matches!(
+            poll_until_settled(&mut job),
+            LatestJobPoll::Failed(_)
+        ));
+        assert_eq!(job.activity(), Activity::Failed("failed".into()));
+        assert_eq!(job.poll(), LatestJobPoll::Idle);
+        assert_eq!(job.activity(), Activity::Failed("failed".into()));
+        job.start("activity-recovery", || Ok(())).unwrap();
+        assert_eq!(job.activity(), Activity::Running);
+        assert_eq!(poll_until_settled(&mut job), LatestJobPoll::Ready(()));
+        assert_eq!(job.activity(), Activity::Idle);
+    }
+
+    #[test]
+    fn activity_reports_panics_as_failures() {
+        let mut job = LatestJob::<()>::default();
+        job.start("activity-panic", || panic!("injected")).unwrap();
+        assert_eq!(
+            poll_until_settled(&mut job),
+            LatestJobPoll::Failed("background worker panicked".into())
+        );
+        assert!(matches!(
+            job.activity(),
+            crate::activity::Activity::Failed(_)
+        ));
+    }
+
+    #[test]
     fn disconnected_worker_is_failed_and_clears_pending_state() {
         let (sender, receiver) = mpsc::channel();
         drop(sender);
         let mut job = LatestJob::<()> {
             receiver: Some(receiver),
+            last_error: None,
         };
         assert_eq!(
             job.poll(),
-            LatestJobPoll::Failed("background worker stopped unexpectedly".to_owned())
+            LatestJobPoll::Failed("background worker stopped unexpectedly".into())
         );
+        assert!(matches!(
+            job.activity(),
+            crate::activity::Activity::Failed(_)
+        ));
         assert_eq!(job.poll(), LatestJobPoll::Idle);
     }
 
@@ -285,6 +340,7 @@ mod tests {
         let (_old_sender, old_receiver) = mpsc::channel();
         let mut job = LatestJob::<()> {
             receiver: Some(old_receiver),
+            last_error: None,
         };
         let (_sender, receiver) = mpsc::channel();
         let error = job

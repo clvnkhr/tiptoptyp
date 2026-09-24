@@ -110,6 +110,7 @@ pub enum UiSnapshotScene {
     RenameDialog,
     WorkspaceChooser,
     ProblemsPanel,
+    ActivityPanel,
     TerminalPanel,
     TerminalMaximized,
     TerminalIcons,
@@ -126,7 +127,7 @@ pub enum UiSnapshotScene {
 }
 
 impl UiSnapshotScene {
-    pub const ALL: [Self; 57] = [
+    pub const ALL: [Self; 58] = [
         Self::TableEditor,
         Self::TableEditorNarrow,
         Self::Main,
@@ -171,6 +172,7 @@ impl UiSnapshotScene {
         Self::RenameDialog,
         Self::WorkspaceChooser,
         Self::ProblemsPanel,
+        Self::ActivityPanel,
         Self::TerminalPanel,
         Self::TerminalMaximized,
         Self::TerminalIcons,
@@ -233,6 +235,7 @@ impl UiSnapshotScene {
             Self::RenameDialog => "rename-dialog",
             Self::WorkspaceChooser => "workspace-chooser",
             Self::ProblemsPanel => "problems-panel",
+            Self::ActivityPanel => "activity-panel",
             Self::TerminalPanel => "terminal-panel",
             Self::TerminalMaximized => "terminal-maximized",
             Self::TerminalIcons => "terminal-icons",
@@ -268,6 +271,7 @@ impl UiSnapshotScene {
             | Self::DelimiterMatch
             | Self::RainbowBrackets
             | Self::ProblemsPanel
+            | Self::ActivityPanel
             | Self::TerminalPanel
             | Self::TerminalMaximized
             | Self::TerminalIcons
@@ -361,6 +365,7 @@ impl UiSnapshotScene {
             "rename-dialog" => Self::RenameDialog,
             "workspace-chooser" => Self::WorkspaceChooser,
             "problems-panel" => Self::ProblemsPanel,
+            "activity-panel" => Self::ActivityPanel,
             "terminal-panel" => Self::TerminalPanel,
             "terminal-maximized" => Self::TerminalMaximized,
             "terminal-icons" => Self::TerminalIcons,

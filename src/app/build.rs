@@ -72,7 +72,10 @@ impl EditorApp {
         };
 
         match self.compiler.request(request) {
-            Ok(()) => self.preview.status = PreviewStatus::Compiling,
+            Ok(()) => {
+                self.activity.build = crate::activity::Activity::Running;
+                self.preview.status = PreviewStatus::Compiling;
+            }
             Err(error) => self.set_compile_error(error),
         }
     }
@@ -135,6 +138,7 @@ impl EditorApp {
                 CompileEvent::Artifact(artifact) => {
                     self.preview.accept_artifact(artifact.key, artifact.pdf);
                     self.set_diagnostics(artifact.diagnostics);
+                    self.activity.build = crate::activity::Activity::Idle;
                     self.preview.status = PreviewStatus::Ready(result.elapsed);
                     self.complete_pending_export();
                 }
@@ -147,6 +151,7 @@ impl EditorApp {
     }
 
     pub(super) fn set_compile_failure(&mut self, report: DiagnosticReport) {
+        self.activity.build = crate::activity::Activity::Failed(report.raw.clone());
         self.preview.content.invalidate();
         self.preview.status = PreviewStatus::Error;
         self.set_diagnostics(report);

@@ -45,6 +45,7 @@ impl EditorApp {
         if self.snapshot_scene.is_some() || self.save_job.is_running() {
             return false;
         }
+        self.activity.save_error = None;
         let path = canonical_or_absolute(&path);
         if self.tabs.ids().any(|id| {
             id != tab
@@ -191,9 +192,11 @@ impl EditorApp {
             .document_for_tab(pending.tab)
             .is_some_and(|doc| doc.key() == pending.key);
         let intent = result.completion.intent;
+        self.activity.save_error = None;
         let committed = match result.completion.result {
             Ok(committed) => committed,
             Err(error) => {
+                self.activity.save_error = Some(error.to_string());
                 if let Some(observed) = result.conflict {
                     if active && unchanged && intent != SaveIntent::Auto {
                         self.document_workflow.set_modal(AppModal::Overwrite {
@@ -310,6 +313,7 @@ impl EditorApp {
         }
         self.schedule_project_index();
         if let WriteDurability::Uncertain(error) = committed.durability {
+            self.activity.save_error = Some(format!("Save durability uncertain: {error}"));
             if token_matches {
                 self.document_workflow.cancel_continuation();
             }
@@ -454,6 +458,12 @@ mod tests {
             .start_and_repaint("uncertain save", &context, || Ok(result))
             .unwrap();
         app.finish_save_for_test(&context);
+        assert!(
+            app.activity
+                .save_error
+                .as_deref()
+                .is_some_and(|e| e.contains("directory sync failure"))
+        );
         assert_eq!(fs::read_to_string(&path).unwrap(), "saved bytes");
         assert_eq!(app.document().path().as_ref(), Some(&path));
         assert!(!app.document().is_dirty());

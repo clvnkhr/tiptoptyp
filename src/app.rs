@@ -1,3 +1,4 @@
+mod activity_panel;
 mod build;
 mod encoding_import;
 mod icon_sheet;
@@ -1148,6 +1149,7 @@ pub struct EditorApp {
 
     view_mode: ViewMode,
     explorer: ExplorerPanelState,
+    activity: activity_panel::ActivityTracking,
     bottom_panel: BottomPanel,
     terminal: TerminalPane,
     settings_visible: bool,
@@ -1437,6 +1439,7 @@ impl EditorApp {
             editor_data: EditorDerivedData::default(),
             view_mode: ViewMode::Split,
             explorer: ExplorerPanelState::default(),
+            activity: Default::default(),
             bottom_panel: BottomPanel::default(),
             terminal: TerminalPane::default(),
             settings_visible: false,
@@ -2228,7 +2231,10 @@ impl EditorApp {
             crate::worker::RepaintTarget::current(context),
         ) {
             self.notice = Some(Notice {
-                message: format!("Could not start project index: {error}"),
+                message: {
+                    self.activity.index_error = Some(error.clone());
+                    format!("Could not start project index: {error}")
+                },
                 kind: NoticeKind::Error,
             });
         }
@@ -2237,9 +2243,11 @@ impl EditorApp {
     fn tick_project_index(&mut self, context: &egui::Context) {
         match self.project_index_job.poll() {
             ProjectIndexPoll::Ready(index) if !self.project_index_deadline.is_pending() => {
+                self.activity.index_error = None;
                 self.project_index = index;
             }
             ProjectIndexPoll::Failed(error) => {
+                self.activity.index_error = Some(error.clone());
                 self.notice = Some(Notice {
                     message: format!("Project index stopped: {error}"),
                     kind: NoticeKind::Error,
@@ -2315,6 +2323,9 @@ impl EditorApp {
         if self.document_mut().take_edit().is_none() {
             return;
         }
+        self.activity.completion = None;
+        self.activity.hover = None;
+        self.activity.intelligence_error = None;
         self.queue_preview_follow();
         self.manual_format_revision = None;
         self.format_request_key = None;
@@ -2639,7 +2650,9 @@ impl EditorApp {
         if self.compilation_paused {
             if !self.may_run_compilation() {
                 self.compile_deadline = None;
+                self.activity.build = crate::activity::Activity::Inactive("Paused");
                 if let Err(error) = self.compiler.pause(self.document().revision()) {
+                    self.activity.build = crate::activity::Activity::Failed(error.clone());
                     self.compilation_paused = false;
                     self.notice = Some(Notice {
                         message: format!("Could not pause the Typst watcher: {error}"),
@@ -2710,8 +2723,14 @@ impl EditorApp {
     }
 
     fn clear_preview_for_document(&mut self, preserve_designated_preview: bool) {
+        self.activity.completion = None;
+        self.activity.hover = None;
+        self.activity.intelligence_error = None;
+        self.activity.diagnostics = Default::default();
+        self.activity.format_error = None;
         self.pdfium_asset = Default::default();
         if !preserve_designated_preview {
+            self.activity.build = Default::default();
             self.pdfium_preview = Default::default();
         }
         self.manual_format_revision = None;
@@ -4884,7 +4903,11 @@ impl EditorApp {
         if !self.lifecycle.allows_document_work() {
             return;
         }
+        self.activity.workspace = crate::activity::Activity::Pending("Scan queued");
+        self.activity.watcher = crate::activity::Activity::Running;
         if let Err(error) = self.workspace_service.subscribe(&root) {
+            self.activity.watcher = crate::activity::Activity::Failed(error.clone());
+            self.activity.workspace = crate::activity::Activity::Failed(error.clone());
             self.workspace_error = Some(format!("Could not start workspace scan: {error}"));
         }
     }
@@ -4892,11 +4915,14 @@ impl EditorApp {
     fn poll_workspace_scan(&mut self, context: &egui::Context) {
         while let Some(event) = self.workspace_service.poll() {
             match event {
+                WorkspaceEvent::Watcher(state) => self.activity.watcher = state,
+                WorkspaceEvent::Activity(state) => self.activity.workspace = state,
                 WorkspaceEvent::Snapshot {
                     snapshot,
                     scan_serial,
                 } => {
                     debug_assert!(scan_serial > 0);
+                    self.activity.workspace = crate::activity::Activity::Idle;
                     let font_files = workspace_snapshot_font_files(&snapshot);
                     let should_rescan_fonts = !self.font_catalog_scan.is_running()
                         && snapshot.root == self.font_catalog_root
@@ -4925,6 +4951,7 @@ impl EditorApp {
                     self.poll_external_file_change(context, false);
                 }
                 WorkspaceEvent::Error(error) => {
+                    self.activity.workspace = crate::activity::Activity::Failed(error.clone());
                     self.workspace_error = Some(error);
                 }
             }
@@ -5109,6 +5136,8 @@ impl EditorApp {
                     }
                 }
                 PreviewEffect::DiscardLanguageRequests => {
+                    self.activity.completion = None;
+                    self.activity.hover = None;
                     self.manual_format_revision = None;
                     self.format_request_key = None;
                     self.format_when_service_ready = None;
@@ -5544,6 +5573,9 @@ impl EditorApp {
                     contents,
                     ..
                 } => {
+                    if self.activity.hover == Some(request_token) {
+                        self.activity.hover = None;
+                    }
                     let current_key = self.document().key();
                     let request_key = self.editor_hover.as_ref().and_then(|hover| {
                         hover
@@ -5593,6 +5625,10 @@ impl EditorApp {
                     request_token,
                     message,
                 } => {
+                    if self.activity.completion == Some(request_token) {
+                        self.activity.completion = None;
+                        self.activity.intelligence_error = Some(message.clone());
+                    }
                     let matches = self.editor_completion.as_ref().is_some_and(|completion| {
                         completion_response_matches(
                             completion,
@@ -5621,6 +5657,7 @@ impl EditorApp {
                 }
                 TinymistEvent::Error { stage, message, .. } => {
                     if stage == "formatting" {
+                        self.activity.format_error = Some(message.clone());
                         self.manual_format_revision = None;
                         self.format_request_key = None;
                         self.notice = Some(Notice {
@@ -5927,6 +5964,9 @@ impl EditorApp {
                 diagnostic
             })
             .collect();
+        if self.tinymist_sync.current_uri.as_deref() == Some(uri) {
+            self.activity.diagnostics[0] = Some(self.document().key());
+        }
         normalize_diagnostics(&mut converted);
         self.preview.tinymist_diagnostics = converted;
         self.update_tex_diagnostics();
@@ -6379,6 +6419,7 @@ impl EditorApp {
     }
 
     fn request_format_document(&mut self) {
+        self.activity.format_error = None;
         if self.table_editor.is_some() {
             return;
         }
@@ -6418,7 +6459,10 @@ impl EditorApp {
             self.manual_format_revision = None;
             self.format_request_key = None;
             self.notice = Some(Notice {
-                message: format!("Could not prepare the document for formatting: {error}"),
+                message: {
+                    self.activity.format_error = Some(error.clone());
+                    format!("Could not prepare the document for formatting: {error}")
+                },
                 kind: NoticeKind::Error,
             });
             return;
@@ -6439,7 +6483,10 @@ impl EditorApp {
                 self.manual_format_revision = None;
                 self.format_request_key = None;
                 self.notice = Some(Notice {
-                    message: format!("Could not request formatting: {error}"),
+                    message: {
+                        self.activity.format_error = Some(error.to_string());
+                        format!("Could not request formatting: {error}")
+                    },
                     kind: NoticeKind::Error,
                 });
             }
@@ -6481,7 +6528,9 @@ impl EditorApp {
             return;
         }
         self.format_request_key = None;
+        self.activity.format_error = None;
         let Some(edits) = edits else {
+            self.activity.format_error = Some("The tool did not provide a formatter".into());
             self.manual_format_revision = None;
             self.notice = Some(Notice {
                 message: "The selected tool did not provide a formatter for this document"
@@ -7176,19 +7225,22 @@ impl EditorApp {
             let is_tex = self.document().kind() == DocumentKind::Tex;
             if let Some(hover) = &mut self.editor_hover {
                 hover.requested = true;
-                if is_tex {
-                    let _ = self.tex_service.request(crate::tex::RequestKind::Hover {
+                let result = if is_tex {
+                    self.tex_service.request(crate::tex::RequestKind::Hover {
                         position,
                         token: hover.request_token,
-                    });
+                    })
                 } else {
-                    let _ = self.tinymist.hover_document(
-                        generation,
-                        uri,
-                        version,
-                        position,
-                        hover.request_token,
-                    );
+                    self.tinymist
+                        .hover_document(generation, uri, version, position, hover.request_token)
+                        .map_err(|error| error.to_string())
+                };
+                match result {
+                    Ok(()) => {
+                        self.activity.hover = Some(hover.request_token);
+                        self.activity.intelligence_error = None;
+                    }
+                    Err(error) => self.activity.intelligence_error = Some(error),
                 }
             }
         }
@@ -7331,6 +7383,8 @@ impl EditorApp {
         };
         match result {
             Ok(()) => {
+                self.activity.completion = Some(request_token);
+                self.activity.intelligence_error = None;
                 self.editor_completion = Some(EditorCompletionState {
                     key: self.document().key(),
                     provenance: CompletionProvenance::Server {
@@ -7359,6 +7413,7 @@ impl EditorApp {
                 });
             }
             Err(error) => {
+                self.activity.intelligence_error = Some(error.clone());
                 self.editor_completion = None;
                 if explicit {
                     self.notice = Some(Notice {
@@ -7383,6 +7438,9 @@ impl EditorApp {
             is_incomplete,
             mut items,
         } = response;
+        if self.activity.completion == Some(request_token) {
+            self.activity.completion = None;
+        }
         let document_revision = self.document().revision();
         let document_key = self.document().key();
         let request_key = self

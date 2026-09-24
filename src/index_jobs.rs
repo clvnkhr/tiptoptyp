@@ -362,7 +362,6 @@ impl ProjectIndexClient {
         while self.completions.try_recv().is_ok() {}
     }
 
-    #[cfg(test)]
     pub(crate) fn is_running(&self) -> bool {
         self.pending
     }

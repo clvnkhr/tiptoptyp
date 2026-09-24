@@ -738,6 +738,9 @@ impl QaSession {
                     app.captures.defer_target("main");
                 }
             }
+            UiSnapshotScene::ActivityPanel => {
+                app.bottom_panel.select(PanelTab::Activity);
+            }
             UiSnapshotScene::TerminalIcons => {
                 if !self.terminal_icons_prepared {
                     app.font_catalog = FontCatalog::discover(&app.workspace_root);

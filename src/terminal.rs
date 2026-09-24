@@ -12,6 +12,7 @@ pub(crate) enum PanelTab {
     #[default]
     Problems,
     Terminal,
+    Activity,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

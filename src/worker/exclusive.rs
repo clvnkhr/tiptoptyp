@@ -88,6 +88,7 @@ struct Completion<T> {
 pub(crate) struct ExclusiveJob<T: OperationSummary> {
     active: Option<Arc<Mutex<Completion<T>>>>,
     name: String,
+    last_error: Option<String>,
     shell: Option<RepaintTarget>,
 }
 impl<T: OperationSummary> Default for ExclusiveJob<T> {
@@ -95,6 +96,7 @@ impl<T: OperationSummary> Default for ExclusiveJob<T> {
         Self {
             active: None,
             name: String::new(),
+            last_error: None,
             shell: None,
         }
     }
@@ -109,6 +111,7 @@ impl<T: OperationSummary + Send + 'static> ExclusiveJob<T> {
         if self.is_running() {
             return Err("An operation is already in progress".to_owned());
         }
+        self.last_error = None;
         self.name = name.into();
         let name = self.name.clone();
         let owner = RepaintTarget::current(context);
@@ -139,7 +142,11 @@ impl<T: OperationSummary + Send + 'static> ExclusiveJob<T> {
                     shell.request_repaint();
                 }
             })
-            .map_err(|error| format!("could not start background operation: {error}"))?;
+            .map_err(|error| {
+                let message = format!("could not start background operation: {error}");
+                self.last_error = Some(message.clone());
+                message
+            })?;
         self.active = Some(completion);
         Ok(())
     }
@@ -158,10 +165,16 @@ impl<T: OperationSummary + Send + 'static> ExclusiveJob<T> {
                 self.active = None;
                 match result {
                     Ok(value) => LatestJobPoll::Ready(value),
-                    Err(error) => LatestJobPoll::Failed(error),
+                    Err(error) => {
+                        self.last_error = Some(error.clone());
+                        LatestJobPoll::Failed(error)
+                    }
                 }
             }
         }
+    }
+    pub(crate) fn activity(&self) -> crate::activity::Activity {
+        crate::activity::Activity::work(self.is_running(), false, self.last_error.as_deref())
     }
     pub(crate) fn is_running(&self) -> bool {
         self.active.is_some()

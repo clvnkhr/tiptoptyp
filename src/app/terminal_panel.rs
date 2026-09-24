@@ -14,10 +14,13 @@ impl EditorApp {
             return false;
         }
         let maximized = self.bottom_panel.is_maximized();
+        let activity = self.bottom_panel.selected() == Some(PanelTab::Activity);
         let id = crate::child_view::viewport_scoped_id(
             ui.ctx(),
             if maximized {
                 "bottom-panel-maximized"
+            } else if activity {
+                "activity-panel"
             } else {
                 "bottom-panel"
             },
@@ -26,6 +29,8 @@ impl EditorApp {
         let panel = egui::Panel::bottom(id);
         let panel = if maximized {
             panel.resizable(false).exact_size(available)
+        } else if self.snapshot_scene == Some(UiSnapshotScene::ActivityPanel) {
+            panel.resizable(false).exact_size(120.0_f32.min(available))
         } else if matches!(
             self.snapshot_scene,
             Some(UiSnapshotScene::ProblemsPanel | UiSnapshotScene::TerminalPanel)
@@ -34,8 +39,19 @@ impl EditorApp {
         } else {
             panel
                 .resizable(true)
-                .default_size(METRICS.chrome.bottom_panel_default_height)
-                .min_size(METRICS.chrome.bottom_panel_min_height.min(available))
+                .default_size(if activity {
+                    120.0
+                } else {
+                    METRICS.chrome.bottom_panel_default_height
+                })
+                .min_size(
+                    if activity {
+                        54.0_f32
+                    } else {
+                        METRICS.chrome.bottom_panel_min_height
+                    }
+                    .min(available),
+                )
                 .max_size(available)
         };
         panel.show(ui, |ui| self.show_bottom_panel(ui));
@@ -104,6 +120,15 @@ impl EditorApp {
             {
                 self.bottom_panel.select(PanelTab::Terminal);
             }
+            if ui
+                .selectable_label(
+                    self.bottom_panel.selected() == Some(PanelTab::Activity),
+                    "Activity",
+                )
+                .clicked()
+            {
+                self.bottom_panel.select(PanelTab::Activity);
+            }
             // Reserve the square close control even for a long exit message.
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if panel_icon_button(ui, UiIcon::Close, "Close panel").clicked() {
@@ -132,6 +157,7 @@ impl EditorApp {
         match self.bottom_panel.selected() {
             Some(PanelTab::Problems) => self.show_problems(ui),
             Some(PanelTab::Terminal) => self.show_terminal_panel(ui),
+            Some(PanelTab::Activity) => self.show_activity(ui),
             None => {}
         }
     }
@@ -515,6 +541,15 @@ mod tests {
         harness.run();
         assert_eq!(harness.state().document().source(), "unchanged source");
         assert!(harness.state().compile_deadline.is_none());
+        harness.get_by_label("Activity").click();
+        harness.run();
+        assert_eq!(
+            harness.state().bottom_panel.selected(),
+            Some(PanelTab::Activity)
+        );
+        assert!(harness.query_by_label("Terminal input").is_none());
+        assert!(harness.state().compile_deadline.is_none());
+        assert_eq!(harness.state().document().source(), "unchanged source");
         harness.get_by_label("Problems").click();
         harness.run();
         assert_eq!(

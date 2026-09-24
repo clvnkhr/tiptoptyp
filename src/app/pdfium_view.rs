@@ -114,6 +114,18 @@ impl PdfiumView {
             _ => false,
         }
     }
+    pub(super) fn activity(&self) -> crate::activity::Activity {
+        use crate::activity::Activity;
+        if let Some(error) = &self.error {
+            Activity::Failed(error.clone())
+        } else if self.bytes.is_none() {
+            Activity::Inactive("Not in use")
+        } else if !self.ready() || self.search_pending {
+            Activity::Running
+        } else {
+            Activity::Idle
+        }
+    }
     pub(super) fn service_state(&self) -> ServiceState {
         if let Some(error) = &self.error {
             ServiceState::Failed(error.clone())

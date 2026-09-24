@@ -36,6 +36,8 @@ fn event_impact(kind: &EventKind) -> EventImpact {
 
 #[derive(Debug)]
 pub(crate) enum WorkspaceEvent {
+    Activity(crate::activity::Activity),
+    Watcher(crate::activity::Activity),
     Snapshot {
         snapshot: Arc<WorkspaceSnapshot>,
         scan_serial: u64,
@@ -170,9 +172,13 @@ fn root_worker(
     let mut snapshot = None::<Arc<WorkspaceSnapshot>>;
     let mut scan_serial = 0_u64;
     scan_and_publish(&root, &mut snapshot, &mut scan_serial, &subscribers, true);
-    if let Some(error) = watch_error {
-        publish(&subscribers, || WorkspaceEvent::Error(error.clone()));
-    }
+    let mut watcher_state = watch_error.map_or(
+        crate::activity::Activity::Idle,
+        crate::activity::Activity::Failed,
+    );
+    publish(&subscribers, || {
+        WorkspaceEvent::Watcher(watcher_state.clone())
+    });
 
     let mut changed_paths = BTreeSet::new();
     let mut structural_change = false;
@@ -194,6 +200,10 @@ fn root_worker(
                     });
                     subscriber.repaint.request_repaint();
                 }
+                let _ = subscriber.events.send(RoutedWorkspaceEvent {
+                    subscription: subscriber.subscription,
+                    event: WorkspaceEvent::Watcher(watcher_state.clone()),
+                });
                 subscribers.insert(owner, subscriber);
             }
             Ok(RootCommand::Unsubscribe(owner)) => {
@@ -205,17 +215,33 @@ fn root_worker(
                 flush_at = Some(Instant::now() + EVENT_QUIET_PERIOD);
             }
             Ok(RootCommand::Notification(Ok(mut event))) => {
+                if matches!(watcher_state, crate::activity::Activity::Failed(_)) {
+                    watcher_state = crate::activity::Activity::Idle;
+                    publish(&subscribers, || {
+                        WorkspaceEvent::Watcher(watcher_state.clone())
+                    });
+                }
                 let impact = event_impact(&event.kind);
                 event.paths.retain(|path| observed_path(&root, path));
                 if impact != EventImpact::Ignore && !event.paths.is_empty() {
+                    if flush_at.is_none() && impact == EventImpact::Structure {
+                        publish(&subscribers, || {
+                            WorkspaceEvent::Activity(crate::activity::Activity::Pending(
+                                "Changes queued",
+                            ))
+                        });
+                    }
                     structural_change |= impact == EventImpact::Structure;
                     changed_paths.extend(event.paths);
                     flush_at = Some(Instant::now() + EVENT_QUIET_PERIOD);
                 }
             }
             Ok(RootCommand::Notification(Err(error))) => {
+                watcher_state = crate::activity::Activity::Failed(format!(
+                    "Workspace notification failed: {error}"
+                ));
                 publish(&subscribers, || {
-                    WorkspaceEvent::Error(format!("Workspace notification failed: {error}"))
+                    WorkspaceEvent::Watcher(watcher_state.clone())
                 });
                 structural_change = true;
                 flush_at = Some(Instant::now() + EVENT_QUIET_PERIOD);
@@ -264,9 +290,15 @@ fn scan_and_publish(
     subscribers: &HashMap<WindowSessionId, Subscriber>,
     publish_unchanged: bool,
 ) {
+    publish(subscribers, || {
+        WorkspaceEvent::Activity(crate::activity::Activity::Running)
+    });
     *serial = serial.wrapping_add(1);
     match WorkspaceSnapshot::scan(root) {
         Ok(next) => {
+            publish(subscribers, || {
+                WorkspaceEvent::Activity(crate::activity::Activity::Idle)
+            });
             let unchanged = current
                 .as_ref()
                 .is_some_and(|snapshot| snapshot.as_ref() == &next);

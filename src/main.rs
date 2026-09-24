@@ -1,6 +1,7 @@
 #![deny(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod activity;
 mod app;
 #[allow(unsafe_code)]
 mod app_icon;

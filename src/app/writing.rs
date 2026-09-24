@@ -2,12 +2,24 @@ use super::*;
 #[derive(Default)]
 pub(super) struct WritingState {
     observed: Option<(DocumentKey, bool, bool)>,
+    skipped: Option<&'static str>,
     deadline: Option<Instant>,
     job: LatestJob<((DocumentKey, bool, bool), Vec<Diagnostic>)>,
     pub(super) diagnostics: Vec<Diagnostic>,
     pub(super) markers: Vec<usize>,
 }
 impl WritingState {
+    pub(super) fn activity(&self) -> crate::activity::Activity {
+        if let Some(reason) = self.skipped {
+            return crate::activity::Activity::Inactive(reason);
+        }
+        let state = self.job.activity();
+        if self.deadline.is_some() && matches!(state, crate::activity::Activity::Idle) {
+            crate::activity::Activity::Pending("Stale; waiting for edits to settle")
+        } else {
+            state
+        }
+    }
     pub(super) fn markers(&self, key: DocumentKey) -> &[usize] {
         if self.observed.is_some_and(|observed| observed.0 == key) {
             &self.markers
@@ -26,6 +38,7 @@ impl EditorApp {
         );
         if self.writing.observed != Some(identity) {
             self.writing.observed = Some(identity);
+            self.writing.skipped = None;
             self.writing.deadline = Some(Instant::now() + Duration::from_millis(600));
             self.writing.diagnostics.clear();
             self.writing.markers.clear();
@@ -84,6 +97,7 @@ impl EditorApp {
             .clone()
             .unwrap_or_else(|| self.tinymist_document_path());
         if source.len() > 2_000_000 {
+            self.writing.skipped = Some("Document exceeds writing-check size limit");
             return;
         }
         if let Err(error) =

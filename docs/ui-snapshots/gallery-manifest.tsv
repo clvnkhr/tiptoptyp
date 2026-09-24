@@ -104,3 +104,4 @@ scene	templates	templates	templates	targeted	-	-
 scene	encoding-import	encoding-import	encoding-import	targeted	-	-
 scene	writing-checks	main	main-writing-checks	targeted	-	-
 scene	icons	main	main-icons	targeted	-	-
+scene	activity-panel	main	main-activity-panel	targeted	-	-

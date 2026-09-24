@@ -112,6 +112,14 @@ impl EditorApp {
                 Event::Failed {
                     provider, message, ..
                 } => {
+                    if provider == Provider::Texlab {
+                        self.activity.completion = None;
+                        self.activity.hover = None;
+                    }
+                    if provider == Provider::Badness && self.format_request_key.is_some() {
+                        self.format_request_key = None;
+                        self.activity.format_error = Some(message.clone());
+                    }
                     self.tex_diagnostics[provider_index(provider)].clear();
                     self.update_tex_diagnostics();
                     self.notice = Some(Notice {
@@ -124,6 +132,8 @@ impl EditorApp {
                     diagnostics,
                     ..
                 } => {
+                    self.activity.diagnostics[1 + provider_index(provider)] =
+                        Some(self.document().key());
                     let locations =
                         crate::tex::diagnostic_locations(self.document().source(), &diagnostics);
                     self.tex_diagnostics[provider_index(provider)] = diagnostics
@@ -177,6 +187,9 @@ impl EditorApp {
                     let RequestKind::Hover { token, .. } = request.kind else {
                         continue;
                     };
+                    if self.activity.hover == Some(token) {
+                        self.activity.hover = None;
+                    }
                     if let Some(hover) = &mut self.editor_hover
                         && hover.key == request.identity.key
                         && hover.accepts_response(
@@ -189,7 +202,21 @@ impl EditorApp {
                     }
                 }
                 Event::RequestFailed { request, message } => {
+                    match request.kind {
+                        RequestKind::Hover { token, .. } if self.activity.hover == Some(token) => {
+                            self.activity.hover = None;
+                            self.activity.intelligence_error = Some(message.clone());
+                        }
+                        RequestKind::Completion { token, .. }
+                            if self.activity.completion == Some(token) =>
+                        {
+                            self.activity.completion = None;
+                            self.activity.intelligence_error = Some(message.clone());
+                        }
+                        _ => {}
+                    }
                     if matches!(request.kind, RequestKind::Format) {
+                        self.activity.format_error = Some(message.clone());
                         self.format_request_key = None;
                         self.manual_format_revision = None;
                     }
@@ -229,6 +256,7 @@ impl EditorApp {
         self.mark_diagnostics_changed();
     }
     pub(super) fn request_tex_format(&mut self) {
+        self.activity.format_error = None;
         // mark_edited runs before actions; refuse an out-of-date service snapshot.
         if self
             .tex_service
@@ -251,6 +279,7 @@ impl EditorApp {
                 });
             }
             Err(message) => {
+                self.activity.format_error = Some(message.clone());
                 self.format_request_key = None;
                 self.manual_format_revision = None;
                 self.notice = Some(Notice {
