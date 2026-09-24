@@ -60,7 +60,7 @@ impl EditorApp {
             }),
         };
         let request = CompileRequest {
-            revision: self.document().revision(),
+            revision: self.preview_document_revision(),
             input: CompileInput {
                 language,
                 source,
@@ -121,9 +121,10 @@ impl EditorApp {
     pub(super) fn receive_compile_results(&mut self) {
         let _span = crate::performance::span("compile.receive");
         while let Some(result) = self.compiler.try_recv() {
-            if !self.preview_processing_enabled()
+            if !self.compiler.is_latest(&result)
+                || !self.preview_processing_enabled()
                 || !self.may_run_compilation()
-                || result.revision != self.document().revision()
+                || result.revision != self.preview_document_revision()
             {
                 continue;
             }

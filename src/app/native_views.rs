@@ -1,6 +1,25 @@
 //! Owned child-window views and native preview composition.
 use super::*;
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn preview_outline_script(entries: &[crate::project_index::OutlineEntry]) -> String {
+    let entries = entries
+        .iter()
+        .map(|entry| {
+            serde_json::json!({
+                "title": entry.title,
+                "path": entry.path.to_string_lossy(),
+                "line": entry.line,
+                "level": entry.level,
+            })
+        })
+        .collect::<Vec<_>>();
+    let json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".to_owned());
+    format!(
+        "if (document.readyState === 'loading') {{ document.addEventListener('DOMContentLoaded', () => window.tiptoptypSetOutline?.({json})); }} else {{ window.tiptoptypSetOutline?.({json}); }}"
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct WebviewAppliedState {
     bounds: NativeRect,
@@ -37,6 +56,7 @@ impl EditorApp {
             self.webview_url = None;
             self.webview_navigation = None;
             self.webview_reload_pending = false;
+            self.webview_outline_snapshot = None;
         }
     }
 
@@ -1347,6 +1367,8 @@ impl EditorApp {
             let navigation_repaint = crate::worker::RepaintTarget::current(context);
             let popup_sender = self.web_link_sender.clone();
             let popup_repaint = crate::worker::RepaintTarget::current(context);
+            let action_sender = self.web_action_sender.clone();
+            let action_repaint = crate::worker::RepaintTarget::current(context);
             let shared_navigation = Arc::new(Mutex::new(navigation_state));
             let navigation_handler_state = Arc::clone(&shared_navigation);
             let popup_handler_state = Arc::clone(&shared_navigation);
@@ -1356,9 +1378,16 @@ impl EditorApp {
                 background.b(),
                 background.a(),
             );
+            let outline_script = preview_outline_script(&self.project_index.outline);
             let builder = wry::WebViewBuilder::new()
                 .with_url(&url)
                 .with_initialization_script(include_str!("../preview_navigation.js"))
+                .with_initialization_script(outline_script)
+                .with_ipc_handler(move |request| {
+                    if action_sender.send(request.body().clone()).is_ok() {
+                        action_repaint.request_repaint();
+                    }
+                })
                 .with_bounds(bounds)
                 .with_background_color(rgba)
                 .with_background_throttling(wry::BackgroundThrottlingPolicy::Disabled)
@@ -1442,8 +1471,15 @@ impl EditorApp {
             }
             self.webview_url = Some(url);
             self.webview_reload_pending = false;
+            self.webview_outline_snapshot = None;
         }
         if let Some(webview) = &self.webview {
+            if self.webview_outline_snapshot.as_ref() != Some(&self.project_index.outline) {
+                let script = preview_outline_script(&self.project_index.outline);
+                if webview.evaluate_script(&script).is_ok() {
+                    self.webview_outline_snapshot = Some(self.project_index.outline.clone());
+                }
+            }
             let diff = webview_property_diff(self.webview_applied, next_applied);
             if diff.background {
                 let _ = webview.set_background_color((

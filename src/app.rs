@@ -281,6 +281,32 @@ fn source_preview_available_for(document_kind: DocumentKind, designated: bool) -
     LanguageSupport::for_document(document_kind).build.is_some() || designated
 }
 
+/// Returns a scalar offset and the next folded-byte search position.
+fn find_next_preview_source(source: &str, query: &str, start: usize) -> Option<(usize, usize)> {
+    if query.is_empty() {
+        return None;
+    }
+    let mut folded = String::new();
+    let mut scalar_at_byte = Vec::new();
+    for (scalar, value) in source.chars().enumerate() {
+        for lower in value.to_lowercase() {
+            let old_len = folded.len();
+            folded.push(lower);
+            scalar_at_byte.extend(std::iter::repeat_n(scalar, folded.len() - old_len));
+        }
+    }
+    let query = query.to_lowercase();
+    let mut start = start.min(folded.len());
+    while !folded.is_char_boundary(start) {
+        start -= 1;
+    }
+    let found = folded[start..]
+        .find(&query)
+        .map(|offset| start + offset)
+        .or_else(|| folded[..start].find(&query))?;
+    Some((scalar_at_byte[found], found + query.len()))
+}
+
 fn preview_visible_for(document_kind: DocumentKind, view_mode: ViewMode, designated: bool) -> bool {
     document_kind.preview_only()
         || (source_preview_available_for(document_kind, designated) && view_mode.shows_preview())
@@ -1263,9 +1289,15 @@ pub struct EditorApp {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     webview_applied: Option<native_views::WebviewAppliedState>,
     web_link_sender: mpsc::Sender<String>,
+    web_action_sender: mpsc::Sender<String>,
     pdfium_preview: pdfium_view::PdfiumView,
     pdfium_asset: pdfium_view::PdfiumView,
     web_link_receiver: mpsc::Receiver<String>,
+    web_action_receiver: mpsc::Receiver<String>,
+    web_search_query: String,
+    web_search_offset: usize,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    webview_outline_snapshot: Option<Vec<crate::project_index::OutlineEntry>>,
     browser_launch: Option<mpsc::Receiver<Result<String, String>>>,
     browser_repaint: crate::worker::RepaintTarget,
 }
@@ -1401,6 +1433,7 @@ impl EditorApp {
         let preview_dark =
             settings.document_theme.resolve(active_interface_theme) == egui::Theme::Dark;
         let (web_link_sender, web_link_receiver) = mpsc::channel();
+        let (web_action_sender, web_action_receiver) = mpsc::channel();
 
         let mut generic_highlighter = GenericSyntaxHighlighter::default();
         generic_highlighter.set_custom_theme(Some(active_theme.syntect_theme.clone()));
@@ -1556,9 +1589,15 @@ impl EditorApp {
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             webview_applied: None,
             web_link_sender,
+            web_action_sender,
             pdfium_preview: pdfium_view::PdfiumView::default(),
             pdfium_asset: pdfium_view::PdfiumView::default(),
             web_link_receiver,
+            web_action_receiver,
+            web_search_query: String::new(),
+            web_search_offset: 0,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            webview_outline_snapshot: None,
             browser_launch: None,
             browser_repaint: crate::worker::RepaintTarget::new(context, viewport),
         };
@@ -2732,6 +2771,8 @@ impl EditorApp {
         if !preserve_designated_preview {
             self.activity.build = Default::default();
             self.pdfium_preview = Default::default();
+            self.web_search_query.clear();
+            self.web_search_offset = 0;
         }
         self.manual_format_revision = None;
         self.format_request_key = None;
@@ -2746,8 +2787,9 @@ impl EditorApp {
         self.asset_loader.cancel_before(self.asset_token);
         self.asset_preview
             .clear_for_document(self.document().revision(), false);
+        let preview_revision = self.preview_document_revision();
         self.preview
-            .clear_for_document(self.document().revision(), preserve_designated_preview);
+            .clear_for_document(preview_revision, preserve_designated_preview);
         self.pending_asset_page = None;
         self.clear_editor_hover();
         self.clear_asset_hover();
@@ -4604,7 +4646,11 @@ impl EditorApp {
         let reusable = pdf_artifact_reusable_for_output(
             output_preview.content.artifact_key(),
             output_preview.content.pdf().is_some(),
-            self.document().revision(),
+            if typst_output {
+                self.preview_document_revision()
+            } else {
+                self.document().revision()
+            },
             requires_new_artifact,
         );
         if !reusable
@@ -4658,7 +4704,11 @@ impl EditorApp {
             return;
         };
         let document_epoch = self.document().epoch();
-        let document_revision = self.document().revision();
+        let document_revision = if self.source_preview_available() {
+            self.preview_document_revision()
+        } else {
+            self.document().revision()
+        };
         let Some(pending) = take_ready_export(
             &mut self.document_workflow.pending_export,
             document_epoch,
@@ -5704,6 +5754,71 @@ impl EditorApp {
                 self.handle_web_link(&target);
             }
         }
+        while let Ok(action) = self.web_action_receiver.try_recv() {
+            self.handle_web_action(&action);
+        }
+    }
+
+    fn handle_web_action(&mut self, action: &str) {
+        if !self.interactive_preview_active() {
+            return;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(action) else {
+            return;
+        };
+        let Some(generation) = self.tinymist_sync.generation else {
+            return;
+        };
+        match value.get("type").and_then(|value| value.as_str()) {
+            Some("find") => {
+                let Some(query) = value.get("query").and_then(|value| value.as_str()) else {
+                    return;
+                };
+                if query.is_empty() {
+                    return;
+                }
+                if self.web_search_query != query {
+                    self.web_search_query = query.to_owned();
+                    self.web_search_offset = 0;
+                }
+                let Ok(source) = self.preview_document_source() else {
+                    return;
+                };
+                let Some((scalar, next)) =
+                    find_next_preview_source(&source, query, self.web_search_offset)
+                else {
+                    return;
+                };
+                self.web_search_offset = next;
+                let (line, column) = scalar_position_at(&source, ScalarOffset::new(scalar));
+                let _ = self.tinymist.scroll_preview(
+                    generation,
+                    self.preview_document_path(),
+                    line,
+                    column,
+                );
+            }
+            Some("outline") => {
+                let Some(path) = value.get("path").and_then(|value| value.as_str()) else {
+                    return;
+                };
+                let Some(line) = value.get("line").and_then(|value| value.as_u64()) else {
+                    return;
+                };
+                let Some(entry) = self.project_index.outline.iter().find(|entry| {
+                    entry.path.to_string_lossy() == path && entry.line as u64 == line
+                }) else {
+                    return;
+                };
+                let _ = self.tinymist.scroll_preview(
+                    generation,
+                    entry.path.clone(),
+                    tiptoptyp_core::text::LineIndex::new(entry.line.saturating_sub(1) as u32),
+                    tiptoptyp_core::text::ScalarColumn::new(0),
+                );
+            }
+            _ => {}
+        }
     }
 
     fn handle_web_link(&mut self, target: &str) {
@@ -5879,6 +5994,15 @@ impl EditorApp {
         }
     }
 
+    fn preview_document_revision(&self) -> u64 {
+        self.tab_preview_document()
+            .filter(|_| self.tabs.uses_designated_preview())
+            .map_or_else(
+                || self.document().revision(),
+                |document| document.revision(),
+            )
+    }
+
     fn preview_language_support(&self) -> LanguageSupport {
         LanguageSupport::for_document(self.preview_document_kind())
     }
@@ -5888,7 +6012,7 @@ impl EditorApp {
             self.preview_language_support().interactive_preview,
             self.preview_visible(),
             cfg!(any(target_os = "macos", target_os = "windows")),
-            self.document().revision(),
+            self.preview_document_revision(),
         )
     }
 

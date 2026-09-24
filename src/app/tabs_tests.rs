@@ -98,10 +98,54 @@ fn a_tex_tab_can_be_edited_beside_a_designated_typst_preview() {
     app.select_preview_tab(tex, &context);
     assert_eq!(app.tabs.preview_id(), Some(tex));
     assert_eq!(app.preview_document_kind(), DocumentKind::Tex);
+    assert_eq!(app.preview_document_revision(), app.document().revision());
     assert!(!app.interactive_preview_requested());
     assert!(
         app.preview_language_support().build
             == Some(crate::language_support::BuildEngineKind::Tectonic)
+    );
+}
+
+#[test]
+fn selecting_inactive_tex_preview_replaces_the_typst_artifact_and_uses_tex_revision() {
+    let context = egui::Context::default();
+    let root = tempfile::tempdir().unwrap();
+    let mut app = fixture(&context, root.path());
+    app.lifecycle = DocumentLifecycle::Active;
+    app.preview = PreviewController::new(false, PreviewPreference::Interactive);
+    let typst = app.tabs.active_id().unwrap();
+    app.preview.accept_artifact(
+        ArtifactKey::unversioned(app.document().revision()),
+        Arc::from(b"old Typst PDF".as_slice()),
+    );
+    app.append_tab(&context);
+    let tex = app.tabs.active_id().unwrap();
+    app.document_mut().replace_loaded_unprojected(
+        "\\documentclass{article}".into(),
+        root.path().join("paper.tex"),
+        DocumentKind::Tex,
+        None,
+    );
+    app.document_mut()
+        .edit(CCursorRange::default(), |source| source.push_str("\nHello"));
+    let tex_revision = app.document().revision();
+    app.activate_tab(typst, &context);
+    assert_ne!(app.document().revision(), tex_revision);
+    app.select_preview_tab(tex, &context);
+    assert_eq!(app.preview_document_kind(), DocumentKind::Tex);
+    assert_eq!(app.preview_document_revision(), tex_revision);
+    assert!(app.preview.content.pdf().is_none());
+    assert!(app.compile_deadline.is_some());
+    assert!(app.pdfium_preview_requested());
+    app.preview.accept_artifact(
+        ArtifactKey::unversioned(tex_revision),
+        Arc::from(b"new TeX PDF".as_slice()),
+    );
+    app.activate_tab(tex, &context);
+    app.activate_tab(typst, &context);
+    assert_eq!(
+        app.preview.content.artifact_key().unwrap().revision,
+        app.preview_document_revision()
     );
 }
 

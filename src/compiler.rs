@@ -106,6 +106,10 @@ pub(crate) struct Compiler {
 }
 
 impl Compiler {
+    pub(crate) fn is_latest(&self, result: &CompileResult) -> bool {
+        result.request_generation == self.latest_request.load(Ordering::Acquire)
+    }
+
     pub(crate) fn new(context: crate::worker::RepaintTarget) -> Self {
         let (request_tx, request_rx) = latest_channel::<CompilerCommand>();
         let (result_tx, result_rx) = mpsc::channel::<CompileResult>();

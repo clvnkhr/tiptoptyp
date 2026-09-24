@@ -8619,3 +8619,15 @@ fn fold_row_lookup_matches_source_cursors_across_wraps_and_blank_lines() {
         })
         .drop_without_applying_deltas();
 }
+#[test]
+fn preview_source_search_wraps_and_preserves_unicode_scalar_positions() {
+    let source = "Été and été";
+    let first = find_next_preview_source(source, "été", 0).unwrap();
+    assert_eq!(first.0, 0);
+    let second = find_next_preview_source(source, "été", first.1).unwrap();
+    assert_eq!(second.0, 8);
+    assert_eq!(
+        find_next_preview_source(source, "été", second.1).unwrap().0,
+        0
+    );
+}

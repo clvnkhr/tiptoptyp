@@ -787,6 +787,11 @@ impl EditorApp {
         self.remove_parked_tab(closing);
         if changed_preview {
             self.tabs.preview_explicit = true;
+            self.web_search_query.clear();
+            self.web_search_offset = 0;
+            self.preview.content.clear();
+            self.pdfium_preview = Default::default();
+            let _ = self.compiler.pause(self.preview_document_revision());
             self.restart_tinymist_for_preview_entry();
             self.schedule_compile_now();
         }
@@ -846,6 +851,11 @@ impl EditorApp {
         }
         self.tabs.preview = Some(id);
         self.tabs.preview_explicit = true;
+        self.web_search_query.clear();
+        self.web_search_offset = 0;
+        let _ = self.compiler.pause(self.preview_document_revision());
+        self.preview.content.clear();
+        self.pdfium_preview = Default::default();
         self.restart_tinymist_for_preview_entry();
         self.schedule_compile_now();
         self.schedule_project_index();

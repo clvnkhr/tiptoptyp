@@ -36,6 +36,9 @@ pub(super) struct PdfiumView {
     height: f32,
     page_focus: Option<egui::Id>,
     focus_find: bool,
+    controls_open: bool,
+    back: Vec<(usize, f32)>,
+    forward: Vec<(usize, f32)>,
 }
 
 impl Default for PdfiumView {
@@ -67,6 +70,9 @@ impl Default for PdfiumView {
             height: 0.0,
             page_focus: None,
             focus_find: false,
+            controls_open: false,
+            back: Vec::new(),
+            forward: Vec::new(),
         }
     }
 }
@@ -82,6 +88,7 @@ impl PdfiumView {
             .page_focus
             .is_some_and(|id| context.memory(|m| m.focused()) == Some(id));
         if command == AppCommand::Find && (focused || force_find) {
+            self.controls_open = true;
             self.focus_find = true;
             context.request_repaint();
             return true;
@@ -272,100 +279,13 @@ impl PdfiumView {
             self.search_pending = false;
         }
         let mut link = None;
-        ui.horizontal_wrapped(|ui| {
-            if icon_button(ui, UiIcon::Previous, "Previous page").clicked() {
-                self.goto = Some(self.page.saturating_sub(1));
-            }
-            let mut page = self.page + 1;
-            let count = self.catalog.as_ref().map_or(1, |c| c.sizes.len());
-            if ui
-                .add(egui::DragValue::new(&mut page).range(1..=count))
-                .changed()
-            {
-                self.goto = Some(page - 1);
-            }
-            ui.label(format!("/ {count}"));
-            if icon_button(ui, UiIcon::Next, "Next page").clicked() {
-                self.goto = Some((self.page + 1).min(count - 1));
-            }
-            if icon_button(ui, UiIcon::ZoomOut, "Zoom out").clicked() {
-                self.zoom(PreviewZoomAction::Out);
-            }
-            if icon_button(ui, UiIcon::ZoomIn, "Zoom in").clicked() {
-                self.zoom(PreviewZoomAction::In);
-            }
-            if icon_button(ui, UiIcon::FitWidth, "Fit page width").clicked() {
-                self.zoom(PreviewZoomAction::Reset);
-            }
-            ui.label(format!("{:.0}%", self.zoom * 100.0));
-            if let Some(catalog) = &self.catalog
-                && !catalog.outline.is_empty()
-            {
-                ui.menu_button("Outline", |ui| {
-                    for (title, page) in &catalog.outline {
-                        if ui.button(title).clicked() {
-                            self.goto = Some(*page);
-                            ui.close();
-                        }
-                    }
-                });
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.label("Find");
-            let find = ui.add(
-                egui::TextEdit::singleline(&mut self.query)
-                    .desired_width(150.0)
-                    .hint_text("Search PDF"),
-            );
-            if self.focus_find {
-                find.request_focus();
-                self.focus_find = false;
-            }
-            if find.changed() {
-                self.search_pages.clear();
-                self.search_pending = !self.query.is_empty();
-            }
-            if !self.query.is_empty() {
-                ui.label(if self.search_pending {
-                    "Searching…".into()
-                } else {
-                    format!("{} pages", self.search_pages.len())
-                });
-                if icon_button(ui, UiIcon::Next, "Next matching page").clicked() {
-                    self.goto = self
-                        .search_pages
-                        .iter()
-                        .copied()
-                        .find(|p| *p > self.page)
-                        .or_else(|| self.search_pages.first().copied());
-                }
-            }
-        });
-        if let Some(error) = &self.error {
-            ui.horizontal_wrapped(|ui| {
-                ui.colored_label(
-                    ui.visuals().error_fg_color,
-                    format!("PDF update failed; previous preview retained: {error}"),
-                );
-                if ui.button("Retry").clicked() {
-                    self.requested = None;
-                }
-            });
-        } else {
-            ui.label(if self.active_revision != self.revision {
-                "Updating PDF…"
-            } else {
-                " "
-            });
-        }
-        let mut demand = vec![self.page];
         let available = ui.available_rect_before_wrap();
+        let mut demand = vec![self.page];
         if let Some(catalog) = self.catalog.clone() {
             let widest = catalog.sizes.iter().map(|s| s[0]).fold(1.0f32, f32::max);
             let old_zoom = self.zoom;
             if self.fit {
-                self.zoom = ((available.width() - 24.0) / widest).clamp(0.15, 8.0);
+                self.zoom = fit_width_zoom(available.width(), widest);
             }
             let pinch = ui.ctx().input(|i| i.zoom_delta());
             let pointer = ui.ctx().pointer_latest_pos();
@@ -390,7 +310,7 @@ impl PdfiumView {
                     + 12.0;
                 self.layout_zoom = self.zoom;
             }
-            let width = (widest * self.zoom + 24.0).max(available.width());
+            let width = (widest * self.zoom).max(available.width());
             let mut scroll = egui::ScrollArea::both()
                 .id_salt("pdfium-scroll")
                 .auto_shrink([false, false]);
@@ -486,7 +406,11 @@ impl PdfiumView {
                             for (bounds, target) in &resident.links {
                                 if map(*bounds).contains(pointer) {
                                     match target {
-                                        LinkTarget::Page(page) => self.goto = Some(*page),
+                                        LinkTarget::Page(page) => {
+                                            push_history(&mut self.back, self.anchor);
+                                            self.forward.clear();
+                                            self.goto = Some(*page);
+                                        }
                                         LinkTarget::Url(url) => link = Some(url.clone()),
                                     }
                                 }
@@ -545,6 +469,19 @@ impl PdfiumView {
         } else {
             show_centered_preview_message(ui, "Preparing PDF preview…", self.error.is_none());
         }
+        let was_open = self.controls_open;
+        let controls_response = egui::Area::new(ui.make_persistent_id("pdfium-controls"))
+            .order(egui::Order::Foreground)
+            .default_pos(available.min + egui::vec2(8.0, 8.0))
+            .movable(true)
+            .constrain_to(available)
+            .sense(egui::Sense::click_and_drag())
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| self.show_controls(ui));
+            });
+        if !was_open && controls_response.response.clicked() {
+            self.controls_open = true;
+        }
         let key = RequestKey {
             revision: self.revision,
             pages: demand,
@@ -559,7 +496,6 @@ impl PdfiumView {
                 && self.active_revision == self.revision
                 && self.requested.as_ref().is_some_and(|r| r == &key)
         {
-            // Theme-only updates replace textures through the same retained batch path.
             self.dark = dark;
             self.worker.as_ref().unwrap().request(Request {
                 key: key.clone(),
@@ -570,6 +506,156 @@ impl PdfiumView {
         }
         link
     }
+
+    fn navigate(&mut self, page: usize) {
+        push_history(&mut self.back, self.anchor);
+        self.forward.clear();
+        self.goto = Some(page);
+    }
+
+    fn show_controls(&mut self, ui: &mut egui::Ui) {
+        if !self.controls_open {
+            ui.allocate_ui_with_layout(
+                egui::vec2(18.0, 18.0),
+                egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+                |ui| {
+                    ui.label("☰").on_hover_text("Preview controls");
+                },
+            );
+            return;
+        }
+        let mut outline_target = None;
+        ui.horizontal(|ui| {
+            if ui
+                .small_button("−")
+                .on_hover_text("Minimize controls")
+                .clicked()
+            {
+                self.controls_open = false;
+            }
+            ui.label("Preview");
+            if let Some(catalog) = &self.catalog
+                && !catalog.outline.is_empty()
+            {
+                ui.menu_button("Outline", |ui| {
+                    for (title, page) in &catalog.outline {
+                        if ui.button(title).clicked() {
+                            outline_target = Some(*page);
+                            ui.close();
+                        }
+                    }
+                });
+            }
+        });
+        if let Some(page) = outline_target {
+            self.navigate(page);
+        }
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(!self.back.is_empty(), egui::Button::new("←"))
+                .on_hover_text("Back")
+                .clicked()
+                && let Some(target) = self.back.pop()
+            {
+                push_history(&mut self.forward, self.anchor);
+                self.anchor = target;
+                self.restore_anchor = true;
+            }
+            if ui
+                .add_enabled(!self.forward.is_empty(), egui::Button::new("→"))
+                .on_hover_text("Forward")
+                .clicked()
+                && let Some(target) = self.forward.pop()
+            {
+                push_history(&mut self.back, self.anchor);
+                self.anchor = target;
+                self.restore_anchor = true;
+            }
+            if icon_button(ui, UiIcon::Previous, "Previous page").clicked() {
+                self.navigate(self.page.saturating_sub(1));
+            }
+            let mut page = self.page + 1;
+            let count = self.catalog.as_ref().map_or(1, |c| c.sizes.len());
+            if ui
+                .add(egui::DragValue::new(&mut page).range(1..=count))
+                .changed()
+            {
+                self.navigate(page - 1);
+            }
+            ui.label(format!("/ {count}"));
+            if icon_button(ui, UiIcon::Next, "Next page").clicked() {
+                self.navigate((self.page + 1).min(count - 1));
+            }
+            if icon_button(ui, UiIcon::ZoomOut, "Zoom out").clicked() {
+                self.zoom(PreviewZoomAction::Out);
+            }
+            if icon_button(ui, UiIcon::ZoomIn, "Zoom in").clicked() {
+                self.zoom(PreviewZoomAction::In);
+            }
+            if icon_button(ui, UiIcon::FitWidth, "Fit page width").clicked() {
+                self.zoom(PreviewZoomAction::Reset);
+            }
+            ui.label(format!("{:.0}%", self.zoom * 100.0));
+        });
+        ui.horizontal(|ui| {
+            ui.label("Find");
+            let find = ui.add(
+                egui::TextEdit::singleline(&mut self.query)
+                    .desired_width(150.0)
+                    .hint_text("Search PDF"),
+            );
+            if self.focus_find {
+                find.request_focus();
+                self.focus_find = false;
+            }
+            if find.changed() {
+                self.search_pages.clear();
+                self.search_pending = !self.query.is_empty();
+            }
+            if !self.query.is_empty() {
+                ui.label(if self.search_pending {
+                    "Searching…".into()
+                } else {
+                    format!("{} pages", self.search_pages.len())
+                });
+                if icon_button(ui, UiIcon::Next, "Next matching page").clicked() {
+                    let target = self
+                        .search_pages
+                        .iter()
+                        .copied()
+                        .find(|p| *p > self.page)
+                        .or_else(|| self.search_pages.first().copied());
+                    if let Some(target) = target {
+                        self.navigate(target);
+                    }
+                }
+            }
+        });
+        if let Some(error) = &self.error {
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    format!("PDF update failed; previous preview retained: {error}"),
+                );
+                if ui.button("Retry").clicked() {
+                    self.requested = None;
+                }
+            });
+        } else if self.active_revision != self.revision {
+            ui.label("Updating PDF…");
+        }
+    }
+}
+
+fn fit_width_zoom(available_width: f32, page_width: f32) -> f32 {
+    (available_width / page_width).clamp(0.15, 8.0)
+}
+
+fn push_history(history: &mut Vec<(usize, f32)>, position: (usize, f32)) {
+    if history.len() == 256 {
+        history.remove(0);
+    }
+    history.push(position);
 }
 
 fn page_tops(sizes: &[[f32; 2]], zoom: f32) -> Vec<f32> {
@@ -694,6 +780,33 @@ impl EditorApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fit_width_uses_the_whole_preview_width() {
+        assert_eq!(fit_width_zoom(600.0, 400.0) * 400.0, 600.0);
+    }
+
+    #[test]
+    fn page_navigation_retains_a_back_stack() {
+        let mut view = PdfiumView {
+            anchor: (2, 0.4),
+            ..Default::default()
+        };
+        view.navigate(6);
+        assert_eq!(view.back, vec![(2, 0.4)]);
+        assert_eq!(view.goto, Some(6));
+        assert!(view.forward.is_empty());
+    }
+
+    #[test]
+    fn navigation_history_is_bounded() {
+        let mut history = Vec::new();
+        for page in 0..300 {
+            push_history(&mut history, (page, 0.0));
+        }
+        assert_eq!(history.len(), 256);
+        assert_eq!(history.first().unwrap().0, 44);
+        assert_eq!(history.last().unwrap().0, 299);
+    }
     #[test]
     fn demand_only_intersects_visible_region_and_clamps_after_shrink() {
         let sizes = vec![[420.0, 550.0]; 240];
