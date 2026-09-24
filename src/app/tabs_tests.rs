@@ -1353,3 +1353,46 @@ fn pinned_typst_diagnostics_do_not_replace_the_active_tex_providers() {
     assert_eq!(app.preview.editor_diagnostics.len(), 1);
     assert_eq!(app.preview.editor_diagnostics[0].message, "Typst error");
 }
+
+#[test]
+fn tex_edit_keeps_previous_diagnostics_until_new_results_arrive() {
+    let context = egui::Context::default();
+    let root = tempfile::tempdir().unwrap();
+    let mut app = fixture(&context, root.path());
+    app.snapshot_scene = None;
+    app.lifecycle = DocumentLifecycle::Active;
+    app.settings.tex.build_enabled = false;
+    app.settings.tex.texlab_enabled = false;
+    app.settings.tex.lint = false;
+    app.settings.tex.formatter = crate::tex::settings::Formatter::Disabled;
+    let path = root.path().join("main.tex");
+    app.document_mut().replace_loaded_unprojected(
+        "\\section{Introduction}\n".into(),
+        path.clone(),
+        DocumentKind::Tex,
+        None,
+    );
+    app.sync_tex(&context);
+    assert!(app.tex_service.identity().is_some());
+    app.tex_diagnostics[0] = vec![crate::diagnostics::Diagnostic {
+        provider: Some("TexLab".into()),
+        severity: crate::diagnostics::DiagnosticSeverity::Warning,
+        source: DiagnosticSource::File(path),
+        location: None,
+        message: "Previous diagnostic".into(),
+        details: Vec::new(),
+    }];
+    app.update_tex_diagnostics();
+    app.document_mut().edit(CCursorRange::default(), |source| {
+        source.push_str("new text\n")
+    });
+    app.mark_edited();
+    app.sync_tex(&context);
+    assert_eq!(app.tex_diagnostics[0][0].message, "Previous diagnostic");
+    assert!(
+        app.preview
+            .editor_diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message == "Previous diagnostic")
+    );
+}

@@ -3,11 +3,14 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
-use eframe::egui::{Color32, Stroke, TextFormat, text::LayoutJob};
+use eframe::egui::{
+    Color32, Stroke, TextFormat,
+    text::{LayoutJob, LayoutSection},
+};
 use syntect::{
     easy::HighlightLines,
-    highlighting::{Color as SyntectColor, FontStyle, Style, Theme, ThemeSet},
-    parsing::{SyntaxReference, SyntaxSet},
+    highlighting::{Color as SyntectColor, FontStyle, HighlightState, Style, Theme, ThemeSet},
+    parsing::{ParseState, SyntaxReference, SyntaxSet},
     util::LinesWithEndings,
 };
 
@@ -21,10 +24,21 @@ pub struct GenericSyntaxHighlighter {
     custom_theme: Option<Theme>,
     cached_source: String,
     cached_extension: Option<String>,
+    cached_syntax: String,
+    cached_lines: Vec<Arc<CachedLine>>,
     cached_dark_mode: bool,
     cached_job: LayoutJob,
     has_cache: bool,
     theme_revision: u64,
+    #[cfg(test)]
+    parsed_lines_last: usize,
+}
+
+struct CachedLine {
+    text: String,
+    job: LayoutJob,
+    start: (HighlightState, ParseState),
+    end: (HighlightState, ParseState),
 }
 
 impl Default for GenericSyntaxHighlighter {
@@ -41,10 +55,14 @@ impl Default for GenericSyntaxHighlighter {
             custom_theme: None,
             cached_source: String::new(),
             cached_extension: None,
+            cached_syntax: String::new(),
+            cached_lines: Vec::new(),
             cached_dark_mode: true,
             cached_job: LayoutJob::default(),
             has_cache: false,
             theme_revision: 0,
+            #[cfg(test)]
+            parsed_lines_last: 0,
         }
     }
 }
@@ -73,17 +91,18 @@ impl GenericSyntaxHighlighter {
         }
 
         let normalized_extension = extension.map(str::to_ascii_lowercase);
+        let syntaxes = Arc::clone(&self.syntaxes);
         let syntax = normalized_extension
             .as_deref()
-            .and_then(|extension| self.syntaxes.find_syntax_by_extension(extension))
+            .and_then(|extension| syntaxes.find_syntax_by_extension(extension))
             .or_else(|| {
                 source
                     .lines()
                     .next()
-                    .and_then(|line| self.syntaxes.find_syntax_by_first_line(line))
+                    .and_then(|line| syntaxes.find_syntax_by_first_line(line))
             })
-            .unwrap_or_else(|| self.syntaxes.find_syntax_plain_text());
-        let job = self.highlight_with_syntax(source, syntax, dark_mode);
+            .unwrap_or_else(|| syntaxes.find_syntax_plain_text());
+        let job = self.highlight_incrementally(source, syntax, dark_mode, extension);
 
         self.cached_source.clear();
         self.cached_source.push_str(source);
@@ -91,6 +110,103 @@ impl GenericSyntaxHighlighter {
         self.cached_dark_mode = dark_mode;
         self.cached_job = job.clone();
         self.has_cache = true;
+        job
+    }
+
+    fn highlight_incrementally(
+        &mut self,
+        source: &str,
+        syntax: &SyntaxReference,
+        dark_mode: bool,
+        extension: Option<&str>,
+    ) -> LayoutJob {
+        let lines = LinesWithEndings::from(source).collect::<Vec<_>>();
+        let reuse = self.has_cache
+            && self.cached_dark_mode == dark_mode
+            && extensions_match(self.cached_extension.as_deref(), extension)
+            && self.cached_syntax == syntax.name;
+        let old = &self.cached_lines;
+        let prefix = if reuse {
+            old.iter()
+                .zip(&lines)
+                .take_while(|(cached, line)| cached.text == **line)
+                .count()
+        } else {
+            0
+        };
+        let mut suffix = 0;
+        if reuse {
+            while suffix < old.len() - prefix
+                && suffix < lines.len() - prefix
+                && old[old.len() - suffix - 1].text == lines[lines.len() - suffix - 1]
+            {
+                suffix += 1;
+            }
+        }
+        let old_suffix = old.len() - suffix;
+        let new_suffix = lines.len() - suffix;
+        let theme = self.selected_theme(dark_mode);
+        let mut state = if prefix == 0 {
+            HighlightLines::new(syntax, theme).state()
+        } else {
+            old[prefix - 1].end.clone()
+        };
+        let mut cached = Vec::with_capacity(lines.len());
+        cached.extend(old[..prefix].iter().cloned());
+        #[cfg(test)]
+        let mut parsed_lines = 0;
+        for (index, line) in lines.iter().enumerate().skip(prefix) {
+            if index >= new_suffix {
+                let corresponding = old_suffix + index - new_suffix;
+                if state == old[corresponding].start {
+                    cached.extend(old[corresponding..].iter().cloned());
+                    break;
+                }
+            }
+            let mut highlighter =
+                HighlightLines::from_state(theme, state.0.clone(), state.1.clone());
+            let mut job = LayoutJob::default();
+            match highlighter.highlight_line(line, &self.syntaxes) {
+                Ok(regions) => {
+                    for (style, text) in regions {
+                        job.append(text, 0.0, syntect_format(style, theme));
+                    }
+                }
+                Err(_) => job.append(line, 0.0, plain_format(dark_mode)),
+            }
+            let end = highlighter.state();
+            cached.push(Arc::new(CachedLine {
+                text: (*line).to_owned(),
+                job,
+                start: state,
+                end: end.clone(),
+            }));
+            state = end;
+            #[cfg(test)]
+            {
+                parsed_lines += 1;
+            }
+        }
+        let mut job = LayoutJob::default();
+        job.text.reserve(source.len());
+        for line in &cached {
+            let offset = job.text.len();
+            job.text.push_str(&line.job.text);
+            job.sections
+                .extend(line.job.sections.iter().map(|section| LayoutSection {
+                    leading_space: section.leading_space,
+                    byte_range: section.byte_range.start + offset..section.byte_range.end + offset,
+                    format: section.format.clone(),
+                }));
+        }
+        job.wrap.break_anywhere = false;
+        debug_assert_eq!(job.text, source);
+        self.cached_syntax.clone_from(&syntax.name);
+        self.cached_lines = cached;
+        #[cfg(test)]
+        {
+            self.parsed_lines_last = parsed_lines;
+        }
         job
     }
 
@@ -193,6 +309,31 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "opt-in optimized TeX edit highlighting probe"]
+    fn tex_edit_cost_probe() {
+        use std::time::Instant;
+        let mut highlighter = GenericSyntaxHighlighter::default();
+        let mut source = (0..5_000)
+            .map(|n| format!("\\section{{Section {n}}} Here is a paragraph with \\emph{{highlighted text}} and $x_n^2$.\n"))
+            .collect::<String>();
+        let path = Path::new("paper.tex");
+        highlighter.highlight(&source, Some(path), false);
+        let marker = source.find("Section 2500").unwrap();
+        let started = Instant::now();
+        for n in 0..25 {
+            source.replace_range(marker..marker + 1, if n % 2 == 0 { "s" } else { "S" });
+            let job = highlighter.highlight(&source, Some(path), false);
+            assert_eq!(job.text, source);
+        }
+        println!(
+            "fixture_bytes={} edits=25 total_ms={:.3} per_edit_ms={:.3}",
+            source.len(),
+            started.elapsed().as_secs_f64() * 1_000.0,
+            started.elapsed().as_secs_f64() * 1_000.0 / 25.0
+        );
+    }
+
+    #[test]
     fn extension_case_changes_preserve_highlighting() {
         let mut highlighter = GenericSyntaxHighlighter::default();
         let source = "fn main() { let value = 42; }";
@@ -216,6 +357,43 @@ mod tests {
             let job = highlighter.highlight(source, Some(Path::new(path)), true);
             assert_eq!(job.text, source);
         }
+    }
+
+    #[test]
+    fn tex_edits_reparse_only_until_the_syntax_state_rejoins() {
+        let source = (0..1_000)
+            .map(|n| format!("\\section{{Heading {n}}}\nText with \\emph{{color}} and $x^2$.\n"))
+            .collect::<String>();
+        let path = Some(Path::new("main.tex"));
+        let mut cached = GenericSyntaxHighlighter::default();
+        cached.highlight(&source, path, false);
+        for needle in ["Heading 1", "Heading 500", "Heading 999"] {
+            let mut edited = source.clone();
+            let at = edited.find(needle).unwrap();
+            edited.replace_range(at..at + 1, "h");
+            let result = cached.highlight(&edited, path, false);
+            let mut fresh = GenericSyntaxHighlighter::default();
+            let expected = fresh.highlight(&edited, path, false);
+            assert_eq!(result, expected, "wrong colors after editing {needle}");
+            assert!(
+                cached.parsed_lines_last <= 2,
+                "unaffected TeX lines were reparsed"
+            );
+            cached.highlight(&source, path, false);
+        }
+    }
+
+    #[test]
+    fn multiline_tex_state_reparses_until_a_safe_boundary() {
+        let source = "before\n\\begin{verbatim}\nold\n\\end{verbatim}\nafter\n";
+        let path = Some(Path::new("main.tex"));
+        let mut cached = GenericSyntaxHighlighter::default();
+        cached.highlight(source, path, true);
+        let edited = source.replace("\\end{verbatim}", "\\end{other}");
+        let result = cached.highlight(&edited, path, true);
+        let mut fresh = GenericSyntaxHighlighter::default();
+        assert_eq!(result, fresh.highlight(&edited, path, true));
+        assert!(cached.parsed_lines_last >= 2);
     }
 
     #[test]

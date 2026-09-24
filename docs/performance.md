@@ -346,6 +346,20 @@ The [background-save review](background-saves.md) records matched optimized
 synchronous/background dispatch measurements and the opt-in slow-storage probe.
 It separates foreground submission latency from total persistence time.
 
+## TeX editing syntax work
+
+The opt-in `tex_edit_cost_probe` measures 25 single-character edits in the
+middle of the same 423,890-byte, 5,000-line TeX document, after one initial
+highlight. On this macOS arm64 Apple M2 Max, with the release test profile and
+the same target directory, the full-document Syntect pass took 14,502 ms total
+(580.090 ms/edit) at `5fcd572`. The incremental line-state cache took 150 ms
+total (6.013 ms/edit) on this branch. Run it with
+`cargo test --release --bin tiptoptyp tex_edit_cost_probe -- --ignored --nocapture`.
+The test has no wall-time assertion; deterministic tests cover reparsing only
+until the syntax state rejoins unchanged lines. This isolates highlighting, not
+the whole editor frame, font layout, PDF compilation, or cross-machine typing
+latency.
+
 See [the architecture performance review](architecture-performance.md) for
 matched baseline/fixed measurements, retained evidence, limitations, and the
 opt-in `architecture_cost_probe` command. Normal test runs skip its timing loop;

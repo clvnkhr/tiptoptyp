@@ -25,6 +25,13 @@ impl EditorApp {
         }) {
             return;
         }
+        let same_document = self.tex_service.identity().is_some_and(|s| {
+            s.key.owner == key.owner
+                && s.key.epoch == key.epoch
+                && s.root == root
+                && s.settings == self.settings.tex
+                && s.tools == self.tex_tools
+        });
         let path = self.document().path().clone().unwrap_or_else(|| {
             root.join(".tiptoptyp")
                 .join(format!("untitled-{:?}-{}.tex", key.owner, key.epoch))
@@ -32,8 +39,13 @@ impl EditorApp {
         let Ok(uri) = url::Url::from_file_path(path) else {
             return;
         };
-        self.tex_diagnostics = Default::default();
-        self.update_tex_diagnostics();
+        // A new revision makes existing results stale, but they remain useful
+        // until a service supplies a replacement. Only a document or settings
+        // transition invalidates their ownership.
+        if !same_document {
+            self.tex_diagnostics = Default::default();
+            self.update_tex_diagnostics();
+        }
         self.tex_service.synchronize(
             Snapshot {
                 generation: Generation(0),

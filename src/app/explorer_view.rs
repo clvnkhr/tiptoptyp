@@ -698,7 +698,7 @@ pub(super) fn workspace_entry_color(
     }
     let syntax = theme::syntax_palette(context);
     let extension = path.extension().and_then(|extension| extension.to_str());
-    if extension_matches(extension, &["typ"]) {
+    if extension_matches(extension, &["typ", "tex"]) {
         return syntax.keyword;
     }
     if extension_matches(
@@ -715,7 +715,7 @@ pub(super) fn workspace_entry_color(
             "txt", "md", "markdown", "json", "jsonc", "toml", "yaml", "yml", "xml", "html", "htm",
             "css", "scss", "js", "jsx", "ts", "tsx", "rs", "py", "rb", "go", "java", "c", "h",
             "cc", "cpp", "hpp", "sh", "bash", "zsh", "fish", "sql", "csv", "tsv", "ini", "cfg",
-            "conf", "log", "tex", "bib",
+            "conf", "log", "bib",
         ],
     ) {
         return syntax.plain;

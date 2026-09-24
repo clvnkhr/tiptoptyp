@@ -1,8 +1,8 @@
 # Activity panel
 
 Open the bottom panel and select **Activity**, after Problems and Terminal.
-Compact status chips wrap horizontally, with their own remembered panel height
-(default 120 logical pixels, minimum 54). Hover a chip for its role, precise
+Compact status chips wrap horizontally and use the same remembered panel height
+as Problems and Terminal. Hover a chip for its role, precise
 pending state, or failure reason. Maximize/restore and close work like the other
 tabs. Labels stay fixed when states change; colour carries the state. The
 Activity tab tooltip explains the colours, and each source tooltip explains its
@@ -31,11 +31,11 @@ red because it could not produce the requested artifact.
 | Badness | Startup, lint diagnostics and formatting |
 | Tinymist format / Badness format / tex-fmt | The selected formatter's explicit requests and failures |
 | Compiler diagnostics | CLI build-result freshness and build failures |
-| Renderer | Native interactive preview / PDF.js view readiness |
-| PDFium | PDFium page and text-search requests for source preview |
-| PDF viewer | PDFium page and text-search requests for an opened PDF |
-| Asset loading | Opening PDFs and decoding images |
-| Hover preview | Image/PDF thumbnail generation |
+| Vector view | Tinymist's live preview surface |
+| PDFium preview | Compiled PDF pages when the PDFium preview is selected |
+| Opened PDF | Display and text search for a PDF opened as a document |
+| File loading | Opening a PDF or decoding an image |
+| Hover thumbnail | Small image/PDF previews shown on hover |
 | Git status | Repository scans and repository operations |
 | Git hunks | Debounced changes against the current editor buffer |
 | Git mutation | Applying selected hunk/file changes |
@@ -79,7 +79,7 @@ supplies mixed states without launching tools to simulate failures.
 viewport framebuffer with deterministic example states, not a live process
 sample or a composed desktop screenshot.
 
-Validation (2026-09-24): full Rust suite, final 1,069 application unit tests,
+Validation (2026-09-24): full Rust suite, 1,076 application unit tests,
 15 tooling tests, formatting and strict all-target Clippy passed. The release
-Activity framebuffer was inspected; the 23-image maintained gallery was
-regenerated in one session and decoded successfully.
+Activity framebuffer was freshly captured and inspected; the maintained
+23-image gallery was regenerated in one session and decoded successfully.

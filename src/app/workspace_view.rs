@@ -124,16 +124,17 @@ impl EditorApp {
         ui.vertical_centered(|ui| {
             ui.heading(heading);
             ui.weak(help);
-            if workspace_available && crate::app::icons::action_button(ui, "New document").clicked()
+            if workspace_available
+                && labeled_empty_action(ui, "New document", "Create a blank document")
             {
                 self.execute_app_command(AppCommand::New, ui.ctx(), frame);
             }
             if !workspace_available
-                && crate::app::icons::action_button(ui, "Choose folder…").clicked()
+                && labeled_empty_action(ui, "Choose folder…", "Choose a working folder")
             {
                 self.execute_app_command(AppCommand::ChangeWorkspaceRoot, ui.ctx(), frame);
             }
-            if crate::app::icons::action_button(ui, "Open file…").clicked() {
+            if labeled_empty_action(ui, "Open file…", "Open an existing file") {
                 self.execute_app_command(AppCommand::Open, ui.ctx(), frame);
             }
         });
@@ -190,6 +191,16 @@ impl EditorApp {
     }
 }
 
+fn labeled_empty_action(ui: &mut egui::Ui, action: &str, caption: &str) -> bool {
+    ui.horizontal(|ui| {
+        ui.add_space(((ui.available_width() - 240.0) * 0.5).max(0.0));
+        let clicked = crate::app::icons::action_button(ui, action).clicked();
+        ui.label(caption);
+        clicked
+    })
+    .inner
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,5 +210,23 @@ mod tests {
         assert_eq!(empty_workspace_copy(true).0, "No open tabs");
         assert_eq!(empty_workspace_copy(false).0, "Choose a working directory");
         assert!(empty_workspace_copy(false).1.contains("unavailable"));
+    }
+
+    #[test]
+    fn empty_workspace_actions_have_visible_explanatory_labels() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        app.empty_workspace(&context);
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(700.0, 500.0))
+            .build_ui_state(
+                |ui, app: &mut EditorApp| app.show_empty_workspace(ui, None),
+                app,
+            );
+        harness.run();
+        assert!(harness.query_by_label("Create a blank document").is_some());
+        assert!(harness.query_by_label("Open an existing file").is_some());
     }
 }

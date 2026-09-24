@@ -241,23 +241,23 @@ impl EditorApp {
             },
         );
         add(
-            "Renderer",
-            "Displays the live preview or PDF in the preview pane.",
+            "Vector view",
+            "Shows Tinymist's live preview inside the preview pane.",
             service(&self.preview.webview_state),
         );
         add(
-            "PDFium",
-            "Draws PDF pages and searches their text when PDFium is selected.",
+            "PDFium preview",
+            "Draws compiled PDF pages when the PDFium preview is selected.",
             self.pdfium_preview.activity(),
         );
         add(
-            "PDF viewer",
-            "Draws opened PDF files and searches their text.",
+            "Opened PDF",
+            "Draws and searches a PDF file opened as a document.",
             self.pdfium_asset.activity(),
         );
         add(
-            "Asset loading",
-            "Opens PDFs and images for viewing.",
+            "File loading",
+            "Loads an opened PDF or image before it can be shown.",
             if self.document().kind().preview_only() {
                 preview_work(self.asset_preview.status)
             } else {
@@ -265,8 +265,8 @@ impl EditorApp {
             },
         );
         add(
-            "Hover preview",
-            "Shows a small image or PDF preview when you hover.",
+            "Hover thumbnail",
+            "Makes the small image or PDF preview shown on hover.",
             self.hover_activity(),
         );
         add(
@@ -433,11 +433,11 @@ fn fixture_indicators() -> Vec<Indicator> {
         ("Badness", Activity::Inactive("Not in use")),
         ("Tinymist format", Activity::Idle),
         ("Compiler diagnostics", Activity::Pending("Stale")),
-        ("Renderer", Activity::Idle),
-        ("PDFium", Activity::Inactive("Not in use")),
-        ("PDF viewer", Activity::Inactive("Not in use")),
-        ("Asset loading", Activity::Idle),
-        ("Hover preview", Activity::Inactive("Not in use")),
+        ("Vector view", Activity::Idle),
+        ("PDFium preview", Activity::Inactive("Not in use")),
+        ("Opened PDF", Activity::Inactive("Not in use")),
+        ("File loading", Activity::Idle),
+        ("Hover thumbnail", Activity::Inactive("Not in use")),
         (
             "Git status",
             Activity::Failed("Example: Git executable unavailable".into()),

@@ -1039,7 +1039,7 @@ fn closing_retained_root_clears_discarded_buffer_autosave_and_old_receipts() {
     let mut deadline = Some(Instant::now());
     assert!(document.is_dirty());
     reset_untitled_buffer(&mut document, &mut deadline);
-    assert_eq!(document.source(), DEFAULT_SOURCE);
+    assert_eq!(document.source(), "");
     assert!(!document.is_dirty());
     assert!(document.path().is_none());
     assert!(deadline.is_none());
@@ -5695,6 +5695,10 @@ fn workspace_colors_use_the_same_extension_policy_as_document_detection() {
         workspace_entry_color(Path::new("main.TYP"), false, false, &light_context())
     );
     assert_eq!(
+        workspace_entry_color(Path::new("main.typ"), false, false, &light_context()),
+        workspace_entry_color(Path::new("paper.tex"), false, false, &light_context())
+    );
+    assert_eq!(
         workspace_entry_color(Path::new("paper.pdf"), false, false, &light_context()),
         workspace_entry_color(Path::new("paper.PDF"), false, false, &light_context())
     );
@@ -6507,9 +6511,9 @@ fn folding_gutter_toggles_from_number_and_arrow_without_overlapping_git() {
                     .show(ui);
                 let rows = logical_line_row_ranges(&output.galley.rows);
                 paint_line_numbers(ui, &output, &rows, egui::FontId::monospace(14.0));
-                let gutter_clicked = paint_fold_controls(ui, &output, &rows, folding, true);
+                let gutter_clicked = paint_fold_controls(ui, &output, folding, true);
                 let marker_clicked =
-                    paint_fold_markers(ui, &output, &rows, folding, &marker, marker_width);
+                    paint_fold_markers(ui, &output, folding, &marker, marker_width);
                 if let Some(region) = gutter_clicked.or(marker_clicked) {
                     output.response.request_focus();
                     folding.toggle(region.line);
@@ -8503,4 +8507,115 @@ fn native_find_edit_commands_do_not_target_the_still_focused_source_widget() {
         assert!(app.route_edit_command_to_focused_widget(AppCommand::SelectAll, ui.ctx(), child));
         assert!(ui.ctx().input_for(child, |input| input.events.iter().any(|event| matches!(event, egui::Event::Key { key: egui::Key::A, modifiers, .. } if modifiers.command))));
     }).drop_without_applying_deltas();
+}
+
+#[test]
+fn folding_nested_typst_controls_stay_on_headers_after_click() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    struct FoldState {
+        app: EditorApp,
+        fonts_ready: bool,
+        _root: tempfile::TempDir,
+    }
+    let source = concat!(
+        "#import \"@preview/theoretic:0.4.0\"\n",
+        "#import theoretic.presets.basic: *\n\n\n\n",
+        "#let todo(it) = {\n",
+        "  let hclr = yellow.lighten(30%)\n",
+        "  show math.equation: it => box(fill: hclr, it, outset: 3pt)\n",
+        "  highlight(\n",
+        "    fill: hclr,\n",
+        "    text(fill: red.darken(10%), { strong[TODO:] + \" \" + it }),\n",
+        "  )\n",
+        "}\n\n\n",
+        "#set text(lang: \"en\", region: \"uk\")\n",
+        "#set page(numbering: \"1\", number-align: center + bottom)\n",
+        "#set heading(numbering: \"1.\")\n",
+        "#show link: set text(fill: blue)\n",
+        "#show ref: set text(fill: green.darken(40%))\n\n",
+        "#show: equate.with(\n  number: true,\n  sub-number: true,\n)\n"
+    );
+    let root = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+    app.document_mut().replace_loaded_unprojected(
+        source.into(),
+        root.path().join("sample.typ"),
+        DocumentKind::Typst,
+        None,
+    );
+    app.settings.line_numbers = true;
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(500.0, 900.0))
+        .build_ui_state(
+            |ui, state: &mut FoldState| {
+                if !state.fonts_ready {
+                    theme::configure_editor_fonts(
+                        ui.ctx(),
+                        Default::default(),
+                        Default::default(),
+                        false,
+                        400,
+                        400,
+                        None,
+                    );
+                    state.fonts_ready = true;
+                    return;
+                }
+                state.app.show_editor(ui);
+            },
+            FoldState {
+                app,
+                fonts_ready: false,
+                _root: root,
+            },
+        );
+    harness.run();
+    assert!(harness.query_by_label("Collapse line 5").is_none());
+    assert!(harness.query_by_label("Collapse line 12").is_none());
+    assert!(harness.query_by_label("Collapse line 6").is_some());
+    assert!(harness.query_by_label("Collapse line 9").is_some());
+    harness.get_by_label("Collapse line 6").click();
+    harness.run();
+    assert!(harness.state().app.folding().is_collapsed(5));
+    assert!(harness.query_by_label("Expand line 6").is_some());
+    assert!(harness.query_by_label("Collapse line 9").is_none());
+    assert!(harness.query_by_label("Collapse line 22").is_some());
+}
+
+#[test]
+fn fold_row_lookup_matches_source_cursors_across_wraps_and_blank_lines() {
+    let source = "\n\n#let α = {\n  a very long wrapped line with 🙂 and more words than fit\n  [body]\n}\n\n#let β = {\n  [body]\n}\n";
+    let parsed = typst_syntax::Source::detached(source);
+    let mut folding = crate::folding::Folding::default();
+    folding.prepare(
+        DocumentKey::new(tiptoptyp_core::document::WindowSessionId::new(1), 0, 0),
+        Arc::from(source),
+        &crate::editor_features::context_regions(&parsed, source),
+    );
+    let context = egui::Context::default();
+    context
+        .run_ui(Default::default(), |ui| {
+            let galley = ui.painter().layout(
+                source.into(),
+                egui::FontId::monospace(14.0),
+                Color32::WHITE,
+                100.0,
+            );
+            for position in [
+                |region: &crate::folding::FoldRegion| region.header,
+                |region: &crate::folding::FoldRegion| region.hidden_chars.start - 1,
+            ] {
+                let rows = fold_row_indices(&galley, &folding.regions, position);
+                for (region, row) in folding.regions.iter().zip(rows) {
+                    assert_eq!(
+                        row,
+                        galley
+                            .layout_from_cursor(CCursor::new(position(region)))
+                            .row
+                    );
+                }
+            }
+        })
+        .drop_without_applying_deltas();
 }

@@ -629,6 +629,27 @@ mod tests {
     }
 
     #[test]
+    fn blank_untitled_document_saves_as_tex_or_an_arbitrary_text_extension() {
+        for (name, kind) in [
+            ("paper.tex", DocumentKind::Tex),
+            ("notes.foo", DocumentKind::Text),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let context = egui::Context::default();
+            let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+            app.snapshot_scene = None;
+            app.reset_untitled_document();
+            assert_eq!(app.document().source(), "");
+            let path = root.path().join(name);
+            assert!(app.save_to(path.clone(), &context));
+            app.finish_save_for_test(&context);
+            assert_eq!(app.document().kind(), kind);
+            assert_eq!(app.document().path().as_ref(), Some(&path));
+            assert_eq!(fs::read_to_string(path).unwrap(), "");
+        }
+    }
+
+    #[test]
     fn replaced_document_does_not_accept_a_late_receipt_or_lose_its_new_close_intent() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("note.txt");

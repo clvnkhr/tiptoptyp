@@ -14,13 +14,10 @@ impl EditorApp {
             return false;
         }
         let maximized = self.bottom_panel.is_maximized();
-        let activity = self.bottom_panel.selected() == Some(PanelTab::Activity);
         let id = crate::child_view::viewport_scoped_id(
             ui.ctx(),
             if maximized {
                 "bottom-panel-maximized"
-            } else if activity {
-                "activity-panel"
             } else {
                 "bottom-panel"
             },
@@ -39,22 +36,17 @@ impl EditorApp {
         } else {
             panel
                 .resizable(true)
-                .default_size(if activity {
-                    120.0
-                } else {
-                    METRICS.chrome.bottom_panel_default_height
-                })
-                .min_size(
-                    if activity {
-                        54.0_f32
-                    } else {
-                        METRICS.chrome.bottom_panel_min_height
-                    }
-                    .min(available),
-                )
+                .default_size(METRICS.chrome.bottom_panel_default_height)
+                .min_size(METRICS.chrome.bottom_panel_min_height.min(available))
                 .max_size(available)
         };
-        panel.show(ui, |ui| self.show_bottom_panel(ui));
+        panel.show(ui, |ui| {
+            self.show_bottom_panel(ui);
+            // A sparse tab must occupy the user's existing panel rectangle.
+            // Otherwise egui shrinks it to its content height when switching
+            // from Terminal to Activity and persists that smaller height.
+            ui.allocate_space(ui.available_size().max(Vec2::ZERO));
+        });
         maximized || ui.available_height() < 1.0
     }
 
@@ -345,6 +337,7 @@ mod tests {
             root.path().into(),
             egui::ViewportId::ROOT,
         );
+        app.snapshot_scene = None;
         theme::configure_editor_fonts(
             &context,
             Default::default(),
@@ -406,6 +399,24 @@ mod tests {
         harness.get_by_label("Restore panel size").click();
         harness.run();
         assert_eq!(harness.get_by_label("Terminal input").rect(), original);
+        let panel_id = crate::child_view::viewport_scoped_id(&harness.ctx, "bottom-panel");
+        let terminal_height = harness.ctx.data_mut(|data| {
+            data.get_persisted::<egui::PanelState>(panel_id)
+                .unwrap()
+                .outer_rect
+                .height()
+        });
+        harness.state_mut().bottom_panel.select(PanelTab::Activity);
+        harness.run();
+        let activity_height = harness.ctx.data_mut(|data| {
+            data.get_persisted::<egui::PanelState>(panel_id)
+                .unwrap()
+                .outer_rect
+                .height()
+        });
+        assert_eq!(activity_height, terminal_height);
+        harness.state_mut().bottom_panel.select(PanelTab::Terminal);
+        harness.run();
         harness.get_by_label("Terminal input").click();
         harness.run();
         let shortcut = harness

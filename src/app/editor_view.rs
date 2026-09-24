@@ -560,16 +560,9 @@ impl EditorApp {
             }
             if line_numbers {
                 paint_line_numbers(ui, &output, &line_rows, theme::editor_font());
-                let gutter_clicked =
-                    paint_fold_controls(ui, &output, &line_rows, folding, git_gutter);
-                let marker_clicked = paint_fold_markers(
-                    ui,
-                    &output,
-                    &line_rows,
-                    folding,
-                    &fold_marker,
-                    fold_marker_width,
-                );
+                let gutter_clicked = paint_fold_controls(ui, &output, folding, git_gutter);
+                let marker_clicked =
+                    paint_fold_markers(ui, &output, folding, &fold_marker, fold_marker_width);
                 if let Some(region) = gutter_clicked.or(marker_clicked) {
                     output.response.request_focus();
                     folding.toggle(region.line);

@@ -4238,24 +4238,24 @@ impl EditorApp {
         if self.document_workflow.has_dialog() {
             return false;
         }
-        let kind = self.document().kind();
+        let untitled = self.document().path().is_none();
+        // An untitled document has no language until the user chooses a name.
+        // The chosen extension determines its kind when the write is admitted.
+        let kind = if untitled {
+            DocumentKind::Text
+        } else {
+            self.document().kind()
+        };
         let Some(dialog) = self.native_file_dialog(frame) else {
             return false;
         };
-        let mut dialog = dialog.set_file_name(self.document_name());
-        dialog = if kind == DocumentKind::Typst {
-            dialog
-                .add_filter("Typst documents", &["typ"])
-                .set_title("Save Typst document")
-        } else if kind == DocumentKind::Tex {
-            dialog
-                .add_filter("TeX documents", &["tex"])
-                .set_title("Save TeX document")
-        } else {
-            dialog
-                .add_filter("Text files", &["txt"])
-                .set_title("Save text file")
-        };
+        let mut dialog = dialog
+            .set_file_name(if untitled {
+                "Untitled".to_owned()
+            } else {
+                self.document_name()
+            })
+            .set_title("Save document");
         if let Some(directory) = self.current_directory() {
             dialog = dialog.set_directory(directory);
         }
@@ -9385,10 +9385,36 @@ fn line_number_position(
     Pos2::new(right - number.size().x, top + baseline - number_baseline)
 }
 
+/// Map monotonically ordered source positions to visual rows in one galley
+/// scan. Calling `Galley::layout_from_cursor` for every fold would rescan the
+/// document from row zero for each control in a large file.
+fn fold_row_indices(
+    galley: &egui::Galley,
+    regions: &[crate::folding::FoldRegion],
+    position: impl Fn(&crate::folding::FoldRegion) -> usize,
+) -> Vec<usize> {
+    let mut result = Vec::with_capacity(regions.len());
+    let mut row_index = 0;
+    let mut row_start = 0usize;
+    for region in regions {
+        let target = position(region);
+        while let Some(row) = galley.rows.get(row_index) {
+            if target <= row_start + row.char_count_excluding_newline().0
+                || row_index + 1 == galley.rows.len()
+            {
+                break;
+            }
+            row_start += row.char_count_including_newline().0;
+            row_index += 1;
+        }
+        result.push(row_index);
+    }
+    result
+}
+
 fn paint_fold_controls(
     ui: &mut egui::Ui,
     output: &egui::text_edit::TextEditOutput,
-    line_rows: &[Range<usize>],
     folding: &crate::folding::Folding,
     git_gutter: bool,
 ) -> Option<crate::folding::FoldRegion> {
@@ -9398,11 +9424,14 @@ fn paint_fold_controls(
         } else {
             0.0
         };
-    for region in &folding.regions {
-        let Some(rows) = line_rows.get(region.line) else {
+    let row_indices = fold_row_indices(&output.galley, &folding.regions, |region| region.header);
+    for (region, row_index) in folding.regions.iter().zip(row_indices) {
+        // Anchor controls to the syntax region's source character, rather than
+        // assuming the galley's visual-row/newline accounting matches the
+        // structural line index after wrapping or folded-row projection.
+        let Some(row) = output.galley.rows.get(row_index) else {
             continue;
         };
-        let row = &output.galley.rows[rows.start];
         let rect = row.rect().translate(output.galley_pos.to_vec2());
         if row.size.y == 0.0 || !ui.clip_rect().intersects(rect) {
             continue;
@@ -9457,20 +9486,20 @@ fn paint_fold_controls(
 fn paint_fold_markers(
     ui: &mut egui::Ui,
     output: &egui::text_edit::TextEditOutput,
-    line_rows: &[Range<usize>],
     folding: &crate::folding::Folding,
     marker: &Arc<egui::Galley>,
     marker_width: f32,
 ) -> Option<crate::folding::FoldRegion> {
-    for region in folding
-        .regions
-        .iter()
-        .filter(|r| folding.is_collapsed(r.line))
-    {
-        let Some(rows) = line_rows.get(region.line) else {
+    let row_indices = fold_row_indices(&output.galley, &folding.regions, |region| {
+        region.hidden_chars.start.saturating_sub(1)
+    });
+    for (region, row_index) in folding.regions.iter().zip(row_indices) {
+        if !folding.is_collapsed(region.line) {
+            continue;
+        }
+        let Some(row) = output.galley.rows.get(row_index) else {
             continue;
         };
-        let row = &output.galley.rows[rows.end - 1];
         let rect = row.rect().translate(output.galley_pos.to_vec2());
         if row.size.y == 0.0 || !ui.clip_rect().intersects(rect) {
             continue;
@@ -10239,7 +10268,7 @@ fn same_path(left: &Path, right: &Path) -> bool {
 }
 
 fn reset_untitled_buffer(document: &mut DocumentSession, autosave_deadline: &mut Option<Instant>) {
-    document.replace_unprojected_untitled(DEFAULT_SOURCE);
+    document.replace_unprojected_untitled("");
     *autosave_deadline = None;
 }
 
