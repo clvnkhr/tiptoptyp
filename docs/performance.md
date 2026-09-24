@@ -1,6 +1,9 @@
 # Performance workflow
 
-## Built-in PDF thumbnail probe (23 September 2026)
+## Historical PDF thumbnail probe (23 September 2026)
+
+Hayro was subsequently removed; see [the PDFium thumbnail consolidation](hayro-removal.md)
+for the current implementation and its validation.
 
 On macOS 14.6.1 arm64, the same three-page `manual-tests/typst-preview.typ`
 PDF was rendered at a 720-pixel long edge, white background, four consecutive

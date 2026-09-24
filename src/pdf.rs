@@ -1,9 +1,6 @@
-//! Bounded PDF thumbnails for hover previews. PDFium owns document viewing.
-use hayro::{RenderCache, RenderSettings, hayro_syntax::Pdf};
-use std::path::Path;
+//! Shared PDF pixel data and bounded thumbnail geometry. PDFium owns rendering.
 
 pub const PREVIEW_DPI: f32 = 144.0;
-const MAX_PDF_PAGES: usize = 10_000;
 const MAX_RENDER_PIXELS: usize = 32 * 1024 * 1024;
 
 #[derive(Debug)]
@@ -12,72 +9,42 @@ pub struct PreviewPage {
     pub rgba: Vec<u8>,
 }
 
-fn load(pdf: &[u8]) -> Result<Pdf, String> {
-    let pdf = Pdf::new(pdf.to_vec()).map_err(|error| format!("Could not read PDF: {error:?}"))?;
-    if pdf.pages().is_empty() || pdf.pages().len() > MAX_PDF_PAGES {
-        return Err("PDF must contain between 1 and 10,000 pages".into());
-    }
-    Ok(pdf)
-}
-fn check_cancelled(cancelled: &mut impl FnMut() -> bool) -> Result<(), String> {
-    if cancelled() {
-        Err("PDF work was superseded by a newer artifact".into())
-    } else {
-        Ok(())
-    }
-}
-fn dimensions(
-    page: &hayro::hayro_syntax::page::Page<'_>,
-    scale: f32,
-) -> Result<[usize; 2], String> {
-    let (w, h) = page.render_dimensions();
-    let (w, h) = (w * scale, h * scale);
-    if !w.is_finite() || !h.is_finite() || w <= 0.0 || h <= 0.0 || w > 65535.0 || h > 65535.0 {
+pub(crate) fn thumbnail_size(page: [f32; 2], max_dimension: u32) -> Result<[usize; 2], String> {
+    if max_dimension == 0
+        || max_dimension > 65535
+        || page.iter().any(|value| !value.is_finite() || *value <= 0.0)
+    {
         return Err("PDF page dimensions are outside the supported range".into());
     }
-    Ok([w.ceil() as usize, h.ceil() as usize])
-}
-pub(crate) fn rasterize_pdf_first_page(
-    pdf: &[u8],
-    _project_root: &Path,
-    max_dimension: u32,
-    mut cancelled: impl FnMut() -> bool,
-) -> Result<PreviewPage, String> {
-    check_cancelled(&mut cancelled)?;
-    let pdf = load(pdf)?;
-    let page = &pdf.pages()[0];
-    let (width, height) = page.render_dimensions();
-    let scale = max_dimension as f32 / width.max(height);
-    let mut size = dimensions(page, scale)?;
-    for dimension in &mut size {
-        *dimension = (*dimension).min(max_dimension as usize);
-    }
+    let scale = f64::from(max_dimension) / f64::from(page[0].max(page[1]));
+    let size = page
+        .map(|value| ((f64::from(value) * scale).ceil() as usize).clamp(1, max_dimension as usize));
     if size[0].saturating_mul(size[1]) > MAX_RENDER_PIXELS {
         return Err("PDF thumbnail exceeds the 32 megapixel request limit".into());
     }
-    let settings = RenderSettings {
-        x_scale: scale,
-        y_scale: scale,
-        width: Some(size[0] as u16),
-        height: Some(size[1] as u16),
-        bg_color: hayro::vello_cpu::color::palette::css::WHITE,
-    };
-    let pixels = hayro::render(page, &RenderCache::new(), &Default::default(), &settings);
-    check_cancelled(&mut cancelled)?;
-    Ok(PreviewPage {
-        size,
-        rgba: pixels.data_as_u8_slice().to_vec(),
-    })
+    Ok(size)
 }
 
 #[cfg(test)]
 pub(crate) fn test_pdf() -> Vec<u8> {
+    test_pdf_page("", "1 0 0 rg 0 0 200 100 re f")
+}
+
+#[cfg(test)]
+pub(crate) fn test_pdf_page(attributes: &str, content: &str) -> Vec<u8> {
+    let page = format!(
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] {attributes} /Annots [4 0 R] /Contents 5 0 R >>"
+    );
+    let stream = format!(
+        "<< /Length {} >>\nstream\n{content}\nendstream",
+        content.len()
+    );
     let objects = [
         "<< /Type /Catalog /Pages 2 0 R >>",
         "<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Annots [4 0 R] /Contents 5 0 R >>",
+        &page,
         "<< /Type /Annot /Subtype /Link /Rect [10 20 100 40] /A << /S /URI /URI (https://example.com) >> >>",
-        "<< /Length 27 >>\nstream\n1 0 0 rg 0 0 200 100 re f\nendstream",
+        &stream,
     ];
     let mut pdf = String::from("%PDF-1.4\n");
     let mut offsets = vec![0];
@@ -100,22 +67,21 @@ pub(crate) fn test_pdf() -> Vec<u8> {
 mod tests {
     use super::*;
     #[test]
-    fn thumbnail_needs_no_host_utilities_or_writable_workspace() {
-        let pdf = test_pdf();
-        let root = Path::new("/nonexistent/read-only");
-        let image = rasterize_pdf_first_page(&pdf, root, 100, || false).unwrap();
-        assert_eq!(image.size, [100, 50]);
-        assert_eq!(image.rgba.len(), 100 * 50 * 4);
-        assert_eq!(&image.rgba[..4], &[255, 0, 0, 255]);
-    }
-    #[test]
-    fn cancelled_invalid_and_oversized_requests_fail() {
-        let pdf = test_pdf();
-        let root = Path::new(".");
-        assert!(rasterize_pdf_first_page(&pdf, root, 100, || true).is_err());
-        assert!(rasterize_pdf_first_page(b"not a PDF", root, 100, || false).is_err());
-        assert!(rasterize_pdf_first_page(&pdf, root, 0, || false).is_err());
-        assert!(rasterize_pdf_first_page(&pdf, root, 20_000, || false).is_err());
+    fn thumbnail_geometry_preserves_aspect_ratio_and_bounds_allocations() {
+        assert_eq!(thumbnail_size([200.0, 100.0], 100).unwrap(), [100, 50]);
+        assert_eq!(thumbnail_size([100.0, 200.0], 100).unwrap(), [50, 100]);
+        assert_eq!(thumbnail_size([200.0, 100.0], 1).unwrap(), [1, 1]);
+        for page in [
+            [0.0, 100.0],
+            [-1.0, 100.0],
+            [f32::NAN, 100.0],
+            [100.0, f32::INFINITY],
+        ] {
+            assert!(thumbnail_size(page, 100).is_err());
+        }
+        for limit in [0, 20_000, u32::MAX] {
+            assert!(thumbnail_size([200.0, 100.0], limit).is_err());
+        }
     }
 }
 
@@ -128,13 +94,7 @@ mod probes {
         let bytes = std::fs::read(path).unwrap();
         for run in 0..4 {
             let started = std::time::Instant::now();
-            let page = super::rasterize_pdf_first_page(
-                &bytes,
-                std::path::Path::new("/nonexistent"),
-                720,
-                || false,
-            )
-            .unwrap();
+            let page = crate::pdfium::thumbnail(&bytes, 720, || false).unwrap();
             eprintln!(
                 "thumbnail run={run} elapsed_us={} size={:?}",
                 started.elapsed().as_micros(),

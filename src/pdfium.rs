@@ -50,6 +50,59 @@ fn engine() -> Result<&'static Pdfium, String> {
         .map_err(Clone::clone)
 }
 
+/// Runs on the existing asset worker. Uses the same process-wide PDFium engine
+/// as document viewing; no subprocess, filesystem workspace, or extra worker.
+pub(crate) fn thumbnail(
+    bytes: &[u8],
+    max_dimension: u32,
+    mut cancelled: impl FnMut() -> bool,
+) -> Result<crate::pdf::PreviewPage, String> {
+    let mut check = || {
+        if cancelled() {
+            Err("PDF thumbnail was superseded".to_owned())
+        } else {
+            Ok(())
+        }
+    };
+    check()?;
+    if bytes.len() > MAX_BYTES {
+        return Err("PDF exceeds the 256 MiB preview limit".into());
+    }
+    // Reject invalid caps before loading the engine or parsing the document.
+    if max_dimension == 0 || max_dimension > 65535 {
+        return Err("PDF thumbnail dimensions are outside the supported range".into());
+    }
+    let document = engine()?
+        .load_pdf_from_byte_slice(bytes, None)
+        .map_err(|e| e.to_string())?;
+    check()?;
+    let count = document.pages().len() as usize;
+    if count == 0 || count > MAX_PAGES {
+        return Err("PDF must have 1–10,000 pages".into());
+    }
+    let page = document.pages().get(0).map_err(|e| e.to_string())?;
+    let size =
+        crate::pdf::thumbnail_size([page.width().value, page.height().value], max_dimension)?;
+    let config = PdfRenderConfig::new()
+        .set_target_size(size[0] as i32, size[1] as i32)
+        .set_clear_color(PdfColor::WHITE);
+    check()?;
+    let result = render_pixels(&page, &config)?;
+    check()?;
+    Ok(result)
+}
+
+fn render_pixels(
+    page: &PdfPage<'_>,
+    config: &PdfRenderConfig,
+) -> Result<crate::pdf::PreviewPage, String> {
+    let bitmap = page.render_with_config(config).map_err(|e| e.to_string())?;
+    Ok(crate::pdf::PreviewPage {
+        size: [bitmap.width() as usize, bitmap.height() as usize],
+        rgba: bitmap.as_rgba_bytes(),
+    })
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct RequestKey {
     pub revision: u64,
@@ -208,12 +261,7 @@ impl Worker {
                         let page = doc.pages().get(index as i32).map_err(|e| e.to_string())?;
                         let config =
                             PdfRenderConfig::new().set_target_size(size[0] as i32, size[1] as i32);
-                        let bitmap = page
-                            .render_with_config(&config)
-                            .map_err(|e| e.to_string())?;
-                        let size = [bitmap.width() as usize, bitmap.height() as usize];
-                        let rgba = bitmap.as_rgba_bytes();
-                        drop(bitmap);
+                        let crate::pdf::PreviewPage { size, rgba } = render_pixels(&page, &config)?;
                         if !current() {
                             return Err("Superseded".into());
                         }
@@ -387,6 +435,61 @@ pub(crate) fn safe_url(uri: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn thumbnail_preflight_rejects_cancelled_or_invalid_requests_without_pdfium() {
+        assert!(
+            thumbnail(b"invalid", 100, || true)
+                .unwrap_err()
+                .contains("superseded")
+        );
+        for limit in [0, u32::MAX] {
+            assert!(
+                thumbnail(b"invalid", limit, || false)
+                    .unwrap_err()
+                    .contains("dimensions")
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires cargo run --manifest-path xtask/Cargo.toml -- fetch-pdfium"]
+    fn native_thumbnails_preserve_pixels_rotation_white_background_and_cancellation() {
+        let pdf = crate::pdf::test_pdf();
+        let image = thumbnail(&pdf, 100, || false).unwrap();
+        assert_eq!(image.size, [100, 50]);
+        assert_eq!(image.rgba.len(), 100 * 50 * 4);
+        assert!(
+            image
+                .rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| *pixel == [255, 0, 0, 255])
+        );
+        let rotated = crate::pdf::test_pdf_page("/Rotate 90", "1 0 0 rg 0 0 200 100 re f");
+        assert_eq!(thumbnail(&rotated, 100, || false).unwrap().size, [50, 100]);
+        let blank = crate::pdf::test_pdf_page("", "");
+        assert!(
+            thumbnail(&blank, 100, || false)
+                .unwrap()
+                .rgba
+                .iter()
+                .all(|byte| *byte == 255)
+        );
+        assert!(thumbnail(b"not a PDF", 100, || false).is_err());
+        assert!(thumbnail(&pdf, 20_000, || false).is_err());
+        // Check cancellation at each phase, including after a native render.
+        for cancel_at in 1..=4 {
+            let mut checks = 0;
+            let result = thumbnail(&pdf, 100, || {
+                checks += 1;
+                checks == cancel_at
+            });
+            assert!(result.unwrap_err().contains("superseded"));
+            assert_eq!(checks, cancel_at);
+        }
+    }
+
     #[test]
     fn raster_budget_and_invalid_dimensions() {
         assert!(raster_size([f32::NAN, 20.0], 100).is_err());

@@ -12,11 +12,7 @@ use std::{
     time::SystemTime,
 };
 
-use crate::{
-    document::DocumentKind,
-    pdf::{PreviewPage, rasterize_pdf_first_page},
-    private_workspace::project_root_for_path,
-};
+use crate::{document::DocumentKind, pdf::PreviewPage};
 
 macro_rules! request_token {
     ($name:ident) => {
@@ -393,13 +389,7 @@ fn load_pdf_thumbnail(
     if cancelled() {
         return Err("PDF thumbnail loading was superseded".to_owned());
     }
-    let project_root = project_root_for_path(path).map_err(|error| {
-        format!(
-            "Could not locate private workspace storage for {}: {error}",
-            path.display()
-        )
-    })?;
-    let page = rasterize_pdf_first_page(&bytes, &project_root, max_dimension, cancelled)?;
+    let page = crate::pdfium::thumbnail(&bytes, max_dimension, cancelled)?;
     thumbnail_from_preview_page(page, max_dimension)
 }
 

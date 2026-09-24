@@ -226,27 +226,6 @@ impl PrivateSourceMirror {
     }
 }
 
-/// Finds the natural private-workspace root for a file. `typst.toml` and Git
-/// roots win; otherwise the file's containing directory is used.
-pub fn project_root_for_path(path: &Path) -> io::Result<PathBuf> {
-    let absolute = if path.is_absolute() {
-        path.to_owned()
-    } else {
-        std::env::current_dir()?.join(path)
-    };
-    let start = if absolute.is_dir() {
-        absolute.as_path()
-    } else {
-        absolute.parent().unwrap_or_else(|| Path::new("."))
-    };
-    let start = start.canonicalize()?;
-    Ok(start
-        .ancestors()
-        .find(|ancestor| ancestor.join("typst.toml").is_file() || ancestor.join(".git").exists())
-        .unwrap_or(&start)
-        .to_owned())
-}
-
 /// Destination-local writer for atomic user-file replacement.
 ///
 /// Temporary inodes live below a private directory beside the destination,
@@ -992,17 +971,5 @@ mod tests {
             Some(destination.as_path())
         );
         assert_eq!(fs::read(destination).unwrap(), b"pdf bytes");
-    }
-
-    #[test]
-    fn root_discovery_prefers_nearest_project_marker() {
-        let project = tempfile::tempdir().unwrap();
-        fs::create_dir(project.path().join(".git")).unwrap();
-        fs::create_dir_all(project.path().join("chapters/deep")).unwrap();
-        fs::write(project.path().join("chapters/deep/main.typ"), "text").unwrap();
-        assert_eq!(
-            project_root_for_path(&project.path().join("chapters/deep/main.typ")).unwrap(),
-            project.path().canonicalize().unwrap()
-        );
     }
 }

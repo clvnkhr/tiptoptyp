@@ -183,7 +183,7 @@ fn find_overlay_stays_above_sticky_rows_after_sticky_layer_promotion() {
 }
 
 #[test]
-fn pdfium_routes_canonical_artifacts_without_hayro_or_webview_work() {
+fn pdfium_routes_canonical_artifacts_without_duplicate_rendering_or_webview_work() {
     let directory = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
     let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());

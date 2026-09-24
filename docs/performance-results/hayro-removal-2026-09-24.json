@@ -1,0 +1,32 @@
+{
+  "date": "2026-09-24",
+  "environment": "macOS 14.6.1 arm64, Apple M2 Max",
+  "rustc": "1.98.1",
+  "profile": "release, thin LTO, CARGO_INCREMENTAL=0",
+  "baseline_commit": "7aa3219400d8e1f530e5309a6689b3399410cabc",
+  "after": "codex/remove-hayro renderer changes; excludes final spacing-only adjustment",
+  "fixture": "manual-tests/typst-preview.typ compiled with bundled Typst",
+  "fixture_sha256": "e2066d15c87f94c50e0be62f31b1ab15e090d794814c1f53e481634697dbd6f3",
+  "output_size": [
+    508,
+    720
+  ],
+  "max_dimension": 720,
+  "pdfium": "chromium/7881",
+  "scope": "First-page parse/render to RGBA; white background; warm filesystem; run 0 cold process/engine; runs 1-3 warm engine, fresh PDF. Excludes disk input, PNG encoding, GPU upload, display. No viewport/theme. No competing task build or fixture app during measurements.",
+  "samples_us": {
+    "before": [
+      5280,
+      3342,
+      3139,
+      3485
+    ],
+    "after": [
+      27162,
+      5812,
+      5282,
+      7024
+    ]
+  },
+  "limitations": "Four samples per renderer on one small PDF; no cross-platform, whole-app, or large-document claim; no matched app-size measurement."
+}

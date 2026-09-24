@@ -193,9 +193,6 @@ fn generate_third_party_notices() -> Result<(), String> {
         root.join("docs/licenses/utf8-decoder-MIT.txt"),
         root.join("docs/licenses/Unicode-3.0.txt"),
         root.join("docs/licenses/zig-MIT.txt"),
-        root.join("docs/licenses/hayro-foxit.txt"),
-        root.join("docs/licenses/hayro-cgats.txt"),
-        root.join("docs/licenses/hayro-cmaps.txt"),
     ] {
         let name = path
             .strip_prefix(&root)

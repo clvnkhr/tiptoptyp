@@ -778,7 +778,12 @@ impl EditorApp {
         };
         let theme = context.theme();
         let style = context.style_of(theme);
-        let tooltip_frame = theme::tooltip_card_frame(&style);
+        let mut tooltip_frame = theme::tooltip_card_frame(&style);
+        if hover.kind == DocumentKind::Pdf {
+            tooltip_frame = tooltip_frame
+                .inner_margin(egui::Margin::same(METRICS.popup.card_inner_margin / 2))
+                .outer_margin(egui::Margin::same(theme::SPACE.content as i8 / 2));
+        }
         let frame_margin = tooltip_frame.total_margin().sum();
         let size = asset_hover_card_size(
             &hover.content,

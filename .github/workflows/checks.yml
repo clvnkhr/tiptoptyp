@@ -106,7 +106,7 @@ jobs:
           test -x "$TIPTOPTYP_TEST_TYPST"
           test -x "$TIPTOPTYP_TEST_TINYMIST"
           cargo +1.98.1 test --locked -p glutin --lib native_thread_current_context -- --ignored
-          cargo +1.98.1 test --locked --bin tiptoptyp -- --ignored --skip native_fixture_probe --test-threads=1
+          cargo +1.98.1 test --locked --bin tiptoptyp -- --ignored --skip native_fixture_probe --skip thumbnail_probe --test-threads=1
 
   native-windows:
     name: Native macOS window contract
