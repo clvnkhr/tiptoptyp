@@ -122,10 +122,11 @@ pub enum UiSnapshotScene {
     FindStickyContext,
     PreviewCompiling,
     PdfiumPreview,
+    Icons,
 }
 
 impl UiSnapshotScene {
-    pub const ALL: [Self; 56] = [
+    pub const ALL: [Self; 57] = [
         Self::TableEditor,
         Self::TableEditorNarrow,
         Self::Main,
@@ -182,6 +183,7 @@ impl UiSnapshotScene {
         Self::FindStickyContext,
         Self::PreviewCompiling,
         Self::PdfiumPreview,
+        Self::Icons,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -189,6 +191,7 @@ impl UiSnapshotScene {
             Self::TableEditor => "table-editor",
             Self::TableEditorNarrow => "table-editor-narrow",
             Self::Main => "main",
+            Self::Icons => "icons",
             Self::Tabs => "tabs",
             Self::EmptyWorkspace => "empty-workspace",
             Self::TabsPdf => "tabs-pdf",
@@ -271,7 +274,8 @@ impl UiSnapshotScene {
             | Self::ExplorerDrop
             | Self::ExplorerMaximized
             | Self::PreviewCompiling
-            | Self::PdfiumPreview => ROOT_VIEWPORT_NAME,
+            | Self::PdfiumPreview
+            | Self::Icons => ROOT_VIEWPORT_NAME,
             Self::FileMenu
             | Self::EditMenu
             | Self::EditorContextMenu
@@ -365,6 +369,7 @@ impl UiSnapshotScene {
             "writing-checks" => Self::WritingChecks,
             "explorer-maximized" => Self::ExplorerMaximized,
             "explorer-drop" => Self::ExplorerDrop,
+            "icons" => Self::Icons,
             "find-replace" => Self::FindReplace,
             "find-sticky-context" => Self::FindStickyContext,
             "preview-compiling" => Self::PreviewCompiling,

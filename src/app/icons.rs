@@ -3,8 +3,17 @@ use super::tooltips::native_hover_text;
 use crate::theme::METRICS;
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum UiIcon {
+// One registry drives both the exhaustive painter and the visual audit sheet.
+macro_rules! ui_icons {
+    ($($name:ident),* $(,)?) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub(crate) enum UiIcon { $($name),* }
+        impl UiIcon {
+            pub(crate) const ALL: &'static [Self] = &[$(Self::$name),*];
+        }
+    };
+}
+ui_icons! {
     Check,
     Save,
     Document,
@@ -45,6 +54,8 @@ pub(crate) enum UiIcon {
     Waiting,
     ZoomIn,
     ZoomOut,
+    Folder,
+    File,
 }
 
 pub(crate) fn square_icon_button(
@@ -293,6 +304,9 @@ pub(crate) fn paint_ui_icon(painter: &egui::Painter, rect: Rect, icon: UiIcon, c
     let center = rect.center();
     let stroke = Stroke::new(1.25, color);
     match icon {
+        UiIcon::Folder | UiIcon::File => {
+            paint_tree_glyph(painter, rect, icon == UiIcon::Folder, color);
+        }
         UiIcon::Save => {
             painter.rect_stroke(rect, 1.5, stroke, egui::StrokeKind::Inside);
             painter.rect_stroke(
@@ -331,14 +345,20 @@ pub(crate) fn paint_ui_icon(painter: &egui::Painter, rect: Rect, icon: UiIcon, c
             );
         }
         UiIcon::Copy => {
-            painter.rect_stroke(
-                Rect::from_min_max(rect.min, rect.max - Vec2::splat(4.0)),
-                1.5,
+            // Only paint the exposed edge of the back sheet. A transparent
+            // foreground fill cannot erase lines already painted behind it.
+            let back =
+                Rect::from_min_max(rect.min + Vec2::splat(0.625), rect.max - Vec2::splat(4.0));
+            painter.add(egui::Shape::line(
+                vec![
+                    Pos2::new(back.left(), rect.bottom() - 4.0),
+                    back.left_top(),
+                    back.right_top(),
+                    Pos2::new(back.right(), rect.top() + 2.0),
+                ],
                 stroke,
-                egui::StrokeKind::Inside,
-            );
-            let front = Rect::from_min_max(rect.min + Vec2::splat(4.0), rect.max);
-            painter.rect_filled(front, 1.5, Color32::TRANSPARENT);
+            ));
+            let front = Rect::from_min_max(rect.min + Vec2::splat(3.5), rect.max);
             painter.rect_stroke(front, 1.5, stroke, egui::StrokeKind::Inside);
         }
         UiIcon::Trash => {
@@ -739,41 +759,28 @@ pub(crate) fn paint_ui_icon(painter: &egui::Painter, rect: Rect, icon: UiIcon, c
             }
         }
         UiIcon::FitWidth => {
-            painter.line_segment(
-                [
-                    Pos2::new(rect.left(), rect.top()),
-                    Pos2::new(rect.left(), rect.bottom()),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(rect.right(), rect.top()),
-                    Pos2::new(rect.right(), rect.bottom()),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(rect.left() + 3.0, center.y),
-                    Pos2::new(rect.right() - 3.0, center.y),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(rect.left() + 3.0, center.y),
-                    Pos2::new(rect.left() + 6.0, center.y - 3.0),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(rect.right() - 3.0, center.y),
-                    Pos2::new(rect.right() - 6.0, center.y - 3.0),
-                ],
-                stroke,
-            );
+            for x in [rect.left() + 0.625, rect.right() - 0.625] {
+                painter.line_segment(
+                    [
+                        Pos2::new(x, rect.top() + 1.0),
+                        Pos2::new(x, rect.bottom() - 1.0),
+                    ],
+                    stroke,
+                );
+            }
+            let left = Pos2::new(rect.left() + 3.0, center.y);
+            let right = Pos2::new(rect.right() - 3.0, center.y);
+            painter.line_segment([left, right], stroke);
+            for (tip, direction) in [(left, 1.0), (right, -1.0)] {
+                painter.add(egui::Shape::line(
+                    vec![
+                        tip + Vec2::new(direction * 2.0, -2.0),
+                        tip,
+                        tip + Vec2::new(direction * 2.0, 2.0),
+                    ],
+                    stroke,
+                ));
+            }
         }
         UiIcon::Warning => {
             painter.add(egui::Shape::convex_polygon(
@@ -835,9 +842,86 @@ pub(crate) fn action_button_enabled(
     icon_button_enabled(ui, enabled, icon, label)
 }
 
+fn paint_tree_glyph(painter: &egui::Painter, rect: Rect, folder: bool, color: Color32) {
+    let stroke = Stroke::new(METRICS.explorer.tree_icon_stroke, color);
+    if folder {
+        // A flat tab reads as a folder even at 14×12; avoid a peaked roof.
+        let outline = rect.shrink(stroke.width * 0.5);
+        painter.add(egui::Shape::closed_line(
+            vec![
+                outline.left_bottom(),
+                outline.left_top(),
+                Pos2::new(outline.left() + 4.0, outline.top()),
+                Pos2::new(outline.left() + 6.0, outline.top() + 3.0),
+                Pos2::new(outline.right(), outline.top() + 3.0),
+                outline.right_bottom(),
+            ],
+            stroke,
+        ));
+        painter.line_segment(
+            [
+                Pos2::new(outline.left(), outline.top() + 3.0),
+                Pos2::new(outline.left() + 6.0, outline.top() + 3.0),
+            ],
+            stroke,
+        );
+    } else {
+        let rect = rect.shrink2(Vec2::new(2.0, 0.0));
+        painter.rect_stroke(rect, 1.2, stroke, egui::StrokeKind::Inside);
+        painter.line_segment(
+            [
+                Pos2::new(rect.left() + 2.5, rect.top() + 4.0),
+                Pos2::new(rect.right() - 2.5, rect.top() + 4.0),
+            ],
+            stroke,
+        );
+        painter.line_segment(
+            [
+                Pos2::new(rect.left() + 2.5, rect.top() + 7.0),
+                Pos2::new(rect.right() - 2.5, rect.top() + 7.0),
+            ],
+            stroke,
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_registered_icon_has_finite_bounded_ink_at_control_sizes() {
+        for size in [Vec2::new(14.0, 12.0), Vec2::splat(14.0)] {
+            for &icon in UiIcon::ALL {
+                let ctx = egui::Context::default();
+                let rect = Rect::from_min_size(Pos2::new(20.0, 20.0), size);
+                let mut output = ctx.run_ui(Default::default(), |ui| {
+                    let painter = ui.ctx().layer_painter(egui::LayerId::background());
+                    paint_ui_icon(&painter, rect, icon, Color32::BLACK);
+                });
+                output.textures_delta.clear();
+                assert!(!output.shapes.is_empty(), "{icon:?} has no ink");
+                for shape in output.shapes {
+                    let bounds = shape.shape.visual_bounding_rect();
+                    assert!(bounds.is_finite(), "{icon:?}: {bounds:?}");
+                    assert!(
+                        rect.expand(1.0).contains_rect(bounds),
+                        "{icon:?}: {bounds:?} outside {rect:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn contact_sheet_renders_every_registered_icon_without_clipping() {
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(Vec2::new(1400.0, 900.0))
+            .build_ui(super::super::icon_sheet::show);
+        harness.run();
+        assert_eq!(harness.ctx.pixels_per_point(), 1.0);
+        assert!(76.0 + UiIcon::ALL.len().div_ceil(6) as f32 * 88.0 + 152.0 < 900.0);
+    }
 
     #[test]
     fn panel_size_windows_share_bounded_geometry_at_small_and_scaled_sizes() {

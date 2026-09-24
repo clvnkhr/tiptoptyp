@@ -101,6 +101,7 @@ The accepted scenes and their framebuffer targets are:
 | `explorer-maximized` | `main` | Files section filling Explorer, with sibling sections hidden |
 | `terminal-panel` | `main` | Shared bottom panel with deterministic libghostty colors, Unicode and cursor; no shell is spawned |
 | `problems-panel` | `main` | Expanded Problems panel with diagnostics |
+| `icons` | `main` | All shared vector icons at 1× and 4×, plus production/development application icons |
 | `find-replace` | `find-replace` | Find and replace controls |
 | `find-sticky-context` | `find-replace` | Find/replace controls and match count for the scrolled sticky-context fixture |
 | `preview-compiling` | `main` | Compiling status and empty preview state |

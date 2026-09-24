@@ -1,5 +1,6 @@
 mod build;
 mod encoding_import;
+mod icon_sheet;
 pub(crate) mod icons;
 mod templates;
 mod tex;
@@ -8320,6 +8321,11 @@ impl EditorApp {
         self.tick_workspace(&context);
         self.tick_project_index(&context);
         self.prepare_qa_scene(&context);
+        if self.snapshot_scene == Some(UiSnapshotScene::Icons) {
+            self.hide_webview();
+            icon_sheet::show(ui);
+            return;
+        }
         if self.snapshot_scene.is_none() {
             // Advance the Git model independently of the Explorer body's
             // collapsed state. A collapsed section still needs to collect

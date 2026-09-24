@@ -8229,7 +8229,7 @@ fn toolbar_styles_preserve_accessible_actions() {
 fn selected_tree_icons_keep_visible_theme_strokes() {
     for folder in [false, true] {
         let context = egui::Context::default();
-        let output = context.run_ui(egui::RawInput::default(), |ui| {
+        let mut output = context.run_ui(egui::RawInput::default(), |ui| {
             ui.visuals_mut().widgets.noninteractive.fg_stroke = egui::Stroke::NONE;
             ui.visuals_mut().widgets.inactive.fg_stroke = egui::Stroke::NONE;
             let mut child = ui.new_child(
@@ -8237,21 +8237,19 @@ fn selected_tree_icons_keep_visible_theme_strokes() {
             );
             explorer_view::paint_tree_icon(&mut child, folder);
         });
-        let strokes: Vec<_> = output
+        output.textures_delta.clear();
+        let strokes: Vec<egui::epaint::PathStroke> = output
             .shapes
             .iter()
             .filter_map(|shape| match &shape.shape {
-                egui::Shape::Rect(rect) => Some(rect.stroke),
-                egui::Shape::LineSegment { stroke, .. } => Some(*stroke),
+                egui::Shape::Rect(rect) => Some(rect.stroke.into()),
+                egui::Shape::LineSegment { stroke, .. } => Some((*stroke).into()),
+                egui::Shape::Path(path) => Some(path.stroke.clone()),
                 _ => None,
             })
             .collect();
-        assert!(strokes.len() >= 3);
-        assert!(
-            strokes
-                .iter()
-                .all(|stroke| stroke.width > 0.0 && stroke.color.a() > 0)
-        );
+        assert!(!strokes.is_empty());
+        assert!(strokes.iter().all(|stroke| !stroke.is_empty()));
         output.drop_without_applying_deltas();
     }
 }

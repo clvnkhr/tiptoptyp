@@ -2,7 +2,8 @@
 use super::{
     FileDropTarget, METRICS, TooltipPlacement, UiIcon, approximate_char_capacity,
     clipped_panel_content_ui, error_color, icon_button, native_hover_text, offer_asset_hover,
-    offer_file_drop_target, offer_folder_row_drop, square_icon_button, static_icon, tail_elide,
+    offer_file_drop_target, offer_folder_row_drop, paint_ui_icon, square_icon_button, static_icon,
+    tail_elide,
 };
 use crate::workspace::{WorkspaceNode, WorkspaceSnapshot};
 use crate::{
@@ -1304,44 +1305,10 @@ pub(super) fn paint_tree_icon(ui: &mut egui::Ui, folder: bool) {
     // The tree derives its selected foreground from selection.stroke, which
     // is transparent for our borderless rows. Read the theme foreground instead.
     let color = ui.ctx().style_of(ui.ctx().theme()).visuals.text_color();
-    let stroke = Stroke::new(METRICS.explorer.tree_icon_stroke, color);
-    if folder {
-        let body = Rect::from_min_max(
-            Pos2::new(rect.left(), rect.top() + 3.0),
-            Pos2::new(rect.right(), rect.bottom()),
-        );
-        ui.painter()
-            .rect_stroke(body, 1.5, stroke, StrokeKind::Inside);
-        ui.painter().line_segment(
-            [
-                Pos2::new(rect.left() + 1.5, rect.top() + 3.0),
-                Pos2::new(rect.left() + 4.5, rect.top()),
-            ],
-            stroke,
-        );
-        ui.painter().line_segment(
-            [
-                Pos2::new(rect.left() + 4.5, rect.top()),
-                Pos2::new(rect.left() + 8.0, rect.top() + 3.0),
-            ],
-            stroke,
-        );
-    } else {
-        ui.painter()
-            .rect_stroke(rect, 1.2, stroke, StrokeKind::Inside);
-        ui.painter().line_segment(
-            [
-                Pos2::new(rect.left() + 3.0, rect.top() + 4.0),
-                Pos2::new(rect.right() - 3.0, rect.top() + 4.0),
-            ],
-            stroke,
-        );
-        ui.painter().line_segment(
-            [
-                Pos2::new(rect.left() + 3.0, rect.top() + 7.0),
-                Pos2::new(rect.right() - 3.0, rect.top() + 7.0),
-            ],
-            stroke,
-        );
-    }
+    paint_ui_icon(
+        ui.painter(),
+        rect,
+        if folder { UiIcon::Folder } else { UiIcon::File },
+        color,
+    );
 }

@@ -795,6 +795,7 @@ impl QaSession {
                 app.preview.raw_diagnostics.clear();
                 app.mark_diagnostics_changed();
             }
+            UiSnapshotScene::Icons => {}
             UiSnapshotScene::FindReplace => {
                 app.notice = None;
                 app.find_bar.visible = true;
