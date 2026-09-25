@@ -123,3 +123,11 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 4. [ ] improve harper integration
 5. [ ] autodetect installed tex distributions
 6. [ ] implement synctex integration
+7. [ ] dragging a file from the explorer to the code panel should put the path at the cursor
+8. [ ] i noticed that the tinymist preview has a bunch of shortcuts. for instance pressing t inverts the view! we should use this instead of repainting the preview from scratch when we toggle dark mode. Make it work smoothly with comfy mode above
+9. [ ] the above shortcuts are interfering with the find feature of our litle popup. also I found that cmd+A selects all in the code panel - the find bar should be the one that receives thte cmd+A.
+10. [ ] the TOC doesn't jump to the sections for tinymist
+11. [ ] the design for the minimised icon is different for both variants (pdf and tinymist preview). And anyway it uses way too much space. fix and make the button more compact
+12. [ ] the UI of the interface is completely inconsistent in all states - minimised (see above and below todos), unminimised, and with TOC expanded. The UI layout should be shared code, just the wiring can be different
+13. [ ] instead of a floating minimized button, in fact it should be a button left of the find button in the top. So remove the floating button. Keep the floating window when expanded
+14. [ ] the floating window should be more thoughtfully designed. the buttons needs to be correctly grouped while not taking too much space.
