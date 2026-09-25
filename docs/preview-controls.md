@@ -26,6 +26,10 @@ and colored text are tinted too. Explicit document inversion swaps the palette.
 PDFium recolors retained, bounded visible-page pixels. Tinymist updates an SVG
 color filter; neither operation edits source, recompiles, nor restarts Tinymist.
 The frontend's `t` shortcut changes appearance through the same settings path.
+The browser regression checks actual paper and ink pixels after dark, warm-light,
+and standard palette changes. Source-level `set text`/`set page` injection is not
+needed for this path; it would also complicate source offsets and document rules.
+These browser checks do not certify native WKWebView composition.
 
 Opening a source outside the workspace keeps the Explorer root. The editor banner
 provides an explicit root switch, shared by all tabs in that window. Dragging a

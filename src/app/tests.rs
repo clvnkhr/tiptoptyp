@@ -8611,3 +8611,76 @@ fn preview_source_search_wraps_and_preserves_unicode_scalar_positions() {
         0
     );
 }
+
+#[test]
+fn live_editor_input_preferences_preserve_paste_and_apply_to_typing() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    app.snapshot_scene = None;
+    let id = source_editor_id(&context);
+    let frame = |app: &mut EditorApp, events| {
+        context
+            .run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 500.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.show_editor(ui),
+            )
+            .drop_without_applying_deltas();
+    };
+    let key = |shift| egui::Event::Key {
+        key: egui::Key::Tab,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: if shift {
+            Modifiers::SHIFT
+        } else {
+            Modifiers::NONE
+        },
+    };
+    app.document_mut().replace_unprojected_untitled("");
+    frame(&mut app, vec![]);
+    for width in [2, 4, 7, 0] {
+        app.settings.indent_spaces = width;
+        app.document_mut().replace_unprojected_untitled("");
+        context.memory_mut(|m| m.request_focus(id));
+        let mut state = egui::text_edit::TextEditState::load(&context, id).unwrap();
+        state
+            .cursor
+            .set_char_range(Some(CCursorRange::one(CCursor::new(0))));
+        state.store(&context, id);
+        frame(&mut app, vec![]); // Let TextEdit install its Tab focus lock.
+        frame(&mut app, vec![key(false)]);
+        let expected = if width == 0 {
+            "\t".to_owned()
+        } else {
+            " ".repeat(width as usize)
+        };
+        assert_eq!(app.document().source(), &expected);
+        frame(&mut app, vec![key(true)]);
+        assert_eq!(app.document().source(), "");
+        frame(&mut app, vec![egui::Event::Paste("\t".into())]);
+        assert_eq!(app.document().source(), "\t");
+    }
+    for ascii in [false, true] {
+        app.settings.ascii_punctuation = ascii;
+        app.document_mut().replace_unprojected_untitled("");
+        context.memory_mut(|m| m.request_focus(id));
+        let mut state = egui::text_edit::TextEditState::load(&context, id).unwrap();
+        state
+            .cursor
+            .set_char_range(Some(CCursorRange::one(CCursor::new(0))));
+        state.store(&context, id);
+        frame(&mut app, vec![egui::Event::Text("字。！".into())]);
+        assert_eq!(
+            app.document().source(),
+            if ascii { "字.!" } else { "字。！" }
+        );
+        frame(&mut app, vec![egui::Event::Paste("。".into())]);
+        assert!(app.document().source().ends_with('。'));
+    }
+}

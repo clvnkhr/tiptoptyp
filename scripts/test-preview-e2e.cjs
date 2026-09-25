@@ -46,6 +46,26 @@ const crypto = require('node:crypto');
     fs.appendFileSync(file,'\n');
     await page.waitForFunction(()=>window.outline?.length===3);
     await page.waitForTimeout(1500);
+    // Check rendered pixels, not merely CSS attributes: both paper and ink
+    // must respond to appearance changes without rebuilding the document.
+    for (const [bg,fg] of [[[24,31,42],[200,210,220]],[[245,239,228],[42,35,26]],[[255,255,255],[0,0,0]]]) {
+      await page.evaluate(([bg,fg]) => window.tiptoptypSetPalette(bg,fg),[bg,fg]);
+      const png = await page.screenshot();
+      const counts = await page.evaluate(async ({png,bg,fg}) => {
+        const bitmap = await createImageBitmap(await (await fetch(`data:image/png;base64,${png}`)).blob());
+        const canvas = document.createElement('canvas'); canvas.width=bitmap.width; canvas.height=bitmap.height;
+        const ctx=canvas.getContext('2d'); ctx.drawImage(bitmap,0,0); bitmap.close();
+        const pixels=ctx.getImageData(0,0,canvas.width,canvas.height).data;
+        let paper=0,ink=0;
+        for(let i=0;i<pixels.length;i+=4) {
+          const matches=color=>color.every((c,j)=>Math.abs(pixels[i+j]-c)<=3);
+          if(matches(bg)) paper++; if(matches(fg)) ink++;
+        }
+        return {paper,ink};
+      },{png:png.toString('base64'),bg,fg});
+      assert.ok(counts.paper>300000,`paper palette ${bg}: ${JSON.stringify(counts)}`);
+      assert.ok(counts.ink>10,`text palette ${fg}: ${JSON.stringify(counts)}`);
+    }
     // Actual document clicks exercise the capture handler and the pinned
     // frontend together; directly invoking our location action cannot do that.
     await page.locator('svg a').first().click();
@@ -118,7 +138,7 @@ const crypto = require('node:crypto');
     });
     await page.waitForFunction(() => window.messages.at(-1)?.page === 3);
     assert.deepEqual(errors,[]);
-    console.log(JSON.stringify({browser:await browser.version(),platform:process.platform,arch:process.arch,viewport:[800,600],adapterSha256:crypto.createHash('sha256').update(adapter).digest('hex'),scenarios:['internal link/back/forward','page navigation across resize','compiled outline','zoom/fit','palette without rerender','text editing and viewer shortcuts','live source update'],result},null,2));
+    console.log(JSON.stringify({browser:await browser.version(),platform:process.platform,arch:process.arch,viewport:[800,600],adapterSha256:crypto.createHash('sha256').update(adapter).digest('hex'),scenarios:['internal link/back/forward','page navigation across resize','compiled outline','zoom/fit','rendered light/dark palette without rerender','text editing and viewer shortcuts','live source update'],result},null,2));
   } finally {
     clearTimeout(watchdog); await browser?.close(); server.kill(); fs.rmSync(directory,{recursive:true,force:true});
   }

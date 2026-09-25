@@ -866,6 +866,8 @@ enum SettingsTarget {
     LineNumbers,
     StickyContextRows,
     AutoPairDelimiters,
+    Indentation,
+    AsciiPunctuation,
     EnglishGrammar,
     UnicodeWarnings,
     MitexDollars,
@@ -898,7 +900,7 @@ enum SettingsTarget {
 }
 
 impl SettingsTarget {
-    const ALL: [Self; 41] = [
+    const ALL: [Self; 43] = [
         Self::Appearance,
         Self::TypstSyntax,
         Self::LightTheme,
@@ -911,6 +913,8 @@ impl SettingsTarget {
         Self::LineNumbers,
         Self::StickyContextRows,
         Self::AutoPairDelimiters,
+        Self::Indentation,
+        Self::AsciiPunctuation,
         Self::EnglishGrammar,
         Self::UnicodeWarnings,
         Self::MitexDollars,
@@ -956,6 +960,8 @@ impl SettingsTarget {
             Self::LineNumbers => "Line numbers",
             Self::StickyContextRows => "Sticky context rows",
             Self::AutoPairDelimiters => "Auto-close delimiters",
+            Self::Indentation => "Tab inserts",
+            Self::AsciiPunctuation => "Use ASCII punctuation when typing",
             Self::EnglishGrammar => "Offline British English grammar (Typst / TeX)",
             Self::UnicodeWarnings => "Flag invisible and confusable characters",
             Self::MitexDollars => "Auto-enable miTeX in compatible Typst documents",
@@ -1002,6 +1008,8 @@ impl SettingsTarget {
             | Self::LineNumbers
             | Self::StickyContextRows
             | Self::AutoPairDelimiters
+            | Self::Indentation
+            | Self::AsciiPunctuation
             | Self::EnglishGrammar
             | Self::UnicodeWarnings
             | Self::MitexDollars
@@ -1056,6 +1064,8 @@ impl SettingsTarget {
             Self::UnicodeWarnings => {
                 "unicode invisible characters confusable zero-width cjk lookalikes"
             }
+            Self::Indentation => "editor indent tab spaces width",
+            Self::AsciiPunctuation => "editor cjk full width punctuation period keyboard input",
             Self::AutoPairDelimiters => {
                 "editor automatic pairing brackets quotes dollar backspace matching"
             }

@@ -398,6 +398,22 @@ impl SettingsPanel<'_> {
                 settings_target_anchor(ui, SettingsTarget::UnicodeWarnings, &mut settings_scroll_target);
                 ui.checkbox(&mut edited.unicode_warnings, SettingsTarget::UnicodeWarnings.label());
                 ui.checkbox(&mut edited.auto_pair_delimiters, SettingsTarget::AutoPairDelimiters.label());
+                settings_target_anchor(ui, SettingsTarget::Indentation, &mut settings_scroll_target);
+                ui.horizontal(|ui| {
+                    ui.label(SettingsTarget::Indentation.label());
+                    let mut spaces = edited.indent_spaces != 0;
+                    ui.checkbox(&mut spaces, "Spaces");
+                    if spaces {
+                        if edited.indent_spaces == 0 { edited.indent_spaces = 2; }
+                        ui.add(egui::DragValue::new(&mut edited.indent_spaces).range(1..=16));
+                    } else {
+                        edited.indent_spaces = 0;
+                        ui.label("Tab character");
+                    }
+                });
+                settings_target_anchor(ui, SettingsTarget::AsciiPunctuation, &mut settings_scroll_target);
+                ui.checkbox(&mut edited.ascii_punctuation, SettingsTarget::AsciiPunctuation.label())
+                    .on_hover_text("Convert full-width punctuation, including 。 to a period. Off preserves the characters sent by your keyboard. Pasted text is unchanged.");
                 settings_target_anchor(ui, SettingsTarget::MitexDollars, &mut settings_scroll_target);
                 ui.checkbox(&mut edited.mitex_auto_enable, SettingsTarget::MitexDollars.label());
                 ui.horizontal_wrapped(|ui| {
@@ -1299,6 +1315,16 @@ mod tests {
         assert!(harness.state().2.iter().any(|action| {
             matches!(action, SettingsAction::Update(settings) if !settings.preview_follow_edits)
         }));
+        harness.state_mut().2.clear();
+        harness.get_by_label("Spaces").click();
+        harness.run();
+        assert!(harness.state().2.iter().any(|action| matches!(action, SettingsAction::Update(settings) if settings.indent_spaces == 0)));
+        harness.state_mut().2.clear();
+        harness
+            .get_by_label("Use ASCII punctuation when typing")
+            .click();
+        harness.run();
+        assert!(harness.state().2.iter().any(|action| matches!(action, SettingsAction::Update(settings) if settings.ascii_punctuation)));
         harness.state_mut().2.clear();
         harness.get_by_label("Retry Tinymist").click();
         harness.run();

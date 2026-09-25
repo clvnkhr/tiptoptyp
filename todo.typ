@@ -17,7 +17,7 @@ See #link("docs/backlog-300-worklog.md")[the completion summary] for the latest 
 
 117. [ ] large-project performance: share repository status between windows and measure indexing, preview, and typing latency (ongoing optimization, using the profiling foundation in item 2)
 
-163. [ ] Allow for the pdf preview to pop out into a different window. if I close it, the preview should go back to the window. I think we can essentially reuse the main window code for the extra window, just dont let it open a bottom panel, or explorer panel, or code panel. and the two windows should be linked in their actions - if in the main window we toggle the preview back on whether in split or just preview mode, then this extra preview window should be closed. and, if we close the extra preview window, it should open back in the main window as either preview or split mode.
+163. [x] Allow for the pdf preview to pop out into a different window. if I close it, the preview should go back to the window. I think we can essentially reuse the main window code for the extra window, just dont let it open a bottom panel, or explorer panel, or code panel. and the two windows should be linked in their actions - if in the main window we toggle the preview back on whether in split or just preview mode, then this extra preview window should be closed. and, if we close the extra preview window, it should open back in the main window as either preview or split mode.
 
 182. [ ] pretty animation for dragging tabs
 
@@ -117,23 +117,23 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 
 = NEW TODOS
 
-1. [ ] sometimes tinymist can redirect you to a source file outside the current workspace root (when it sends you to a package file). When this happens, the workspace root switches to the workspace of that file, and that file is opened in a new tab. I agree that it should open in a new tab but not that the workspace root changes. if we nav back to the old tab the workspace root changes back. It should instead, at the top of the code editor, have a small banner that says "You are currently editing a file outside the current workspace root. The workspace root is now [workspace root path]." and have a button that says "Switch to this workspace root" which when clicked, switches the workspace root to the new one. This way, the user is aware of the change and can choose to switch or not.
-2. [ ] the stage all and commit button / commit all staged button in the git subpanel should be text
-3. [ ] we need to implement comfy mode - if on, the bg and text of a pdf / tinymist preview should be adjusted to match the theme settings.
-4. [ ] improve harper typst/tex integration - it needs to ignore string keys of functions and spellchecking on names somehow
-5. [ ] allow using a tex dist (pdfLaTeX, XeLaTeX, LuaLaTeX) and autodetect installed tex distributions (mactex)
-6. [ ] implement synctex for tex docs
-7. [ ] dragging a file from the explorer to the code panel should put the path at the cursor
-8. [ ] i noticed that the tinymist preview has a bunch of shortcuts. for instance pressing t inverts the view! we should use this instead of repainting the preview from scratch when we toggle dark mode. Make it work smoothly with comfy mode above
-9. [ ] the above shortcuts are interfering with the find feature of our litle popup. also I found that cmd+A selects all in the code panel - the find bar should be the one that receives thte cmd+A.
-10. [ ] the TOC doesn't jump to the sections for tinymist
-11. [ ] the design for the minimised icon is different for both variants (pdf and tinymist preview). And anyway it uses way too much space. fix and make the button more compact
-12. [ ] the UI of the interface is completely inconsistent in all states - minimised (see above and below todos), unminimised, and with TOC expanded. The UI layout should be shared code, just the wiring can be different
-13. [ ] instead of a floating minimized button, in fact it should be a button left of the find button in the top. So remove the floating button. Keep the floating window when expanded. And this button should be greyed out inactive if editor is nto in preview or split mode.
-14. [ ] the floating window should be more thoughtfully designed. the buttons needs to be correctly grouped while not taking too much space.
-15. [ ] i modified old todo 163 above - this action should be in our floating window
-16. [ ] tab -> 2 or 4 or x spaces or tab should be settable in settings (default to 2)
-17. [ ] i noticed in a cjk keyboard typing 。 gave me a . - we should be able to toggle this behavior
+1. [x] sometimes tinymist can redirect you to a source file outside the current workspace root (when it sends you to a package file). When this happens, the workspace root switches to the workspace of that file, and that file is opened in a new tab. I agree that it should open in a new tab but not that the workspace root changes. if we nav back to the old tab the workspace root changes back. It should instead, at the top of the code editor, have a small banner that says "You are currently editing a file outside the current workspace root. The workspace root is now [workspace root path]." and have a button that says "Switch to this workspace root" which when clicked, switches the workspace root to the new one. This way, the user is aware of the change and can choose to switch or not.
+2. [x] the stage all and commit button / commit all staged button in the git subpanel should be text
+3. [x] we need to implement comfy mode - if on, the bg and text of a pdf / tinymist preview should be adjusted to match the theme settings.
+4. [x] improve harper typst/tex integration - it needs to ignore string keys of functions and spellchecking on names somehow
+5. [x] allow using a tex dist (pdfLaTeX, XeLaTeX, LuaLaTeX) and autodetect installed tex distributions (mactex)
+6. [x] implement synctex for tex docs
+7. [x] dragging a file from the explorer to the code panel should put the path at the cursor
+8. [x] i noticed that the tinymist preview has a bunch of shortcuts. for instance pressing t inverts the view! we should use this instead of repainting the preview from scratch when we toggle dark mode. Make it work smoothly with comfy mode above
+9. [x] the above shortcuts are interfering with the find feature of our litle popup. also I found that cmd+A selects all in the code panel - the find bar should be the one that receives thte cmd+A.
+10. [x] the TOC doesn't jump to the sections for tinymist
+11. [x] the design for the minimised icon is different for both variants (pdf and tinymist preview). And anyway it uses way too much space. fix and make the button more compact
+12. [x] the UI of the interface is completely inconsistent in all states - minimised (see above and below todos), unminimised, and with TOC expanded. The UI layout should be shared code, just the wiring can be different
+13. [x] instead of a floating minimized button, in fact it should be a button left of the find button in the top. So remove the floating button. Keep the floating window when expanded. And this button should be greyed out inactive if editor is nto in preview or split mode.
+14. [x] the floating window should be more thoughtfully designed. the buttons needs to be correctly grouped while not taking too much space.
+15. [x] i modified old todo 163 above - this action should be in our floating window
+16. [x] tab -> 2 or 4 or x spaces or tab should be settable in settings (default to 2)
+17. [x] i noticed in a cjk keyboard typing 。 gave me a . - we should be able to toggle this behavior
 
 // Implementation notes (2026-09-25):
 // NEW TODO 2: text commit actions and interaction coverage landed in e94766d.
@@ -165,3 +165,18 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 // PDF-popout framebuffers were inspected; the 24-image gallery was regenerated.
 // Desktop composition inspection remains unverified because the Mac was locked.
 // Details and test commands: docs/preview-controls.md and docs/architecture/0007-tex-services.md.
+
+// Follow-up (2026-09-25): checkboxes updated at the user's request; task
+// descriptions remain verbatim. NEW 1-17 and old 163 are implemented.
+// NEW 16: Settings chooses 1-16 spaces (default 2) or literal Tab; Shift+Tab
+// removes the configured indent. Existing source and pasted tabs are preserved.
+// NEW 17: optional ASCII punctuation for committed typing; default preserves
+// keyboard input. Preedit and pasted text are never normalized. This cannot
+// recover punctuation already substituted by the operating system/input method.
+// NEW 3/8: real Tinymist browser tests verify rendered paper/text pixels after
+// dark, warm-light and standard palette changes, without rerendering. Source
+// rule injection is unnecessary in that tested path. Native WKWebView appearance
+// and an actual native CJK keyboard session remain unverified.
+// Details: docs/editor-input.md and docs/preview-controls.md.
+// Verification: 1,285 Rust tests, 15 xtask tests, strict all-target Clippy,
+// formatting, 8 JavaScript unit tests and the real Tinymist browser scenarios pass.

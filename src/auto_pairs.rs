@@ -9,6 +9,33 @@ use eframe::egui::{
 use tiptoptyp_core::pairing::{self, TypedAction};
 use typst_syntax::{LinkedNode, Side, Source, SyntaxKind};
 
+/// Only committed typing is normalized. Preedit and paste remain verbatim.
+pub(crate) fn ascii_punctuation(events: &mut [egui::Event]) {
+    for event in events {
+        if let egui::Event::Text(text) | egui::Event::Ime(egui::ImeEvent::Commit(text)) = event
+            && text
+                .chars()
+                .any(|c| c == '。' || ('\u{ff01}'..='\u{ff5e}').contains(&c))
+        {
+            *text = text
+                .chars()
+                .map(|c| match c {
+                    '。' => '.',
+                    '\u{ff01}'..='\u{ff5e}' => {
+                        let ascii = char::from_u32(c as u32 - 0xfee0).unwrap();
+                        if ascii.is_ascii_punctuation() {
+                            ascii
+                        } else {
+                            c
+                        }
+                    }
+                    _ => c,
+                })
+                .collect();
+        }
+    }
+}
+
 pub(crate) struct PairSyntax(Source);
 
 impl Default for PairSyntax {
@@ -213,6 +240,8 @@ pub(crate) struct PairingBuffer<'a> {
     source: &'a mut String,
     syntax: &'a mut PairSyntax,
     enabled: bool,
+    indent_spaces: Option<u8>,
+    typed_tab: bool,
 }
 
 impl<'a> PairingBuffer<'a> {
@@ -231,7 +260,16 @@ impl<'a> PairingBuffer<'a> {
             source,
             syntax,
             enabled: enabled && !verbatim,
+            indent_spaces: None,
+            typed_tab: events.iter().any(|event| matches!(event, egui::Event::Key { key: egui::Key::Tab, pressed: true, modifiers, .. } if !modifiers.shift)) && !verbatim,
         }
+    }
+}
+
+impl PairingBuffer<'_> {
+    pub(crate) fn with_indentation(mut self, spaces: u8) -> Self {
+        self.indent_spaces = Some(spaces.min(16));
+        self
     }
 }
 
@@ -252,6 +290,15 @@ impl TextBuffer for PairingBuffer<'_> {
         self.source.delete_char_range(range);
     }
     fn insert_text_at(&mut self, cursor: &mut CCursor, text: &str, limit: usize) {
+        if self.typed_tab
+            && text == "\t"
+            && let Some(spaces) = self.indent_spaces
+            && spaces > 0
+        {
+            self.source
+                .insert_text_at(cursor, &" ".repeat(spaces as usize), limit);
+            return;
+        }
         if self.enabled && text == "\n" {
             let byte = self.source.byte_index_from_char_index(cursor.index).0;
             if let Some((inserted, advance)) = self.syntax.newline(self.source, byte)
@@ -325,6 +372,24 @@ impl TextBuffer for PairingBuffer<'_> {
             }
         }
         self.source.insert_text_at(cursor, text, limit);
+    }
+    fn decrease_indentation(&mut self, cursor: &mut CCursor) {
+        let byte = self.source.byte_index_from_char_index(cursor.index).0;
+        let start_byte = self.source[..byte].rfind('\n').map_or(0, |at| at + 1);
+        let start = self.source[..start_byte].chars().count();
+        let width = self.indent_spaces.unwrap_or(4).max(1) as usize;
+        let count = if self.source[start_byte..].starts_with('\t') {
+            1
+        } else {
+            self.source[start_byte..]
+                .chars()
+                .take(width)
+                .take_while(|c| *c == ' ')
+                .count()
+        };
+        self.source
+            .delete_char_range(CharIndex(start)..CharIndex(start + count));
+        cursor.index = CharIndex(cursor.index.0.saturating_sub(count).max(start));
     }
     fn delete_previous_char(&mut self, cursor: CCursor) -> CCursor {
         if self.enabled && cursor.index.0 > 0 {
@@ -846,5 +911,35 @@ mod tests {
         );
         assert_eq!(other.source(), "()");
         assert_eq!(doc.source(), "中(文");
+    }
+}
+
+#[cfg(test)]
+mod input_preference_tests {
+    use super::*;
+    #[test]
+    fn punctuation_changes_commits_but_never_preedit_or_paste() {
+        let mut events = vec![
+            egui::Event::Ime(egui::ImeEvent::Preedit {
+                text: "日本。".into(),
+                active_range_chars: None,
+            }),
+            egui::Event::Ime(egui::ImeEvent::Commit("日本。".into())),
+            egui::Event::Paste("。！".into()),
+            egui::Event::Text("。！".into()),
+        ];
+        ascii_punctuation(&mut events);
+        assert_eq!(
+            events,
+            vec![
+                egui::Event::Ime(egui::ImeEvent::Preedit {
+                    text: "日本。".into(),
+                    active_range_chars: None
+                }),
+                egui::Event::Ime(egui::ImeEvent::Commit("日本.".into())),
+                egui::Event::Paste("。！".into()),
+                egui::Event::Text(".!".into())
+            ]
+        );
     }
 }

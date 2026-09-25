@@ -234,6 +234,10 @@ impl GitDiffStyle {
     }
 }
 
+fn default_indent_spaces() -> u8 {
+    2
+}
+
 /// Persisted user choices for the current settings schema.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum ToolbarStyle {
@@ -283,6 +287,10 @@ pub(crate) struct AppSettings {
     pub(crate) sticky_context_rows: bool,
     #[serde(default = "default_true")]
     pub(crate) auto_pair_delimiters: bool,
+    #[serde(default = "default_indent_spaces")]
+    pub(crate) indent_spaces: u8,
+    #[serde(default)]
+    pub(crate) ascii_punctuation: bool,
     #[serde(default)]
     pub(crate) mitex_auto_enable: bool,
     #[serde(default = "default_mitex_version")]
@@ -360,6 +368,8 @@ impl Default for AppSettings {
             unicode_warnings: false,
             sticky_context_rows: true,
             auto_pair_delimiters: true,
+            indent_spaces: 2,
+            ascii_punctuation: false,
             mitex_auto_enable: false,
             mitex_version: default_mitex_version(),
             rainbow_brackets: crate::rainbow::RainbowBrackets::default(),
@@ -430,6 +440,8 @@ impl AppSettings {
             unicode_warnings,
             sticky_context_rows,
             auto_pair_delimiters,
+            indent_spaces,
+            ascii_punctuation,
             mitex_auto_enable,
             mitex_version,
             rainbow_brackets,
@@ -683,6 +695,8 @@ mod tests {
         assert_eq!(settings.theme_hue_shift_degrees, 0);
         assert_eq!(settings.document_theme, DocumentTheme::FollowInterface);
         assert_eq!(settings.preview_preference, PreviewPreference::Interactive);
+        assert_eq!(settings.indent_spaces, 2);
+        assert!(!settings.ascii_punctuation);
         assert!(settings.line_wrap);
         assert!(settings.line_numbers);
         assert_eq!(
@@ -790,6 +804,8 @@ mod tests {
             unicode_warnings: false,
             sticky_context_rows: false,
             auto_pair_delimiters: false,
+            indent_spaces: 4,
+            ascii_punctuation: true,
             mitex_auto_enable: true,
             mitex_version: "0.2.7".into(),
             rainbow_brackets: crate::rainbow::RainbowBrackets {

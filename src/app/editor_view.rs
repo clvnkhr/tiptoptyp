@@ -313,6 +313,14 @@ impl EditorApp {
             )));
             state.store(ui.ctx(), id);
         }
+        if !read_only
+            && self.settings.ascii_punctuation
+            && ui.memory(|memory| memory.has_focus(source_editor_id(ui.ctx())))
+        {
+            ui.input_mut(|input| {
+                crate::auto_pairs::ascii_punctuation(&mut input.events);
+            });
+        }
         let snapshot_before_edit = self.editor_snapshot(ui.ctx());
         let available_size = ui.available_size();
         let viewport_snapshot_id = source_editor_id(ui.ctx()).with("resize-anchor");
@@ -333,6 +341,7 @@ impl EditorApp {
             .flatten();
         self.highlighter
             .set_rainbow_brackets(self.settings.rainbow_brackets);
+        let indent_spaces = self.settings.indent_spaces;
         let auto_pair_enabled = self.settings.auto_pair_delimiters && document_kind.is_typst();
         let auto_pair_syntax = &mut self.auto_pair_syntax;
         let highlighter = &mut self.highlighter;
@@ -438,6 +447,7 @@ impl EditorApp {
                             auto_pair_enabled,
                             &input.events,
                         )
+                        .with_indentation(indent_spaces)
                     });
                     &mut pairing
                 };
