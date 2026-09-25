@@ -231,14 +231,20 @@
       channel.setAttribute('slope',String((bg[index]-fg[index])/255));
       channel.setAttribute('intercept',String(fg[index]/255));
     });
-    const container = document.getElementById('typst-container');
-    if (container) container.style.filter = 'url(#tiptoptyp-palette)';
-    document.body.style.background = `rgb(${bg.join(',')})`;
+    document.documentElement.style.setProperty('--tiptoptyp-paper', `rgb(${bg.join(',')})`);
   };
   window.tiptoptypSetPalette = (bg,fg) => { palette = [bg,fg]; applyPalette(); };
   const mount = () => {
     const style = document.createElement('style');
-    style.textContent = '#typst-container-top { display: none !important; }';
+    // WKWebView can apply an HTML-ancestor SVG filter in takeSnapshot while
+    // omitting it from the on-screen compositor. Keep filters inside the SVG,
+    // one per page, and recolor the renderer's separate paper rectangles directly.
+    style.textContent = `
+      #typst-container-top { display: none !important; }
+      body { background: var(--tiptoptyp-paper) !important; }
+      #typst-container .typst-page-inner { fill: var(--tiptoptyp-paper); }
+      #typst-container g[data-page-width] { filter: url(#tiptoptyp-palette); }
+    `;
     document.head.append(style);
     applyPalette();
     updateControls();

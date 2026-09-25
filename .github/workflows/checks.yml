@@ -151,11 +151,21 @@ jobs:
         run: rustup toolchain install 1.98.1 --profile minimal
       - name: Real native lifecycle and ownership
         run: python3 scripts/test-native-windows.py
+      - name: Fetch pinned sidecars for native preview
+        run: cargo +1.98.1 run --locked --manifest-path xtask/Cargo.toml -- fetch-sidecars
+      - name: Native Tinymist appearance and reload
+        shell: bash
+        run: |
+          target="$(rustc +1.98.1 -vV | sed -n 's/^host: //p')"
+          export TIPTOPTYP_TEST_TINYMIST="$PWD/toolchain/bin/tinymist-$target"
+          python3 scripts/test-native-preview-palette.py
       - name: Retain native evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: native-window-contract
-          path: .tiptoptyp/native-window-tests/**/result.txt
+          path: |
+            .tiptoptyp/native-window-tests/**/result.txt
+            .tiptoptyp/screenshots/agent-review/native-preview-palette
           include-hidden-files: true
           if-no-files-found: warn

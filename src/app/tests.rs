@@ -8684,3 +8684,19 @@ fn live_editor_input_preferences_preserve_paste_and_apply_to_typing() {
         assert!(app.document().source().ends_with('。'));
     }
 }
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[test]
+fn native_preview_load_invalidates_queued_palette_even_when_preview_is_hidden() {
+    let context = egui::Context::default();
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+    app.webview_palette = Some((Color32::BLACK, Color32::WHITE));
+    assert!(!app.interactive_preview_active());
+    app.handle_web_action(r#"{"type":"preview-loaded"}"#);
+    assert_eq!(app.webview_palette, None);
+    // A delayed notification only invalidates delivery, never the latest theme.
+    app.preview.dark = true;
+    app.handle_web_action(r#"{"type":"preview-loaded"}"#);
+    assert!(app.preview.dark);
+}

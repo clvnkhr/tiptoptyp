@@ -180,3 +180,17 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 // Details: docs/editor-input.md and docs/preview-controls.md.
 // Verification: 1,285 Rust tests, 15 xtask tests, strict all-target Clippy,
 // formatting, 8 JavaScript unit tests and the real Tinymist browser scenarios pass.
+
+// Tinymist appearance regression (2026-09-25): 2ed0f84 replaced built-in
+// inversion with a whole-preview filter. Native WKWebView snapshots showed dark
+// pixels while its on-screen window stayed white. Reproduced with a Tinymist-only
+// window and observed via native app capture, independent of PDFium. Apply the
+// transform inside each SVG page and set the separate paper fills directly;
+// after the change the actual window is dark. Keep Tinymist inversion disabled
+// to avoid double application. Re-send the latest palette after native page load.
+// Regression coverage checks filter placement, standard/comfy colors, refreshed
+// pages and reload delivery. See docs/preview-controls.md for the native probe.
+// Validation: 1,286 Rust tests, 15 xtask tests, strict Clippy, formatting,
+// 8 JavaScript unit tests, real Tinymist browser tests, and native palette/reload
+// checks pass. The Tinymist-only window was observed white before and dark after
+// with the app-capture tool; WKWebView PNGs alone were not used for that claim.

@@ -1365,6 +1365,8 @@ impl EditorApp {
             let navigation_repaint = crate::worker::RepaintTarget::current(context);
             let popup_sender = self.web_link_sender.clone();
             let popup_repaint = crate::worker::RepaintTarget::current(context);
+            let load_sender = self.web_action_sender.clone();
+            let load_repaint = crate::worker::RepaintTarget::current(context);
             let action_sender = self.web_action_sender.clone();
             let action_repaint = crate::worker::RepaintTarget::current(context);
             let shared_navigation = Arc::new(Mutex::new(navigation_state));
@@ -1382,6 +1384,18 @@ impl EditorApp {
                 .with_url(&url)
                 .with_initialization_script(include_str!("../preview_navigation.js"))
                 .with_initialization_script(palette_script)
+                .with_on_page_load_handler(move |event, _url| {
+                    // evaluate_script returning Ok only means queued. A navigation
+                    // can discard it, then replay the creation-time palette.
+                    // Re-send the current palette after the new document is ready.
+                    if matches!(event, wry::PageLoadEvent::Finished)
+                        && load_sender
+                            .send(r#"{"type":"preview-loaded"}"#.to_owned())
+                            .is_ok()
+                    {
+                        load_repaint.request_repaint();
+                    }
+                })
                 .with_ipc_handler(move |request| {
                     if action_sender.send(request.body().clone()).is_ok() {
                         action_repaint.request_repaint();

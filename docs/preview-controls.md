@@ -23,13 +23,29 @@ preview service when moving between native parents.
 **Comfy preview** in Appearance maps white and black to the active theme's
 background and text colors. Intermediate RGB values are interpolated, so images
 and colored text are tinted too. Explicit document inversion swaps the palette.
-PDFium recolors retained, bounded visible-page pixels. Tinymist updates an SVG
-color filter; neither operation edits source, recompiles, nor restarts Tinymist.
+PDFium recolors retained, bounded visible-page pixels. Tinymist recolors the paper rectangles and applies a color filter inside each SVG
+page; neither operation edits source, recompiles, nor restarts Tinymist.
 The frontend's `t` shortcut changes appearance through the same settings path.
 The browser regression checks actual paper and ink pixels after dark, warm-light,
 and standard palette changes. Source-level `set text`/`set page` injection is not
 needed for this path; it would also complicate source offsets and document rules.
-These browser checks do not certify native WKWebView composition.
+The native regression is `TIPTOPTYP_TEST_TINYMIST=/path/to/tinymist python3
+scripts/test-native-preview-palette.py` on macOS with Swift and WindowServer.
+Add `--hold` to leave the final Tinymist-only window visible for 60 seconds.
+It tests a 32-page document, standard dark, comfy dark/light, and appearance
+replay after navigation; PNGs are written under `.tiptoptyp/screenshots/agent-review/native-preview-palette`.
+
+A whole-HTML-preview SVG filter regressed native appearance in 2ed0f84:
+WKWebView's `takeSnapshot` returned dark pixels while the **visible window stayed
+white**. Chromium also passed, so neither is sufficient evidence for that class
+of compositing bug. An actual window observation reproduced white before and
+verified dark after moving the filter into individual SVG pages. The browser
+regression now rejects an HTML-host filter and verifies per-page placement,
+paper fills, and newly compiled pages. Native load completion also invalidates
+the queued-palette cache so reloads receive current settings instead of retaining
+the creation-time appearance. Tinymist's own inversion stays disabled; exactly
+one transform handles both normal dark and comfy colors. No source rules,
+compilation, per-frame traversal, or idle repaint loop are introduced.
 
 Opening a source outside the workspace keeps the Explorer root. The editor banner
 provides an explicit root switch, shared by all tabs in that window. Dragging a

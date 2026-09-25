@@ -5820,12 +5820,19 @@ impl EditorApp {
     }
 
     fn handle_web_action(&mut self, action: &str) {
-        if !self.interactive_preview_active() {
-            return;
-        }
         let Ok(value) = serde_json::from_str::<serde_json::Value>(action) else {
             return;
         };
+        if value.get("type").and_then(|v| v.as_str()) == Some("preview-loaded") {
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            {
+                self.webview_palette = None;
+            }
+            return;
+        }
+        if !self.interactive_preview_active() {
+            return;
+        }
         if value.get("type").and_then(|v| v.as_str()) == Some("preview-state") {
             if let Ok(snapshot) = serde_json::from_value(value) {
                 self.preview_controls.web = snapshot;

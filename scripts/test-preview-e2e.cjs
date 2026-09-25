@@ -48,8 +48,16 @@ const crypto = require('node:crypto');
     await page.waitForTimeout(1500);
     // Check rendered pixels, not merely CSS attributes: both paper and ink
     // must respond to appearance changes without rebuilding the document.
-    for (const [bg,fg] of [[[24,31,42],[200,210,220]],[[245,239,228],[42,35,26]],[[255,255,255],[0,0,0]]]) {
+    const assertPalette = async (bg,fg) => {
       await page.evaluate(([bg,fg]) => window.tiptoptypSetPalette(bg,fg),[bg,fg]);
+      const placement = await page.evaluate(() => ({
+        host: getComputedStyle(document.getElementById('typst-container')).filter,
+        page: getComputedStyle(document.querySelector('#typst-container g[data-page-width]')).filter,
+        paper: getComputedStyle(document.querySelector('#typst-container .typst-page-inner')).fill
+      }));
+      assert.equal(placement.host, 'none', 'never filter the HTML host: WKWebView snapshots hide its compositor failure');
+      assert.ok(placement.page.includes('#tiptoptyp-palette'), JSON.stringify(placement));
+      assert.equal(placement.paper, `rgb(${bg.join(', ')})`);
       const png = await page.screenshot();
       const counts = await page.evaluate(async ({png,bg,fg}) => {
         const bitmap = await createImageBitmap(await (await fetch(`data:image/png;base64,${png}`)).blob());
@@ -65,6 +73,9 @@ const crypto = require('node:crypto');
       },{png:png.toString('base64'),bg,fg});
       assert.ok(counts.paper>300000,`paper palette ${bg}: ${JSON.stringify(counts)}`);
       assert.ok(counts.ink>10,`text palette ${fg}: ${JSON.stringify(counts)}`);
+    };
+    for (const [bg,fg] of [[[0,0,0],[255,255,255]],[[24,31,42],[200,210,220]],[[245,239,228],[42,35,26]],[[255,255,255],[0,0,0]]]) {
+      await assertPalette(bg,fg);
     }
     // Actual document clicks exercise the capture handler and the pinned
     // frontend together; directly invoking our location action cannot do that.
@@ -137,6 +148,7 @@ const crypto = require('node:crypto');
       window.tiptoptypPreviewAction({action:'location',value:{page:position.page_no-1,x:position.x,y:position.y}});
     });
     await page.waitForFunction(() => window.messages.at(-1)?.page === 3);
+    await assertPalette([24,31,42],[200,210,220]);
     assert.deepEqual(errors,[]);
     console.log(JSON.stringify({browser:await browser.version(),platform:process.platform,arch:process.arch,viewport:[800,600],adapterSha256:crypto.createHash('sha256').update(adapter).digest('hex'),scenarios:['internal link/back/forward','page navigation across resize','compiled outline','zoom/fit','rendered light/dark palette without rerender','text editing and viewer shortcuts','live source update'],result},null,2));
   } finally {
