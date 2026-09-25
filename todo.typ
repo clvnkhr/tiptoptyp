@@ -9,7 +9,7 @@ append new tasks starting at 339. The historical checklist and detailed work dia
 are preserved in #link("archive/todo-2026-09-23.typ")[the archived todo file].
 See #link("docs/backlog-300-worklog.md")[the completion summary] for the latest work.
 
-26. [ ] (Deferred) once in a while the text everywhere breaks (see pic) some sort of leak?
+26. [X] (Deferred) once in a while the text everywhere breaks (see pic) some sort of leak?
 
 114. [ ] crash recovery: restore unsaved buffers and all document windows after an unexpected exit
 
@@ -17,13 +17,13 @@ See #link("docs/backlog-300-worklog.md")[the completion summary] for the latest 
 
 117. [ ] large-project performance: share repository status between windows and measure indexing, preview, and typing latency (ongoing optimization, using the profiling foundation in item 2)
 
-163. [ ] Allow for the pdf preview to pop out into a different window. if I close it, the preview should go back to the window
+163. [ ] Allow for the pdf preview to pop out into a different window. if I close it, the preview should go back to the window. I think we can essentially reuse the main window code for the extra window, just dont let it open a bottom panel, or explorer panel, or code panel. and the two windows should be linked in their actions - if in the main window we toggle the preview back on whether in split or just preview mode, then this extra preview window should be closed. and, if we close the extra preview window, it should open back in the main window as either preview or split mode.
 
 182. [ ] pretty animation for dragging tabs
 
 223. [ ] prove out typst-compatible binaries like calepin
 
-234. [ ] Isolate the transient oddly shaped large-window flash reported when
+234. [X] Isolate the transient oddly shaped large-window flash reported when
 opening Settings with multiple main windows. Duplicate Settings ownership is
 fixed in 231, but steady-state native observations/framebuffers cannot certify
 that a short-lived flash is gone. Keep this separate from singleton acceptance.
@@ -120,14 +120,15 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 1. [ ] sometimes tinymist can redirect you to a source file outside the current workspace root (when it sends you to a package file). When this happens, the workspace root switches to the workspace of that file, and that file is opened in a new tab. I agree that it should open in a new tab but not that the workspace root changes. if we nav back to the old tab the workspace root changes back. It should instead, at the top of the code editor, have a small banner that says "You are currently editing a file outside the current workspace root. The workspace root is now [workspace root path]." and have a button that says "Switch to this workspace root" which when clicked, switches the workspace root to the new one. This way, the user is aware of the change and can choose to switch or not.
 2. [ ] the stage all and commit button / commit all staged button in the git subpanel should be text
 3. [ ] we need to implement comfy mode - if on, the bg and text of a pdf / tinymist preview should be adjusted to match the theme settings.
-4. [ ] improve harper integration
-5. [ ] autodetect installed tex distributions
-6. [ ] implement synctex integration
+4. [ ] improve harper typst/tex integration - it needs to ignore string keys of functions and spellchecking on names somehow
+5. [ ] allow using a tex dist (pdfLaTeX, XeLaTeX, LuaLaTeX) and autodetect installed tex distributions (mactex)
+6. [ ] implement synctex for tex docs
 7. [ ] dragging a file from the explorer to the code panel should put the path at the cursor
 8. [ ] i noticed that the tinymist preview has a bunch of shortcuts. for instance pressing t inverts the view! we should use this instead of repainting the preview from scratch when we toggle dark mode. Make it work smoothly with comfy mode above
 9. [ ] the above shortcuts are interfering with the find feature of our litle popup. also I found that cmd+A selects all in the code panel - the find bar should be the one that receives thte cmd+A.
 10. [ ] the TOC doesn't jump to the sections for tinymist
 11. [ ] the design for the minimised icon is different for both variants (pdf and tinymist preview). And anyway it uses way too much space. fix and make the button more compact
 12. [ ] the UI of the interface is completely inconsistent in all states - minimised (see above and below todos), unminimised, and with TOC expanded. The UI layout should be shared code, just the wiring can be different
-13. [ ] instead of a floating minimized button, in fact it should be a button left of the find button in the top. So remove the floating button. Keep the floating window when expanded
+13. [ ] instead of a floating minimized button, in fact it should be a button left of the find button in the top. So remove the floating button. Keep the floating window when expanded. And this button should be greyed out inactive if editor is nto in preview or split mode.
 14. [ ] the floating window should be more thoughtfully designed. the buttons needs to be correctly grouped while not taking too much space.
+15. [ ] i modified old todo 163 above - this action should be in our floating window
