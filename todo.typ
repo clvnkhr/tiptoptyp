@@ -132,6 +132,8 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 13. [ ] instead of a floating minimized button, in fact it should be a button left of the find button in the top. So remove the floating button. Keep the floating window when expanded. And this button should be greyed out inactive if editor is nto in preview or split mode.
 14. [ ] the floating window should be more thoughtfully designed. the buttons needs to be correctly grouped while not taking too much space.
 15. [ ] i modified old todo 163 above - this action should be in our floating window
+16. [ ] tab -> 2 or 4 or x spaces or tab should be settable in settings (default to 2)
+17. [ ] i noticed in a cjk keyboard typing 。 gave me a . - we should be able to toggle this behavior
 
 // Implementation notes (2026-09-25):
 // NEW TODO 2: text commit actions and interaction coverage landed in e94766d.
