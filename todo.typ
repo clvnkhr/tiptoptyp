@@ -114,3 +114,10 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 295. [x] Removed the legacy raster PDF viewer and PDF.js, including their settings,
   adapters, assets, render workers and capture surrogate. PDFium owns PDF viewing
   and framebuffer captures; image viewing and hover thumbnails remain separate.
+
+= NEW TODOS
+
+1. [ ] sometimes tinymist can redirect you to a source file outside the current workspace root (when it sends you to a package file). When this happens, the workspace root switches to the workspace of that file, and that file is opened in a new tab. I agree that it should open in a new tab but not that the workspace root changes. if we nav back to the old tab the workspace root changes back. It should instead, at the top of the code editor, have a small banner that says "You are currently editing a file outside the current workspace root. The workspace root is now [workspace root path]." and have a button that says "Switch to this workspace root" which when clicked, switches the workspace root to the new one. This way, the user is aware of the change and can choose to switch or not.
+2. [ ] the stage all and commit button / commit all staged button in the git subpanel should be text
+3. [ ] we need to implement comfy mode - if on, the bg and text of a pdf / tinymist preview should be adjusted to match the theme settings.
+4. [ ] improve harper integration
