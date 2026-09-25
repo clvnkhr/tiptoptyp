@@ -107,19 +107,17 @@ impl Controls {
             });
         });
         ui.horizontal(|ui| {
-            if ui
-                .add_enabled(snapshot.back, egui::Button::new("←"))
-                .on_hover_text("Back")
-                .clicked()
-            {
-                action = Some(Action::Back);
-            }
-            if ui
-                .add_enabled(snapshot.forward, egui::Button::new("→"))
-                .on_hover_text("Forward")
-                .clicked()
-            {
-                action = Some(Action::Forward);
+            for (enabled, symbol, label, navigation) in [
+                (snapshot.back, "←", "Back", Action::Back),
+                (snapshot.forward, "→", "Forward", Action::Forward),
+            ] {
+                let response = ui.add_enabled(enabled, egui::Button::new(symbol));
+                response.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), label)
+                });
+                if response.on_hover_text(label).clicked() {
+                    action = Some(navigation);
+                }
             }
             ui.separator();
             if icon_button(ui, UiIcon::Previous, "Previous page").clicked() {
@@ -156,6 +154,13 @@ impl Controls {
                     .hint_text("Find in preview")
                     .desired_width(245.0),
             );
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::TextEdit,
+                    response.enabled(),
+                    "Find in preview",
+                )
+            });
             if self.focus_find {
                 response.request_focus();
                 self.focus_find = false;
@@ -393,6 +398,9 @@ impl EditorApp {
         }
     }
 }
+
+#[cfg(test)]
+mod e2e;
 
 #[cfg(test)]
 mod tests {

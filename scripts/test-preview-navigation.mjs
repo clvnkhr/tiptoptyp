@@ -9,11 +9,15 @@ function fixture() {
   const frames = [];
   let rescales = 0;
   let demands = 0;
+  let clearedAnchors = 0;
+  const messages = [];
   const classes = { toggle() {} };
   const scroll = {
     clientWidth: 800, clientHeight: 600, classList: classes,
     x: 0, y: 0,
-    getBoundingClientRect: () => ({ left: 0, top: 0 }),
+    getBoundingClientRect: () => ({ left: 0, top: 0, bottom: 600 }),
+    get scrollTop() { return this.y; }, get scrollLeft() { return this.x; },
+    scrollTo({top, left}) { if (top !== undefined) this.y = top; if (left !== undefined) this.x = left; },
     scrollBy(x, y) { this.x += x; this.y += y; },
   };
   const svg = {
@@ -28,18 +32,21 @@ function fixture() {
     hookedElem: { firstElementChild: svg, parentElement: scroll, classList: classes, style: {} },
     cachedDOMState: { width: 800, height: 600 },
     addViewportChange() { demands++; },
-    clearSvgResizeAnchor() {},
+    clearSvgResizeAnchor() { clearedAnchors++; },
     retrieveDOMState: () => ({ width: 800, height: 600 }),
     r: { rescale() { rescales++; }, rerender() { throw Error('viewport rerender'); } },
   };
   const container = { documents: [{ impl: doc }] };
+  const window = { addEventListener: (name, handler) => handlers.set(name, handler), ipc: { postMessage: value => messages.push(JSON.parse(value)) } };
   runInNewContext(source, {
     document: { getElementById: () => container, readyState: 'loading', addEventListener() {} },
-    window: { addEventListener: (name, handler) => handlers.set(name, handler) },
+    window,
+    performance: {now: () => 0},
     requestAnimationFrame: callback => { frames.push(callback); return frames.length; },
   });
   return {
-    doc, scroll, frames, container, get rescales() { return rescales; },
+    doc, scroll, frames, container, messages, action: value => window.tiptoptypPreviewAction(value),
+    get rescales() { return rescales; }, get clearedAnchors() { return clearedAnchors; },
     get demands() { return demands; },
     flush() { frames.splice(0).forEach(f => f()); },
     event(name, data = {}) {
@@ -59,6 +66,26 @@ test('resize bursts rescale once per frame, never rerender or keep idle frames a
   f.flush();
   assert.equal(f.rescales, 1);
   assert.equal(f.frames.length, 0);
+});
+
+test('page indicator follows the dominant visible page and explicit navigation clears link anchors', () => {
+  const f = fixture();
+  f.doc.hookedElem.firstElementChild.children = [0, 1, 2].map(index => ({
+    tagName: 'g',
+    getAttribute: name => name === 'data-page-width' ? '600' : '890',
+    getScreenCTM: () => ({a:1,d:1,e:0,f:index * 900 - f.scroll.y}),
+    getBoundingClientRect: () => { throw Error('Ink bounds are not page bounds'); },
+  }));
+  f.scroll.y = 800; // Tail of page one, most of page two.
+  f.event('scroll', {target:f.scroll});
+  assert.equal(f.messages.at(-1).page, 1);
+  f.action({action:'page', value:2});
+  assert.equal(f.clearedAnchors, 1);
+  assert.equal(f.scroll.y, 1800);
+  assert.equal(f.messages.at(-1).page, 2);
+  f.action({action:'back'});
+  assert.equal(f.scroll.y, 800);
+  assert.equal(f.messages.at(-1).page, 1);
 });
 test('small wheel deltas accumulate continuously and preserve the pointer anchor', () => {
   const f = fixture();

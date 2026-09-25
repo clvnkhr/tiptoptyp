@@ -31,6 +31,10 @@ const crypto = require('node:crypto');
     browser = await chromium.launch({ headless:true, ...(process.env.TIPTOPTYP_TEST_CHROME ? {executablePath:process.env.TIPTOPTYP_TEST_CHROME}: {}) });
     const page = await browser.newPage({viewport:{width:800,height:600}});
     const errors = []; page.on('pageerror',e=>errors.push(e.message));
+    await page.addInitScript(() => {
+      window.messages = [];
+      window.ipc = { postMessage: message => window.messages.push(JSON.parse(message)) };
+    });
     await page.addInitScript(adapter);
     await page.goto(url);
     await page.waitForFunction(()=>document.getElementById('typst-container')?.documents?.[0]?.impl?.moduleInitialized);
@@ -42,6 +46,25 @@ const crypto = require('node:crypto');
     fs.appendFileSync(file,'\n');
     await page.waitForFunction(()=>window.outline?.length===3);
     await page.waitForTimeout(1500);
+    // Actual document clicks exercise the capture handler and the pinned
+    // frontend together; directly invoking our location action cannot do that.
+    await page.locator('svg a').first().click();
+    await page.waitForFunction(() => window.messages.at(-1)?.page === 1 && window.messages.at(-1)?.back);
+    await page.evaluate(() => window.tiptoptypPreviewAction({action:'back'}));
+    await page.waitForFunction(() => window.messages.at(-1)?.page === 0 && window.messages.at(-1)?.forward);
+    await page.evaluate(() => window.tiptoptypPreviewAction({action:'forward'}));
+    await page.waitForFunction(() => window.messages.at(-1)?.page === 1);
+    // A page button after an internal link must retire that link's resize
+    // anchor. Otherwise the next layout can pull us back to the old link.
+    await page.evaluate(() => window.tiptoptypPreviewAction({action:'page',value:2}));
+    await page.waitForFunction(() => window.messages.at(-1)?.page === 2);
+    await page.setViewportSize({width:760,height:600});
+    await page.waitForTimeout(500);
+    assert.equal(await page.evaluate(() => window.messages.at(-1)?.page), 2, 'resizing must retain page-button navigation');
+    await page.setViewportSize({width:800,height:600});
+    await page.waitForTimeout(500);
+    await page.evaluate(() => window.tiptoptypPreviewAction({action:'page',value:0}));
+    await page.waitForFunction(() => window.messages.at(-1)?.page === 0);
     const result = await page.evaluate(async () => {
       const doc = document.getElementById('typst-container').documents[0].impl;
       const scroll = doc.hookedElem.parentElement;
@@ -53,7 +76,7 @@ const crypto = require('node:crypto');
       const jumped = scroll.scrollTop;
       window.tiptoptypPreviewAction({action:'back'}); await settle(); const back = scroll.scrollTop;
       window.tiptoptypPreviewAction({action:'forward'}); await settle(); const forward = scroll.scrollTop;
-      let rerenders=0; const original=doc.r.rerender; doc.r.rerender=(...args)=>{rerenders++;return original(...args);};
+      let rerenders=0; const original=doc.r.rerender; doc.r.rerender=(...args)=>{rerenders++;return original.apply(doc.r,args);};
       const start=performance.now();
       for(let i=0;i<50;i++) window.tiptoptypSetPalette(i%2?[255,255,255]:[24,31,42],i%2?[0,0,0]:[200,210,220]);
       const paletteMs=performance.now()-start;
@@ -62,7 +85,7 @@ const crypto = require('node:crypto');
       const idleRerenders=rerenders;
       window.tiptoptypPreviewAction({action:'zoom-in'}); await settle(); const zoom=doc.currentScaleRatio;
       window.tiptoptypPreviewAction({action:'fit'}); await settle(); const fit=doc.currentScaleRatio;
-      const field=document.createElement('input'); document.body.append(field); field.focus();
+      const field=document.createElement('input'); field.id='test-query'; document.body.append(field); field.focus();
       const inputBefore=scroll.scrollTop; field.dispatchEvent(new KeyboardEvent('keydown',{key:'j',bubbles:true})); await settle();
       return {before,jumped,back,forward,zoom,fit,paletteMs,idleRerenders,nodesBefore,nodesAfter:doc.hookedElem.childElementCount,inputBefore,inputAfter:scroll.scrollTop,htmlControls:document.getElementById('tiptoptyp-preview-controls')!==null};
     });
@@ -72,8 +95,30 @@ const crypto = require('node:crypto');
     assert.ok(result.zoom>1); assert.equal(result.fit,1);
     assert.equal(result.idleRerenders,0); assert.equal(result.nodesBefore,result.nodesAfter);
     assert.equal(result.inputBefore,result.inputAfter); assert.equal(result.htmlControls,false);
+    const field = page.locator('#test-query');
+    await field.fill('before');
+    await field.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
+    await field.pressSequentially('tjk');
+    assert.equal(await field.inputValue(), 'tjk', 'viewer shortcuts must not consume text edits');
+    assert.equal(await page.evaluate(() => window.messages.filter(m=>m.type==='invert-preview').length), 0);
+    await field.blur();
+    await page.keyboard.press('t');
+    await page.waitForFunction(() => window.messages.some(m=>m.type==='invert-preview'));
+    // The standalone control connection, like an editor, supplies unsaved text.
+    // CLI disk watching is not the update path under test.
+    await page.evaluate(({file, source}) => window.control.send(JSON.stringify({
+      event:'updateMemoryFiles', files:{[file]:source}
+    })), {file, source:source+'\n#pagebreak()\n= Fourth\nUpdated preview.'});
+    await page.waitForFunction(()=>window.outline?.length===4 && window.messages.some(m=>m.type==='preview-state' && m.count===4)).catch(async error => {
+      throw Error(`${error.message}\n${JSON.stringify({errors,state:await page.evaluate(()=>({outline:window.outline,messages:window.messages.slice(-8)})),log:log.slice(-2000)})}`);
+    });
+    await page.evaluate(() => {
+      const position = window.outline[3].position;
+      window.tiptoptypPreviewAction({action:'location',value:{page:position.page_no-1,x:position.x,y:position.y}});
+    });
+    await page.waitForFunction(() => window.messages.at(-1)?.page === 3);
     assert.deepEqual(errors,[]);
-    console.log(JSON.stringify({browser:await browser.version(),platform:process.platform,arch:process.arch,viewport:[800,600],adapterSha256:crypto.createHash('sha256').update(adapter).digest('hex'),result},null,2));
+    console.log(JSON.stringify({browser:await browser.version(),platform:process.platform,arch:process.arch,viewport:[800,600],adapterSha256:crypto.createHash('sha256').update(adapter).digest('hex'),scenarios:['internal link/back/forward','page navigation across resize','compiled outline','zoom/fit','palette without rerender','text editing and viewer shortcuts','live source update'],result},null,2));
   } finally {
     clearTimeout(watchdog); await browser?.close(); server.kill(); fs.rmSync(directory,{recursive:true,force:true});
   }

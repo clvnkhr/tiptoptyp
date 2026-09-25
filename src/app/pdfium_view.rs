@@ -39,6 +39,7 @@ pub(super) struct PdfiumView {
     tops: Vec<f32>,
     height: f32,
     page_focus: Option<egui::Id>,
+    scroll_owner: Option<egui::Id>,
     controls_open: bool,
     back: Vec<(usize, f32)>,
     forward: Vec<(usize, f32)>,
@@ -74,6 +75,7 @@ impl Default for PdfiumView {
             tops: Vec::new(),
             height: 0.0,
             page_focus: None,
+            scroll_owner: None,
             controls_open: false,
             back: Vec::new(),
             forward: Vec::new(),
@@ -327,10 +329,17 @@ impl PdfiumView {
             let old_zoom = self.zoom;
             if self.fit {
                 self.zoom = fit_width_zoom(available.width(), widest);
+                if self.zoom != old_zoom {
+                    self.restore_anchor = true;
+                }
             }
             let pinch = ui.ctx().input(|i| i.zoom_delta());
             let pointer = ui.ctx().pointer_latest_pos();
             let scroll_id = ui.make_persistent_id("pdfium-scroll");
+            if self.scroll_owner != Some(scroll_id) {
+                self.scroll_owner = Some(scroll_id);
+                self.restore_anchor = true;
+            }
             if pointer.is_some_and(|p| available.contains(p)) && (pinch - 1.0).abs() > 0.001 {
                 self.fit = false;
                 self.zoom = (self.zoom * pinch).clamp(0.15, 8.0);
@@ -343,6 +352,9 @@ impl PdfiumView {
                     self.zoom,
                 );
                 state.store(ui.ctx(), scroll_id);
+                // Pointer anchoring already supplies the new offset; a page
+                // anchor from a prior layout must not overwrite that gesture.
+                self.restore_anchor = false;
             }
             if self.layout_zoom != self.zoom {
                 self.tops = page_tops(&catalog.sizes, self.zoom);

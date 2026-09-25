@@ -142,20 +142,41 @@
     const svg = documentRenderer()?.hookedElem.firstElementChild;
     return svg ? [...svg.children].filter(node => node.tagName.toLowerCase() === 'g') : [];
   };
+  const pageBounds = page => {
+    // A <g>'s client rect bounds its ink, not the paper (and may be empty).
+    // The renderer supplies paper dimensions and a transform for every page.
+    const matrix = page.getScreenCTM?.();
+    const width = Number(page.getAttribute?.('data-page-width'));
+    const height = Number(page.getAttribute?.('data-page-height'));
+    if (matrix && width > 0 && height > 0) {
+      return {left:matrix.e, top:matrix.f, right:matrix.e + width * matrix.a, bottom:matrix.f + height * matrix.d};
+    }
+    return page.getBoundingClientRect();
+  };
   const currentPage = () => {
     const scroll = scrollElement();
     if (!scroll) return 0;
     const all = pages();
-    const top = scroll.getBoundingClientRect().top;
-    return Math.max(0, all.findLastIndex(page => page.getBoundingClientRect().top <= top + 16));
+    const viewport = scroll.getBoundingClientRect();
+    // Linked headings are positioned below the viewport's top edge. Prefer
+    // the page occupying most of the viewport over the previous page's tail.
+    let current = 0, visible = -1;
+    all.forEach((page, index) => {
+      const rect = pageBounds(page);
+      const overlap = Math.max(0, Math.min(rect.bottom, viewport.bottom) - Math.max(rect.top, viewport.top));
+      if (overlap > visible) { current = index; visible = overlap; }
+    });
+    return current;
   };
   const gotoPage = page => {
     const scroll = scrollElement();
     const target = pages()[page];
     if (!scroll || !target) return;
     const before = position();
-    const top = target.getBoundingClientRect().top - scroll.getBoundingClientRect().top + scroll.scrollTop;
+    const top = pageBounds(target).top - scroll.getBoundingClientRect().top + scroll.scrollTop;
     if (Math.abs(top - scroll.scrollTop) < 1) return;
+    pendingNavigation = null;
+    documentRenderer()?.clearSvgResizeAnchor();
     if (before) pushHistory(back, before);
     forward.length = 0;
     scroll.scrollTo({ top, behavior: 'instant' });

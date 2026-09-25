@@ -1,0 +1,628 @@
+{
+  "revision": "2ed0f84973b0afb8affb003886ff697cc213df33",
+  "working_tree_modified": true,
+  "source_sha256": "c79cc3d98adb7a47c2f18327a93a30990b3ec3316c599e0e1d95d9d7884d1694",
+  "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8",
+  "cargo_llvm_cov": "cargo-llvm-cov 0.9.1",
+  "scope": "Rust application and core workspace; inline unit tests included. Standalone test files, vendor code and build script excluded. Native GUI, JavaScript and external binaries are not instrumented. Branch coverage is unavailable on this stable toolchain.",
+  "extra_tests": [
+    "app::preview_controls::e2e::",
+    "app::pdfium_view::tests::native_view_retains_pixels_during_updates_and_errors",
+    "pdfium::tests::native_thumbnails_preserve_pixels_rotation_white_background_and_cancellation",
+    "pdfium::tests::native_worker_reuses_documents_rejects_stale_and_survives_errors",
+    "tinymist::tests::real_",
+    "app::tests::real_tinymist_hover_targets_respect_math_syntax_boundaries",
+    "compiler::tests::persistent_watcher_compiles_errors_and_recovers",
+    "editor_features::table::tests::table_generated_spans_and_markdown_compile_with_typst",
+    "app::tests::projected_application_compiles_real_inline_and_block_output",
+    "tex::tests::real_tex_services_format_complete_hover_and_lint",
+    "compiler::tex::tests::installed_engines_build_and_synctex_round_trip_after_private_mirror_is_removed",
+    "compiler::tex::tests::real_tectonic_builds_unsaved_source_relative_inputs_errors_and_recovers"
+  ],
+  "command": "python3 scripts/measure-coverage.py --real-tools --tex-distribution",
+  "standard": {
+    "totals": {
+      "branches": {
+        "count": 0,
+        "covered": 0,
+        "notcovered": 0,
+        "percent": 0
+      },
+      "functions": {
+        "count": 6748,
+        "covered": 5442,
+        "percent": 80.64611736810907
+      },
+      "instantiations": {
+        "count": 13951,
+        "covered": 6659,
+        "percent": 47.73134542326715
+      },
+      "lines": {
+        "count": 73210,
+        "covered": 57245,
+        "percent": 78.19286982652643
+      },
+      "mcdc": {
+        "count": 0,
+        "covered": 0,
+        "notcovered": 0,
+        "percent": 0
+      },
+      "regions": {
+        "count": 113297,
+        "covered": 88922,
+        "notcovered": 24375,
+        "percent": 78.48574984333213
+      }
+    },
+    "selected_files": {
+      "src/app/pdfium_view.rs": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 73,
+          "covered": 33,
+          "percent": 45.20547945205479
+        },
+        "instantiations": {
+          "count": 134,
+          "covered": 33,
+          "percent": 24.62686567164179
+        },
+        "lines": {
+          "count": 796,
+          "covered": 234,
+          "percent": 29.396984924623116
+        },
+        "regions": {
+          "count": 1169,
+          "covered": 304,
+          "notcovered": 865,
+          "percent": 26.00513259195894
+        }
+      },
+      "src/app/preview_controls.rs": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 36,
+          "covered": 24,
+          "percent": 66.66666666666666
+        },
+        "instantiations": {
+          "count": 64,
+          "covered": 24,
+          "percent": 37.5
+        },
+        "lines": {
+          "count": 458,
+          "covered": 286,
+          "percent": 62.445414847161565
+        },
+        "regions": {
+          "count": 815,
+          "covered": 523,
+          "notcovered": 292,
+          "percent": 64.1717791411043
+        }
+      },
+      "src/compiler/tex.rs": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 31,
+          "covered": 21,
+          "percent": 67.74193548387096
+        },
+        "instantiations": {
+          "count": 56,
+          "covered": 21,
+          "percent": 37.5
+        },
+        "lines": {
+          "count": 532,
+          "covered": 291,
+          "percent": 54.699248120300744
+        },
+        "regions": {
+          "count": 781,
+          "covered": 436,
+          "notcovered": 345,
+          "percent": 55.8258642765685
+        }
+      },
+      "src/synctex.rs": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 25,
+          "covered": 6,
+          "percent": 24.0
+        },
+        "instantiations": {
+          "count": 49,
+          "covered": 6,
+          "percent": 12.244897959183673
+        },
+        "lines": {
+          "count": 121,
+          "covered": 48,
+          "percent": 39.66942148760331
+        },
+        "regions": {
+          "count": 238,
+          "covered": 75,
+          "notcovered": 163,
+          "percent": 31.512605042016805
+        }
+      },
+      "src/app/native_views.rs": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 99,
+          "covered": 18,
+          "percent": 18.181818181818183
+        },
+        "instantiations": {
+          "count": 196,
+          "covered": 18,
+          "percent": 9.183673469387756
+        },
+        "lines": {
+          "count": 1407,
+          "covered": 107,
+          "percent": 7.604832977967305
+        },
+        "regions": {
+          "count": 2137,
+          "covered": 130,
+          "notcovered": 2007,
+          "percent": 6.083294337856809
+        }
+      },
+      "src/app/package_browser.rs": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 18,
+          "covered": 0,
+          "percent": 0.0
+        },
+        "instantiations": {
+          "count": 36,
+          "covered": 0,
+          "percent": 0.0
+        },
+        "lines": {
+          "count": 194,
+          "covered": 0,
+          "percent": 0.0
+        },
+        "regions": {
+          "count": 277,
+          "covered": 0,
+          "notcovered": 277,
+          "percent": 0.0
+        }
+      }
+    },
+    "groups": {
+      "application": {
+        "lines": {
+          "count": 71616,
+          "covered": 55672,
+          "percent": 77.73681858802502
+        },
+        "functions": {
+          "count": 6531,
+          "covered": 5228,
+          "percent": 80.04899709079774
+        },
+        "regions": {
+          "count": 110715,
+          "covered": 86378,
+          "percent": 78.01833536557828
+        }
+      },
+      "core": {
+        "lines": {
+          "count": 1594,
+          "covered": 1573,
+          "percent": 98.68255959849435
+        },
+        "functions": {
+          "count": 217,
+          "covered": 214,
+          "percent": 98.61751152073732
+        },
+        "regions": {
+          "count": 2582,
+          "covered": 2544,
+          "percent": 98.52827265685515
+        }
+      }
+    }
+  },
+  "with_extra_tests": {
+    "totals": {
+      "branches": {
+        "count": 0,
+        "covered": 0,
+        "notcovered": 0,
+        "percent": 0
+      },
+      "functions": {
+        "count": 6748,
+        "covered": 5574,
+        "percent": 82.60225251926497
+      },
+      "instantiations": {
+        "count": 13951,
+        "covered": 6828,
+        "percent": 48.94272811984804
+      },
+      "lines": {
+        "count": 73210,
+        "covered": 59221,
+        "percent": 80.89195465100396
+      },
+      "mcdc": {
+        "count": 0,
+        "covered": 0,
+        "notcovered": 0,
+        "percent": 0
+      },
+      "regions": {
+        "count": 113297,
+        "covered": 92006,
+        "notcovered": 21291,
+        "percent": 81.20779897084654
+      }
+    },
+    "selected_files": {
+      "src/app/pdfium_view.rs": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 73,
+          "covered": 61,
+          "percent": 83.56164383561644
+        },
+        "instantiations": {
+          "count": 134,
+          "covered": 61,
+          "percent": 45.52238805970149
+        },
+        "lines": {
+          "count": 796,
+          "covered": 629,
+          "percent": 79.02010050251256
+        },
+        "regions": {
+          "count": 1169,
+          "covered": 912,
+          "notcovered": 257,
+          "percent": 78.01539777587682
+        }
+      },
+      "src/app/preview_controls.rs": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 36,
+          "covered": 32,
+          "percent": 88.88888888888889
+        },
+        "instantiations": {
+          "count": 64,
+          "covered": 32,
+          "percent": 50.0
+        },
+        "lines": {
+          "count": 458,
+          "covered": 389,
+          "percent": 84.93449781659389
+        },
+        "regions": {
+          "count": 815,
+          "covered": 699,
+          "notcovered": 116,
+          "percent": 85.76687116564418
+        }
+      },
+      "src/compiler/tex.rs": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 31,
+          "covered": 26,
+          "percent": 83.87096774193549
+        },
+        "instantiations": {
+          "count": 56,
+          "covered": 26,
+          "percent": 46.42857142857143
+        },
+        "lines": {
+          "count": 532,
+          "covered": 486,
+          "percent": 91.35338345864662
+        },
+        "regions": {
+          "count": 781,
+          "covered": 695,
+          "notcovered": 86,
+          "percent": 88.98847631241996
+        }
+      },
+      "src/synctex.rs": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 25,
+          "covered": 14,
+          "percent": 56.00000000000001
+        },
+        "instantiations": {
+          "count": 49,
+          "covered": 14,
+          "percent": 28.57142857142857
+        },
+        "lines": {
+          "count": 121,
+          "covered": 108,
+          "percent": 89.25619834710744
+        },
+        "regions": {
+          "count": 238,
+          "covered": 192,
+          "notcovered": 46,
+          "percent": 80.67226890756302
+        }
+      },
+      "src/app/native_views.rs": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 99,
+          "covered": 18,
+          "percent": 18.181818181818183
+        },
+        "instantiations": {
+          "count": 196,
+          "covered": 18,
+          "percent": 9.183673469387756
+        },
+        "lines": {
+          "count": 1407,
+          "covered": 107,
+          "percent": 7.604832977967305
+        },
+        "regions": {
+          "count": 2137,
+          "covered": 130,
+          "notcovered": 2007,
+          "percent": 6.083294337856809
+        }
+      },
+      "src/app/package_browser.rs": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 18,
+          "covered": 0,
+          "percent": 0.0
+        },
+        "instantiations": {
+          "count": 36,
+          "covered": 0,
+          "percent": 0.0
+        },
+        "lines": {
+          "count": 194,
+          "covered": 0,
+          "percent": 0.0
+        },
+        "regions": {
+          "count": 277,
+          "covered": 0,
+          "notcovered": 277,
+          "percent": 0.0
+        }
+      }
+    },
+    "groups": {
+      "application": {
+        "lines": {
+          "count": 71616,
+          "covered": 57648,
+          "percent": 80.49597855227881
+        },
+        "functions": {
+          "count": 6531,
+          "covered": 5360,
+          "percent": 82.07012708620425
+        },
+        "regions": {
+          "count": 110715,
+          "covered": 89462,
+          "percent": 80.80386578151109
+        }
+      },
+      "core": {
+        "lines": {
+          "count": 1594,
+          "covered": 1573,
+          "percent": 98.68255959849435
+        },
+        "functions": {
+          "count": 217,
+          "covered": 214,
+          "percent": 98.61751152073732
+        },
+        "regions": {
+          "count": 2582,
+          "covered": 2544,
+          "percent": 98.52827265685515
+        }
+      }
+    }
+  },
+  "browser_e2e": {
+    "browser": "154.0.8037.57",
+    "platform": "darwin",
+    "arch": "arm64",
+    "viewport": [
+      800,
+      600
+    ],
+    "adapterSha256": "2ef7280ccabbc3c01a24b05139fc45addde345a464bde09582c8a183b16f5a53",
+    "scenarios": [
+      "internal link/back/forward",
+      "page navigation across resize",
+      "compiled outline",
+      "zoom/fit",
+      "palette without rerender",
+      "text editing and viewer shortcuts",
+      "live source update"
+    ],
+    "result": {
+      "before": 0,
+      "jumped": 1006,
+      "back": 0,
+      "forward": 1006,
+      "zoom": 1.1,
+      "fit": 1,
+      "paletteMs": 0.5,
+      "idleRerenders": 0,
+      "nodesBefore": 1,
+      "nodesAfter": 1,
+      "inputBefore": 1006,
+      "inputAfter": 1006,
+      "htmlControls": false
+    }
+  }
+}

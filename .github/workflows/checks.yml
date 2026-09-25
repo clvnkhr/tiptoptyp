@@ -73,19 +73,26 @@ jobs:
           cargo +1.98.1 test --locked --features profiling --no-fail-fast
 
   real-tools:
-    name: Real Typst and Tinymist (macOS)
+    name: Real previews and Rust coverage (macOS)
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
       - name: Install Zig for libghostty
         uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
       - name: Install Rust
-        run: rustup toolchain install 1.98.1 --profile minimal
+        run: rustup toolchain install 1.98.1 --profile minimal --component llvm-tools-preview
+      - name: Install coverage runner
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.9.1
       - name: Install cargo-about
         uses: taiki-e/install-action@v2
         with:
@@ -96,7 +103,7 @@ jobs:
         run: cargo +1.98.1 run --locked --manifest-path xtask/Cargo.toml -- fetch-sidecars
       - name: Fetch hash-verified PDFium
         run: cargo +1.98.1 run --locked --manifest-path xtask/Cargo.toml -- fetch-pdfium
-      - name: Run real-tool integration tests
+      - name: Run real-tool integration tests and measure coverage
         shell: bash
         run: |
           target="$(rustc +1.98.1 -vV | sed -n 's/^host: //p')"
@@ -106,7 +113,27 @@ jobs:
           test -x "$TIPTOPTYP_TEST_TYPST"
           test -x "$TIPTOPTYP_TEST_TINYMIST"
           cargo +1.98.1 test --locked -p glutin --lib native_thread_current_context -- --ignored
-          cargo +1.98.1 test --locked --bin tiptoptyp -- --ignored --skip native_fixture_probe --skip thumbnail_probe --test-threads=1
+          python3 scripts/measure-coverage.py --real-tools
+      - name: Install isolated browser test dependencies
+        run: |
+          npm install --prefix "$RUNNER_TEMP/preview-browser" --no-audit --no-fund playwright@1.63.0
+          node "$RUNNER_TEMP/preview-browser/node_modules/playwright/cli.js" install chromium
+      - name: Real Tinymist browser end-to-end tests
+        shell: bash
+        run: |
+          target="$(rustc +1.98.1 -vV | sed -n 's/^host: //p')"
+          export TIPTOPTYP_TEST_TINYMIST="$PWD/toolchain/bin/tinymist-$target"
+          export TIPTOPTYP_PLAYWRIGHT="$RUNNER_TEMP/preview-browser/node_modules/playwright"
+          node scripts/test-preview-e2e.cjs
+      - name: Retain coverage evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-coverage
+          path: .tiptoptyp/coverage/latest
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
 
   native-windows:
     name: Native macOS window contract
