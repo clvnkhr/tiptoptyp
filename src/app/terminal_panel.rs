@@ -42,10 +42,12 @@ impl EditorApp {
         };
         panel.show(ui, |ui| {
             self.show_bottom_panel(ui);
-            // A sparse tab must occupy the user's existing panel rectangle.
-            // Otherwise egui shrinks it to its content height when switching
-            // from Terminal to Activity and persists that smaller height.
-            ui.allocate_space(ui.available_size().max(Vec2::ZERO));
+            if self.bottom_panel.selected() == Some(PanelTab::Activity) {
+                // Activity content is short when there are few indicators.
+                // Keep its panel at the user's saved height when switching
+                // from Terminal or Problems.
+                ui.allocate_space(ui.available_size().max(Vec2::ZERO));
+            }
         });
         maximized || ui.available_height() < 1.0
     }
@@ -445,6 +447,61 @@ mod tests {
         harness.run();
         let small = harness.get_by_label("Terminal input").rect();
         assert!(small.bottom() <= 350.0 && small.top() >= 0.0);
+    }
+
+    #[test]
+    fn problems_content_growth_does_not_resize_the_bottom_panel() {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_window_for_tests(
+            &context,
+            root.path().into(),
+            egui::ViewportId::ROOT,
+        );
+        app.snapshot_scene = None;
+        app.bottom_panel.select(PanelTab::Problems);
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(800.0, 720.0))
+            .build_ui_state(
+                |ui, app: &mut EditorApp| {
+                    if !app.show_bottom_panel_container(ui) {
+                        ui.label("Document content");
+                    }
+                },
+                app,
+            );
+        harness.run();
+        let panel_id = crate::child_view::viewport_scoped_id(&harness.ctx, "bottom-panel");
+        let initial_height = harness.ctx.data_mut(|data| {
+            data.get_persisted::<egui::PanelState>(panel_id)
+                .unwrap()
+                .outer_rect
+                .height()
+        });
+
+        harness.state_mut().preview.diagnostics = (0..80)
+            .map(|index| crate::diagnostics::Diagnostic {
+                provider: None,
+                severity: crate::diagnostics::DiagnosticSeverity::Error,
+                source: crate::diagnostics::DiagnosticSource::Main,
+                location: Some(crate::diagnostics::DiagnosticLocation {
+                    line: index + 1,
+                    column: 1,
+                }),
+                message: format!("Diagnostic {index}: {}", "detail ".repeat(20)),
+                details: vec!["more context ".repeat(20)],
+            })
+            .collect();
+        for _ in 0..8 {
+            harness.run();
+            let height = harness.ctx.data_mut(|data| {
+                data.get_persisted::<egui::PanelState>(panel_id)
+                    .unwrap()
+                    .outer_rect
+                    .height()
+            });
+            assert_eq!(height, initial_height);
+        }
     }
 
     #[test]
