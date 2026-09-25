@@ -121,3 +121,5 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 2. [ ] the stage all and commit button / commit all staged button in the git subpanel should be text
 3. [ ] we need to implement comfy mode - if on, the bg and text of a pdf / tinymist preview should be adjusted to match the theme settings.
 4. [ ] improve harper integration
+5. [ ] autodetect installed tex distributions
+6. [ ] implement synctex integration
