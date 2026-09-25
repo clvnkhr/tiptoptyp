@@ -46,6 +46,7 @@ ui_icons! {
     Maximize,
     Restore,
     Panel,
+    Menu,
     Next,
     Previous,
     Refresh,
@@ -405,6 +406,22 @@ pub(crate) fn paint_ui_icon(painter: &egui::Painter, rect: Rect, icon: UiIcon, c
     let center = rect.center();
     let stroke = Stroke::new(1.25, color);
     match icon {
+        UiIcon::Menu => {
+            let bar_width = rect.width() * 0.76;
+            let bar_height = (rect.height() * 0.1).max(1.0);
+            let left = rect.center().x - bar_width * 0.5;
+            for fraction in [0.2, 0.5, 0.8] {
+                let y = rect.top() + rect.height() * fraction;
+                painter.rect_filled(
+                    Rect::from_min_size(
+                        Pos2::new(left, y - bar_height * 0.5),
+                        Vec2::new(bar_width, bar_height),
+                    ),
+                    bar_height * 0.5,
+                    color,
+                );
+            }
+        }
         UiIcon::Folder | UiIcon::File => {
             paint_tree_glyph(painter, rect, icon == UiIcon::Folder, color);
         }
@@ -994,6 +1011,27 @@ mod tests {
             "the warning contour must join its final edge"
         );
         assert_eq!(outline.fill.a(), 0);
+    }
+
+    #[test]
+    fn menu_button_is_three_even_rounded_bars_inside_its_icon_bounds() {
+        let shapes = glyph_shapes(UiIcon::Menu);
+        assert_eq!(shapes.len(), 3);
+        let bars = shapes
+            .iter()
+            .map(|shape| {
+                let egui::Shape::Rect(bar) = shape else {
+                    panic!("menu bars should be filled contours")
+                };
+                bar.rect
+            })
+            .collect::<Vec<_>>();
+        for bar in &bars {
+            assert!((bar.width() - 10.64).abs() < 0.01);
+            assert!((bar.height() - 1.4).abs() < 0.01);
+        }
+        assert!((bars[1].top() - bars[0].top() - 4.2).abs() < 0.01);
+        assert!((bars[2].top() - bars[1].top() - 4.2).abs() < 0.01);
     }
 
     #[test]

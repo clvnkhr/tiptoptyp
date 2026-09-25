@@ -190,11 +190,17 @@
       #tiptoptyp-preview-controls { position: fixed; left: 12px; top: 12px; z-index: 2147483647;
         font: 13px -apple-system, BlinkMacSystemFont, sans-serif; color: var(--vscode-menu-foreground, #26303b);
         background: var(--vscode-menu-background, #fff); border: 1px solid var(--vscode-menu-border, #b7c3cc);
-        border-radius: 8px; box-shadow: 0 3px 14px #0003; padding: 4px; max-width: calc(100vw - 24px); }
+        border-radius: 6px; box-shadow: 0 3px 14px #0003; padding: 2px; max-width: calc(100vw - 24px); }
       #tiptoptyp-preview-controls button { color: inherit; background: transparent; border: 0;
         border-radius: 4px; padding: 5px 7px; cursor: pointer; font: inherit; }
       #tiptoptyp-preview-controls button:hover { background: #8883; }
       #tiptoptyp-preview-controls button:disabled { opacity: .4; cursor: default; }
+      #tiptoptyp-preview-controls button[data-open] { width: 22px; height: 22px; padding: 0;
+        display: grid; place-items: center; }
+      #tiptoptyp-preview-controls .menu-glyph { width: 12px; height: 12px; box-sizing: border-box;
+        display: flex; flex-direction: column; justify-content: space-between; padding: 1.8px 1.44px; }
+      #tiptoptyp-preview-controls .menu-glyph span { flex: 0 0 1.2px; height: 1.2px;
+        border-radius: .6px; background: currentColor; }
       #tiptoptyp-preview-controls input { font: inherit; color: inherit; background: transparent;
         border: 1px solid #8886; border-radius: 4px; padding: 3px 5px; }
       #tiptoptyp-preview-controls [data-full] { width: max-content; max-width: 100%; }
@@ -207,9 +213,14 @@
     document.head.append(style);
     controls = document.createElement('div');
     controls.id = 'tiptoptyp-preview-controls';
-    const opener = button('☰', 'Preview controls', () => { if (!controls.dataset.dragged) { expanded = true; updateControls(); } });
+    const opener = button('', 'Preview controls', () => { if (!controls.dataset.dragged) { expanded = true; updateControls(); } });
     opener.dataset.open = '';
     opener.className = 'handle';
+    const menuGlyph = document.createElement('span');
+    menuGlyph.className = 'menu-glyph';
+    menuGlyph.setAttribute('aria-hidden', 'true');
+    for (let index = 0; index < 3; index++) menuGlyph.append(document.createElement('span'));
+    opener.append(menuGlyph);
     controls.append(opener);
     const full = document.createElement('div');
     full.dataset.full = '';

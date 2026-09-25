@@ -830,7 +830,7 @@ pub(super) fn show_panel(ui: &mut egui::Ui, input: Input<'_>, cache: &mut Cache)
                 }
                 right_action_row(ui, |ui| {
                     let stage_all = staged == 0 && input.snapshot.entries.stageable;
-                    if action_button(ui, !input.busy && !input.dirty && (staged > 0 || stage_all) && !cache.commit_message.trim().is_empty(), if stage_all { "Stage all and commit" } else { "Commit staged changes" }, input.toolbar_style)
+                    if action_button(ui, !input.busy && !input.dirty && (staged > 0 || stage_all) && !cache.commit_message.trim().is_empty(), if stage_all { "Stage all and commit" } else { "Commit staged changes" }, crate::settings::ToolbarStyle::Text)
                         .clicked()
                     {
                         output.operation = Some(if stage_all {
@@ -1111,6 +1111,12 @@ mod tests {
             } else {
                 "Commit staged changes"
             };
+            assert!(
+                harness.output().shapes.iter().any(|clipped| {
+                    matches!(&clipped.shape, egui::Shape::Text(text) if text.galley.job.text == label)
+                }),
+                "commit action should visibly include {label:?} even in icon toolbar mode"
+            );
             harness.get_by_label(label).click();
             harness.run_steps(3);
             assert_eq!(

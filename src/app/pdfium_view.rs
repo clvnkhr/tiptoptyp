@@ -469,19 +469,7 @@ impl PdfiumView {
         } else {
             show_centered_preview_message(ui, "Preparing PDF preview…", self.error.is_none());
         }
-        let was_open = self.controls_open;
-        let controls_response = egui::Area::new(ui.make_persistent_id("pdfium-controls"))
-            .order(egui::Order::Foreground)
-            .default_pos(available.min + egui::vec2(8.0, 8.0))
-            .movable(true)
-            .constrain_to(available)
-            .sense(egui::Sense::click_and_drag())
-            .show(ui.ctx(), |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| self.show_controls(ui));
-            });
-        if !was_open && controls_response.response.clicked() {
-            self.controls_open = true;
-        }
+        self.show_controls_area(ui.ctx(), available);
         let key = RequestKey {
             revision: self.revision,
             pages: demand,
@@ -507,6 +495,27 @@ impl PdfiumView {
         link
     }
 
+    fn show_controls_area(&mut self, context: &egui::Context, available: Rect) -> Rect {
+        egui::Area::new(crate::child_view::viewport_scoped_id(
+            context,
+            "pdfium-controls",
+        ))
+        .order(egui::Order::Foreground)
+        .default_pos(available.min + egui::vec2(8.0, 8.0))
+        .movable(true)
+        .constrain_to(available)
+        .sense(egui::Sense::click_and_drag())
+        .show(context, |ui| {
+            let margin = if self.controls_open { 8 } else { 2 };
+            egui::Frame::popup(ui.style())
+                .inner_margin(egui::Margin::same(margin))
+                .show(ui, |ui| self.show_controls(ui))
+                .response
+                .rect
+        })
+        .inner
+    }
+
     fn navigate(&mut self, page: usize) {
         push_history(&mut self.back, self.anchor);
         self.forward.clear();
@@ -515,22 +524,22 @@ impl PdfiumView {
 
     fn show_controls(&mut self, ui: &mut egui::Ui) {
         if !self.controls_open {
-            ui.allocate_ui_with_layout(
-                egui::vec2(18.0, 18.0),
-                egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
-                |ui| {
-                    ui.label("☰").on_hover_text("Preview controls");
-                },
-            );
+            if crate::app::icons::square_icon_button(
+                ui,
+                UiIcon::Menu,
+                "Preview controls",
+                PREVIEW_CONTROL_BUTTON_SIZE,
+            )
+            .on_hover_text("Preview controls")
+            .clicked()
+            {
+                self.controls_open = true;
+            }
             return;
         }
         let mut outline_target = None;
         ui.horizontal(|ui| {
-            if ui
-                .small_button("−")
-                .on_hover_text("Minimize controls")
-                .clicked()
-            {
+            if crate::app::icons::icon_button(ui, UiIcon::Down, "Minimize controls").clicked() {
                 self.controls_open = false;
             }
             ui.label("Preview");
@@ -646,6 +655,8 @@ impl PdfiumView {
         }
     }
 }
+
+const PREVIEW_CONTROL_BUTTON_SIZE: f32 = 22.0;
 
 fn fit_width_zoom(available_width: f32, page_width: f32) -> f32 {
     (available_width / page_width).clamp(0.15, 8.0)
@@ -780,6 +791,37 @@ impl EditorApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui_kittest::{Harness, kittest::Queryable as _};
+
+    #[test]
+    fn compact_preview_control_opens_and_minimizes_with_one_consistent_button() {
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(360.0, 240.0))
+            .build_ui_state(
+                |ui, state: &mut (PdfiumView, Rect)| {
+                    state.1 = state.0.show_controls_area(ui.ctx(), ui.max_rect());
+                },
+                (PdfiumView::default(), Rect::NOTHING),
+            );
+        harness.run_steps(2);
+        let button = harness.get_by_label("Preview controls");
+        assert_eq!(
+            button.rect().size(),
+            egui::vec2(PREVIEW_CONTROL_BUTTON_SIZE, PREVIEW_CONTROL_BUTTON_SIZE)
+        );
+        assert!(harness.state().1.width() <= 30.0 && harness.state().1.height() <= 30.0);
+        assert!(!harness.state().0.controls_open);
+
+        button.click();
+        harness.run_steps(2);
+        assert!(harness.state().0.controls_open);
+
+        harness.get_by_label("Minimize controls").click();
+        harness.run_steps(2);
+        assert!(!harness.state().0.controls_open);
+        assert!(harness.state().1.width() <= 30.0 && harness.state().1.height() <= 30.0);
+        harness.get_by_label("Preview controls");
+    }
     #[test]
     fn fit_width_uses_the_whole_preview_width() {
         assert_eq!(fit_width_zoom(600.0, 400.0) * 400.0, 600.0);
