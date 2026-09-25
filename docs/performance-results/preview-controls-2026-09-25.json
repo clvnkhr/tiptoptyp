@@ -1,0 +1,25 @@
+{
+  "browser": "154.0.8037.57",
+  "platform": "darwin",
+  "arch": "arm64",
+  "viewport": [
+    800,
+    600
+  ],
+  "adapterSha256": "ac93a0b821edfac2e483469fd8b4e57a874d0448a7da4f17adbb0b1924312868",
+  "result": {
+    "before": 0,
+    "jumped": 1006,
+    "back": 0,
+    "forward": 1006,
+    "zoom": 1.1,
+    "fit": 1,
+    "paletteMs": 0.699999988079071,
+    "idleRerenders": 0,
+    "nodesBefore": 1,
+    "nodesAfter": 1,
+    "inputBefore": 1006,
+    "inputAfter": 1006,
+    "htmlControls": false
+  }
+}

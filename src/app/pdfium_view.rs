@@ -5,6 +5,8 @@ use std::collections::BTreeMap;
 
 struct Resident {
     texture: egui::TextureHandle,
+    original: Vec<u8>,
+    size: [usize; 2],
     characters: Vec<Character>,
     links: Vec<(Rect, LinkTarget)>,
 }
@@ -19,23 +21,24 @@ pub(super) struct PdfiumView {
     catalog: Option<Arc<Catalog>>,
     residents: BTreeMap<usize, Resident>,
     active_scale: u32,
-    dark: bool,
+    palette: (Color32, Color32),
     zoom: f32,
     fit: bool,
     page: usize,
     goto: Option<usize>,
+    pending_position: Option<(usize, f32)>,
     anchor: (usize, f32),
     restore_anchor: bool,
     query: String,
     search_pages: Vec<usize>,
     search_pending: bool,
+    find_when_ready: bool,
     selection: Option<(usize, usize, usize)>,
     error: Option<String>,
     layout_zoom: f32,
     tops: Vec<f32>,
     height: f32,
     page_focus: Option<egui::Id>,
-    focus_find: bool,
     controls_open: bool,
     back: Vec<(usize, f32)>,
     forward: Vec<(usize, f32)>,
@@ -53,23 +56,24 @@ impl Default for PdfiumView {
             catalog: None,
             residents: BTreeMap::new(),
             active_scale: 0,
-            dark: false,
+            palette: (Color32::WHITE, Color32::BLACK),
             zoom: 1.0,
             fit: true,
             page: 0,
             goto: None,
+            pending_position: None,
             anchor: (0, 0.0),
             restore_anchor: false,
             query: String::new(),
             search_pages: Vec::new(),
             search_pending: false,
+            find_when_ready: false,
             selection: None,
             error: None,
             layout_zoom: 0.0,
             tops: Vec::new(),
             height: 0.0,
             page_focus: None,
-            focus_find: false,
             controls_open: false,
             back: Vec::new(),
             forward: Vec::new(),
@@ -89,7 +93,6 @@ impl PdfiumView {
             .is_some_and(|id| context.memory(|m| m.focused()) == Some(id));
         if command == AppCommand::Find && (focused || force_find) {
             self.controls_open = true;
-            self.focus_find = true;
             context.request_repaint();
             return true;
         }
@@ -167,6 +170,27 @@ impl PdfiumView {
         self.goto
     }
 
+    pub(super) fn go_to_position(&mut self, page: usize, y: f32) {
+        // The new map may arrive before its PDF has been inspected. Resolve
+        // point coordinates only against that PDF's admitted page dimensions.
+        self.pending_position = Some((page, y));
+    }
+    fn apply_pending_position(&mut self) {
+        if self.active_revision != self.revision {
+            return;
+        }
+        if let Some((page, y)) = self.pending_position.take() {
+            if let Some(size) = self.catalog.as_ref().and_then(|c| c.sizes.get(page)) {
+                push_history(&mut self.back, self.anchor);
+                self.forward.clear();
+                self.anchor = (page, (y / size[1]).clamp(0.0, 1.0));
+                self.goto = None;
+                self.restore_anchor = true;
+            } else {
+                self.goto = Some(page);
+            }
+        }
+    }
     pub(super) fn go_to_page(&mut self, page: usize) {
         self.goto = Some(page);
     }
@@ -186,9 +210,15 @@ impl PdfiumView {
         self.restore_anchor = true;
     }
 
-    fn accept(&mut self, batch: Batch, key: &RequestKey, ui: &egui::Ui, dark: bool) {
+    fn accept(
+        &mut self,
+        batch: Batch,
+        key: &RequestKey,
+        ui: &egui::Ui,
+        palette: (Color32, Color32),
+    ) {
         let changed = self.active_revision != key.revision;
-        if changed || self.active_scale != key.scale || self.dark != dark {
+        if changed || self.active_scale != key.scale {
             self.residents.clear();
         }
         if changed {
@@ -197,15 +227,9 @@ impl PdfiumView {
             self.layout_zoom = 0.0;
         }
         for page in batch.pages {
+            let original = page.rgba.clone();
             let mut rgba = page.rgba;
-            if dark {
-                for pixel in rgba.as_chunks_mut::<4>().0 {
-                    // Source colors remain untouched when the caller disables dark rendering.
-                    for channel in &mut pixel[..3] {
-                        *channel = 255 - *channel;
-                    }
-                }
-            }
+            super::preview_palette::recolor(&mut rgba, palette.0, palette.1);
             let texture = ui.ctx().load_texture(
                 format!("pdfium-{}-{}", key.revision, page.index),
                 egui::ColorImage::from_rgba_unmultiplied(page.size, &rgba),
@@ -215,6 +239,8 @@ impl PdfiumView {
                 page.index,
                 Resident {
                     texture,
+                    original,
+                    size: page.size,
                     characters: page.characters,
                     links: page.links,
                 },
@@ -229,7 +255,7 @@ impl PdfiumView {
         self.catalog = Some(batch.catalog);
         self.active_revision = key.revision;
         self.active_scale = key.scale;
-        self.dark = dark;
+        self.palette = palette;
         self.error = None;
     }
 
@@ -238,7 +264,7 @@ impl PdfiumView {
         ui: &mut egui::Ui,
         path: PathBuf,
         bytes: Arc<[u8]>,
-        dark: bool,
+        palette: (Color32, Color32),
     ) -> Option<String> {
         if self.bytes.is_some() && self.path != path {
             *self = Self::default();
@@ -267,16 +293,31 @@ impl PdfiumView {
             && self.requested.as_ref() == Some(&reply.key)
         {
             match reply.result {
-                Ok(batch) => self.accept(batch, &reply.key, ui, dark),
+                Ok(batch) => self.accept(batch, &reply.key, ui, palette),
                 Err(error) => self.error = Some(error),
             }
         }
+        self.apply_pending_position();
         if let Some((key, pages)) = search
             && key.revision == self.revision
             && key.query == self.query
         {
             self.search_pages = pages;
             self.search_pending = false;
+            if std::mem::take(&mut self.find_when_ready) {
+                self.find_next();
+            }
+        }
+        if self.palette != palette {
+            for resident in self.residents.values_mut() {
+                let mut rgba = resident.original.clone();
+                super::preview_palette::recolor(&mut rgba, palette.0, palette.1);
+                resident.texture.set(
+                    egui::ColorImage::from_rgba_unmultiplied(resident.size, &rgba),
+                    egui::TextureOptions::LINEAR,
+                );
+            }
+            self.palette = palette;
         }
         let mut link = None;
         let available = ui.available_rect_before_wrap();
@@ -348,15 +389,7 @@ impl PdfiumView {
                         ui.min_rect().min + egui::vec2((width - size.x) / 2.0, self.tops[index]),
                         size,
                     );
-                    ui.painter().rect_filled(
-                        rect,
-                        0.0,
-                        if dark {
-                            Color32::from_gray(25)
-                        } else {
-                            Color32::WHITE
-                        },
-                    );
+                    ui.painter().rect_filled(rect, 0.0, palette.0);
                     let Some(resident) = self.residents.get(&index) else {
                         continue;
                     };
@@ -381,6 +414,12 @@ impl PdfiumView {
                         )
                     };
                     if let Some(pointer) = response.interact_pointer_pos() {
+                        if response.clicked() && ui.input(|i| i.modifiers.command) {
+                            let point = (pointer - rect.min) / self.zoom;
+                            let id = viewport_scoped_id(ui.ctx(), "pdf-synctex");
+                            ui.ctx()
+                                .data_mut(|data| data.insert_temp(id, (index, point.x, point.y)));
+                        }
                         if response.drag_started()
                             && let Some(char_index) = nearest_character(
                                 &resident.characters,
@@ -469,7 +508,7 @@ impl PdfiumView {
         } else {
             show_centered_preview_message(ui, "Preparing PDF preview…", self.error.is_none());
         }
-        self.show_controls_area(ui.ctx(), available);
+
         let key = RequestKey {
             revision: self.revision,
             pages: demand,
@@ -478,13 +517,8 @@ impl PdfiumView {
                 .max(1.0) as u32,
             query: self.query.clone(),
         };
-        if self.requested.as_ref() != Some(&key)
-            || self.dark != dark
-                && self.error.is_none()
-                && self.active_revision == self.revision
-                && self.requested.as_ref().is_some_and(|r| r == &key)
-        {
-            self.dark = dark;
+        if self.requested.as_ref() != Some(&key) {
+            self.palette = palette;
             self.worker.as_ref().unwrap().request(Request {
                 key: key.clone(),
                 bytes: self.bytes.as_ref().unwrap().clone(),
@@ -495,25 +529,16 @@ impl PdfiumView {
         link
     }
 
-    fn show_controls_area(&mut self, context: &egui::Context, available: Rect) -> Rect {
-        egui::Area::new(crate::child_view::viewport_scoped_id(
-            context,
-            "pdfium-controls",
-        ))
-        .order(egui::Order::Foreground)
-        .default_pos(available.min + egui::vec2(8.0, 8.0))
-        .movable(true)
-        .constrain_to(available)
-        .sense(egui::Sense::click_and_drag())
-        .show(context, |ui| {
-            let margin = if self.controls_open { 8 } else { 2 };
-            egui::Frame::popup(ui.style())
-                .inner_margin(egui::Margin::same(margin))
-                .show(ui, |ui| self.show_controls(ui))
-                .response
-                .rect
-        })
-        .inner
+    fn find_next(&mut self) {
+        if let Some(target) = self
+            .search_pages
+            .iter()
+            .copied()
+            .find(|p| *p > self.page)
+            .or_else(|| self.search_pages.first().copied())
+        {
+            self.navigate(target);
+        }
     }
 
     fn navigate(&mut self, page: usize) {
@@ -522,141 +547,62 @@ impl PdfiumView {
         self.goto = Some(page);
     }
 
-    fn show_controls(&mut self, ui: &mut egui::Ui) {
-        if !self.controls_open {
-            if crate::app::icons::square_icon_button(
-                ui,
-                UiIcon::Menu,
-                "Preview controls",
-                PREVIEW_CONTROL_BUTTON_SIZE,
-            )
-            .on_hover_text("Preview controls")
-            .clicked()
-            {
-                self.controls_open = true;
-            }
-            return;
+    pub(super) fn controls_snapshot(&self) -> super::preview_controls::Snapshot {
+        super::preview_controls::Snapshot {
+            page: self.page,
+            count: self.catalog.as_ref().map_or(0, |c| c.sizes.len()),
+            zoom: self.zoom,
+            back: !self.back.is_empty(),
+            forward: !self.forward.is_empty(),
+            outline: self
+                .catalog
+                .as_ref()
+                .map_or_else(Vec::new, |c| c.outline.clone()),
         }
-        let mut outline_target = None;
-        ui.horizontal(|ui| {
-            if crate::app::icons::icon_button(ui, UiIcon::Down, "Minimize controls").clicked() {
-                self.controls_open = false;
+    }
+    pub(super) fn controls_action(&mut self, action: super::preview_controls::Action) {
+        use super::preview_controls::Action;
+        match action {
+            Action::Back => {
+                if let Some(target) = self.back.pop() {
+                    push_history(&mut self.forward, self.anchor);
+                    self.anchor = target;
+                    self.restore_anchor = true;
+                }
             }
-            ui.label("Preview");
-            if let Some(catalog) = &self.catalog
-                && !catalog.outline.is_empty()
-            {
-                ui.menu_button("Outline", |ui| {
-                    for (title, page) in &catalog.outline {
-                        if ui.button(title).clicked() {
-                            outline_target = Some(*page);
-                            ui.close();
-                        }
-                    }
-                });
+            Action::Forward => {
+                if let Some(target) = self.forward.pop() {
+                    push_history(&mut self.back, self.anchor);
+                    self.anchor = target;
+                    self.restore_anchor = true;
+                }
             }
-        });
-        if let Some(page) = outline_target {
-            self.navigate(page);
-        }
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_enabled(!self.back.is_empty(), egui::Button::new("←"))
-                .on_hover_text("Back")
-                .clicked()
-                && let Some(target) = self.back.pop()
-            {
-                push_history(&mut self.forward, self.anchor);
-                self.anchor = target;
-                self.restore_anchor = true;
+            Action::Page(page) => self.navigate(page),
+            Action::ZoomIn => self.zoom(PreviewZoomAction::In),
+            Action::ZoomOut => self.zoom(PreviewZoomAction::Out),
+            Action::Fit => self.zoom(PreviewZoomAction::Reset),
+            Action::Outline(index) => {
+                if let Some((_, page)) = self.catalog.as_ref().and_then(|c| c.outline.get(index)) {
+                    self.navigate(*page);
+                }
             }
-            if ui
-                .add_enabled(!self.forward.is_empty(), egui::Button::new("→"))
-                .on_hover_text("Forward")
-                .clicked()
-                && let Some(target) = self.forward.pop()
-            {
-                push_history(&mut self.back, self.anchor);
-                self.anchor = target;
-                self.restore_anchor = true;
-            }
-            if icon_button(ui, UiIcon::Previous, "Previous page").clicked() {
-                self.navigate(self.page.saturating_sub(1));
-            }
-            let mut page = self.page + 1;
-            let count = self.catalog.as_ref().map_or(1, |c| c.sizes.len());
-            if ui
-                .add(egui::DragValue::new(&mut page).range(1..=count))
-                .changed()
-            {
-                self.navigate(page - 1);
-            }
-            ui.label(format!("/ {count}"));
-            if icon_button(ui, UiIcon::Next, "Next page").clicked() {
-                self.navigate((self.page + 1).min(count - 1));
-            }
-            if icon_button(ui, UiIcon::ZoomOut, "Zoom out").clicked() {
-                self.zoom(PreviewZoomAction::Out);
-            }
-            if icon_button(ui, UiIcon::ZoomIn, "Zoom in").clicked() {
-                self.zoom(PreviewZoomAction::In);
-            }
-            if icon_button(ui, UiIcon::FitWidth, "Fit page width").clicked() {
-                self.zoom(PreviewZoomAction::Reset);
-            }
-            ui.label(format!("{:.0}%", self.zoom * 100.0));
-        });
-        ui.horizontal(|ui| {
-            ui.label("Find");
-            let find = ui.add(
-                egui::TextEdit::singleline(&mut self.query)
-                    .desired_width(150.0)
-                    .hint_text("Search PDF"),
-            );
-            if self.focus_find {
-                find.request_focus();
-                self.focus_find = false;
-            }
-            if find.changed() {
-                self.search_pages.clear();
-                self.search_pending = !self.query.is_empty();
-            }
-            if !self.query.is_empty() {
-                ui.label(if self.search_pending {
-                    "Searching…".into()
+            Action::Find(query) => {
+                if self.query != query {
+                    self.query = query;
+                    self.search_pages.clear();
+                    self.search_pending = !self.query.is_empty();
+                    self.find_when_ready = self.search_pending;
+                } else if self.search_pending {
+                    self.find_when_ready = true;
                 } else {
-                    format!("{} pages", self.search_pages.len())
-                });
-                if icon_button(ui, UiIcon::Next, "Next matching page").clicked() {
-                    let target = self
-                        .search_pages
-                        .iter()
-                        .copied()
-                        .find(|p| *p > self.page)
-                        .or_else(|| self.search_pages.first().copied());
-                    if let Some(target) = target {
-                        self.navigate(target);
-                    }
+                    self.find_next();
                 }
             }
-        });
-        if let Some(error) = &self.error {
-            ui.horizontal_wrapped(|ui| {
-                ui.colored_label(
-                    ui.visuals().error_fg_color,
-                    format!("PDF update failed; previous preview retained: {error}"),
-                );
-                if ui.button("Retry").clicked() {
-                    self.requested = None;
-                }
-            });
-        } else if self.active_revision != self.revision {
-            ui.label("Updating PDF…");
+            Action::Location(location) => self.go_to_position(location.page, location.y),
+            Action::PopOut => {}
         }
     }
 }
-
-const PREVIEW_CONTROL_BUTTON_SIZE: f32 = 22.0;
 
 fn fit_width_zoom(available_width: f32, page_width: f32) -> f32 {
     (available_width / page_width).clamp(0.15, 8.0)
@@ -747,6 +693,7 @@ impl EditorApp {
         self.document().kind() == DocumentKind::Pdf
     }
     pub(super) fn show_pdfium_view(&mut self, ui: &mut egui::Ui, asset: bool) {
+        self.preview_controls.available = Some(ui.available_rect_before_wrap());
         let path = if asset {
             self.document().path().clone().unwrap_or_default()
         } else {
@@ -765,12 +712,16 @@ impl EditorApp {
             );
             return;
         };
-        let dark = preview.render_dark();
+        let palette = self.preview_palette(ui.ctx(), preview.render_dark());
         let view = if asset {
             &mut self.pdfium_asset
         } else {
             &mut self.pdfium_preview
         };
+        if std::mem::take(&mut view.controls_open) {
+            self.preview_controls.open = true;
+            self.preview_controls.focus_find = true;
+        }
         if let Some(link) = ui
             .push_id(
                 if asset {
@@ -778,12 +729,20 @@ impl EditorApp {
                 } else {
                     "pdfium-preview"
                 },
-                |ui| view.show(ui, path, bytes, dark),
+                |ui| view.show(ui, path, bytes, palette),
             )
             .inner
             && crate::pdfium::safe_url(&link)
         {
             let _ = self.web_link_sender.send(link);
+        }
+        let id = viewport_scoped_id(ui.ctx(), "pdf-synctex");
+        if !asset
+            && let Some((page, x, y)) = ui
+                .ctx()
+                .data_mut(|data| data.remove_temp::<(usize, f32, f32)>(id))
+        {
+            self.request_synctex(crate::synctex::Query::Page { page, x, y }, false);
         }
     }
 }
@@ -791,37 +750,33 @@ impl EditorApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use egui_kittest::{Harness, kittest::Queryable as _};
 
     #[test]
-    fn compact_preview_control_opens_and_minimizes_with_one_consistent_button() {
-        let mut harness = Harness::builder()
-            .with_size(egui::vec2(360.0, 240.0))
-            .build_ui_state(
-                |ui, state: &mut (PdfiumView, Rect)| {
-                    state.1 = state.0.show_controls_area(ui.ctx(), ui.max_rect());
-                },
-                (PdfiumView::default(), Rect::NOTHING),
-            );
-        harness.run_steps(2);
-        let button = harness.get_by_label("Preview controls");
-        assert_eq!(
-            button.rect().size(),
-            egui::vec2(PREVIEW_CONTROL_BUTTON_SIZE, PREVIEW_CONTROL_BUTTON_SIZE)
-        );
-        assert!(harness.state().1.width() <= 30.0 && harness.state().1.height() <= 30.0);
-        assert!(!harness.state().0.controls_open);
-
-        button.click();
-        harness.run_steps(2);
-        assert!(harness.state().0.controls_open);
-
-        harness.get_by_label("Minimize controls").click();
-        harness.run_steps(2);
-        assert!(!harness.state().0.controls_open);
-        assert!(harness.state().1.width() <= 30.0 && harness.state().1.height() <= 30.0);
-        harness.get_by_label("Preview controls");
+    fn source_position_waits_for_the_new_pdfs_dimensions() {
+        let mut view = PdfiumView {
+            revision: 2,
+            active_revision: 1,
+            catalog: Some(Arc::new(Catalog {
+                sizes: vec![[400.0, 100.0]],
+                outline: vec![],
+            })),
+            ..Default::default()
+        };
+        view.go_to_position(0, 50.0);
+        view.apply_pending_position();
+        assert!(view.pending_position.is_some());
+        assert_eq!(view.anchor, (0, 0.0));
+        view.active_revision = 2;
+        view.catalog = Some(Arc::new(Catalog {
+            sizes: vec![[400.0, 200.0]],
+            outline: vec![],
+        }));
+        view.apply_pending_position();
+        assert!(view.pending_position.is_none());
+        assert_eq!(view.anchor, (0, 0.25));
+        assert!(view.restore_anchor);
     }
+
     #[test]
     fn fit_width_uses_the_whole_preview_width() {
         assert_eq!(fit_width_zoom(600.0, 400.0) * 400.0, 600.0);
@@ -912,7 +867,12 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| {
-                        view.show(ui, PathBuf::from("fixture.pdf"), bytes.clone(), false);
+                        view.show(
+                            ui,
+                            PathBuf::from("fixture.pdf"),
+                            bytes.clone(),
+                            (Color32::WHITE, Color32::BLACK),
+                        );
                     },
                 )
                 .drop_without_applying_deltas();

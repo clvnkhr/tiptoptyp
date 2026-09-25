@@ -48,8 +48,7 @@ fn opening_tex_preserves_native_source_and_never_requests_typst_services() {
     assert!(app.source_preview_available());
     assert!(!app.interactive_preview_requested());
     assert!(
-        app.preview_language_support().build
-            == Some(crate::language_support::BuildEngineKind::Tectonic)
+        app.preview_language_support().build == Some(crate::language_support::BuildEngineKind::Tex)
     );
     app.settings.tex.build_enabled = false;
     assert!(!tinymist_language_features_ready(
@@ -101,8 +100,7 @@ fn a_tex_tab_can_be_edited_beside_a_designated_typst_preview() {
     assert_eq!(app.preview_document_revision(), app.document().revision());
     assert!(!app.interactive_preview_requested());
     assert!(
-        app.preview_language_support().build
-            == Some(crate::language_support::BuildEngineKind::Tectonic)
+        app.preview_language_support().build == Some(crate::language_support::BuildEngineKind::Tex)
     );
 }
 
@@ -1438,5 +1436,62 @@ fn tex_edit_keeps_previous_diagnostics_until_new_results_arrive() {
             .editor_diagnostics
             .iter()
             .any(|diagnostic| diagnostic.message == "Previous diagnostic")
+    );
+}
+
+#[test]
+fn outside_source_tabs_keep_the_window_workspace_until_explicit_switch() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let context = egui::Context::default();
+    let root = tempfile::tempdir().unwrap();
+    let external = tempfile::tempdir().unwrap();
+    let root = root.path().canonicalize().unwrap();
+    let outside = external.path().join("package.typ");
+    fs::write(&outside, "= Package documentation\n").unwrap();
+    let mut app = fixture(&context, &root);
+    app.lifecycle = DocumentLifecycle::Active;
+    let first = app.tabs.active_id().unwrap();
+    assert!(app.open_tab_path(outside, &context));
+    let second = app.tabs.active_id().unwrap();
+    assert_eq!(app.workspace_root, root);
+    app.activate_tab(first, &context);
+    app.activate_tab(second, &context);
+    assert_eq!(app.workspace_root, root);
+    app.lifecycle = DocumentLifecycle::Dormant;
+    let mut fonts_ready = false;
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(900.0, 400.0))
+        .build_ui_state(
+            move |ui, app: &mut EditorApp| {
+                if !fonts_ready {
+                    theme::configure_editor_fonts(
+                        ui.ctx(),
+                        Default::default(),
+                        Default::default(),
+                        false,
+                        400,
+                        400,
+                        None,
+                    );
+                    fonts_ready = true;
+                    return;
+                }
+                app.show_editor(ui);
+            },
+            app,
+        );
+    harness.run_steps(3);
+    harness
+        .get_by_label("Switch to this workspace root")
+        .click();
+    harness.run_steps(3);
+    assert_eq!(
+        harness.state().workspace_root,
+        external.path().canonicalize().unwrap()
+    );
+    harness.state_mut().activate_tab(first, &context);
+    assert_eq!(
+        harness.state().workspace_root,
+        external.path().canonicalize().unwrap()
     );
 }

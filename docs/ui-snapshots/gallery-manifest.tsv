@@ -53,6 +53,7 @@ scene	find-replace	find-replace	find-replace	component	transparent	-
 scene	find-sticky-context	find-replace	find-replace-find-sticky-context	targeted	transparent	-
 scene	preview-compiling	main	main-preview-compiling	component	-	-
 scene	pdfium-preview	main	main-pdfium-preview	component	-	-
+scene	preview-controls	preview-controls	preview-controls	component	transparent	-
 scene	file-menu	popup	popup-file-menu	component	transparent	-
 scene	edit-menu	popup	popup-edit-menu	component	transparent	-
 scene	editor-context-menu	popup	popup-editor-context-menu	component	transparent	-
@@ -105,3 +106,5 @@ scene	encoding-import	encoding-import	encoding-import	targeted	-	-
 scene	writing-checks	main	main-writing-checks	targeted	-	-
 scene	icons	main	main-icons	targeted	-	-
 scene	activity-panel	main	main-activity-panel	targeted	-	-
+scene	preview-window	preview-window	preview-window	targeted	-	-
+scene	preview-native-window	preview-window	preview-window-preview-native-window	targeted	-	-

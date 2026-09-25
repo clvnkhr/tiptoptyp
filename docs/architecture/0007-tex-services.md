@@ -8,7 +8,7 @@ never route native TeX through Typst, miTeX or Tinymist's preview protocol.
 
 | Feature | Default | Alternatives / independent controls |
 | --- | --- | --- |
-| Build | Tectonic | Disable builds; standard LaTeX is an explicit unimplemented engine choice |
+| Build | Tectonic | Disable builds; installed pdfLaTeX, XeLaTeX or LuaLaTeX |
 | Editor intelligence | TexLab | Disable the service, completion, hover, or its diagnostics separately |
 | Formatting | Badness | tex-fmt or disabled; only one formatter at a time |
 | Linting | Badness | Independently enabled, even with TexLab or formatting disabled |
@@ -21,12 +21,14 @@ Windows ARM release: that target uses its official Windows x64 executable.
 
 ## Builds and publication
 
-Tectonic's finite build adapter owns a private source mirror and output directory
+The shared TeX finite-build adapter owns a private source mirror and output directory
 below the project's `.tiptoptyp`, along with the child process and its logs.
 The main buffer overlays its on-disk entry; included files remain disk-backed,
 matching the existing Typst policy. Relative paths retain project layout. Build
 outputs must never overwrite the user's PDF, source or auxiliary files.
-Tectonic manages the TeX/BibTeX reruns; the app does not invent a pass count.
+Tectonic manages TeX/BibTeX reruns. System engines have their own argument builder
+and run two passes, with a third when the log requests a reference rerun. Automatic
+BibTeX/Biber orchestration for system engines is not implemented.
 Shell escape is disabled. Package downloads are allowed by default, with an
 independent cached-packages-only setting. Private outputs live until the build
 session is retired, and canonical PDF bytes are snapshotted before cleanup.
@@ -34,9 +36,17 @@ session is retired, and canonical PDF bytes are snapshotted before cleanup.
 Edits replace queued builds. Switching engines, roots or settings retires the
 previous child. Failed or cancelled builds cannot publish an earlier PDF.
 The existing compiler publication, artifact-generation and PDFium paths remain
-responsible for preview/export. Standard LaTeX has a typed settings slot and a
-clear unsupported result, without pretending that a different executable can
-reuse Tectonic's command line. SyncTeX navigation is separate future work.
+responsible for preview/export. Installed system engines are resolved on PATH or
+at MacTeX's stable `/Library/TeX/texbin` link. Settings paint reads that cached
+resolution; refreshing tools updates it.
+
+All engines request SyncTeX output. Its bounded map is retained alongside the PDF
+before retiring the private directory. One coalescing background job invokes the
+installed `synctex` utility (also detected at the MacTeX link), with a ten-second
+and one-MiB output limit. Forward and inverse results are admitted only for the
+same PDF generation and preview path. Mirrored input paths map back to real files.
+Navigation does not rebuild a document. The utility is not bundled: Tectonic
+users also need an installed SyncTeX command for source/PDF navigation.
 
 ## Editor services
 
@@ -80,7 +90,8 @@ disk, with saves and explicit builds triggering a refresh; external dependency
 watching and multi-buffer overlays remain future work. Build diagnostics retain
 raw output, and known fatal wrapper messages become details of the located error.
 TexLab can publish unversioned diagnostics under LSP; those are accepted only for
-the current URI/session and cleared on edits. Versioned diagnostics reject older
+the current URI/session. Edits retain stale annotations until their replacements
+arrive. Versioned diagnostics reject older
 versions. Every formatting/completion/hover response has an exact request key.
 
 The pinned real sidecars are Tectonic 0.17.0, TexLab 5.26.0, Badness 0.24.0 and
@@ -131,3 +142,13 @@ warmup and five samples with Rust 1.98.1, Typst 0.15.1 and the same fixture on
 macOS 14.6.1 arm64. This is a headless compiler-worker observation, not a GUI or
 cross-platform performance guarantee. No material Typst performance regression
 was observed. New TeX services have no pre-existing runtime baseline.
+
+
+## 2026-09-25 system-engine and SyncTeX coverage
+
+The opt-in `installed_engines_build_and_synctex_round_trip_after_private_mirror_is_removed`
+test compiles unsaved source with all three installed system engines, removes the
+private build mirror, and checks both directions of navigation. The Tectonic
+build/error/recovery test now also resolves a location from its emitted SyncTeX map.
+These checks passed with the installed macOS arm64 tools. No system-engine
+bibliography support or other-platform runtime coverage is claimed.

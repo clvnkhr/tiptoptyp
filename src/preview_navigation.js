@@ -70,6 +70,7 @@
       if (doc.partialRendering && (input.demand || input.resize || input.zoom)) {
         doc.addViewportChange();
       }
+      updateControls();
     });
   };
   const zoom = (doc, factor, reset = false, point = {}) => enqueue(doc, input => {
@@ -113,13 +114,9 @@
     return true;
   };
 
-  // The native WebView is above egui's framebuffer, so its controls must be
-  // drawn inside the WebView rather than in a root-window egui Area.
-  let controls;
-  let expanded = false;
-  let outline = [];
-  let indexedOutline = [];
-  let searchText = '';
+  // UI lives in the shared native controls window. This adapter only reports
+  // geometry and carries out viewer actions; no parallel HTML toolbar.
+  let lastState = '';
   const back = [];
   const forward = [];
   const pushHistory = (history, value) => {
@@ -132,7 +129,11 @@
     const scroll = scrollElement();
     return scroll ? { top: scroll.scrollTop, left: scroll.scrollLeft } : null;
   };
-  const restore = value => scrollElement()?.scrollTo(value.left, value.top);
+  const restore = value => {
+    const doc = documentRenderer();
+    doc?.clearSvgResizeAnchor();
+    scrollElement()?.scrollTo({left:value.left,top:value.top,behavior:'instant'});
+  };
   const prepareHistory = () => {
     const current = position();
     pendingNavigation = current ? { ...current, at: performance.now() } : null;
@@ -160,194 +161,69 @@
     scroll.scrollTo({ top, behavior: 'instant' });
     updateControls();
   };
-  const button = (label, title, action) => {
-    const element = document.createElement('button');
-    element.type = 'button';
-    element.textContent = label;
-    element.title = title;
-    element.addEventListener('click', action);
-    return element;
-  };
   const updateControls = () => {
-    if (!controls) return;
-    const all = pages();
-    controls.querySelector('[data-page]').value = String(currentPage() + 1);
-    controls.querySelector('[data-count]').textContent = `/ ${all.length}`;
-    controls.querySelector('[data-zoom]').textContent = `${Math.round((documentRenderer()?.currentScaleRatio ?? 1) * 100)}%`;
-    controls.querySelector('[data-back]').disabled = back.length === 0;
-    controls.querySelector('[data-forward]').disabled = forward.length === 0;
-    controls.classList.toggle('expanded', expanded);
-    controls.querySelector('[data-open]').hidden = expanded;
-    controls.querySelector('[data-full]').hidden = !expanded;
-    controls.style.left = `${Math.max(0, Math.min(innerWidth - controls.offsetWidth, controls.offsetLeft))}px`;
-    controls.style.top = `${Math.max(0, Math.min(innerHeight - controls.offsetHeight, controls.offsetTop))}px`;
+    const state = JSON.stringify({ type: 'preview-state', page: currentPage(), count: pages().length,
+      zoom: documentRenderer()?.currentScaleRatio ?? 1, back: back.length > 0, forward: forward.length > 0 });
+    if (state !== lastState) { lastState = state; window.ipc?.postMessage(state); }
   };
-  const mountControls = () => {
-    if (controls || !document.body) return;
-    const style = document.createElement('style');
-    style.textContent = `
-      #typst-container-top { display: none !important; }
-      #tiptoptyp-preview-controls { position: fixed; left: 12px; top: 12px; z-index: 2147483647;
-        font: 13px -apple-system, BlinkMacSystemFont, sans-serif; color: var(--vscode-menu-foreground, #26303b);
-        background: var(--vscode-menu-background, #fff); border: 1px solid var(--vscode-menu-border, #b7c3cc);
-        border-radius: 6px; box-shadow: 0 3px 14px #0003; padding: 2px; max-width: calc(100vw - 24px); }
-      #tiptoptyp-preview-controls button { color: inherit; background: transparent; border: 0;
-        border-radius: 4px; padding: 5px 7px; cursor: pointer; font: inherit; }
-      #tiptoptyp-preview-controls button:hover { background: #8883; }
-      #tiptoptyp-preview-controls button:disabled { opacity: .4; cursor: default; }
-      #tiptoptyp-preview-controls button[data-open] { width: 22px; height: 22px; padding: 0;
-        display: grid; place-items: center; }
-      #tiptoptyp-preview-controls .menu-glyph { width: 12px; height: 12px; box-sizing: border-box;
-        display: flex; flex-direction: column; justify-content: space-between; padding: 1.8px 1.44px; }
-      #tiptoptyp-preview-controls .menu-glyph span { flex: 0 0 1.2px; height: 1.2px;
-        border-radius: .6px; background: currentColor; }
-      #tiptoptyp-preview-controls input { font: inherit; color: inherit; background: transparent;
-        border: 1px solid #8886; border-radius: 4px; padding: 3px 5px; }
-      #tiptoptyp-preview-controls [data-full] { width: max-content; max-width: 100%; }
-      #tiptoptyp-preview-controls .row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; }
-      #tiptoptyp-preview-controls .handle { cursor: move; user-select: none; touch-action: none; }
-      #tiptoptyp-preview-controls .outline { max-height: 220px; overflow: auto; display: none; }
-      #tiptoptyp-preview-controls .outline.open { display: block; }
-      #tiptoptyp-preview-controls .outline button { display: block; text-align: left; width: 100%; }
-    `;
-    document.head.append(style);
-    controls = document.createElement('div');
-    controls.id = 'tiptoptyp-preview-controls';
-    const opener = button('', 'Preview controls', () => { if (!controls.dataset.dragged) { expanded = true; updateControls(); } });
-    opener.dataset.open = '';
-    opener.className = 'handle';
-    const menuGlyph = document.createElement('span');
-    menuGlyph.className = 'menu-glyph';
-    menuGlyph.setAttribute('aria-hidden', 'true');
-    for (let index = 0; index < 3; index++) menuGlyph.append(document.createElement('span'));
-    opener.append(menuGlyph);
-    controls.append(opener);
-    const full = document.createElement('div');
-    full.dataset.full = '';
-    const header = document.createElement('div');
-    header.className = 'row handle';
-    header.append(button('−', 'Minimize preview controls', () => { expanded = false; updateControls(); }));
-    const title = document.createElement('span');
-    title.textContent = 'Preview';
-    header.append(title);
-    const outlineBox = document.createElement('div'); outlineBox.className = 'outline';
-    header.append(button('Outline', 'Document outline', () => {
-      outlineBox.classList.toggle('open');
-      renderOutline();
-    }));
-    full.append(header);
-    const row = document.createElement('div');
-    row.className = 'row';
-    const backButton = button('←', 'Back', () => {
-      const target = back.pop();
-      const here = position();
-      if (target && here) { pendingNavigation = null; pushHistory(forward, here); restore(target); updateControls(); }
-    });
-    backButton.dataset.back = '';
-    row.append(backButton);
-    const forwardButton = button('→', 'Forward', () => {
-      const target = forward.pop();
-      const here = position();
-      if (target && here) { pendingNavigation = null; pushHistory(back, here); restore(target); updateControls(); }
-    });
-    forwardButton.dataset.forward = '';
-    row.append(forwardButton);
-    row.append(button('‹', 'Previous page', () => gotoPage(Math.max(0, currentPage() - 1))));
-    const pageInput = document.createElement('input');
-    pageInput.type = 'number'; pageInput.min = '1'; pageInput.style.width = '3.5em'; pageInput.dataset.page = '';
-    pageInput.addEventListener('change', () => gotoPage(Math.max(0, Number(pageInput.value) - 1)));
-    row.append(pageInput);
-    const count = document.createElement('span'); count.dataset.count = ''; row.append(count);
-    row.append(button('›', 'Next page', () => gotoPage(Math.min(pages().length - 1, currentPage() + 1))));
-    row.append(button('−', 'Zoom out', () => command('out')));
-    row.append(button('+', 'Zoom in', () => command('in')));
-    row.append(button('↔', 'Fit page width', () => command('reset')));
-    const zoomLabel = document.createElement('span'); zoomLabel.dataset.zoom = ''; row.append(zoomLabel);
-    full.append(row);
-    const findRow = document.createElement('div'); findRow.className = 'row';
-    const findInput = document.createElement('input'); findInput.placeholder = 'Find source text';
-    findInput.title = 'Find Typst source text and reveal its position in the preview';
-    findInput.setAttribute('aria-label', 'Find in preview');
-    findInput.addEventListener('input', () => { searchText = findInput.value; });
-    findInput.addEventListener('keydown', event => { if (event.key === 'Enter') findNext(); });
-    findRow.append(findInput, button('Find next', 'Find next matching page', findNext));
-    full.append(findRow, outlineBox);
-    controls.append(full);
-    document.body.append(controls);
-    const startDrag = event => {
-      if (event.target.closest('input') || (event.target.closest('button') && event.target !== opener)) return;
-      const startX = event.clientX, startY = event.clientY;
-      const left = controls.offsetLeft, top = controls.offsetTop;
-      controls.dataset.dragged = '';
-      const move = point => {
-        if (Math.abs(point.clientX - startX) + Math.abs(point.clientY - startY) > 3) controls.dataset.dragged = 'yes';
-        controls.style.left = `${Math.max(0, Math.min(innerWidth - controls.offsetWidth, left + point.clientX - startX))}px`;
-        controls.style.top = `${Math.max(0, Math.min(innerHeight - controls.offsetHeight, top + point.clientY - startY))}px`;
-      };
-      const end = () => {
-        window.removeEventListener('pointermove', move);
-        window.removeEventListener('pointerup', end);
-        setTimeout(() => { delete controls.dataset.dragged; }, 0);
-      };
-      window.addEventListener('pointermove', move);
-      window.addEventListener('pointerup', end, { once: true });
-    };
-    header.addEventListener('pointerdown', startDrag);
-    opener.addEventListener('pointerdown', startDrag);
+  window.tiptoptypPreviewAction = ({ action, value }) => {
+    if (action === 'zoom-in') command('in');
+    else if (action === 'zoom-out') command('out');
+    else if (action === 'fit') command('reset');
+    else if (action === 'page') gotoPage(value);
+    else if (action === 'location') {
+      const doc = documentRenderer();
+      if (doc && Number.isFinite(value?.page) && Number.isFinite(value?.x) && Number.isFinite(value?.y)) {
+        prepareHistory();
+        doc.windowElem.handleTypstLocation?.(doc.hookedElem.firstElementChild,value.page+1,value.x,value.y);
+      }
+    }
+    else if (action === 'find' || action === 'outline') prepareHistory();
+    else if (action === 'back' || action === 'forward') {
+      const from = action === 'back' ? back : forward;
+      const to = action === 'back' ? forward : back;
+      const target = from.pop(), here = position();
+      if (target && here) { pendingNavigation = null; pushHistory(to,here); restore(target); }
+    }
     updateControls();
   };
-  const findNext = () => {
-    if (!searchText) return;
-    if (window.ipc?.postMessage) {
-      prepareHistory();
-      window.ipc.postMessage(JSON.stringify({ type: 'find', query: searchText }));
-      return;
-    }
-    if (typeof window.find === 'function' && window.find(searchText, false, false, true)) return;
-    const all = pages();
-    const from = currentPage();
-    for (let offset = 1; offset <= all.length; offset++) {
-      const page = (from + offset) % all.length;
-      if (all[page].textContent.toLocaleLowerCase().includes(searchText.toLocaleLowerCase())) {
-        gotoPage(page);
-        return;
+  let palette = [[255,255,255],[0,0,0]];
+  let filter;
+  const applyPalette = () => {
+    if (!document.body) return;
+    if (!filter) {
+      const namespace = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(namespace,'svg');
+      svg.style.cssText = 'position:absolute;width:0;height:0;pointer-events:none';
+      filter = document.createElementNS(namespace,'filter');
+      filter.id = 'tiptoptyp-palette';
+      filter.setAttribute('color-interpolation-filters','sRGB');
+      const transfer = document.createElementNS(namespace,'feComponentTransfer');
+      for (const channel of ['R','G','B']) {
+        const component = document.createElementNS(namespace,`feFunc${channel}`);
+        component.setAttribute('type','linear'); transfer.append(component);
       }
+      filter.append(transfer); svg.append(filter); document.body.append(svg);
     }
+    const [bg,fg] = palette;
+    [...filter.firstElementChild.children].forEach((channel,index) => {
+      channel.setAttribute('slope',String((bg[index]-fg[index])/255));
+      channel.setAttribute('intercept',String(fg[index]/255));
+    });
+    const container = document.getElementById('typst-container');
+    if (container) container.style.filter = 'url(#tiptoptyp-palette)';
+    document.body.style.background = `rgb(${bg.join(',')})`;
   };
-  const renderOutline = () => {
-    const box = controls?.querySelector('.outline');
-    if (!box || !box.classList.contains('open')) return;
-    box.replaceChildren();
-    const visit = (items, depth = 0) => {
-      for (const item of items) {
-        const label = item.title ?? item.label ?? item.body ?? '';
-        const page = item.page ?? item.pageNo ?? item.position?.page;
-        if (label && (Number.isFinite(Number(page)) || item.path)) {
-          const entry = button(String(label), 'Go to heading', () => {
-            if (item.path && window.ipc?.postMessage) {
-              prepareHistory();
-              window.ipc.postMessage(JSON.stringify({ type: 'outline', path: item.path, line: item.line }));
-            } else if (Number.isFinite(Number(page))) gotoPage(Number(page));
-          });
-          entry.style.paddingLeft = `${8 + (item.level ? item.level - 1 : depth) * 12}px`;
-          box.append(entry);
-        }
-        if (Array.isArray(item.children)) visit(item.children, depth + 1);
-      }
-    };
-    visit(indexedOutline.length ? indexedOutline : outline);
-    if (!box.childElementCount) box.textContent = 'No outline available';
+  window.tiptoptypSetPalette = (bg,fg) => { palette = [bg,fg]; applyPalette(); };
+  const mount = () => {
+    const style = document.createElement('style');
+    style.textContent = '#typst-container-top { display: none !important; }';
+    document.head.append(style);
+    applyPalette();
+    updateControls();
+    const container = document.getElementById('typst-container');
+    if (container) new MutationObserver(updateControls).observe(container,{ childList:true, subtree:true });
   };
-  window.tiptoptypSetOutline = entries => {
-    indexedOutline = Array.isArray(entries) ? entries : [];
-    renderOutline();
-  };
-  window.addEventListener('message', event => {
-    if (event.data?.type === 'outline') {
-      outline = Array.isArray(event.data.outline) ? event.data.outline : [];
-      renderOutline();
-    }
-  }, true);
   document.addEventListener('click', event => {
     const anchor = event.target.closest?.('a');
     if (!anchor) return;
@@ -360,8 +236,8 @@
     if (!internal) return;
     prepareHistory();
   }, true);
-  document.addEventListener('DOMContentLoaded', mountControls);
-  if (document.readyState !== 'loading') mountControls();
+  document.addEventListener('DOMContentLoaded', mount);
+  if (document.readyState !== 'loading') mount();
   const recordNavigationScroll = () => {
     const now = position();
     if (pendingNavigation && performance.now() - pendingNavigation.at < 2000 && now &&
@@ -374,8 +250,14 @@
   };
   window.addEventListener('tiptoptyp-preview-zoom', event => command(event.detail));
   window.addEventListener('keydown', event => {
-    if (!(event.metaKey || event.ctrlKey) ||
-        event.target?.closest?.('input, textarea, [contenteditable]')) return;
+    if (event.target?.closest?.('input, textarea, [contenteditable]')) { event.stopImmediatePropagation(); return; }
+    if (!event.metaKey && !event.ctrlKey && !event.altKey && event.key === 't') {
+      event.preventDefault(); event.stopImmediatePropagation();
+      palette = [palette[1],palette[0]]; applyPalette();
+      window.ipc?.postMessage(JSON.stringify({type:'invert-preview'}));
+      return;
+    }
+    if (!(event.metaKey || event.ctrlKey)) return;
     const action = event.key === '=' || event.key === '+' ? 'in'
       : event.key === '-' ? 'out' : event.key === '0' ? 'reset' : null;
     if (!action || !command(action)) return;

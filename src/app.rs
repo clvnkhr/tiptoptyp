@@ -56,11 +56,14 @@ mod workspace_view;
 use lifecycle::DocumentLifecycle;
 mod native_views;
 mod pdfium_view;
+mod preview_controls;
 mod preview_follow;
+mod preview_palette;
 mod settings_panel;
 mod settings_view;
 mod settings_window;
 mod shortcut_editor;
+mod synctex;
 mod tooltips;
 use find_bar::FindBarState;
 use settings_window::SettingsWindow;
@@ -144,7 +147,7 @@ use crate::{
     screenshot::{CaptureController, CaptureThemeProfile, UiCaptureStep, UiSnapshotScene},
     settings::{
         AppSettings, ColorThemeChoice, DEFAULT_UI_FONT_WEIGHT, DEFAULT_UI_SCALE_PERCENT,
-        DocumentTheme, PreviewPreference, SourcePreviewTrigger, normalize_workspace_root,
+        PreviewPreference, SourcePreviewTrigger, normalize_workspace_root,
     },
     shortcuts::{
         ShortcutAction, ShortcutBindings, ShortcutChord, ShortcutPlatform, consume_shortcut_action,
@@ -199,32 +202,12 @@ const ASSET_HOVER_LOADING_SIZE: Vec2 = Vec2::new(260.0, 112.0);
 const ASSET_HOVER_ERROR_SIZE: Vec2 = Vec2::new(360.0, 144.0);
 const WIDGET_PASTE_ADMISSION_FRAME_BUDGET: u64 = 8;
 
-fn tinymist_invert_colors(document_theme: DocumentTheme, preview_dark: bool) -> InvertColors {
-    match document_theme {
-        DocumentTheme::FollowInterface => {
-            if preview_dark {
-                InvertColors::Always
-            } else {
-                InvertColors::Never
-            }
-        }
-        DocumentTheme::Light => InvertColors::Never,
-        DocumentTheme::Dark => InvertColors::Always,
-    }
-}
-
 fn tinymist_restart_required(
-    document_theme_mode_changed: bool,
-    preview_appearance_changed: bool,
     preview_preference_changed: bool,
     tinymist_program_changed: bool,
     refresh_tools: bool,
 ) -> bool {
-    document_theme_mode_changed
-        || preview_appearance_changed
-        || preview_preference_changed
-        || tinymist_program_changed
-        || refresh_tools
+    preview_preference_changed || tinymist_program_changed || refresh_tools
 }
 
 fn may_create_embedded_webview(prevent_background_activation: bool, focused: Option<bool>) -> bool {
@@ -1061,7 +1044,9 @@ impl SettingsTarget {
             Self::ThemeColors => {
                 "theme colors colours invert inversion hue shift luminosity lightness brightness contrast saturation reset"
             }
-            Self::PageTheme => "document light dark follow interface effective",
+            Self::PageTheme => {
+                "document light dark follow interface effective comfy preview page text"
+            }
             Self::WrapLines => "editor soft wrapping",
             Self::LineNumbers => "editor gutter",
             Self::StickyContextRows => "editor headings scopes sections breadcrumbs",
@@ -1101,7 +1086,7 @@ impl SettingsTarget {
             Self::HoverDelay => "editor tooltip wait milliseconds timing",
             Self::TypstCompiler => "tools binary custom bundled path",
             Self::TexServices => {
-                "TeX tools: Tectonic, TexLab, Badness, tex-fmt; build, completion, hover, diagnostics, formatting, linting"
+                "TeX tools: Tectonic, pdfLaTeX, XeLaTeX, LuaLaTeX, MacTeX, SyncTeX, TexLab, Badness, tex-fmt; build, completion, hover, diagnostics, formatting, linting"
             }
             Self::TinymistLanguageServer => "tools binary lsp custom bundled path",
             Self::RefreshBinaryStatus => "tools rescan reload",
@@ -1283,6 +1268,8 @@ pub struct EditorApp {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     webview_url: Option<String>,
     #[cfg(any(target_os = "macos", target_os = "windows"))]
+    webview_parent: Option<egui::ViewportId>,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     webview_reload_pending: bool,
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     webview_navigation: Option<Arc<Mutex<PreviewNavigationContext>>>,
@@ -1292,12 +1279,14 @@ pub struct EditorApp {
     web_action_sender: mpsc::Sender<String>,
     pdfium_preview: pdfium_view::PdfiumView,
     pdfium_asset: pdfium_view::PdfiumView,
+    preview_controls: preview_controls::Controls,
+    synctex: synctex::State,
     web_link_receiver: mpsc::Receiver<String>,
     web_action_receiver: mpsc::Receiver<String>,
     web_search_query: String,
     web_search_offset: usize,
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    webview_outline_snapshot: Option<Vec<crate::project_index::OutlineEntry>>,
+    webview_palette: Option<(Color32, Color32)>,
     browser_launch: Option<mpsc::Receiver<Result<String, String>>>,
     browser_repaint: crate::worker::RepaintTarget,
 }
@@ -1583,6 +1572,8 @@ impl EditorApp {
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             webview_url: None,
             #[cfg(any(target_os = "macos", target_os = "windows"))]
+            webview_parent: None,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             webview_reload_pending: false,
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             webview_navigation: None,
@@ -1592,12 +1583,14 @@ impl EditorApp {
             web_action_sender,
             pdfium_preview: pdfium_view::PdfiumView::default(),
             pdfium_asset: pdfium_view::PdfiumView::default(),
+            preview_controls: Default::default(),
+            synctex: Default::default(),
             web_link_receiver,
             web_action_receiver,
             web_search_query: String::new(),
             web_search_offset: 0,
             #[cfg(any(target_os = "macos", target_os = "windows"))]
-            webview_outline_snapshot: None,
+            webview_palette: None,
             browser_launch: None,
             browser_repaint: crate::worker::RepaintTarget::new(context, viewport),
         };
@@ -1751,7 +1744,9 @@ impl EditorApp {
             }
             CommandRequirement::SourcePreview => self.source_preview_available(),
             CommandRequirement::InteractivePreview => {
-                self.document().kind().is_typst() && self.interactive_preview_active()
+                (self.document().kind().is_typst() && self.interactive_preview_active())
+                    || (self.document().kind() == DocumentKind::Tex
+                        && self.synctex.artifact.is_some())
             }
         }
     }
@@ -1898,6 +1893,7 @@ impl EditorApp {
         frame: Option<&eframe::Frame>,
     ) {
         let _span = crate::performance::span("host.dormant.logic");
+        self.restore_preview_window(context);
         ChildViewHost::dormant_owner(context);
         self.process_open_requests(context);
         self.execute_pending_document_action(context, frame);
@@ -2917,9 +2913,16 @@ impl EditorApp {
         }
         let other_text_input_focused = shortcut_viewport
             == scoped_child_viewport_id(context, find_bar::VIEWPORT_SALT)
+            || shortcut_viewport == scoped_child_viewport_id(context, preview_controls::SALT)
+            || shortcut_viewport
+                == crate::child_view::child_viewport_id(
+                    scoped_child_viewport_id(context, "preview-window"),
+                    preview_controls::SALT,
+                )
             || (!source_focused && context.egui_wants_keyboard_input());
-        let can_sync_preview =
-            self.document().kind().is_typst() && self.interactive_preview_active();
+        let can_sync_preview = (self.document().kind().is_typst()
+            && self.interactive_preview_active())
+            || (self.document().kind() == DocumentKind::Tex && self.synctex.artifact.is_some());
         let find_viewport = scoped_child_viewport_id(context, find_bar::VIEWPORT_SALT);
         let global_command = context.input_mut_for(shortcut_viewport, |input| {
             consume_shortcut(input, &shortcuts, |command| {
@@ -2940,7 +2943,13 @@ impl EditorApp {
             })
         });
         if let Some(command) = global_command {
-            self.execute_app_command(command, context, frame);
+            if command == AppCommand::CloseTab
+                && shortcut_viewport == scoped_child_viewport_id(context, "preview-window")
+            {
+                self.restore_preview_window(context);
+            } else {
+                self.execute_app_command(command, context, frame);
+            }
         }
         if shortcuts
             .egui(ShortcutAction::Compile)
@@ -3223,7 +3232,7 @@ impl EditorApp {
             }
             AppCommand::New => self.new_document(),
             AppCommand::NewFromTemplate => self.template_picker = Some(0),
-            AppCommand::ComfyDocument => self.toggle_comfy(context),
+            AppCommand::ComfyPreview => self.toggle_comfy(context),
             AppCommand::NewWindow => {
                 self.pending_window_requests
                     .push_back(EditorWindowRequest::New {
@@ -3285,8 +3294,14 @@ impl EditorApp {
                 context.request_repaint();
             }
             AppCommand::Code => self.view_mode = ViewMode::Code,
-            AppCommand::Split => self.view_mode = ViewMode::Split,
-            AppCommand::Preview => self.view_mode = ViewMode::Preview,
+            AppCommand::Split => {
+                self.restore_preview_window(context);
+                self.view_mode = ViewMode::Split;
+            }
+            AppCommand::Preview => {
+                self.restore_preview_window(context);
+                self.view_mode = ViewMode::Preview;
+            }
         }
     }
 
@@ -3300,7 +3315,13 @@ impl EditorApp {
             if self.route_edit_command_to_focused_widget(command, context, focused_viewport) {
                 continue;
             }
-            self.execute_app_command(command, context, frame);
+            if command == AppCommand::CloseTab
+                && focused_viewport == scoped_child_viewport_id(context, "preview-window")
+            {
+                self.restore_preview_window(context);
+            } else {
+                self.execute_app_command(command, context, frame);
+            }
         }
     }
 
@@ -3327,10 +3348,42 @@ impl EditorApp {
         }
         let focused = context.memory(|memory| memory.focused());
         let find_child = viewport == scoped_child_viewport_id(context, find_bar::VIEWPORT_SALT);
+        let controls_child = viewport == scoped_child_viewport_id(context, preview_controls::SALT)
+            || viewport
+                == crate::child_view::child_viewport_id(
+                    scoped_child_viewport_id(context, "preview-window"),
+                    preview_controls::SALT,
+                );
         if !find_child
+            && !controls_child
             && (focused == Some(source_editor_id(context)) || !context.egui_wants_keyboard_input())
         {
             return false;
+        }
+        if (find_child || controls_child) && viewport != context.viewport_id() {
+            let event = match command {
+                AppCommand::Cut => Some(egui::Event::Cut),
+                AppCommand::Copy => Some(egui::Event::Copy),
+                AppCommand::Undo | AppCommand::Redo | AppCommand::SelectAll => {
+                    standard_text_edit_shortcut(command).map(|shortcut| egui::Event::Key {
+                        key: shortcut.logical_key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: shortcut.modifiers,
+                    })
+                }
+                _ => None,
+            };
+            if let Some(event) = event {
+                if find_child {
+                    self.find_bar.edit_events.push(event);
+                } else {
+                    self.preview_controls.edit_events.push(event);
+                }
+                context.request_repaint_of(viewport);
+                return true;
+            }
         }
         match command {
             AppCommand::Cut => context.input_mut_for(viewport, |input| {
@@ -3356,7 +3409,7 @@ impl EditorApp {
             // Source-only editing commands must not mutate the document while
             // a find, settings, rename, package, or table field owns focus.
             AppCommand::ToggleComment
-            | AppCommand::ComfyDocument
+            | AppCommand::ComfyPreview
             | AppCommand::Format
             | AppCommand::NewTable
             | AppCommand::EditTable => {}
@@ -3631,12 +3684,9 @@ impl EditorApp {
             self.capabilities.invalidate();
         }
 
-        // A system appearance event changes the effective preview palette when
-        // the document follows the interface, so refresh Tinymist as well as
-        // the raster-page textures.
+        // Appearance changes update the local preview palette. Only a changed
+        // service/backend configuration requires replacing Tinymist.
         if tinymist_restart_required(
-            changes.document_theme,
-            preview_appearance_changed,
             changes.preview_preference,
             tinymist_program_changed,
             refresh_tools,
@@ -3644,7 +3694,6 @@ impl EditorApp {
             self.restart_tinymist();
             self.schedule_compile_now();
         }
-        self.refresh_comfy_theme(context);
         self.presentation.commit(request);
     }
 
@@ -4038,7 +4087,7 @@ impl EditorApp {
         }
         self.workspace_root = root.clone();
         self.explorer.clear_selection();
-        self.tabs.current_record_mut().workspace = root.clone();
+        self.tabs.set_workspace(&root);
         self.workspace = None;
         self.workspace_error = None;
         self.request_workspace_scan(root.clone());
@@ -4176,7 +4225,6 @@ impl EditorApp {
             });
         let keep_designated_preview =
             !adopt_source_preview && self.should_keep_designated_preview(&path);
-        let workspace_root_changed = !path.starts_with(&self.workspace_root);
         let preserve_workspace_snapshot = preserve_workspace_snapshot_for_open(
             self.workspace.as_ref().map(WorkspaceTree::root),
             &self.workspace_root,
@@ -4194,9 +4242,6 @@ impl EditorApp {
         }
         if (retain_tex || self.settings.mitex_auto_enable) && kind.is_typst() {
             self.activate_preferred_tex();
-        }
-        if workspace_root_changed && let Some(parent) = path.parent() {
-            self.workspace_root = canonical_or_absolute(&discover_project_root(parent));
         }
         let workspace_root = self.workspace_root.clone();
         self.tabs.current_record_mut().workspace = workspace_root.clone();
@@ -4655,12 +4700,10 @@ impl EditorApp {
         );
         if !reusable
             && self.preview_document_kind() == DocumentKind::Tex
-            && (!self.settings.tex.build_enabled
-                || self.settings.tex.build_engine == crate::tex::settings::BuildEngine::Latex)
+            && !self.settings.tex.build_enabled
         {
             self.notice = Some(Notice {
-                message: "Enable Tectonic builds in Settings → Tools before creating this PDF"
-                    .into(),
+                message: "Enable TeX builds in Settings → Tools before creating this PDF".into(),
                 kind: NoticeKind::Info,
             });
             return;
@@ -5225,6 +5268,7 @@ impl EditorApp {
         self.format_request_key = None;
         self.editor_completion = None;
         let start_preview = self.interactive_preview_requested();
+        self.preview_controls.native_outline.clear();
         self.preview.tinymist_preview_enabled = start_preview;
         self.stop_tinymist_session_io();
         #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -5305,11 +5349,7 @@ impl EditorApp {
         }
         config.command = self.tinymist_tool.command.clone();
         config.start_preview = start_preview;
-        config.preview.invert_colors = if self.preview_comfy() {
-            InvertColors::Never
-        } else {
-            tinymist_invert_colors(self.settings.document_theme, self.preview.dark)
-        };
+        config.preview.invert_colors = InvertColors::Never;
         config.preview.refresh = tinymist_preview_refresh(self.compilation_paused);
         let source = match self.canonical_document_source() {
             Ok(source) => source,
@@ -5525,6 +5565,16 @@ impl EditorApp {
                             .compile_status(generation, path, status, received);
                         self.preview_follow.compiled(generation, status, received);
                     }
+                }
+                TinymistEvent::Notification {
+                    method,
+                    params,
+                    generation,
+                } if method == "tinymist/documentOutline"
+                    && self.tinymist_sync.generation == Some(generation)
+                    && self.preview.recovery.accepts(generation) =>
+                {
+                    self.preview_controls.set_outline(&params)
                 }
                 TinymistEvent::Initialized { generation } => {
                     if !self.preview.initialized(generation) {
@@ -5766,10 +5816,29 @@ impl EditorApp {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(action) else {
             return;
         };
+        if value.get("type").and_then(|v| v.as_str()) == Some("preview-state") {
+            if let Ok(snapshot) = serde_json::from_value(value) {
+                self.preview_controls.web = snapshot;
+            }
+            return;
+        }
         let Some(generation) = self.tinymist_sync.generation else {
             return;
         };
         match value.get("type").and_then(|value| value.as_str()) {
+            Some("invert-preview") => {
+                self.preview.dark = !self.preview.dark;
+                let mut edited = self
+                    .pending_settings
+                    .clone()
+                    .unwrap_or_else(|| self.settings.clone());
+                edited.document_theme = if self.preview.dark {
+                    crate::settings::DocumentTheme::Dark
+                } else {
+                    crate::settings::DocumentTheme::Light
+                };
+                self.pending_settings = Some(edited);
+            }
             Some("find") => {
                 let Some(query) = value.get("query").and_then(|value| value.as_str()) else {
                     return;
@@ -5796,25 +5865,6 @@ impl EditorApp {
                     self.preview_document_path(),
                     line,
                     column,
-                );
-            }
-            Some("outline") => {
-                let Some(path) = value.get("path").and_then(|value| value.as_str()) else {
-                    return;
-                };
-                let Some(line) = value.get("line").and_then(|value| value.as_u64()) else {
-                    return;
-                };
-                let Some(entry) = self.project_index.outline.iter().find(|entry| {
-                    entry.path.to_string_lossy() == path && entry.line as u64 == line
-                }) else {
-                    return;
-                };
-                let _ = self.tinymist.scroll_preview(
-                    generation,
-                    entry.path.clone(),
-                    tiptoptyp_core::text::LineIndex::new(entry.line.saturating_sub(1) as u32),
-                    tiptoptyp_core::text::ScalarColumn::new(0),
                 );
             }
             _ => {}
@@ -5932,8 +5982,22 @@ impl EditorApp {
     }
 
     fn jump_source_to_preview(&mut self, char_index: usize) {
+        self.jump_source_to_preview_with_mode(char_index, false);
+    }
+
+    fn jump_source_to_preview_with_mode(&mut self, char_index: usize, automatic: bool) {
         // An explicit jump takes precedence over any delayed edit-follow jump.
         self.preview_follow.clear();
+        if self.document().kind() == DocumentKind::Tex {
+            let (line, column) = line_column_at_char(self.document().source(), char_index);
+            if let Some(path) = self.document().path().clone() {
+                self.request_synctex(
+                    crate::synctex::Query::Source { path, line, column },
+                    automatic,
+                );
+            }
+            return;
+        }
         if !self.document().kind().is_typst() || !self.interactive_preview_active() {
             return;
         }
@@ -5973,6 +6037,9 @@ impl EditorApp {
     }
 
     fn preview_visible(&self) -> bool {
+        if self.preview_controls.popout.is_some() {
+            return !self.tabs.is_empty();
+        }
         !self.bottom_panel.is_maximized()
             && !self.tabs.is_empty()
             && preview_visible_for(
@@ -6330,6 +6397,18 @@ impl EditorApp {
                             "Use TeX inside dollar math. Saves standard MiTeX calls."
                         },
                     );
+                }
+                let response = icons::toolbar_button(
+                    ui,
+                    self.preview_controls_enabled(),
+                    self.preview_controls.open,
+                    UiIcon::Menu,
+                    "Preview controls",
+                    self.settings.toolbar_style,
+                    false,
+                );
+                if native_hover_text(response, "Show preview controls").clicked() {
+                    self.preview_controls.open = !self.preview_controls.open;
                 }
                 // Lay out the title last so it gets precisely the space left
                 // between the menus and the right-aligned control group.
@@ -7736,6 +7815,7 @@ impl EditorApp {
     }
 
     fn show_preview(&mut self, ui: &mut egui::Ui, frame: Option<&eframe::Frame>) {
+        self.preview_controls.available = Some(ui.available_rect_before_wrap());
         if self.document().kind().preview_only() && !self.source_preview_available() {
             self.hide_webview();
             self.show_asset_view(ui);
@@ -8554,7 +8634,9 @@ impl EditorApp {
             .set_visible(self.bottom_panel.selected() == Some(PanelTab::Terminal));
         let content_hidden = self.show_bottom_panel_container(ui);
         if content_hidden {
-            self.hide_webview();
+            if self.preview_controls.popout.is_none() {
+                self.hide_webview();
+            }
         } else {
             if self.explorer.panel_visible() {
                 let panel_id = explorer_panel_id(&context);
@@ -8596,7 +8678,11 @@ impl EditorApp {
                 self.tabs.is_empty(),
                 self.document().kind(),
                 self.source_preview_available(),
-                self.view_mode,
+                if self.preview_controls.popout.is_some() {
+                    ViewMode::Code
+                } else {
+                    self.view_mode
+                },
             );
             if !self.pdfium_preview_requested() {
                 self.pdfium_preview = Default::default();
@@ -8606,11 +8692,16 @@ impl EditorApp {
             }
             match content_view {
                 ContentView::Empty | ContentView::Source | ContentView::Asset => {
-                    self.hide_webview();
+                    if self.preview_controls.popout.is_none() {
+                        self.hide_webview();
+                    }
                     egui::CentralPanel::default()
                         .frame(theme::content_panel_frame(ui.style()))
                         .show(ui, |ui| match content_view {
                             ContentView::Empty => self.show_empty_workspace(ui, frame),
+                            ContentView::Asset if self.preview_controls.popout.is_some() => {
+                                ui.weak("Preview is open in its own window");
+                            }
                             ContentView::Asset => self.show_asset_view(ui),
                             _ => self.show_editor(ui),
                         });
@@ -8631,22 +8722,29 @@ impl EditorApp {
                             }
                         });
                     egui::CentralPanel::default()
-                        .frame(theme::content_panel_frame(ui.style()))
+                        .frame(theme::content_panel_frame(ui.style()).inner_margin(0.0))
                         .show(ui, |ui| self.show_preview(ui, frame));
                 }
                 ContentView::Preview => {
                     egui::CentralPanel::default()
-                        .frame(theme::content_panel_frame(ui.style()))
+                        .frame(theme::content_panel_frame(ui.style()).inner_margin(0.0))
                         .show(ui, |ui| self.show_preview(ui, frame));
                 }
             }
         }
+        let drop_id = viewport_scoped_id(&context, "explorer-source-drop");
+        context.data_mut(|data| data.remove::<(PathBuf, Pos2)>(drop_id));
+        self.poll_synctex(&context);
         self.update_writing_checks(&context);
         self.handle_dropped_file(&context);
         self.update_asset_hover(&context);
         self.refresh_diagnostic_tooltip(&context);
         self.focus_requested_tooltip(&context);
         self.show_app_popup_window(&context);
+        if self.preview_controls.popout.is_none() {
+            self.show_preview_controls(&context);
+        }
+        self.show_preview_window(&context);
         self.show_template_picker(&context);
         self.show_encoding_import(&context);
         self.show_rename_dialog(&context);
@@ -10400,11 +10498,16 @@ fn source_editor_id(context: &egui::Context) -> egui::Id {
     viewport_scoped_id(context, "tiptoptyp-source-editor")
 }
 
-fn owned_input_viewports(current: egui::ViewportId) -> [egui::ViewportId; 13] {
+fn owned_input_viewports(current: egui::ViewportId) -> [egui::ViewportId; 16] {
     use crate::child_view::child_viewport_id;
     [
-        current,
         child_viewport_id(current, find_bar::VIEWPORT_SALT),
+        child_viewport_id(current, preview_controls::SALT),
+        child_viewport_id(
+            child_viewport_id(current, "preview-window"),
+            preview_controls::SALT,
+        ),
+        child_viewport_id(current, "preview-window"),
         child_viewport_id(current, "tiptoptyp-packages"),
         child_viewport_id(current, "tiptoptyp-table-editor"),
         child_viewport_id(current, "tiptoptyp-rename-overlay"),
@@ -10416,6 +10519,7 @@ fn owned_input_viewports(current: egui::ViewportId) -> [egui::ViewportId; 13] {
         child_viewport_id(current, "asset-hover-overlay"),
         child_viewport_id(current, "tiptoptyp-popup-overlay"),
         child_viewport_id(current, "diagnostic-tooltip-overlay"),
+        current,
     ]
 }
 
@@ -10578,7 +10682,7 @@ fn source_mutating_command(command: AppCommand) -> bool {
             | AppCommand::Paste
             | AppCommand::ToggleComment
             | AppCommand::Format
-            | AppCommand::ComfyDocument
+            | AppCommand::ComfyPreview
             | AppCommand::NewTable
             | AppCommand::EditTable
     )

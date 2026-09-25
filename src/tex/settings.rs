@@ -6,8 +6,34 @@ use serde::{Deserialize, Serialize};
 pub(crate) enum BuildEngine {
     #[default]
     Tectonic,
-    /// Reserved explicitly for a future system LaTeX/latexmk adapter.
-    Latex,
+    PdfLatex,
+    XeLatex,
+    LuaLatex,
+}
+
+impl BuildEngine {
+    pub(crate) const ALL: [Self; 4] = [
+        Self::Tectonic,
+        Self::PdfLatex,
+        Self::XeLatex,
+        Self::LuaLatex,
+    ];
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Tectonic => "Tectonic",
+            Self::PdfLatex => "pdfLaTeX",
+            Self::XeLatex => "XeLaTeX",
+            Self::LuaLatex => "LuaLaTeX",
+        }
+    }
+    pub(crate) fn executable(self) -> &'static str {
+        match self {
+            Self::Tectonic => "tectonic",
+            Self::PdfLatex => "pdflatex",
+            Self::XeLatex => "xelatex",
+            Self::LuaLatex => "lualatex",
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

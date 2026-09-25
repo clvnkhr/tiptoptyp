@@ -22,7 +22,8 @@ const MAX_PDF: u64 = 256 * 1024 * 1024;
 const BUILD_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TectonicOptions {
+pub(crate) struct TexOptions {
+    pub(crate) engine: crate::tex::settings::BuildEngine,
     pub(crate) command: std::sync::Arc<crate::tool_command::CommandCustomization>,
     pub(crate) executable: PathBuf,
     pub(crate) only_cached: bool,
@@ -38,6 +39,10 @@ struct Session {
     root: PathBuf,
     source: String,
     started: Instant,
+    command: Command,
+    pass: u8,
+    standard: bool,
+    engine: crate::tex::settings::BuildEngine,
 }
 
 pub(super) struct Backend {
@@ -57,13 +62,13 @@ impl Backend {
     pub(super) fn submit(
         &mut self,
         request: &CompileRequest,
-        options: &TectonicOptions,
+        options: &TexOptions,
     ) -> Result<(), String> {
         self.session = None;
         self.started = false;
         self.session = Some(
             Session::start(request, options)
-                .map_err(|e| format!("Could not start Tectonic: {e}"))?,
+                .map_err(|e| format!("Could not start TeX build: {e}"))?,
         );
         self.started = true;
         Ok(())
@@ -87,9 +92,36 @@ impl Backend {
                 return Vec::new();
             }
             Ok(Some(status)) => Ok(status),
-            Ok(None) => Err("Tectonic exceeded the build time or log limit".to_owned()),
-            Err(error) => Err(format!("Could not wait for Tectonic: {error}")),
+            Ok(None) => Err("TeX build exceeded the build time or log limit".to_owned()),
+            Err(error) => Err(format!("Could not wait for TeX build: {error}")),
         };
+        if status.as_ref().is_ok_and(|status| status.success())
+            && session.standard
+            && session.pass < 3
+        {
+            let log = read_limited(&session.log, MAX_LOG).unwrap_or_default();
+            if session.pass == 1
+                || log.contains("Rerun to get")
+                || log.contains("Label(s) may have changed")
+            {
+                match crate::process::OwnedChild::spawn(&mut session.command) {
+                    Ok(child) => {
+                        session.child = child;
+                        session.pass += 1;
+                        return Vec::new();
+                    }
+                    Err(error) => {
+                        let result = EngineResult {
+                            revision: session.revision,
+                            elapsed: session.started.elapsed(),
+                            event: EngineEvent::Failed(DiagnosticReport::error(error.to_string())),
+                        };
+                        self.session = None;
+                        return vec![result];
+                    }
+                }
+            }
+        }
         let session = self.session.take().unwrap();
         let mut report = diagnostics(
             &read_limited(&session.log, MAX_LOG).unwrap_or_default(),
@@ -97,6 +129,7 @@ impl Backend {
             &session.source,
         );
         for diagnostic in &mut report.diagnostics {
+            diagnostic.provider = Some(session.engine.label().into());
             if let DiagnosticSource::File(path) = &mut diagnostic.source {
                 let candidate = if path.is_absolute() {
                     path.clone()
@@ -117,6 +150,23 @@ impl Backend {
         let event = match status {
             Ok(status) if status.success() => match read_pdf(&session.pdf) {
                 Ok(pdf) => EngineEvent::Pdf {
+                    synctex: [true, false].into_iter().find_map(|compressed| {
+                        let path = session.pdf.with_extension(if compressed {
+                            "synctex.gz"
+                        } else {
+                            "synctex"
+                        });
+                        let metadata = fs::metadata(&path).ok()?;
+                        if metadata.len() > 64 * 1024 * 1024 {
+                            return None;
+                        }
+                        Some(Arc::new(crate::synctex::Artifact {
+                            data: fs::read(path).ok()?.into(),
+                            compressed,
+                            root: session.root.clone(),
+                            mirror: session.mirror.mirror_root().to_owned(),
+                        }))
+                    }),
                     pdf,
                     diagnostics: report,
                 },
@@ -129,7 +179,7 @@ impl Backend {
                     .any(|d| d.severity == DiagnosticSeverity::Error)
                 {
                     let message =
-                        status.map_or_else(|e| e, |s| format!("Tectonic exited with {s}"));
+                        status.map_or_else(|e| e, |s| format!("TeX build exited with {s}"));
                     report
                         .diagnostics
                         .extend(DiagnosticReport::error(message).diagnostics);
@@ -145,7 +195,7 @@ impl Backend {
     }
 }
 impl Session {
-    fn start(request: &CompileRequest, options: &TectonicOptions) -> std::io::Result<Self> {
+    fn start(request: &CompileRequest, options: &TexOptions) -> std::io::Result<Self> {
         let private = PrivateWorkspace::open(&request.input.project_root)?;
         let mirror = private.mirrored_source(
             &request.input.source_dir,
@@ -154,28 +204,44 @@ impl Session {
         )?;
         let output = mirror.session_dir().join("output");
         fs::create_dir(&output)?;
-        let log = mirror.session_dir().join("tectonic-output.log");
+        let log = mirror.session_dir().join("tex-output.log");
         let logs = File::create(&log)?;
         let pdf = output
             .join(mirror.path().file_name().unwrap())
             .with_extension("pdf");
         let mut command = Command::new(&options.executable);
+        let standard = options.engine != crate::tex::settings::BuildEngine::Tectonic;
+        if standard {
+            command
+                .args([
+                    "-interaction=nonstopmode",
+                    "-halt-on-error",
+                    "-file-line-error",
+                    "-no-shell-escape",
+                    "-synctex=1",
+                ])
+                .arg(format!("-output-directory={}", output.display()));
+        } else {
+            command
+                .args([
+                    "-X",
+                    "compile",
+                    "--untrusted",
+                    "--synctex",
+                    "--keep-logs",
+                    "--keep-intermediates",
+                    "--outdir",
+                ])
+                .arg(&output);
+            if options.only_cached {
+                command.arg("--only-cached");
+            }
+        }
         command
-            .args([
-                "-X",
-                "compile",
-                "--untrusted",
-                "--keep-logs",
-                "--keep-intermediates",
-                "--outdir",
-            ])
-            .arg(&output)
             .arg(mirror.path())
             .current_dir(mirror.path().parent().unwrap())
-            .env("NO_COLOR", "1");
-        if options.only_cached {
-            command.arg("--only-cached");
-        }
+            .env("NO_COLOR", "1")
+            .env("LC_ALL", "C");
         options.command.apply(&mut command)?;
         command
             .stdin(Stdio::null())
@@ -184,6 +250,10 @@ impl Session {
         let child = crate::process::OwnedChild::spawn(&mut command)?;
         Ok(Self {
             child,
+            command,
+            pass: 1,
+            standard,
+            engine: options.engine,
             mirror,
             log,
             pdf,
@@ -203,9 +273,9 @@ fn read_pdf(path: &Path) -> Result<Arc<[u8]>, String> {
     let mut bytes = Vec::new();
     File::open(path)
         .and_then(|f| f.take(MAX_PDF + 1).read_to_end(&mut bytes))
-        .map_err(|e| format!("Tectonic produced no readable PDF: {e}"))?;
+        .map_err(|e| format!("TeX build produced no readable PDF: {e}"))?;
     if bytes.len() as u64 > MAX_PDF || !bytes.starts_with(b"%PDF-") {
-        return Err("Tectonic produced an invalid or oversized PDF".into());
+        return Err("TeX build produced an invalid or oversized PDF".into());
     }
     Ok(bytes.into())
 }
@@ -220,6 +290,13 @@ fn diagnostics(raw: &str, entry: &Path, source: &str) -> DiagnosticReport {
             (DiagnosticSeverity::Error, m)
         } else if let Some(m) = line.strip_prefix("warning: ") {
             (DiagnosticSeverity::Warning, m)
+        } else if line.contains(".tex:") {
+            (DiagnosticSeverity::Error, line)
+        } else if line.starts_with("LaTeX Warning:")
+            || line.starts_with("Overfull ")
+            || line.starts_with("Underfull ")
+        {
+            (DiagnosticSeverity::Warning, line)
         } else {
             continue;
         };
@@ -334,7 +411,8 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
         )
         .unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
-        let options = TectonicOptions {
+        let options = TexOptions {
+            engine: crate::tex::settings::BuildEngine::Tectonic,
             command: Default::default(),
             executable,
             only_cached: true,
@@ -348,7 +426,7 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
                 project_root: project.path().into(),
                 display_name: "main.draft.tex".into(),
             },
-            engine: super::super::EngineConfig::Tectonic(options.clone()),
+            engine: super::super::EngineConfig::Tex(options.clone()),
         };
         let mut backend = Backend::new();
         backend.submit(&request, &options).unwrap();
@@ -409,6 +487,86 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
         assert_eq!(report.diagnostics[1].location.unwrap().line, 9);
     }
     #[test]
+    #[ignore = "requires a local TeX distribution and synctex"]
+    fn installed_engines_build_and_synctex_round_trip_after_private_mirror_is_removed() {
+        use crate::tex::settings::BuildEngine;
+        for engine in [
+            BuildEngine::PdfLatex,
+            BuildEngine::XeLatex,
+            BuildEngine::LuaLatex,
+        ] {
+            let executable = crate::tex::tools::distribution_tool(engine.executable())
+                .expect("install TeX distribution");
+            let project = tempfile::tempdir().unwrap();
+            let source = "\\documentclass{article}\n\\begin{document}\n\\section{Introduction}\nA short paragraph for source navigation.\n\\end{document}\n";
+            let options = TexOptions {
+                engine,
+                executable,
+                command: Default::default(),
+                only_cached: true,
+            };
+            let request = CompileRequest {
+                revision: 1,
+                input: super::super::CompileInput {
+                    language: tiptoptyp_core::document::TypesettingLanguage::Tex,
+                    source: source.into(),
+                    source_dir: project.path().into(),
+                    project_root: project.path().into(),
+                    display_name: "main.tex".into(),
+                },
+                engine: super::super::EngineConfig::Tex(options.clone()),
+            };
+            let mut backend = Backend::new();
+            backend.submit(&request, &options).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(60);
+            let (pdf, map) = loop {
+                let result = backend
+                    .poll()
+                    .into_iter()
+                    .find_map(|result| match result.event {
+                        EngineEvent::Pdf { pdf, synctex, .. } => {
+                            Some((pdf, synctex.expect("SyncTeX map")))
+                        }
+                        EngineEvent::Failed(report) => panic!("{}: {}", engine.label(), report.raw),
+                        _ => None,
+                    });
+                if let Some(result) = result {
+                    break result;
+                }
+                assert!(Instant::now() < deadline, "{} timed out", engine.label());
+                std::thread::sleep(Duration::from_millis(20));
+            };
+            assert!(!map.mirror.exists());
+            assert!(pdf.starts_with(b"%PDF-"));
+            let target = crate::synctex::query(
+                &map,
+                &pdf,
+                crate::synctex::Query::Source {
+                    path: project.path().join("main.tex"),
+                    line: 4,
+                    column: 1,
+                },
+            )
+            .unwrap();
+            let crate::synctex::Destination::Page { page, x, y } = target else {
+                panic!("expected PDF destination")
+            };
+            let target =
+                crate::synctex::query(&map, &pdf, crate::synctex::Query::Page { page, x, y })
+                    .unwrap();
+            let crate::synctex::Destination::Source { path, line, .. } = target else {
+                panic!("expected source destination")
+            };
+            assert_eq!(
+                path,
+                project.path().canonicalize().unwrap().join("main.tex")
+            );
+            assert!((3..=4).contains(&line), "{engine:?}: line {line}");
+            assert!(!project.path().join("main.pdf").exists());
+        }
+    }
+
+    #[test]
     #[ignore = "executes pinned Tectonic; first run may download TeX packages"]
     fn real_tectonic_builds_unsaved_source_relative_inputs_errors_and_recovers() {
         let project = tempfile::tempdir().unwrap();
@@ -425,7 +583,8 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
                 project_root: project.path().into(),
                 display_name: "main.tex".into(),
             },
-            engine: super::super::EngineConfig::Tectonic(TectonicOptions {
+            engine: super::super::EngineConfig::Tex(TexOptions {
+                engine: crate::tex::settings::BuildEngine::Tectonic,
                 command: Default::default(),
                 executable: crate::toolchain::resolve_tool(
                     crate::toolchain::ToolKind::Tectonic,
@@ -435,7 +594,7 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
                 only_cached: false,
             }),
         };
-        let super::super::EngineConfig::Tectonic(options) = request.engine.clone() else {
+        let super::super::EngineConfig::Tex(options) = request.engine.clone() else {
             unreachable!()
         };
         let mut backend = Backend::new();
@@ -454,9 +613,23 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
                 for event in backend.poll() {
                     assert_eq!(event.revision, request.revision);
                     match event.event {
-                        EngineEvent::Pdf { pdf, .. } => {
+                        EngineEvent::Pdf { pdf, synctex, .. } => {
                             assert!(valid);
                             assert!(pdf.starts_with(b"%PDF-"));
+                            let map = synctex.expect("Tectonic must emit a SyncTeX map");
+                            assert!(matches!(
+                                crate::synctex::query(
+                                    &map,
+                                    &pdf,
+                                    crate::synctex::Query::Source {
+                                        path: project.path().join("main.tex"),
+                                        line: 3,
+                                        column: 1,
+                                    }
+                                )
+                                .unwrap(),
+                                crate::synctex::Destination::Page { page: 0, .. }
+                            ));
                             done = true;
                         }
                         EngineEvent::Failed(report) => {

@@ -269,6 +269,7 @@ pub(crate) struct AppSettings {
     #[serde(default)]
     pub(crate) theme_colors: crate::theme_transform::ThemeColorAdjustments,
     pub(crate) document_theme: DocumentTheme,
+    pub(crate) comfy_preview: bool,
     pub(crate) preview_preference: PreviewPreference,
     #[serde(default)]
     pub(crate) git_diff_style: GitDiffStyle,
@@ -349,6 +350,7 @@ impl Default for AppSettings {
             theme_invert: false,
             theme_hue_shift_degrees: 0,
             theme_colors: Default::default(),
+            comfy_preview: false,
             document_theme: DocumentTheme::FollowInterface,
             preview_preference: PreviewPreference::Interactive,
             git_diff_style: GitDiffStyle::Unified,
@@ -419,6 +421,7 @@ impl AppSettings {
             theme_hue_shift_degrees,
             theme_colors,
             document_theme,
+            comfy_preview,
             preview_preference,
             git_diff_style,
             line_wrap,
@@ -777,6 +780,7 @@ mod tests {
                 contrast: 115,
                 saturation: 80,
             },
+            comfy_preview: false,
             document_theme: DocumentTheme::Dark,
             preview_preference: PreviewPreference::Pdfium,
             git_diff_style: GitDiffStyle::Unified,

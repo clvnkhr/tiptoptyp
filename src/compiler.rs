@@ -1,6 +1,6 @@
 //! Shared build service. Engine adapters own processes and translate output;
 //! this owner schedules requests and publishes canonical PDF artifacts.
-mod tectonic;
+mod tex;
 mod typst;
 
 use crate::{
@@ -21,19 +21,19 @@ use std::{
 use tiptoptyp_core::document::TypesettingLanguage;
 
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(15);
-pub(crate) use tectonic::TectonicOptions;
+pub(crate) use tex::TexOptions;
 pub(crate) use typst::TypstOptions;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum EngineConfig {
     Typst(TypstOptions),
-    Tectonic(TectonicOptions),
+    Tex(TexOptions),
 }
 impl EngineConfig {
     pub(crate) fn kind(&self) -> BuildEngineKind {
         match self {
             Self::Typst(_) => BuildEngineKind::Typst,
-            Self::Tectonic(_) => BuildEngineKind::Tectonic,
+            Self::Tex(_) => BuildEngineKind::Tex,
         }
     }
 }
@@ -72,6 +72,7 @@ pub(crate) struct CompileArtifact {
     pub(crate) key: ArtifactKey,
     pub(crate) pdf: Arc<[u8]>,
     pub(crate) diagnostics: DiagnosticReport,
+    pub(crate) synctex: Option<Arc<crate::synctex::Artifact>>,
 }
 
 pub(crate) use tiptoptyp_core::preview::ArtifactKey;
@@ -206,24 +207,25 @@ enum EngineEvent {
     Pdf {
         pdf: Arc<[u8]>,
         diagnostics: DiagnosticReport,
+        synctex: Option<Arc<crate::synctex::Artifact>>,
     },
 }
 
 enum Backend {
     Typst(Box<typst::Backend>),
-    Tectonic(Box<tectonic::Backend>),
+    Tex(Box<tex::Backend>),
 }
 impl Backend {
     fn kind(&self) -> BuildEngineKind {
         match self {
             Self::Typst(_) => BuildEngineKind::Typst,
-            Self::Tectonic(_) => BuildEngineKind::Tectonic,
+            Self::Tex(_) => BuildEngineKind::Tex,
         }
     }
     fn for_config(config: &EngineConfig) -> Self {
         match config {
             EngineConfig::Typst(_) => Self::Typst(Box::new(typst::Backend::new())),
-            EngineConfig::Tectonic(_) => Self::Tectonic(Box::new(tectonic::Backend::new())),
+            EngineConfig::Tex(_) => Self::Tex(Box::new(tex::Backend::new())),
         }
     }
     fn submit(&mut self, request: &CompileRequest) -> Result<(), String> {
@@ -231,22 +233,20 @@ impl Backend {
             (Self::Typst(backend), EngineConfig::Typst(options)) => {
                 backend.submit(request, options)
             }
-            (Self::Tectonic(backend), EngineConfig::Tectonic(options)) => {
-                backend.submit(request, options)
-            }
+            (Self::Tex(backend), EngineConfig::Tex(options)) => backend.submit(request, options),
             _ => Err("Build engine configuration changed".into()),
         }
     }
     fn poll(&mut self) -> Vec<EngineResult> {
         match self {
             Self::Typst(backend) => backend.poll(),
-            Self::Tectonic(backend) => backend.poll(),
+            Self::Tex(backend) => backend.poll(),
         }
     }
     fn is_running(&self) -> bool {
         match self {
             Self::Typst(backend) => backend.is_running(),
-            Self::Tectonic(backend) => backend.is_running(),
+            Self::Tex(backend) => backend.is_running(),
         }
     }
 }
@@ -358,13 +358,25 @@ fn publish_engine_result(
     let event = match result.event {
         EngineEvent::Started => CompileEvent::Started,
         EngineEvent::Failed(report) => CompileEvent::Failed(report),
-        EngineEvent::Pdf { pdf, diagnostics } => {
+        EngineEvent::Pdf {
+            pdf,
+            diagnostics,
+            synctex,
+        } => {
             let key = ArtifactKey {
                 revision: result.revision,
                 generation: *next_artifact_generation,
             };
             *next_artifact_generation = (*next_artifact_generation).wrapping_add(1).max(1);
-            publish_compiled_artifact(pdf, diagnostics, key, result.elapsed, results, context);
+            publish_compiled_artifact(
+                pdf,
+                diagnostics,
+                synctex,
+                key,
+                result.elapsed,
+                results,
+                context,
+            );
             return;
         }
     };
@@ -383,6 +395,7 @@ fn publish_engine_result(
 fn publish_compiled_artifact(
     pdf: Arc<[u8]>,
     diagnostics: DiagnosticReport,
+    synctex: Option<Arc<crate::synctex::Artifact>>,
     key: ArtifactKey,
     elapsed: Duration,
     results: &ResultSender,
@@ -400,6 +413,7 @@ fn publish_compiled_artifact(
                 key,
                 pdf,
                 diagnostics,
+                synctex,
             }),
         },
     );
@@ -519,6 +533,7 @@ mod tests {
                     revision: 7,
                     elapsed: Duration::from_millis(4),
                     event: EngineEvent::Pdf {
+                        synctex: None,
                         pdf: pdf.clone(),
                         diagnostics: DiagnosticReport::default(),
                     },

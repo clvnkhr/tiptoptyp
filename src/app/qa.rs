@@ -11,6 +11,7 @@ pub(super) struct QaSession {
     folding_prepared: bool,
     tabs_prepared: bool,
     terminal_icons_prepared: bool,
+    preview_window_prepared: bool,
     asset_fixture: Option<tempfile::TempDir>,
 }
 
@@ -231,6 +232,36 @@ impl QaSession {
         }
         let toolbar_anchor = Pos2::new(theme::SPACE.content, METRICS.chrome.toolbar_height);
         match scene {
+            UiSnapshotScene::PreviewWindow | UiSnapshotScene::PreviewNativeWindow => {
+                let native = scene == UiSnapshotScene::PreviewNativeWindow;
+                if !self.preview_window_prepared {
+                    if native {
+                        app.settings.preview_preference = PreviewPreference::Interactive;
+                        app.preview
+                            .set_requested_backend(PreviewPreference::Interactive);
+                    }
+                    app.view_mode = ViewMode::Split;
+                    app.preview_control_action(super::preview_controls::Action::PopOut);
+                    self.preview_window_prepared = true;
+                }
+                if if native {
+                    !matches!(app.preview.webview_state, ServiceState::Ready(_))
+                } else {
+                    !app.pdfium_preview.ready_for(app.preview.content.pdf())
+                } {
+                    app.captures.defer_target("preview-window");
+                }
+            }
+            UiSnapshotScene::PreviewControls => {
+                app.view_mode = ViewMode::Split;
+                app.settings.preview_preference = PreviewPreference::Pdfium;
+                app.preview.set_requested_backend(PreviewPreference::Pdfium);
+                app.preview_controls.open = true;
+                app.preview_controls.outline = true;
+                if !app.pdfium_preview.ready_for(app.preview.content.pdf()) {
+                    app.captures.defer_target("preview-controls");
+                }
+            }
             UiSnapshotScene::PdfiumPreview => {
                 app.settings.preview_preference = PreviewPreference::Pdfium;
                 app.preview.set_requested_backend(PreviewPreference::Pdfium);
@@ -823,6 +854,9 @@ impl QaSession {
         context: &egui::Context,
     ) {
         crate::window_logo::clear_snapshot(context);
+        app.restore_preview_window(context);
+        app.preview_controls = Default::default();
+        self.preview_window_prepared = false;
         context.data_mut(|data| data.remove::<bool>(egui::Id::new("qa-explorer-drop")));
         self.git_fixture_prepared = false;
         app.git.visible = false;

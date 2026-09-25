@@ -649,3 +649,111 @@ fn command_toolbar_availability_matches_document_and_empty_workspace_admission()
         }
     }
 }
+
+#[test]
+fn deferred_find_select_all_is_delivered_once_to_query_without_editing_source() {
+    use egui_kittest::Harness;
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+    app.document_mut()
+        .replace_unprojected_untitled("keep this source");
+    app.find_bar.visible = true;
+    app.find_bar.focus = true;
+    app.find_bar.query = "old query".into();
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(700.0, 100.0))
+        .build_ui_state(|ui, app: &mut EditorApp| app.show_find_bar(ui), app);
+    harness.run_steps(3);
+    let child =
+        crate::child_view::child_viewport_id(egui::ViewportId::ROOT, find_bar::VIEWPORT_SALT);
+    assert!(harness.state_mut().route_edit_command_to_focused_widget(
+        AppCommand::SelectAll,
+        &context,
+        child
+    ));
+    harness.run_steps(2);
+    harness.event(egui::Event::Text("new".into()));
+    harness.run_steps(2);
+    assert_eq!(harness.state().find_bar.query, "new");
+    assert!(harness.state().find_bar.edit_events.is_empty());
+    assert_eq!(harness.state().document().source(), "keep this source");
+}
+
+#[test]
+fn explorer_drop_inserts_a_relative_path_at_the_caret_and_undoes_once() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, root.clone());
+    app.document_mut().replace_loaded_unprojected(
+        "ab".into(),
+        root.join("main.typ"),
+        DocumentKind::Typst,
+        None,
+    );
+    app.document_mut().set_history_reset(false);
+    fs::write(root.join("image.png"), b"fixture").unwrap();
+    app.workspace = Some(WorkspaceTree::from_snapshot(
+        WorkspaceSnapshot::scan(&root).unwrap(),
+    ));
+    let mut configured = false;
+    let mut caret_set = false;
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(900.0, 500.0))
+        .build_ui_state(
+            move |ui, app: &mut EditorApp| {
+                if !configured {
+                    theme::configure_editor_fonts(
+                        ui.ctx(),
+                        Default::default(),
+                        Default::default(),
+                        false,
+                        400,
+                        400,
+                        None,
+                    );
+                    configured = true;
+                    return;
+                }
+                if !caret_set {
+                    app.store_editor_cursor(ui.ctx(), CCursorRange::one(CCursor::new(1)));
+                    caret_set = true;
+                }
+                egui::Panel::left("explorer")
+                    .exact_size(250.0)
+                    .show(ui, |ui| app.show_workspace(ui));
+                egui::CentralPanel::default().show(ui, |ui| app.show_editor(ui));
+            },
+            app,
+        );
+    harness.run_steps(3);
+    let start = harness.get_by_label("image.png").rect().center();
+    let end = Pos2::new(600.0, 200.0);
+    harness.event(egui::Event::PointerMoved(start));
+    harness.run_steps(1);
+    harness.event(egui::Event::PointerButton {
+        pos: start,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Modifiers::NONE,
+    });
+    harness.run_steps(1);
+    for step in 1..=10 {
+        harness.event(egui::Event::PointerMoved(
+            start.lerp(end, step as f32 / 10.0),
+        ));
+        harness.run_steps(1);
+    }
+    harness.event(egui::Event::PointerButton {
+        pos: end,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Modifiers::NONE,
+    });
+    harness.run_steps(3);
+    assert_eq!(harness.state().document().source(), "aimage.pngb");
+    let context = harness.ctx.clone();
+    harness.state_mut().undo_editor(&context, false);
+    assert_eq!(harness.state().document().source(), "ab");
+}

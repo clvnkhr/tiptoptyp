@@ -6753,32 +6753,11 @@ fn system_theme_selects_a_light_or_dark_tiptop_palette() {
 }
 
 #[test]
-fn document_theme_maps_to_tinymist_with_effective_preview_appearance() {
-    assert_eq!(
-        tinymist_invert_colors(DocumentTheme::FollowInterface, false),
-        InvertColors::Never
-    );
-    assert_eq!(
-        tinymist_invert_colors(DocumentTheme::Light, true),
-        InvertColors::Never
-    );
-    assert_eq!(
-        tinymist_invert_colors(DocumentTheme::Dark, false),
-        InvertColors::Always
-    );
-    assert_eq!(
-        tinymist_invert_colors(DocumentTheme::FollowInterface, true),
-        InvertColors::Always
-    );
-}
-
-#[test]
-fn resolved_system_appearance_change_restarts_tinymist_preview() {
-    assert!(!tinymist_restart_required(
-        false, false, false, false, false
-    ));
-    assert!(tinymist_restart_required(true, false, false, false, false));
-    assert!(tinymist_restart_required(false, true, false, false, false));
+fn only_backend_or_tool_changes_restart_tinymist() {
+    assert!(!tinymist_restart_required(false, false, false));
+    assert!(tinymist_restart_required(true, false, false));
+    assert!(tinymist_restart_required(false, true, false));
+    assert!(tinymist_restart_required(false, false, true));
 }
 
 #[test]
@@ -7028,6 +7007,7 @@ fn projected_application_toolbar_order_and_right_alignment_survive_resizing() {
             "Edit",
             "View",
             "Untitled.typ",
+            "Preview controls",
             "miTeX",
             "Find",
             "Pause",
@@ -8505,7 +8485,7 @@ fn native_find_edit_commands_do_not_target_the_still_focused_source_widget() {
         ui.ctx().memory_mut(|memory| memory.request_focus(editor));
         assert_eq!(focused_input_viewport(ui.ctx()), child);
         assert!(app.route_edit_command_to_focused_widget(AppCommand::SelectAll, ui.ctx(), child));
-        assert!(ui.ctx().input_for(child, |input| input.events.iter().any(|event| matches!(event, egui::Event::Key { key: egui::Key::A, modifiers, .. } if modifiers.command))));
+        assert!(app.find_bar.edit_events.iter().any(|event| matches!(event, egui::Event::Key { key: egui::Key::A, modifiers, .. } if modifiers.command)));
     }).drop_without_applying_deltas();
 }
 

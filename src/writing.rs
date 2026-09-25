@@ -25,10 +25,22 @@ pub(crate) fn check(
             Document::new_curated(source, &harper_typst::Typst)
         };
         let mut linter = LintGroup::new_curated(FstDictionary::curated(), Dialect::British);
+        let excluded = excluded_typst_ranges(source, kind);
+        let characters: Vec<char> = source.chars().collect();
         issues.extend(
             linter
                 .lint(&document)
                 .into_iter()
+                .filter(|lint| {
+                    let next = excluded.partition_point(|range| range.end <= lint.span.start);
+                    excluded
+                        .get(next)
+                        .is_none_or(|range| range.start >= lint.span.end)
+                })
+                .filter(|lint| {
+                    lint.lint_kind != harper_core::linting::LintKind::Spelling
+                        || !likely_name(&characters, lint.span.start, lint.span.end)
+                })
                 .map(|lint| (lint.span.start, lint.message, "Harper")),
         );
     }
@@ -110,9 +122,95 @@ pub(crate) fn check(
         })
         .collect()
 }
+// Harper deliberately reads Typst string literals as prose. Technical named
+// arguments and math are not prose; keep their original scalar coordinates.
+fn excluded_typst_ranges(source: &str, kind: DocumentKind) -> Vec<std::ops::Range<usize>> {
+    if kind != DocumentKind::Typst {
+        return Vec::new();
+    }
+    use typst_syntax::{LinkedNode, SyntaxKind, ast::Named};
+    fn visit(node: LinkedNode<'_>, offsets: &[usize], out: &mut Vec<std::ops::Range<usize>>) {
+        let excluded = node.kind() == SyntaxKind::Equation
+            || node.get().cast::<Named>().is_some_and(|arg| {
+                !matches!(
+                    arg.name().as_str(),
+                    "body" | "title" | "caption" | "alt" | "description"
+                )
+            });
+        if excluded {
+            let range = node.range();
+            out.push(offsets[range.start]..offsets[range.end]);
+        } else {
+            for child in node.children() {
+                visit(child, offsets, out);
+            }
+        }
+    }
+    let mut offsets = vec![0; source.len() + 1];
+    for (scalar, (byte, ch)) in source.char_indices().enumerate() {
+        offsets[byte..byte + ch.len_utf8()].fill(scalar);
+        offsets[byte + ch.len_utf8()] = scalar + 1;
+    }
+    let syntax = typst_syntax::Source::detached(source);
+    let mut excluded = Vec::new();
+    visit(LinkedNode::new(syntax.root()), &offsets, &mut excluded);
+    excluded
+}
+
+// A capitalized word in the middle of a sentence is usually a person's or
+// place's name. Do not exempt sentence-initial spelling mistakes or lowercase
+// prose, and retain every non-spelling rule for names.
+fn likely_name(source: &[char], start: usize, end: usize) -> bool {
+    let Some(word) = source.get(start..end) else {
+        return false;
+    };
+    if word.len() < 2 || !word[0].is_uppercase() || !word[1..].iter().all(|ch| ch.is_lowercase()) {
+        return false;
+    }
+    source[..start]
+        .iter()
+        .rev()
+        .find(|ch| **ch == '\n' || !ch.is_whitespace())
+        .is_some_and(|ch| !matches!(ch, '.' | '!' | '?' | ':' | '\n'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn technical_arguments_display_math_and_names_are_not_spelling_errors() {
+        let source = "#set text(lang: \"uk\", font: \"NonsensicalFontName\")\nThe Leray theorem has the the consequence.\n$ nonwordxyz + nonwordxyz $\nThiss is ordinary prose.";
+        let issues = check(
+            source,
+            DocumentKind::Typst,
+            Path::new("fixture.typ"),
+            true,
+            false,
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|d| d.location.unwrap().line == 1 || d.location.unwrap().line == 3)
+        );
+        assert!(!issues.iter().any(|d| d.message.contains("Leray")));
+        assert!(
+            issues.iter().any(|d| d.location.unwrap().line == 4),
+            "{issues:?}"
+        );
+        assert!(issues.iter().any(|d| d.location.unwrap().line == 2));
+        let tex = r"The Leray theorem. \[ nonwordxyz \] \begin{equation} nonwordxyz \end{equation}";
+        assert!(
+            !check(
+                tex,
+                DocumentKind::Tex,
+                Path::new("fixture.tex"),
+                true,
+                false
+            )
+            .iter()
+            .any(|d| d.message.contains("nonwordxyz") || d.message.contains("Leray"))
+        );
+    }
     #[test]
     #[ignore = "opt-in optimized writing-check cost measurement"]
     fn writing_cost_measurement() {

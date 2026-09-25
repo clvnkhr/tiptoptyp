@@ -118,7 +118,7 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 = NEW TODOS
 
 1. [ ] sometimes tinymist can redirect you to a source file outside the current workspace root (when it sends you to a package file). When this happens, the workspace root switches to the workspace of that file, and that file is opened in a new tab. I agree that it should open in a new tab but not that the workspace root changes. if we nav back to the old tab the workspace root changes back. It should instead, at the top of the code editor, have a small banner that says "You are currently editing a file outside the current workspace root. The workspace root is now [workspace root path]." and have a button that says "Switch to this workspace root" which when clicked, switches the workspace root to the new one. This way, the user is aware of the change and can choose to switch or not.
-2. [x] The commit actions in the Git subpanel always show their text labels, including when the toolbar preference is icons. An interaction test confirms both commit modes render the label and trigger the matching operation.
+2. [ ] the stage all and commit button / commit all staged button in the git subpanel should be text
 3. [ ] we need to implement comfy mode - if on, the bg and text of a pdf / tinymist preview should be adjusted to match the theme settings.
 4. [ ] improve harper typst/tex integration - it needs to ignore string keys of functions and spellchecking on names somehow
 5. [ ] allow using a tex dist (pdfLaTeX, XeLaTeX, LuaLaTeX) and autodetect installed tex distributions (mactex)
@@ -127,8 +127,39 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 8. [ ] i noticed that the tinymist preview has a bunch of shortcuts. for instance pressing t inverts the view! we should use this instead of repainting the preview from scratch when we toggle dark mode. Make it work smoothly with comfy mode above
 9. [ ] the above shortcuts are interfering with the find feature of our litle popup. also I found that cmd+A selects all in the code panel - the find bar should be the one that receives thte cmd+A.
 10. [ ] the TOC doesn't jump to the sections for tinymist
-11. [x] PDFium and Tinymist minimized preview controls now use the same 22×22 three-line button and compact surrounding padding. A UI interaction test verifies that the PDFium control opens and minimizes correctly.
+11. [ ] the design for the minimised icon is different for both variants (pdf and tinymist preview). And anyway it uses way too much space. fix and make the button more compact
 12. [ ] the UI of the interface is completely inconsistent in all states - minimised (see above and below todos), unminimised, and with TOC expanded. The UI layout should be shared code, just the wiring can be different
 13. [ ] instead of a floating minimized button, in fact it should be a button left of the find button in the top. So remove the floating button. Keep the floating window when expanded. And this button should be greyed out inactive if editor is nto in preview or split mode.
 14. [ ] the floating window should be more thoughtfully designed. the buttons needs to be correctly grouped while not taking too much space.
 15. [ ] i modified old todo 163 above - this action should be in our floating window
+
+// Implementation notes (2026-09-25):
+// NEW TODO 2: text commit actions and interaction coverage landed in e94766d.
+// NEW TODO 11: compact controls landed in e94766d; the toolbar placement and
+// shared controls requested in 12-14 supersede the floating minimized button.
+// Original task descriptions and checkboxes are preserved; progress is append-only.
+// NEW TODO 1: outside-root source navigation now preserves the window workspace;
+// the editor banner offers an explicit root switch for all tabs.
+// NEW TODO 3/8: Comfy preview recolors PDFium and Tinymist locally; appearance
+// changes do not edit source or restart/recompile Tinymist.
+// NEW TODO 4: Harper skips Typst math and technical named arguments, retaining
+// prose strings. Mid-sentence capitalized unknown words are treated as likely
+// names; this heuristic can miss capitalized typos or flag sentence-initial names.
+// NEW TODO 5: system pdfLaTeX, XeLaTeX and LuaLaTeX are selectable and discovered
+// on PATH / the MacTeX link. Standard-engine bibliography orchestration is future work.
+// NEW TODO 6: versioned SyncTeX maps support source/PDF navigation and edit following.
+// The installed synctex command is required, including when building with Tectonic.
+// NEW TODO 7: Explorer file drops insert paths at the caret in one undoable edit.
+// NEW TODO 9: Find and preview-search fields receive their own editing commands;
+// preview keyboard shortcuts no longer consume typing in text fields.
+// NEW TODO 10: Tinymist outline navigation uses compiled heading coordinates.
+// NEW TODO 11-14: one shared draggable controls popup serves both viewers. Its
+// toolbar toggle sits immediately left of miTeX when present, otherwise Find,
+// and is disabled in Code view. The outline popup sizes itself to its content.
+// NEW TODO 15 / old 163: Pop out reuses the preview and child-window host; close
+// or Split/Preview restores the original document view without another compiler.
+// Regression coverage includes semantic UI tests, real Tinymist browser navigation,
+// real Tectonic/system-engine builds and SyncTeX round trips. Fresh controls and
+// PDF-popout framebuffers were inspected; the 24-image gallery was regenerated.
+// Desktop composition inspection remains unverified because the Mac was locked.
+// Details and test commands: docs/preview-controls.md and docs/architecture/0007-tex-services.md.

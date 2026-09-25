@@ -2,21 +2,11 @@
 use super::*;
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn preview_outline_script(entries: &[crate::project_index::OutlineEntry]) -> String {
-    let entries = entries
-        .iter()
-        .map(|entry| {
-            serde_json::json!({
-                "title": entry.title,
-                "path": entry.path.to_string_lossy(),
-                "line": entry.line,
-                "level": entry.level,
-            })
-        })
-        .collect::<Vec<_>>();
-    let json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".to_owned());
+fn preview_palette_script(palette: (Color32, Color32)) -> String {
     format!(
-        "if (document.readyState === 'loading') {{ document.addEventListener('DOMContentLoaded', () => window.tiptoptypSetOutline?.({json})); }} else {{ window.tiptoptypSetOutline?.({json}); }}"
+        "window.tiptoptypSetPalette?.({}, {});",
+        serde_json::json!([palette.0.r(), palette.0.g(), palette.0.b()]),
+        serde_json::json!([palette.1.r(), palette.1.g(), palette.1.b()])
     )
 }
 
@@ -54,9 +44,10 @@ impl EditorApp {
             self.webview = None;
             self.webview_applied = None;
             self.webview_url = None;
+            self.webview_parent = None;
             self.webview_navigation = None;
             self.webview_reload_pending = false;
-            self.webview_outline_snapshot = None;
+            self.webview_palette = None;
         }
     }
 
@@ -1117,8 +1108,9 @@ impl EditorApp {
         let has_selection = self.selected_editor_chars(context).is_some();
         let can_format = self.document().kind().typesetting_language().is_some();
         let can_export_pdf = self.source_preview_available();
-        let can_sync_preview =
-            self.document().kind().is_typst() && self.interactive_preview_active();
+        let can_sync_preview = (self.document().kind().is_typst()
+            && self.interactive_preview_active())
+            || (self.document().kind() == DocumentKind::Tex && self.synctex.artifact.is_some());
         let edit_availability = CommandAvailability {
             can_undo,
             can_redo,
@@ -1319,6 +1311,12 @@ impl EditorApp {
     ) -> bool {
         use wry::dpi::{LogicalPosition, LogicalSize};
 
+        if self
+            .webview_parent
+            .is_some_and(|parent| parent != context.viewport_id())
+        {
+            self.discard_webview();
+        }
         let Some(url) = self.preview.connection.endpoint().map(ToString::to_string) else {
             self.hide_webview();
             return false;
@@ -1378,11 +1376,12 @@ impl EditorApp {
                 background.b(),
                 background.a(),
             );
-            let outline_script = preview_outline_script(&self.project_index.outline);
+            let palette = self.preview_palette(context, self.preview.dark);
+            let palette_script = preview_palette_script(palette);
             let builder = wry::WebViewBuilder::new()
                 .with_url(&url)
                 .with_initialization_script(include_str!("../preview_navigation.js"))
-                .with_initialization_script(outline_script)
+                .with_initialization_script(palette_script)
                 .with_ipc_handler(move |request| {
                     if action_sender.send(request.body().clone()).is_ok() {
                         action_repaint.request_repaint();
@@ -1421,28 +1420,18 @@ impl EditorApp {
                     }
                     wry::NewWindowResponse::Deny
                 });
-            let built = if self.window_host.is_root() {
-                let Some(window) = frame.and_then(eframe::Frame::winit_window) else {
-                    self.preview.webview_state = ServiceState::Degraded(
-                        "The native window handle is temporarily unavailable".to_owned(),
-                    );
-                    return false;
-                };
-                builder.build_as_child(window.as_ref())
-            } else {
-                let Some(window) = self.native_window_parent.as_ref() else {
-                    self.preview.webview_state = ServiceState::Starting(
-                        "Waiting for this document window's native handle".to_owned(),
-                    );
-                    return false;
-                };
-                builder.build_as_child(window)
+            let parent = crate::native_window::for_viewport(context, context.viewport_id())
+                .or_else(|| frame.and_then(crate::native_window::NativeWindowHandle::from_owner));
+            let Some(parent) = parent else {
+                return false;
             };
+            let built = builder.build_as_child(&parent);
             match built {
                 Ok(webview) => {
                     #[cfg(target_os = "macos")]
                     crate::native_window::enable_native_webview_magnification(&webview);
                     self.webview = Some(webview);
+                    self.webview_parent = Some(context.viewport_id());
                     self.webview_url = Some(url.clone());
                     self.webview_reload_pending = false;
                     self.webview_navigation = Some(shared_navigation);
@@ -1471,13 +1460,14 @@ impl EditorApp {
             }
             self.webview_url = Some(url);
             self.webview_reload_pending = false;
-            self.webview_outline_snapshot = None;
+            self.webview_palette = None;
         }
+        let palette = self.preview_palette(context, self.preview.dark);
         if let Some(webview) = &self.webview {
-            if self.webview_outline_snapshot.as_ref() != Some(&self.project_index.outline) {
-                let script = preview_outline_script(&self.project_index.outline);
+            if self.webview_palette != Some(palette) {
+                let script = preview_palette_script(palette);
                 if webview.evaluate_script(&script).is_ok() {
-                    self.webview_outline_snapshot = Some(self.project_index.outline.clone());
+                    self.webview_palette = Some(palette);
                 }
             }
             let diff = webview_property_diff(self.webview_applied, next_applied);

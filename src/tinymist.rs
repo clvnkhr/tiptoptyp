@@ -108,7 +108,6 @@ pub enum InvertColors {
     Never,
     #[default]
     Auto,
-    Always,
 }
 
 impl InvertColors {
@@ -116,7 +115,6 @@ impl InvertColors {
         match self {
             Self::Never => "never",
             Self::Auto => "auto",
-            Self::Always => "always",
         }
     }
 }

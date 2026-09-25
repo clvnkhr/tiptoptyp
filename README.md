@@ -151,7 +151,8 @@ validated at startup; source builds prepare it with `cargo xtask fetch-pdfium`.
 ### Native TeX
 
 Open a `.tex` document, edit it, and use the existing preview and PDF export
-commands. Tectonic builds the current main buffer in a private project mirror;
+commands. Tectonic (the default), pdfLaTeX, XeLaTeX or LuaLaTeX builds the current
+main buffer in a private project mirror;
 included files are read from disk. Save an included file or build explicitly to
 refresh its PDF. Build output never replaces a user PDF until Compile/Export is
 requested. PDFium displays canonical output.
@@ -160,14 +161,19 @@ In **Settings → Tools → TeX tools**, choose the build engine, toggle TexLab
 completion/hover/diagnostics, select Badness or tex-fmt formatting, and toggle
 Badness linting independently. Disabling TexLab leaves Badness available.
 TexLab's own automatic builds, ChkTeX and formatters are disabled to prevent
-duplicate work. Standard LaTeX is labelled as coming soon; its adapter is not yet
-implemented. These controls concern native TeX, separately from Typst's miTeX mode.
+duplicate work. Installed system engines are detected on PATH and at MacTeX's
+`/Library/TeX/texbin`. These controls concern native TeX, separately from Typst's
+miTeX mode.
 
 Tectonic downloads missing packages by default; first use can take several
 minutes. Enable **Use cached TeX packages only** for offline builds. Shell escape
 is disabled. The service cancels replaced builds and bounds a stalled build to
-ten minutes. Dependency watching outside the app, SyncTeX navigation, additional
-LSP commands and system LaTeX engines remain future work. See
+ten minutes. Standard engines run two passes, with a third when references need it.
+SyncTeX supports source-to-PDF navigation through Sync Preview and PDF-to-source
+navigation with Command-click (Control-click on other platforms). The `synctex`
+command from a TeX distribution is required even with Tectonic. Maps travel with
+their PDF, and private build paths are translated back to source paths.
+Dependency watching outside the app and additional LSP commands remain future work. See
 [the service architecture](docs/architecture/0007-tex-services.md).
 
 ## Run
@@ -407,4 +413,4 @@ The editor still uses `egui::TextEdit<String>` and lays out the whole buffer.
 A rope-backed, virtualized editor is the next performance milestone for very
 large books. Linux interactive webview support is also follow-up work;
 bidirectional Typst source/preview navigation is already implemented on supported
-platforms. TeX SyncTeX navigation remains future work.
+platforms. TeX navigation uses the installed SyncTeX command.

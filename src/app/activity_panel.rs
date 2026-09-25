@@ -99,13 +99,26 @@ impl EditorApp {
             },
         );
         add(
-            "Tectonic",
+            self.settings.tex.build_engine.label(),
             "Builds a PDF from your TeX document.",
             if self.preview_document_kind() == DocumentKind::Tex && self.settings.tex.build_enabled
             {
                 build
             } else {
                 inactive.clone()
+            },
+        );
+        add(
+            "SyncTeX",
+            "Connects TeX source positions to matching places in the PDF and back.",
+            if self.preview_document_kind() != DocumentKind::Tex {
+                inactive.clone()
+            } else if self.tex_tools.synctex.is_none() {
+                Activity::Inactive("Install the synctex command")
+            } else if self.synctex.artifact.is_none() {
+                Activity::Inactive("Compile a source map first")
+            } else {
+                self.synctex.activity()
             },
         );
         let intelligence_busy = self.activity.completion.is_some() || self.activity.hover.is_some();

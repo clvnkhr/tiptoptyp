@@ -280,6 +280,17 @@ pub(super) fn show(
                     tree_state.store(ui, tree_id);
                     for action in actions {
                         match action {
+                            TreeAction::MoveExternal(drop) => {
+                                if let Some(path) = drop.source.into_iter().find(|path| {
+                                    find_node(path).is_some_and(WorkspaceNode::is_file)
+                                }) {
+                                    let id =
+                                        super::viewport_scoped_id(ui.ctx(), "explorer-source-drop");
+                                    ui.ctx().data_mut(|data| {
+                                        data.insert_temp(id, (path, drop.position))
+                                    });
+                                }
+                            }
                             TreeAction::SetSelected(selected) => {
                                 if let Some(path) = selected.into_iter().next() {
                                     state.select_path(path);

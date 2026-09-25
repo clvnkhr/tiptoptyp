@@ -17,7 +17,7 @@ pub(crate) enum ShortcutAction {
     New,
     NewWindow,
     NewFromTemplate,
-    ComfyDocument,
+    ComfyPreview,
     Open,
     OpenInNewWindow,
     ChangeWorkspaceRoot,
@@ -103,7 +103,7 @@ impl ShortcutAction {
         Self::New,
         Self::NewWindow,
         Self::NewFromTemplate,
-        Self::ComfyDocument,
+        Self::ComfyPreview,
         Self::Open,
         Self::OpenInNewWindow,
         Self::ChangeWorkspaceRoot,
@@ -189,7 +189,7 @@ impl ShortcutAction {
             Self::New => "file.new",
             Self::NewWindow => "file.new_window",
             Self::NewFromTemplate => "file.new_from_template",
-            Self::ComfyDocument => "edit.comfy_document",
+            Self::ComfyPreview => "view.comfy_preview",
             Self::Open => "file.open",
             Self::OpenInNewWindow => "file.open_in_new_window",
             Self::ChangeWorkspaceRoot => "file.change_workspace_root",
@@ -280,7 +280,7 @@ impl ShortcutAction {
             Self::New => "New document",
             Self::NewWindow => "New window",
             Self::NewFromTemplate => "New from template",
-            Self::ComfyDocument => "Toggle Typst comfy defaults",
+            Self::ComfyPreview => "Toggle comfy preview",
             Self::Open => "Open",
             Self::OpenInNewWindow => "Open in new window",
             Self::ChangeWorkspaceRoot => "Change workspace root",
@@ -388,7 +388,7 @@ impl ShortcutAction {
             | Self::SelectAll
             | Self::ToggleComment
             | Self::NewTable
-            | Self::ComfyDocument
+            | Self::ComfyPreview
             | Self::EditTable
             | Self::Find
             | Self::FindReplace
@@ -1197,7 +1197,7 @@ fn default_binding(action: ShortcutAction, platform: ShortcutPlatform) -> Option
         Action::Paste => ShortcutChord::primary(Key::V),
         Action::SelectAll => ShortcutChord::primary(Key::A),
         Action::ToggleComment => ShortcutChord::primary(Key::Slash),
-        Action::NewTable | Action::EditTable | Action::NewFromTemplate | Action::ComfyDocument => {
+        Action::NewTable | Action::EditTable | Action::NewFromTemplate | Action::ComfyPreview => {
             return None;
         }
         Action::Find => ShortcutChord::primary(Key::F),
@@ -1305,7 +1305,7 @@ mod tests {
                         ShortcutAction::NewTable
                             | ShortcutAction::EditTable
                             | ShortcutAction::NewFromTemplate
-                            | ShortcutAction::ComfyDocument
+                            | ShortcutAction::ComfyPreview
                     )
             ));
         }

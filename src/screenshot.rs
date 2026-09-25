@@ -123,11 +123,14 @@ pub enum UiSnapshotScene {
     FindStickyContext,
     PreviewCompiling,
     PdfiumPreview,
+    PreviewControls,
+    PreviewWindow,
+    PreviewNativeWindow,
     Icons,
 }
 
 impl UiSnapshotScene {
-    pub const ALL: [Self; 58] = [
+    pub const ALL: [Self; 61] = [
         Self::TableEditor,
         Self::TableEditorNarrow,
         Self::Main,
@@ -185,6 +188,9 @@ impl UiSnapshotScene {
         Self::FindStickyContext,
         Self::PreviewCompiling,
         Self::PdfiumPreview,
+        Self::PreviewControls,
+        Self::PreviewWindow,
+        Self::PreviewNativeWindow,
         Self::Icons,
     ];
 
@@ -248,6 +254,9 @@ impl UiSnapshotScene {
             Self::FindStickyContext => "find-sticky-context",
             Self::PreviewCompiling => "preview-compiling",
             Self::PdfiumPreview => "pdfium-preview",
+            Self::PreviewControls => "preview-controls",
+            Self::PreviewWindow => "preview-window",
+            Self::PreviewNativeWindow => "preview-native-window",
         }
     }
 
@@ -280,6 +289,8 @@ impl UiSnapshotScene {
             | Self::PreviewCompiling
             | Self::PdfiumPreview
             | Self::Icons => ROOT_VIEWPORT_NAME,
+            Self::PreviewControls => "preview-controls",
+            Self::PreviewWindow | Self::PreviewNativeWindow => "preview-window",
             Self::FileMenu
             | Self::EditMenu
             | Self::EditorContextMenu
@@ -379,6 +390,9 @@ impl UiSnapshotScene {
             "find-sticky-context" => Self::FindStickyContext,
             "preview-compiling" => Self::PreviewCompiling,
             "pdfium-preview" => Self::PdfiumPreview,
+            "preview-controls" => Self::PreviewControls,
+            "preview-window" => Self::PreviewWindow,
+            "preview-native-window" => Self::PreviewNativeWindow,
             _ => {
                 let choices = Self::ALL
                     .iter()
@@ -1605,7 +1619,7 @@ mod tests {
         let default_output_count = contract.themes.len()
             + component_count * contract.scene_themes.len()
             + contract.variants.len();
-        assert_eq!(default_output_count, 72);
+        assert_eq!(default_output_count, 74);
     }
 
     #[test]

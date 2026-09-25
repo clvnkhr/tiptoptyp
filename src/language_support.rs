@@ -4,14 +4,14 @@ use tiptoptyp_core::document::{DocumentKind, TypesettingLanguage};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BuildEngineKind {
     Typst,
-    Tectonic,
+    Tex,
 }
 
 impl BuildEngineKind {
     pub(crate) fn language(self) -> TypesettingLanguage {
         match self {
             Self::Typst => TypesettingLanguage::Typst,
-            Self::Tectonic => TypesettingLanguage::Tex,
+            Self::Tex => TypesettingLanguage::Tex,
         }
     }
 }
@@ -38,7 +38,7 @@ impl LanguageSupport {
                 interactive_preview: true,
             },
             Some(TypesettingLanguage::Tex) => Self {
-                build: Some(BuildEngineKind::Tectonic),
+                build: Some(BuildEngineKind::Tex),
                 language_service: Some(LanguageServiceKind::Texlab),
                 interactive_preview: false,
             },
@@ -89,7 +89,7 @@ mod tests {
             assert!(!support.interactive_preview);
         }
         let tex = LanguageSupport::for_document(DocumentKind::Tex);
-        assert_eq!(tex.build, Some(BuildEngineKind::Tectonic));
+        assert_eq!(tex.build, Some(BuildEngineKind::Tex));
         assert_eq!(tex.language_service, Some(LanguageServiceKind::Texlab));
         assert!(!tex.interactive_preview);
         let typst = LanguageSupport::for_document(DocumentKind::Typst);

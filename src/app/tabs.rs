@@ -68,6 +68,11 @@ impl Default for Tabs {
     }
 }
 impl Tabs {
+    pub(super) fn set_workspace(&mut self, root: &Path) {
+        for record in self.records.values_mut() {
+            record.workspace = root.to_owned();
+        }
+    }
     #[cfg(target_os = "macos")]
     pub(super) fn suppress_native_drag(
         &mut self,
@@ -594,7 +599,6 @@ impl EditorApp {
         incoming.folding.rekey(old_key, incoming.document.key());
         let new_key = incoming.document.key();
         let incoming_editor = incoming.editor.take().unwrap_or_default();
-        let incoming_workspace = incoming.workspace.clone();
         // Close approvals survive a pure view switch, never an intervening edit.
         for (_, key) in &mut self.tabs.approved {
             if *key == old_key {
@@ -602,7 +606,6 @@ impl EditorApp {
             }
         }
         self.tabs.active = Some(id);
-        self.workspace_root = incoming_workspace;
         incoming_editor.store(context, source_editor_id(context));
         self.reset_transient_editor_state();
         self.last_editor_caret = None;
@@ -690,15 +693,12 @@ impl EditorApp {
             return;
         }
         let preserve_preview = self.source_preview_available();
-        let workspace_changed = self.tabs.records[&id].workspace != self.workspace_root;
         self.activate_record(id, context);
         self.tabs.reveal_active = true;
         self.tabs.refresh_autosave();
         self.clear_preview_for_document(preserve_preview);
         self.git_editor.clear_document();
-        if workspace_changed {
-            self.reset_document_services();
-        } else if let Some(path) = self.document().path().clone() {
+        if let Some(path) = self.document().path().clone() {
             if self.tinymist_sync.generation.is_some() {
                 self.reopen_tinymist_current_document(&path, self.document().kind());
             } else {

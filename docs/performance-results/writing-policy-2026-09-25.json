@@ -1,0 +1,27 @@
+{
+  "date": "2026-09-25",
+  "scope": "worker writing-check pipeline; no GUI timings",
+  "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+  "compiler": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)",
+  "flags": [
+    "opt-level=3",
+    "lto=thin",
+    "codegen-units=1"
+  ],
+  "fixture_repeat": 80,
+  "fixture": "\"#set text(lang: \\\"uk\\\", font: \\\"NonsensicalFontName\\\")\\nThe Leray theorem has the the consequence.\\n$ nonwordxyz + nonwordxyz $\\nThiss is ordinary prose.\\n\"",
+  "warmup": 4,
+  "warm_samples": 20,
+  "baseline_commit": "e94766d",
+  "after_sha256": "23f54e76402e55bdb535d8b2063160d05ac0fc2bfaba5db29f6a7d4dca7af745",
+  "before": [
+    "cold_us=1681154 diagnostics=480\nwarm_median_us=61317 warm_min_us=60675 warm_max_us=62651 bytes=11760",
+    "cold_us=1684980 diagnostics=480\nwarm_median_us=60887 warm_min_us=60387 warm_max_us=64059 bytes=11760",
+    "cold_us=1661435 diagnostics=480\nwarm_median_us=62286 warm_min_us=60567 warm_max_us=63894 bytes=11760"
+  ],
+  "after": [
+    "cold_us=1670125 diagnostics=160\nwarm_median_us=60986 warm_min_us=60518 warm_max_us=62508 bytes=11760",
+    "cold_us=1679801 diagnostics=160\nwarm_median_us=60992 warm_min_us=60183 warm_max_us=74541 bytes=11760",
+    "cold_us=1690785 diagnostics=160\nwarm_median_us=61417 warm_min_us=60739 warm_max_us=63427 bytes=11760"
+  ]
+}

@@ -12,9 +12,9 @@ scripts/capture-theme-gallery.sh
 Ordinary timestamped captures remain private under `.tiptoptyp/screenshots`.
 Only deliberate `--ui-screenshot-latest` captures belong here.
 
-The maintained matrix contains exactly 22 decoded PNGs:
+The maintained matrix contains exactly 24 decoded PNGs:
 
-- the ready main editor/preview and all 18 component scenes in Catppuccin Latte;
+- the ready main editor/preview and all 20 component scenes in Catppuccin Latte;
 - three Catppuccin Mocha samples: the main window, File dropdown and Save popup.
 
 Extra themes and color-transform variants remain opt-in. Panel and diagnostic

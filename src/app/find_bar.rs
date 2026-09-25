@@ -9,6 +9,7 @@ use crate::{document::DocumentKey, search::SearchSession};
 use eframe::egui::{self, RichText};
 
 pub(super) struct FindBarState {
+    pub(super) edit_events: Vec<egui::Event>,
     pub(super) visible: bool,
     pub(super) replace_visible: bool,
     pub(super) query: String,
@@ -25,6 +26,7 @@ pub(super) struct FindBarState {
 impl Default for FindBarState {
     fn default() -> Self {
         Self {
+            edit_events: Vec::new(),
             visible: false,
             replace_visible: false,
             query: String::new(),
@@ -113,6 +115,7 @@ impl FindBarState {
     }
 
     pub(super) fn close(&mut self) {
+        self.edit_events.clear();
         self.visible = false;
         self.child_focused = false;
         self.blur_started = None;
@@ -139,6 +142,8 @@ pub(super) fn show(
     document_key: DocumentKey,
     editable: bool,
 ) -> FindBarActions {
+    ui.ctx()
+        .input_mut(|input| input.events.append(&mut state.edit_events));
     let match_status = {
         let search_results = state.search.results(
             source,

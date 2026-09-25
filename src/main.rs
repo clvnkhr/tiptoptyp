@@ -53,6 +53,7 @@ mod screenshot;
 mod search;
 mod settings;
 mod shortcuts;
+mod synctex;
 mod syntax_theme;
 mod terminal;
 #[cfg(test)]

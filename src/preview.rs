@@ -183,7 +183,6 @@ pub(crate) struct PreviewController {
     pub(crate) requested_zoom: Option<f32>,
     pub(crate) requested_page: Option<usize>,
     pub(crate) dark: bool,
-    pub(crate) source_colors: bool,
     was_visible: bool,
 }
 
@@ -434,7 +433,6 @@ impl PreviewController {
             requested_zoom: None,
             requested_page: None,
             dark,
-            source_colors: false,
             was_visible: false,
         }
     }
@@ -467,7 +465,7 @@ impl PreviewController {
     }
 
     pub(crate) fn render_dark(&self) -> bool {
-        self.dark && !self.source_colors
+        self.dark
     }
 
     pub(crate) fn bump_appearance(&mut self, dark: bool) {

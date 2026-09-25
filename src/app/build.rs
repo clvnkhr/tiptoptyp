@@ -2,7 +2,7 @@
 use super::*;
 use crate::{
     compiler::{
-        CompileEvent, CompileInput, CompileRequest, EngineConfig, TectonicOptions, TypstOptions,
+        CompileEvent, CompileInput, CompileRequest, EngineConfig, TexOptions, TypstOptions,
     },
     language_support::BuildEngineKind,
 };
@@ -21,7 +21,6 @@ impl EditorApp {
                 return;
             }
         };
-        self.preview.source_colors = super::templates::without_comfy(&source).is_some();
         let source_dir = self.preview_source_directory();
         let display_name = preview_path
             .file_name()
@@ -33,18 +32,8 @@ impl EditorApp {
         let Some(language) = self.preview_document_kind().typesetting_language() else {
             return;
         };
-        if engine == BuildEngineKind::Tectonic
-            && (!self.settings.tex.build_enabled
-                || self.settings.tex.build_engine == crate::tex::settings::BuildEngine::Latex)
-        {
-            self.set_compile_error(
-                if self.settings.tex.build_enabled {
-                    "Standard LaTeX builds are not implemented yet"
-                } else {
-                    "TeX builds are disabled in Settings"
-                }
-                .into(),
-            );
+        if engine == BuildEngineKind::Tex && !self.settings.tex.build_enabled {
+            self.set_compile_error("TeX builds are disabled in Settings".into());
             return;
         }
         let engine = match engine {
@@ -53,9 +42,26 @@ impl EditorApp {
                 executable: self.typst_tool.program.clone(),
                 font_paths: self.font_catalog.workspace_directories().to_vec(),
             }),
-            BuildEngineKind::Tectonic => EngineConfig::Tectonic(TectonicOptions {
-                command: self.tex_tools.tectonic.command.clone().into(),
-                executable: self.tex_tools.tectonic.program.clone(),
+            BuildEngineKind::Tex => EngineConfig::Tex(TexOptions {
+                command: if self.settings.tex.build_engine
+                    == crate::tex::settings::BuildEngine::Tectonic
+                {
+                    self.tex_tools.tectonic.command.clone()
+                } else {
+                    Default::default()
+                }
+                .into(),
+                engine: self.settings.tex.build_engine,
+                executable: if self.settings.tex.build_engine
+                    == crate::tex::settings::BuildEngine::Tectonic
+                {
+                    self.tex_tools.tectonic.program.clone()
+                } else {
+                    self.tex_tools
+                        .distribution(self.settings.tex.build_engine)
+                        .unwrap_or_else(|| Path::new(self.settings.tex.build_engine.executable()))
+                        .to_owned()
+                },
                 only_cached: self.settings.tex.only_cached,
             }),
         };
@@ -137,11 +143,28 @@ impl EditorApp {
                 }
                 CompileEvent::Failed(report) => self.set_compile_failure(report),
                 CompileEvent::Artifact(artifact) => {
+                    self.synctex.artifact =
+                        artifact.synctex.map(|map| super::synctex::VersionedMap {
+                            path: self.preview_document_path(),
+                            key: artifact.key,
+                            map,
+                            pdf: artifact.pdf.clone(),
+                        });
                     self.preview.accept_artifact(artifact.key, artifact.pdf);
                     self.set_diagnostics(artifact.diagnostics);
                     self.activity.build = crate::activity::Activity::Idle;
                     self.preview.status = PreviewStatus::Ready(result.elapsed);
                     self.complete_pending_export();
+                    if self.settings.preview_follow_edits
+                        && self.preview_visible()
+                        && self.tex_tools.synctex.is_some()
+                        && self.current_is_preview_document()
+                        && self.document().kind() == DocumentKind::Tex
+                        && let Some(caret) = &self.last_editor_caret
+                        && caret.key == self.document().key()
+                    {
+                        self.jump_source_to_preview_with_mode(caret.char_index, true);
+                    }
                 }
             }
         }

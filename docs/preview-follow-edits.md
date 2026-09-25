@@ -16,7 +16,12 @@ An explicit preview jump supersedes a pending automatic jump.
 Hidden and paused previews do not follow edits. Changing the active document,
 revision, Tinymist session, backend or toggle discards pending work. Automatic
 following does not focus the editor or open the preview from Code view.
-PDFium previews lack source mapping and keep their existing behavior.
+TeX PDFs use the SyncTeX map attached to an accepted build. When the installed
+`synctex` utility is available, a visible TeX preview follows the caret after each
+accepted compile. One coalescing worker performs the lookup; its result is checked
+against the current preview path and PDF generation. New point coordinates wait
+for that PDF's page dimensions. Without the utility, automatic following stays
+inactive. Opened PDF assets do not have source mapping.
 Source that produces no rendered location, such as a comment, may have no jump
 target. Tinymist compile reports are unversioned; the adapter admits only reports
 for the current session/preview entry received after the edit and waits through

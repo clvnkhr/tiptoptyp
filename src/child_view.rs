@@ -332,7 +332,10 @@ impl ChildViewHost {
     }
 
     pub(crate) fn close(context: &egui::Context, salt: &'static str) {
-        let id = scoped_child_viewport_id(context, salt);
+        Self::close_viewport(context, scoped_child_viewport_id(context, salt));
+    }
+
+    pub(crate) fn close_viewport(context: &egui::Context, id: egui::ViewportId) {
         if crate::window_host::transition(context, id, ChildViewLifecycle::DurablyClosed) {
             context.send_viewport_cmd_to(id, egui::ViewportCommand::Close);
             crate::font_preview::dispose_viewport(context, id);

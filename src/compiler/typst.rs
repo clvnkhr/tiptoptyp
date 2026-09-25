@@ -435,6 +435,7 @@ fn finish_settled_completion(session: &mut Option<WatchSession>, results: &mut V
         // remove the private workspace before publication or inspection finishes.
         match fs::read(&current.pdf_path) {
             Ok(pdf) => EngineEvent::Pdf {
+                synctex: None,
                 pdf: pdf.into(),
                 diagnostics,
             },

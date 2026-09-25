@@ -106,6 +106,9 @@ The accepted scenes and their framebuffer targets are:
 | `find-replace` | `find-replace` | Find and replace controls |
 | `find-sticky-context` | `find-replace` | Find/replace controls and match count for the scrolled sticky-context fixture |
 | `preview-compiling` | `main` | Compiling status and empty preview state |
+| `preview-controls` | `preview-controls` | Shared floating navigation, search and outline controls |
+| `preview-window` | `preview-window` | Detached PDF preview with shared window chrome |
+| `preview-native-window` | `preview-window` | Detached Tinymist native view: use bounds tracing; its pixels are outside the framebuffer |
 | `pdfium-preview` | `main` | Actual bundled PDFium pixels and native egui controls; requires `fetch-pdfium` |
 
 A capture batch retains its initial document separately from scene-specific

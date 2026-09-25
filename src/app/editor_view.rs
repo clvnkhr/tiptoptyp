@@ -4,6 +4,28 @@ use super::*;
 use eframe::egui::text::{ByteIndex, LayoutJob, LayoutSection};
 
 impl EditorApp {
+    fn insert_editor_text(&mut self, context: &egui::Context, text: &str) {
+        let snapshot = self.editor_snapshot(context);
+        let range = snapshot.cursor.as_sorted_char_range();
+        let start = snapshot
+            .source
+            .char_indices()
+            .nth(range.start.0)
+            .map_or(snapshot.source.len(), |(i, _)| i);
+        let end = snapshot
+            .source
+            .char_indices()
+            .nth(range.end.0)
+            .map_or(snapshot.source.len(), |(i, _)| i);
+        self.document_mut().edit(snapshot.cursor, |source| {
+            source.replace_range(start..end, text)
+        });
+        let cursor = CCursorRange::one(CCursor::new(range.start.0 + text.chars().count()));
+        self.store_editor_cursor(context, cursor);
+        self.mark_edited();
+        let editor = source_editor_id(context);
+        context.memory_mut(|m| m.request_focus(editor));
+    }
     pub(super) fn show_find_bar(&mut self, ui: &mut egui::Ui) {
         let source = self.tabs.current_record().document.source();
         let document_key = self.document().key();
@@ -120,6 +142,43 @@ impl EditorApp {
     }
 
     pub(super) fn show_editor(&mut self, ui: &mut egui::Ui) {
+        if let Some(path) = self.document().path().clone()
+            && !path.starts_with(&self.workspace_root)
+        {
+            ui.horizontal_wrapped(|ui| {
+                ui.weak(format!(
+                    "Outside this workspace: {}",
+                    self.workspace_root.display()
+                ));
+                if ui
+                    .button("Switch to this workspace root")
+                    .on_hover_text(path.parent().unwrap_or(&path).display().to_string())
+                    .clicked()
+                {
+                    let root = discover_project_root(path.parent().unwrap_or(&path));
+                    self.finish_open_folder_selection(root);
+                }
+            });
+        }
+        let drop_id = viewport_scoped_id(ui.ctx(), "explorer-source-drop");
+        if let Some((path, position)) = ui
+            .ctx()
+            .data_mut(|data| data.remove_temp::<(PathBuf, Pos2)>(drop_id))
+            && ui.max_rect().contains(position)
+            && self.table_editor.is_none()
+        {
+            let text = self
+                .document()
+                .path()
+                .as_deref()
+                .and_then(Path::parent)
+                .and_then(|base| path.strip_prefix(base).ok())
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            self.insert_editor_text(ui.ctx(), &text);
+        }
+
         let _span = crate::performance::span("ui.source");
         let read_only = self.table_editor.is_some();
         if read_only {
@@ -206,7 +265,8 @@ impl EditorApp {
             .as_ref()
             .map(|_| self.workspace_root.clone());
         let source_preview_trigger = self.settings.source_preview_trigger;
-        let preview_jump_enabled = document_kind.is_typst() && self.interactive_preview_active();
+        let preview_jump_enabled = (document_kind.is_typst() && self.interactive_preview_active())
+            || (document_kind == DocumentKind::Tex && self.synctex.artifact.is_some());
         let sticky_context_enabled = document_kind.is_typst()
             && (sticky_context_snapshot || self.settings.sticky_context_rows);
         let snapshot_scroll_offset = source_editor_snapshot_scroll_offset(self.snapshot_scene);

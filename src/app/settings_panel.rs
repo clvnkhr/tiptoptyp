@@ -344,6 +344,7 @@ impl SettingsPanel<'_> {
                     );
                 }
 
+                ui.checkbox(&mut edited.comfy_preview, "Comfy preview — match page and text to the interface");
                 settings_target_anchor(
                     ui,
                     SettingsTarget::PageTheme,
@@ -702,7 +703,7 @@ impl SettingsPanel<'_> {
                 ui.add_space(theme::SPACE.small);
                 ui.scope(|ui| {
                     ui.strong("TeX tools");
-                    show_tex_preferences(ui, &mut edited.tex);
+                    show_tex_preferences(ui, &mut edited.tex, self.tex_tools);
                     for (kind, preference, resolution) in [
                         (crate::toolchain::ToolKind::Tectonic, &mut edited.tex.tectonic, &self.tex_tools.tectonic),
                         (crate::toolchain::ToolKind::Texlab, &mut edited.tex.texlab, &self.tex_tools.texlab),
@@ -1105,23 +1106,32 @@ pub(super) fn show_bracket_controls(
     });
 }
 
-fn show_tex_preferences(ui: &mut egui::Ui, settings: &mut crate::tex::settings::TexSettings) {
+fn show_tex_preferences(
+    ui: &mut egui::Ui,
+    settings: &mut crate::tex::settings::TexSettings,
+    tools: &crate::tex::tools::TexTools,
+) {
     use crate::tex::settings::{BuildEngine, Formatter};
     ui.checkbox(&mut settings.build_enabled, "Build TeX documents");
     ui.horizontal_wrapped(|ui| {
         ui.label("Build engine:");
-        ui.selectable_value(
-            &mut settings.build_engine,
-            BuildEngine::Tectonic,
-            "Tectonic",
-        );
-        ui.add_enabled(false, egui::Button::new("Standard LaTeX (coming soon)"));
+        for engine in BuildEngine::ALL {
+            ui.selectable_value(&mut settings.build_engine, engine, engine.label());
+        }
     });
-    if settings.build_engine == BuildEngine::Latex {
-        ui.label("Standard LaTeX is not implemented yet. Select Tectonic to build.");
+    if settings.build_engine != BuildEngine::Tectonic {
+        if let Some(path) = tools.distribution(settings.build_engine) {
+            ui.weak(format!("Detected: {}", path.display()));
+        } else {
+            ui.weak("Not found. Install a TeX distribution such as MacTeX and restart the app.");
+        }
     }
-    ui.checkbox(&mut settings.only_cached, "Use cached TeX packages only")
-        .on_hover_text("Otherwise Tectonic downloads missing packages. Shell escape is disabled.");
+    ui.add_enabled_ui(settings.build_engine == BuildEngine::Tectonic, |ui| {
+        ui.checkbox(&mut settings.only_cached, "Use cached TeX packages only")
+            .on_hover_text(
+                "Otherwise Tectonic downloads missing packages. Shell escape is disabled.",
+            );
+    });
     ui.checkbox(&mut settings.texlab_enabled, "TexLab editor intelligence");
     ui.indent("texlab-features", |ui| {
         ui.checkbox(&mut settings.completion, "TeX completions");
@@ -1158,10 +1168,11 @@ mod tests {
     #[test]
     fn tex_controls_keep_build_intelligence_format_and_lint_independent() {
         use crate::tex::settings::{Formatter, TexSettings};
+        let tools = crate::tex::tools::TexTools::resolve(&TexSettings::default());
         let mut harness = Harness::builder()
             .with_size(Vec2::new(700.0, 600.0))
             .build_ui_state(
-                |ui, settings: &mut TexSettings| show_tex_preferences(ui, settings),
+                |ui, settings: &mut TexSettings| show_tex_preferences(ui, settings, &tools),
                 TexSettings::default(),
             );
         harness.run();

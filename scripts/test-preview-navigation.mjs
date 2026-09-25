@@ -17,7 +17,7 @@ function fixture() {
     scrollBy(x, y) { this.x += x; this.y += y; },
   };
   const svg = {
-    tagName: 'svg',
+    tagName: 'svg', children: [],
     getAttribute: () => '100',
     getBoundingClientRect: () => ({ left: -scroll.x, top: -scroll.y }),
   };
@@ -34,7 +34,7 @@ function fixture() {
   };
   const container = { documents: [{ impl: doc }] };
   runInNewContext(source, {
-    document: { getElementById: () => container },
+    document: { getElementById: () => container, readyState: 'loading', addEventListener() {} },
     window: { addEventListener: (name, handler) => handlers.set(name, handler) },
     requestAnimationFrame: callback => { frames.push(callback); return frames.length; },
   });
