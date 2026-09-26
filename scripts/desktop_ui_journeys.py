@@ -13,6 +13,17 @@ def fingerprint(text):
 
 
 class EditorJourneys:
+    def focus_document_window(self):
+        if self.snapshot()["document"]["focused"]:
+            return
+        windows = self.native("windows").get("windows", [])
+        title = next((window.get("AXTitle") for window in windows
+                      if window.get("AXMain") and not window.get("AXMinimized")), None)
+        self.native("activate")
+        if title:
+            self.native("raise", title)
+        self.wait("document window focused", lambda d: d["focused"])
+
     def paste_source(self, text):
         import json
         import subprocess
@@ -53,7 +64,18 @@ class EditorJourneys:
     def source_is(self, text):
         return self.wait("exact fixture content", lambda d: d["source_fingerprint"] == fingerprint(text) and d["source_bytes"] == len(text.encode("utf-8")))
 
+    def ensure_typesetting_tab(self):
+        """Keep document-scoped journeys independent of dialog tab residue."""
+        if (self.snapshot()["document"]["path"] or "").endswith((".typ", ".tex")):
+            return
+        for _ in range(4):
+            self.key(48, "ctrl+shift")
+            if (self.snapshot()["document"]["path"] or "").endswith((".typ", ".tex")):
+                break
+        self.wait("journey selects a typesetting document", lambda d: (d["path"] or "").endswith((".typ", ".tex")))
+
     def scratch(self, text=""):
+        self.focus_document_window()
         count = self.snapshot()["document"]["tabs"]
         self.key(45)
         self.wait("new empty scratch tab", lambda d: d["tabs"] == count + 1 and d["path"] is None and d["source_bytes"] == 0)
@@ -68,20 +90,30 @@ class EditorJourneys:
         return count
 
     def close_scratch(self, count):
-        self.click("editor.source")
-        self.key(0)
-        self.key(51, "none")
-        self.source_is("")
-        self.wait("cleared scratch is clean", lambda d: not d["dirty"])
         self.key(13)
-        self.wait("scratch tab closed once", lambda d: d["tabs"] == count)
+        self.wait("scratch close either completes or asks for confirmation",
+                  lambda d: d["tabs"] == count or d["modal_open"])
+        if self.snapshot()["document"]["modal_open"]:
+            self.wait_target("modal.discard")
+            self.click("modal.discard")
+        self.wait("scratch tab closed once", lambda d: d["tabs"] == count and not d["modal_open"])
 
     def editing(self):
-        count = self.scratch("zzz")
-        self.wait("typed caret follows text", lambda d: d["cursor"] == [3, 3])
+        count = self.scratch()
+        self.click("editor.source")
+        self.native("text", "zzz")
+        # Observe the edit and caret in one frame. Waiting for the source
+        # first can allow an asynchronous selection update to move the caret
+        # before the regression assertion samples it.
+        self.wait("typed caret follows text", lambda d: d["source_fingerprint"] == fingerprint("zzz")
+                  and d["cursor"] == [3, 3])
+        self.stable_state(lambda d: d["source_fingerprint"] == fingerprint("zzz") and d["cursor"] == [3, 3])
+        self.click("editor.source")
         self.key(6)  # Undo
         self.source_is("")
+        self.click("editor.source")
         self.key(123, "cmd")  # Move caret before replaying the edit.
+        self.click("editor.source")
         self.key(6, "cmd+shift")
         self.source_is("zzz")
         self.wait("redo restores post-edit caret", lambda d: d["cursor"] == [3, 3])
@@ -171,7 +203,97 @@ class EditorJourneys:
         self.wait("original tab and pinned preview retained", lambda d: d["path"] == original["path"]
                   and d["source_fingerprint"] == original["source_fingerprint"] and d["preview_path"] == original["preview_path"])
 
+    def tab_drag(self):
+        count = self.scratch("first scratch")
+        self.scratch("second scratch")
+        before = self.snapshot()["document"]["tab_order"]
+        if len(before) != count + 2:
+            raise AssertionError(f"unexpected tab order before drag: {before}")
+        source = f"tab.{before[-1]}"
+        destination = f"tab.{before[0]}"
+        self.drag(source, destination)
+        self.wait("tab drag reorders the native strip", lambda d: d["tab_order"] == [before[-1], *before[:-1]])
+        self.click(f"tab.{before[1]}")
+        self.wait("first scratch remains selectable after drag", lambda d: d["active_tab_id"] == before[1])
+        self.close_scratch(count + 1)
+        self.click(f"tab.{before[-1]}")
+        self.close_scratch(count)
+        self.wait("tab drag preserves the original tab", lambda d: d["tabs"] == count and d["path"] is not None)
+
+    def dialogs(self):
+        opened = self.directory / "opened.tex"
+        opened.write_text("\\documentclass{article}\n\\begin{document}\nOpened.\\n\\end{document}\n")
+        self.key(31, "cmd")  # Cmd+O
+        import time
+        time.sleep(0.8)  # rfd creates the native panel asynchronously.
+        self.native("ax-press-description", "search")
+        self.native("text", opened.name)
+        time.sleep(0.8)
+        self.native("ax-press-title", "Open")
+        self.wait("native Open panel loads a TeX file", lambda d: d["path"] == str(opened), timeout=15)
+
+        self.key(45)  # New empty document.
+        self.wait("dialog journey gets an empty tab", lambda d: d["path"] is None and d["source_bytes"] == 0)
+        destination = self.directory / "saved.arbitrary"
+        self.key(1, "cmd+shift")  # Cmd+Shift+S
+        time.sleep(0.8)
+        self.native("ax-set-text", destination.name)
+        self.native("ax-press-title", "Save")
+        self.wait("Save As accepts an arbitrary extension", lambda d: d["path"] == str(destination), timeout=15)
+
+    def startup_preview(self):
+        source = self.directory / "journey.typ"
+        self.wait("plain launch starts with an unbound startup buffer", lambda d: d["tabs"] == 1 and d["path"] is None and d["source_bytes"] > 0)
+        self.key(31, "cmd")  # Cmd+O
+        import time
+        time.sleep(0.8)
+        self.native("ax-press-description", "search")
+        self.native("text", source.name)
+        time.sleep(0.8)
+        self.native("ax-press-title", "Open")
+        self.wait("first opened source becomes active", lambda d: d["path"] == str(source), timeout=15)
+        self.wait("first opened source becomes the preview target", lambda d: d["preview_path"] == str(source) and d["preview_tab_id"] == d["active_tab_id"], timeout=30)
+
+    def diagnostics(self):
+        current_path = self.snapshot()["document"]["path"] or ""
+        if not current_path.endswith((".typ", ".tex")):
+            # The dialog journey deliberately leaves an arbitrary-extension
+            # tab active. Move back to the original Typst owner before
+            # asking the compiler for diagnostics.
+            for _ in range(2):
+                self.key(48, "ctrl+shift")
+            self.wait("diagnostic journey selects a typesetting tab", lambda d: (d["path"] or "").endswith(".typ"))
+        before = self.snapshot()["document"]
+        self.click("editor.source")
+        self.key(0)
+        self.paste_source("#let broken = {\n")
+        self.key(23)  # Problems
+        self.wait("Problems exposes compiler diagnostics", lambda d: d["panel"] == "Problems" and d["diagnostic_count"] > 0, timeout=30)
+        self.wait_target("problem.0")
+        self.double_click("problem.0")
+        self.wait("diagnostic navigation returns focus to the editor", lambda d: d["focused"] and d["panel"] == "Problems")
+        self.key(6, "cmd")
+        self.wait("diagnostic fixture undo restores the prior source", lambda d: d["source_fingerprint"] == before["source_fingerprint"] and d["source_bytes"] == before["source_bytes"])
+        self.key(23)
+        self.wait("diagnostic journey closes its panel", lambda d: d["panel"] is None)
+
+    def completion(self):
+        count = self.scratch("#mi(`\\alp`)")
+        self.key(123, "none")
+        self.key(123, "none")
+        self.key(49, "ctrl")  # Explicit completion request.
+        self.wait("completion popup receives a real response", lambda d: d["completion_visible"] and d["completion_count"] > 0, timeout=30)
+        self.wait_target("completion.item.0")
+        self.key(53, "none")  # Escape dismisses without editing the source.
+        self.wait("completion dismisses without changing source", lambda d: not d["completion_visible"])
+        self.source_is("#mi(`\\alp`)")
+        self.close_scratch(count)
+
     def layout(self):
+        # The dialog journey intentionally leaves an arbitrary-extension tab
+        # active. View-mode and panel commands are document-scoped, so make
+        # this journey self-contained instead of relying on aggregate order.
+        self.ensure_typesetting_tab()
         initial = self.snapshot()["document"]
         for key, mode in ((19, "Code"), (21, "Preview"), (20, "Split")):
             self.key(key)
@@ -277,6 +399,13 @@ class EditorJourneys:
                 self.click("preview.open")
                 self.wait("opening controls dismisses the toolbar tooltip", lambda d: not d["hover_tooltip_open"])
             self.wait("controls opened", lambda d: d["preview_controls_open"])
+            before_position = self.wait("controls position measured", lambda d: d["preview_controls_position"] is not None)["document"]["preview_controls_position"]
+            self.wait_target("preview.drag_handle")
+            handle = self.snapshot()["targets"]["preview.drag_handle"]
+            self.native("drag", handle["x"], handle["y"], handle["x"] + 48, handle["y"] + 24)
+            self.wait("preview controls drag persists", lambda d: d["preview_controls_position"] is not None and
+                      (abs(d["preview_controls_position"][0] - before_position[0]) > 12 or
+                       abs(d["preview_controls_position"][1] - before_position[1]) > 12))
             self.wait_target("preview.Outline")
             if not self.snapshot()["document"]["preview_outline"]:
                 self.click("preview.Outline")
@@ -335,6 +464,7 @@ class EditorJourneys:
         self.close_settings()
 
     def background(self):
+        self.ensure_typesetting_tab()
         self.choose_backend("Pdfium")
         self.key(19)
         self.wait("preview pane hidden", lambda d: d["view_mode"] == "Code")

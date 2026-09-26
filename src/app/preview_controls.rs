@@ -109,6 +109,8 @@ impl Controls {
         let mut action = None;
         ui.horizontal(|ui| {
             let handle = ui.add(egui::Label::new("Preview").sense(Sense::drag()));
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            crate::desktop_test::observe("preview.drag_handle", &handle);
             if handle.dragged() {
                 *self.position.get_or_insert(Pos2::ZERO) += handle.drag_delta();
             }

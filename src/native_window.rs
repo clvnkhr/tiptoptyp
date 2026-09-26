@@ -210,6 +210,22 @@ pub(crate) fn application_active(context: &eframe::egui::Context) -> Option<bool
     }
 }
 
+/// Bring the application to the foreground before honoring an explicit user
+/// focus request. A viewport focus command alone can leave an AppKit child
+/// marked key while another application still owns the active NSApplication.
+/// Keeping activation here makes every user initiated focus handoff obey the
+/// same rule, including Settings reopening after an app switch.
+pub(crate) fn activate_application() {
+    #[cfg(target_os = "macos")]
+    if let Some(marker) = objc2::MainThreadMarker::new() {
+        // Explicit user actions need the stronger activation semantics here:
+        // cooperative `activate` can leave a renderer/settings child as the
+        // apparent key window while another app remains frontmost.
+        #[allow(deprecated)]
+        objc2_app_kit::NSApplication::sharedApplication(marker).activateIgnoringOtherApps(true);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

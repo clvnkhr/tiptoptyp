@@ -45,6 +45,9 @@ impl EditorApp {
             "focused": context.input(|input| input.viewport().focused),
             "minimized": context.input(|input| input.viewport().minimized),
             "tabs": self.tabs.len(),
+            "tab_order": self.tabs.ids().collect::<Vec<_>>(),
+            "active_tab_id": self.tabs.active_id(),
+            "preview_tab_id": self.tabs.preview_id(),
             "path": self.document().path(),
             "source_bytes": self.document().source().len(),
             "revision": format!("{:?}", self.document().revision()),
@@ -97,6 +100,7 @@ impl EditorApp {
             "preview_controls_visible": eframe::window_host::window(context, controls_viewport).and_then(|window| window.is_visible()),
             "preview_controls_measured_size": self.preview_controls.inspected_size().map(|size| [size.x, size.y]),
             "preview_controls_size": context.input(|input| input.raw.viewports.get(&controls_viewport).and_then(|viewport| viewport.inner_rect)).map(|rect| [rect.width(), rect.height()]),
+            "preview_controls_position": context.input(|input| input.raw.viewports.get(&controls_viewport).and_then(|viewport| viewport.outer_rect)).map(|rect| [rect.min.x, rect.min.y]),
             "hover_tooltip_open": context.data(|data| data.get_temp::<HoverTooltipOverlay>(hover_tooltip_id).is_some()),
             "preview_controls_open": self.preview_controls.open,
             "preview_popout": self.preview_controls.popout.is_some(),
@@ -108,6 +112,10 @@ impl EditorApp {
             "preview_zoom": controls.zoom,
             "preview_back": controls.back,
             "preview_forward": controls.forward,
+            "diagnostic_count": self.preview.diagnostics.len() + self.preview.editor_diagnostics.len(),
+            "completion_visible": self.editor_completion.as_ref().is_some_and(|completion| !completion.items.is_empty()),
+            "completion_count": self.editor_completion.as_ref().map_or(0, |completion| completion.items.len()),
+            "completion_selected": self.editor_completion.as_ref().map(|completion| completion.selected),
         });
         observation
             .as_object_mut()

@@ -8,7 +8,7 @@ machines. Removing those would lose edge cases and headless CI coverage.
 The desktop journeys use native keyboard/mouse or native Accessibility window
 actions. They never call editor commands through the inspection socket. Exact
 fixture content is compared by byte length/fingerprint; cursor offsets are
-Unicode scalar positions. Temporary scratch tabs are cleared/closed at the end
+Unicode scalar positions. Temporary scratch tabs are closed at the end
 of each journey, so the combined run also detects leaked state between journeys.
 
 ## Promoted interaction contracts
@@ -31,6 +31,9 @@ The retained source tests remain the fast regression layer.
 | `app/tabs_tests.rs::new_tabs_preserve_the_designated_preview_identity` | `tabs`: scratch tabs do not replace the original preview |
 | `app/tabs_tests.rs::last_tab_closes_to_an_empty_workspace_and_new_reuses_the_window` | `empty`: original window survives, Cmd+N is empty |
 | `app/tabs_tests.rs::empty_workspace_new_button_and_close_tab_workflow_are_reusable` | `empty`: keyboard path through close-last/new workflow (button-specific semantics retained) |
+| Plain launch without a saved history target | `startup_preview`: no-argument launch starts with the synthetic editing buffer, then opening the first `.typ` rebinds the preview target to that file |
+| Native file dialog routing | `dialogs`: Open selects a real `.tex` file through the macOS panel; Save As accepts an arbitrary extension |
+| Tab strip reorder behavior | `tab_drag`: native drag reorders scratch tabs and each tab remains selectable |
 | `app/tabs_tests.rs::closing_checks_dirty_background_tabs_without_discarding_on_cancel` | `closing`: active dirty tab cancellation preserves content; background-tab cases retained |
 | `app/tabs_tests.rs::all_dirty_tabs_must_be_approved_and_later_edits_revoke_window_close` | `closing`: repeated close asks again; Cancel/Escape preserve text; Discard closes only requested tab |
 | `app/tests.rs::folding_nested_typst_controls_stay_on_headers_after_click` | `folding`: three real shortcut cycles plus gutter collapse/expand clicks preserve header identities and source; exact gutter geometry remains a fast test |
@@ -44,6 +47,7 @@ The retained source tests remain the fast regression layer.
 | `app/tests.rs::settings_is_root_owned_and_secondary_requests_never_create_a_viewport` | `focus`: one Settings window reached from alternating document owners |
 | Native lifecycle fixture focus/close contracts | `focus`: Settings close returns to most recent owner, minimize/restore, app switch, native close |
 | `app/preview_controls/e2e.rs::e2e_pdf_controls_navigate_search_edit_query_and_restore_history` | `controls`: real PDFium and Tinymist controls, outline/back/forward/pages/zoom/fit/search/minimize/pop-out/close |
+| Preview control persistence | `controls`: native drag moves the compact toolbar and its position remains stable while the outline opens |
 | `scripts/test-preview-e2e.cjs` navigation and history scenarios | `controls`: same user-facing actions through the embedded viewer and native controls, rather than JS action calls |
 | `app/tests.rs::native_preview_load_invalidates_queued_palette_even_when_preview_is_hidden` | `preview`: renderer switches followed by theme/comfy transitions and actual applied state |
 | `scripts/test-native-preview-palette.py` / `test-preview-palette.swift` | `preview`: production app/backend identity and live DOM palette; optional composed-window review |
@@ -72,6 +76,15 @@ The retained source tests remain the fast regression layer.
   journey deliberately waits for the tooltip before opening the popup.
 - Shared fixed modeless popups now suspend while another application is active
   and return without discarding their open state.
+- A plain launch previously designated the synthetic `untitled.typ` buffer as
+  the preview owner, so the first file opened from a no-history launch did not
+  replace the startup preview. The launch now leaves that fallback unbound;
+  the first opened source becomes the preview owner, covered by the native
+  `startup_preview` journey.
+- Native child views and settings can leave the process inactive while the
+  document reports an accessibility focus. The driver now raises the owning
+  document before input and the app explicitly activates itself for user-focus
+  requests; scratch journeys assert this precondition.
 
 Additional requested journeys cover settings-search highlighting and loading the
 Tinymist frontend while its pane is hidden. Native activation guards remain in
@@ -105,11 +118,12 @@ work/reuse checks, not a wall-time performance benchmark or speed claim.
 
 ## Remaining candidates
 
-Real open/save dialogs (including `.tex` and arbitrary extensions), restart/session
-restoration with a pinned TeX target, tab drag reorder, OS file drag/drop,
-completion and diagnostic navigation with actual LSP responses, cross-window
-clipboard ownership, and preview controls dragging/resizing need dedicated
-fixtures. The current journeys must not be cited as coverage for these cases.
+Restart/session restoration with a pinned TeX target, OS file drag/drop,
+completion and diagnostic navigation backed by an external LSP process,
+cross-window clipboard ownership, and preview-control resizing still need
+dedicated fixtures. The current completion and diagnostics journeys exercise
+the app's native response paths (MiTeX completion and compiler diagnostics),
+but do not claim external TexLab or remote-toolchain coverage.
 
 ## Execution evidence
 
@@ -120,11 +134,10 @@ builds, observer-only runs and manual review acknowledgements do not turn that
 failure into a desktop pass. Consult each run's `result.json` for completed
 journeys; do not infer execution from this audit table.
 
-On 2026-09-26, `run-ah3gtlxj` passed all 14 journeys together on macOS 14.6.1
-ARM64, with Accessibility and native input enabled. The run records its binary
-hash and source diff. Formatting, strict all-target Clippy (default and
-`desktop-ui-tests`), the full Rust suite, the 15 xtask tests and the 10 Python
-driver-contract tests passed. Fresh viewport captures of the toolbar, settings
-highlight and preview controls were inspected. These captures verify their
-individual viewport appearance, not native preview composition; the desktop
-journeys assert native interaction and read-only renderer state.
+On 2026-09-26, `run-kqidr5wg` passed all 18 aggregate journeys together on
+macOS 14.6.1 ARM64, with Accessibility and native input enabled. The separate
+`run-xq4hbovu` launch passed the no-history `startup_preview` journey. Each run
+records the exact binary hash, source diff, native actions and read-only state.
+Visual captures remain evidence for individual viewport surfaces, not native
+preview composition; the desktop journeys assert native interaction and
+read-only renderer state.

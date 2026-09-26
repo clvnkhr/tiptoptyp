@@ -80,6 +80,55 @@ if command == "windows" {
     }
     emit(["windows": result]); exit(0)
 }
+if command == "ax-set-text" {
+    guard args.count == 3 else { fail("ax-set-text requires text") }
+    let application = AXUIElementCreateApplication(pid)
+    AXUIElementSetMessagingTimeout(application, 4)
+    func setFirst(_ element: AXUIElement) -> Bool {
+        if (attribute(element, kAXRoleAttribute) as? String) == kAXTextFieldRole,
+           AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, args[2] as CFTypeRef) == .success {
+            return true
+        }
+        var children: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children) == .success,
+              let values = children as? [AXUIElement] else { return false }
+        return values.contains { setFirst($0) }
+    }
+    guard nativeWindows().contains(where: { setFirst($0) }) else { fail("no text field was available") }
+    emit(["set": "text"]); exit(0)
+}
+if command == "ax-press-title" {
+    guard args.count == 3 else { fail("ax-press-title requires title") }
+    let application = AXUIElementCreateApplication(pid)
+    AXUIElementSetMessagingTimeout(application, 4)
+    func press(_ element: AXUIElement) -> Bool {
+        if (attribute(element, kAXTitleAttribute) as? String) == args[2] {
+            return AXUIElementPerformAction(element, kAXPressAction as CFString) == .success
+        }
+        var children: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children) == .success,
+              let values = children as? [AXUIElement] else { return false }
+        return values.contains { press($0) }
+    }
+    guard nativeWindows().contains(where: { press($0) }) else { fail("button title was unavailable") }
+    emit(["pressed": args[2]]); exit(0)
+}
+if command == "ax-press-description" {
+    guard args.count == 3 else { fail("ax-press-description requires description") }
+    let application = AXUIElementCreateApplication(pid)
+    AXUIElementSetMessagingTimeout(application, 4)
+    func press(_ element: AXUIElement) -> Bool {
+        if (attribute(element, kAXDescriptionAttribute) as? String) == args[2] {
+            return AXUIElementPerformAction(element, kAXPressAction as CFString) == .success
+        }
+        var children: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children) == .success,
+              let values = children as? [AXUIElement] else { return false }
+        return values.contains { press($0) }
+    }
+    guard nativeWindows().contains(where: { press($0) }) else { fail("element description was unavailable") }
+    emit(["pressed": args[2]]); exit(0)
+}
 guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { fail("refusing input: target app is not foreground (actual: \(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown") pid \(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1), target \(pid))") }
 let source = CGEventSource(stateID: .hidSystemState)
 if command == "paste" {
@@ -148,17 +197,48 @@ if command == "paste" {
         event.post(tap: .cghidEventTap)
         Thread.sleep(forTimeInterval: 0.05)
     }
-} else if command == "click" || command == "move" {
+} else if command == "click" || command == "double-click" || command == "move" {
     guard args.count == 4, let x = Double(args[2]), let y = Double(args[3]), x.isFinite, y.isFinite else { fail("click requires finite screen coordinates") }
     let point = CGPoint(x: x, y: y)
     let types: [CGEventType] = command == "move" ? [.mouseMoved] : [.leftMouseDown, .leftMouseUp]
-    for type in types {
+    let repetitions = command == "double-click" ? 2 : 1
+    for repetition in 0..<repetitions {
+      for type in types {
         guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left) else { fail("cannot create mouse event") }
         event.flags = []
         event.setIntegerValueField(.mouseEventClickState, value: type == .mouseMoved ? 0 : 1)
         event.post(tap: .cghidEventTap)
         // Preserve distinct move/down/up delivery across native event-loop turns.
         Thread.sleep(forTimeInterval: 0.05)
+      }
+      if repetition == 0 && command == "double-click" {
+        Thread.sleep(forTimeInterval: 0.08)
+      }
     }
+} else if command == "drag" {
+    guard args.count == 6,
+          let x1 = Double(args[2]), let y1 = Double(args[3]),
+          let x2 = Double(args[4]), let y2 = Double(args[5]),
+          [x1, y1, x2, y2].allSatisfy(\.isFinite) else { fail("drag requires four finite coordinates") }
+    let start = CGPoint(x: x1, y: y1)
+    let end = CGPoint(x: x2, y: y2)
+    guard let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: start, mouseButton: .left) else { fail("cannot create drag start") }
+    down.flags = []
+    down.setIntegerValueField(.mouseEventClickState, value: 1)
+    down.post(tap: .cghidEventTap)
+    Thread.sleep(forTimeInterval: 0.08)
+    for step in 1...8 {
+        let fraction = CGFloat(step) / 8.0
+        let point = CGPoint(x: x1 + (x2 - x1) * Double(fraction), y: y1 + (y2 - y1) * Double(fraction))
+        guard let moved = CGEvent(mouseEventSource: source, mouseType: .leftMouseDragged, mouseCursorPosition: point, mouseButton: .left) else { fail("cannot create drag move") }
+        moved.flags = []
+        moved.setIntegerValueField(.mouseEventClickState, value: 1)
+        moved.post(tap: .cghidEventTap)
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+    guard let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: end, mouseButton: .left) else { fail("cannot create drag end") }
+    up.flags = []
+    up.setIntegerValueField(.mouseEventClickState, value: 1)
+    up.post(tap: .cghidEventTap)
 } else { fail("unknown command") }
 emit(["posted": command, "pid": pid])

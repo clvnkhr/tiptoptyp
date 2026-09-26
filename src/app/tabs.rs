@@ -922,6 +922,8 @@ impl EditorApp {
                                             ui.scroll_to_rect(tab.rect, Some(Align::Center));
                                         }
                                         let response = tab.title;
+                                        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                                        crate::desktop_test::observe(&format!("tab.{id}"), &response);
                                         if trace_sample && index < 16 {
                                             use std::fmt::Write as _;
                                             let _ = write!(trace_widgets,

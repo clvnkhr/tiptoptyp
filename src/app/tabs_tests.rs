@@ -67,6 +67,27 @@ fn opening_tex_preserves_native_source_and_never_requests_typst_services() {
 }
 
 #[test]
+fn a_plain_launch_rebinds_the_fallback_preview_to_the_first_opened_source() {
+    let context = egui::Context::default();
+    let root = tempfile::tempdir().unwrap();
+    let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+    app.snapshot_scene = None;
+    let owner = app.document().key().owner;
+    app.tabs = Tabs::new(
+        false,
+        DocumentSession::new(owner, "", DocumentKind::Typst),
+        root.path().into(),
+    );
+    let source = root.path().join("main.typ");
+    fs::write(&source, "= Opened source\n").unwrap();
+
+    assert!(app.load_path(source.clone()));
+    assert!(!app.tabs.uses_designated_preview());
+    assert_eq!(app.preview_document_path(), source.canonicalize().unwrap());
+    assert!(app.current_is_preview_document());
+}
+
+#[test]
 fn a_tex_tab_can_be_edited_beside_a_designated_typst_preview() {
     let context = egui::Context::default();
     let root = tempfile::tempdir().unwrap();

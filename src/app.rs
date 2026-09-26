@@ -1447,7 +1447,12 @@ impl EditorApp {
         let owner = tiptoptyp_core::document::WindowSessionId::new(viewport.0.value());
         let mut app = Self {
             tabs: tabs::Tabs::new(
-                snapshot_scene.is_none(),
+                // A saved launch target owns the first preview. A plain
+                // launch starts with an untitled editing buffer whose
+                // fallback preview must be replaceable by the first file the
+                // user opens; pinning that synthetic path strands the preview
+                // on `untitled.typ`.
+                initial_document.is_some() && snapshot_scene.is_none(),
                 DocumentSession::new(owner, DEFAULT_SOURCE, DocumentKind::Typst),
                 workspace_root.clone(),
             ),
@@ -8028,6 +8033,10 @@ impl EditorApp {
                     } else {
                         row
                     };
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    if ui.is_rect_visible(row.rect) {
+                        crate::desktop_test::observe(&format!("problem.{index}"), &row);
+                    }
                     let pointer_in_row = row
                         .ctx
                         .pointer_latest_pos()

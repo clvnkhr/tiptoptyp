@@ -375,6 +375,12 @@ fn apply_focus(context: &egui::Context, request: FocusRequest) {
     let FocusRequest { token, cause } = request;
     let id = token.id;
 
+    if cause == FocusCause::UserAction
+        && crate::native_window::application_active(context) != Some(true)
+    {
+        crate::native_window::activate_application();
+    }
+
     let (exists, active, visible, minimized) = context.input(|input| {
         let info = input.raw.viewports.get(&id);
         (

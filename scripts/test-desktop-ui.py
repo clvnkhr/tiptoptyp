@@ -74,6 +74,16 @@ class Journey(EditorJourneys):
         self.log.flush()
 
     def native(self, command, *args):
+        if command in {"click", "double-click", "drag", "key", "move", "text", "paste"}:
+            foreground = subprocess.run(
+                [str(self.driver), "foreground", str(self.process.pid)],
+                capture_output=True,
+                text=True,
+                timeout=6,
+            )
+            if foreground.returncode == 0 and json.loads(foreground.stdout)["pid"] != self.process.pid:
+                self.record("foreground.recovered")
+                subprocess.run([str(self.driver), "activate", str(self.process.pid)], check=True, timeout=6)
         result = subprocess.run([str(self.driver), command, str(self.process.pid), *map(str, args)],
                                 capture_output=True, text=True, timeout=6)
         self.record(command, arguments=({"fixture_text_bytes": len(args[0].encode("utf-8"))} if command == "text" else args), stdout=result.stdout, stderr=result.stderr, exit=result.returncode)
@@ -147,6 +157,36 @@ class Journey(EditorJourneys):
         self.record("target", name=name, target=observed)
         self.native("click", observed["x"], observed["y"])
 
+    def drag(self, source_name, destination_name):
+        state = self.snapshot()
+        source = state["targets"].get(source_name)
+        destination = state["targets"].get(destination_name)
+        for name, target in ((source_name, source), (destination_name, destination)):
+            if not target or not target["enabled"] or target["age_ms"] > 500:
+                raise AssertionError(f"missing, disabled or stale drag target: {name}")
+        self.native("move", source["x"], source["y"])
+        deadline = time.monotonic() + 3
+        while True:
+            state = self.snapshot()
+            current = state["targets"].get(source_name)
+            if current and current["hovered"]:
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError("drag source did not become current")
+            time.sleep(0.05)
+        source = state["targets"][source_name]
+        self.record("drag", source=source_name, destination=destination_name,
+                    source_target=source, destination_target=destination)
+        self.native("drag", source["x"], source["y"], destination["x"], destination["y"])
+
+    def double_click(self, name):
+        state = self.snapshot()
+        target = state["targets"].get(name)
+        if not target or not target["enabled"] or target["age_ms"] > 500:
+            raise AssertionError(f"missing, disabled or stale double-click target: {name}")
+        self.native("move", target["x"], target["y"])
+        self.native("double-click", target["x"], target["y"])
+
     def stable(self, baseline, frames=30):
         previous = None
         for _ in range(frames):
@@ -194,7 +234,18 @@ class Journey(EditorJourneys):
         self.stable_state(lambda d: not d["find_visible"])
 
     def empty(self):
-        self.key(13)  # Cmd+W closes the fixture tab
+        # The aggregate run may have opened dialog fixtures alongside the
+        # launch document. Close every tab explicitly so this journey tests
+        # the final-tab contract rather than depending on journey ordering.
+        while self.snapshot()["document"]["tabs"]:
+            before = self.snapshot()["document"]["tabs"]
+            self.key(13)  # Cmd+W closes the active tab.
+            self.wait("tab closes or asks for confirmation",
+                      lambda d: d["tabs"] < before or d["modal_open"])
+            if self.snapshot()["document"]["modal_open"]:
+                self.wait_target("modal.discard")
+                self.click("modal.discard")
+                self.wait("dirty tab discarded", lambda d: d["tabs"] < before and not d["modal_open"])
         self.wait("window remains after final tab closes", lambda d: d["tabs"] == 0)
         self.key(45)  # Cmd+N
         self.wait("New creates an empty document", lambda d: d["tabs"] == 1 and d["source_bytes"] == 0 and d["path"] is None)
@@ -226,6 +277,16 @@ class Journey(EditorJourneys):
 
     def preview(self):
         fixture = self.directory / "journey.typ"
+        # Earlier dialog/renderer journeys may leave a TeX or arbitrary
+        # extension tab active. The preview contract is about the fixture's
+        # designated tab, so select it explicitly before exercising backend
+        # and palette transitions.
+        state = self.snapshot()["document"]
+        if state["path"] != str(fixture):
+            preview_tab = state.get("preview_tab_id")
+            if preview_tab is None:
+                raise AssertionError("preview fixture has no designated tab")
+            self.click(f"tab.{preview_tab}")
         self.wait("Typst fixture opened", lambda d: d["path"] == str(fixture), timeout=20)
         self.key(35, "cmd+alt")  # Pin this tab for preview.
         self.key(15)  # Compile.
@@ -327,7 +388,7 @@ class Journey(EditorJourneys):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--journey", choices=["all", "panels", "find", "empty", "focus", "preview", "editing", "search", "tabs", "layout", "folding", "closing", "controls", "settings_search", "background"], default="all")
+    parser.add_argument("--journey", choices=["all", "panels", "find", "empty", "focus", "preview", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "folding", "closing", "controls", "settings_search", "background"], default="all")
     parser.add_argument("--review-preview", action="store_true", help="pause at each dark/comfy renderer for independent on-screen review; not an automated visual pass")
     parser.add_argument("--capture-review", action="store_true", help="capture affected settings/controls framebuffers for separate visual inspection")
     parser.add_argument("--trace-preview", action="store_true", help="retain native preview geometry traces")
@@ -380,8 +441,14 @@ def main():
                 "CFBundleExecutable": "tiptoptyp", "CFBundleIdentifier": "dev.tiptoptyp.journey." + directory.name,
                 "CFBundleName": "tiptoptyp UI Journey", "CFBundlePackageType": "APPL", "NSHighResolutionCapable": True,
             }))
-            fixture = directory / ("journey.typ" if args.journey in ("all", "preview", "controls", "tabs", "layout", "background") else "journey.txt")
-            fixture.write_text('#set page(width: 200pt, height: 200pt, margin: 20pt)\n= First\nBlack text on white paper.\n#pagebreak()\n= Second\nMiddle page.\n#pagebreak()\n= Third\n#v(95pt)\nFinal needle.\n' if fixture.suffix == ".typ" else "Desktop journey fixture.\n")
+            fixture = directory / ("journey.typ" if args.journey in ("all", "preview", "controls", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "layout", "background") else "journey.txt")
+            fixture.write_text(
+                '#set page(width: 200pt, height: 200pt, margin: 20pt)\n= First\nBlack text on white paper.\n#pagebreak()\n= Second\nMiddle page.\n#pagebreak()\n= Third\n#v(95pt)\nFinal needle.\n'
+                if fixture.suffix == ".typ" and args.journey != "diagnostics"
+                else '#let broken = {\n'
+                if args.journey == "diagnostics"
+                else "Desktop journey fixture.\n"
+            )
             environment = {key: value for key, value in os.environ.items()
                            if not key.startswith(("TIPTOPTYP_UI_", "TIPTOPTYP_PROFILE", "TIPTOPTYP_DESKTOP_TEST"))}
             environment["TIPTOPTYP_DESKTOP_TEST_DIR"] = str(directory)
@@ -394,7 +461,8 @@ def main():
             environment["ENV"] = str(directory / "empty-shell-rc")
             environment["BASH_ENV"] = str(directory / "empty-shell-rc")
             with (evidence / "app.log").open("w") as log:
-                process = subprocess.Popen([str(binary), str(fixture)], cwd=directory, env=environment,
+                launch_arguments = [] if args.journey == "startup_preview" else [str(fixture)]
+                process = subprocess.Popen([str(binary), *launch_arguments], cwd=directory, env=environment,
                                            stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
                 try:
                     deadline = time.monotonic() + 15
@@ -418,12 +486,45 @@ def main():
                                 raise
                             time.sleep(0.05)
                     if not args.observe_only:
-                        journey.native_wait("native document window registered", lambda windows: any(
-                            window.get("AXTitle") == fixture.name + " — tiptoptyp"
-                            and window.get("AXMinimized") is False for window in windows), timeout=15)
-                        journey.native("activate")
-                        journey.wait("document window focused", lambda d: d["focused"])
-                    journey.wait("fixture document loaded", lambda d: d["tabs"] == 1 and d["path"] == str(fixture), timeout=15)
+                        document_title = None
+                        registered = journey.native_wait("native document window registered", lambda windows: any(
+                            ((args.journey == "startup_preview" and
+                              (window.get("AXTitle", "").endswith(" — tiptoptyp") or
+                               window.get("AXTitle") == "tiptoptyp UI Journey"))
+                             or window.get("AXTitle") == fixture.name + " — tiptoptyp")
+                            and window.get("AXMinimized") is not True for window in windows), timeout=15)
+                        if args.journey == "startup_preview":
+                            document_title = next((window["AXTitle"] for window in registered
+                                                   if window.get("AXTitle", "").endswith(" — tiptoptyp")
+                                                   and window.get("AXMinimized") is not True),
+                                                  None)
+                        if args.journey != "startup_preview":
+                            journey.native("activate")
+                        # A renderer child can leave the process key without
+                        # changing the document's AX focus flag. Raise the
+                        # actual owner once before posting the first event so
+                        # native input is delivered to the same window the
+                        # semantic observer reports.
+                        if document_title:
+                            journey.native("raise", document_title)
+                            journey.wait("document window focused", lambda d: d["focused"])
+                        elif args.journey == "startup_preview":
+                            # Some AppKit launches expose only the bundle
+                            # title until the first root hit-test. Focus the
+                            # published editor target instead of attempting
+                            # an AXRaise on that non-document host window.
+                            journey.click("editor.source")
+                            journey.wait("document window focused", lambda d: d["focused"])
+                        else:
+                            journey.native("raise", fixture.name + " — tiptoptyp")
+                            journey.wait("document window focused", lambda d: d["focused"])
+                    journey.wait(
+                        "fixture document loaded",
+                        (lambda d: d["tabs"] == 1 and d["path"] is None and d["source_bytes"] > 0)
+                        if args.journey == "startup_preview"
+                        else (lambda d: d["tabs"] == 1 and d["path"] == str(fixture)),
+                        timeout=15,
+                    )
                     state = journey.snapshot()
                     if state["build"] != result["version"]:
                         raise AssertionError("running build differs from tested binary")
@@ -445,7 +546,7 @@ def main():
                         return
                     if args.capture_review:
                         journey.capture_viewport("main")
-                    for name in (["panels", "find", "editing", "search", "tabs", "layout", "folding", "closing", "focus", "settings_search", "background", "preview", "controls", "empty"] if args.journey == "all" else [args.journey]):
+                    for name in (["panels", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "folding", "closing", "focus", "settings_search", "background", "preview", "controls", "empty"] if args.journey == "all" else [args.journey]):
                         journey.record("journey.start", name=name)
                         getattr(journey, name)()
                         result["journeys"].append(name)

@@ -87,6 +87,13 @@ pub(super) fn show(
                             if let Some(documentation) = item.documentation.as_deref() {
                                 response = response.on_hover_text(documentation);
                             }
+                            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                            if ui.is_rect_visible(response.rect) {
+                                crate::desktop_test::observe(
+                                    &format!("completion.item.{index}"),
+                                    &response,
+                                );
+                            }
                             if response.hovered() {
                                 hovered = Some(index);
                             }
