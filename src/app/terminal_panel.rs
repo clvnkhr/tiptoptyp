@@ -85,13 +85,11 @@ impl EditorApp {
         ui.horizontal(|ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 3.0;
-                if ui
-                    .selectable_label(
-                        self.bottom_panel.selected() == Some(PanelTab::Problems),
-                        "Problems",
-                    )
-                    .clicked()
-                {
+                let problems = ui.selectable_label(
+                    self.bottom_panel.selected() == Some(PanelTab::Problems), "Problems");
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("panel.problems", &problems);
+                if problems.clicked() {
                     self.bottom_panel.select(PanelTab::Problems);
                 }
                 let count = self.preview.diagnostics.len() + self.preview.editor_diagnostics.len();
@@ -105,13 +103,11 @@ impl EditorApp {
                     .response
                     .on_hover_text("Compiler diagnostics");
             });
-            if ui
-                .selectable_label(
-                    self.bottom_panel.selected() == Some(PanelTab::Terminal),
-                    "Terminal",
-                )
-                .clicked()
-            {
+            let terminal = ui.selectable_label(
+                self.bottom_panel.selected() == Some(PanelTab::Terminal), "Terminal");
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            crate::desktop_test::observe("panel.terminal", &terminal);
+            if terminal.clicked() {
                 self.bottom_panel.select(PanelTab::Terminal);
             }
             if native_hover_text(ui.selectable_label(

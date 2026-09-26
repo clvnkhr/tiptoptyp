@@ -11,6 +11,7 @@ repository = "https://github.com/calvinkhor/tiptoptyp"
 production = []
 profiling = []
 native-ui-tests = []
+desktop-ui-tests = []
 
 [dependencies]
 tiptoptyp-core = { path = "core" }

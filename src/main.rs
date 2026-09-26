@@ -14,6 +14,8 @@ mod compiler;
 mod completion;
 mod completion_edit;
 mod delimiters;
+#[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+mod desktop_test;
 mod diagnostics;
 mod document;
 mod editor_data;
@@ -124,6 +126,19 @@ fn validate_runtime() -> eframe::Result {
 fn run(profile_storage: Option<std::path::PathBuf>) -> eframe::Result {
     let launch =
         LaunchOptions::from_process(profile_storage).map_err(invalid_launch_configuration)?;
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    let launch = {
+        let mut launch = launch;
+        if let Some(storage) = desktop_test::start().map_err(invalid_launch_configuration)? {
+            if launch.mode != launch::LaunchMode::Interactive || launch.persistence_path.is_some() {
+                return Err(invalid_launch_configuration(
+                    "desktop journeys require normal interactive mode, without profiling or QA scenes",
+                ));
+            }
+            launch.persistence_path = Some(storage);
+        }
+        launch
+    };
     if let Some(profile) = &launch.theme_profile
         && profile.name != settings::SYSTEM_THEME_ID
         && builtin_themes::find(&profile.name).is_none()
@@ -187,6 +202,8 @@ fn run(profile_storage: Option<std::path::PathBuf>) -> eframe::Result {
                     context.egui_ctx.clone(),
                     &ShortcutBindings::current_defaults(),
                 )?;
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                desktop_test::attach(&context.egui_ctx);
                 let app = AppShell::new(
                     context,
                     initial_path,

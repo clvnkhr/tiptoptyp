@@ -223,17 +223,21 @@ pub(super) fn show(
             state.regex = !state.regex;
             state.search.clear();
         }
-        if ui
+        let replace = ui
             .selectable_label(state.replace_visible, "Replace")
-            .on_hover_text("Show or hide replace fields")
-            .clicked()
-        {
+            .on_hover_text("Show or hide replace fields");
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        crate::desktop_test::observe("find.replace", &replace);
+        if replace.clicked() {
             state.replace_visible = !state.replace_visible;
             state.native_height = None;
         }
         actions.previous |= icon_button(ui, UiIcon::Up, "Previous match · Shift+Enter").clicked();
         actions.next |= icon_button(ui, UiIcon::Down, "Next match · Enter").clicked();
-        if icon_button(ui, UiIcon::Close, "Close · Esc").clicked() {
+        let close = icon_button(ui, UiIcon::Close, "Close · Esc");
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        crate::desktop_test::observe("find.close", &close);
+        if close.clicked() {
             state.close();
             actions.closed = true;
         }

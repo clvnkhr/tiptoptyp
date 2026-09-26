@@ -13,7 +13,7 @@ use crate::screenshot::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LaunchOptions {
     pub mode: LaunchMode,
-    /// Profiling uses session-owned storage, never the normal preferences path.
+    /// Profiling and desktop journeys use session-owned storage, never normal preferences.
     pub persistence_path: Option<PathBuf>,
     pub initial_path: Option<PathBuf>,
     pub captures: CaptureConfig,

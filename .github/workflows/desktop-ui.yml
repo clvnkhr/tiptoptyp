@@ -1,0 +1,39 @@
+name: Desktop UI
+
+on:
+  workflow_dispatch:
+    inputs:
+      journey:
+        description: Real editor journey
+        type: choice
+        options: [all, panels, find, empty]
+        default: all
+
+permissions:
+  contents: read
+
+# A dedicated logged-in desktop, not a headless macOS build worker.
+concurrency:
+  group: desktop-ui
+  cancel-in-progress: false
+
+jobs:
+  journeys:
+    runs-on: [self-hosted, macOS, desktop-ui]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Real editor journeys
+        env:
+          JOURNEY: ${{ inputs.journey }}
+        run: python3 scripts/test-desktop-ui.py --journey "$JOURNEY"
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-ui-evidence
+          path: .tiptoptyp/desktop-ui-tests/run-*/
+          include-hidden-files: true
+          if-no-files-found: warn

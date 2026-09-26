@@ -73,6 +73,20 @@ Do not claim visual verification unless a fresh PNG was inspected.
 If the environment cannot launch the native app, report the exact command and
 the missing GUI capability instead of implying that visual QA passed.
 
+## Real-app interaction evidence
+
+For regressions, establish a failing reproduction before selecting a fix. For
+changes to interactions covered by `docs/desktop-ui-journeys.md`, run the affected
+real-app journey before handoff. Report native interaction results separately
+from deterministic Rust tests and framebuffer screenshots. Missing macOS input
+permissions are an unavailable check, never a pass. Preparation/observation-only
+runs do not count as interaction coverage.
+
+Verify the running build and effective preview backend before investigating
+preview behavior. A requested backend, a fixture scene, or a standalone WebKit
+snapshot does not prove what the composed editor window displayed. Prefer
+repeated transition and frame-stability checks over single settled states.
+
 ## Testability and observability
 
 - Put geometry, sizing, scene routing, and state-transition rules in small

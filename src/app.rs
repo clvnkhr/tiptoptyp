@@ -1,5 +1,7 @@
 mod activity_panel;
 mod build;
+#[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+mod desktop_inspection;
 mod encoding_import;
 mod icon_sheet;
 pub(crate) mod icons;
@@ -8782,6 +8784,8 @@ impl EditorApp {
         self.tick_preview_follow(&context);
         self.tick_autosave(&context);
         self.tick_compile(&context);
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        self.publish_desktop_inspection(&context);
     }
 
     fn reconcile_child_view_lifecycles(&self, context: &egui::Context) {
