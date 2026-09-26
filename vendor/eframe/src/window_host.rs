@@ -83,3 +83,29 @@ pub fn identity(context: &Context, id: ViewportId) -> Option<u64> {
 pub fn requires_ui(any_visible: bool, close_requested: bool) -> bool {
     any_visible || close_requested
 }
+
+/// egui-winit deliberately avoids querying minimized/maximized state at runtime
+/// on macOS. A native restore therefore leaves the previous Minimized command
+/// cached. A focused window cannot be minimized; reconcile before deciding to
+/// suppress its UI, including after its last child window closes.
+pub(crate) fn reconcile_restored_viewport(info: &mut egui::ViewportInfo) {
+    if info.focused == Some(true) {
+        info.minimized = Some(false);
+    }
+}
+
+#[cfg(test)]
+mod restoration_tests {
+    #[test]
+    fn restored_focus_clears_stale_minimized_state_without_unminimizing_background_windows() {
+        for focused in [None, Some(false), Some(true)] {
+            let mut info = egui::ViewportInfo {
+                focused,
+                minimized: Some(true),
+                ..Default::default()
+            };
+            super::reconcile_restored_viewport(&mut info);
+            assert_eq!(info.minimized, Some(focused != Some(true)));
+        }
+    }
+}

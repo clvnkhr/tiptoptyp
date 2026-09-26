@@ -110,15 +110,20 @@ impl EditorApp {
             if terminal.clicked() {
                 self.bottom_panel.select(PanelTab::Terminal);
             }
-            if native_hover_text(ui.selectable_label(
+            let activity = native_hover_text(ui.selectable_label(
                     self.bottom_panel.selected() == Some(PanelTab::Activity), "Activity"),
-                    "App activity: green = ready or idle; yellow = waiting or working; red = failed; grey = not in use. Hover a name for details.").clicked()
-            {
+                    "App activity: green = ready or idle; yellow = waiting or working; red = failed; grey = not in use. Hover a name for details.");
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            crate::desktop_test::observe("panel.activity", &activity);
+            if activity.clicked() {
                 self.bottom_panel.select(PanelTab::Activity);
             }
             // Reserve the square close control even for a long exit message.
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if panel_icon_button(ui, UiIcon::Close, "Close panel").clicked() {
+                let close = panel_icon_button(ui, UiIcon::Close, "Close panel");
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("panel.close", &close);
+                if close.clicked() {
                     self.bottom_panel.hide();
                 }
                 let (icon, label) = if self.bottom_panel.is_maximized() {
@@ -126,7 +131,10 @@ impl EditorApp {
                 } else {
                     (UiIcon::Maximize, "Maximize panel")
                 };
-                if panel_icon_button(ui, icon, label).clicked() {
+                let maximize = panel_icon_button(ui, icon, label);
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("panel.maximize", &maximize);
+                if maximize.clicked() {
                     self.bottom_panel.toggle_maximized();
                     ui.ctx().request_repaint();
                 }

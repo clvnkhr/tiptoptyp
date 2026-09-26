@@ -3,6 +3,7 @@ import importlib.util
 import math
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 import sys
 
 sys.dont_write_bytecode = True
@@ -10,6 +11,49 @@ sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location("desktop_ui", Path(__file__).with_name("test-desktop-ui.py"))
 runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
+
+
+class FixtureFingerprintContract(unittest.TestCase):
+    def test_matches_rust_probe_vectors_without_logging_source(self):
+        from desktop_ui_journeys import fingerprint
+        self.assertEqual(fingerprint(""), "cbf29ce484222325")
+        self.assertEqual(fingerprint("hello"), "a430d84680aabd0b")
+        self.assertEqual(fingerprint("é🙂z"), "3a046d85bff8a56f")
+
+
+class ClickReadinessContract(unittest.TestCase):
+    def test_settles_moving_geometry_before_one_click(self):
+        journey = object.__new__(runner.Journey)
+        samples = iter([10, 11, 11])
+        journey.snapshot = lambda: {"document": {}, "targets": {"button": {
+            "x": 20, "y": next(samples), "enabled": True, "age_ms": 0}}}
+        actions = []
+        journey.native = lambda *args: actions.append(args)
+        journey.record = lambda *args, **kwargs: None
+        journey.click("button")
+        self.assertEqual(actions, [("move", 20, 10), ("move", 20, 11), ("click", 20, 11)])
+
+    def test_unsettled_target_times_out_without_clicking(self):
+        journey = object.__new__(runner.Journey)
+        samples = iter([10, 11])
+        journey.snapshot = lambda: {"document": {}, "targets": {"button": {
+            "x": 20, "y": next(samples), "enabled": True, "age_ms": 0}}}
+        actions = []
+        journey.native = lambda *args: actions.append(args)
+        with patch.object(runner.time, "monotonic", side_effect=[0, 4]):
+            with self.assertRaisesRegex(AssertionError, "did not settle"):
+                journey.click("button")
+        self.assertEqual(actions, [("move", 20, 10)])
+
+    def test_disappearing_target_never_receives_a_click(self):
+        journey = object.__new__(runner.Journey)
+        samples = iter([{"button": {"x": 20, "y": 10, "enabled": True, "age_ms": 0}}, {}])
+        journey.snapshot = lambda: {"document": {}, "targets": next(samples)}
+        actions = []
+        journey.native = lambda *args: actions.append(args)
+        with self.assertRaisesRegex(AssertionError, "missing"):
+            journey.click("button")
+        self.assertEqual(actions, [("move", 20, 10)])
 
 
 class HeightContract(unittest.TestCase):

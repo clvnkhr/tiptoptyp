@@ -669,6 +669,7 @@ impl WgpuWinitRunning<'_> {
                 return Ok(EventResult::Wait);
             };
             egui_winit::update_viewport_info(info, &integration.egui_ctx, window, false);
+            crate::window_host::reconcile_restored_viewport(info);
 
             let is_visible = viewport.info.visible().unwrap_or(true);
 
@@ -1183,6 +1184,7 @@ fn render_immediate_viewport(
             return;
         };
         egui_winit::update_viewport_info(&mut viewport.info, egui_ctx, window, false);
+        crate::window_host::reconcile_restored_viewport(&mut viewport.info);
 
         let mut input = egui_winit.take_egui_input(window);
         input.viewports = viewports

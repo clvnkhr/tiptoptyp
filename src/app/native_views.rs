@@ -14,7 +14,7 @@ fn preview_palette_script(palette: (Color32, Color32)) -> String {
 pub(super) struct WebviewAppliedState {
     bounds: NativeRect,
     background: Color32,
-    visible: bool,
+    pub(super) visible: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +39,8 @@ impl EditorApp {
     /// Native objects stay on the owning UI thread; discard their cached
     /// presentation identity together so a recreated view cannot inherit it.
     pub(super) fn discard_webview(&mut self) {
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        crate::desktop_test::reset_renderer();
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             self.webview = None;
@@ -526,12 +528,21 @@ impl EditorApp {
                                         if crate::app::icons::action_button(ui, "Save").clicked() {
                                             choice = Some(AppModalChoice::Primary);
                                         }
-                                        if crate::app::icons::action_button(ui, "Discard").clicked()
+                                        let discard =
+                                            crate::app::icons::action_button(ui, "Discard");
+                                        let cancel = crate::app::icons::action_button(ui, "Cancel");
+                                        #[cfg(all(
+                                            feature = "desktop-ui-tests",
+                                            target_os = "macos"
+                                        ))]
                                         {
+                                            crate::desktop_test::observe("modal.discard", &discard);
+                                            crate::desktop_test::observe("modal.cancel", &cancel);
+                                        }
+                                        if discard.clicked() {
                                             choice = Some(AppModalChoice::Secondary);
                                         }
-                                        if crate::app::icons::action_button(ui, "Cancel").clicked()
-                                        {
+                                        if cancel.clicked() {
                                             choice = Some(AppModalChoice::Cancel);
                                         }
                                     }
@@ -1402,6 +1413,7 @@ impl EditorApp {
                     }
                 })
                 .with_bounds(bounds)
+                .with_visible(visible)
                 .with_background_color(rgba)
                 .with_background_throttling(wry::BackgroundThrottlingPolicy::Disabled)
                 // The SVG adapter owns keyboard zoom; AppKit still handles

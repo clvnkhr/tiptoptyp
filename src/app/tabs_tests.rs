@@ -83,6 +83,7 @@ fn a_tex_tab_can_be_edited_beside_a_designated_typst_preview() {
         None,
     );
     assert_eq!(app.preview_document_kind(), DocumentKind::Typst);
+    assert_eq!(app.compile_button_label(), "Typst");
     assert_eq!(app.preview_document_source().unwrap(), "first");
     assert!(app.source_preview_available());
     app.document_mut()
@@ -97,6 +98,11 @@ fn a_tex_tab_can_be_edited_beside_a_designated_typst_preview() {
     app.select_preview_tab(tex, &context);
     assert_eq!(app.tabs.preview_id(), Some(tex));
     assert_eq!(app.preview_document_kind(), DocumentKind::Tex);
+    assert_eq!(app.compile_button_label(), "Tectonic");
+    app.settings.tex.build_engine = crate::tex::settings::BuildEngine::XeLatex;
+    app.activate_tab(preview, &context);
+    assert_eq!(app.compile_button_label(), "XeLaTeX");
+    app.activate_tab(tex, &context);
     assert_eq!(app.preview_document_revision(), app.document().revision());
     assert!(!app.interactive_preview_requested());
     assert!(

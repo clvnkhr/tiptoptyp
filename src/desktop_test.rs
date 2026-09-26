@@ -19,7 +19,40 @@ struct State {
     document: Value,
     renderer: Option<(Value, Instant)>,
     renderer_pending: bool,
+    renderer_epoch: u64,
     targets: BTreeMap<String, (Value, Instant)>,
+    observed_targets: BTreeMap<String, (Value, Instant)>,
+}
+impl State {
+    fn publish_document(&mut self, document: Value) {
+        self.document = document;
+        // Freeze hit targets with their document frame. The next native pass
+        // may start before the socket reader wakes; it must not mix frames.
+        self.targets.clone_from(&self.observed_targets);
+        self.published = self.requested;
+    }
+    fn reset_renderer(&mut self) {
+        self.renderer_epoch += 1;
+        self.renderer_pending = false;
+        self.renderer = None;
+    }
+    fn request_renderer(&mut self) -> Option<u64> {
+        if self.renderer_pending {
+            return None;
+        }
+        self.renderer_pending = true;
+        Some(self.renderer_epoch)
+    }
+    fn renderer_observed(&mut self, epoch: u64, value: String) {
+        if epoch != self.renderer_epoch {
+            return;
+        }
+        self.renderer = Some((
+            serde_json::from_str(&value).unwrap_or(Value::Null),
+            Instant::now(),
+        ));
+        self.renderer_pending = false;
+    }
 }
 struct Probe {
     state: Mutex<State>,
@@ -95,6 +128,12 @@ fn snapshot() -> Value {
     let viewports = context.input(|input| input.raw.viewports.keys().copied().collect::<Vec<_>>());
     for id in viewports {
         context.request_repaint_of(id);
+        // A snapshot needs a new native UI pass even when egui coalesces the
+        // request with the pass currently finishing (e.g. a theme change).
+        // This is one read-only observation wakeup, never an idle repaint loop.
+        if let Some(window) = eframe::window_host::window(&context, id) {
+            window.request_redraw();
+        }
     }
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut state = probe.state.lock().unwrap();
@@ -116,32 +155,33 @@ fn snapshot() -> Value {
         .collect();
     json!({
         "schema": 1, "pid": std::process::id(), "build": crate::build_info::VERSION,
-        "request": request, "document": state.document, "targets": targets,
+        "request": request, "renderer_generation": state.renderer_epoch, "document": state.document, "targets": targets,
         "renderer": state.renderer.as_ref().map(|(value, time)| json!({"value": value, "age_ms": time.elapsed().as_millis()})),
     })
 }
 
-pub(crate) fn request_renderer() -> bool {
-    let Some(probe) = PROBE.get() else {
-        return false;
-    };
-    let mut state = probe.state.lock().unwrap();
-    if state.renderer_pending {
-        return false;
+pub(crate) fn reset_renderer() {
+    if let Some(probe) = PROBE.get() {
+        probe.state.lock().unwrap().reset_renderer();
     }
-    state.renderer_pending = true;
-    true
 }
 
-pub(crate) fn renderer_observed(value: String) {
+pub(crate) fn request_renderer() -> Option<u64> {
+    PROBE.get()?.state.lock().unwrap().request_renderer()
+}
+
+pub(crate) fn renderer_observed(epoch: u64, value: String) {
     if let Some(probe) = PROBE.get() {
-        let mut state = probe.state.lock().unwrap();
-        state.renderer = Some((
-            serde_json::from_str(&value).unwrap_or(Value::Null),
-            Instant::now(),
-        ));
-        state.renderer_pending = false;
+        probe.state.lock().unwrap().renderer_observed(epoch, value);
     }
+}
+
+/// Stable non-cryptographic comparison of disposable fixture contents; never logs text.
+pub(crate) fn fingerprint(text: &str) -> String {
+    let hash = text.bytes().fold(0xcbf29ce484222325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+    });
+    format!("{hash:016x}")
 }
 
 pub(crate) fn requested() -> bool {
@@ -162,8 +202,7 @@ pub(crate) fn publish(document: Value) {
         {
             return;
         }
-        state.document = document;
-        state.published = state.requested;
+        state.publish_document(document);
         probe.changed.notify_all();
     }
 }
@@ -180,13 +219,13 @@ pub(crate) fn observe(name: &str, response: &egui::Response) {
         return;
     };
     let point = screen_point(origin, response.interact_rect, context.zoom_factor());
-    let target = json!({"x": point.x, "y": point.y, "enabled": response.enabled(),
+    let target = json!({"x": point.x, "y": point.y, "enabled": response.enabled(), "hovered": response.hovered(),
         "viewport": format!("{:?}", context.viewport_id()), "frame": context.cumulative_frame_nr()});
     probe
         .state
         .lock()
         .unwrap()
-        .targets
+        .observed_targets
         .insert(name.into(), (target, Instant::now()));
 }
 
@@ -208,6 +247,42 @@ mod tests {
             super::screen_point(pos2(-100.0, 200.0), hit, 1.5),
             pos2(-90.0, 390.0)
         );
+    }
+
+    #[test]
+    fn document_and_hit_targets_are_published_as_one_frame() {
+        let mut state = super::State::default();
+        state.observed_targets.insert(
+            "button".into(),
+            (serde_json::json!({"frame": 1}), std::time::Instant::now()),
+        );
+        state.publish_document(serde_json::json!({"frame": 1}));
+        state.observed_targets.get_mut("button").unwrap().0["frame"] = 2.into();
+        assert_eq!(state.document["frame"], state.targets["button"].0["frame"]);
+        state.publish_document(serde_json::json!({"frame": 2}));
+        assert_eq!(state.document["frame"], state.targets["button"].0["frame"]);
+    }
+
+    #[test]
+    fn navigation_releases_dropped_callback_and_rejects_previous_renderer() {
+        let mut state = super::State::default();
+        let old = state.request_renderer().unwrap();
+        assert!(state.request_renderer().is_none());
+        state.reset_renderer(); // Pending pre-load callback was discarded by WebView.
+        let current = state.request_renderer().unwrap();
+        state.renderer_observed(old, "{}".into());
+        assert!(state.renderer.is_none());
+        assert!(state.request_renderer().is_none());
+        state.renderer_observed(current, "{\"ready\":true}".into());
+        assert_eq!(state.renderer.as_ref().unwrap().0["ready"], true);
+        assert!(state.request_renderer().is_some());
+    }
+
+    #[test]
+    fn fixture_fingerprints_match_runner_vectors() {
+        assert_eq!(super::fingerprint(""), "cbf29ce484222325");
+        assert_eq!(super::fingerprint("hello"), "a430d84680aabd0b");
+        assert_eq!(super::fingerprint("é🙂z"), "3a046d85bff8a56f");
     }
 
     #[test]

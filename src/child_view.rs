@@ -167,6 +167,15 @@ impl ChildViewSpec {
         self
     }
 
+    fn suspend_when_inactive(mut self, active: Option<bool>) -> Self {
+        if self.role == ChildViewRole::Persistent
+            && matches!(self.bounds, ChildViewBounds::Fixed { .. })
+        {
+            self.visible = Some(self.visible != Some(false) && active != Some(false));
+        }
+        self
+    }
+
     fn viewport(self) -> egui::ViewportBuilder {
         let viewport = match self.bounds {
             ChildViewBounds::Persistent { inner, minimum } => crate::window_policy::document()
@@ -273,6 +282,7 @@ impl ChildViewHost {
         style: &std::sync::Arc<egui::Style>,
         body: impl Fn(&mut egui::Ui, ChildViewInput) + Send + Sync + 'static,
     ) {
+        let spec = spec.suspend_when_inactive(crate::native_window::application_active(context));
         let id = scoped_child_viewport_id(context, spec.id_salt);
         let Some(token) = begin_lifecycle(context, id, spec) else {
             return;
@@ -300,6 +310,7 @@ impl ChildViewHost {
         style: &std::sync::Arc<egui::Style>,
         mut body: impl FnMut(&mut egui::Ui, ChildViewInput),
     ) {
+        let spec = spec.suspend_when_inactive(crate::native_window::application_active(context));
         debug_assert!(matches!(
             (spec.role, spec.role.focus_policy()),
             (ChildViewRole::Persistent, FocusPolicy::Preserve)
@@ -424,6 +435,46 @@ pub(crate) fn popup_focus_should_close(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn modeless_popups_hide_when_application_deactivates_without_closing() {
+        let spec = super::ChildViewSpec::modeless_popup(
+            "controls",
+            "Controls",
+            eframe::egui::Rect::from_min_size(
+                eframe::egui::Pos2::ZERO,
+                eframe::egui::vec2(360.0, 100.0),
+            ),
+            false,
+            "controls",
+        );
+        assert_eq!(
+            spec.suspend_when_inactive(Some(false)).viewport().visible,
+            Some(false)
+        );
+        assert_eq!(
+            spec.suspend_when_inactive(Some(true)).viewport().visible,
+            Some(true)
+        );
+        assert_eq!(
+            spec.suspend_when_inactive(None).viewport().visible,
+            Some(true)
+        );
+        let document = super::ChildViewSpec::persistent(
+            "settings",
+            "Settings",
+            [600.0, 400.0],
+            [300.0, 200.0],
+            "settings",
+        );
+        assert_eq!(
+            document
+                .suspend_when_inactive(Some(false))
+                .viewport()
+                .visible,
+            None
+        );
+    }
+
     use super::*;
     use std::{cell::RefCell, rc::Rc};
 

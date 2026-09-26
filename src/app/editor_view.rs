@@ -463,6 +463,8 @@ impl EditorApp {
                     .layouter(&mut layouter);
                 editor.show(ui)
             });
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            crate::desktop_test::observe("editor.source", &output.response);
             // A closer can move the caret without modifying the document.
             // Do not invalidate completions or schedule work for that movement.
             changed = document.key() != document_before_edit;
@@ -1248,17 +1250,48 @@ impl EditorApp {
                     return;
                 }
                 let shortcut = ui.ctx().input_mut(|input| {
+                    find_bar::recover_shortcut_events(input, &shortcuts);
                     consume_shortcut_action(input, &shortcuts, |action| {
                         matches!(
                             action,
                             ShortcutAction::Find
                                 | ShortcutAction::FindReplace
+                                | ShortcutAction::FindNext
+                                | ShortcutAction::FindPrevious
+                                | ShortcutAction::ReplaceOne
+                                | ShortcutAction::ReplaceAll
+                                | ShortcutAction::ToggleFindCase
+                                | ShortcutAction::ToggleFindRegex
                                 | ShortcutAction::CloseTab
                                 | ShortcutAction::CloseWindow
                         )
                     })
                 });
                 let close_shortcut = match shortcut {
+                    Some(ShortcutAction::ToggleFindCase | ShortcutAction::ToggleFindRegex) => {
+                        if shortcut == Some(ShortcutAction::ToggleFindCase) {
+                            self.find_bar.case_sensitive = !self.find_bar.case_sensitive;
+                        } else {
+                            self.find_bar.regex = !self.find_bar.regex;
+                        }
+                        self.find_bar.search.clear();
+                        false
+                    }
+                    Some(ShortcutAction::FindNext | ShortcutAction::FindPrevious) => {
+                        actions.next = shortcut == Some(ShortcutAction::FindNext);
+                        actions.previous = shortcut == Some(ShortcutAction::FindPrevious);
+                        false
+                    }
+                    Some(ShortcutAction::ReplaceOne | ShortcutAction::ReplaceAll) => {
+                        if self.find_bar.replace_visible {
+                            actions.replace_one = shortcut == Some(ShortcutAction::ReplaceOne);
+                            actions.replace_all = shortcut == Some(ShortcutAction::ReplaceAll);
+                        } else {
+                            self.find_bar.replace_visible = true;
+                            self.find_bar.native_height = None;
+                        }
+                        false
+                    }
                     Some(ShortcutAction::FindReplace) if !self.find_bar.replace_visible => {
                         self.find_bar.replace_visible = true;
                         self.find_bar.native_height = None;
@@ -1274,7 +1307,14 @@ impl EditorApp {
                 }
                 let response = frame.show(ui, |ui| {
                     ui.set_width((bounds.width() - frame.total_margin().sum().x).max(1.0));
-                    actions = find_bar::show(ui, &mut self.find_bar, source, key, editable);
+                    ui.set_max_height(owner.height());
+                    actions.merge(find_bar::show(
+                        ui,
+                        &mut self.find_bar,
+                        source,
+                        key,
+                        editable,
+                    ));
                 });
                 let height = response
                     .response

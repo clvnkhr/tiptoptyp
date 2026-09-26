@@ -135,6 +135,50 @@ pub(super) struct FindBarActions {
     pub(super) closed: bool,
 }
 
+impl FindBarActions {
+    pub(super) fn merge(&mut self, other: Self) {
+        self.previous |= other.previous;
+        self.next |= other.next;
+        self.replace_one |= other.replace_one;
+        self.replace_all |= other.replace_all;
+        self.closed |= other.closed;
+    }
+}
+
+/// egui-winit emits Copy/Cut for modified C/X chords too. Recover an
+/// explicitly bound Find action before a text field treats it as clipboard input.
+pub(super) fn recover_shortcut_events(
+    input: &mut egui::InputState,
+    bindings: &crate::shortcuts::ShortcutBindings,
+) {
+    let mut modifiers = input.modifiers;
+    for event in &mut input.events {
+        if let egui::Event::ModifiersChanged(changed) = event {
+            modifiers = *changed;
+        }
+        let key = match event {
+            egui::Event::Copy => egui::Key::C,
+            egui::Event::Cut => egui::Key::X,
+            _ => continue,
+        };
+        if matches!(
+            bindings.action_for_key_event(key, modifiers),
+            Some(
+                crate::shortcuts::ShortcutAction::ToggleFindCase
+                    | crate::shortcuts::ShortcutAction::ToggleFindRegex
+            )
+        ) {
+            *event = egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            };
+        }
+    }
+}
+
 pub(super) fn show(
     ui: &mut egui::Ui,
     state: &mut FindBarState,
@@ -169,6 +213,8 @@ pub(super) fn show(
                 .hint_text("Find")
                 .desired_width(METRICS.editor.find_field_width),
         );
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        crate::desktop_test::observe("find.query", &response);
         if state.focus {
             response.request_focus();
             state.focus = false;
@@ -245,16 +291,23 @@ pub(super) fn show(
 
     if state.replace_visible {
         ui.horizontal(|ui| {
-            ui.add(
+            let _replacement = ui.add(
                 egui::TextEdit::singleline(&mut state.replacement)
                     .id(replacement_id(ui.ctx()))
                     .hint_text("Replace")
                     .desired_width(METRICS.editor.find_field_width),
             );
-            actions.replace_one |=
-                crate::app::icons::action_button_enabled(ui, editable, "Replace").clicked();
-            actions.replace_all |=
-                crate::app::icons::action_button_enabled(ui, editable, "Replace all").clicked();
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            crate::desktop_test::observe("find.replacement", &_replacement);
+            let one = crate::app::icons::action_button_enabled(ui, editable, "Replace");
+            let all = crate::app::icons::action_button_enabled(ui, editable, "Replace all");
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            {
+                crate::desktop_test::observe("find.replace_one", &one);
+                crate::desktop_test::observe("find.replace_all", &all);
+            }
+            actions.replace_one |= one.clicked();
+            actions.replace_all |= all.clicked();
         });
     }
 

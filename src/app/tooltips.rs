@@ -637,6 +637,28 @@ pub(super) fn hover_text_with_id(
     detail: impl Into<String>,
     id: egui::Id,
 ) -> egui::Response {
+    if response.clicked() {
+        let native = id == native_hover_tooltip_id(&response.ctx);
+        let geometry = tooltip_geometry_id(&response.ctx);
+        let interaction = tooltip_interaction_id(&response.ctx);
+        let dismissed = viewport_scoped_id(&response.ctx, "dismissed-tooltip-origin");
+        response.ctx.data_mut(|data| {
+            data.remove::<HoverTooltipOverlay>(id);
+            data.remove::<HoverTimingState>(id.with("timing"));
+            if native {
+                data.remove::<TooltipGeometry>(geometry);
+                data.remove::<TooltipInteractionState>(interaction);
+                data.insert_temp(dismissed, response.rect);
+            }
+        });
+        // An action may open a popup below this control, exactly where its
+        // tooltip was. Retiring it prevents the tooltip intercepting that
+        // popup's first click. Keep it dismissed until the pointer leaves.
+        if native {
+            ChildViewHost::close(&response.ctx, "diagnostic-tooltip-overlay");
+        }
+        return response;
+    }
     if let Some(opacity) = hover_opacity(&response, id.with("timing")) {
         let tooltip = HoverTooltipOverlay {
             origin: response.rect,

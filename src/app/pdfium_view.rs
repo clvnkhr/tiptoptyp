@@ -393,11 +393,21 @@ impl PdfiumView {
                     viewport.bottom(),
                 );
                 demand = range.clone().collect();
-                self.page = range.start;
+                // The first intersecting page can be only a sliver, especially
+                // when the last page cannot scroll all the way to the top.
+                // Keep the scroll anchor separate from the displayed page.
+                self.page = most_visible_page(
+                    range.clone(),
+                    &self.tops,
+                    &catalog.sizes,
+                    self.zoom,
+                    viewport.top(),
+                    viewport.bottom(),
+                );
                 self.anchor = (
-                    self.page,
-                    (viewport.top() - self.tops[self.page])
-                        / (catalog.sizes[self.page][1] * self.zoom),
+                    range.start,
+                    (viewport.top() - self.tops[range.start])
+                        / (catalog.sizes[range.start][1] * self.zoom),
                 );
                 for index in range {
                     let size =
@@ -667,6 +677,27 @@ fn visible_pages(
             .min(tops.len())
 }
 
+fn most_visible_page(
+    range: std::ops::Range<usize>,
+    tops: &[f32],
+    sizes: &[[f32; 2]],
+    zoom: f32,
+    top: f32,
+    bottom: f32,
+) -> usize {
+    let mut page = range.start;
+    let mut largest = 0.0;
+    for index in range {
+        let visible =
+            (bottom.min(tops[index] + sizes[index][1] * zoom) - top.max(tops[index])).max(0.0);
+        if visible > largest {
+            page = index;
+            largest = visible;
+        }
+    }
+    page
+}
+
 fn nearest_character(chars: &[Character], point: Vec2) -> Option<usize> {
     chars
         .iter()
@@ -834,6 +865,19 @@ mod tests {
             0..1
         );
     }
+    #[test]
+    fn current_page_ignores_a_previous_page_sliver_at_the_document_end() {
+        let sizes = vec![[200.0, 200.0]; 3];
+        let tops = page_tops(&sizes, 1.0);
+        assert_eq!(most_visible_page(1..3, &tops, &sizes, 1.0, 400.0, 648.0), 2);
+        assert_eq!(most_visible_page(0..2, &tops, &sizes, 1.0, 12.0, 250.0), 0);
+        // Ties choose the earlier page and page sizing need not be uniform.
+        assert_eq!(most_visible_page(0..2, &tops, &sizes, 1.0, 12.0, 424.0), 0);
+        let mixed = [[200.0, 100.0], [200.0, 300.0]];
+        let tops = page_tops(&mixed, 2.0);
+        assert_eq!(most_visible_page(0..2, &tops, &mixed, 2.0, 180.0, 600.0), 1);
+    }
+
     #[test]
     fn text_hit_testing_ignores_missing_bounds() {
         let chars = vec![

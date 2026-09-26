@@ -1,6 +1,15 @@
 //! One presentation for both preview engines. Backends only exchange state/actions.
 use super::*;
 
+fn control(ui: &mut egui::Ui, icon: UiIcon, label: &str) -> egui::Response {
+    let response = icon_button(ui, icon, label);
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    if ui.is_rect_visible(response.rect) {
+        crate::desktop_test::observe(&format!("preview.{label}"), &response);
+    }
+    response
+}
+
 pub(super) const SALT: &str = "preview-controls";
 #[derive(Clone, Default, serde::Deserialize)]
 pub(super) struct Snapshot {
@@ -47,6 +56,13 @@ pub(super) struct Controls {
     measured_size: Option<(bool, usize, egui::Vec2)>,
 }
 impl Controls {
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    pub(super) fn inspected_size(&self) -> Option<egui::Vec2> {
+        self.measured_size
+            .filter(|(outline, _, _)| *outline == self.outline)
+            .map(|(_, _, size)| size)
+    }
+
     pub(super) fn set_outline(&mut self, value: &serde_json::Value) {
         fn visit(items: &[serde_json::Value], depth: usize, result: &mut Vec<(String, Location)>) {
             if depth > 32 {
@@ -87,6 +103,9 @@ impl Controls {
     fn show(&mut self, ui: &mut egui::Ui, snapshot: &Snapshot) -> Option<Action> {
         ui.ctx()
             .input_mut(|input| input.events.append(&mut self.edit_events));
+        // Content determines the popup height. Measuring against last frame's
+        // shorter native viewport feeds its clipping limit back into sizing.
+        ui.set_max_height(10_000.0);
         let mut action = None;
         ui.horizontal(|ui| {
             let handle = ui.add(egui::Label::new("Preview").sense(Sense::drag()));
@@ -94,16 +113,18 @@ impl Controls {
                 *self.position.get_or_insert(Pos2::ZERO) += handle.drag_delta();
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if icon_button(ui, UiIcon::Down, "Minimize controls").clicked() {
+                if control(ui, UiIcon::Down, "Minimize controls").clicked() {
                     self.open = false;
                 }
-                if ui
-                    .add_enabled(self.popout.is_none(), egui::Button::new("Pop out"))
-                    .clicked()
-                {
+                let popout = ui.add_enabled(self.popout.is_none(), egui::Button::new("Pop out"));
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("preview.Pop out", &popout);
+                if popout.clicked() {
                     action = Some(Action::PopOut);
                 }
-                ui.toggle_value(&mut self.outline, "Outline");
+                let _outline = ui.toggle_value(&mut self.outline, "Outline");
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("preview.Outline", &_outline);
             });
         });
         ui.horizontal(|ui| {
@@ -115,12 +136,14 @@ impl Controls {
                 response.widget_info(|| {
                     egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), label)
                 });
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe(&format!("preview.{label}"), &response);
                 if response.on_hover_text(label).clicked() {
                     action = Some(navigation);
                 }
             }
             ui.separator();
-            if icon_button(ui, UiIcon::Previous, "Previous page").clicked() {
+            if control(ui, UiIcon::Previous, "Previous page").clicked() {
                 action = Some(Action::Page(snapshot.page.saturating_sub(1)));
             }
             let mut page = snapshot.page + 1;
@@ -131,19 +154,19 @@ impl Controls {
                 action = Some(Action::Page(page - 1));
             }
             ui.label(format!("/ {}", snapshot.count));
-            if icon_button(ui, UiIcon::Next, "Next page").clicked() {
+            if control(ui, UiIcon::Next, "Next page").clicked() {
                 action = Some(Action::Page(
                     (snapshot.page + 1).min(snapshot.count.saturating_sub(1)),
                 ));
             }
             ui.separator();
-            if icon_button(ui, UiIcon::ZoomOut, "Zoom out").clicked() {
+            if control(ui, UiIcon::ZoomOut, "Zoom out").clicked() {
                 action = Some(Action::ZoomOut);
             }
-            if icon_button(ui, UiIcon::ZoomIn, "Zoom in").clicked() {
+            if control(ui, UiIcon::ZoomIn, "Zoom in").clicked() {
                 action = Some(Action::ZoomIn);
             }
-            if icon_button(ui, UiIcon::FitWidth, "Fit page width").clicked() {
+            if control(ui, UiIcon::FitWidth, "Fit page width").clicked() {
                 action = Some(Action::Fit);
             }
             ui.label(format!("{:.0}%", snapshot.zoom * 100.0));
@@ -161,12 +184,14 @@ impl Controls {
                     "Find in preview",
                 )
             });
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            crate::desktop_test::observe("preview.query", &response);
             if self.focus_find {
                 response.request_focus();
                 self.focus_find = false;
             }
             let enter = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if icon_button(ui, UiIcon::Next, "Find next").clicked() || enter {
+            if control(ui, UiIcon::Next, "Find next").clicked() || enter {
                 action = Some(Action::Find(self.query.clone()));
             }
         });
@@ -179,11 +204,17 @@ impl Controls {
                         ui.weak("No outline available");
                     }
                     for (index, (title, _)) in snapshot.outline.iter().enumerate() {
-                        if ui
+                        let response = ui
                             .add(egui::Button::new(title).wrap_mode(egui::TextWrapMode::Truncate))
-                            .on_hover_text(title)
-                            .clicked()
-                        {
+                            .on_hover_text(title);
+                        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                        if index < 16 && ui.is_rect_visible(response.rect) {
+                            crate::desktop_test::observe(
+                                &format!("preview.outline.{index}"),
+                                &response,
+                            );
+                        }
+                        if response.clicked() {
                             action = Some(Action::Outline(index));
                         }
                     }
@@ -458,6 +489,44 @@ mod tests {
     }
 
     #[test]
+    fn outline_height_does_not_feed_back_from_the_previous_popup_size() {
+        for count in [0, 3, 100] {
+            let snapshot = Snapshot {
+                count: 3,
+                zoom: 1.0,
+                outline: (0..count).map(|i| (format!("Heading {i}"), 0)).collect(),
+                ..Default::default()
+            };
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(380.0, 108.0))
+                .build_ui_state(
+                    move |ui, state: &mut (Controls, f32)| {
+                        let card = theme::popup_card_frame(ui.style()).show(ui, |ui| {
+                            ui.set_width(344.0);
+                            state.0.show(ui, &snapshot);
+                        });
+                        state.1 = card.response.rect.height();
+                    },
+                    (
+                        Controls {
+                            open: true,
+                            outline: true,
+                            ..Default::default()
+                        },
+                        0.0,
+                    ),
+                );
+            harness.run_steps(3);
+            let expected = harness.state().1;
+            for _ in 0..10 {
+                harness.set_size(egui::vec2(380.0, expected));
+                harness.run_steps(2);
+                assert_eq!(harness.state().1, expected, "outline count {count}");
+            }
+        }
+    }
+
+    #[test]
     fn controls_have_one_layout_and_emit_backend_actions() {
         let snapshot = Snapshot {
             page: 1,
@@ -505,7 +574,7 @@ mod tests {
             harness.run_steps(3);
             let button = harness.get_by_label("Preview controls");
             let next = harness.get_by_label(if kind == DocumentKind::Typst {
-                "miTeX"
+                "auto-miTeX"
             } else {
                 "Find"
             });

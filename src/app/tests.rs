@@ -857,6 +857,41 @@ fn explicit_source_jump_does_not_reveal_the_previous_caret_fold() {
 }
 
 #[test]
+fn clicking_a_control_retires_its_tooltip_and_suppresses_stationary_reopen() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let mut harness = Harness::builder().build_ui_state(
+        |ui, state: &mut (Rect, egui::Context)| {
+            let response = ui.button("Open controls");
+            *state = (response.rect, ui.ctx().clone());
+            native_hover_text(response, "Show controls");
+        },
+        (Rect::ZERO, egui::Context::default()),
+    );
+    harness.run_steps(3);
+    let (rect, context) = harness.state().clone();
+    let id = native_hover_tooltip_id(&context);
+    context.data_mut(|data| {
+        data.insert_temp(
+            id,
+            HoverTooltipOverlay {
+                origin: rect,
+                anchor: rect.left_bottom(),
+                detail: Arc::from("Show controls"),
+                opacity: 1.0,
+            },
+        )
+    });
+    harness.get_by_label("Open controls").click();
+    harness.run_steps(3);
+    assert!(
+        context
+            .data(|data| data.get_temp::<HoverTooltipOverlay>(id))
+            .is_none()
+    );
+    assert!(native_tooltip_handoff_blocks(&context, rect));
+}
+
+#[test]
 fn retained_tooltip_survives_lifecycle_cleanup_after_leaving_source_token() {
     let directory = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
@@ -5539,6 +5574,38 @@ fn settings_search_indexes_every_visible_setting_label() {
 }
 
 #[test]
+fn settings_highlight_is_targeted_viewport_scoped_and_expires() {
+    let context = egui::Context::default();
+    let owner = egui::ViewportId::ROOT;
+    let other = egui::ViewportId::from_hash_of("other-settings");
+    let id = settings_highlight_id(owner);
+    context.data_mut(|data| {
+        data.insert_temp(
+            id,
+            (
+                SettingsTarget::PreviewBackend,
+                Instant::now() + Duration::from_secs(3),
+            ),
+        )
+    });
+    assert_eq!(
+        settings_highlight(&context, owner),
+        Some(SettingsTarget::PreviewBackend)
+    );
+    assert_eq!(settings_highlight(&context, other), None);
+    context.data_mut(|data| {
+        data.insert_temp(
+            id,
+            (
+                SettingsTarget::PreviewBackend,
+                Instant::now() - Duration::from_secs(1),
+            ),
+        )
+    });
+    assert_eq!(settings_highlight(&context, owner), None);
+}
+
+#[test]
 fn settings_search_routes_to_the_exact_individual_target() {
     let mut pending = Some(SettingsTarget::CodeFontWeight);
     assert!(!take_settings_scroll_target(
@@ -6958,6 +7025,26 @@ fn tex_completion_is_local_and_applies_one_safe_edit() {
 const PROJECTED_SOURCE: &str = "#import \"@preview/mitex:0.2.7\": mi\n文 #mi(`\\alpha+😀`) tail\n";
 
 #[test]
+fn compile_toolbar_names_the_selected_engine_in_every_button_style() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    for style in crate::settings::ToolbarStyle::ALL {
+        for engine in crate::tex::settings::BuildEngine::ALL {
+            let directory = tempfile::tempdir().unwrap();
+            let context = egui::Context::default();
+            let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+            app.document_mut().replace_untitled_kind(DocumentKind::Tex);
+            app.settings.tex.build_engine = engine;
+            app.settings.toolbar_style = style;
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(1600.0, 80.0))
+                .build_ui_state(|ui, app: &mut EditorApp| app.show_toolbar(ui, None), app);
+            harness.run_steps(3);
+            assert!(harness.get_by_label(engine.label()).rect().width() > 40.0);
+        }
+    }
+}
+
+#[test]
 fn projected_application_toolbar_toggle_is_local_to_document() {
     use egui_kittest::{Harness, kittest::Queryable as _};
     let directory = tempfile::tempdir().unwrap();
@@ -6971,12 +7058,12 @@ fn projected_application_toolbar_toggle_is_local_to_document() {
             app,
         );
     harness.run_steps(3);
-    harness.get_by_label("miTeX").click();
+    harness.get_by_label("auto-miTeX").click();
     harness.run_steps(3);
     assert!(harness.state().document().config().is_some());
     assert!(harness.state().pending_settings.is_none());
     assert!(!harness.state().settings.mitex_auto_enable);
-    harness.get_by_label("miTeX").click();
+    harness.get_by_label("auto-miTeX").click();
     harness.run_steps(3);
     assert!(harness.state().document().config().is_none());
     assert!(harness.state().pending_settings.is_none());
@@ -7008,10 +7095,10 @@ fn projected_application_toolbar_order_and_right_alignment_survive_resizing() {
             "View",
             "Untitled.typ",
             "Preview controls",
-            "miTeX",
+            "auto-miTeX",
             "Find",
             "Pause",
-            "Compile",
+            "Typst",
             "Settings",
             if compact { "Files" } else { "Explorer" },
             if compact { "C" } else { "Code" },
@@ -8402,6 +8489,51 @@ fn native_find_child_routes_query_and_escape_to_its_owner() {
         == crate::child_view::child_viewport_id(egui::ViewportId::ROOT, find_bar::VIEWPORT_SALT)
         && *parent == egui::ViewportId::ROOT
         && size.unwrap().x > 300.0));
+    // Native child key events do not necessarily survive until the owner's
+    // next pass. Consume search shortcuts inside the child that received them.
+    for (key, expected_case, expected_regex) in [
+        (egui::Key::C, false, false),
+        (egui::Key::X, false, true),
+        (egui::Key::C, true, true),
+        (egui::Key::X, true, false),
+    ] {
+        events.borrow_mut().push(egui::Event::ModifiersChanged(
+            Modifiers::COMMAND | Modifiers::ALT,
+        ));
+        events.borrow_mut().push(if key == egui::Key::C {
+            egui::Event::Copy
+        } else {
+            egui::Event::Cut
+        });
+        frame(&mut app);
+        assert!(app.find_bar.visible);
+        assert_eq!(app.find_bar.case_sensitive, expected_case);
+        assert_eq!(app.find_bar.regex, expected_regex);
+        assert_eq!(app.document().source(), "alpha beta alpha");
+    }
+    for (modifiers, selected) in [
+        (Modifiers::COMMAND, 1),
+        (Modifiers::COMMAND, 2),
+        (Modifiers::COMMAND | Modifiers::SHIFT, 1),
+    ] {
+        events.borrow_mut().push(egui::Event::Key {
+            key: egui::Key::G,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        });
+        frame(&mut app);
+        assert_eq!(app.find_bar.search.selected_ordinal(), Some(selected));
+        events.borrow_mut().push(egui::Event::Key {
+            key: egui::Key::G,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            modifiers,
+        });
+        frame(&mut app);
+    }
     let paints = seen.borrow().len();
     app.find_bar.child_focused = false;
     app.find_bar.blur_started = Some(Instant::now() - Duration::from_secs(1));

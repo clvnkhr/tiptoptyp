@@ -82,15 +82,52 @@ if command == "windows" {
 }
 guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { fail("refusing input: target app is not foreground (actual: \(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown") pid \(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1), target \(pid))") }
 let source = CGEventSource(stateID: .hidSystemState)
-if command == "text" {
-    guard args.count == 3 else { fail("text requires a string") }
-    let units = Array(args[2].utf16)
+if command == "paste" {
+    guard args.count == 3 else { fail("paste requires fixture text") }
+    let board = NSPasteboard.general
+    let previous: [NSPasteboardItem] = (board.pasteboardItems ?? []).map { item in
+        let copy = NSPasteboardItem()
+        for type in item.types { if let data = item.data(forType: type) { copy.setData(data, forType: type) } }
+        return copy
+    }
+    board.clearContents()
+    board.setString(args[2], forType: .string)
+    let written = board.changeCount
+    defer {
+        // Never overwrite a newer clipboard change made outside the fixture.
+        if board.changeCount == written { board.clearContents(); board.writeObjects(previous) }
+    }
     for down in [true, false] {
-        guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down) else { fail("cannot create text event") }
-        event.flags = []
-        event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+        guard let event = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: down) else { fail("cannot create paste event") }
+        event.flags = .maskCommand
         event.post(tap: .cghidEventTap)
         Thread.sleep(forTimeInterval: 0.05)
+    }
+    emit(["posted": "paste", "pid": pid])
+    fflush(stdout)
+    // Runner acknowledges the read-only content fingerprint before restoration.
+    _ = readLine()
+} else if command == "text" {
+    guard args.count == 3 else { fail("text requires a string") }
+    guard !args[2].contains("\n") && !args[2].contains("\r") else { fail("use acknowledged paste for multiline fixtures") }
+    // Quartz carries only a bounded UTF-16 payload per event. Never truncate
+    // a long fixture or split a surrogate pair across events.
+    var chunks: [[UInt16]] = []
+    var current: [UInt16] = []
+    for scalar in args[2].unicodeScalars {
+        let units = Array(String(scalar).utf16)
+        if current.count + units.count > 16 { chunks.append(current); current = [] }
+        current.append(contentsOf: units)
+    }
+    if !current.isEmpty { chunks.append(current) }
+    for units in chunks {
+        for down in [true, false] {
+            guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down) else { fail("cannot create text event") }
+            event.flags = []
+            event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+            event.post(tap: .cghidEventTap)
+            Thread.sleep(forTimeInterval: 0.05)
+        }
     }
 } else if command == "key" {
     guard args.count == 4, let code = UInt16(args[2]) else { fail("key requires keycode and flags") }
@@ -111,10 +148,11 @@ if command == "text" {
         event.post(tap: .cghidEventTap)
         Thread.sleep(forTimeInterval: 0.05)
     }
-} else if command == "click" {
+} else if command == "click" || command == "move" {
     guard args.count == 4, let x = Double(args[2]), let y = Double(args[3]), x.isFinite, y.isFinite else { fail("click requires finite screen coordinates") }
     let point = CGPoint(x: x, y: y)
-    for type in [CGEventType.mouseMoved, .leftMouseDown, .leftMouseUp] {
+    let types: [CGEventType] = command == "move" ? [.mouseMoved] : [.leftMouseDown, .leftMouseUp]
+    for type in types {
         guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left) else { fail("cannot create mouse event") }
         event.flags = []
         event.setIntegerValueField(.mouseEventClickState, value: type == .mouseMoved ? 0 : 1)

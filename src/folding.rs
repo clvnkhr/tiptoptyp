@@ -188,22 +188,21 @@ impl Folding {
     }
 
     pub(crate) fn layout(&mut self, original: Arc<Galley>) -> Arc<Galley> {
-        if self.collapsed.is_empty() {
-            return original;
-        }
         if let Some((input, output)) = &self.cached
             && Arc::ptr_eq(input, &original)
         {
             return Arc::clone(output);
         }
         // TextEdit lays out each mutation before DocumentSession commits its
-        // revision. Preserve unaffected folds in that very layout: returning
-        // an expanded galley would paint a flash and scroll to the wrong y.
+        // revision. Update expanded markers too: stale character offsets put
+        // arrows on the wrong row for one frame. Preserve collapsed geometry
+        // to avoid flashing expanded text and scrolling to the wrong y.
         if original.job.text.as_str() != self.source.as_ref() {
             self.remap_unchanged_regions(&original.job.text);
-            if self.collapsed.is_empty() {
-                return original;
-            }
+        }
+        if self.collapsed.is_empty() {
+            self.cached = Some((Arc::clone(&original), Arc::clone(&original)));
+            return original;
         }
         let mut hidden: Vec<Range<usize>> = Vec::new();
         for region in self
@@ -410,6 +409,37 @@ mod tests {
                         &original,
                         &folding.layout(Arc::clone(&original))
                     ));
+                })
+                .drop_without_applying_deltas();
+        }
+    }
+
+    #[test]
+    fn expanded_markers_follow_edits_in_the_same_layout_frame() {
+        let source = "préface\n#let f() = {\n  αβ\n}\ntail";
+        for edited in [
+            source.replace("préface", "préface新"),
+            source.replace("préface", "préface\n新"),
+            source.replace("préface", "p"),
+        ] {
+            egui::Context::default()
+                .run_ui(Default::default(), |ui| {
+                    let mut folding = Folding::default();
+                    prepare(&mut folding, source, 0);
+                    let galley = ui.painter().layout_no_wrap(
+                        edited.clone(),
+                        egui::FontId::monospace(14.0),
+                        egui::Color32::WHITE,
+                    );
+                    folding.layout(Arc::clone(&galley));
+                    let source_snapshot = Arc::clone(&folding.source);
+                    assert!(Arc::ptr_eq(&galley, &folding.layout(Arc::clone(&galley))));
+                    assert!(Arc::ptr_eq(&source_snapshot, &folding.source));
+                    assert!(Arc::ptr_eq(&folding.cached.as_ref().unwrap().0, &galley));
+                    let during_edit = folding.regions.clone();
+                    prepare(&mut folding, &edited, 1);
+                    assert!(!during_edit.is_empty());
+                    assert_eq!(during_edit, folding.regions);
                 })
                 .drop_without_applying_deltas();
         }

@@ -126,6 +126,13 @@ impl SettingsPanel<'_> {
                     );
                     if response.clicked() {
                         self.state.scroll_target = Some(target);
+                        let duration = std::time::Duration::from_secs(3);
+                        let id = super::settings_highlight_id(ui.ctx().viewport_id());
+                        ui.ctx().data_mut(|data| {
+                            data.insert_temp(id, (target, std::time::Instant::now() + duration))
+                        });
+                        // One delayed repaint removes the highlight; no idle animation loop.
+                        ui.ctx().request_repaint_after(duration);
                     }
                 }
             });

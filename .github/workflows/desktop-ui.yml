@@ -6,7 +6,7 @@ on:
       journey:
         description: Real editor journey
         type: choice
-        options: [all, panels, find, empty, focus, preview]
+        options: [all, panels, find, empty, focus, preview, editing, search, tabs, layout, folding, closing, controls, settings_search, background]
         default: all
 
 permissions:

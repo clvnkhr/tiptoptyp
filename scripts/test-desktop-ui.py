@@ -20,6 +20,9 @@ import sys
 import tempfile
 import time
 
+sys.dont_write_bytecode = True
+from desktop_ui_journeys import EditorJourneys
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -57,7 +60,7 @@ def assert_tinymist_palette(renderer, palette):
             raise AssertionError("Tinymist transfer intercept differs from palette")
 
 
-class Journey:
+class Journey(EditorJourneys):
     def __init__(self, process, driver, directory, evidence):
         self.process, self.driver, self.directory, self.evidence = process, driver, directory, evidence
         self.sequence = 0
@@ -73,7 +76,7 @@ class Journey:
     def native(self, command, *args):
         result = subprocess.run([str(self.driver), command, str(self.process.pid), *map(str, args)],
                                 capture_output=True, text=True, timeout=6)
-        self.record(command, arguments=args, stdout=result.stdout, stderr=result.stderr, exit=result.returncode)
+        self.record(command, arguments=({"fixture_text_bytes": len(args[0].encode("utf-8"))} if command == "text" else args), stdout=result.stdout, stderr=result.stderr, exit=result.returncode)
         if result.returncode:
             raise RuntimeError(result.stderr or result.stdout)
         return json.loads(result.stdout)
@@ -117,16 +120,32 @@ class Journey:
         self.native("key", code, flags)
 
     def click(self, name):
-        state = self.snapshot()
-        target = state["targets"].get(name)
-        if not target or not target["enabled"] or target["age_ms"] > 500:
-            raise AssertionError(f"missing, disabled or stale hit target: {name}")
-        if name.startswith("panel.") and state["document"]["panel"] is None:
-            raise AssertionError("cannot click a hidden panel")
-        if name.startswith("find.") and not state["document"]["find_visible"]:
-            raise AssertionError("cannot click hidden Find controls")
-        self.record("target", name=name, target=target)
-        self.native("click", target["x"], target["y"])
+        def target_in(state):
+            target = state["targets"].get(name)
+            if not target or not target["enabled"] or target["age_ms"] > 500:
+                raise AssertionError(f"missing, disabled or stale hit target: {name}")
+            if name.startswith("panel.") and state["document"]["panel"] is None:
+                raise AssertionError("cannot click a hidden panel")
+            if name.startswith("find.") and not state["document"]["find_visible"]:
+                raise AssertionError("cannot click hidden Find controls")
+            return target
+
+        target = target_in(self.snapshot())
+        deadline = time.monotonic() + 3
+        while True:
+            self.native("move", target["x"], target["y"])
+            # Wait for scroll/layout to settle before posting a click. No action
+            # has been attempted yet; this never retries a failed click.
+            observed = target_in(self.snapshot())
+            if abs(observed["x"] - target["x"]) <= 0.5 and abs(observed["y"] - target["y"]) <= 0.5:
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError(f"target did not settle before click: {name}")
+            target = observed
+        # AppKit/WKWebView can suppress passive root hover. Fresh, stable hit
+        # geometry and the asserted action outcome are the click contract.
+        self.record("target", name=name, target=observed)
+        self.native("click", observed["x"], observed["y"])
 
     def stable(self, baseline, frames=30):
         previous = None
@@ -168,7 +187,8 @@ class Journey:
         for expected in (True, False, True, False):
             self.click("find.replace")
             self.wait("Replace toggles", lambda d: d["find_visible"] and d["replace_visible"] == expected)
-            self.stable_state(lambda d: d["find_visible"] and d["replace_visible"] == expected)
+            sized = self.wait("Find popup settles at its content height", lambda d: d["find_native_height"] is not None and d["find_native_height"] == d["find_measured_height"])["document"]
+            self.stable_state(lambda d: d["find_visible"] and d["replace_visible"] == expected and d["find_native_height"] == sized["find_native_height"], frames=30)
         self.click("find.close")
         self.wait("one click closes Find", lambda d: not d["find_visible"])
         self.stable_state(lambda d: not d["find_visible"])
@@ -253,6 +273,10 @@ class Journey:
                         if self.process.poll() is not None or time.monotonic() >= deadline:
                             raise RuntimeError("visual review not completed within three minutes")
                         time.sleep(0.2)
+                    # Independent inspection tools may restore their previous app.
+                    # Explicitly return to the fixture at this manual boundary.
+                    self.native("activate")
+                    self.wait("document focused after manual review", lambda d: d["focused"])
 
     def native_wait(self, description, predicate, timeout=6):
         deadline = time.monotonic() + timeout
@@ -297,12 +321,17 @@ class Journey:
         self.native("raise", original)
         self.multiple_windows = False
         self.viewport = None
+        self.wait("restored editor keeps rendering after children close", lambda d: d["focused"] and d["minimized"] is not True)
+        self.stable_state(lambda d: d["minimized"] is not True)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--journey", choices=["all", "panels", "find", "empty", "focus", "preview"], default="all")
+    parser.add_argument("--journey", choices=["all", "panels", "find", "empty", "focus", "preview", "editing", "search", "tabs", "layout", "folding", "closing", "controls", "settings_search", "background"], default="all")
     parser.add_argument("--review-preview", action="store_true", help="pause at each dark/comfy renderer for independent on-screen review; not an automated visual pass")
+    parser.add_argument("--capture-review", action="store_true", help="capture affected settings/controls framebuffers for separate visual inspection")
+    parser.add_argument("--trace-preview", action="store_true", help="retain native preview geometry traces")
+    parser.add_argument("--review-failure", action="store_true", help="retain a failed fixture for up to three minutes of independent inspection")
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--observe-only", action="store_true", help="check real-app inspection without input; does not pass the interaction suite")
     modes.add_argument("--prepare-only", action="store_true", help="build runner and editor without launching")
@@ -351,11 +380,13 @@ def main():
                 "CFBundleExecutable": "tiptoptyp", "CFBundleIdentifier": "dev.tiptoptyp.journey." + directory.name,
                 "CFBundleName": "tiptoptyp UI Journey", "CFBundlePackageType": "APPL", "NSHighResolutionCapable": True,
             }))
-            fixture = directory / ("journey.typ" if args.journey in ("all", "preview") else "journey.txt")
-            fixture.write_text('#set page(width: 200pt, height: 200pt, margin: 20pt)\n= Preview journey\nBlack text on white paper.\n' if fixture.suffix == ".typ" else "Desktop journey fixture.\n")
+            fixture = directory / ("journey.typ" if args.journey in ("all", "preview", "controls", "tabs", "layout", "background") else "journey.txt")
+            fixture.write_text('#set page(width: 200pt, height: 200pt, margin: 20pt)\n= First\nBlack text on white paper.\n#pagebreak()\n= Second\nMiddle page.\n#pagebreak()\n= Third\n#v(95pt)\nFinal needle.\n' if fixture.suffix == ".typ" else "Desktop journey fixture.\n")
             environment = {key: value for key, value in os.environ.items()
                            if not key.startswith(("TIPTOPTYP_UI_", "TIPTOPTYP_PROFILE", "TIPTOPTYP_DESKTOP_TEST"))}
             environment["TIPTOPTYP_DESKTOP_TEST_DIR"] = str(directory)
+            if args.trace_preview:
+                environment["TIPTOPTYP_UI_TRACE"] = "1"
             # macOS default-shell startup and history belong to this fixture.
             environment["ZDOTDIR"] = str(directory)
             environment["HISTFILE"] = str(directory / "shell-history")
@@ -373,6 +404,7 @@ def main():
                         time.sleep(0.05)
                     journey = Journey(process, driver, directory, evidence)
                     journey.review_preview = args.review_preview
+                    journey.capture_review = args.capture_review
                     # The socket binds before the native UI is initialized. Initial startup
                     # readiness is distinct from retrying a failed journey.
                     # Handshake is bounded and only tolerates startup-not-ready replies.
@@ -386,6 +418,9 @@ def main():
                                 raise
                             time.sleep(0.05)
                     if not args.observe_only:
+                        journey.native_wait("native document window registered", lambda windows: any(
+                            window.get("AXTitle") == fixture.name + " — tiptoptyp"
+                            and window.get("AXMinimized") is False for window in windows), timeout=15)
                         journey.native("activate")
                         journey.wait("document window focused", lambda d: d["focused"])
                     journey.wait("fixture document loaded", lambda d: d["tabs"] == 1 and d["path"] == str(fixture), timeout=15)
@@ -408,19 +443,28 @@ def main():
                             raise AssertionError("inspection accepted a mutation")
                         result["observation_passed"] = True
                         return
-                    for name in (["panels", "find", "focus", "preview", "empty"] if args.journey == "all" else [args.journey]):
+                    if args.capture_review:
+                        journey.capture_viewport("main")
+                    for name in (["panels", "find", "editing", "search", "tabs", "layout", "folding", "closing", "focus", "settings_search", "background", "preview", "controls", "empty"] if args.journey == "all" else [args.journey]):
                         journey.record("journey.start", name=name)
                         getattr(journey, name)()
                         result["journeys"].append(name)
                         journey.record("journey.passed", name=name)
                     result["native_windows"] = journey.native("windows")
                     result["passed"] = True
-                except Exception:
+                except Exception as error:
+                    print(f"Journey failed: {error}", flush=True)
                     if journey and process.poll() is None and not args.observe_only:
                         try:
                             result["failure_native_windows"] = journey.native("windows")
                         except Exception as error:
                             result["native_inspection_error"] = str(error)
+                    if args.review_failure and process.poll() is None:
+                        resume = evidence / "failure.reviewed"
+                        print(f"Failure review: app={directory / 'Journey.app'}; resume={resume}", flush=True)
+                        deadline = time.monotonic() + 180
+                        while not resume.exists() and time.monotonic() < deadline and process.poll() is None:
+                            time.sleep(0.2)
                     raise
                 finally:
                     if process.poll() is None:

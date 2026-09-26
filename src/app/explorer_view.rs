@@ -1066,11 +1066,18 @@ pub(super) fn explorer_section_resizable(
                 (UiIcon::Maximize, "Maximize")
             };
             let label = format!("{verb} {} section", spec.title);
-            toggle_maximized = native_hover_text(
+            let maximize = native_hover_text(
                 square_icon_button(ui, icon, &label, METRICS.explorer.section_header_height),
                 &label,
-            )
-            .clicked();
+            );
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            if ui.is_rect_visible(maximize.rect) {
+                crate::desktop_test::observe(
+                    &format!("explorer.maximize.{}", spec.title),
+                    &maximize,
+                );
+            }
+            toggle_maximized = maximize.clicked();
         });
         if spec.maximized {
             // Maximize is temporary: never write the normal collapsed state.

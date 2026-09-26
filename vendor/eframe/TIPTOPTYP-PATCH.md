@@ -34,3 +34,10 @@ On AppKit, a deferred reveal of an inactive child uses `orderFront`, preserving
 its creation-time non-activating behavior; winit's `set_visible(true)` otherwise
 makes it key. Visibility intent emitted by the first callback is applied before
 reveal, so first-frame dismissal cannot briefly show the child.
+
+Both renderers reconcile a focused viewport's cached minimized flag before
+visibility-based UI suppression. egui-winit avoids live minimized/maximized
+queries on macOS, so a native restore otherwise leaves a prior Minimized(true)
+command cached indefinitely. Native focus proves that window is restored;
+unfocused/minimized windows retain their existing state. This does not issue a
+restore or focus command and does not add polling.

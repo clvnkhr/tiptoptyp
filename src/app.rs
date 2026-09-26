@@ -2833,6 +2833,9 @@ impl EditorApp {
                 egui::Event::Key { key: egui::Key::A, pressed: true, modifiers, .. } if modifiers.command && modifiers.shift
             )))
         { return; }
+        context.input_mut_for(shortcut_viewport, |input| {
+            find_bar::recover_shortcut_events(input, &shortcuts);
+        });
         self.handle_extra_shortcuts(context, shortcut_viewport, &shortcuts);
         // egui allows extra Shift/Alt modifiers on a simpler shortcut. Consume
         // Cmd+Shift+W before the File menu's Cmd+W tab action.
@@ -5826,6 +5829,8 @@ impl EditorApp {
             return;
         };
         if value.get("type").and_then(|v| v.as_str()) == Some("preview-loaded") {
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            crate::desktop_test::reset_renderer();
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             {
                 self.webview_palette = None;
@@ -5878,7 +5883,10 @@ impl EditorApp {
                     return;
                 };
                 self.web_search_offset = next;
-                let (line, column) = scalar_position_at(&source, ScalarOffset::new(scalar));
+                // The pinned Tinymist resolver can miss a span at its leading
+                // boundary (notably column zero). Aim just after the first
+                // matched Unicode scalar, still inside the matched text.
+                let (line, column) = scalar_position_at(&source, ScalarOffset::new(scalar + 1));
                 let _ = self.tinymist.scroll_preview(
                     generation,
                     self.preview_document_path(),
@@ -6093,6 +6101,16 @@ impl EditorApp {
         LanguageSupport::for_document(self.preview_document_kind())
     }
 
+    fn compile_button_label(&self) -> &'static str {
+        match self.preview_language_support().build {
+            Some(crate::language_support::BuildEngineKind::Typst) => "Typst",
+            Some(crate::language_support::BuildEngineKind::Tex) => {
+                self.settings.tex.build_engine.label()
+            }
+            None => "Compile",
+        }
+    }
+
     fn preview_status_snapshot(&self) -> PreviewStatusSnapshot<'_> {
         self.preview.status_snapshot(
             self.preview_language_support().interactive_preview,
@@ -6114,6 +6132,35 @@ impl EditorApp {
     fn fail_local_webview(&mut self, message: String) {
         self.discard_webview();
         self.preview.webview_state = ServiceState::Failed(message);
+    }
+
+    fn prepare_hidden_preview(&mut self, context: &egui::Context, frame: Option<&eframe::Frame>) {
+        if self.preview_visible() || !self.preview_status_snapshot().should_attempt_native {
+            return;
+        }
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if self.webview.is_some()
+            && !self.webview_reload_pending
+            && self.webview_url.as_deref()
+                == self.preview.connection.endpoint().map(url::Url::as_str)
+            && self.webview_palette == Some(self.preview_palette(context, self.preview.dark))
+        {
+            return;
+        }
+        // Prepare the real frontend without showing a child view or changing
+        // focus. update_webview retains its native activation guard.
+        let rect = context.content_rect();
+        let Some(native_rect) = egui_rect_to_native(context, rect) else {
+            return;
+        };
+        self.update_webview(
+            context,
+            frame,
+            rect,
+            native_rect,
+            context.style_of(context.theme()).visuals.panel_fill,
+            false,
+        );
     }
 
     fn sync_preview_visibility(&mut self) {
@@ -6348,13 +6395,13 @@ impl EditorApp {
                         self.source_preview_available(),
                         false,
                         UiIcon::Compile,
-                        "Compile",
-                        self.settings.toolbar_style,
+                        self.compile_button_label(),
+                        crate::settings::ToolbarStyle::TextAndIcons,
                         matches!(self.status_preview().status, PreviewStatus::Compiling)
                             && self.snapshot_scene.is_none(),
                     ),
                     shortcut_tooltip(
-                        "Compile PDF beside the Typst source",
+                        "Compile PDF from the previewed source",
                         &shortcuts,
                         ShortcutAction::Compile,
                     ),
@@ -6404,7 +6451,7 @@ impl EditorApp {
 
                 if tex_available {
                     let active = self.document().config().is_some();
-                    let response = ui.selectable_label(active, "miTeX");
+                    let response = ui.selectable_label(active, "auto-miTeX");
                     if response.clicked() {
                         self.set_tex_mode(!active, ui.ctx());
                     }
@@ -6426,6 +6473,8 @@ impl EditorApp {
                     self.settings.toolbar_style,
                     false,
                 );
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("preview.open", &response);
                 if native_hover_text(response, "Show preview controls").clicked() {
                     self.preview_controls.open = !self.preview_controls.open;
                 }
@@ -8781,6 +8830,7 @@ impl EditorApp {
         // commands which do not explicitly request immediate service updates.
         self.mark_edited();
         self.sync_preview_visibility();
+        self.prepare_hidden_preview(&context, frame);
         self.tick_preview_follow(&context);
         self.tick_autosave(&context);
         self.tick_compile(&context);
@@ -9689,6 +9739,10 @@ fn paint_fold_controls(
             output.response.id.with(("fold", region.line)),
             Sense::click(),
         );
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        if region.line < 32 {
+            crate::desktop_test::observe(&format!("fold.{}", region.line), &response);
+        }
         response.widget_info(|| {
             egui::WidgetInfo::labeled(
                 egui::WidgetType::Button,
@@ -11436,17 +11490,47 @@ fn settings_heading(ui: &mut egui::Ui, section: SettingsSection) {
     ui.heading(section.title());
 }
 
+fn settings_highlight_id(viewport: egui::ViewportId) -> egui::Id {
+    egui::Id::new(("settings-search-highlight", viewport))
+}
+
+fn settings_highlight(
+    context: &egui::Context,
+    viewport: egui::ViewportId,
+) -> Option<SettingsTarget> {
+    context
+        .data(|data| {
+            data.get_temp::<(SettingsTarget, std::time::Instant)>(settings_highlight_id(viewport))
+        })
+        .filter(|(_, until)| std::time::Instant::now() < *until)
+        .map(|(target, _)| target)
+}
+
 fn settings_target_anchor(
     ui: &mut egui::Ui,
     target: SettingsTarget,
     pending: &mut Option<SettingsTarget>,
 ) {
+    let rect = Rect::from_min_size(
+        ui.next_widget_position(),
+        Vec2::new(
+            ui.available_width().max(1.0),
+            ui.spacing().interact_size.y.max(METRICS.icon.button_size.y),
+        ),
+    );
     if take_settings_scroll_target(pending, target) {
-        let rect = Rect::from_min_size(
-            ui.next_widget_position(),
-            Vec2::new(ui.available_width().max(1.0), ui.spacing().interact_size.y),
-        );
         ui.scroll_to_rect(rect, Some(Align::Min));
+    }
+    if settings_highlight(ui.ctx(), ui.ctx().viewport_id()) == Some(target) {
+        let accent = theme::palette(ui.ctx()).accent;
+        ui.painter()
+            .rect_filled(rect, 3.0, accent.gamma_multiply(0.22));
+        ui.painter().rect_stroke(
+            rect,
+            3.0,
+            egui::Stroke::new(1.0, accent),
+            egui::StrokeKind::Inside,
+        );
     }
 }
 
