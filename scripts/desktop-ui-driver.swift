@@ -29,11 +29,46 @@ if command == "activate" {
     guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { fail("target app did not activate") }
     emit(["active": true]); exit(0)
 }
-if command == "windows" {
-    let element = AXUIElementCreateApplication(pid)
+func nativeWindows() -> [AXUIElement] {
+    let application = AXUIElementCreateApplication(pid)
+    AXUIElementSetMessagingTimeout(application, 4)
     var value: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &value) == .success else { fail("cannot inspect native windows") }
-    let windows = value as! [AXUIElement]
+    guard AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &value) == .success,
+          let windows = value as? [AXUIElement] else { fail("cannot inspect native windows") }
+    return windows
+}
+func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
+    return value
+}
+if ["raise", "close", "restore"].contains(command) {
+    guard args.count == 3 else { fail("window action requires exact title") }
+    let matches = nativeWindows().filter { attribute($0, kAXTitleAttribute) as? String == args[2] }
+    guard matches.count == 1 else { fail("window title is missing or ambiguous") }
+    let window = matches[0]
+    let status: AXError
+    if command == "close" {
+        guard let button = attribute(window, kAXCloseButtonAttribute) else { fail("window has no close button") }
+        status = AXUIElementPerformAction(button as! AXUIElement, kAXPressAction as CFString)
+    } else if command == "restore" {
+        status = AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+    } else {
+        status = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+    }
+    guard status == .success else { fail("native window action failed: \(status.rawValue)") }
+    emit(["performed": command]); exit(0)
+}
+if command == "foreground" {
+    emit(["pid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1]); exit(0)
+}
+if command == "finder" {
+    guard let finder = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first else { fail("Finder is unavailable") }
+    finder.activate(options: [])
+    emit(["pid": finder.processIdentifier]); exit(0)
+}
+if command == "windows" {
+    let windows = nativeWindows()
     var result: [[String: Any]] = []
     for window in windows {
         var row: [String: Any] = [:]
@@ -45,9 +80,19 @@ if command == "windows" {
     }
     emit(["windows": result]); exit(0)
 }
-guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { fail("refusing input: target app is not foreground") }
+guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { fail("refusing input: target app is not foreground (actual: \(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown") pid \(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1), target \(pid))") }
 let source = CGEventSource(stateID: .hidSystemState)
-if command == "key" {
+if command == "text" {
+    guard args.count == 3 else { fail("text requires a string") }
+    let units = Array(args[2].utf16)
+    for down in [true, false] {
+        guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down) else { fail("cannot create text event") }
+        event.flags = []
+        event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+        event.post(tap: .cghidEventTap)
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+} else if command == "key" {
     guard args.count == 4, let code = UInt16(args[2]) else { fail("key requires keycode and flags") }
     var flags: CGEventFlags = []
     for flag in args[3].split(separator: "+") {
@@ -71,6 +116,7 @@ if command == "key" {
     let point = CGPoint(x: x, y: y)
     for type in [CGEventType.mouseMoved, .leftMouseDown, .leftMouseUp] {
         guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left) else { fail("cannot create mouse event") }
+        event.flags = []
         event.setIntegerValueField(.mouseEventClickState, value: type == .mouseMoved ? 0 : 1)
         event.post(tap: .cghidEventTap)
         // Preserve distinct move/down/up delivery across native event-loop turns.

@@ -5,6 +5,17 @@ impl EditorApp {
         if !crate::desktop_test::requested() {
             return;
         }
+        if let Some(webview) = &self.webview
+            && crate::desktop_test::request_renderer()
+            && webview
+                .evaluate_script_with_callback(
+                    include_str!("desktop_preview_probe.js"),
+                    crate::desktop_test::renderer_observed,
+                )
+                .is_err()
+        {
+            crate::desktop_test::renderer_observed("null".into());
+        }
         let panel_id = crate::child_view::viewport_scoped_id(
             context,
             if self.bottom_panel.is_maximized() {
@@ -18,6 +29,7 @@ impl EditorApp {
             [rect.left(), rect.top(), rect.right(), rect.bottom()]
         });
         let preview = self.preview_status_snapshot();
+        let palette = self.preview_palette(context, self.preview.dark);
         crate::desktop_test::publish(serde_json::json!({
             "viewport": format!("{:?}", context.viewport_id()),
             "frame": context.cumulative_frame_nr(),
@@ -35,6 +47,10 @@ impl EditorApp {
             "preview_failure": preview.failure_reason(),
             "dark": context.theme() == egui::Theme::Dark,
             "comfy": self.settings.comfy_preview,
+            "page_dark": self.preview.dark,
+            "expected_palette": [palette.0.to_array(), palette.1.to_array()],
+            "webview_palette": self.webview_palette.map(|p| [p.0.to_array(), p.1.to_array()]),
+            "pdfium_palette": self.pdfium_preview.inspected_palette(),
             "panel": self.bottom_panel.selected().map(|tab| format!("{tab:?}")),
             "panel_rect": panel,
             "panel_maximized": self.bottom_panel.is_maximized(),

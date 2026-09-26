@@ -19,11 +19,14 @@ python3 scripts/test-desktop-ui.py
 python3 scripts/test-desktop-ui.py --journey panels
 python3 scripts/test-desktop-ui.py --journey find
 python3 scripts/test-desktop-ui.py --journey empty
+python3 scripts/test-desktop-ui.py --journey focus
+python3 scripts/test-desktop-ui.py --journey preview
 ```
 
 The runner compiles a separate `desktop-ui-tests` feature build and copies it
 into a uniquely identified temporary app bundle. It launches one editor window
-with a disposable text document, fresh settings and session storage. The terminal
+with a disposable document, fresh settings and session storage. Preview/all runs
+use a small Typst document and require working Tinymist, Typst and PDFium tools. The terminal
 journey currently requires the system `/bin/zsh`; it isolates zsh startup files
 and shell history with `ZDOTDIR`. No user document is opened. The fixture app
 and its process group are terminated on success or failure.
@@ -52,15 +55,36 @@ are delivered across event-loop turns; outcome assertions still wait on state.
 | panels | Cmd+5, repeated clicks on Terminal/Problems, hide/reopen; stable panel height across 30 fresh frames per sample; app remains responsive |
 | find | Cmd+F with Find focused, repeated Replace clicks, one close-button click; expected popup state after every action |
 | empty | Cmd+W on the only tab, then Cmd+N; original window remains, new tab has no path and zero source bytes |
+| focus | Two document windows; Settings opened/closed from alternating owners; native focus returns to each owner; minimize/restore, Finder app switch, close second window once |
+| preview | Pin a real Typst fixture; switch PDFium → Tinymist through Settings; require the selected renderer to become ready; light/dark × comfy transitions; applied palette and live Tinymist DOM checks |
 
-These are single-document-window journeys. The runner fails if inspection
-unexpectedly switches document owners. Find is a real native child viewport.
-The fixture is a text document: this lane **does not exercise either live preview
-backend** and records backend identity without claiming rendering readiness.
+Find is a real native child viewport. The focus journey uses native Accessibility
+window actions and verifies native focus independently of the inspection socket.
+Other journeys reject unexpected document-owner changes.
 
-Still to add: two-document Settings focus handoff; minimize/app-switch/restore;
-real save dialogs and TeX save-as; restored Typst → pinned TeX builds; native
-preview theme/comfy transitions and their composed on-screen appearance.
+Preview checks compare the effective page palette with each renderer's applied
+palette. Tinymist additionally requires a rendered page, exactly one palette
+filter in its ancestor chain, the expected paper color, and matching transfer
+coefficients. This detects missing/double transformations and stale DOM state.
+It does **not** prove final screen pixels: an on-screen compositor bug may still
+pass DOM checks. No document content is included in DOM observations.
+
+For independent composed-window inspection, run:
+
+```sh
+python3 scripts/test-desktop-ui.py --journey preview --review-preview
+```
+
+This pauses at each renderer's dark/comfy state for up to three minutes and
+prints the exact isolated app path and a resume-file path. Inspect that app's
+whole window using the approved computer-use tool (not another running editor).
+Record the observation in the printed resume file to continue. The file is an
+operator acknowledgement, not an automated visual assertion. Manual viewport
+captures can be taken with Cmd+Shift+F12 and retained before fixture cleanup;
+Tinymist's native child is not composited into that framebuffer capture.
+
+Still to add: real save dialogs and TeX save-as; restored Typst → pinned TeX
+builds; automated assertions against composed on-screen pixels.
 The existing `scripts/test-native-windows.py` covers a separate native lifecycle
 fixture, not those complete editor journeys.
 
@@ -71,7 +95,8 @@ Each run leaves `.tiptoptyp/desktop-ui-tests/run-*/` with:
 - `result.json`: pass/failure, completed journeys, platform, exact binary version
   and SHA-256, Git revision/diff summary, and initial backend/settings state.
 - `events.jsonl`: ordered native actions, observed targets and bounded state
-  snapshots. No document contents are included.
+  snapshots. No document contents are included. Preview runs also record read-only DOM
+  palette/filter observations.
 - `app.log`: app stdout/stderr, including startup failures.
 - The isolated persisted settings file, when the app wrote one.
 
@@ -98,7 +123,7 @@ the previously observed 3-point-per-frame growth and invalid/missing geometry.
 
 The manually dispatched Desktop UI workflow targets a dedicated, logged-in
 self-hosted macOS runner labelled `desktop-ui`. Its host must already have the
-permissions above. It uploads evidence even on failure. It is not automatically
+permissions above, and must remain unused while native input is running. It uploads evidence even on failure. It is not automatically
 run against arbitrary pull-request code on a personal desktop.
 
 Before merging a change to a covered interaction, run that journey and report

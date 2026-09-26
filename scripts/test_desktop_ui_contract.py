@@ -28,5 +28,28 @@ class HeightContract(unittest.TestCase):
                 runner.assert_stable_height(220, {"panel_rect": rectangle})
 
 
+class PreviewContract(unittest.TestCase):
+    def observation(self):
+        return {"age_ms": 0, "value": {"ready": True, "filters": ["url(#tiptoptyp-palette)"],
+                "background": "rgb(0, 0, 0)", "slopes": [-1, -1, -1], "intercepts": [1, 1, 1]}}
+
+    def test_single_dark_transform(self):
+        runner.assert_tinymist_palette(self.observation(), [[0, 0, 0, 255], [255, 255, 255, 255]])
+
+    def test_double_inversion_cannot_pass(self):
+        state = self.observation()
+        state["value"]["filters"].append("invert(1)")
+        with self.assertRaisesRegex(AssertionError, "exactly one"):
+            runner.assert_tinymist_palette(state, [[0, 0, 0, 255], [255, 255, 255, 255]])
+
+    def test_stale_or_wrong_palette_cannot_pass(self):
+        state = self.observation()
+        state["age_ms"] = 501
+        with self.assertRaisesRegex(AssertionError, "stale"):
+            runner.assert_tinymist_palette(state, [[0, 0, 0, 255], [255, 255, 255, 255]])
+        with self.assertRaisesRegex(AssertionError, "paper"):
+            runner.assert_tinymist_palette(self.observation(), [[255, 255, 255, 255], [0, 0, 0, 255]])
+
+
 if __name__ == "__main__":
     unittest.main()

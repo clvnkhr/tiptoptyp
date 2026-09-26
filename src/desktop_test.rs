@@ -17,6 +17,8 @@ struct State {
     requested: u64,
     published: u64,
     document: Value,
+    renderer: Option<(Value, Instant)>,
+    renderer_pending: bool,
     targets: BTreeMap<String, (Value, Instant)>,
 }
 struct Probe {
@@ -115,7 +117,31 @@ fn snapshot() -> Value {
     json!({
         "schema": 1, "pid": std::process::id(), "build": crate::build_info::VERSION,
         "request": request, "document": state.document, "targets": targets,
+        "renderer": state.renderer.as_ref().map(|(value, time)| json!({"value": value, "age_ms": time.elapsed().as_millis()})),
     })
+}
+
+pub(crate) fn request_renderer() -> bool {
+    let Some(probe) = PROBE.get() else {
+        return false;
+    };
+    let mut state = probe.state.lock().unwrap();
+    if state.renderer_pending {
+        return false;
+    }
+    state.renderer_pending = true;
+    true
+}
+
+pub(crate) fn renderer_observed(value: String) {
+    if let Some(probe) = PROBE.get() {
+        let mut state = probe.state.lock().unwrap();
+        state.renderer = Some((
+            serde_json::from_str(&value).unwrap_or(Value::Null),
+            Instant::now(),
+        ));
+        state.renderer_pending = false;
+    }
 }
 
 pub(crate) fn requested() -> bool {

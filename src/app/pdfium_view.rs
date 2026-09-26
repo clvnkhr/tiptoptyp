@@ -84,6 +84,11 @@ impl Default for PdfiumView {
 }
 
 impl PdfiumView {
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    pub(super) fn inspected_palette(&self) -> [[u8; 4]; 2] {
+        [self.palette.0.to_array(), self.palette.1.to_array()]
+    }
+
     pub(super) fn command(
         &mut self,
         command: AppCommand,

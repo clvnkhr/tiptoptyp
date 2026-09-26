@@ -102,11 +102,13 @@ impl SettingsPanel<'_> {
 
         ui.horizontal(|ui| {
             ui.label(RichText::new("Search settings").strong());
-            ui.add(
+            let _search = ui.add(
                 egui::TextEdit::singleline(&mut self.state.query)
                     .hint_text("Theme, fonts, shortcuts, preview, tools…")
                     .desired_width(f32::INFINITY),
             );
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            crate::desktop_test::observe("settings.search", &_search);
         });
         if !self.state.query.trim().is_empty() {
             let matches = settings_search_results(&self.state.query);
@@ -117,6 +119,11 @@ impl SettingsPanel<'_> {
                 }
                 for target in matches {
                     let response = ui.button(target.label());
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    crate::desktop_test::observe(
+                        &format!("settings.result.{}", target.label()),
+                        &response,
+                    );
                     if response.clicked() {
                         self.state.scroll_target = Some(target);
                     }
@@ -198,11 +205,15 @@ impl SettingsPanel<'_> {
                     );
                     ui.add_enabled_ui(theme_picker_enabled, |ui| {
                         for appearance in InterfaceTheme::ALL {
-                            ui.selectable_value(
+                            let _response = ui.selectable_value(
                                 &mut edited.interface_theme,
                                 appearance,
                                 appearance.label(),
                             );
+                            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                            if ui.is_rect_visible(_response.rect) {
+                                crate::desktop_test::observe(&format!("settings.theme.{}", appearance.label()), &_response);
+                            }
                         }
                     });
                     if theme_overridden {
@@ -344,7 +355,9 @@ impl SettingsPanel<'_> {
                     );
                 }
 
-                ui.checkbox(&mut edited.comfy_preview, "Comfy preview — match page and text to the interface");
+                let _comfy = ui.checkbox(&mut edited.comfy_preview, "Comfy preview — match page and text to the interface");
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                if ui.is_rect_visible(_comfy.rect) { crate::desktop_test::observe("settings.comfy", &_comfy); }
                 settings_target_anchor(
                     ui,
                     SettingsTarget::PageTheme,
@@ -766,7 +779,7 @@ impl SettingsPanel<'_> {
                 );
                 ui.horizontal_wrapped(|ui| {
                     for preference in PreviewPreference::ALL {
-                        ui.selectable_value(
+                        let _response = ui.selectable_value(
                             &mut edited.preview_preference,
                             preference,
                             preference.label(),
@@ -775,6 +788,10 @@ impl SettingsPanel<'_> {
                             PreviewPreference::Interactive => "Tinymist provides interactive Typst preview and source navigation. TeX and opened PDFs always use PDFium. Errors do not switch renderers.",
                             PreviewPreference::Pdfium => "PDFium displays compiled Typst and TeX output and opened PDFs, retaining the previous page while an update renders.",
                         });
+                        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                        if ui.is_rect_visible(_response.rect) {
+                            crate::desktop_test::observe(&format!("settings.backend.{preference:?}"), &_response);
+                        }
                     }
                     ui.separator();
                     settings_inline_value(
