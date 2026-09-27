@@ -1,2 +1,8 @@
 [alias]
 xtask = "run --manifest-path xtask/Cargo.toml --"
+
+# Keep `cargo run` convenient without allowing old incremental sessions to
+# accumulate indefinitely. The runner preserves the newest session for each
+# crate after the launched process exits.
+[target.'cfg(target_os = "macos")']
+runner = "scripts/cargo-run-clean.sh"

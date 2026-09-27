@@ -198,6 +198,13 @@ Direct `cargo run --release` launches the visibly marked `tiptoptyp Dev` build.
 Use the packaging commands below, or `scripts/install-macos-app.sh`, for the
 production `tiptoptyp.app` bundle.
 
+On macOS, the repository Cargo config routes `cargo run` through a small
+post-run cleanup wrapper. After the launched process exits, it removes older
+incremental sessions that Cargo no longer uses while keeping the newest session
+for each crate. Dependency artifacts and the current build outputs remain
+available for the next run. Set `TIPTOPTYP_KEEP_CARGO_CACHE=1` to skip this
+cleanup, or set `TIPTOPTYP_CARGO_CACHE_KEEP_SESSIONS` to retain more sessions.
+
 Launching the packaged `tiptoptyp.app` without a path restores the newest recent
 workspace that still exists, falling back to the current folder on first run.
 The bundle registers the text, Typst, PDF, and image formats supported by the
