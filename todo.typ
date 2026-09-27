@@ -135,7 +135,7 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 16. [x] tab -> 2 or 4 or x spaces or tab should be settable in settings (default to 2)
 17. [x] i noticed in a cjk keyboard typing 。 gave me a . - we should be able to toggle this behavior
 18. [ ] tex diagnostics/fmt override in mitex
-19. [ ] detexify / detypstify (https://github.com/kirel/detexify-next / https://detypify.quarticcat.com/) we should just pull the model params/hyperparams out and use rust as much as possible (i hear good things about ax)
+19. [ ] detexify / detypstify (https://github.com/kirel/detexify-next / https://detypify.quarticcat.com/) we should just pull the model params/hyperparams out and use rust as much as possible (i hear good things about ax). Add it as an explorer subpanel we can draw in
 20. [ ] more customizable snippets
 21. [ ] multiple cursor snippeting: e.g. if we  tab autocomplete to `\begin` and then type e.g. `enumerate` the generated `\end` should also be populated with `enumerate`.
 22. [ ] sometimes, when switching from tex to typ, i get that tinymist is stale, tectonic and harper stays around from the tex file, and i dont get new diagnostics until first keyboard press. after, harper refreshed (yay) but tectonic stuck around (boo)
