@@ -1657,6 +1657,47 @@ fn focused_viewport_and_standard_text_edit_commands_are_explicit() {
 }
 
 #[test]
+fn native_menu_commands_cannot_reach_the_document_behind_settings() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+    app.settings_visible = true;
+    let tabs = app.tabs.len();
+    let panel = app.bottom_panel.selected();
+    for command in [AppCommand::New, AppCommand::Panel, AppCommand::Format] {
+        app.queued_native_menu_commands.push(command);
+    }
+    let child = scoped_child_viewport_id(&context, "tiptoptyp-settings");
+    let mut input = egui::RawInput::default();
+    input
+        .viewports
+        .entry(egui::ViewportId::ROOT)
+        .or_default()
+        .focused = Some(false);
+    input.viewports.entry(child).or_default().focused = Some(true);
+    context
+        .run_ui(input, |ui| app.process_native_menu_commands(ui.ctx(), None))
+        .drop_without_applying_deltas();
+    assert_eq!(app.tabs.len(), tabs);
+    assert_eq!(app.bottom_panel.selected(), panel);
+    assert!(app.queued_native_menu_commands.pop().is_none());
+
+    app.queued_native_menu_commands.push(AppCommand::CloseTab);
+    let mut input = egui::RawInput::default();
+    input
+        .viewports
+        .entry(egui::ViewportId::ROOT)
+        .or_default()
+        .focused = Some(false);
+    input.viewports.entry(child).or_default().focused = Some(true);
+    context
+        .run_ui(input, |ui| app.process_native_menu_commands(ui.ctx(), None))
+        .drop_without_applying_deltas();
+    assert!(app.settings_window.lock().unwrap().has_actions());
+    assert_eq!(app.tabs.len(), tabs);
+}
+
+#[test]
 fn semantic_clipboard_events_obey_effective_shortcuts_and_capture() {
     use crate::shortcuts::ShortcutOverrides;
 

@@ -89,16 +89,11 @@ mod tests {
             .get(by().role(egui::accesskit::Role::TextInput).value("theme"))
             .focus();
         harness.run();
-        let select_all = harness
-            .state()
-            .input
-            .as_ref()
-            .unwrap()
-            .settings
-            .effective_shortcuts()
-            .egui(ShortcutAction::SelectAll)
-            .unwrap();
-        harness.key_press_modifiers(select_all.modifiers, select_all.logical_key);
+        assert!(
+            harness
+                .state_mut()
+                .queue_edit_command(AppCommand::SelectAll)
+        );
         harness.run();
         harness
             .get(by().role(egui::accesskit::Role::TextInput).value("theme"))
@@ -218,6 +213,72 @@ mod tests {
         );
     }
 
+    #[test]
+    fn document_shortcuts_do_not_interrupt_settings_search_typing() {
+        let mut window = SettingsWindow::default();
+        window.ui.query = "back".into();
+        let mut harness = settings_harness(window);
+        harness.run();
+        harness
+            .get(by().role(egui::accesskit::Role::TextInput).value("back"))
+            .focus();
+        harness.run();
+        for action in [
+            ShortcutAction::New,
+            ShortcutAction::Save,
+            ShortcutAction::Panel,
+            ShortcutAction::Compile,
+            ShortcutAction::ToggleLineWrap,
+        ] {
+            let shortcut = harness
+                .state()
+                .input
+                .as_ref()
+                .unwrap()
+                .settings
+                .effective_shortcuts()
+                .egui(action)
+                .unwrap();
+            harness.key_press_modifiers(shortcut.modifiers, shortcut.logical_key);
+            harness.run();
+            assert_eq!(harness.state().ui.query, "back", "{action:?}");
+            assert!(!harness.state().close_requested, "{action:?}");
+        }
+        harness
+            .get(by().role(egui::accesskit::Role::TextInput).value("back"))
+            .type_text("end");
+        harness.run();
+        assert_eq!(harness.state().ui.query, "backend");
+    }
+
+    #[test]
+    fn minimize_shortcut_targets_the_settings_viewport() {
+        let mut harness = settings_harness(SettingsWindow::default());
+        let shortcut = harness
+            .state()
+            .input
+            .as_ref()
+            .unwrap()
+            .settings
+            .effective_shortcuts()
+            .egui(ShortcutAction::Minimize)
+            .unwrap();
+        harness.input_mut().events.push(egui::Event::Key {
+            key: shortcut.logical_key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: shortcut.modifiers,
+        });
+        harness.step();
+        assert!(
+            harness.output().viewport_output[&harness.ctx.viewport_id()]
+                .commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::Minimized(true)))
+        );
+    }
+
     fn settings_harness(mut window: SettingsWindow) -> Harness<'static, SettingsWindow> {
         let context = egui::Context::default();
         if window.input.is_none() {
@@ -235,9 +296,7 @@ mod tests {
                     let actions = window.paint(ui, &captures, &mut false);
                     window.text_input_focused = ui.ctx().text_edit_focused();
                     window.accept_actions(actions);
-                    window.collect_owner_shortcuts(ui.ctx());
-                    let owner_keys = window.take_owner_keys();
-                    window.route_owner_shortcuts(owner_keys);
+                    window.consume_shortcuts(ui.ctx(), &captures);
                 },
                 window,
             )
@@ -502,7 +561,6 @@ pub(super) struct SettingsWindow {
     focused: bool,
     pub(super) text_input_focused: bool,
     menu_commands: Vec<AppCommand>,
-    owner_keys: Vec<egui::Event>,
     paste_deadline: Option<f64>,
     local_events: Vec<egui::Event>,
 }
@@ -517,50 +575,11 @@ impl SettingsWindow {
         }
     }
 
-    pub(super) fn take_owner_keys(&mut self) -> Vec<egui::Event> {
-        std::mem::take(&mut self.owner_keys)
-    }
     pub(super) fn request_close(&mut self) {
         self.close_requested = true;
     }
     pub(super) fn request_search_focus(&mut self) {
         self.ui.focus_search = true;
-    }
-    /// Handle shortcuts captured by the native Settings viewport. Commands
-    /// that belong to Settings are applied here; everything else is returned
-    /// to the owning document viewport for its normal router.
-    pub(super) fn route_owner_shortcuts(&mut self, events: Vec<egui::Event>) -> Vec<egui::Event> {
-        // Resolve against the same Settings snapshot used when the child
-        // captured these keys. Pending shortcut edits may not have reached
-        // the document owner yet.
-        let shortcuts = self
-            .input
-            .as_ref()
-            .expect("captured Settings shortcut needs its input snapshot")
-            .settings
-            .effective_shortcuts();
-        let mut forwarded = Vec::new();
-        for event in events {
-            let action = match &event {
-                egui::Event::Key {
-                    key,
-                    modifiers,
-                    pressed: true,
-                    ..
-                } => shortcuts.action_for_key_event(*key, *modifiers),
-                _ => None,
-            };
-            match action {
-                Some(ShortcutAction::CloseTab | ShortcutAction::CloseWindow) => {
-                    self.request_close();
-                }
-                Some(ShortcutAction::Find | ShortcutAction::FindReplace) => {
-                    self.request_search_focus();
-                }
-                _ => forwarded.push(event),
-            }
-        }
-        forwarded
     }
     pub(super) fn has_actions(&self) -> bool {
         self.edit.is_some() || !self.actions.is_empty() || self.close_requested
@@ -588,7 +607,6 @@ impl SettingsWindow {
         self.focused = false;
         self.text_input_focused = false;
         self.menu_commands.clear();
-        self.owner_keys.clear();
         self.paste_deadline = None;
         self.local_events.clear();
     }
@@ -719,7 +737,7 @@ impl SettingsWindow {
                 state.prepare_keyboard(ui.ctx());
                 let actions = state.paint(ui, &child_captures, &mut close);
                 state.text_input_focused = ui.ctx().text_edit_focused();
-                let shortcut = state.collect_owner_shortcuts(ui.ctx());
+                let shortcut = state.consume_shortcuts(ui.ctx(), &child_captures);
                 if state.accept_actions(actions) || close || gained_focus || shortcut {
                     if close
                         && state
@@ -741,11 +759,9 @@ impl SettingsWindow {
         );
     }
 
-    fn collect_owner_shortcuts(&mut self, context: &egui::Context) -> bool {
-        // Preserve the existing owner shortcut router, but don't wake it for
-        // search typing or keys consumed by a Settings widget.
-        context.input_mut(|input| {
-            if !input.events.iter().any(|event| {
+    fn consume_shortcuts(&mut self, context: &egui::Context, captures: &CaptureController) -> bool {
+        if !context.input(|input| {
+            input.events.iter().any(|event| {
                 matches!(
                     event,
                     egui::Event::Key { pressed: true, .. }
@@ -753,16 +769,21 @@ impl SettingsWindow {
                         | egui::Event::Cut
                         | egui::Event::Paste(_)
                 )
-            }) {
-                return false;
-            }
-            let shortcuts = self
-                .input
-                .as_ref()
-                .expect("visible Settings input")
-                .settings
-                .effective_shortcuts();
-            let mut forwarded = false;
+            })
+        }) {
+            return false;
+        }
+        let shortcuts = self
+            .input
+            .as_ref()
+            .expect("visible Settings input")
+            .settings
+            .effective_shortcuts();
+        let mut owner_changed = false;
+        let mut focus_search = false;
+        let mut minimize = false;
+        let mut capture_ui = false;
+        context.input_mut(|input| {
             input.events.retain(|event| {
                 if self.local_events.contains(event) {
                     return false;
@@ -776,26 +797,37 @@ impl SettingsWindow {
                     } => shortcuts.action_for_key_event(*key, *modifiers),
                     _ => None,
                 };
-                let local_edit = self.text_input_focused
-                    && action.is_some_and(|action| {
-                        crate::native_menu::COMMAND_SPECS.iter().any(|spec| {
-                            spec.shortcut_action == action && is_widget_edit_command(spec.command)
-                        })
-                    });
-                let matched = action.is_some() && !local_edit;
-                if matched {
-                    self.owner_keys.push(event.clone());
-                    forwarded = true;
+                match action {
+                    Some(ShortcutAction::CloseTab | ShortcutAction::CloseWindow) => {
+                        self.close_requested = true;
+                        owner_changed = true;
+                    }
+                    Some(ShortcutAction::Find | ShortcutAction::FindReplace) => {
+                        focus_search = true;
+                    }
+                    Some(ShortcutAction::Minimize) => minimize = true,
+                    Some(ShortcutAction::CaptureUi) => capture_ui = true,
+                    _ => {}
                 }
-                let local_clipboard = self.text_input_focused
-                    && matches!(
-                        event,
-                        egui::Event::Copy | egui::Event::Cut | egui::Event::Paste(_)
-                    );
-                !matched && !local_edit && !local_clipboard
+                // TextEdit has already handled its own input. No app shortcut
+                // is allowed to escape this focused native viewport.
+                !matches!(
+                    event,
+                    egui::Event::Copy | egui::Event::Cut | egui::Event::Paste(_)
+                ) && action.is_none()
             });
-            forwarded
-        })
+        });
+        if focus_search {
+            self.request_search_focus();
+            context.request_repaint();
+        }
+        if minimize {
+            context.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        }
+        if capture_ui {
+            captures.queue_for_viewport(context.viewport_id());
+        }
+        owner_changed
     }
 
     fn prepare_keyboard(&mut self, context: &egui::Context) {
@@ -950,7 +982,7 @@ impl SettingsWindow {
     }
 }
 
-fn is_widget_edit_command(command: AppCommand) -> bool {
+pub(super) fn is_widget_edit_command(command: AppCommand) -> bool {
     matches!(
         command,
         AppCommand::Cut
@@ -959,7 +991,5 @@ fn is_widget_edit_command(command: AppCommand) -> bool {
             | AppCommand::Undo
             | AppCommand::Redo
             | AppCommand::SelectAll
-            | AppCommand::ToggleComment
-            | AppCommand::Format
     )
 }

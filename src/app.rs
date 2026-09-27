@@ -2822,22 +2822,12 @@ impl EditorApp {
     }
 
     fn handle_shortcuts(&mut self, context: &egui::Context, frame: Option<&eframe::Frame>) {
-        let settings_keys = self.settings_window.lock().unwrap().take_owner_keys();
-        if !settings_keys.is_empty() {
-            let viewport = scoped_child_viewport_id(context, "tiptoptyp-settings");
-            let forwarded = self
-                .settings_window
-                .lock()
-                .unwrap()
-                .route_owner_shortcuts(settings_keys);
-            context.request_repaint_of(viewport);
-            // Preserve the existing owner routing for commands that belong to
-            // the document or another child viewport.
-            if !forwarded.is_empty() {
-                context.input_mut_for(viewport, |input| input.events.extend(forwarded));
-            }
-        }
         let shortcut_viewport = focused_input_viewport(context);
+        // Settings is a native keyboard owner. Its callback handles its own
+        // controls and shortcuts; the document router must not read that input.
+        if shortcut_viewport == scoped_child_viewport_id(context, "tiptoptyp-settings") {
+            return;
+        }
         if self.handle_shortcut_capture(context, shortcut_viewport) {
             return;
         }
@@ -3360,7 +3350,18 @@ impl EditorApp {
                         context.request_repaint_of(focused_viewport);
                         continue;
                     }
-                    _ => {}
+                    _ if settings_window::is_widget_edit_command(command) => {
+                        if self
+                            .settings_window
+                            .lock()
+                            .unwrap()
+                            .queue_edit_command(command)
+                        {
+                            context.request_repaint_of(focused_viewport);
+                        }
+                        continue;
+                    }
+                    _ => continue,
                 }
             }
             if self.route_edit_command_to_focused_widget(command, context, focused_viewport) {

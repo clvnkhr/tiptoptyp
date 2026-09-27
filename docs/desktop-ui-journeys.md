@@ -79,7 +79,7 @@ now exercised through the real app, and the lower-level coverage retained.
 | folding | Repeated shortcut and gutter collapse/expand without losing headers or source |
 | closing | Dirty-close Cancel/Escape preserve text; explicit Discard closes only the requested tab |
 | controls | Both engines: stable outline popup size, app-switch hide/restore, outline/history/pages/zoom/fit/search, minimize/reopen, detach/return |
-| settings_search | Cmd+F focuses Settings search without opening document Find; repeated Cmd+F, search destinations and highlight expiry; Cmd+W closes Settings and preserves the document |
+| settings_search | Cmd+N and Cmd+5 cannot change the document behind Settings; Cmd+F focuses Settings search without opening document Find; typing, repeated Cmd+F, search destinations and highlight expiry; Cmd+W closes Settings and preserves the document |
 | background | Switch to Tinymist with its pane hidden; frontend finishes loading; reveal reuses it and paints pages |
 | focus | Two document windows; Settings opened/closed from alternating owners; native focus returns to each owner; minimize/restore, Finder app switch, close second window once |
 | preview | Pin a real Typst fixture; switch PDFium → Tinymist through Settings; require the selected renderer to become ready; light/dark × comfy transitions; applied palette and live Tinymist DOM checks |

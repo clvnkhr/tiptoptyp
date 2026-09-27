@@ -455,6 +455,12 @@ class EditorJourneys:
 
     def settings_search(self):
         self.settings()
+        tabs = self.snapshot()["document"]["tabs"]
+        panel = self.snapshot()["document"]["panel"]
+        self.key(45)  # Cmd+N belongs to Settings; it must not create a document.
+        self.stable_state(lambda d: d["settings_visible"] and d["tabs"] == tabs)
+        self.key(23)  # Cmd+5 must not toggle the document's bottom panel.
+        self.stable_state(lambda d: d["settings_visible"] and d["panel"] == panel)
         self.key(3)  # Cmd+F focuses the Settings search, not document Find.
         self.wait("Settings search receives its shortcut", lambda d: d["settings_text_input_focused"] and not d["find_visible"])
         self.native("text", "backend")
