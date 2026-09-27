@@ -755,8 +755,14 @@ impl EditorApp {
         let Some(bytes) = preview.content.pdf().cloned() else {
             show_centered_preview_message(
                 ui,
-                "Waiting for a PDF…",
-                preview.status != PreviewStatus::Error,
+                if self.compilation_paused {
+                    "Preview paused"
+                } else {
+                    "Waiting for a PDF…"
+                },
+                !self.compilation_paused
+                    && preview.status != PreviewStatus::Error
+                    && self.compile_indicator_spinning(),
             );
             return;
         };

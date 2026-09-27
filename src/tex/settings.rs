@@ -60,6 +60,8 @@ pub(crate) struct TexSettings {
     pub(crate) build_enabled: bool,
     pub(crate) build_engine: BuildEngine,
     pub(crate) only_cached: bool,
+    /// Emit a SyncTeX map for source/preview navigation.
+    pub(crate) synctex: bool,
     pub(crate) texlab_enabled: bool,
     pub(crate) completion: bool,
     pub(crate) hover: bool,
@@ -70,6 +72,9 @@ pub(crate) struct TexSettings {
     pub(crate) texlab: ToolPreference,
     pub(crate) badness: ToolPreference,
     pub(crate) tex_fmt: ToolPreference,
+    /// Badness/TexLab diagnostic codes to hide, entered as a comma-separated
+    /// list in Settings. Matching is case-insensitive and ignores quotes.
+    pub(crate) ignored_diagnostic_codes: Vec<String>,
 }
 impl Default for TexSettings {
     fn default() -> Self {
@@ -77,6 +82,7 @@ impl Default for TexSettings {
             build_enabled: true,
             build_engine: BuildEngine::Tectonic,
             only_cached: false,
+            synctex: true,
             texlab_enabled: true,
             completion: true,
             hover: true,
@@ -87,12 +93,23 @@ impl Default for TexSettings {
             texlab: ToolPreference::default(),
             badness: ToolPreference::default(),
             tex_fmt: ToolPreference::default(),
+            ignored_diagnostic_codes: Vec::new(),
         }
     }
 }
 impl TexSettings {
     pub(crate) fn needs_badness(&self) -> bool {
         self.lint || self.formatter == Formatter::Badness
+    }
+
+    pub(crate) fn ignores_diagnostic_code(&self, code: &str) -> bool {
+        let normalized = code.trim().trim_matches(['"', '\'']).to_ascii_lowercase();
+        self.ignored_diagnostic_codes.iter().any(|candidate| {
+            candidate
+                .trim()
+                .trim_matches(['"', '\''])
+                .eq_ignore_ascii_case(&normalized)
+        })
     }
 }
 
@@ -104,6 +121,7 @@ mod tests {
         let mut settings: TexSettings = serde_json::from_str("{}").unwrap();
         assert_eq!(settings, TexSettings::default());
         assert!(settings.build_enabled && settings.texlab_enabled && settings.lint);
+        assert!(settings.synctex);
         settings.texlab_enabled = false;
         settings.build_enabled = false;
         settings.formatter = Formatter::TexFmt;
@@ -118,6 +136,9 @@ mod tests {
             settings.needs_badness(),
             "formatting remains available without linting"
         );
+        settings.ignored_diagnostic_codes = vec!["redundant-script-braces".into()];
+        assert!(settings.ignores_diagnostic_code("\"redundant-script-braces\""));
+        assert!(!settings.ignores_diagnostic_code("other-code"));
         assert_eq!(
             serde_json::from_str::<TexSettings>(&serde_json::to_string(&settings).unwrap())
                 .unwrap(),

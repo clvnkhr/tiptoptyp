@@ -1089,7 +1089,7 @@ fn preview_focus_wait_is_static_but_active_transition_animates() {
     let context = egui::Context::default();
     let paint = |waiting| {
         context.run_ui(egui::RawInput::default(), |ui| {
-            show_preview_transition(ui, waiting)
+            show_preview_transition(ui, waiting, false, !waiting)
         })
     };
     for _ in 0..10 {
@@ -2179,6 +2179,8 @@ fn egui_color_conversion_preserves_unmultiplied_alpha_channels() {
 
 #[test]
 fn pausing_blocks_automatic_builds_but_not_explicit_pdf_or_capture_work() {
+    assert!(!compilation_pause_button_visible(DocumentKind::Typst));
+    assert!(compilation_pause_button_visible(DocumentKind::Tex));
     assert!(compilation_run_allowed(false, false, false));
     assert!(!compilation_run_allowed(true, false, false));
     assert!(compilation_run_allowed(true, true, false));
@@ -7097,7 +7099,6 @@ fn projected_application_toolbar_order_and_right_alignment_survive_resizing() {
             "Preview controls",
             "auto-miTeX",
             "Find",
-            "Pause",
             "Typst",
             "Settings",
             if compact { "Files" } else { "Explorer" },
@@ -7991,6 +7992,36 @@ fn editor_diagnostics_become_one_based_inline_diagnostics() {
         converted.full_message(),
         "old syntax\ncode: \"deprecated\"\ntinymist"
     );
+}
+
+#[test]
+fn ignored_tex_diagnostic_codes_are_filtered_without_disabling_other_results() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+    app.document_mut().replace_untitled_kind(DocumentKind::Tex);
+    app.settings.tex.ignored_diagnostic_codes = vec!["redundant-script-braces".into()];
+    app.tex_diagnostics[0] = vec![
+        Diagnostic {
+            provider: Some("Badness".into()),
+            severity: DiagnosticSeverity::Warning,
+            source: DiagnosticSource::Main,
+            location: None,
+            message: "redundant braces around a single-token script argument".into(),
+            details: vec!["Code: \"redundant-script-braces\"".into()],
+        },
+        Diagnostic {
+            provider: Some("Badness".into()),
+            severity: DiagnosticSeverity::Warning,
+            source: DiagnosticSource::Main,
+            location: None,
+            message: "other warning".into(),
+            details: vec!["Code: \"other-warning\"".into()],
+        },
+    ];
+    app.update_tex_diagnostics();
+    assert_eq!(app.preview.editor_diagnostics.len(), 1);
+    assert_eq!(app.preview.editor_diagnostics[0].message, "other warning");
 }
 
 #[test]

@@ -261,6 +261,10 @@ impl EditorApp {
             .iter()
             .chain(self.tex_diagnostics.iter().flatten())
             .chain(self.writing.diagnostics.iter())
+            .filter(|diagnostic| {
+                diagnostic_code(diagnostic)
+                    .is_none_or(|code| !self.settings.tex.ignores_diagnostic_code(&code))
+            })
             .cloned()
             .collect();
         normalize_diagnostics(&mut diagnostics);

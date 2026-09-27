@@ -1172,6 +1172,8 @@ fn show_tex_preferences(
                 "Otherwise Tectonic downloads missing packages. Shell escape is disabled.",
             );
     });
+    ui.checkbox(&mut settings.synctex, "SyncTeX source/preview navigation")
+        .on_hover_text("Emit a SyncTeX map so source and PDF positions can follow each other.");
     ui.checkbox(&mut settings.texlab_enabled, "TexLab editor intelligence");
     ui.indent("texlab-features", |ui| {
         ui.checkbox(&mut settings.completion, "TeX completions");
@@ -1185,6 +1187,27 @@ fn show_tex_preferences(
         }
     });
     ui.checkbox(&mut settings.lint, "Badness linting");
+    ui.horizontal(|ui| {
+        ui.label("Ignored diagnostic codes:");
+        let mut codes = settings.ignored_diagnostic_codes.join(", ");
+        if ui
+            .add(egui::TextEdit::singleline(&mut codes).hint_text("e.g. redundant-script-braces"))
+            .changed()
+        {
+            settings.ignored_diagnostic_codes = codes
+                .split(',')
+                .map(str::trim)
+                .filter(|code| !code.is_empty())
+                .map(str::to_owned)
+                .collect();
+        }
+    });
+    ui.label(
+        egui::RichText::new(
+            "Codes are hidden from TeX editor diagnostics; hover a diagnostic to copy its full text.",
+        )
+        .weak(),
+    );
     ui.label(
         egui::RichText::new(
             "The main buffer is built from the editor; included files are read from disk.",

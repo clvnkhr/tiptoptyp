@@ -574,6 +574,11 @@ mod tests {
                 .with_size(egui::vec2(1400.0, 80.0))
                 .build_ui_state(|ui, app: &mut EditorApp| app.show_toolbar(ui, None), app);
             harness.run_steps(3);
+            if kind == DocumentKind::Tex {
+                harness.get_by_label("Pause");
+            } else {
+                assert!(harness.query_by_label("Pause").is_none());
+            }
             let button = harness.get_by_label("Preview controls");
             let next = harness.get_by_label(if kind == DocumentKind::Typst {
                 "auto-miTeX"

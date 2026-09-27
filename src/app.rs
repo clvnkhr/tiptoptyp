@@ -379,6 +379,10 @@ const fn compilation_toggle_copy(paused: bool) -> (&'static str, &'static str) {
     }
 }
 
+const fn compilation_pause_button_visible(kind: DocumentKind) -> bool {
+    matches!(kind, DocumentKind::Tex)
+}
+
 const fn compilation_notice(paused: bool) -> (&'static str, NoticeKind) {
     if paused {
         ("Automatic preview updates paused", NoticeKind::Info)
@@ -2979,11 +2983,13 @@ impl EditorApp {
         {
             self.compile_pdf(frame);
         }
-        if shortcuts
-            .egui(ShortcutAction::ToggleCompilation)
-            .is_some_and(|shortcut| {
-                context.input_mut_for(shortcut_viewport, |input| input.consume_shortcut(&shortcut))
-            })
+        if compilation_pause_button_visible(self.preview_document_kind())
+            && shortcuts
+                .egui(ShortcutAction::ToggleCompilation)
+                .is_some_and(|shortcut| {
+                    context
+                        .input_mut_for(shortcut_viewport, |input| input.consume_shortcut(&shortcut))
+                })
         {
             self.toggle_compilation_paused();
         }
@@ -6116,6 +6122,11 @@ impl EditorApp {
         }
     }
 
+    fn compile_indicator_spinning(&self) -> bool {
+        self.snapshot_scene.is_none()
+            && matches!(self.status_preview().status, PreviewStatus::Compiling)
+    }
+
     fn preview_status_snapshot(&self) -> PreviewStatusSnapshot<'_> {
         self.preview.status_snapshot(
             self.preview_language_support().interactive_preview,
@@ -6402,8 +6413,7 @@ impl EditorApp {
                         UiIcon::Compile,
                         self.compile_button_label(),
                         crate::settings::ToolbarStyle::TextAndIcons,
-                        matches!(self.status_preview().status, PreviewStatus::Compiling)
-                            && self.snapshot_scene.is_none(),
+                        self.compile_indicator_spinning(),
                     ),
                     shortcut_tooltip(
                         "Compile PDF from the previewed source",
@@ -6416,26 +6426,29 @@ impl EditorApp {
                     self.compile_pdf(frame);
                 }
 
-                let (pause_label, pause_hint) = compilation_toggle_copy(self.compilation_paused);
-                if native_hover_text(
-                    icons::toolbar_button(
-                        ui,
-                        self.source_preview_available(),
-                        self.compilation_paused,
-                        if self.compilation_paused {
-                            UiIcon::Play
-                        } else {
-                            UiIcon::Pause
-                        },
-                        pause_label,
-                        self.settings.toolbar_style,
-                        false,
-                    ),
-                    shortcut_tooltip(pause_hint, &shortcuts, ShortcutAction::ToggleCompilation),
-                )
-                .clicked()
-                {
-                    self.toggle_compilation_paused();
+                if compilation_pause_button_visible(self.preview_document_kind()) {
+                    let (pause_label, pause_hint) =
+                        compilation_toggle_copy(self.compilation_paused);
+                    if native_hover_text(
+                        icons::toolbar_button(
+                            ui,
+                            self.source_preview_available(),
+                            self.compilation_paused,
+                            if self.compilation_paused {
+                                UiIcon::Play
+                            } else {
+                                UiIcon::Pause
+                            },
+                            pause_label,
+                            self.settings.toolbar_style,
+                            false,
+                        ),
+                        shortcut_tooltip(pause_hint, &shortcuts, ShortcutAction::ToggleCompilation),
+                    )
+                    .clicked()
+                    {
+                        self.toggle_compilation_paused();
+                    }
                 }
                 if native_hover_text(
                     icons::toolbar_button(
@@ -7897,7 +7910,15 @@ impl EditorApp {
         if self.pdfium_preview_requested() {
             self.hide_webview();
             if snapshot_scene_hides_preview_pages(self.snapshot_scene) {
-                show_centered_preview_message(ui, "Building preview…", true);
+                show_centered_preview_message(
+                    ui,
+                    if self.compilation_paused {
+                        "Preview paused"
+                    } else {
+                        "Building preview…"
+                    },
+                    self.compile_indicator_spinning() && !self.compilation_paused,
+                );
             } else {
                 self.show_pdfium_view(ui, false);
             }
@@ -7930,7 +7951,12 @@ impl EditorApp {
         if let Some(reason) = self.preview_status_snapshot().failure_reason() {
             show_centered_preview_message(ui, &reason, false);
         } else {
-            show_preview_transition(ui, false);
+            show_preview_transition(
+                ui,
+                false,
+                self.compilation_paused,
+                self.compile_indicator_spinning(),
+            );
         }
     }
 
@@ -7954,6 +7980,7 @@ impl EditorApp {
                     .enumerate()
                 {
                     let color = diagnostic_color(diagnostic.severity, ui.ctx());
+                    let code = diagnostic_code(diagnostic);
                     let background_slot = ui.painter().add(egui::Shape::Noop);
                     let row = ui
                         .scope(|ui| {
@@ -7988,9 +8015,17 @@ impl EditorApp {
                                         .selectable(true)
                                         .wrap(),
                                 );
-                                if let Some(provider) = &diagnostic.provider {
+                                if diagnostic.provider.is_some() || code.is_some() {
+                                    let source = match (&diagnostic.provider, &code) {
+                                        (Some(provider), Some(code)) => {
+                                            format!("{provider} · Code: {code}")
+                                        }
+                                        (Some(provider), None) => provider.clone(),
+                                        (None, Some(code)) => format!("Code: {code}"),
+                                        (None, None) => unreachable!(),
+                                    };
                                     let galley = ui.painter().layout_no_wrap(
-                                        provider.clone(),
+                                        source,
                                         theme::supporting_font(),
                                         ui.visuals().weak_text_color(),
                                     );
@@ -8010,6 +8045,11 @@ impl EditorApp {
                                 }
                             });
                             for detail in &diagnostic.details {
+                                if detail.split_once(':').is_some_and(|(label, _)| {
+                                    label.trim().eq_ignore_ascii_case("code")
+                                }) {
+                                    continue;
+                                }
                                 ui.horizontal(|ui| {
                                     ui.add_space(METRICS.problems.detail_indent);
                                     ui.add(
@@ -8026,6 +8066,12 @@ impl EditorApp {
                             }
                         })
                         .response;
+                    row.context_menu(|ui| {
+                        if ui.button("Copy diagnostic").clicked() {
+                            ui.ctx().copy_text(diagnostic.full_message());
+                            ui.close();
+                        }
+                    });
                     let row = if self.snapshot_scene == Some(UiSnapshotScene::ProblemsPanel)
                         && index == 0
                     {
@@ -10083,15 +10129,22 @@ fn scale_rect_from_egui_to_native(rect: Rect, viewport: Rect, scale: f32) -> Opt
     )?)
 }
 
-fn show_preview_transition(ui: &mut egui::Ui, waiting_for_focus: bool) {
+fn show_preview_transition(
+    ui: &mut egui::Ui,
+    waiting_for_focus: bool,
+    paused: bool,
+    spinning: bool,
+) {
     show_centered_preview_message(
         ui,
         if waiting_for_focus {
             "Activate the document window to resume preview"
+        } else if paused {
+            "Preview paused"
         } else {
             "Building preview…"
         },
-        !waiting_for_focus,
+        spinning && !waiting_for_focus && !paused,
     );
 }
 
@@ -10511,6 +10564,16 @@ fn tinymist_diagnostic(diagnostic: LspDiagnostic, source: DiagnosticSource) -> D
         message: diagnostic.message,
         details,
     }
+}
+
+fn diagnostic_code(diagnostic: &Diagnostic) -> Option<String> {
+    diagnostic.details.iter().find_map(|detail| {
+        let (label, value) = detail.split_once(':')?;
+        label
+            .trim()
+            .eq_ignore_ascii_case("code")
+            .then(|| value.trim().to_owned())
+    })
 }
 
 fn revision_as_i32(revision: u64) -> i32 {

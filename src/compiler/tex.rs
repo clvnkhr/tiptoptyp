@@ -27,6 +27,7 @@ pub(crate) struct TexOptions {
     pub(crate) command: std::sync::Arc<crate::tool_command::CommandCustomization>,
     pub(crate) executable: PathBuf,
     pub(crate) only_cached: bool,
+    pub(crate) synctex: bool,
 }
 
 struct Session {
@@ -43,6 +44,7 @@ struct Session {
     pass: u8,
     standard: bool,
     engine: crate::tex::settings::BuildEngine,
+    synctex: bool,
 }
 
 pub(super) struct Backend {
@@ -150,23 +152,28 @@ impl Backend {
         let event = match status {
             Ok(status) if status.success() => match read_pdf(&session.pdf) {
                 Ok(pdf) => EngineEvent::Pdf {
-                    synctex: [true, false].into_iter().find_map(|compressed| {
-                        let path = session.pdf.with_extension(if compressed {
-                            "synctex.gz"
-                        } else {
-                            "synctex"
-                        });
-                        let metadata = fs::metadata(&path).ok()?;
-                        if metadata.len() > 64 * 1024 * 1024 {
-                            return None;
-                        }
-                        Some(Arc::new(crate::synctex::Artifact {
-                            data: fs::read(path).ok()?.into(),
-                            compressed,
-                            root: session.root.clone(),
-                            mirror: session.mirror.mirror_root().to_owned(),
-                        }))
-                    }),
+                    synctex: session
+                        .synctex
+                        .then(|| {
+                            [true, false].into_iter().find_map(|compressed| {
+                                let path = session.pdf.with_extension(if compressed {
+                                    "synctex.gz"
+                                } else {
+                                    "synctex"
+                                });
+                                let metadata = fs::metadata(&path).ok()?;
+                                if metadata.len() > 64 * 1024 * 1024 {
+                                    return None;
+                                }
+                                Some(Arc::new(crate::synctex::Artifact {
+                                    data: fs::read(path).ok()?.into(),
+                                    compressed,
+                                    root: session.root.clone(),
+                                    mirror: session.mirror.mirror_root().to_owned(),
+                                }))
+                            })
+                        })
+                        .flatten(),
                     pdf,
                     diagnostics: report,
                 },
@@ -218,20 +225,16 @@ impl Session {
                     "-halt-on-error",
                     "-file-line-error",
                     "-no-shell-escape",
-                    "-synctex=1",
                 ])
                 .arg(format!("-output-directory={}", output.display()));
+            if options.synctex {
+                command.arg("-synctex=1");
+            }
         } else {
             command
-                .args([
-                    "-X",
-                    "compile",
-                    "--untrusted",
-                    "--synctex",
-                    "--keep-logs",
-                    "--keep-intermediates",
-                    "--outdir",
-                ])
+                .args(["-X", "compile", "--untrusted"])
+                .args(options.synctex.then_some("--synctex"))
+                .args(["--keep-logs", "--keep-intermediates", "--outdir"])
                 .arg(&output);
             if options.only_cached {
                 command.arg("--only-cached");
@@ -254,6 +257,7 @@ impl Session {
             pass: 1,
             standard,
             engine: options.engine,
+            synctex: options.synctex,
             mirror,
             log,
             pdf,
@@ -416,6 +420,7 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
             command: Default::default(),
             executable,
             only_cached: true,
+            synctex: true,
         };
         let mut request = CompileRequest {
             revision: 1,
@@ -504,6 +509,7 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
                 executable,
                 command: Default::default(),
                 only_cached: true,
+                synctex: true,
             };
             let request = CompileRequest {
                 revision: 1,
@@ -592,6 +598,7 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
                 )
                 .program,
                 only_cached: false,
+                synctex: true,
             }),
         };
         let super::super::EngineConfig::Tex(options) = request.engine.clone() else {

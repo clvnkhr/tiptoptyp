@@ -63,6 +63,7 @@ impl EditorApp {
                         .to_owned()
                 },
                 only_cached: self.settings.tex.only_cached,
+                synctex: self.settings.tex.synctex,
             }),
         };
         let request = CompileRequest {
