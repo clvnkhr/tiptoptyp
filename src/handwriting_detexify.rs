@@ -273,7 +273,13 @@ mod tests {
             ("\\Updelta", "upright(Delta)"),
             ("\\textsca", "\"ᴀ\""),
             ("\\textturnv", "\"ʌ\""),
+            ("\\textceltpal", "\"ʲ\""),
             ("\\textdollar", "\"$\""),
+            ("\\landdownint", "∫"),
+            ("\\sqiint", "∯"),
+            ("\\llceil", "\"⌈⌈\""),
+            ("\\nnearrow", "↗"),
+            ("\\textthreequartersemdash", "\"‒\""),
             ("\\textbraceleft", "\"{\""),
             ("\\ngeqq", "≧\u{338}"),
             ("\\Aquarius", "♒"),
@@ -285,7 +291,7 @@ mod tests {
             assert_eq!(symbol.typst.as_deref(), Some(typst), "{tex}");
             assert!(!symbol.tex_only, "{tex}");
         }
-        assert!(labels().iter().filter(|s| s.typst.is_some()).count() >= 1050);
+        assert!(labels().iter().filter(|s| s.typst.is_some()).count() >= 1120);
         for symbol in labels() {
             assert_eq!(symbol.tex_only, symbol.typst.is_none());
         }

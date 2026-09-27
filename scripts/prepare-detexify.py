@@ -50,6 +50,14 @@ expressions = {
     r'\Eqcolon': 'minus colon.double', r'\Eqqcolon': 'eq colon.double',
     r'\idotsint': 'integral dots.h integral',
     r'\dotsint': 'integral dots.h integral',
+    r'\----': 'dash.em.three',
+    r'\\': '#linebreak()',
+    r'\leftrightarroweq': '"↔="',
+    r'\llceil': '"⌈⌈"', r'\llfloor': '"⌊⌊"',
+    r'\rrceil': '"⌉⌉"', r'\rrfloor': '"⌋⌋"',
+    r'\nnearrow': '↗', r'\nnwarrow': '↖',
+    r'\ssearrow': '↘', r'\sswarrow': '↙',
+    r'\textpalhook': '"\\u{321}"',
 }
 for symbol in json.loads((source/'symbols.json').read_text())['symbols']:
     command=symbol['command']

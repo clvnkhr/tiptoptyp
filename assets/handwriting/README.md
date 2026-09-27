@@ -36,9 +36,9 @@ suggestions and 122/128 calligraphic letters among four dedicated suggestions.
 This split is not writer-disjoint and does not establish general handwriting
 accuracy. The classifier recognizes individual symbols, not whole formulas.
 
-1,091 of the 1,123 definitions have verified Typst expressions (407 more than
-initially mapped). These include `cal(A)`, `scr(A)`, `bb(h)`, upright Greek,
-phonetic letters, punctuation, currencies, zodiac signs and mathematical aliases.
+1,120 of the 1,123 definitions have Typst output (436 more than initially
+mapped). These include `cal(A)`, `scr(A)`, `bb(h)`, upright Greek, IPA letters
+and marks, punctuation, currencies, zodiac signs and mathematical aliases.
 TeX/miTeX insertion retains the original LaTeX command. Unicode symbols work in
 Typst even when they have no named `sym` alias. Text/IPA characters and ASCII
 punctuation are quoted so they remain upright and cannot become Typst syntax.
@@ -55,16 +55,16 @@ Math style expressions follow [Typst's variants](https://typst.app/docs/referenc
 The generator combines this table with UnicodeIt and explicit Typst expressions;
 it does not require these websites at generation time or runtime.
 
-The remaining 32 definitions say “No verified Typst mapping yet”, not “TeX only”.
-These include specialist integral variants, double corner delimiters, steep
-arrows, unusual phonetic hooks and package-specific pictograms. They remain
-available in TeX; Typst insertion is disabled until a faithful mapping is added.
-This is an incomplete conversion table, not a limitation of Typst. Tooltips also
-identify required LaTeX packages from upstream metadata.
+Three definitions still have no Typst insertion: `\\textraisevibyi` (a raised
+phonetic glyph without a settled text equivalent), `\\texttoneletterstem` (a
+font-specific tone component), and `\\ataribox` (the Atari logo). They remain
+available in TeX and show “No verified Typst mapping yet.” This is a short list
+of unresolved conversions, not a limitation of Typst. Tooltips also identify
+required LaTeX packages from upstream metadata.
 
 Validation: `cargo test handwriting` includes syntax checks for every mapping
 and semantic click/insertion tests for both languages. With Typst installed,
-`cargo test every_typst_mapping_compiles -- --ignored` compiles all 1,091 mapped
+`cargo test every_typst_mapping_compiles -- --ignored` compiles all 1,120 mapped
 expressions against the actual math library. Updating mappings does not alter
 the sample or holdout binaries, recognition ranking, or background-worker work.
 
