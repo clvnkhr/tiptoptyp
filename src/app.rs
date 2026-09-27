@@ -2825,7 +2825,17 @@ impl EditorApp {
         let settings_keys = self.settings_window.lock().unwrap().take_owner_keys();
         if !settings_keys.is_empty() {
             let viewport = scoped_child_viewport_id(context, "tiptoptyp-settings");
-            context.input_mut_for(viewport, |input| input.events.extend(settings_keys));
+            let forwarded = self
+                .settings_window
+                .lock()
+                .unwrap()
+                .route_owner_shortcuts(settings_keys, &self.settings.effective_shortcuts());
+            context.request_repaint_of(viewport);
+            // Preserve the existing owner routing for commands that belong to
+            // the document or another child viewport.
+            if !forwarded.is_empty() {
+                context.input_mut_for(viewport, |input| input.events.extend(forwarded));
+            }
         }
         let shortcut_viewport = focused_input_viewport(context);
         if self.handle_shortcut_capture(context, shortcut_viewport) {
@@ -3338,6 +3348,21 @@ impl EditorApp {
     ) {
         let focused_viewport = focused_input_viewport(context);
         while let Some(command) = self.queued_native_menu_commands.pop() {
+            if focused_viewport == scoped_child_viewport_id(context, "tiptoptyp-settings") {
+                match command {
+                    AppCommand::CloseTab => {
+                        self.settings_window.lock().unwrap().request_close();
+                        context.request_repaint_of(focused_viewport);
+                        continue;
+                    }
+                    AppCommand::Find | AppCommand::FindReplace => {
+                        self.settings_window.lock().unwrap().request_search_focus();
+                        context.request_repaint_of(focused_viewport);
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
             if self.route_edit_command_to_focused_widget(command, context, focused_viewport) {
                 continue;
             }

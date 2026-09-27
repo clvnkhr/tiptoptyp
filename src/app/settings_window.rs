@@ -172,6 +172,94 @@ mod tests {
             .drop_without_applying_deltas();
     }
 
+    #[test]
+    fn settings_search_focus_request_targets_the_search_field() {
+        let context = egui::Context::default();
+        let mut window = SettingsWindow::default();
+        window.synchronize(input(&context), &FontCatalog::default());
+        window.ui.query = "theme".into();
+        let captures = CaptureController::disabled_for_tests();
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(700.0, 3000.0))
+            .build_ui_state(
+                move |ui, window: &mut SettingsWindow| {
+                    window.prepare_keyboard(ui.ctx());
+                    if !window.close_requested {
+                        let actions = window.paint(ui, &captures, &mut false);
+                        window.text_input_focused = ui.ctx().text_edit_focused();
+                        window.accept_actions(actions);
+                        window.collect_owner_shortcuts(ui.ctx());
+                        let owner_keys = window.take_owner_keys();
+                        window.route_owner_shortcuts(
+                            owner_keys,
+                            &AppSettings::default().effective_shortcuts(),
+                        );
+                    }
+                },
+                window,
+            );
+        harness.run();
+        let shortcut = harness
+            .state()
+            .input
+            .as_ref()
+            .unwrap()
+            .settings
+            .effective_shortcuts()
+            .egui(ShortcutAction::Find)
+            .unwrap();
+        harness.key_press_modifiers(shortcut.modifiers, shortcut.logical_key);
+        harness.run();
+        assert!(
+            harness
+                .get(by().role(egui::accesskit::Role::TextInput).value("theme"))
+                .is_focused(),
+            "Cmd+F in Settings should focus the settings search field"
+        );
+    }
+
+    #[test]
+    fn settings_close_shortcut_is_consumed_by_the_settings_owner() {
+        let mut window = SettingsWindow::default();
+        let context = egui::Context::default();
+        window.synchronize(input(&context), &FontCatalog::default());
+        let captures = CaptureController::disabled_for_tests();
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(700.0, 3000.0))
+            .build_ui_state(
+                move |ui, window: &mut SettingsWindow| {
+                    window.prepare_keyboard(ui.ctx());
+                    if !window.close_requested {
+                        let actions = window.paint(ui, &captures, &mut false);
+                        window.text_input_focused = ui.ctx().text_edit_focused();
+                        window.accept_actions(actions);
+                        window.collect_owner_shortcuts(ui.ctx());
+                        let owner_keys = window.take_owner_keys();
+                        window.route_owner_shortcuts(
+                            owner_keys,
+                            &AppSettings::default().effective_shortcuts(),
+                        );
+                    }
+                },
+                window,
+            );
+        harness.run();
+        let shortcut = harness
+            .state()
+            .input
+            .as_ref()
+            .unwrap()
+            .settings
+            .effective_shortcuts()
+            .egui(ShortcutAction::CloseTab)
+            .unwrap();
+        harness.key_press_modifiers(shortcut.modifiers, shortcut.logical_key);
+        harness.run();
+        let mut settings = AppSettings::default();
+        let (_, close) = harness.state_mut().take_actions(&mut settings);
+        assert!(close, "Cmd+W should close the Settings panel");
+    }
+
     fn input(context: &egui::Context) -> SettingsWindowInput {
         use crate::toolchain::{ToolKind, ToolOrigin};
         SettingsWindowInput {
@@ -448,6 +536,43 @@ impl SettingsWindow {
 
     pub(super) fn take_owner_keys(&mut self) -> Vec<egui::Event> {
         std::mem::take(&mut self.owner_keys)
+    }
+    pub(super) fn request_close(&mut self) {
+        self.close_requested = true;
+    }
+    pub(super) fn request_search_focus(&mut self) {
+        self.ui.focus_search = true;
+    }
+    /// Handle shortcuts captured by the native Settings viewport. Commands
+    /// that belong to Settings are applied here; everything else is returned
+    /// to the owning document viewport for its normal router.
+    pub(super) fn route_owner_shortcuts(
+        &mut self,
+        events: Vec<egui::Event>,
+        shortcuts: &crate::shortcuts::ShortcutBindings,
+    ) -> Vec<egui::Event> {
+        let mut forwarded = Vec::new();
+        for event in events {
+            let action = match &event {
+                egui::Event::Key {
+                    key,
+                    modifiers,
+                    pressed: true,
+                    ..
+                } => shortcuts.action_for_key_event(*key, *modifiers),
+                _ => None,
+            };
+            match action {
+                Some(ShortcutAction::CloseTab | ShortcutAction::CloseWindow) => {
+                    self.request_close();
+                }
+                Some(ShortcutAction::Find | ShortcutAction::FindReplace) => {
+                    self.request_search_focus();
+                }
+                _ => forwarded.push(event),
+            }
+        }
+        forwarded
     }
     pub(super) fn has_actions(&self) -> bool {
         self.edit.is_some() || !self.actions.is_empty() || self.close_requested

@@ -29,6 +29,9 @@ use std::path::Path;
 #[derive(Default)]
 pub(super) struct SettingsUiState {
     pub(super) query: String,
+    /// The owner sets this when a shortcut should return focus to the search
+    /// field. The flag is consumed after the widget is built for this frame.
+    pub(super) focus_search: bool,
     pub(super) scroll_target: Option<SettingsTarget>,
     pub(super) staged_ui_font_weight: Option<u16>,
     pub(super) staged_code_font_weight: Option<u16>,
@@ -102,13 +105,18 @@ impl SettingsPanel<'_> {
 
         ui.horizontal(|ui| {
             ui.label(RichText::new("Search settings").strong());
-            let _search = ui.add(
+            let search = ui.add(
                 egui::TextEdit::singleline(&mut self.state.query)
+                    .id_salt("settings-search")
                     .hint_text("Theme, fonts, shortcuts, preview, tools…")
                     .desired_width(f32::INFINITY),
             );
+            if self.state.focus_search {
+                self.state.focus_search = false;
+                search.request_focus();
+            }
             #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-            crate::desktop_test::observe("settings.search", &_search);
+            crate::desktop_test::observe("settings.search", &search);
         });
         if !self.state.query.trim().is_empty() {
             let matches = settings_search_results(&self.state.query);
