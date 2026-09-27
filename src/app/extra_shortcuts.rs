@@ -253,25 +253,29 @@ fn raster_shortcut(preview: &mut PreviewController, action: ShortcutAction) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui_kittest::Harness;
 
-    fn press(app: &mut EditorApp, context: &egui::Context, action: A) {
-        let bindings = app.settings.effective_shortcuts();
-        let chord = bindings.egui(action).unwrap();
-        context
-            .run_ui(
-                egui::RawInput {
-                    events: vec![egui::Event::Key {
-                        key: chord.logical_key,
-                        physical_key: None,
-                        pressed: true,
-                        repeat: false,
-                        modifiers: chord.modifiers,
-                    }],
-                    ..Default::default()
+    fn shortcut_harness(app: EditorApp) -> Harness<'static, EditorApp> {
+        Harness::builder()
+            .with_size(Vec2::new(1000.0, 700.0))
+            .build_ui_state(
+                |ui, app: &mut EditorApp| {
+                    let bindings = app.settings.effective_shortcuts();
+                    app.handle_extra_shortcuts(ui.ctx(), ui.ctx().viewport_id(), &bindings);
                 },
-                |ui| app.handle_extra_shortcuts(ui.ctx(), ui.ctx().viewport_id(), &bindings),
+                app,
             )
-            .drop_without_applying_deltas();
+    }
+
+    fn press(harness: &mut Harness<'static, EditorApp>, action: A) {
+        let chord = harness
+            .state()
+            .settings
+            .effective_shortcuts()
+            .egui(action)
+            .unwrap();
+        harness.key_press_modifiers(chord.modifiers, chord.logical_key);
+        harness.run();
     }
 
     fn app(context: &egui::Context, root: &Path) -> EditorApp {
@@ -288,28 +292,31 @@ mod tests {
 
     #[test]
     fn added_bindings_toggle_workspace_controls_and_respect_close_guards() {
-        let context = egui::Context::default();
         let root = tempfile::tempdir().unwrap();
-        let mut app = app(&context, root.path());
-        app.explorer.hide();
-        press(&mut app, &context, A::ExplorerSearch);
-        assert!(app.explorer.panel_visible());
-        assert!(app.explorer.take_search_focus());
-        press(&mut app, &context, A::KeyboardShortcuts);
-        assert!(app.shortcut_editor_visible);
-        app.process_close_pending = true;
-        press(&mut app, &context, A::ToggleLineWrap);
-        assert!(app.pending_settings.is_none());
-        app.process_close_pending = false;
-        press(&mut app, &context, A::ToggleLineWrap);
+        let context = egui::Context::default();
+        let app = app(&context, root.path());
+        let mut harness = shortcut_harness(app);
+        harness.run();
+        harness.state_mut().explorer.hide();
+        press(&mut harness, A::ExplorerSearch);
+        assert!(harness.state().explorer.panel_visible());
+        assert!(harness.state_mut().explorer.take_search_focus());
+        press(&mut harness, A::KeyboardShortcuts);
+        assert!(harness.state().shortcut_editor_visible);
+        harness.state_mut().process_close_pending = true;
+        press(&mut harness, A::ToggleLineWrap);
+        assert!(harness.state().pending_settings.is_none());
+        harness.state_mut().process_close_pending = false;
+        press(&mut harness, A::ToggleLineWrap);
         assert_eq!(
-            app.pending_settings.as_ref().unwrap().line_wrap,
-            !app.settings.line_wrap
+            harness.state().pending_settings.as_ref().unwrap().line_wrap,
+            !harness.state().settings.line_wrap
         );
-        app.empty_workspace(&context);
-        press(&mut app, &context, A::CollapseAll);
-        assert!(app.tabs.is_empty());
-        assert!(app.folding().regions.is_empty());
+        let context = harness.ctx.clone();
+        harness.state_mut().empty_workspace(&context);
+        press(&mut harness, A::CollapseAll);
+        assert!(harness.state().tabs.is_empty());
+        assert!(harness.state().folding().regions.is_empty());
     }
 
     #[test]
@@ -352,20 +359,23 @@ mod tests {
         let key = app.document().key();
         let source = app.document().source().clone();
         let cursor = source[..source.find('α').unwrap()].chars().count();
+        let mut harness = shortcut_harness(app);
+        harness.run();
+        let editor = source_editor_id(&harness.ctx);
         let mut state = egui::text_edit::TextEditState::default();
         state
             .cursor
             .set_char_range(Some(CCursorRange::one(CCursor::new(cursor))));
-        state.store(&context, source_editor_id(&context));
-        press(&mut app, &context, A::CollapseAll);
-        assert!(app.folding().is_collapsed(0));
-        assert!(app.pending_editor_selection.is_some());
-        press(&mut app, &context, A::ExpandAll);
-        assert!(!app.folding().is_collapsed(0));
-        press(&mut app, &context, A::ToggleFold);
-        assert!(app.folding().is_collapsed(0));
-        assert_eq!(app.document().key(), key);
-        assert_eq!(*app.document().source(), source);
+        state.store(&harness.ctx, editor);
+        press(&mut harness, A::CollapseAll);
+        assert!(harness.state().folding().is_collapsed(0));
+        assert!(harness.state().pending_editor_selection.is_some());
+        press(&mut harness, A::ExpandAll);
+        assert!(!harness.state().folding().is_collapsed(0));
+        press(&mut harness, A::ToggleFold);
+        assert!(harness.state().folding().is_collapsed(0));
+        assert_eq!(harness.state().document().key(), key);
+        assert_eq!(*harness.state().document().source(), source);
     }
 
     #[test]
@@ -376,13 +386,18 @@ mod tests {
         app.find_bar.query = "α".into();
         app.find_bar.replacement = "β".into();
         let source = app.document().source().clone();
-        press(&mut app, &context, A::ReplaceAll);
-        assert_eq!(*app.document().source(), source);
-        assert!(app.find_bar.visible && app.find_bar.replace_visible);
-        press(&mut app, &context, A::FindNext);
-        assert!(app.pending_editor_selection.is_some());
-        press(&mut app, &context, A::ReplaceAll);
-        assert_eq!(*app.document().source(), source.replace('α', "β"));
+        let mut harness = shortcut_harness(app);
+        harness.run();
+        press(&mut harness, A::ReplaceAll);
+        assert_eq!(*harness.state().document().source(), source);
+        assert!(harness.state().find_bar.visible && harness.state().find_bar.replace_visible);
+        press(&mut harness, A::FindNext);
+        assert!(harness.state().pending_editor_selection.is_some());
+        press(&mut harness, A::ReplaceAll);
+        assert_eq!(
+            *harness.state().document().source(),
+            source.replace('α', "β")
+        );
     }
 
     #[test]

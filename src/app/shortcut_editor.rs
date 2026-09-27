@@ -173,23 +173,24 @@ mod tests {
 
     #[test]
     fn editor_renders_from_a_settings_snapshot_without_an_app_owner() {
-        let context = egui::Context::default();
+        use egui_kittest::Harness;
         let settings = AppSettings::default();
-        let mut state = ShortcutEditorState::default();
-        context
-            .run_ui(Default::default(), |ui| {
+        let mut harness = Harness::builder().build_ui_state(
+            |ui, (state, settings): &mut (ShortcutEditorState, AppSettings)| {
                 assert!(
                     show(
                         ui,
-                        &mut state,
+                        state,
                         ShortcutEditorInput {
-                            settings: &settings,
+                            settings,
                             pending_settings: None,
                         },
                     )
                     .is_none()
                 );
-            })
-            .drop_without_applying_deltas();
+            },
+            (ShortcutEditorState::default(), settings),
+        );
+        harness.run();
     }
 }

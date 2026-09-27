@@ -535,50 +535,37 @@ mod tests {
 
     #[test]
     fn table_keyboard_moves_between_anchors_and_extends_selection() {
-        let context = egui::Context::default();
-        let mut dialog =
-            dialog("#table(columns: 3, table.cell(colspan: 2)[A], [B], [C], [D], [E])");
-        let frame = |dialog: &mut TableEditorDialog, mut events: Vec<egui::Event>| {
-            let modifiers = events
-                .iter()
-                .find_map(|event| match event {
-                    egui::Event::Key { modifiers, .. } => Some(*modifiers),
-                    _ => None,
-                })
-                .unwrap_or_default();
-            events.insert(0, egui::Event::ModifiersChanged(modifiers));
-            context
-                .run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(940.0, 700.0))),
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| {
-                        show_table_editor_ui(ui, dialog, 920.0, 680.0);
-                    },
-                )
-                .drop_without_applying_deltas();
-        };
-        frame(&mut dialog, vec![]);
-        frame(&mut dialog, vec![key(egui::Key::Tab, Modifiers::NONE)]);
-        assert_eq!(dialog.ui.selection.focus, (0, 2));
-        frame(
-            &mut dialog,
-            vec![key(egui::Key::ArrowDown, Modifiers::ALT | Modifiers::SHIFT)],
-        );
-        assert_eq!(dialog.ui.selection.anchor, (0, 2));
-        assert_eq!(dialog.ui.selection.focus, (1, 2));
-        frame(&mut dialog, vec![key(egui::Key::Space, Modifiers::SHIFT)]);
-        assert_eq!(dialog.ui.selection.anchor, (1, 0));
-        assert_eq!(dialog.ui.selection.focus, (1, 2));
-        frame(
-            &mut dialog,
-            vec![key(egui::Key::A, Modifiers::COMMAND | Modifiers::SHIFT)],
-        );
-        assert_eq!(dialog.ui.selection.anchor, (0, 0));
+        use egui_kittest::Harness;
+        let dialog = dialog("#table(columns: 3, table.cell(colspan: 2)[A], [B], [C], [D], [E])");
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(940.0, 700.0))
+            .build_ui_state(
+                |ui, dialog: &mut TableEditorDialog| {
+                    show_table_editor_ui(ui, dialog, 920.0, 680.0);
+                },
+                dialog,
+            );
+        harness.run();
+        harness.key_press(egui::Key::Tab);
+        harness.run();
+        assert_eq!(harness.state().ui.selection.focus, (0, 2));
+        harness.key_press_modifiers(Modifiers::ALT | Modifiers::SHIFT, egui::Key::ArrowDown);
+        harness.run();
+        assert_eq!(harness.state().ui.selection.anchor, (0, 2));
+        assert_eq!(harness.state().ui.selection.focus, (1, 2));
+        harness.key_press_modifiers(Modifiers::SHIFT, egui::Key::Space);
+        harness.run();
+        assert_eq!(harness.state().ui.selection.anchor, (1, 0));
+        assert_eq!(harness.state().ui.selection.focus, (1, 2));
+        harness.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, egui::Key::A);
+        harness.run();
+        assert_eq!(harness.state().ui.selection.anchor, (0, 0));
         assert_eq!(
-            selected_cells(&dialog, &dialog.table.cell_owners().unwrap()).len(),
+            selected_cells(
+                harness.state(),
+                &harness.state().table.cell_owners().unwrap()
+            )
+            .len(),
             5
         );
     }

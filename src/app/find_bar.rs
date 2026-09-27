@@ -462,14 +462,13 @@ mod tests {
 
     #[test]
     fn bar_renders_from_local_state_without_an_app_owner() {
-        let context = egui::Context::default();
-        let mut state = FindBarState::default();
+        use egui_kittest::Harness;
         let source = "alpha beta";
-        context
-            .run_ui(Default::default(), |ui| {
+        let mut harness = Harness::builder().build_ui_state(
+            |ui, state: &mut FindBarState| {
                 let actions = show(
                     ui,
-                    &mut state,
+                    state,
                     source,
                     DocumentKey::new(tiptoptyp_core::document::WindowSessionId::new(1), 0, 0),
                     true,
@@ -492,7 +491,9 @@ mod tests {
                         .len(),
                     0
                 );
-            })
-            .drop_without_applying_deltas();
+            },
+            FindBarState::default(),
+        );
+        harness.run();
     }
 }

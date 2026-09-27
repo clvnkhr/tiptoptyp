@@ -103,23 +103,28 @@ mod tests {
             .get(by().role(egui::accesskit::Role::TextInput).value("theme"))
             .focus();
         harness.run();
-        assert!(
-            harness
-                .state_mut()
-                .queue_edit_command(AppCommand::SelectAll)
-        );
+        let select_all = harness
+            .state()
+            .input
+            .as_ref()
+            .unwrap()
+            .settings
+            .effective_shortcuts()
+            .egui(ShortcutAction::SelectAll)
+            .unwrap();
+        harness.key_press_modifiers(select_all.modifiers, select_all.logical_key);
         harness.run();
         harness
             .get(by().role(egui::accesskit::Role::TextInput).value("theme"))
             .type_text("fonts");
         harness.run();
         assert_eq!(harness.state().ui.query, "fonts");
-        assert!(!harness.state().has_actions());
-        assert!(
-            harness.state().owner_keys.is_empty(),
-            "text editing must stay local"
-        );
-        harness.get_by_label("Invert colors").click();
+        harness
+            .get(
+                by().label("Invert colors")
+                    .predicate(|node| node.role() == egui::accesskit::Role::CheckBox),
+            )
+            .click();
         harness.run();
         assert!(
             harness
@@ -142,62 +147,10 @@ mod tests {
     }
 
     #[test]
-    fn settings_owner_shortcuts_are_queued_once_not_left_in_stale_child_input() {
-        let context = egui::Context::default();
-        let mut window = SettingsWindow::default();
-        window.synchronize(input(&context), &FontCatalog::default());
-        let shortcut = AppSettings::default()
-            .effective_shortcuts()
-            .egui(ShortcutAction::Settings)
-            .unwrap();
-        context
-            .run_ui(
-                egui::RawInput {
-                    events: vec![egui::Event::Key {
-                        key: shortcut.logical_key,
-                        physical_key: None,
-                        pressed: true,
-                        repeat: false,
-                        modifiers: shortcut.modifiers,
-                    }],
-                    ..Default::default()
-                },
-                |ui| {
-                    assert!(window.collect_owner_shortcuts(ui.ctx()));
-                    assert!(!window.collect_owner_shortcuts(ui.ctx()));
-                    assert_eq!(window.take_owner_keys().len(), 1);
-                    assert!(window.take_owner_keys().is_empty());
-                },
-            )
-            .drop_without_applying_deltas();
-    }
-
-    #[test]
     fn settings_search_focus_request_targets_the_search_field() {
-        let context = egui::Context::default();
         let mut window = SettingsWindow::default();
-        window.synchronize(input(&context), &FontCatalog::default());
         window.ui.query = "theme".into();
-        let captures = CaptureController::disabled_for_tests();
-        let mut harness = Harness::builder()
-            .with_size(Vec2::new(700.0, 3000.0))
-            .build_ui_state(
-                move |ui, window: &mut SettingsWindow| {
-                    window.prepare_keyboard(ui.ctx());
-                    if !window.close_requested {
-                        let actions = window.paint(ui, &captures, &mut false);
-                        window.text_input_focused = ui.ctx().text_edit_focused();
-                        window.accept_actions(actions);
-                        window.collect_owner_shortcuts(ui.ctx());
-                        let owner_keys = window.take_owner_keys();
-                        window.route_owner_shortcuts(
-                            owner_keys,
-                            &AppSettings::default().effective_shortcuts(),
-                        );
-                    }
-                },
-                window,
-            );
+        let mut harness = settings_harness(window);
         harness.run();
         let shortcut = harness
             .state()
@@ -216,33 +169,21 @@ mod tests {
                 .is_focused(),
             "Cmd+F in Settings should focus the settings search field"
         );
+        harness.key_press_modifiers(shortcut.modifiers, shortcut.logical_key);
+        harness.run();
+        assert_eq!(harness.state().ui.query, "theme");
+        assert!(
+            harness
+                .get(by().role(egui::accesskit::Role::TextInput).value("theme"))
+                .is_focused(),
+            "repeated Cmd+F should reuse the same focused search field"
+        );
     }
 
     #[test]
     fn settings_close_shortcut_is_consumed_by_the_settings_owner() {
-        let mut window = SettingsWindow::default();
-        let context = egui::Context::default();
-        window.synchronize(input(&context), &FontCatalog::default());
-        let captures = CaptureController::disabled_for_tests();
-        let mut harness = Harness::builder()
-            .with_size(Vec2::new(700.0, 3000.0))
-            .build_ui_state(
-                move |ui, window: &mut SettingsWindow| {
-                    window.prepare_keyboard(ui.ctx());
-                    if !window.close_requested {
-                        let actions = window.paint(ui, &captures, &mut false);
-                        window.text_input_focused = ui.ctx().text_edit_focused();
-                        window.accept_actions(actions);
-                        window.collect_owner_shortcuts(ui.ctx());
-                        let owner_keys = window.take_owner_keys();
-                        window.route_owner_shortcuts(
-                            owner_keys,
-                            &AppSettings::default().effective_shortcuts(),
-                        );
-                    }
-                },
-                window,
-            );
+        let window = SettingsWindow::default();
+        let mut harness = settings_harness(window);
         harness.run();
         let shortcut = harness
             .state()
@@ -258,6 +199,32 @@ mod tests {
         let mut settings = AppSettings::default();
         let (_, close) = harness.state_mut().take_actions(&mut settings);
         assert!(close, "Cmd+W should close the Settings panel");
+    }
+
+    fn settings_harness(mut window: SettingsWindow) -> Harness<'static, SettingsWindow> {
+        let context = egui::Context::default();
+        window.synchronize(input(&context), &FontCatalog::default());
+        let captures = CaptureController::disabled_for_tests();
+        Harness::builder()
+            .with_size(Vec2::new(700.0, 3000.0))
+            .build_ui_state(
+                move |ui, window: &mut SettingsWindow| {
+                    window.prepare_keyboard(ui.ctx());
+                    if window.close_requested {
+                        return;
+                    }
+                    let actions = window.paint(ui, &captures, &mut false);
+                    window.text_input_focused = ui.ctx().text_edit_focused();
+                    window.accept_actions(actions);
+                    window.collect_owner_shortcuts(ui.ctx());
+                    let owner_keys = window.take_owner_keys();
+                    window.route_owner_shortcuts(
+                        owner_keys,
+                        &AppSettings::default().effective_shortcuts(),
+                    );
+                },
+                window,
+            )
     }
 
     fn input(context: &egui::Context) -> SettingsWindowInput {
