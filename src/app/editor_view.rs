@@ -4,7 +4,7 @@ use super::*;
 use eframe::egui::text::{ByteIndex, LayoutJob, LayoutSection};
 
 impl EditorApp {
-    fn insert_editor_text(&mut self, context: &egui::Context, text: &str) {
+    pub(super) fn insert_editor_text(&mut self, context: &egui::Context, text: &str) {
         let snapshot = self.editor_snapshot(context);
         let range = snapshot.cursor.as_sorted_char_range();
         let start = snapshot
@@ -433,6 +433,13 @@ impl EditorApp {
                 folding.layout(ui.fonts_mut(|fonts| fonts.layout_job(job)))
             };
             let document_before_edit = document.key();
+            if self
+                .snippet_session
+                .as_ref()
+                .is_some_and(|session| session.key != document_before_edit)
+            {
+                self.snippet_session = None;
+            }
             let mut output = document.edit(snapshot_before_edit.cursor, |source| {
                 let mut readonly;
                 let mut pairing;
@@ -461,13 +468,36 @@ impl EditorApp {
                     // document height cannot leave an internal border behind.
                     .frame(egui::Frame::new().inner_margin(editor_margin))
                     .layouter(&mut layouter);
-                editor.show(ui)
+                let mut output = editor.show(ui);
+                if output.response.changed()
+                    && let Some(session) = self.snippet_session.as_mut()
+                {
+                    let caret = output
+                        .state
+                        .cursor
+                        .char_range()
+                        .map_or(0, |range| range.primary.index.0);
+                    if let Some(caret) = session.update(source, caret) {
+                        output
+                            .state
+                            .cursor
+                            .set_char_range(Some(CCursorRange::one(CCursor::new(caret))));
+                        output.state.clone().store(ui.ctx(), output.response.id);
+                        ui.ctx().request_repaint();
+                    } else {
+                        self.snippet_session = None;
+                    }
+                }
+                output
             });
             #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
             crate::desktop_test::observe("editor.source", &output.response);
             // A closer can move the caret without modifying the document.
             // Do not invalidate completions or schedule work for that movement.
             changed = document.key() != document_before_edit;
+            if let Some(session) = self.snippet_session.as_mut() {
+                session.key = document.key();
+            }
             table_cursor = output
                 .state
                 .cursor

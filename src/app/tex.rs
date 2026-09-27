@@ -4,10 +4,12 @@ use crate::tex::{Event, Identity, Provider, RequestKind, Snapshot};
 
 impl EditorApp {
     pub(super) fn sync_tex(&mut self, context: &egui::Context) {
-        if self.document().kind() != DocumentKind::Tex
+        let embedded = self.document().config().is_some();
+        if (self.document().kind() != DocumentKind::Tex && !embedded)
             || self.snapshot_scene.is_some()
             || !self.lifecycle.allows_document_work()
         {
+            self.embedded_tex = None;
             self.tex_service.stop();
             if self.tex_diagnostics.iter().any(|d| !d.is_empty()) {
                 self.tex_diagnostics = Default::default();
@@ -29,10 +31,15 @@ impl EditorApp {
             .tex_service
             .identity()
             .is_some_and(|s| crate::diagnostics::same_document(s.key, key));
-        let path = self.document().path().clone().unwrap_or_else(|| {
+        let path = if embedded {
             root.join(".tiptoptyp")
-                .join(format!("untitled-{:?}-{}.tex", key.owner, key.epoch))
-        });
+                .join(format!("embedded-{:?}-{}.tex", key.owner, key.epoch))
+        } else {
+            self.document().path().clone().unwrap_or_else(|| {
+                root.join(".tiptoptyp")
+                    .join(format!("untitled-{:?}-{}.tex", key.owner, key.epoch))
+            })
+        };
         let Ok(uri) = url::Url::from_file_path(path) else {
             return;
         };
@@ -45,8 +52,10 @@ impl EditorApp {
         }
         let mut retired = false;
         for (index, enabled) in [
-            self.settings.tex.texlab_enabled && self.settings.tex.diagnostics,
-            self.settings.tex.lint,
+            self.settings.tex.texlab_enabled
+                && self.settings.tex.diagnostics
+                && (!embedded || self.settings.tex.embedded_diagnostics),
+            self.settings.tex.lint && (!embedded || self.settings.tex.embedded_diagnostics),
         ]
         .into_iter()
         .enumerate()
@@ -59,12 +68,24 @@ impl EditorApp {
         if retired {
             self.update_tex_diagnostics();
         }
+        self.embedded_tex = if embedded {
+            self.prepare_editor_source_data();
+            Some(self.editor_data.embedded_tex_projection())
+        } else {
+            None
+        };
         self.tex_service.synchronize(
             Snapshot {
                 generation: Generation(0),
                 key,
                 uri: uri.into(),
-                source: Arc::from(self.document().source().as_str()),
+                source: Arc::from(
+                    self.embedded_tex
+                        .as_ref()
+                        .map_or(self.document().source().as_str(), |projection| {
+                            projection.source.as_str()
+                        }),
+                ),
                 root,
                 settings: self.settings.tex.clone(),
                 tools: self.tex_tools.clone(),
@@ -157,6 +178,21 @@ impl EditorApp {
                     diagnostics,
                     ..
                 } => {
+                    let diagnostics = if let Some(projection) = &self.embedded_tex {
+                        diagnostics
+                            .into_iter()
+                            .filter_map(|mut diagnostic| {
+                                if !self.settings.tex.embedded_diagnostics {
+                                    return None;
+                                }
+                                diagnostic.range = projection
+                                    .map_range(self.document().source(), &diagnostic.range)?;
+                                Some(diagnostic)
+                            })
+                            .collect()
+                    } else {
+                        diagnostics
+                    };
                     self.activity.diagnostics[1 + provider_index(provider)] =
                         Some(self.document().key());
                     let locations =
@@ -180,6 +216,9 @@ impl EditorApp {
                         })
                         .collect();
                     self.update_tex_diagnostics();
+                }
+                Event::Formatted { request, edits } if self.embedded_tex.is_some() => {
+                    self.receive_embedded_format(context, request.identity.key, edits);
                 }
                 Event::Formatted { request, edits } => self.receive_formatted_document(
                     context,
@@ -256,7 +295,7 @@ impl EditorApp {
             }
         }
         let key = self.document().key();
-        let ready = self.document().kind() == DocumentKind::Tex
+        let ready = (self.document().kind() == DocumentKind::Tex || self.embedded_tex.is_some())
             && self.tex_service.identity().is_some_and(|s| s.key == key)
             && match self.settings.tex.formatter {
                 crate::tex::settings::Formatter::Badness => self.tex_service.badness_ready,
@@ -284,6 +323,54 @@ impl EditorApp {
         self.preview.editor_diagnostics = diagnostics;
         self.mark_diagnostics_changed();
     }
+    fn receive_embedded_format(
+        &mut self,
+        context: &egui::Context,
+        key: DocumentKey,
+        edits: Option<Vec<LspTextEdit>>,
+    ) {
+        if self.format_request_key != Some(key) || self.document().key() != key {
+            return;
+        }
+        self.format_request_key = None;
+        let save_after_format = self.manual_format_revision == Some(key.revision);
+        let result = (|| -> Result<(), String> {
+            let projection = self.embedded_tex.as_ref().ok_or("Math source changed")?;
+            let edits = edits.unwrap_or_default();
+            let formatted = tiptoptyp_core::text::apply_text_edits(
+                &projection.source,
+                &edits,
+                [tiptoptyp_core::text::ScalarOffset::new(0); 2],
+            )?;
+            let edits = projection.formatted_edits(self.document().source(), &formatted.text)?;
+            let snapshot = self.editor_snapshot(context);
+            let applied = tiptoptyp_core::text::apply_text_edits(
+                self.document().source(),
+                &edits,
+                [
+                    snapshot.cursor.primary.index.0,
+                    snapshot.cursor.secondary.index.0,
+                ]
+                .map(tiptoptyp_core::text::ScalarOffset::new),
+            )?;
+            self.document_mut()
+                .edit(snapshot.cursor, |source| *source = applied.text);
+            self.pending_editor_selection = Some(EditorSelection::Focus(
+                applied.mapped_offsets[1].get()..applied.mapped_offsets[0].get(),
+            ));
+            self.mark_edited();
+            if save_after_format && let Some(path) = self.document().path().clone() {
+                self.save_to_with_intent(path, SaveIntent::Explicit, context);
+            }
+            Ok(())
+        })();
+        self.manual_format_revision = None;
+        if let Err(error) = result {
+            self.activity.format_error = Some(error.clone());
+            self.show_file_error(error);
+        }
+    }
+
     pub(super) fn request_tex_format(&mut self) {
         self.activity.format_error = None;
         // mark_edited runs before actions; refuse an out-of-date service snapshot.

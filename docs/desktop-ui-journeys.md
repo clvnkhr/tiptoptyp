@@ -187,3 +187,10 @@ integration check, excluded from `all`. It requires a running Rectangle and read
 its existing `almostMaximize` and `bottomLeftSixth` bindings from macOS preferences.
 It sends those real shortcuts with Find focused and checks that the document
 resizes while Find retains keyboard focus. It does not edit Rectangle preferences.
+
+### Linked snippets
+
+The `snippets` journey configures a custom TeX environment snippet through Settings JSON,
+invokes completion, types into its selected name, and checks the mirrored closing
+environment plus undo/redo. Run it with `scripts/test-desktop-ui.py --journey snippets`.
+The native driver rejects a locked desktop before attempting input.

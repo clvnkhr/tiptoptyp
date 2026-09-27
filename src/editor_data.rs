@@ -213,6 +213,11 @@ impl EditorDerivedData {
         }
     }
 
+    pub(crate) fn embedded_tex_projection(&mut self) -> crate::embedded_tex::Projection {
+        self.prepare_syntax();
+        crate::embedded_tex::Projection::from_parsed(&self.parsed_source)
+    }
+
     fn prepare_syntax(&mut self) {
         if self.parsed_key == self.source_key {
             return;

@@ -297,6 +297,32 @@ class EditorJourneys:
         self.click("find.close")
         self.wait("Find still closes normally after Rectangle commands", lambda d: not d["find_visible"])
 
+    def snippets(self):
+        import json
+        self.settings()
+        self.click("settings.json.mode")
+        self.wait("JSON settings ready", lambda d: d["settings_json"]["visible"])
+        self.click("settings.json")
+        self.key(0)
+        settings = {"snippets": [{"prefix": "env", "description": "Linked environment", "language": "both", "body": "\\begin{${1:name}}\n\\end{$1}$0"}]}
+        self.native("paste", json.dumps(settings))
+        self.wait("snippet settings validate", lambda d: d["settings_json"]["valid"])
+        self.click("settings.json.save")
+        self.wait("snippet settings saved", lambda d: d["settings_json"]["saved"])
+        self.close_settings()
+        count = self.scratch("env")
+        self.key(49, "ctrl")
+        self.wait("custom snippet offered", lambda d: d["completion_count"] > 0)
+        self.key(48, "none")
+        self.source_is("\\begin{name}\n\\end{name}")
+        self.native("text", "enumerate")
+        self.source_is("\\begin{enumerate}\n\\end{enumerate}")
+        self.key(6)
+        self.source_is("\\begin{name}\n\\end{name}")
+        self.key(6, "cmd+shift")
+        self.source_is("\\begin{enumerate}\n\\end{enumerate}")
+        self.close_scratch(count)
+
     def completion(self):
         count = self.scratch("#mi(`\\alp`)")
         self.key(123, "none")
@@ -424,8 +450,8 @@ class EditorJourneys:
             handle = self.snapshot()["targets"]["preview.drag_handle"]
             self.native("drag", handle["x"], handle["y"], handle["x"] + 48, handle["y"] + 24)
             self.wait("preview controls drag persists", lambda d: d["preview_controls_position"] is not None and
-                      (abs(d["preview_controls_position"][0] - before_position[0]) > 12 or
-                       abs(d["preview_controls_position"][1] - before_position[1]) > 12))
+                      abs(d["preview_controls_position"][0] - before_position[0] - 48) <= 3 and
+                      abs(d["preview_controls_position"][1] - before_position[1] - 24) <= 3)
             self.wait_target("preview.Outline")
             if not self.snapshot()["document"]["preview_outline"]:
                 self.click("preview.Outline")

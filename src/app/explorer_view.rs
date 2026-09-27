@@ -28,6 +28,7 @@ pub(super) struct Input<'a> {
     pub error: Option<&'a str>,
     pub order: ExplorerOrder,
     pub git_visible: bool,
+    pub tex: bool,
 }
 
 pub(super) struct ContextMenu {
@@ -42,6 +43,7 @@ pub(super) struct Output {
     pub change_root: bool,
     pub refresh: bool,
     pub repaint: bool,
+    pub insert_symbol: Option<String>,
     pub packages: bool,
     pub open: Option<PathBuf>,
     pub index_target: Option<(PathBuf, usize)>,
@@ -53,6 +55,7 @@ pub(super) fn show(
     ui: &mut egui::Ui,
     input: Input<'_>,
     state: &mut ExplorerPanelState,
+    drawing: &mut crate::handwriting::Drawing,
     mut show_git: impl FnMut(&mut egui::Ui) -> crate::git::view::Output,
 ) -> Output {
     let explorer_rect = ui.max_rect();
@@ -324,6 +327,9 @@ pub(super) fn show(
                 if let Some(error) = input.error {
                     ui.colored_label(error_color(ui.ctx()), error);
                 }
+            }
+            ExplorerSection::DrawSymbol => {
+                output.insert_symbol = drawing.show(ui, input.tex);
             }
             ExplorerSection::Git => {
                 output.git = Some(show_git(ui));
@@ -656,6 +662,7 @@ pub(super) fn explorer_section_query_matches(
             .references
             .iter()
             .any(|entry| reference_entry_matches_query(entry, normalized_query)),
+        "draw symbol".contains(normalized_query),
     ];
     if !matches.into_iter().any(|matched| matched) {
         // Keep one result surface visible so an empty search has a clear
@@ -947,9 +954,9 @@ pub(super) fn explorer_section(
 
 pub(super) struct ExplorerSectionsSpec {
     pub(super) order: ExplorerOrder,
-    pub(super) defaults: [bool; 8],
-    pub(super) heights: [f32; 8],
-    pub(super) open: [bool; 8],
+    pub(super) defaults: [bool; 9],
+    pub(super) heights: [f32; 9],
+    pub(super) open: [bool; 9],
     pub(super) filtered: bool,
     pub(super) git_visible: bool,
     pub(super) maximized: Option<ExplorerSection>,
@@ -1234,7 +1241,9 @@ pub(super) fn show_project_index_section(
                 }
             }
         }
-        ExplorerSection::Files | ExplorerSection::Git => unreachable!("not a project index panel"),
+        ExplorerSection::Files | ExplorerSection::Git | ExplorerSection::DrawSymbol => {
+            unreachable!("not a project index panel")
+        }
     }
     if !shown {
         let empty = if filtered {
@@ -1247,7 +1256,7 @@ pub(super) fn show_project_index_section(
                 ExplorerSection::Packages => "No packages",
                 ExplorerSection::Tags => "No tags",
                 ExplorerSection::References => "No references",
-                ExplorerSection::Files | ExplorerSection::Git => {
+                ExplorerSection::Files | ExplorerSection::Git | ExplorerSection::DrawSymbol => {
                     unreachable!("not a project index panel")
                 }
             }

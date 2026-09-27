@@ -203,3 +203,38 @@ PNGs were inspected. Native `controls` also passed in `run-k674s3vy`, including
 ordinary app-switch visibility. Final checks: formatting, Clippy with warnings
 as errors, 1,312 Rust tests (32 intentionally ignored), 15 xtask tests, and 10
 Python harness contract tests passed.
+
+### 2026-09-27 new todos
+
+- Preview controls: screen-coordinate drag anchor replaces moving-window-relative deltas; the whole spare header is draggable and minimize uses a minus icon. `controls` now requires a 48×24 drag to produce the same window movement within three pixels, on both PDFium and Tinymist. Native journey passed in `.tiptoptyp/desktop-ui-tests/run-ml0pqabi`.
+- Changing preview entry retires compiler errors from the previous entry. Switching editor tabs synchronously retires previous editor-provider results and admits new checks. TeX → Typst reinitializes the retained Tinymist service without discarding the preview surface, avoiding dependence on a later keystroke.
+- Snippet input has an editor-level transaction regression covering mirrored replacement and one-step undo/redo. The `snippets` native journey configures a custom snippet through Settings JSON, accepts it, types, and exercises undo/redo.
+- Native snippet runs were unavailable after macOS locked the desktop (`CGSSessionScreenIsLocked = 1`), despite granted input/Accessibility permissions. The native driver's preflight now reports that condition. Startup activation failures from those runs are not interaction passes.
+
+Deterministic validation: 1,322 Rust tests passed (32 intentionally ignored),
+15 xtask tests, strict all-target Clippy, formatting, and 10 Python harness
+contract tests. The separately invoked pinned TexLab/Badness/tex-fmt test also
+passes with a projected miTeX source and verifies that formatting preserves
+surrounding Typst prose. Offline inference recognizes the dagger fixture.
+The model preparation script verified eight seeded tensors against upstream
+ONNX Runtime with zero output difference.
+
+Performance scope: no handwriting model initialization occurs at startup; it
+loads once on a worker on the first drawing. Jobs are bounded to one per window
+and 4,096 points, and generation checks reject stale results. Normal completion
+requests bypass snippet processing when the custom list is empty. Linked fields
+scan the document only on an actual edit during a snippet session. GUI latency
+and cold/warm release inference timings remain unmeasured; a locked desktop is
+not a valid interactive performance baseline.
+
+Fresh framebuffers inspected: `1790524802860-0001-main-draw-symbol.png` and
+`1790524826006-0001-preview-controls.png` under `.tiptoptyp/screenshots/agent-review`.
+The 25-image gallery was regenerated in one release session and validated.
+These establish canvas/control layout, not composed native desktop placement.
+The locked-session controls trace produced no `ui.preview.bounds` records;
+native drag movement evidence remains the earlier successful controls journey.
+
+The release executable is 52,946,272 bytes on macOS ARM64. The previously
+available release was 33,297,552 bytes (a different dirty revision); the roughly
+19.6 MB increase is indicative, not a controlled size benchmark. The embedded
+model plus Rust ONNX runtime are the material new cost.

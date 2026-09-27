@@ -21,6 +21,7 @@ pub(crate) struct CompletionTransaction {
     key: DocumentKey,
     coordinates: CompletionCoordinates,
     applied: AppliedTextEdits,
+    pub(crate) fields: Vec<(u32, Range<usize>)>,
 }
 impl CompletionTransaction {
     pub(crate) fn prepare(
@@ -34,6 +35,7 @@ impl CompletionTransaction {
         Ok(Self {
             key,
             coordinates,
+            fields: application.fields,
             applied: AppliedTextEdits {
                 text: application.source,
                 mapped_offsets: [ScalarOffset::new(application.cursor); 2],
@@ -66,12 +68,14 @@ impl CompletionTransaction {
 pub(crate) struct CompletionApplication {
     pub(crate) source: String,
     pub(crate) cursor: usize,
+    pub(crate) fields: Vec<(u32, Range<usize>)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SnippetExpansion {
     pub(crate) text: String,
     pub(crate) cursor: usize,
+    pub(crate) fields: Vec<(u32, Range<usize>)>,
 }
 
 fn completion_prefix_range(source: &str, cursor: usize) -> Range<usize> {
@@ -124,6 +128,7 @@ pub(crate) fn prepare_completion_application(
         SnippetExpansion {
             cursor: main_edit.new_text.chars().count(),
             text: main_edit.new_text.clone(),
+            fields: vec![],
         }
     };
     main_edit.new_text = expansion.text.clone();
@@ -152,6 +157,14 @@ pub(crate) fn prepare_completion_application(
     Ok(CompletionApplication {
         source: applied.text,
         cursor,
+        fields: expansion
+            .fields
+            .into_iter()
+            .map(|(id, range)| {
+                let start = applied.mapped_offsets[0].get().saturating_sub(inserted_len);
+                (id, range.start + start..range.end + start)
+            })
+            .collect(),
     })
 }
 
@@ -159,6 +172,8 @@ pub(crate) fn prepare_completion_application(
 struct SnippetCursorTracker {
     first_tabstop: Option<(u32, usize)>,
     final_tabstop: Option<usize>,
+    fields: Vec<(u32, Range<usize>)>,
+    values: std::collections::BTreeMap<u32, String>,
 }
 
 impl SnippetCursorTracker {
@@ -184,9 +199,14 @@ pub(crate) fn expand_lsp_snippet(snippet: &str) -> Result<SnippetExpansion, Stri
         .map(|(_, cursor)| cursor)
         .or(tracker.final_tabstop)
         .unwrap_or_else(|| output.chars().count());
+    if !tracker.fields.is_empty() && tracker.final_tabstop.is_none() {
+        let end = output.chars().count();
+        tracker.fields.push((0, end..end));
+    }
     Ok(SnippetExpansion {
         text: output,
         cursor,
+        fields: tracker.fields,
     })
 }
 
@@ -206,7 +226,14 @@ fn expand_lsp_snippet_fragment(
             }
             '$' if index + 1 < characters.len() && characters[index + 1].is_ascii_digit() => {
                 let (tabstop, next) = parse_snippet_number(characters, index + 1);
-                tracker.record(tabstop, output.chars().count());
+                let start = output.chars().count();
+                tracker.record(tabstop, start);
+                if let Some(value) = tracker.values.get(&tabstop) {
+                    output.push_str(value);
+                }
+                tracker
+                    .fields
+                    .push((tabstop, start..output.chars().count()));
                 index = next;
             }
             '$' if index + 1 < characters.len() && characters[index + 1] == '{' => {
@@ -281,6 +308,13 @@ fn expand_braced_snippet(
         let (tabstop, after_number) = parse_snippet_number(body, 0);
         let cursor = output.chars().count();
         tracker.record(tabstop, cursor);
+        if let Some(value) = tracker.values.get(&tabstop) {
+            output.push_str(value);
+            tracker
+                .fields
+                .push((tabstop, cursor..output.chars().count()));
+            return Ok(());
+        }
         match body.get(after_number) {
             None => {}
             Some(':') => {
@@ -292,6 +326,12 @@ fn expand_braced_snippet(
             }
             _ => return Err("an LSP snippet tabstop has an unsupported form".to_owned()),
         }
+        tracker
+            .values
+            .insert(tabstop, output.chars().skip(cursor).collect());
+        tracker
+            .fields
+            .push((tabstop, cursor..output.chars().count()));
         return Ok(());
     }
 

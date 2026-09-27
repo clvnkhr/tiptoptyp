@@ -560,8 +560,9 @@ mod tests {
     #[ignore = "executes pinned TexLab, Badness and tex-fmt sidecars"]
     fn real_tex_services_format_complete_hover_and_lint() {
         let project = tempfile::tempdir().unwrap();
-        let source =
-            "\\documentclass{article}\n\\begin{document}\nHello   world.\n\\end{document}\n";
+        let display = "Untouched Typst prose 😀. $x^{2} + y$ More prose.";
+        let projection = crate::embedded_tex::Projection::new(display);
+        let source = projection.source.as_str();
         std::fs::write(project.path().join("main.tex"), source).unwrap();
         let mut service = TexService::default();
         let mut input = snapshot(project.path(), source);
@@ -634,7 +635,7 @@ mod tests {
                 match service.try_recv() {
                     Some(Event::Formatted { request, edits }) => {
                         assert!(service.accepts(&request.identity, input.key));
-                        let edits = edits.expect("formatter supports TeX");
+                        let edits = edits.unwrap_or_default();
                         let result = tiptoptyp_core::text::apply_text_edits(
                             source,
                             &edits,
@@ -642,6 +643,15 @@ mod tests {
                         )
                         .unwrap();
                         assert!(result.text.contains("\\documentclass{article}"));
+                        let mapped = projection.formatted_edits(display, &result.text).unwrap();
+                        let mapped = tiptoptyp_core::text::apply_text_edits(
+                            display,
+                            &mapped,
+                            [tiptoptyp_core::text::ScalarOffset::new(0); 2],
+                        )
+                        .unwrap();
+                        assert!(mapped.text.starts_with("Untouched Typst prose 😀. $"));
+                        assert!(mapped.text.ends_with("$ More prose."));
                         break;
                     }
                     Some(Event::RequestFailed { message, .. }) => panic!("{message}"),

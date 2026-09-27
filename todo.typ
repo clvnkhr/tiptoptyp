@@ -134,12 +134,12 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 15. [x] i modified old todo 163 above - this action should be in our floating window
 16. [x] tab -> 2 or 4 or x spaces or tab should be settable in settings (default to 2)
 17. [x] i noticed in a cjk keyboard typing 。 gave me a . - we should be able to toggle this behavior
-18. [ ] tex diagnostics/fmt override in mitex
-19. [ ] detexify / detypstify (https://github.com/kirel/detexify-next / https://detypify.quarticcat.com/) we should just pull the model params/hyperparams out and use rust as much as possible (i hear good things about ax). Add it as an explorer subpanel we can draw in
-20. [ ] more customizable snippets
-21. [ ] multiple cursor snippeting: e.g. if we  tab autocomplete to `\begin` and then type e.g. `enumerate` the generated `\end` should also be populated with `enumerate`.
-22. [ ] sometimes, when switching from tex to typ, i get that tinymist is stale, tectonic and harper stays around from the tex file, and i dont get new diagnostics until first keyboard press. after, harper refreshed (yay) but tectonic stuck around (boo)
-23. [ ] dragging the pdf preview options popup around, it moves in a very janky jumpy way, and the end result is only 50% of the way between start and final mouse position. Also i can only drag from the title "Preview". And the "v" button to close the popup should be a "-" minimise button.
+18. [x] tex diagnostics/fmt override in mitex
+19. [x] detexify / detypstify (https://github.com/kirel/detexify-next / https://detypify.quarticcat.com/) we should just pull the model params/hyperparams out and use rust as much as possible (i hear good things about ax). Add it as an explorer subpanel we can draw in
+20. [x] more customizable snippets
+21. [x] multiple cursor snippeting: e.g. if we  tab autocomplete to `\begin` and then type e.g. `enumerate` the generated `\end` should also be populated with `enumerate`.
+22. [x] sometimes, when switching from tex to typ, i get that tinymist is stale, tectonic and harper stays around from the tex file, and i dont get new diagnostics until first keyboard press. after, harper refreshed (yay) but tectonic stuck around (boo)
+23. [x] dragging the pdf preview options popup around, it moves in a very janky jumpy way, and the end result is only 50% of the way between start and final mouse position. Also i can only drag from the title "Preview". And the "v" button to close the popup should be a "-" minimise button.
 
 // Implementation notes (2026-09-25):
 // NEW TODO 2: text commit actions and interaction coverage landed in e94766d.
@@ -200,3 +200,17 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 // 8 JavaScript unit tests, real Tinymist browser tests, and native palette/reload
 // checks pass. The Tinymist-only window was observed white before and dark after
 // with the app-capture tool; WKWebView PNGs alone were not used for that claim.
+
+// Follow-up (2026-09-27), NEW 18–23 (descriptions preserved):
+// 18: miTeX dollar-math regions use optional TeX diagnostics/formatting;
+//     surrounding Typst prose is preserved. Settings exposes both switches.
+// 19: Draw symbol Explorer panel runs the bundled Detypify model locally in
+//     Rust, with TeX aliases; this does not include Detexify's separate dataset.
+// 20/21: Settings and JSON accept language-scoped snippets; numbered fields
+//     mirror edits in one undo transaction, with Tab/Shift+Tab navigation.
+// 22: tab activation refreshes editor providers immediately; changing the
+//     preview owner retires compiler diagnostics from its previous document.
+// 23: preview-header dragging uses screen coordinates and the full spare
+//     header; minimize uses a minus. Both native viewer drag journeys passed.
+// Native snippet typing remains unverified: macOS became locked before that
+// journey; deterministic editor typing/undo/redo coverage passes.

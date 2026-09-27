@@ -607,6 +607,7 @@ impl EditorApp {
         }
         self.tabs.active = Some(id);
         incoming_editor.store(context, source_editor_id(context));
+        self.snippet_session = None;
         self.reset_transient_editor_state();
         self.last_editor_caret = None;
         self.editor_completion = None;
@@ -692,13 +693,25 @@ impl EditorApp {
         if Some(id) == self.tabs.active_id() {
             return;
         }
+        let previous_kind = self.document().kind();
         let preserve_preview = self.source_preview_available();
         self.activate_record(id, context);
         self.tabs.reveal_active = true;
         self.tabs.refresh_autosave();
         self.clear_preview_for_document(preserve_preview);
+        // Preview ownership and editor ownership are independent. A pinned PDF
+        // may survive this switch; editor-provider results belong to the old tab.
+        self.preview.tinymist_diagnostics.clear();
+        self.sync_tex(context);
+        self.update_writing_checks(context);
+        self.update_tex_diagnostics();
         self.git_editor.clear_document();
-        if let Some(path) = self.document().path().clone() {
+        if previous_kind == DocumentKind::Tex && self.document().kind().is_typst() {
+            // A retained preview service may have no active editor diagnostics
+            // after a TeX session. Reopen the current source through initialization
+            // so even an unchanged buffer receives a fresh publication.
+            self.restart_tinymist_preserving_preview();
+        } else if let Some(path) = self.document().path().clone() {
             if self.tinymist_sync.generation.is_some() {
                 self.reopen_tinymist_current_document(&path, self.document().kind());
             } else {
@@ -854,7 +867,9 @@ impl EditorApp {
         self.web_search_query.clear();
         self.web_search_offset = 0;
         let _ = self.compiler.pause(self.preview_document_revision());
-        self.preview.content.clear();
+        self.preview
+            .clear_for_document(self.preview_document_revision(), false);
+        self.update_tex_diagnostics();
         self.pdfium_preview = Default::default();
         self.restart_tinymist_for_preview_entry();
         self.schedule_compile_now();

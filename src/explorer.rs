@@ -13,10 +13,11 @@ pub(crate) enum ExplorerSection {
     Packages,
     Tags,
     References,
+    DrawSymbol,
 }
 
 impl ExplorerSection {
-    pub(crate) const ALL: [Self; 8] = [
+    pub(crate) const ALL: [Self; 9] = [
         Self::Files,
         Self::Git,
         Self::Contents,
@@ -25,6 +26,7 @@ impl ExplorerSection {
         Self::Packages,
         Self::Tags,
         Self::References,
+        Self::DrawSymbol,
     ];
 
     pub(crate) const fn index(self) -> usize {
@@ -41,6 +43,7 @@ impl ExplorerSection {
             Self::Packages => "Packages",
             Self::Tags => "Tags",
             Self::References => "References",
+            Self::DrawSymbol => "Draw symbol",
         }
     }
 
@@ -54,6 +57,7 @@ impl ExplorerSection {
             Self::Packages => "workspace-packages",
             Self::Tags => "workspace-tags",
             Self::References => "workspace-references",
+            Self::DrawSymbol => "workspace-draw-symbol",
         }
     }
 
@@ -65,8 +69,8 @@ impl ExplorerSection {
 /// Every section occurs exactly once. Neither settings nor a reorder operation
 /// can create duplicate panels or omit one; UI state remains keyed by identity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(try_from = "[ExplorerSection; 8]", into = "[ExplorerSection; 8]")]
-pub(crate) struct ExplorerOrder([ExplorerSection; 8]);
+#[serde(try_from = "[ExplorerSection; 9]", into = "[ExplorerSection; 9]")]
+pub(crate) struct ExplorerOrder([ExplorerSection; 9]);
 
 impl Default for ExplorerOrder {
     fn default() -> Self {
@@ -74,11 +78,11 @@ impl Default for ExplorerOrder {
     }
 }
 
-impl TryFrom<[ExplorerSection; 8]> for ExplorerOrder {
+impl TryFrom<[ExplorerSection; 9]> for ExplorerOrder {
     type Error = &'static str;
 
-    fn try_from(sections: [ExplorerSection; 8]) -> Result<Self, Self::Error> {
-        let mut seen = [false; 8];
+    fn try_from(sections: [ExplorerSection; 9]) -> Result<Self, Self::Error> {
+        let mut seen = [false; 9];
         for section in sections {
             if std::mem::replace(&mut seen[section.index()], true) {
                 return Err("Explorer order must contain each panel exactly once");
@@ -88,14 +92,14 @@ impl TryFrom<[ExplorerSection; 8]> for ExplorerOrder {
     }
 }
 
-impl From<ExplorerOrder> for [ExplorerSection; 8] {
+impl From<ExplorerOrder> for [ExplorerSection; 9] {
     fn from(order: ExplorerOrder) -> Self {
         order.0
     }
 }
 
 impl ExplorerOrder {
-    pub(crate) fn sections(self) -> [ExplorerSection; 8] {
+    pub(crate) fn sections(self) -> [ExplorerSection; 9] {
         self.0
     }
 
@@ -114,7 +118,7 @@ impl ExplorerOrder {
 
     pub(crate) fn next_open(
         self,
-        open: [bool; 8],
+        open: [bool; 9],
         after: ExplorerSection,
     ) -> Option<ExplorerSection> {
         self.0
@@ -176,7 +180,7 @@ mod tests {
         let mut order = ExplorerOrder::default();
         order.move_to(ExplorerSection::References, 0);
         order.move_to(ExplorerSection::Tags, 2);
-        let mut open = [false; 8];
+        let mut open = [false; 9];
         for section in [
             ExplorerSection::References,
             ExplorerSection::Tags,

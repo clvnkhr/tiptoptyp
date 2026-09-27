@@ -108,3 +108,4 @@ scene	icons	main	main-icons	targeted	-	-
 scene	activity-panel	main	main-activity-panel	targeted	-	-
 scene	preview-window	preview-window	preview-window	targeted	-	-
 scene	preview-native-window	preview-window	preview-window-preview-native-window	targeted	-	-
+scene	draw-symbol	main	main-draw-symbol	component	-	-

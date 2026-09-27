@@ -519,6 +519,39 @@ impl SettingsPanel<'_> {
                 settings_target_anchor(ui, SettingsTarget::AsciiPunctuation, &mut settings_scroll_target);
                 ui.checkbox(&mut edited.ascii_punctuation, SettingsTarget::AsciiPunctuation.label())
                     .on_hover_text("Convert full-width punctuation, including 。 to a period. Off preserves the characters sent by your keyboard. Pasted text is unchanged.");
+                settings_target_anchor(ui, SettingsTarget::Snippets, &mut settings_scroll_target);
+                ui.collapsing("Custom snippets", |ui| {
+                    ui.label("Type a prefix, then accept its completion. Use ${1:default} for a field and $0 for the final cursor.");
+                    let mut remove = None;
+                    for (index, snippet) in edited.snippets.iter_mut().enumerate() {
+                        ui.push_id(index, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label("Prefix");
+                                ui.text_edit_singleline(&mut snippet.prefix);
+                                if ui.small_button("Remove").clicked() { remove = Some(index); }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Language");
+                                for (value, label) in [(crate::snippets::Language::Typst, "Typst"), (crate::snippets::Language::Tex, "TeX"), (crate::snippets::Language::Both, "Both")] {
+                                    ui.selectable_value(&mut snippet.language, value, label);
+                                }
+                            });
+                            ui.text_edit_singleline(&mut snippet.description).on_hover_text("Description shown in completion suggestions");
+                            ui.add(egui::TextEdit::multiline(&mut snippet.body).code_editor().desired_rows(3));
+                            ui.separator();
+                        });
+                    }
+                    if let Some(index) = remove { edited.snippets.remove(index); }
+                    if ui.button("Add snippet").clicked() {
+                        edited.snippets.push(crate::snippets::Snippet {
+                            prefix: "example".into(), description: "Custom snippet".into(),
+                            language: crate::snippets::Language::Both, body: "${1:text}$0".into(),
+                        });
+                    }
+                    if let Err(error) = crate::snippets::validate(&edited.snippets) {
+                        ui.colored_label(ui.visuals().error_fg_color, error);
+                    }
+                });
                 settings_target_anchor(ui, SettingsTarget::MitexDollars, &mut settings_scroll_target);
                 ui.checkbox(&mut edited.mitex_auto_enable, SettingsTarget::MitexDollars.label());
                 ui.horizontal_wrapped(|ui| {
@@ -1272,6 +1305,15 @@ fn show_tex_preferences(
         }
     });
     ui.checkbox(&mut settings.lint, "Badness linting");
+    ui.checkbox(
+        &mut settings.embedded_diagnostics,
+        "Check TeX math in auto-miTeX documents",
+    );
+    ui.checkbox(
+        &mut settings.embedded_formatting,
+        "Use TeX formatter for auto-miTeX math",
+    )
+    .on_hover_text("Only math payloads are formatted. Surrounding Typst remains unchanged.");
     ui.horizontal(|ui| {
         ui.label("Ignored diagnostic codes:");
         let id = ui.id().with("ignored-codes-draft");

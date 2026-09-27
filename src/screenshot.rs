@@ -69,6 +69,7 @@ pub enum UiSnapshotScene {
     TableEditor,
     TableEditorNarrow,
     Main,
+    DrawSymbol,
     Tabs,
     EmptyWorkspace,
     TabsPdf,
@@ -130,10 +131,11 @@ pub enum UiSnapshotScene {
 }
 
 impl UiSnapshotScene {
-    pub const ALL: [Self; 61] = [
+    pub const ALL: [Self; 62] = [
         Self::TableEditor,
         Self::TableEditorNarrow,
         Self::Main,
+        Self::DrawSymbol,
         Self::Tabs,
         Self::EmptyWorkspace,
         Self::TabsPdf,
@@ -199,6 +201,7 @@ impl UiSnapshotScene {
             Self::TableEditor => "table-editor",
             Self::TableEditorNarrow => "table-editor-narrow",
             Self::Main => "main",
+            Self::DrawSymbol => "draw-symbol",
             Self::Icons => "icons",
             Self::Tabs => "tabs",
             Self::EmptyWorkspace => "empty-workspace",
@@ -268,6 +271,7 @@ impl UiSnapshotScene {
             Self::WritingChecks => ROOT_VIEWPORT_NAME,
             Self::TableEditor | Self::TableEditorNarrow => "table-editor",
             Self::Main
+            | Self::DrawSymbol
             | Self::Tabs
             | Self::EmptyWorkspace
             | Self::TabsPdf
@@ -333,6 +337,7 @@ impl UiSnapshotScene {
         let value = value.trim();
         let scene = match value {
             "main" => Self::Main,
+            "draw-symbol" => Self::DrawSymbol,
             "table-editor" => Self::TableEditor,
             "table-editor-narrow" => Self::TableEditorNarrow,
             "tabs" => Self::Tabs,
@@ -1619,7 +1624,7 @@ mod tests {
         let default_output_count = contract.themes.len()
             + component_count * contract.scene_themes.len()
             + contract.variants.len();
-        assert_eq!(default_output_count, 74);
+        assert_eq!(default_output_count, 76);
     }
 
     #[test]

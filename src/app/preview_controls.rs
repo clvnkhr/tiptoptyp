@@ -54,7 +54,13 @@ pub(super) struct Controls {
     pub web: Snapshot,
     pub native_outline: Vec<(String, Location)>,
     measured_size: Option<(bool, usize, egui::Vec2)>,
+    drag_anchor: Option<(Pos2, Pos2)>,
 }
+// Screen coordinates stay stable while the native popup moves underneath the pointer.
+fn drag_position((pointer_start, window_start): (Pos2, Pos2), pointer: Pos2) -> Pos2 {
+    window_start + (pointer - pointer_start)
+}
+
 impl Controls {
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     pub(super) fn inspected_size(&self) -> Option<egui::Vec2> {
@@ -108,14 +114,8 @@ impl Controls {
         ui.set_max_height(10_000.0);
         let mut action = None;
         ui.horizontal(|ui| {
-            let handle = ui.add(egui::Label::new("Preview").sense(Sense::drag()));
-            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-            crate::desktop_test::observe("preview.drag_handle", &handle);
-            if handle.dragged() {
-                *self.position.get_or_insert(Pos2::ZERO) += handle.drag_delta();
-            }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if control(ui, UiIcon::Down, "Minimize controls").clicked() {
+                if control(ui, UiIcon::ZoomOut, "Minimize controls").clicked() {
                     self.open = false;
                 }
                 let popout = ui.add_enabled(self.popout.is_none(), egui::Button::new("Pop out"));
@@ -127,6 +127,44 @@ impl Controls {
                 let _outline = ui.toggle_value(&mut self.outline, "Outline");
                 #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
                 crate::desktop_test::observe("preview.Outline", &_outline);
+                let handle = ui.add_sized(
+                    [ui.available_width(), ui.spacing().interact_size.y],
+                    egui::Label::new("Preview").sense(Sense::drag()),
+                );
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("preview.drag_handle", &handle);
+                let embedded = ui.ctx().embed_viewports();
+                let (origin, pointer, pressed) = ui.input(|input| {
+                    (
+                        if embedded {
+                            Pos2::ZERO
+                        } else {
+                            input
+                                .viewport()
+                                .inner_rect
+                                .map_or(Pos2::ZERO, |rect| rect.min)
+                        },
+                        input.pointer.interact_pos(),
+                        input.pointer.press_origin(),
+                    )
+                });
+                if handle.drag_started()
+                    && let Some(pressed) = pressed
+                {
+                    self.drag_anchor = Some((
+                        origin + pressed.to_vec2(),
+                        self.position.unwrap_or_default(),
+                    ));
+                }
+                if handle.dragged()
+                    && let (Some(anchor), Some(pointer)) = (self.drag_anchor, pointer)
+                {
+                    self.position = Some(drag_position(anchor, origin + pointer.to_vec2()));
+                    ui.ctx().request_repaint();
+                }
+                if handle.drag_stopped() {
+                    self.drag_anchor = None;
+                }
             });
         });
         ui.horizontal(|ui| {
@@ -614,5 +652,22 @@ mod tests {
             app.execute_app_command(AppCommand::Split, &context, None);
             assert!(app.preview_controls.popout.is_none());
         }
+    }
+}
+
+#[cfg(test)]
+mod drag_tests {
+    use super::*;
+    #[test]
+    fn moving_viewport_does_not_reduce_pointer_travel() {
+        let anchor = (egui::pos2(120.0, 220.0), egui::pos2(100.0, 200.0));
+        let first = drag_position(anchor, egui::pos2(144.0, 232.0));
+        assert_eq!(first, egui::pos2(124.0, 212.0));
+        // The pointer's local position changes as the viewport follows it.
+        assert_eq!(
+            drag_position(anchor, first + egui::vec2(44.0, 32.0)),
+            egui::pos2(148.0, 224.0)
+        );
+        assert_eq!(drag_position(anchor, egui::pos2(120.0, 220.0)), anchor.1);
     }
 }

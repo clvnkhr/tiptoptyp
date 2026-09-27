@@ -877,6 +877,7 @@ enum SettingsTarget {
     EnglishGrammar,
     UnicodeWarnings,
     MitexDollars,
+    Snippets,
     GitDiffStyle,
     RainbowBrackets,
     AutoSave,
@@ -906,7 +907,7 @@ enum SettingsTarget {
 }
 
 impl SettingsTarget {
-    const ALL: [Self; 43] = [
+    const ALL: [Self; 44] = [
         Self::Appearance,
         Self::TypstSyntax,
         Self::LightTheme,
@@ -924,6 +925,7 @@ impl SettingsTarget {
         Self::EnglishGrammar,
         Self::UnicodeWarnings,
         Self::MitexDollars,
+        Self::Snippets,
         Self::GitDiffStyle,
         Self::RainbowBrackets,
         Self::AutoSave,
@@ -970,6 +972,7 @@ impl SettingsTarget {
             Self::AsciiPunctuation => "Use ASCII punctuation when typing",
             Self::EnglishGrammar => "Offline English spelling and grammar (Typst / TeX)",
             Self::UnicodeWarnings => "Flag invisible and confusable characters",
+            Self::Snippets => "Custom snippets",
             Self::MitexDollars => "Auto-enable miTeX in compatible Typst documents",
             Self::GitDiffStyle => "Git diff style",
             Self::RainbowBrackets => "Rainbow brackets",
@@ -1019,6 +1022,7 @@ impl SettingsTarget {
             | Self::EnglishGrammar
             | Self::UnicodeWarnings
             | Self::MitexDollars
+            | Self::Snippets
             | Self::GitDiffStyle
             | Self::RainbowBrackets
             | Self::AutoSave
@@ -1075,6 +1079,7 @@ impl SettingsTarget {
             Self::AutoPairDelimiters => {
                 "editor automatic pairing brackets quotes dollar backspace matching"
             }
+            Self::Snippets => "custom snippets templates tabstop linked fields completion prefix",
             Self::MitexDollars => {
                 "mitex latex tex dollar inline display block math package version translation"
             }
@@ -1246,6 +1251,9 @@ pub struct EditorApp {
     next_editor_hover_token: u64,
     tooltip_request: Option<TooltipRequest>,
     editor_completion: Option<EditorCompletionState>,
+    snippet_session: Option<crate::snippets::Session>,
+    symbol_drawing: crate::handwriting::Drawing,
+    embedded_tex: Option<crate::embedded_tex::Projection>,
     next_editor_completion_token: u64,
     last_editor_caret: Option<EditorCaretState>,
     manual_format_revision: Option<u64>,
@@ -1558,6 +1566,9 @@ impl EditorApp {
             next_editor_hover_token: 1,
             tooltip_request: None,
             editor_completion: None,
+            snippet_session: None,
+            symbol_drawing: Default::default(),
+            embedded_tex: None,
             next_editor_completion_token: 1,
             last_editor_caret: None,
             manual_format_revision: None,
@@ -2772,6 +2783,7 @@ impl EditorApp {
     }
 
     fn clear_preview_for_document(&mut self, preserve_designated_preview: bool) {
+        self.snippet_session = None;
         self.activity.completion = None;
         self.activity.hover = None;
         self.activity.intelligence_error = None;
@@ -2896,6 +2908,30 @@ impl EditorApp {
         let editor_id = source_editor_id(context);
         let source_focused = shortcut_viewport == context.viewport_id()
             && context.memory(|memory| memory.focused()) == Some(editor_id);
+        if self.snippet_session.is_some()
+            && context.memory(|memory| memory.has_focus(source_editor_id(context)))
+            && focused_input_viewport(context) == context.viewport_id()
+        {
+            if context.input_mut(|input| input.consume_key(Modifiers::NONE, egui::Key::Escape)) {
+                self.snippet_session = None;
+            } else {
+                let backwards = context.input(|input| input.modifiers.shift);
+                let modifiers = if backwards {
+                    Modifiers::SHIFT
+                } else {
+                    Modifiers::NONE
+                };
+                if context.input_mut(|input| input.consume_key(modifiers, egui::Key::Tab)) {
+                    let session = self.snippet_session.as_mut().unwrap();
+                    if let Some(range) = session.advance(backwards) {
+                        self.pending_editor_selection = Some(EditorSelection::Focus(range));
+                    }
+                    if session.finished() {
+                        self.snippet_session = None;
+                    }
+                }
+            }
+        }
         self.handle_editor_completion_keys(context);
         let completion_requested = source_focused
             && shortcuts
@@ -6564,6 +6600,7 @@ impl EditorApp {
     }
 
     fn undo_editor(&mut self, context: &egui::Context, redo: bool) {
+        self.snippet_session = None;
         if self.table_editor.is_some() {
             return;
         }
@@ -6738,7 +6775,9 @@ impl EditorApp {
         if self.table_editor.is_some() {
             return;
         }
-        if self.document().kind() == DocumentKind::Tex {
+        if self.document().kind() == DocumentKind::Tex
+            || (self.document().config().is_some() && self.settings.tex.embedded_formatting)
+        {
             self.request_tex_format();
             return;
         }
@@ -7288,8 +7327,11 @@ impl EditorApp {
                 error: self.workspace_error.as_deref(),
                 order: self.settings.explorer_order,
                 git_visible: self.git.visible,
+                tex: self.document().kind() == DocumentKind::Tex
+                    || self.document().config().is_some(),
             },
             &mut self.explorer,
+            &mut self.symbol_drawing,
             |ui| {
                 self.git.show(
                     ui,
@@ -7299,6 +7341,9 @@ impl EditorApp {
                 )
             },
         );
+        if let Some(symbol) = output.insert_symbol {
+            self.insert_editor_text(ui.ctx(), &symbol);
+        }
         if output.change_root {
             self.open_workspace_chooser();
         }
@@ -7589,11 +7634,27 @@ impl EditorApp {
             return;
         }
         self.prepare_editor_source_data();
-        if self.document().kind().is_typst()
-            && let Some(all_items) = self.editor_data.tex_completions(cursor).or_else(|| {
-                crate::completion::font_items(self.document().source(), cursor, &self.font_catalog)
-            })
-        {
+        if let Some(all_items) = crate::snippets::items(
+            &self.settings.snippets,
+            self.document().kind(),
+            self.document().source(),
+            cursor,
+        )
+        .or_else(|| {
+            self.document()
+                .kind()
+                .is_typst()
+                .then(|| {
+                    self.editor_data.tex_completions(cursor).or_else(|| {
+                        crate::completion::font_items(
+                            self.document().source(),
+                            cursor,
+                            &self.font_catalog,
+                        )
+                    })
+                })
+                .flatten()
+        }) {
             let items = crate::completion::filtered_for_source(
                 &all_items,
                 self.document().source(),
@@ -7832,7 +7893,8 @@ impl EditorApp {
         let Some(item) = completion.items.get(index).cloned() else {
             return;
         };
-        let coordinates = if completion.provenance.is_local() {
+        let local = completion.provenance.is_local();
+        let coordinates = if local {
             crate::completion_edit::CompletionCoordinates::Display
         } else {
             crate::completion_edit::CompletionCoordinates::Canonical
@@ -7844,6 +7906,11 @@ impl EditorApp {
             &item,
             coordinates,
         );
+        let fields = transaction
+            .as_ref()
+            .ok()
+            .map(|transaction| transaction.fields.clone())
+            .unwrap_or_default();
         let snapshot = self.editor_snapshot(context);
         let selection = transaction
             .and_then(|transaction| transaction.commit(self.document_mut(), snapshot.cursor));
@@ -7858,6 +7925,15 @@ impl EditorApp {
                 return;
             }
         };
+        self.snippet_session = if self.document().config().is_none() || local {
+            crate::snippets::Session::new(self.document().key(), self.document().source(), fields)
+        } else {
+            None
+        };
+        let selection = self
+            .snippet_session
+            .as_ref()
+            .map_or(selection, |session| session.selection());
         self.pending_editor_selection = Some(EditorSelection::Focus(selection));
         self.find_bar.search.clear();
         self.editor_completion = None;
@@ -8882,6 +8958,7 @@ impl EditorApp {
         let drop_id = viewport_scoped_id(&context, "explorer-source-drop");
         context.data_mut(|data| data.remove::<(PathBuf, Pos2)>(drop_id));
         self.poll_synctex(&context);
+        self.symbol_drawing.poll();
         self.update_writing_checks(&context);
         self.handle_dropped_file(&context);
         self.update_asset_hover(&context);

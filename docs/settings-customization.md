@@ -58,3 +58,28 @@ them. Changing documents or explicitly disabling a provider retires its results.
 Providers must reject obsolete responses before publication, and must not treat
 “work pending” or an infrastructure failure as a successful empty result. This
 contract applies to new adapters as well as Harper, Tinymist and TeX services.
+
+## Custom snippets and linked fields
+
+Settings → Editor → Custom snippets lets you add a prefix, language (`typst`, `tex`, or `both`), description, and snippet body. The same entries are editable in the `snippets` JSON array. For example:
+
+```json
+{
+  "snippets": [{
+    "prefix": "env",
+    "description": "LaTeX environment",
+    "language": "tex",
+    "body": "\\begin{${1:enumerate}}\n  $0\n\\end{$1}"
+  }]
+}
+```
+
+Type the prefix and accept its completion. Numbered fields are selected for replacement; repeated field numbers mirror the edit. Tab/Shift+Tab navigate fields, `$0` finishes, and Escape ends linked editing. Undo/redo apply to both copies together. Editing outside the selected field or switching documents ends the session. Placeholder defaults and first-choice lists are supported; snippet transformations are not.
+
+## TeX tools in auto-miTeX documents
+
+`tex.embedded_diagnostics` and `tex.embedded_formatting` default to `true`. They independently enable TeX checking and the selected TeX formatter for projected dollar math. Tinymist continues serving the Typst document. TeX tools receive a private virtual document containing math regions; diagnostics map back into those regions, and formatter output replaces only the math payloads. Unrelated Typst bytes are preserved. A response with missing region boundaries is rejected instead of replacing the source.
+
+## Draw symbol
+
+Open Explorer → Draw symbol, draw with the pointer, then choose a result. Recognition is offline and runs after a stroke ends. Clear removes the drawing and results. The bundled Detypify model covers 411 symbol classes; TeX documents display available TeX aliases (390 classes), while Typst displays symbol names. Selecting a Typst result inserts its Unicode character; TeX inserts its command when available. Some TeX commands require packages in the document.

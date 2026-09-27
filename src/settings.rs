@@ -302,6 +302,8 @@ pub(crate) struct AppSettings {
     #[serde(default)]
     pub(crate) english_grammar: bool,
     #[serde(default)]
+    pub(crate) snippets: Vec<crate::snippets::Snippet>,
+    #[serde(default)]
     pub(crate) writing_language: WritingLanguage,
     #[serde(default)]
     pub(crate) unicode_warnings: bool,
@@ -387,6 +389,7 @@ impl Default for AppSettings {
             line_wrap: true,
             line_numbers: true,
             english_grammar: false,
+            snippets: Vec::new(),
             writing_language: WritingLanguage::Auto,
             unicode_warnings: false,
             sticky_context_rows: true,
@@ -460,6 +463,7 @@ impl AppSettings {
             line_wrap,
             line_numbers,
             english_grammar,
+            snippets,
             writing_language,
             unicode_warnings,
             sticky_context_rows,
@@ -825,6 +829,7 @@ mod tests {
             line_wrap: false,
             line_numbers: false,
             english_grammar: false,
+            snippets: Vec::new(),
             writing_language: WritingLanguage::Auto,
             unicode_warnings: false,
             sticky_context_rows: false,

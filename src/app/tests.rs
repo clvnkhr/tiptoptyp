@@ -259,8 +259,10 @@ fn explorer_view_returns_navigation_without_effects_and_does_not_paint_hidden_gi
                         error: None,
                         order: ExplorerOrder::default(),
                         git_visible: false,
+                        tex: false,
                     },
                     &mut state.0,
+                    &mut crate::handwriting::Drawing::default(),
                     |_| panic!("hidden Git must not be painted"),
                 );
                 if output.index_target.is_some() {
@@ -1922,6 +1924,7 @@ fn completion_snippets_expand_placeholders_choices_and_cursor() {
         SnippetExpansion {
             text: "heading(body, red)".to_owned(),
             cursor: "heading(".chars().count(),
+            fields: vec![(1, 8..12), (2, 14..17), (0, 18..18)],
         }
     );
     assert_eq!(
@@ -1929,6 +1932,7 @@ fn completion_snippets_expand_placeholders_choices_and_cursor() {
         SnippetExpansion {
             text: "$cash value".to_owned(),
             cursor: "$cash ".chars().count(),
+            fields: vec![(1, 6..11), (0, 11..11)],
         }
     );
     assert_eq!(
@@ -1936,6 +1940,7 @@ fn completion_snippets_expand_placeholders_choices_and_cursor() {
         SnippetExpansion {
             text: "done".to_owned(),
             cursor: 4,
+            fields: vec![(0, 4..4)],
         }
     );
     assert!(expand_lsp_snippet("${1:unfinished").is_err());
@@ -1949,6 +1954,7 @@ fn completion_without_server_range_replaces_only_identifier_prefix() {
         CompletionApplication {
             source: "#heading".to_owned(),
             cursor: 8,
+            fields: vec![],
         }
     );
 }
@@ -3916,7 +3922,7 @@ fn explorer_sections_split_the_body_budget_without_hiding_headers() {
 
 #[test]
 fn explorer_section_resize_moves_only_the_adjacent_open_split() {
-    let open = [true, false, true, true, false, false, false, false];
+    let open = [true, false, true, true, false, false, false, false, false];
     let mut layout = ExplorerSectionLayout::default();
     let before = layout.body_heights(open, 300.0);
     assert!((before[0] - 100.0).abs() < 0.01);
@@ -4021,7 +4027,7 @@ fn explorer_search_covers_every_project_index_section() {
 
     assert_eq!(
         explorer_section_query_matches(Some(&snapshot), &index, "does-not-exist"),
-        [true, false, false, false, false, false, false, false],
+        [true, false, false, false, false, false, false, false, false],
         "an empty result keeps the Files surface open for its empty-state message"
     );
 }
@@ -4080,7 +4086,7 @@ fn partial_project_index_does_not_add_a_persistent_warning_row() {
 
 #[test]
 fn explorer_section_resize_clamps_to_a_usable_minimum() {
-    let open = [true, true, false, false, false, false, false, false];
+    let open = [true, true, false, false, false, false, false, false, false];
     let mut layout = ExplorerSectionLayout::default();
     assert!(layout.resize_after(
         open,
@@ -4094,7 +4100,7 @@ fn explorer_section_resize_clamps_to_a_usable_minimum() {
     assert!((heights[1] - EXPLORER_SECTION_MIN_BODY_HEIGHT).abs() < 0.01);
 
     let tiny = layout.body_heights(open, 40.0);
-    assert_eq!(tiny, [20.0, 20.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+    assert_eq!(tiny, [20.0, 20.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
     assert!(!layout.resize_after(
         open,
         40.0,
@@ -4220,7 +4226,7 @@ fn reordered_explorer_keeps_body_identity_and_collapsed_state() {
     #[derive(Default)]
     struct State {
         order: ExplorerOrder,
-        body_ids: [Option<egui::Id>; 8],
+        body_ids: [Option<egui::Id>; ExplorerSection::ALL.len()],
     }
     let mut harness = Harness::builder()
         .with_size(Vec2::new(360.0, 800.0))
@@ -4231,7 +4237,7 @@ fn reordered_explorer_keeps_body_identity_and_collapsed_state() {
                     state.order.move_to(ExplorerSection::Files, 7);
                 }
                 state.body_ids.fill(None);
-                let defaults = [true; 8];
+                let defaults = [true; ExplorerSection::ALL.len()];
                 let open = explorer_section_open_states(ui, false, defaults);
                 show_explorer_sections(
                     ui,
@@ -4239,7 +4245,7 @@ fn reordered_explorer_keeps_body_identity_and_collapsed_state() {
                         order: state.order,
                         defaults,
                         open,
-                        heights: [44.0; 8],
+                        heights: [44.0; ExplorerSection::ALL.len()],
                         filtered: false,
                         git_visible: true,
                         maximized: None,
@@ -4283,10 +4289,10 @@ fn explorer_maximize_hides_siblings_and_restores_collapsed_states_and_sizes() {
     struct State {
         panel: ExplorerPanelState,
         layout: ExplorerSectionLayout,
-        bounds: [Option<Rect>; 8],
+        bounds: [Option<Rect>; ExplorerSection::ALL.len()],
     }
     let mut initial = State::default();
-    initial.layout.weights = [2.0, 1.0, 3.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+    initial.layout.weights = [2.0, 1.0, 3.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
     let weights = initial.layout.weights;
     let mut harness = Harness::builder()
         .with_size(Vec2::new(360.0, 800.0))
@@ -4402,7 +4408,7 @@ fn reordered_explorer_resizes_the_visible_neighbor_and_preserves_other_heights()
     let mut order = ExplorerOrder::default();
     order.move_to(ExplorerSection::References, 0);
     order.move_to(ExplorerSection::Contents, 1);
-    let mut open = [false; 8];
+    let mut open = [false; ExplorerSection::ALL.len()];
     for section in [
         ExplorerSection::References,
         ExplorerSection::Files,
@@ -8904,4 +8910,42 @@ fn native_preview_load_invalidates_queued_palette_even_when_preview_is_hidden() 
     app.preview.dark = true;
     app.handle_web_action(r#"{"type":"preview-loaded"}"#);
     assert!(app.preview.dark);
+}
+
+#[test]
+fn linked_snippet_text_edit_replaces_both_fields_in_one_undo() {
+    let root = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+    app.document_mut().replace_unprojected_untitled("env");
+    app.settings.snippets = vec![crate::snippets::Snippet {
+        prefix: "env".into(),
+        description: "environment".into(),
+        language: crate::snippets::Language::Both,
+        body: "begin{${1:name}}\nend{$1}$0".into(),
+    }];
+    app.pending_editor_selection = Some(EditorSelection::Focus(3..3));
+    context
+        .run_ui(Default::default(), |ui| app.show_editor(ui))
+        .drop_without_applying_deltas();
+    app.request_editor_completion(3, Rect::ZERO, true);
+    app.apply_editor_completion(0, &context);
+    context
+        .run_ui(Default::default(), |ui| app.show_editor(ui))
+        .drop_without_applying_deltas();
+    assert_eq!(app.document().source(), "begin{name}\nend{name}");
+    context
+        .run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Text("enumerate".into())],
+                ..Default::default()
+            },
+            |ui| app.show_editor(ui),
+        )
+        .drop_without_applying_deltas();
+    assert_eq!(app.document().source(), "begin{enumerate}\nend{enumerate}");
+    app.undo_editor(&context, false);
+    assert_eq!(app.document().source(), "begin{name}\nend{name}");
+    app.undo_editor(&context, true);
+    assert_eq!(app.document().source(), "begin{enumerate}\nend{enumerate}");
 }

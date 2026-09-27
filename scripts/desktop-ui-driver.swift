@@ -14,8 +14,10 @@ guard let command = args.first else { fail("missing command") }
 if command == "preflight" {
     let trusted = AXIsProcessTrusted()
     let input = CGPreflightPostEventAccess()
-    let desktop = NSWorkspace.shared.frontmostApplication != nil
-    emit(["accessibility": trusted, "input": input, "desktop": desktop])
+    let session = CGSessionCopyCurrentDictionary() as? [String: Any]
+    let locked = session?["CGSSessionScreenIsLocked"] as? Bool ?? false
+    let desktop = NSWorkspace.shared.frontmostApplication != nil && !locked
+    emit(["accessibility": trusted, "input": input, "desktop": desktop, "locked": locked])
     exit(trusted && input && desktop ? 0 : 2)
 }
 guard args.count >= 2, let pid = Int32(args[1]),

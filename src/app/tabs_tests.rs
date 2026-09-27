@@ -1537,3 +1537,72 @@ fn outside_source_tabs_keep_the_window_workspace_until_explicit_switch() {
         external.path().canonicalize().unwrap()
     );
 }
+
+#[test]
+fn switching_preview_entry_retires_previous_compiler_diagnostics() {
+    let context = egui::Context::default();
+    let root = tempfile::tempdir().unwrap();
+    let mut app = fixture(&context, root.path());
+    let typst = app.tabs.active_id().unwrap();
+    app.append_tab(&context);
+    let tex = app.tabs.active_id().unwrap();
+    app.document_mut().replace_loaded_unprojected(
+        "text".into(),
+        root.path().join("main.tex"),
+        DocumentKind::Tex,
+        None,
+    );
+    app.select_preview_tab(tex, &context);
+    app.preview.raw_diagnostics = "old Tectonic error".into();
+    app.preview
+        .diagnostics
+        .push(crate::diagnostics::Diagnostic {
+            provider: Some("Tectonic".into()),
+            severity: crate::diagnostics::DiagnosticSeverity::Error,
+            source: DiagnosticSource::Main,
+            location: None,
+            message: "old TeX error".into(),
+            details: vec![],
+        });
+    app.activate_tab(typst, &context);
+    app.select_preview_tab(typst, &context);
+    assert!(app.preview.diagnostics.is_empty());
+    assert!(app.preview.raw_diagnostics.is_empty());
+}
+
+#[test]
+fn tab_activation_retires_editor_providers_before_another_keypress() {
+    let context = egui::Context::default();
+    let root = tempfile::tempdir().unwrap();
+    let mut app = fixture(&context, root.path());
+    let typst = app.tabs.active_id().unwrap();
+    app.append_tab(&context);
+    app.document_mut().replace_loaded_unprojected(
+        "text".into(),
+        root.path().join("main.tex"),
+        DocumentKind::Tex,
+        None,
+    );
+    app.update_writing_checks(&context);
+    let diagnostic = crate::diagnostics::Diagnostic {
+        provider: Some("Harper".into()),
+        severity: crate::diagnostics::DiagnosticSeverity::Warning,
+        source: DiagnosticSource::File(root.path().join("main.tex")),
+        location: None,
+        message: "old TeX warning".into(),
+        details: vec![],
+    };
+    app.writing.diagnostics.push(diagnostic.clone());
+    let mut tex_diagnostic = diagnostic.clone();
+    tex_diagnostic.provider = Some("TexLab".into());
+    app.tex_diagnostics[0].push(tex_diagnostic);
+    let mut typst_diagnostic = diagnostic;
+    typst_diagnostic.provider = Some("Tinymist".into());
+    app.preview.tinymist_diagnostics.push(typst_diagnostic);
+    app.update_tex_diagnostics();
+    assert_eq!(app.preview.editor_diagnostics.len(), 3);
+    app.activate_tab(typst, &context);
+    assert!(app.preview.editor_diagnostics.is_empty());
+    assert!(app.writing.diagnostics.is_empty());
+    assert!(app.tex_diagnostics.iter().all(Vec::is_empty));
+}

@@ -447,6 +447,15 @@ impl QaSession {
                     true,
                 );
             }
+            UiSnapshotScene::DrawSymbol => {
+                if app.explorer.maximized_section(true)
+                    != Some(crate::explorer::ExplorerSection::DrawSymbol)
+                {
+                    app.explorer
+                        .toggle_section_maximized(crate::explorer::ExplorerSection::DrawSymbol);
+                }
+                app.symbol_drawing = crate::handwriting::Drawing::fixture();
+            }
             UiSnapshotScene::Main => {
                 app.notice = None;
                 app.preview.raw_diagnostics.clear();

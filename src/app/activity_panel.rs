@@ -60,6 +60,11 @@ impl EditorApp {
         let inactive = Activity::Inactive("Not in use");
         let mut rows = Vec::with_capacity(28);
         let mut add = |name, role, state| rows.push(Indicator { name, role, state });
+        add(
+            "Handwriting",
+            "Recognizes symbols drawn in Explorer using the offline model.",
+            self.symbol_drawing.activity(),
+        );
         let save_state = if self.save_job.is_running() {
             Activity::Running
         } else {

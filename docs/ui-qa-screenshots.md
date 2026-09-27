@@ -256,3 +256,5 @@ paintable even when another application is foreground. This prevents the normal
 hide-on-app-switch policy from blocking a deterministic framebuffer capture.
 It does not revive explicitly hidden targets or change ordinary interactive
 popup visibility. The resulting image still proves only that viewport's pixels.
+
+`draw-symbol` captures the maximized Explorer drawing panel with fixed strokes and result labels. Model accuracy is tested separately with real offline inference.

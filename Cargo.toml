@@ -14,6 +14,7 @@ native-ui-tests = []
 desktop-ui-tests = []
 
 [dependencies]
+tract-onnx = { version = "0.23.8", default-features = false }
 tiptoptyp-core = { path = "core" }
 eframe = { version = "0.36.1", default-features = false, features = ["default_fonts", "glow", "persistence", "wayland", "x11"] }
 egui_ltreeview = "0.9.0"
@@ -115,6 +116,9 @@ resources = [
     { src = "assets/fonts/notosanssymbols2/OFL.txt", target = "licenses/NotoSansSymbols2-OFL.txt" },
     { src = "assets/fonts/notosanshebrew/OFL.txt", target = "licenses/NotoSansHebrew-OFL.txt" },
     { src = "assets/fonts/README.md", target = "font-provenance.md" },
+    { src = "assets/handwriting/LICENSE", target = "licenses/Detypify-MIT.txt" },
+    { src = "assets/handwriting/UNICODEIT-LICENSE", target = "licenses/UnicodeIt-MIT.txt" },
+    { src = "assets/handwriting/README.md", target = "handwriting-provenance.md" },
     { src = "toolchain/provenance", target = "toolchain-provenance" },
 ]
 file-associations = [

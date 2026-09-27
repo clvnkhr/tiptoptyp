@@ -20,6 +20,7 @@ pub(crate) fn parse(text: &str) -> Result<AppSettings, String> {
     let original: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
     let roundtrip = serde_json::to_value(&settings).map_err(|e| e.to_string())?;
     reject_unknown(&original, &roundtrip, "settings")?;
+    crate::snippets::validate(&settings.snippets)?;
     for (name, valid) in [
         (
             "ui_scale_percent (75–150)",
