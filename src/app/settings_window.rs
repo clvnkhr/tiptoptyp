@@ -279,6 +279,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn settings_keyboard_shortcuts_command_opens_its_local_editor() {
+        let mut harness = settings_harness(SettingsWindow::default());
+        let shortcut = harness
+            .state()
+            .input
+            .as_ref()
+            .unwrap()
+            .settings
+            .effective_shortcuts()
+            .egui(ShortcutAction::KeyboardShortcuts)
+            .unwrap();
+        harness.key_press_modifiers(shortcut.modifiers, shortcut.logical_key);
+        harness.run();
+        let mut settings = AppSettings::default();
+        let (actions, close) = harness.state_mut().take_actions(&mut settings);
+        assert!(!close);
+        assert!(matches!(
+            actions.as_slice(),
+            [SettingsAction::ShowShortcuts]
+        ));
+    }
+
     fn settings_harness(mut window: SettingsWindow) -> Harness<'static, SettingsWindow> {
         let context = egui::Context::default();
         if window.input.is_none() {
@@ -804,6 +827,10 @@ impl SettingsWindow {
                     }
                     Some(ShortcutAction::Find | ShortcutAction::FindReplace) => {
                         focus_search = true;
+                    }
+                    Some(ShortcutAction::KeyboardShortcuts) => {
+                        self.actions.push(SettingsAction::ShowShortcuts);
+                        owner_changed = true;
                     }
                     Some(ShortcutAction::Minimize) => minimize = true,
                     Some(ShortcutAction::CaptureUi) => capture_ui = true,
