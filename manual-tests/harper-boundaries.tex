@@ -1,0 +1,35 @@
+\documentclass{article}
+\usepackage{amsmath}
+\title{Harper TeX boundary fixture}
+\begin{document}
+
+% Ordinary prose: these should be reported by Harper.
+This sentnce has a typo and a repeated repeated word.
+
+% Inline math: the prose on both sides should remain one sentence.
+This sentnce continues across inline math $x^2 + y^2 = z^2$ and ends here.
+This sentnce continues across inline math \(a^2 + b^2\) and ends here.
+
+% Text inside math: currently protected because the whole math span is masked.
+$\text{This sentnce is inside dollar math}$
+\(\text{This sentnce is inside parenthesized math}\)
+
+% Display math environments: the full environments should be protected.
+\begin{equation}
+  \text{This sentnce is inside an equation environment} \quad x^2 + y^2
+\end{equation}
+
+% Bracket display math: this is a boundary worth checking separately.
+\[
+  \text{This sentnce is inside bracket display math} \quad a^2 + b^2
+\]
+
+% Known prose arguments should be checked; technical commands should not.
+\section{This sentnce is inside a section title}
+\textbf{This sentnce is inside a prose command.}
+\newcommand{\technicalname}{NonsensicalTechnicalToken}
+
+% Capitalized names should not be reported as spelling errors.
+The Leray theorem is discussed here.
+
+\end{document}
