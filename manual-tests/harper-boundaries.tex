@@ -9,7 +9,7 @@ This sentnce has a typo and a repeated repeated word.
 % Inline math: the prose on both sides should remain one sentence.
 This sentnce continues across inline math $x^2 + y^2 = z^2$ and ends here.
 This sentnce continues across inline math \(a^2 + b^2\) and ends here.
-
+\
 % Text inside math: currently protected because the whole math span is masked.
 $\text{This sentnce is inside dollar math}$
 \(\text{This sentnce is inside parenthesized math}\)
@@ -18,7 +18,9 @@ $\text{This sentnce is inside dollar math}$
 \begin{equation}
   \text{This sentnce is inside an equation environment} \quad x^2 + y^2
 \end{equation}
-
+asdf.$a_{1}$ The the chicken. 
+\text{asff}
+Repeated repeated.
 % Bracket display math: this is a boundary worth checking separately.
 \[
   \text{This sentnce is inside bracket display math} \quad a^2 + b^2
@@ -31,5 +33,6 @@ $\text{This sentnce is inside dollar math}$
 
 % Capitalized names should not be reported as spelling errors.
 The Leray theorem is discussed here.
+
 
 \end{document}
