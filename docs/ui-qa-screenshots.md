@@ -250,3 +250,9 @@ be refused by macOS. It fails on absent/incomplete native evidence instead of
 reporting an opt-in test as passed without running it. The suite's normal
 headless tests remain the fast default. See
 [the host audit](architecture/0008-window-lifecycle.md) for coverage and limits.
+
+Automated `--ui-screenshot-exit` requests keep their pending modeless target
+paintable even when another application is foreground. This prevents the normal
+hide-on-app-switch policy from blocking a deterministic framebuffer capture.
+It does not revive explicitly hidden targets or change ordinary interactive
+popup visibility. The resulting image still proves only that viewport's pixels.

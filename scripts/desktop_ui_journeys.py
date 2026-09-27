@@ -277,6 +277,26 @@ class EditorJourneys:
         self.key(23)
         self.wait("diagnostic journey closes its panel", lambda d: d["panel"] is None)
 
+    def rectangle(self):
+        # Optional local integration: preserve the user's bindings and settings.
+        import pathlib
+        import plistlib
+        import subprocess
+        subprocess.run(["pgrep", "-x", "Rectangle"], check=True, capture_output=True)
+        preferences = plistlib.loads((pathlib.Path.home() / "Library/Preferences/com.knollsoft.Rectangle.plist").read_bytes())
+        self.key(3)
+        self.wait("Find focused before Rectangle shortcuts", lambda d: d["find_visible"] and d["find_focused"])
+        for name in ("almostMaximize", "bottomLeftSixth"):
+            binding = preferences[name]
+            flags = "+".join(name for bit, name in ((1 << 20, "cmd"), (1 << 19, "alt"), (1 << 18, "ctrl"), (1 << 17, "shift")) if binding["modifierFlags"] & bit) or "none"
+            before = self.snapshot()["document"]["native_size"]
+            self.record("window-manager.shortcut", window_action=name, keycode=binding["keyCode"], modifiers=flags)
+            self.key(binding["keyCode"], flags)
+            self.wait("Rectangle " + name + " resizes Find's owner", lambda d: d["native_size"] != before and d["find_visible"] and d["find_focused"])
+            self.stable_state(lambda d: d["find_visible"] and d["find_focused"])
+        self.click("find.close")
+        self.wait("Find still closes normally after Rectangle commands", lambda d: not d["find_visible"])
+
     def completion(self):
         count = self.scratch("#mi(`\\alp`)")
         self.key(123, "none")
@@ -473,6 +493,32 @@ class EditorJourneys:
             if self.capture_review and label == "Appearance":
                 self.capture_viewport("settings")
         self.wait("highlight expires", lambda d: d["settings_highlight"] is None, timeout=5)
+        self.click("settings.json.mode")
+        self.wait("JSON settings opens with valid current settings", lambda d: d["settings_json"]["visible"] and d["settings_json"]["valid"])
+        self.click("settings.json")
+        self.key(0)  # Select all in the focused JSON editor.
+        self.native("text", "{broken")
+        self.wait("invalid JSON cannot be saved", lambda d: not d["settings_json"]["valid"])
+        state = self.snapshot()
+        if state["targets"]["settings.json.save"]["enabled"]:
+            raise AssertionError("invalid settings left Save enabled")
+        self.click("settings.json.reload")
+        self.wait("Reload restores valid settings", lambda d: d["settings_json"]["valid"])
+        self.click("settings.json")
+        self.key(0)
+        self.key(124, "none")  # Collapse selection at EOF; append valid whitespace.
+        self.native("text", " ")
+        self.wait("valid JSON is accepted", lambda d: d["settings_json"]["valid"])
+        self.click("settings.json.save")
+        self.wait("JSON saves through normal settings updates", lambda d: d["settings_json"]["saved"])
+        settings_window = next(w for w in self.native("windows")["windows"] if "Settings" in w["AXTitle"])
+        size = settings_window["size"]
+        self.native("zoom-focused")
+        self.native_wait("Settings maximizes independently", lambda ws: any(w.get("AXTitle") == settings_window["AXTitle"] and w.get("size") != size for w in ws))
+        self.native("zoom-focused")
+        self.native_wait("Settings restores its previous size", lambda ws: any(w.get("AXTitle") == settings_window["AXTitle"] and w.get("size") == size for w in ws))
+        self.key(3)
+        self.wait("Cmd+F returns from JSON to Settings search", lambda d: not d["settings_json"]["visible"] and d["settings_text_input_focused"] and not d["find_visible"])
         self.key(13)  # Cmd+W closes Settings, not the document tab.
         self.wait("Cmd+W closes Settings but preserves the document", lambda d: not d["settings_visible"] and d["tabs"] == 1)
         self.native_wait("document regains focus after Settings shortcut", lambda ws: not any("Settings" in w["AXTitle"] for w in ws) and any(w.get("AXFocused") for w in ws))

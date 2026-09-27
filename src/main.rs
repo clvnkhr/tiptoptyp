@@ -43,6 +43,8 @@ mod package_catalog;
 mod pdf;
 mod pdfium;
 mod performance;
+#[allow(unsafe_code)]
+mod popup_window;
 mod presentation;
 mod preview;
 mod private_workspace;
@@ -54,6 +56,7 @@ mod save_io;
 mod screenshot;
 mod search;
 mod settings;
+mod settings_json;
 mod shortcuts;
 mod synctex;
 mod syntax_theme;

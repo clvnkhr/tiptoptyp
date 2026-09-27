@@ -28,6 +28,8 @@ use std::path::Path;
 
 #[derive(Default)]
 pub(super) struct SettingsUiState {
+    pub(super) json_mode: bool,
+    pub(super) json_draft: Option<crate::settings_json::Draft>,
     pub(super) query: String,
     /// The owner sets this when a shortcut should return focus to the search
     /// field. The flag is consumed after the widget is built for this frame.
@@ -74,6 +76,71 @@ pub(super) struct SettingsPanel<'a> {
     pub(super) actions: &'a mut Vec<SettingsAction>,
 }
 impl SettingsPanel<'_> {
+    fn show_json(&mut self, ui: &mut egui::Ui) {
+        let draft = self
+            .state
+            .json_draft
+            .get_or_insert_with(|| crate::settings_json::Draft::new(self.settings));
+        if draft.base != *self.settings
+            && draft
+                .validation
+                .as_ref()
+                .is_ok_and(|value| value == &draft.base)
+        {
+            *draft = crate::settings_json::Draft::new(self.settings);
+        }
+        ui.horizontal(|ui| {
+            let save = ui.add_enabled(
+                draft.validation.is_ok() && !draft.saved,
+                egui::Button::new("Save JSON settings"),
+            );
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            crate::desktop_test::observe("settings.json.save", &save);
+            if save.clicked() {
+                let mut merged = self.settings.clone();
+                merged.apply_edits(&draft.base, draft.validation.as_ref().unwrap().clone());
+                self.actions
+                    .push(SettingsAction::Update(Box::new(merged.clone())));
+                *draft = crate::settings_json::Draft::new(&merged);
+                draft.saved = true;
+            }
+            let reload = ui.button("Reload current settings");
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            crate::desktop_test::observe("settings.json.reload", &reload);
+            if reload.clicked() {
+                *draft = crate::settings_json::Draft::new(self.settings);
+            }
+        });
+        match &draft.validation {
+            Ok(_) => {
+                ui.label(if draft.saved {
+                    "Settings saved"
+                } else {
+                    "Valid settings"
+                });
+            }
+            Err(error) => {
+                ui.colored_label(ui.visuals().error_fg_color, error);
+            }
+        }
+        ui.weak("Changes are checked as you type and applied only when saved. Tool-specific configuration keys are validated by the tool itself.");
+        egui::ScrollArea::vertical()
+            .id_salt("settings-json-scroll")
+            .show(ui, |ui| {
+                let response = ui.add(
+                    egui::TextEdit::multiline(&mut draft.text)
+                        .code_editor()
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(30),
+                );
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("settings.json", &response);
+                if response.changed() {
+                    draft.validate();
+                }
+            });
+    }
+
     pub(super) fn show(&mut self, ui: &mut egui::Ui) {
         let _span = crate::performance::span("ui.settings");
         if self.snapshot_scene == Some(UiSnapshotScene::SettingsFontPicker) {
@@ -102,6 +169,10 @@ impl SettingsPanel<'_> {
             return;
         }
         ui.set_min_width(ui.available_width());
+        if self.state.json_mode {
+            self.show_json(ui);
+            return;
+        }
 
         ui.horizontal(|ui| {
             ui.label(RichText::new("Search settings").strong());
@@ -423,6 +494,12 @@ impl SettingsPanel<'_> {
                 settings_target_anchor(ui, SettingsTarget::AutoPairDelimiters, &mut settings_scroll_target);
                 settings_target_anchor(ui, SettingsTarget::EnglishGrammar, &mut settings_scroll_target);
                 ui.checkbox(&mut edited.english_grammar, SettingsTarget::EnglishGrammar.label()).on_hover_text("Offline checks after a short typing pause. Documents up to 2 MB; suggestions appear in Problems and inline diagnostics.");
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Writing language");
+                    for language in crate::settings::WritingLanguage::ALL {
+                        ui.selectable_value(&mut edited.writing_language, language, language.label());
+                    }
+                }).response.on_hover_text("Auto reads top-level #set text(lang: \"en\", region: \"us\") in Typst. Use region: \"gb\" for UK English. lang: \"uk\" means Ukrainian. Other languages are not checked by Harper. Computed/imported settings use the UK fallback.");
                 settings_target_anchor(ui, SettingsTarget::UnicodeWarnings, &mut settings_scroll_target);
                 ui.checkbox(&mut edited.unicode_warnings, SettingsTarget::UnicodeWarnings.label());
                 ui.checkbox(&mut edited.auto_pair_delimiters, SettingsTarget::AutoPairDelimiters.label());
@@ -1197,7 +1274,13 @@ fn show_tex_preferences(
     ui.checkbox(&mut settings.lint, "Badness linting");
     ui.horizontal(|ui| {
         ui.label("Ignored diagnostic codes:");
-        let mut codes = settings.ignored_diagnostic_codes.join(", ");
+        let id = ui.id().with("ignored-codes-draft");
+        let mut codes = ui
+            .ctx()
+            .data(|data| data.get_temp::<(Vec<String>, String)>(id))
+            .filter(|(original, _)| original == &settings.ignored_diagnostic_codes)
+            .map(|(_, text)| text)
+            .unwrap_or_else(|| settings.ignored_diagnostic_codes.join(", "));
         if ui
             .add(egui::TextEdit::singleline(&mut codes).hint_text("e.g. redundant-script-braces"))
             .changed()
@@ -1209,12 +1292,27 @@ fn show_tex_preferences(
                 .map(str::to_owned)
                 .collect();
         }
+        ui.ctx().data_mut(|data| {
+            data.insert_temp(id, (settings.ignored_diagnostic_codes.clone(), codes))
+        });
     });
     ui.label(
         egui::RichText::new(
-            "Codes are hidden from TeX editor diagnostics; hover a diagnostic to copy its full text.",
+            "Defaults: no codes are ignored. Enter comma-separated codes (for example redundant-script-braces). Problems shows codes beside the provider: Badness · Code: \"redundant-script-braces\".",
         )
         .weak(),
+    );
+    configuration_editor(
+        ui,
+        "TexLab configuration (JSON)",
+        &mut settings.texlab_configuration,
+        || crate::tex::settings::TexSettings::default().texlab_configuration,
+    );
+    configuration_editor(
+        ui,
+        "Badness configuration (JSON)",
+        &mut settings.badness_configuration,
+        || crate::tex::settings::TexSettings::default().badness_configuration,
     );
     ui.label(
         egui::RichText::new(
@@ -1222,6 +1320,56 @@ fn show_tex_preferences(
         )
         .weak(),
     );
+}
+
+fn configuration_editor(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut serde_json::Value,
+    default: impl FnOnce() -> serde_json::Value,
+) {
+    egui::CollapsingHeader::new(label).show(ui, |ui| {
+        ui.weak(
+            "These are the settings sent to the language server. Edit and apply to override them.",
+        );
+        let id = ui.id().with("configuration-draft");
+        let mut text = ui
+            .ctx()
+            .data_mut(|data| data.get_temp::<(serde_json::Value, String)>(id))
+            .filter(|(original, _)| original == value)
+            .map(|(_, draft)| draft)
+            .unwrap_or_else(|| serde_json::to_string_pretty(value).unwrap());
+        ui.add(
+            egui::TextEdit::multiline(&mut text)
+                .code_editor()
+                .desired_width(f32::INFINITY)
+                .desired_rows(6),
+        );
+        let parsed = serde_json::from_str::<serde_json::Value>(&text)
+            .map_err(|e| e.to_string())
+            .and_then(|v| {
+                if v.is_object() {
+                    Ok(v)
+                } else {
+                    Err("Configuration must be a JSON object".into())
+                }
+            });
+        if ui
+            .add_enabled(parsed.is_ok(), egui::Button::new("Apply configuration"))
+            .clicked()
+        {
+            *value = parsed.as_ref().unwrap().clone();
+        }
+        if let Err(error) = parsed {
+            ui.colored_label(ui.visuals().error_fg_color, error);
+        }
+        if ui.button("Reset configuration").clicked() {
+            *value = default();
+            text = serde_json::to_string_pretty(value).unwrap();
+        }
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(id, (value.clone(), text)));
+    });
 }
 
 #[cfg(test)]
@@ -1235,6 +1383,36 @@ mod tests {
     use egui::{Color32, Pos2};
     use egui_kittest::{Harness, kittest::Queryable as _};
     use std::time::Duration;
+
+    #[test]
+    fn ignored_diagnostic_codes_keep_the_comma_while_typing() {
+        use crate::tex::settings::TexSettings;
+        use egui_kittest::kittest::by;
+        let tools = crate::tex::tools::TexTools::resolve(&TexSettings::default());
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(900.0, 1200.0))
+            .build_ui_state(
+                |ui, settings: &mut TexSettings| show_tex_preferences(ui, settings, &tools),
+                TexSettings::default(),
+            );
+        harness.run();
+        harness
+            .get(by().role(egui::accesskit::Role::TextInput))
+            .focus();
+        harness.run();
+        harness
+            .get(by().role(egui::accesskit::Role::TextInput))
+            .type_text("first,");
+        harness.run();
+        harness
+            .get(by().role(egui::accesskit::Role::TextInput))
+            .type_text(" second");
+        harness.run();
+        assert_eq!(
+            harness.state().ignored_diagnostic_codes,
+            ["first", "second"]
+        );
+    }
 
     #[test]
     fn tex_controls_keep_build_intelligence_format_and_lint_independent() {

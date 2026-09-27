@@ -859,3 +859,46 @@ pub(crate) fn collect_retired(context: &egui::Context, input: &egui::RawInput) {
         r.collect_retired(|id| input.viewports.contains_key(&id))
     });
 }
+
+/// Small native controls own text input but delegate window management to their owner.
+pub(crate) fn set_management_owner(context: &egui::Context, child: Id, owner: Option<Id>) {
+    context.data_mut(|data| {
+        let key = egui::Id::new(("window-management-owner", child));
+        if let Some(owner) = owner {
+            data.insert_temp(key, owner);
+        } else {
+            data.remove::<Id>(key);
+        }
+    });
+}
+pub(crate) fn management_target(context: &egui::Context, focused: Id) -> Id {
+    context.data(|data| {
+        let mut target = focused;
+        for _ in 0..16 {
+            match data.get_temp::<Id>(egui::Id::new(("window-management-owner", target))) {
+                Some(owner) if owner != target => target = owner,
+                _ => break,
+            }
+        }
+        target
+    })
+}
+
+#[cfg(test)]
+mod management_tests {
+    use super::*;
+    #[test]
+    fn popup_management_follows_owners_without_moving_keyboard_focus() {
+        let context = egui::Context::default();
+        let document = Id::ROOT;
+        let popup = Id::from_hash_of("popup");
+        let nested = Id::from_hash_of("nested");
+        let settings = Id::from_hash_of("settings");
+        set_management_owner(&context, popup, Some(document));
+        set_management_owner(&context, nested, Some(popup));
+        set_management_owner(&context, settings, None);
+        assert_eq!(management_target(&context, nested), document);
+        assert_eq!(management_target(&context, settings), settings);
+        assert_eq!(management_target(&context, document), document);
+    }
+}

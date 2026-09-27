@@ -141,3 +141,65 @@ records the exact binary hash, source diff, native actions and read-only state.
 Visual captures remain evidence for individual viewport surfaces, not native
 preview composition; the desktop journeys assert native interaction and
 read-only renderer state.
+
+## 27 September: diagnostics and Settings
+
+- Editing retains each provider's previous diagnostics until a successful
+  replacement, including an empty result. Regression tests cover writing jobs,
+  TeX edits/reconfiguration/disable, and projected miTeX source. Infrastructure
+  failures do not masquerade as empty diagnostic responses.
+- JSON Settings tests cover invalid syntax, unknown fields, invalid ranges and
+  enum choices, actual saved changes, and refreshing an unmodified draft after
+  form changes. Invalid choices report the field and allowed values. Provider
+  configuration and command syntax have focused tests; command validation is
+  cached by draft to avoid idle filesystem checks.
+- Completion no longer changes selection on hover or repeatedly scrolls to the
+  selection. The compact menu removes the incomplete-results footer. Semantic
+  coverage checks hover, click acceptance and outside dismissal; the native
+  journey verifies a real completion response and Escape dismissal.
+- `run-5eu1hwrw` reproduced the original focused-Find accessibility-resize failure
+  (`-25200`) with forwarding disabled. `run-9ipln4c2` passed repeated popup
+  open/close, two owner resizes, owner minimization/restoration, and Replace sizing.
+- `run-rhn7_n94` passed native Settings search/typing isolation, invalid JSON with
+  Save disabled, reload/save, independent maximize/restore, Cmd+F and Cmd+W.
+  `run-ix7uzfka` passed completion; `run-tqlxe122` passed multi-window focus and
+  minimize/app-switch restoration. These are macOS 14.6.1 ARM64 interaction runs,
+  not assertions about a user's personal Hammerspoon scripts.
+- Fresh inspected framebuffers under `.tiptoptyp/screenshots/agent-review/`:
+  `1790518100210-0001-main-unicode-completion.png` and
+  `1790518105657-0001-settings-settings-window.png`. These verify the compact
+  menu and title-bar JSON button, not composed native preview geometry.
+
+The changes add no idle repaint loop or concurrent checker. Language detection
+runs in the existing debounced writing worker, with its existing document-size
+limit. Retention keeps one bounded last result rather than accumulating results.
+This is an architectural performance review, not a latency benchmark.
+
+Remaining limitations: Auto language selection reads literal top-level Typst
+settings, not computed/imported language values or locally mixed-language prose.
+External tool configuration keys are checked by the receiving tool. An arbitrary
+Hammerspoon helper may use a different API from the AX size/minimize paths tested.
+
+The installed Hammerspoon configuration contained no window-resize bindings.
+Rectangle was running and owned Cmd+Option+Return (Almost Maximize) and
+Cmd+Option+, (bottom-left sixth). The optional `rectangle` journey passed both
+actual configured shortcuts in `run-lqn4xh24`, retaining Find focus and a working
+close button. These settings were read, not changed. Rectangle's
+[accessibility implementation](https://github.com/rxhanson/Rectangle/blob/main/Rectangle/AccessibilityElement.swift)
+uses the size/position attributes forwarded by the popup bridge.
+
+The gallery exposed a separate capture issue: an inactive application correctly
+hid its modeless preview controls, so a queued framebuffer capture waited forever.
+The 69-second and 264-second runs both stopped after seven images; validating
+existing files alone was not accepted as a fresh-gallery pass. Automated
+close-after-capture requests now keep only their pending target paintable during
+app inactivity. Explicitly hidden targets remain hidden, and ordinary popup
+hide-on-app-switch behavior is unchanged. Deterministic visibility tests cover
+all three cases; this exception does not count as native interaction evidence.
+
+After the capture fix, the complete 24-image release gallery passed in one
+session and `--validate-latest` passed. The refreshed Settings and preview-controls
+PNGs were inspected. Native `controls` also passed in `run-k674s3vy`, including
+ordinary app-switch visibility. Final checks: formatting, Clippy with warnings
+as errors, 1,312 Rust tests (32 intentionally ignored), 15 xtask tests, and 10
+Python harness contract tests passed.

@@ -39,15 +39,17 @@ impl EditorApp {
         };
         let preview = self.preview_status_snapshot();
         let palette = self.preview_palette(context, self.preview.dark);
-        let (settings_query_fingerprint, settings_text_input_focused) = {
+        let (settings_query_fingerprint, settings_text_input_focused, settings_json) = {
             let settings_window = self.settings_window.lock().unwrap();
             (
                 crate::desktop_test::fingerprint(&settings_window.ui.query),
                 settings_window.text_input_focused,
+                serde_json::json!({"visible": settings_window.ui.json_mode, "valid": settings_window.ui.json_draft.as_ref().is_some_and(|draft| draft.validation.is_ok()), "saved": settings_window.ui.json_draft.as_ref().is_some_and(|draft| draft.saved)}),
             )
         };
         let mut observation = serde_json::json!({
             "viewport": format!("{:?}", context.viewport_id()),
+            "native_size": eframe::window_host::window(context, context.viewport_id()).map(|w| { let s = w.inner_size().to_logical::<f64>(w.scale_factor()); [s.width, s.height] }),
             "frame": context.cumulative_frame_nr(),
             "focused": context.input(|input| input.viewport().focused),
             "minimized": context.input(|input| input.viewport().minimized),
@@ -77,6 +79,8 @@ impl EditorApp {
             "find_focused": self.find_bar.child_focused,
             "replace_visible": self.find_bar.replace_visible,
             "settings_visible": self.settings_visible,
+            "settings_json": settings_json,
+            "writing_language": self.settings.writing_language,
             "settings_query_fingerprint": settings_query_fingerprint,
             "settings_text_input_focused": settings_text_input_focused,
         });

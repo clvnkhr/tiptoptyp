@@ -42,6 +42,31 @@ func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
     guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
     return value
 }
+if command == "zoom-focused" {
+    let application = AXUIElementCreateApplication(pid)
+    guard let focused = attribute(application, kAXFocusedWindowAttribute),
+          let zoom = attribute(focused as! AXUIElement, kAXZoomButtonAttribute) else { fail("no focused window zoom button") }
+    let result = AXUIElementPerformAction(zoom as! AXUIElement, kAXPressAction as CFString)
+    guard result == .success else { fail("native zoom failed: \(result.rawValue)") }
+    emit(["zoomed": true]); exit(0)
+}
+if command == "minimize-focused" {
+    let application = AXUIElementCreateApplication(pid)
+    guard let focused = attribute(application, kAXFocusedWindowAttribute) else { fail("no focused window") }
+    let result = AXUIElementSetAttributeValue(focused as! AXUIElement, kAXMinimizedAttribute as CFString, kCFBooleanTrue)
+    guard result == .success else { fail("accessibility minimize failed: \(result.rawValue)") }
+    emit(["minimized": true]); exit(0)
+}
+if command == "resize-focused" {
+    guard args.count == 4, let width = Double(args[2]), let height = Double(args[3]) else { fail("resize-focused requires width and height") }
+    let application = AXUIElementCreateApplication(pid)
+    guard let focused = attribute(application, kAXFocusedWindowAttribute) else { fail("no focused window") }
+    var size = CGSize(width: width, height: height)
+    let value = AXValueCreate(.cgSize, &size)!
+    let result = AXUIElementSetAttributeValue(focused as! AXUIElement, kAXSizeAttribute as CFString, value)
+    guard result == .success else { fail("accessibility resize failed: \(result.rawValue)") }
+    emit(["resized": true]); exit(0)
+}
 if ["raise", "close", "restore"].contains(command) {
     guard args.count == 3 else { fail("window action requires exact title") }
     let matches = nativeWindows().filter { attribute($0, kAXTitleAttribute) as? String == args[2] }
@@ -75,6 +100,10 @@ if command == "windows" {
         for key in [kAXTitleAttribute, kAXMainAttribute, kAXFocusedAttribute, kAXMinimizedAttribute] {
             var field: CFTypeRef?
             if AXUIElementCopyAttributeValue(window, key as CFString, &field) == .success { row[key] = field }
+        }
+        if let value = attribute(window, kAXSizeAttribute), CFGetTypeID(value) == AXValueGetTypeID() {
+            var size = CGSize.zero
+            if AXValueGetValue(value as! AXValue, .cgSize, &size) { row["size"] = [size.width, size.height] }
         }
         result.append(row)
     }

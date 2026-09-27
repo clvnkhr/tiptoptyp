@@ -16,15 +16,19 @@ pub(crate) fn check(
     path: &Path,
     grammar: bool,
     unicode: bool,
+    language: crate::settings::WritingLanguage,
 ) -> Vec<Diagnostic> {
     let mut issues: Vec<(usize, String, &'static str)> = Vec::new();
-    if grammar && matches!(kind, DocumentKind::Typst | DocumentKind::Tex) {
+    if grammar
+        && matches!(kind, DocumentKind::Typst | DocumentKind::Tex)
+        && let Some(dialect) = writing_dialect(source, kind, language)
+    {
         let document = if kind == DocumentKind::Tex {
             Document::new_curated(source, &harper_tex::TeX::default())
         } else {
             Document::new_curated(source, &harper_typst::Typst)
         };
-        let mut linter = LintGroup::new_curated(FstDictionary::curated(), Dialect::British);
+        let mut linter = LintGroup::new_curated(FstDictionary::curated(), dialect);
         let excluded = excluded_typst_ranges(source, kind);
         let characters: Vec<char> = source.chars().collect();
         issues.extend(
@@ -122,6 +126,57 @@ pub(crate) fn check(
         })
         .collect()
 }
+/// Reads syntax rather than matching comments, examples, nested functions or strings.
+fn writing_dialect(
+    source: &str,
+    kind: DocumentKind,
+    language: crate::settings::WritingLanguage,
+) -> Option<Dialect> {
+    use crate::settings::WritingLanguage;
+    use typst_syntax::ast::{Arg, Expr, SetRule};
+    match language {
+        WritingLanguage::British => return Some(Dialect::British),
+        WritingLanguage::American => return Some(Dialect::American),
+        WritingLanguage::Auto => {}
+    }
+    let mut lang = None;
+    let mut region = None;
+    if kind == DocumentKind::Typst {
+        let syntax = typst_syntax::parse(source);
+        for node in syntax.children() {
+            let Some(rule) = node.cast::<SetRule>() else {
+                continue;
+            };
+            if !matches!(rule.target(), Expr::Ident(name) if name.as_str() == "text")
+                || rule.condition().is_some()
+            {
+                continue;
+            }
+            for arg in rule.args().items() {
+                if let Arg::Named(named) = arg
+                    && let Expr::Str(value) = named.expr()
+                {
+                    match named.name().as_str() {
+                        "lang" => lang = Some(value.get().to_ascii_lowercase()),
+                        "region" => region = Some(value.get().to_ascii_lowercase()),
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    match lang.as_deref() {
+        Some("en-us") => Some(Dialect::American),
+        Some("en-gb" | "en-uk") => Some(Dialect::British),
+        Some("en") | None => Some(if region.as_deref() == Some("us") {
+            Dialect::American
+        } else {
+            Dialect::British
+        }),
+        _ => None, // Harper checks English; `uk` is Ukrainian, not British English.
+    }
+}
+
 // Harper deliberately reads Typst string literals as prose. Technical named
 // arguments and math are not prose; keep their original scalar coordinates.
 fn excluded_typst_ranges(source: &str, kind: DocumentKind) -> Vec<std::ops::Range<usize>> {
@@ -178,14 +233,54 @@ fn likely_name(source: &[char], start: usize, end: usize) -> bool {
 mod tests {
     use super::*;
     #[test]
+    fn language_detection_uses_real_top_level_text_rules_and_explicit_overrides() {
+        use crate::settings::WritingLanguage::{American, Auto, British};
+        for (source, expected) in [
+            (
+                "#set text(lang: \"en\", region: \"us\")",
+                Some(Dialect::American),
+            ),
+            (
+                "#set text(lang: \"en\", region: \"gb\")",
+                Some(Dialect::British),
+            ),
+            ("#set text(lang: \"uk\")", None),
+            (
+                "// #set text(lang: \"en\", region: \"us\")",
+                Some(Dialect::British),
+            ),
+            (
+                "#let demo() = { set text(region: \"us\") }",
+                Some(Dialect::British),
+            ),
+            ("#set text(region: \"us\") if false", Some(Dialect::British)),
+        ] {
+            assert_eq!(
+                writing_dialect(source, DocumentKind::Typst, Auto),
+                expected,
+                "{source}"
+            );
+            assert_eq!(
+                writing_dialect(source, DocumentKind::Typst, British),
+                Some(Dialect::British)
+            );
+            assert_eq!(
+                writing_dialect(source, DocumentKind::Typst, American),
+                Some(Dialect::American)
+            );
+        }
+    }
+
+    #[test]
     fn technical_arguments_display_math_and_names_are_not_spelling_errors() {
-        let source = "#set text(lang: \"uk\", font: \"NonsensicalFontName\")\nThe Leray theorem has the the consequence.\n$ nonwordxyz + nonwordxyz $\nThiss is ordinary prose.";
+        let source = "#set text(lang: \"en\", region: \"gb\", font: \"NonsensicalFontName\")\nThe Leray theorem has the the consequence.\n$ nonwordxyz + nonwordxyz $\nThiss is ordinary prose.";
         let issues = check(
             source,
             DocumentKind::Typst,
             Path::new("fixture.typ"),
             true,
             false,
+            crate::settings::WritingLanguage::Auto,
         );
         assert!(
             !issues
@@ -205,7 +300,8 @@ mod tests {
                 DocumentKind::Tex,
                 Path::new("fixture.tex"),
                 true,
-                false
+                false,
+                crate::settings::WritingLanguage::Auto,
             )
             .iter()
             .any(|d| d.message.contains("nonwordxyz") || d.message.contains("Leray"))
@@ -231,6 +327,7 @@ mod tests {
                 Path::new("fixture.typ"),
                 grammar,
                 unicode,
+                crate::settings::WritingLanguage::Auto,
             );
             eprintln!(
                 "writing-cost {name} arch={} bytes={} elapsed_us={} diagnostics={}",
@@ -249,6 +346,7 @@ mod tests {
             Path::new("test.typ"),
             false,
             true,
+            crate::settings::WritingLanguage::Auto,
         );
         assert_eq!(issues.len(), 3);
         assert_eq!(
@@ -262,7 +360,8 @@ mod tests {
                 DocumentKind::Typst,
                 Path::new("t.typ"),
                 false,
-                true
+                true,
+                crate::settings::WritingLanguage::Auto,
             )
             .is_empty()
         );
@@ -279,7 +378,14 @@ mod tests {
                 "This is the the example.\n$ nonwordxyz + nonwordxyz $",
             ),
         ] {
-            let issues = check(source, kind, Path::new("fixture"), true, false);
+            let issues = check(
+                source,
+                kind,
+                Path::new("fixture"),
+                true,
+                false,
+                crate::settings::WritingLanguage::Auto,
+            );
             assert!(issues.iter().any(|issue| issue.location.unwrap().line == 1));
             assert!(
                 !issues

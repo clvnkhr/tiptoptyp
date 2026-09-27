@@ -167,11 +167,12 @@ impl ChildViewSpec {
         self
     }
 
-    fn suspend_when_inactive(mut self, active: Option<bool>) -> Self {
+    fn suspend_when_inactive(mut self, active: Option<bool>, automated_capture: bool) -> Self {
         if self.role == ChildViewRole::Persistent
             && matches!(self.bounds, ChildViewBounds::Fixed { .. })
         {
-            self.visible = Some(self.visible != Some(false) && active != Some(false));
+            self.visible =
+                Some(self.visible != Some(false) && (automated_capture || active != Some(false)));
         }
         self
     }
@@ -181,10 +182,7 @@ impl ChildViewSpec {
             ChildViewBounds::Persistent { inner, minimum } => crate::window_policy::document()
                 .with_title(self.title)
                 .with_inner_size(inner)
-                .with_min_inner_size(minimum)
-                .with_maximize_button(false)
-                .with_maximized(false)
-                .with_fullscreen(false),
+                .with_min_inner_size(minimum),
             ChildViewBounds::Fixed { position, size } => {
                 let builder = theme::popup_viewport_builder(self.title)
                     .with_position(position)
@@ -223,6 +221,11 @@ fn begin_lifecycle(
     id: egui::ViewportId,
     spec: ChildViewSpec,
 ) -> Option<LifecycleToken> {
+    crate::window_host::set_management_owner(
+        context,
+        id,
+        matches!(spec.bounds, ChildViewBounds::Fixed { .. }).then_some(context.viewport_id()),
+    );
     crate::window_host::show(
         context,
         id,
@@ -258,6 +261,7 @@ impl ChildPaint {
         ui.set_style(self.style.clone());
         if class != egui::ViewportClass::EmbeddedWindow {
             sync_native_theme(ui.ctx(), self.appearance);
+            crate::popup_window::attach(ui.ctx());
         }
         let input = ui.ctx().input(|input| ChildViewInput {
             focused: input.viewport().focused,
@@ -282,7 +286,14 @@ impl ChildViewHost {
         style: &std::sync::Arc<egui::Style>,
         body: impl Fn(&mut egui::Ui, ChildViewInput) + Send + Sync + 'static,
     ) {
-        let spec = spec.suspend_when_inactive(crate::native_window::application_active(context));
+        // An automated framebuffer request must be able to paint its target even
+        // while another app is foreground. Ordinary interaction still hides it.
+        let automated_capture =
+            captures.closes_after_captures() && captures.has_pending_for(spec.capture_target);
+        let spec = spec.suspend_when_inactive(
+            crate::native_window::application_active(context),
+            automated_capture,
+        );
         let id = scoped_child_viewport_id(context, spec.id_salt);
         let Some(token) = begin_lifecycle(context, id, spec) else {
             return;
@@ -310,7 +321,14 @@ impl ChildViewHost {
         style: &std::sync::Arc<egui::Style>,
         mut body: impl FnMut(&mut egui::Ui, ChildViewInput),
     ) {
-        let spec = spec.suspend_when_inactive(crate::native_window::application_active(context));
+        // An automated framebuffer request must be able to paint its target even
+        // while another app is foreground. Ordinary interaction still hides it.
+        let automated_capture =
+            captures.closes_after_captures() && captures.has_pending_for(spec.capture_target);
+        let spec = spec.suspend_when_inactive(
+            crate::native_window::application_active(context),
+            automated_capture,
+        );
         debug_assert!(matches!(
             (spec.role, spec.role.focus_policy()),
             (ChildViewRole::Persistent, FocusPolicy::Preserve)
@@ -448,16 +466,35 @@ mod tests {
             "controls",
         );
         assert_eq!(
-            spec.suspend_when_inactive(Some(false)).viewport().visible,
+            spec.suspend_when_inactive(Some(false), false)
+                .viewport()
+                .visible,
             Some(false)
         );
         assert_eq!(
-            spec.suspend_when_inactive(Some(true)).viewport().visible,
+            spec.suspend_when_inactive(Some(true), false)
+                .viewport()
+                .visible,
             Some(true)
         );
         assert_eq!(
-            spec.suspend_when_inactive(None).viewport().visible,
+            spec.suspend_when_inactive(None, false).viewport().visible,
             Some(true)
+        );
+        assert_eq!(
+            spec.suspend_when_inactive(Some(false), true)
+                .viewport()
+                .visible,
+            Some(true),
+            "an automated capture can render while the app is inactive"
+        );
+        assert_eq!(
+            spec.with_visible(false)
+                .suspend_when_inactive(Some(false), true)
+                .viewport()
+                .visible,
+            Some(false),
+            "capture never revives an explicitly hidden target"
         );
         let document = super::ChildViewSpec::persistent(
             "settings",
@@ -468,7 +505,7 @@ mod tests {
         );
         assert_eq!(
             document
-                .suspend_when_inactive(Some(false))
+                .suspend_when_inactive(Some(false), false)
                 .viewport()
                 .visible,
             None
@@ -477,6 +514,21 @@ mod tests {
 
     use super::*;
     use std::{cell::RefCell, rc::Rc};
+
+    #[test]
+    fn settings_allows_native_maximize_without_forcing_window_state() {
+        let viewport = ChildViewSpec::persistent(
+            "settings",
+            "Settings",
+            [600.0, 400.0],
+            [300.0, 200.0],
+            "settings",
+        )
+        .viewport();
+        assert_eq!(viewport.maximize_button, Some(true));
+        assert_eq!(viewport.maximized, None);
+        assert_eq!(viewport.fullscreen, None);
+    }
 
     #[test]
     fn modeless_tool_surfaces_use_popup_alpha_without_blur_dismissal() {

@@ -7792,12 +7792,13 @@ fn projected_application_diagnostics_and_preview_selection_map_canonical_unicode
     );
     app.document_mut()
         .edit(CCursorRange::default(), |source| source.push('!'));
+    let last_published = app.preview.editor_diagnostics.clone();
     app.mark_edited();
-    assert!(app.preview.editor_diagnostics.is_empty());
+    assert_eq!(app.preview.editor_diagnostics, last_published);
     app.receive_editor_diagnostics(uri, None, vec![diagnostic]);
-    assert!(
-        app.preview.editor_diagnostics.is_empty(),
-        "unversioned positions are unsafe after projection"
+    assert_eq!(
+        app.preview.editor_diagnostics, last_published,
+        "reject unsafe unversioned replacements while keeping the last published result"
     );
 }
 

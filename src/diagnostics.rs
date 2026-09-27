@@ -1,3 +1,13 @@
+/// Refreshes retain published diagnostics for this document, even when revisions differ.
+/// Adapters replace them only on a successful response (including an empty one).
+/// Disabling a provider or changing documents explicitly retires its results.
+pub(crate) fn same_document(
+    previous: crate::document::DocumentKey,
+    current: crate::document::DocumentKey,
+) -> bool {
+    previous.owner == current.owner && previous.epoch == current.epoch
+}
+
 use std::{collections::HashMap, path::PathBuf};
 
 /// Severity shared by build and language-service adapters.

@@ -1377,7 +1377,6 @@ impl EditorApp {
                 source: &completion.source,
                 source_cursor: completion.source_cursor,
                 selected,
-                is_incomplete: completion.is_incomplete,
                 anchor: completion.anchor,
                 has_footer: preview_family.is_some(),
             },
@@ -1391,11 +1390,6 @@ impl EditorApp {
             self.captures.defer_target("main");
         }
         match action {
-            Some(CompletionAction::Select(index)) => {
-                if let Some(completion) = &mut self.editor_completion {
-                    completion.selected = index;
-                }
-            }
             Some(CompletionAction::Accept(index)) => self.apply_editor_completion(index, context),
             Some(CompletionAction::Dismiss) => self.editor_completion = None,
             None => {}

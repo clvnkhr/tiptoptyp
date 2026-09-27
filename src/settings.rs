@@ -238,6 +238,26 @@ fn default_indent_spaces() -> u8 {
     2
 }
 
+/// Auto uses literal top-level Typst text language settings; English defaults to UK.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum WritingLanguage {
+    #[default]
+    Auto,
+    British,
+    American,
+}
+impl WritingLanguage {
+    pub(crate) const ALL: [Self; 3] = [Self::Auto, Self::British, Self::American];
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto (document; UK fallback)",
+            Self::British => "English (UK)",
+            Self::American => "English (US)",
+        }
+    }
+}
+
 /// Persisted user choices for the current settings schema.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum ToolbarStyle {
@@ -281,6 +301,8 @@ pub(crate) struct AppSettings {
     pub(crate) line_numbers: bool,
     #[serde(default)]
     pub(crate) english_grammar: bool,
+    #[serde(default)]
+    pub(crate) writing_language: WritingLanguage,
     #[serde(default)]
     pub(crate) unicode_warnings: bool,
     #[serde(default = "default_true")]
@@ -365,6 +387,7 @@ impl Default for AppSettings {
             line_wrap: true,
             line_numbers: true,
             english_grammar: false,
+            writing_language: WritingLanguage::Auto,
             unicode_warnings: false,
             sticky_context_rows: true,
             auto_pair_delimiters: true,
@@ -437,6 +460,7 @@ impl AppSettings {
             line_wrap,
             line_numbers,
             english_grammar,
+            writing_language,
             unicode_warnings,
             sticky_context_rows,
             auto_pair_delimiters,
@@ -801,6 +825,7 @@ mod tests {
             line_wrap: false,
             line_numbers: false,
             english_grammar: false,
+            writing_language: WritingLanguage::Auto,
             unicode_warnings: false,
             sticky_context_rows: false,
             auto_pair_delimiters: false,

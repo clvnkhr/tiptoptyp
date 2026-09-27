@@ -529,21 +529,67 @@ pub(super) fn tool_preference_editor(
                 let cached = data.get_temp::<(crate::tool_command::CommandCustomization, crate::tool_command::CommandCustomization)>(id);
                 cached.filter(|(original,_)| original == &preference.command).map(|(_,draft)| draft).unwrap_or_else(|| preference.command.clone())
             });
-            ui.label("Arguments (quoted values supported; no shell expansion)");
+            command_help(ui.label("Arguments (quoted values supported; no shell expansion)"), resolution.kind, "Arguments");
             ui.add(egui::TextEdit::multiline(&mut draft.arguments).desired_rows(2).desired_width(f32::INFINITY));
             ui.label(egui::RichText::new("{args} keeps generated arguments. {arg:N} inserts one generated argument (zero-based). Remove {args} to replace the command arguments entirely.").small());
-            ui.label("Environment (JSON object of strings)");
+            command_help(ui.label("Environment (JSON object of strings)"), resolution.kind, "Environment");
             ui.add(egui::TextEdit::multiline(&mut draft.environment).desired_rows(2).desired_width(f32::INFINITY));
-            ui.label("Working directory (blank uses the document/project directory)");
+            command_help(ui.label("Working directory (blank uses the document/project directory)"), resolution.kind, "Working directory");
             ui.add(egui::TextEdit::singleline(&mut draft.directory).desired_width(f32::INFINITY));
+            let validation_id = id.with("validation");
+            let validation = ui.ctx().data_mut(|data| {
+                let cached = data.get_temp::<(crate::tool_command::CommandCustomization, Result<(), String>)>(validation_id);
+                let result = cached.filter(|(previous, _)| previous == &draft).map(|(_, result)| result).unwrap_or_else(|| draft.validate());
+                data.insert_temp(validation_id, (draft.clone(), result.clone()));
+                result
+            });
+            if let Err(error) = &validation { ui.colored_label(ui.visuals().error_fg_color, error); }
             ui.horizontal(|ui| {
-                if crate::app::icons::action_button_enabled(ui, draft != preference.command, "Apply command").clicked() { preference.command = draft.clone(); }
+                if crate::app::icons::action_button_enabled(ui, validation.is_ok() && draft != preference.command, "Apply command").clicked() { preference.command = draft.clone(); }
                 if crate::app::icons::action_button(ui, "Reset command").clicked() { draft = Default::default(); preference.command = draft.clone(); }
             });
             ui.ctx().data_mut(|data| data.insert_temp(id,(preference.command.clone(),draft)));
         });
     });
     browse
+}
+
+fn command_help(response: egui::Response, kind: crate::toolchain::ToolKind, field: &str) {
+    use crate::toolchain::ToolKind;
+    let docs = match kind {
+        ToolKind::Typst => "https://github.com/typst/typst/tree/main/crates/typst-cli",
+        ToolKind::Tinymist => "https://myriad-dreamin.github.io/tinymist/feature/cli.html",
+        ToolKind::Tectonic => "https://tectonic-typesetting.github.io/book/latest/ref/v2cli.html",
+        ToolKind::Texlab => "https://github.com/latex-lsp/texlab/wiki/Configuration",
+        ToolKind::Badness => "https://badness.dev/guide/editor-setup.html",
+        ToolKind::TexFmt => "https://github.com/WGUNDERWOOD/tex-fmt#usage",
+    };
+    response.on_hover_ui(|ui| {
+        match field {
+            "Arguments" => {
+                ui.label("Default: {args}. This keeps the arguments generated for each operation. Add optional flags after it; quoting groups one argument and never runs a shell.");
+                let example = match kind {
+                    ToolKind::Typst => "{args} --font-path \"/Users/me/My Fonts\"",
+                    ToolKind::Tectonic => "{args} --keep-logs",
+                    ToolKind::TexFmt => "{args} --wraplen 100",
+                    _ => "{args}  (keep defaults; see the tool documentation for optional flags)",
+                };
+                ui.monospace(example);
+                ui.label("Use the binary's --help in a terminal to see flags for your installed version. Flags must be valid for the app's subcommand.");
+            }
+            "Environment" => {
+                ui.label("Default: {}. Override selected variables inherited by the tool; values must be strings.");
+                ui.monospace(r#"{"RUST_LOG":"debug"}"#);
+                ui.label("Example for tools that support Rust logging. $HOME and ~ are literal; use complete paths.");
+            }
+            _ => {
+                ui.label("Default: blank, preserving the document/project directory selected for the operation.");
+                ui.monospace("/Users/me/Documents/My Paper");
+                ui.label("An existing absolute directory. This changes where the tool resolves relative paths and discovers project configuration. Do not add shell quotes.");
+            }
+        }
+        ui.hyperlink_to(format!("{} documentation", kind.label()), docs);
+    });
 }
 
 pub(super) fn fallback_notice(ui: &mut egui::Ui, label: &str, reason: &str) {

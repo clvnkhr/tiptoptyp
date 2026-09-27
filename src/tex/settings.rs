@@ -75,6 +75,8 @@ pub(crate) struct TexSettings {
     /// Badness/TexLab diagnostic codes to hide, entered as a comma-separated
     /// list in Settings. Matching is case-insensitive and ignores quotes.
     pub(crate) ignored_diagnostic_codes: Vec<String>,
+    pub(crate) texlab_configuration: serde_json::Value,
+    pub(crate) badness_configuration: serde_json::Value,
 }
 impl Default for TexSettings {
     fn default() -> Self {
@@ -94,6 +96,8 @@ impl Default for TexSettings {
             badness: ToolPreference::default(),
             tex_fmt: ToolPreference::default(),
             ignored_diagnostic_codes: Vec::new(),
+            texlab_configuration: serde_json::json!({"texlab": {"build":{"onSave":false,"forwardSearchAfter":false},"chktex":{"onOpenAndSave":false,"onEdit":false},"latexFormatter":"none","bibtexFormatter":"none","hover":{"symbols":"glyph"}}}),
+            badness_configuration: serde_json::json!({}),
         }
     }
 }

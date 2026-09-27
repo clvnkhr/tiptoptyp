@@ -1,10 +1,11 @@
 use super::*;
+type WritingIdentity = (DocumentKey, bool, bool, crate::settings::WritingLanguage);
 #[derive(Default)]
 pub(super) struct WritingState {
-    observed: Option<(DocumentKey, bool, bool)>,
+    observed: Option<WritingIdentity>,
     skipped: Option<&'static str>,
     deadline: Option<Instant>,
-    job: LatestJob<((DocumentKey, bool, bool), Vec<Diagnostic>)>,
+    job: LatestJob<(WritingIdentity, Vec<Diagnostic>)>,
     pub(super) diagnostics: Vec<Diagnostic>,
     pub(super) markers: Vec<usize>,
 }
@@ -47,14 +48,31 @@ impl EditorApp {
             key,
             self.settings.english_grammar,
             self.settings.unicode_warnings,
+            self.settings.writing_language,
         );
         if self.writing.observed != Some(identity) {
+            let retain = self
+                .writing
+                .observed
+                .is_some_and(|previous| crate::diagnostics::same_document(previous.0, key));
             self.writing.observed = Some(identity);
             self.writing.skipped = None;
             self.writing.deadline = Some(Instant::now() + Duration::from_millis(600));
-            self.writing.diagnostics.clear();
-            self.writing.markers.clear();
-            self.update_tex_diagnostics();
+            let previous_count = self.writing.diagnostics.len();
+            self.writing.diagnostics.retain(|diagnostic| {
+                retain
+                    && match diagnostic.provider.as_deref() {
+                        Some("Harper") => identity.1,
+                        Some("Unicode") => identity.2,
+                        _ => true,
+                    }
+            });
+            if !retain || !identity.2 {
+                self.writing.markers.clear();
+            }
+            if self.writing.diagnostics.len() != previous_count {
+                self.update_tex_diagnostics();
+            }
         }
         match self.writing.job.poll() {
             LatestJobPoll::Ready((completed, diagnostics))
@@ -118,7 +136,9 @@ impl EditorApp {
                 .start_and_repaint("writing-checks", context, move || {
                     Ok((
                         identity,
-                        crate::writing::check(&source, kind, &path, identity.1, identity.2),
+                        crate::writing::check(
+                            &source, kind, &path, identity.1, identity.2, identity.3,
+                        ),
                     ))
                 })
         {
@@ -130,6 +150,56 @@ impl EditorApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn edits_keep_writing_diagnostics_until_replacement_but_document_changes_retire_them() {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        app.settings.unicode_warnings = true;
+        app.document_mut()
+            .replace_unprojected_untitled("old\u{200b}");
+        app.update_writing_checks(&context);
+        app.writing.diagnostics = crate::writing::check(
+            "old\u{200b}",
+            DocumentKind::Typst,
+            Path::new("fixture.typ"),
+            false,
+            true,
+            crate::settings::WritingLanguage::Auto,
+        );
+        let original = app.writing.diagnostics.clone();
+        assert!(!original.is_empty());
+        app.document_mut()
+            .edit(CCursorRange::default(), |source| source.push('!'));
+        app.update_writing_checks(&context);
+        assert_eq!(
+            app.writing.diagnostics, original,
+            "edits must not remove stale diagnostics"
+        );
+        // A successful empty response is authoritative.
+        let identity = app.writing.observed.unwrap();
+        app.writing
+            .job
+            .start_and_repaint("writing-test", &context, move || Ok((identity, Vec::new())))
+            .unwrap();
+        for _ in 0..1000 {
+            app.update_writing_checks(&context);
+            if !app.writing.job.is_running() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(app.writing.diagnostics.is_empty());
+        app.writing.diagnostics = original;
+        app.document_mut()
+            .replace_unprojected_untitled("new document");
+        app.update_writing_checks(&context);
+        assert!(
+            app.writing.diagnostics.is_empty(),
+            "never show another document's lints"
+        );
+    }
+
     #[test]
     fn closing_the_last_tab_retires_writing_checks_without_requesting_a_document_path() {
         let root = tempfile::tempdir().unwrap();
@@ -143,7 +213,12 @@ mod tests {
         app.settings.english_grammar = true;
         app.settings.unicode_warnings = true;
         app.finish_close_tab(&context);
-        app.writing.observed = Some((app.document().key(), true, true));
+        app.writing.observed = Some((
+            app.document().key(),
+            true,
+            true,
+            crate::settings::WritingLanguage::Auto,
+        ));
         app.writing.deadline = Some(Instant::now() - Duration::from_secs(1));
         app.update_writing_checks(&context);
         assert!(app.tabs.is_empty());

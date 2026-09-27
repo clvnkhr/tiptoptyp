@@ -1,9 +1,9 @@
 //! Read-only completion popup. The owner applies actions and supplies optional footer painting.
 use crate::{child_view::viewport_scoped_id, theme, tinymist::CompletionItem};
-use eframe::egui::{self, Align, Pos2, Rect, RichText, Vec2};
-const COMPLETION_POPUP_WIDTH: f32 = 360.0;
-const COMPLETION_POPUP_MAX_HEIGHT: f32 = 248.0;
-const COMPLETION_ROW_HEIGHT: f32 = 26.0;
+use eframe::egui::{self, Pos2, Rect, RichText, Vec2};
+const COMPLETION_POPUP_WIDTH: f32 = 300.0;
+const COMPLETION_POPUP_MAX_HEIGHT: f32 = 180.0;
+const COMPLETION_ROW_HEIGHT: f32 = 20.0;
 
 #[derive(Clone, Copy)]
 pub(super) struct CompletionPopupInput<'a> {
@@ -11,13 +11,11 @@ pub(super) struct CompletionPopupInput<'a> {
     pub source: &'a str,
     pub source_cursor: usize,
     pub selected: usize,
-    pub is_incomplete: bool,
     pub anchor: Rect,
     pub has_footer: bool,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CompletionAction {
-    Select(usize),
     Accept(usize),
     Dismiss,
 }
@@ -31,7 +29,6 @@ pub(super) fn show(
     let CompletionPopupInput {
         items,
         selected,
-        is_incomplete,
         anchor,
         has_footer,
         ..
@@ -41,17 +38,22 @@ pub(super) fn show(
     }
     let selected = selected.min(items.len() - 1);
     let popup_width = COMPLETION_POPUP_WIDTH.min((viewport.width() - 8.0).max(1.0));
-    let frame = theme::popup_card_frame(&context.style_of(context.theme()));
+    let frame = theme::popup_card_frame(&context.style_of(context.theme())).inner_margin(4);
     let margin = frame.total_margin().sum();
     let inner_width = (popup_width - margin.x).max(1.0);
-    let list_height = (items.len() as f32 * (COMPLETION_ROW_HEIGHT + theme::SPACE.small)
-        - theme::SPACE.small)
+    let list_height = (items.len() as f32 * (COMPLETION_ROW_HEIGHT + 2.0) - 2.0)
         .clamp(COMPLETION_ROW_HEIGHT, COMPLETION_POPUP_MAX_HEIGHT);
-    let footer_height = f32::from(has_footer) * 36.0 + f32::from(is_incomplete) * 40.0;
+    let footer_height = f32::from(has_footer) * 36.0;
     let desired_size = Vec2::new(popup_width, list_height + footer_height + margin.y);
     let position = completion_popup_position(anchor, desired_size, viewport);
     let mut clicked = None;
-    let mut hovered = None;
+    let selection_id = viewport_scoped_id(context, "completion-last-selection");
+    let frame_nr = context.cumulative_frame_nr();
+    let scroll_selection = context.data_mut(|data| {
+        let previous = data.get_temp::<(usize, u64)>(selection_id);
+        data.insert_temp(selection_id, (selected, frame_nr));
+        previous.is_none_or(|(index, painted)| index != selected || frame_nr > painted + 1)
+    });
 
     let popup = egui::Area::new(viewport_scoped_id(context, "editor-completion-popup"))
         .order(egui::Order::Foreground)
@@ -59,7 +61,8 @@ pub(super) fn show(
         .constrain_to(viewport)
         .show(context, |ui| {
             frame.show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = theme::SPACE.small;
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.spacing_mut().interact_size.y = COMPLETION_ROW_HEIGHT;
                 ui.set_min_width(inner_width);
                 ui.set_max_width(inner_width);
                 ui.set_height(list_height + footer_height);
@@ -79,7 +82,9 @@ pub(super) fn show(
                                 [ui.available_width(), COMPLETION_ROW_HEIGHT],
                                 egui::Button::selectable(
                                     index == selected,
-                                    RichText::new(label).monospace(),
+                                    RichText::new(label)
+                                        .monospace()
+                                        .size(theme::TYPE.supporting),
                                 )
                                 .right_text("")
                                 .truncate(),
@@ -94,27 +99,16 @@ pub(super) fn show(
                                     &response,
                                 );
                             }
-                            if response.hovered() {
-                                hovered = Some(index);
-                            }
                             if response.clicked() {
                                 clicked = Some(index);
                             }
-                            if index == selected {
-                                response.scroll_to_me(Some(Align::Center));
+                            if index == selected && scroll_selection {
+                                response.scroll_to_me(None);
                             }
                         }
                     });
                 if has_footer {
                     footer(ui);
-                }
-                if is_incomplete {
-                    ui.separator();
-                    ui.label(
-                        RichText::new("Keep typing for more suggestions")
-                            .size(theme::TYPE.supporting)
-                            .weak(),
-                    );
                 }
             });
         });
@@ -132,9 +126,7 @@ pub(super) fn show(
     if clicked_outside {
         return Some(CompletionAction::Dismiss);
     }
-    hovered
-        .filter(|&index| index != selected)
-        .map(CompletionAction::Select)
+    None
 }
 
 pub(super) fn completion_popup_position(anchor: Rect, desired_size: Vec2, viewport: Rect) -> Pos2 {
@@ -189,15 +181,11 @@ mod tests {
                             source: "",
                             source_cursor: 0,
                             selected: state.0,
-                            is_incomplete: false,
                             anchor: Rect::from_min_size(Pos2::new(30.0, 30.0), Vec2::splat(10.0)),
                             has_footer: false,
                         },
                         |_| panic!("absent footer must not run"),
                     ) {
-                        if let CompletionAction::Select(index) = action {
-                            state.0 = index;
-                        }
                         state.1.push(action);
                     }
                     egui::Area::new(egui::Id::new("outside"))
@@ -212,14 +200,8 @@ mod tests {
         assert!(harness.state().1.is_empty());
         harness.get_by_label("beta ").hover();
         harness.run_steps(8);
-        assert_eq!(harness.state().0, 1);
-        assert_eq!(harness.state().1, [CompletionAction::Select(1)]);
-        harness.run_steps(3);
-        assert_eq!(
-            harness.state().1.len(),
-            1,
-            "unchanged hover does not repeat selection actions"
-        );
+        assert_eq!(harness.state().0, 0, "hover never moves keyboard selection");
+        assert!(harness.state().1.is_empty());
         harness.get_by_label("beta ").click();
         harness.run_steps(8);
         assert!(harness.state().1.contains(&CompletionAction::Accept(1)));

@@ -224,6 +224,22 @@ class Journey(EditorJourneys):
             self.stable_state(lambda d: not d["find_visible"])
         self.key(3)
         self.wait("Find reopens", lambda d: d["find_visible"] and d["find_focused"])
+        owner = next(window["AXTitle"] for window in self.native("windows")["windows"] if window["AXTitle"].endswith(" — tiptoptyp"))
+        before = self.snapshot()["document"]["native_size"]
+        requested = [before[0] - 60, before[1] - 40]
+        self.native("resize-focused", *requested)
+        self.wait("accessibility resize targets the document behind Find", lambda d: d["native_size"] == requested and d["find_visible"])
+        second = [requested[0] - 20, requested[1] - 20]
+        self.native("resize-focused", *second)
+        self.wait("a second resize still targets the owner", lambda d: d["native_size"] == second and d["find_focused"])
+        self.native("minimize-focused")
+        self.native_wait("minimizing focused Find minimizes its owner", lambda ws: any(w["AXTitle"] == owner and w.get("AXMinimized") for w in ws))
+        self.native("restore", owner)
+        self.native("raise", owner)
+        self.native_wait("owner restores", lambda ws: any(w["AXTitle"] == owner and w.get("AXFocused") and not w.get("AXMinimized") for w in ws))
+        if not self.snapshot()["document"]["find_visible"]:
+            self.key(3)
+        self.wait("Find survives or reopens after minimize", lambda d: d["find_visible"])
         for expected in (True, False, True, False):
             self.click("find.replace")
             self.wait("Replace toggles", lambda d: d["find_visible"] and d["replace_visible"] == expected)
@@ -388,7 +404,7 @@ class Journey(EditorJourneys):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--journey", choices=["all", "panels", "find", "empty", "focus", "preview", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "folding", "closing", "controls", "settings_search", "background"], default="all")
+    parser.add_argument("--journey", choices=["all", "panels", "find", "rectangle", "empty", "focus", "preview", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "folding", "closing", "controls", "settings_search", "background"], default="all")
     parser.add_argument("--review-preview", action="store_true", help="pause at each dark/comfy renderer for independent on-screen review; not an automated visual pass")
     parser.add_argument("--capture-review", action="store_true", help="capture affected settings/controls framebuffers for separate visual inspection")
     parser.add_argument("--trace-preview", action="store_true", help="retain native preview geometry traces")

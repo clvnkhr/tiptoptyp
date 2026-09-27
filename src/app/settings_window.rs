@@ -280,6 +280,90 @@ mod tests {
     }
 
     #[test]
+    fn settings_json_rejects_invalid_text_then_saves_valid_edits() {
+        let mut harness = settings_harness(SettingsWindow::default());
+        harness.run();
+        harness.get_by_label("Edit settings as JSON").click();
+        harness.run();
+        harness
+            .get(by().role(egui::accesskit::Role::MultilineTextInput))
+            .focus();
+        harness.run();
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        harness.run();
+        harness
+            .get(by().role(egui::accesskit::Role::MultilineTextInput))
+            .type_text("{broken");
+        harness.run();
+        assert!(
+            harness
+                .state()
+                .ui
+                .json_draft
+                .as_ref()
+                .unwrap()
+                .validation
+                .is_err()
+        );
+        assert!(!harness.state().has_actions());
+        harness.get_by_label("Reload current settings").click();
+        harness.run();
+        let mut edited = harness.state().input.as_ref().unwrap().settings.clone();
+        edited.writing_language = crate::settings::WritingLanguage::American;
+        let text = serde_json::to_string_pretty(&edited).unwrap();
+        harness
+            .get(by().role(egui::accesskit::Role::MultilineTextInput))
+            .focus();
+        harness.run();
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        harness.run();
+        harness
+            .get(by().role(egui::accesskit::Role::MultilineTextInput))
+            .type_text(&text);
+        harness.run();
+        assert!(
+            harness
+                .state()
+                .ui
+                .json_draft
+                .as_ref()
+                .unwrap()
+                .validation
+                .is_ok()
+        );
+        harness.get_by_label("Save JSON settings").click();
+        harness.run();
+        let mut saved = AppSettings::default();
+        harness.state_mut().take_actions(&mut saved);
+        assert_eq!(
+            saved.writing_language,
+            crate::settings::WritingLanguage::American
+        );
+        harness
+            .state_mut()
+            .input
+            .as_mut()
+            .unwrap()
+            .settings
+            .ui_scale_percent = 125;
+        harness.run();
+        assert_eq!(
+            harness
+                .state()
+                .ui
+                .json_draft
+                .as_ref()
+                .unwrap()
+                .validation
+                .as_ref()
+                .unwrap()
+                .ui_scale_percent,
+            125,
+            "an unmodified JSON draft follows form changes"
+        );
+    }
+
+    #[test]
     fn settings_keyboard_shortcuts_command_opens_its_local_editor() {
         let mut harness = settings_harness(SettingsWindow::default());
         let shortcut = harness
@@ -602,6 +686,7 @@ impl SettingsWindow {
         self.close_requested = true;
     }
     pub(super) fn request_search_focus(&mut self) {
+        self.ui.json_mode = false;
         self.ui.focus_search = true;
     }
     pub(super) fn has_actions(&self) -> bool {
@@ -805,6 +890,7 @@ impl SettingsWindow {
         let mut owner_changed = false;
         let mut focus_search = false;
         let mut minimize = false;
+        let mut fullscreen = false;
         let mut capture_ui = false;
         context.input_mut(|input| {
             input.events.retain(|event| {
@@ -833,6 +919,7 @@ impl SettingsWindow {
                         owner_changed = true;
                     }
                     Some(ShortcutAction::Minimize) => minimize = true,
+                    Some(ShortcutAction::ToggleFullscreen) => fullscreen = true,
                     Some(ShortcutAction::CaptureUi) => capture_ui = true,
                     _ => {}
                 }
@@ -850,6 +937,12 @@ impl SettingsWindow {
         }
         if minimize {
             context.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        }
+        if fullscreen {
+            let active = context
+                .input(|input| input.viewport().fullscreen)
+                .unwrap_or(false);
+            context.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!active));
         }
         if capture_ui {
             captures.queue_for_viewport(context.viewport_id());
@@ -928,10 +1021,6 @@ impl SettingsWindow {
         let settings_tooltip_id = settings_hover_tooltip_id(ui.ctx());
         ui.ctx()
             .data_mut(|data| data.remove::<HoverTooltipOverlay>(settings_tooltip_id));
-        if ui.ctx().input(|input| input.viewport().fullscreen) == Some(true) {
-            ui.ctx()
-                .send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
-        }
         ui.painter()
             .rect_filled(ui.max_rect(), 0.0, ui.visuals().panel_fill);
         let title_rect = Rect::from_min_size(
@@ -955,11 +1044,44 @@ impl SettingsWindow {
                     theme::reserve_window_controls(ui);
                     crate::window_logo::show(ui, captures);
                     ui.label(RichText::new("Settings").strong());
-                    #[cfg(not(target_os = "macos"))]
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if icon_button(ui, UiIcon::Close, "Close Settings").clicked() {
-                            *close = true;
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            if icon_button(ui, UiIcon::Close, "Close Settings").clicked() {
+                                *close = true;
+                            }
+                            if icon_button(ui, UiIcon::Maximize, "Maximize Settings").clicked() {
+                                let maximized = ui
+                                    .ctx()
+                                    .input(|input| input.viewport().maximized)
+                                    .unwrap_or(false);
+                                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(
+                                    !maximized,
+                                ));
+                            }
                         }
+                        let label = if self.ui.json_mode {
+                            "Show settings form"
+                        } else {
+                            "Edit settings as JSON"
+                        };
+                        let json = ui.add(
+                            egui::Button::new(RichText::new("{}").monospace())
+                                .selected(self.ui.json_mode),
+                        );
+                        json.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::WidgetType::Button,
+                                json.enabled(),
+                                label,
+                            )
+                        });
+                        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                        crate::desktop_test::observe("settings.json.mode", &json);
+                        if json.clicked() {
+                            self.ui.json_mode = !self.ui.json_mode;
+                        }
+                        json.on_hover_text(label);
                     });
                 });
             });

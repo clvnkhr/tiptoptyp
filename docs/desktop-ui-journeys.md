@@ -173,3 +173,17 @@ retain the separate visual evidence required by `AGENTS.md`.
 Extend this suite one demonstrated regression at a time: reproduce the old
 failure, exercise the real input path, then assert the visible outcome and its
 stability. A broad list of scenarios with no native execution is not coverage.
+
+The Find journey also resizes the focused native popup twice through accessibility
+and minimizes it, verifying that its document owner receives these operations.
+This exercises the same macOS window attributes used by external window managers;
+it does not execute a user's personal Hammerspoon configuration. Settings remains
+an independently managed window. The Settings search journey now types invalid
+JSON, verifies Save is disabled, reloads, saves a valid edit, and
+uses Cmd+F to return to its search field without opening document Find.
+
+`python3 scripts/test-desktop-ui.py --journey rectangle` is an optional local
+integration check, excluded from `all`. It requires a running Rectangle and reads
+its existing `almostMaximize` and `bottomLeftSixth` bindings from macOS preferences.
+It sends those real shortcuts with Find focused and checks that the document
+resizes while Find retains keyboard focus. It does not edit Rectangle preferences.

@@ -1431,7 +1431,8 @@ fn tex_edit_keeps_previous_diagnostics_until_new_results_arrive() {
     app.snapshot_scene = None;
     app.lifecycle = DocumentLifecycle::Active;
     app.settings.tex.build_enabled = false;
-    app.settings.tex.texlab_enabled = false;
+    app.settings.tex.texlab_enabled = true;
+    app.tex_tools.texlab.program = root.path().join("unavailable-texlab");
     app.settings.tex.lint = false;
     app.settings.tex.formatter = crate::tex::settings::Formatter::Disabled;
     let path = root.path().join("main.tex");
@@ -1463,6 +1464,20 @@ fn tex_edit_keeps_previous_diagnostics_until_new_results_arrive() {
             .editor_diagnostics
             .iter()
             .any(|diagnostic| diagnostic.message == "Previous diagnostic")
+    );
+    app.settings.tex.texlab_configuration["texlab"]["hover"]["symbols"] =
+        serde_json::json!("unicode");
+    app.sync_tex(&context);
+    assert_eq!(
+        app.tex_diagnostics[0].len(),
+        1,
+        "reconfiguration retains stale results"
+    );
+    app.settings.tex.diagnostics = false;
+    app.sync_tex(&context);
+    assert!(
+        app.tex_diagnostics[0].is_empty(),
+        "explicitly disabling diagnostics retires them"
     );
 }
 

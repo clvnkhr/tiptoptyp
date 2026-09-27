@@ -122,7 +122,7 @@ impl Session {
                 "general":{"positionEncodings":["utf-16"]},
                 "workspace":{"configuration":true,"workspaceFolders":true},
                 "textDocument":{"publishDiagnostics":{"versionSupport":true},"hover":{"contentFormat":["markdown","plaintext"]},"completion":{"completionItem":{"snippetSupport":true,"documentationFormat":["markdown","plaintext"]}}}
-            },"initializationOptions":configuration(provider)
+            },"initializationOptions":configuration(provider, &snapshot.settings)
         }}))?;
         Ok(session)
     }
@@ -235,9 +235,11 @@ impl Session {
             if let Some(method) = message["method"].as_str() {
                 if let Some(id) = message.get("id") {
                     let result = match method {
-                        "workspace/configuration" => {
-                            configuration_response(self.provider, &message["params"])
-                        }
+                        "workspace/configuration" => configuration_response(
+                            self.provider,
+                            &self.snapshot.settings,
+                            &message["params"],
+                        ),
                         "workspace/workspaceFolders" => {
                             json!([{"uri":url::Url::from_directory_path(&self.snapshot.root).ok().map(|u| u.to_string()),"name":"TeX workspace"}])
                         }
@@ -298,7 +300,7 @@ impl Session {
                 self.notify("initialized", json!({}))?;
                 self.notify(
                     "workspace/didChangeConfiguration",
-                    json!({"settings":configuration(self.provider)}),
+                    json!({"settings":configuration(self.provider, &self.snapshot.settings)}),
                 )?;
                 self.sync(&self.snapshot.clone())?;
                 events.push(Event::Ready {
@@ -372,16 +374,18 @@ impl Drop for Session {
         }
     }
 }
-fn configuration(provider: Provider) -> Value {
+fn configuration(provider: Provider, settings: &crate::tex::settings::TexSettings) -> Value {
     match provider {
-        Provider::Texlab => {
-            json!({"texlab": {"build":{"onSave":false,"forwardSearchAfter":false},"chktex":{"onOpenAndSave":false,"onEdit":false},"latexFormatter":"none","bibtexFormatter":"none","hover":{"symbols":"glyph"}}})
-        }
-        Provider::Badness => json!({}),
+        Provider::Texlab => settings.texlab_configuration.clone(),
+        Provider::Badness => settings.badness_configuration.clone(),
     }
 }
-fn configuration_response(provider: Provider, params: &Value) -> Value {
-    let settings = configuration(provider);
+fn configuration_response(
+    provider: Provider,
+    settings: &crate::tex::settings::TexSettings,
+    params: &Value,
+) -> Value {
+    let settings = configuration(provider, settings);
     let items = params["items"]
         .as_array()
         .map(|items| {
@@ -406,14 +410,43 @@ fn configuration_response(provider: Provider, params: &Value) -> Value {
 mod tests {
     use super::*;
     #[test]
+    fn user_configuration_overrides_reach_whole_and_section_requests() {
+        let settings = crate::tex::settings::TexSettings {
+            texlab_configuration: json!({"texlab":{"build":{"onSave":true}}}),
+            badness_configuration: json!({"lint":{"enabled":false}}),
+            ..Default::default()
+        };
+        assert_eq!(
+            configuration(Provider::Texlab, &settings),
+            settings.texlab_configuration
+        );
+        assert_eq!(
+            configuration_response(
+                Provider::Texlab,
+                &settings,
+                &json!({"items":[{"section":"texlab.build.onSave"},{"section":"missing"}]})
+            ),
+            json!([true, null])
+        );
+        assert_eq!(
+            configuration_response(Provider::Badness, &settings, &json!({"items":[{}]})),
+            json!([settings.badness_configuration])
+        );
+    }
+
+    #[test]
     fn texlab_cannot_duplicate_build_lint_or_format_roles() {
-        let config = configuration(Provider::Texlab);
+        let config = configuration(
+            Provider::Texlab,
+            &crate::tex::settings::TexSettings::default(),
+        );
         assert_eq!(config["texlab"]["build"]["onSave"], false);
         assert_eq!(config["texlab"]["chktex"]["onEdit"], false);
         assert_eq!(config["texlab"]["latexFormatter"], "none");
         assert_eq!(
             configuration_response(
                 Provider::Texlab,
+                &crate::tex::settings::TexSettings::default(),
                 &json!({"items":[{"section":"texlab"},{"section":"texlab.build.onSave"}]})
             )[1],
             false

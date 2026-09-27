@@ -40,6 +40,7 @@ encoding_rs = "0.8.41"
 harper-core = "2.11.0"
 harper-typst = "2.11.0"
 harper-tex = "2.11.0"
+serde_path_to_error = "0.1"
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.28.0", features = ["signal"] }

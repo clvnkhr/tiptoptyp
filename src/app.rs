@@ -968,7 +968,7 @@ impl SettingsTarget {
             Self::AutoPairDelimiters => "Auto-close delimiters",
             Self::Indentation => "Tab inserts",
             Self::AsciiPunctuation => "Use ASCII punctuation when typing",
-            Self::EnglishGrammar => "Offline British English grammar (Typst / TeX)",
+            Self::EnglishGrammar => "Offline English spelling and grammar (Typst / TeX)",
             Self::UnicodeWarnings => "Flag invisible and confusable characters",
             Self::MitexDollars => "Auto-enable miTeX in compatible Typst documents",
             Self::GitDiffStyle => "Git diff style",
@@ -1065,7 +1065,7 @@ impl SettingsTarget {
             Self::LineNumbers => "editor gutter",
             Self::StickyContextRows => "editor headings scopes sections breadcrumbs",
             Self::EnglishGrammar => {
-                "writing proofreading spelling grammar english harper offline tex typst"
+                "writing proofreading spelling grammar english harper offline tex typst language dialect british american UK US auto"
             }
             Self::UnicodeWarnings => {
                 "unicode invisible characters confusable zero-width cjk lookalikes"
@@ -1102,7 +1102,7 @@ impl SettingsTarget {
             Self::HoverDelay => "editor tooltip wait milliseconds timing",
             Self::TypstCompiler => "tools binary custom bundled path",
             Self::TexServices => {
-                "TeX tools: Tectonic, pdfLaTeX, XeLaTeX, LuaLaTeX, MacTeX, SyncTeX, TexLab, Badness, tex-fmt; build, completion, hover, diagnostics, formatting, linting"
+                "TeX tools: Tectonic, pdfLaTeX, XeLaTeX, LuaLaTeX, MacTeX, SyncTeX, TexLab, Badness, tex-fmt; build, completion, hover, diagnostics, formatting, linting, ignored codes, suppress warnings, configuration JSON"
             }
             Self::TinymistLanguageServer => "tools binary lsp custom bundled path",
             Self::RefreshBinaryStatus => "tools rescan reload",
@@ -2390,13 +2390,6 @@ impl EditorApp {
         self.notice = None;
         self.clear_editor_hover();
         self.editor_completion = None;
-        if self.document().config().is_some() {
-            // Mapped positions belong to the previous view revision.
-            self.preview.diagnostics.clear();
-            self.preview.editor_diagnostics.clear();
-            self.preview.tinymist_diagnostics.clear();
-            self.mark_diagnostics_changed();
-        }
         if LanguageSupport::for_document(self.document().kind())
             .build
             .is_some()
@@ -3107,13 +3100,14 @@ impl EditorApp {
             self.adjust_ui_scale(delta, context);
         }
 
+        let management_target = crate::window_host::management_target(context, shortcut_viewport);
         if shortcuts
             .egui(ShortcutAction::Minimize)
             .is_some_and(|shortcut| {
                 context.input_mut_for(shortcut_viewport, |input| input.consume_shortcut(&shortcut))
             })
         {
-            context.send_viewport_cmd_to(shortcut_viewport, egui::ViewportCommand::Minimized(true));
+            context.send_viewport_cmd_to(management_target, egui::ViewportCommand::Minimized(true));
         }
         if shortcuts
             .egui(ShortcutAction::ToggleFullscreen)
@@ -3122,10 +3116,10 @@ impl EditorApp {
             })
         {
             let fullscreen = context
-                .input_for(shortcut_viewport, |input| input.viewport().fullscreen)
+                .input_for(management_target, |input| input.viewport().fullscreen)
                 .unwrap_or(false);
             context.send_viewport_cmd_to(
-                shortcut_viewport,
+                management_target,
                 egui::ViewportCommand::Fullscreen(!fullscreen),
             );
         }
@@ -3722,8 +3716,13 @@ impl EditorApp {
 
         if refresh_tools || changes.tex {
             self.tex_tools = crate::tex::tools::TexTools::resolve(&request.tex);
-            self.tex_service.stop();
-            self.tex_diagnostics = Default::default();
+            if refresh_tools && let Some(mut snapshot) = self.tex_service.identity().cloned() {
+                snapshot.settings = request.tex.clone();
+                snapshot.tools = self.tex_tools.clone();
+                self.tex_service.stop();
+                self.tex_service
+                    .synchronize(snapshot, crate::worker::RepaintTarget::current(context));
+            }
             if self.preview_document_kind() == DocumentKind::Tex {
                 let _ = self.compiler.pause(self.document().revision());
                 self.preview.content.invalidate();
@@ -5334,8 +5333,7 @@ impl EditorApp {
             has_webview,
         );
         self.preview.connection.suspend(retain_preview_surface);
-        self.preview.tinymist_diagnostics.clear();
-        self.update_tex_diagnostics();
+        // Restarting a provider leaves its last published diagnostics visible.
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             self.webview_reload_pending = false;

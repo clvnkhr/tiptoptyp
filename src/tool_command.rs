@@ -22,6 +22,39 @@ impl Default for CommandCustomization {
     }
 }
 impl CommandCustomization {
+    /// Validate syntax before saving. Argument-index bounds depend on the operation.
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        let tokens = shlex::split(&self.arguments).ok_or("Arguments contain an unmatched quote")?;
+        for token in tokens {
+            if token.contains('\0') {
+                return Err("Arguments cannot contain NUL".into());
+            }
+            if token.starts_with("{arg:")
+                && token
+                    .strip_prefix("{arg:")
+                    .and_then(|s| s.strip_suffix('}'))
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .is_none()
+            {
+                return Err("Use {arg:N} with a non-negative argument index".into());
+            }
+        }
+        let env: BTreeMap<String, String> = serde_json::from_str(&self.environment)
+            .map_err(|e| format!("Environment must be a JSON object of strings: {e}"))?;
+        if env
+            .iter()
+            .any(|(k, v)| k.is_empty() || k.contains(['=', '\0']) || v.contains('\0'))
+        {
+            return Err("Invalid environment variable name or value".into());
+        }
+        if !self.directory.is_empty()
+            && (!std::path::Path::new(&self.directory).is_absolute()
+                || !std::path::Path::new(&self.directory).is_dir())
+        {
+            return Err("Working directory must be blank or an existing absolute directory".into());
+        }
+        Ok(())
+    }
     /// Call after constructing default argv/env/cwd, before attaching stdio.
     pub(crate) fn apply(&self, command: &mut Command) -> std::io::Result<()> {
         let invalid = |message: &str| {
@@ -82,6 +115,44 @@ impl CommandCustomization {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn command_drafts_validate_without_executing() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(CommandCustomization::default().validate().is_ok());
+        for draft in [
+            CommandCustomization {
+                arguments: "'unterminated".into(),
+                ..Default::default()
+            },
+            CommandCustomization {
+                arguments: "{arg:-1}".into(),
+                ..Default::default()
+            },
+            CommandCustomization {
+                environment: r#"{"RUST_LOG":42}"#.into(),
+                ..Default::default()
+            },
+            CommandCustomization {
+                environment: r#"{"bad=name":"x"}"#.into(),
+                ..Default::default()
+            },
+            CommandCustomization {
+                directory: "~/papers".into(),
+                ..Default::default()
+            },
+        ] {
+            assert!(draft.validate().is_err(), "{draft:?}");
+        }
+        assert!(
+            CommandCustomization {
+                directory: directory.path().display().to_string(),
+                ..Default::default()
+            }
+            .validate()
+            .is_ok()
+        );
+    }
+
     #[test]
     fn quoted_flags_and_shell_syntax_are_literal() {
         let mut cmd = Command::new("typst");

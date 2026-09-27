@@ -25,13 +25,10 @@ impl EditorApp {
         }) {
             return;
         }
-        let same_document = self.tex_service.identity().is_some_and(|s| {
-            s.key.owner == key.owner
-                && s.key.epoch == key.epoch
-                && s.root == root
-                && s.settings == self.settings.tex
-                && s.tools == self.tex_tools
-        });
+        let same_document = self
+            .tex_service
+            .identity()
+            .is_some_and(|s| crate::diagnostics::same_document(s.key, key));
         let path = self.document().path().clone().unwrap_or_else(|| {
             root.join(".tiptoptyp")
                 .join(format!("untitled-{:?}-{}.tex", key.owner, key.epoch))
@@ -40,10 +37,26 @@ impl EditorApp {
             return;
         };
         // A new revision makes existing results stale, but they remain useful
-        // until a service supplies a replacement. Only a document or settings
-        // transition invalidates their ownership.
+        // until a service supplies a replacement. Changing documents or explicitly
+        // disabling a provider retires its results.
         if !same_document {
             self.tex_diagnostics = Default::default();
+            self.update_tex_diagnostics();
+        }
+        let mut retired = false;
+        for (index, enabled) in [
+            self.settings.tex.texlab_enabled && self.settings.tex.diagnostics,
+            self.settings.tex.lint,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if !enabled && !self.tex_diagnostics[index].is_empty() {
+                self.tex_diagnostics[index].clear();
+                retired = true;
+            }
+        }
+        if retired {
             self.update_tex_diagnostics();
         }
         self.tex_service.synchronize(
@@ -132,8 +145,8 @@ impl EditorApp {
                         self.format_request_key = None;
                         self.activity.format_error = Some(message.clone());
                     }
-                    self.tex_diagnostics[provider_index(provider)].clear();
-                    self.update_tex_diagnostics();
+                    // A provider failure is not a successful empty diagnostic response.
+                    // Keep its last results while the activity panel reports the failure.
                     self.notice = Some(Notice {
                         message,
                         kind: NoticeKind::Error,

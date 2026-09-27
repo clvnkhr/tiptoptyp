@@ -1,5 +1,5 @@
 #set page(margin: 1in)
-#set text(lang: "uk", font: "NonsensicalFontName")
+#set text(lang: "en", region: "gb", font: "NonsensicalFontName")
 
 // Ordinary prose: these should be reported by Harper.
 = Harper Typst boundary fixture
@@ -16,7 +16,7 @@ $
 // Named technical arguments and strings should be protected.
 #let technical_fn(name, value: "NonsensicalTechnicalToken") = name
 #technical_fn("NonsensicalArgumentToken", value: "NonsensicalValueToken")
-#set text(lang: "uk", font: "AnotherTechnicalFontName")
+#set text(lang: "en", region: "gb", font: "AnotherTechnicalFontName")
 
 // Text-bearing arguments remain prose and should be checked.
 #text("This sentnce is inside a text function.")
