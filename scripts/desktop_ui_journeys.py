@@ -297,6 +297,30 @@ class EditorJourneys:
         self.click("find.close")
         self.wait("Find still closes normally after Rectangle commands", lambda d: not d["find_visible"])
 
+    def drawing(self):
+        count = self.scratch()
+        if not self.snapshot()["document"]["explorer_visible"]:
+            self.key(18)
+        self.click("explorer.maximize.Draw symbol")
+        self.wait("drawing panel maximized", lambda d: d["explorer_maximized"] == "Draw symbol")
+        self.wait_target("drawing.canvas")
+        target = self.snapshot()["targets"]["drawing.canvas"]
+        # Three genuine pen strokes form an A; no fixture state injection.
+        x,y = target["x"],target["y"]
+        for a,b in [((-55,70),(0,-70)), ((0,-70),(55,70)), ((-35,25),(35,25))]:
+            self.native("drag", x+a[0], y+a[1], x+b[0], y+b[1])
+        state = self.wait("drawing recognized", lambda d: len(d["drawing"]["strokes"]) == 3 and not d["drawing"]["busy"] and any(p["detexify"] for p in d["drawing"]["predictions"]), timeout=30)
+        strokes = state["document"]["drawing"]["strokes"]
+        self.native("resize-focused", 1100, 700)
+        old_size = state["document"]["native_size"]
+        self.wait("drawing survives resize", lambda d: d["native_size"] != old_size and d["drawing"]["strokes"] == strokes)
+        self.wait_target("drawing.canvas")
+        prediction = next(p for p in self.snapshot()["document"]["drawing"]["predictions"] if p["detexify"] and p["tex"] == "\\mathcal{A}")
+        self.click("drawing.prediction." + str(prediction["index"]))
+        self.source_is(prediction["typst"])
+        self.click("explorer.maximize.Draw symbol")
+        self.close_scratch(count)
+
     def snippets(self):
         import json
         self.settings()

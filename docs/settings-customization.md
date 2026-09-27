@@ -83,3 +83,9 @@ Type the prefix and accept its completion. Numbered fields are selected for repl
 ## Draw symbol
 
 Open Explorer → Draw symbol, draw with the pointer, then choose a result. Recognition is offline and runs after a stroke ends. Clear removes the drawing and results. The bundled Detypify model covers 411 symbol classes; TeX documents display available TeX aliases (390 classes), while Typst displays symbol names. Selecting a Typst result inserts its Unicode character; TeX inserts its command when available. Some TeX commands require packages in the document.
+
+The drawing canvas fills the panel; resizing preserves its ink and stroke width.
+Predictions appear as non-selectable text over subdued ink; click to insert.
+Detexify's full accepted sample set supplies additional LaTeX commands, including
+calligraphic letters (`\mathcal{A}` / Typst `cal(A)`). Unknown Typst equivalents
+are shown as TeX-only. See [recognition coverage](../assets/handwriting/README.md).

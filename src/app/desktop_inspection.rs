@@ -87,7 +87,7 @@ impl EditorApp {
         let find_viewport = scoped_child_viewport_id(context, find_bar::VIEWPORT_SALT);
         let controls_viewport = scoped_child_viewport_id(context, "preview-controls");
         let hover_tooltip_id = native_hover_tooltip_id(context);
-        let interaction = serde_json::json!({
+        let mut interaction = serde_json::json!({
             "source_fingerprint": crate::desktop_test::fingerprint(self.document().source()),
             "cursor": cursor,
             "pointer": context.input(|input| input.pointer.hover_pos()).map(|position| [position.x, position.y]),
@@ -130,6 +130,7 @@ impl EditorApp {
             "completion_count": self.editor_completion.as_ref().map_or(0, |completion| completion.items.len()),
             "completion_selected": self.editor_completion.as_ref().map(|completion| completion.selected),
         });
+        interaction["drawing"] = self.symbol_drawing.inspection();
         observation
             .as_object_mut()
             .unwrap()

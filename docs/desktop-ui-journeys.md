@@ -194,3 +194,10 @@ The `snippets` journey configures a custom TeX environment snippet through Setti
 invokes completion, types into its selected name, and checks the mirrored closing
 environment plus undo/redo. Run it with `scripts/test-desktop-ui.py --journey snippets`.
 The native driver rejects a locked desktop before attempting input.
+
+### Drawing recognition
+
+`--journey drawing` maximizes Draw symbol, draws three native pointer strokes,
+waits for real Detexify predictions, resizes the window, checks the retained ink,
+and clicks a prediction to insert into a scratch document. No model result or
+canvas state is injected into the app.

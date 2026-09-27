@@ -29,6 +29,7 @@ mod font_preview;
 mod generic_highlight;
 mod git;
 mod handwriting;
+mod handwriting_detexify;
 mod highlight;
 mod image_residency;
 mod index_jobs;

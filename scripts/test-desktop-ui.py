@@ -404,7 +404,7 @@ class Journey(EditorJourneys):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--journey", choices=["all", "snippets", "panels", "find", "rectangle", "empty", "focus", "preview", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "folding", "closing", "controls", "settings_search", "background"], default="all")
+    parser.add_argument("--journey", choices=["all", "drawing", "snippets", "panels", "find", "rectangle", "empty", "focus", "preview", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "folding", "closing", "controls", "settings_search", "background"], default="all")
     parser.add_argument("--review-preview", action="store_true", help="pause at each dark/comfy renderer for independent on-screen review; not an automated visual pass")
     parser.add_argument("--capture-review", action="store_true", help="capture affected settings/controls framebuffers for separate visual inspection")
     parser.add_argument("--trace-preview", action="store_true", help="retain native preview geometry traces")
@@ -562,7 +562,7 @@ def main():
                         return
                     if args.capture_review:
                         journey.capture_viewport("main")
-                    for name in (["panels", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "folding", "closing", "focus", "settings_search", "background", "preview", "controls", "empty", "snippets"] if args.journey == "all" else [args.journey]):
+                    for name in (["panels", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "folding", "closing", "focus", "settings_search", "background", "preview", "controls", "empty", "snippets", "drawing"] if args.journey == "all" else [args.journey]):
                         journey.record("journey.start", name=name)
                         getattr(journey, name)()
                         result["journeys"].append(name)

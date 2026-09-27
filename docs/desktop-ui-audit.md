@@ -238,3 +238,38 @@ The release executable is 52,946,272 bytes on macOS ARM64. The previously
 available release was 33,297,552 bytes (a different dirty revision); the roughly
 19.6 MB increase is indicative, not a controlled size benchmark. The embedded
 model plus Rust ONNX runtime are the material new cost.
+
+### 2026-09-27 drawing panel and full Detexify coverage
+
+The original model has no calligraphic Latin classes. The first calligraphy-only
+prototype found 122/128 held-out letters in its top four; it was expanded at the
+user's request to all 39,494 accepted Detexify samples and 1,123 definitions.
+The complete dataset is bundled, with a bounded two-stage matcher and a separate
+calligraphic shortlist. There is no background download or extra dependency.
+
+The canvas now fills its section. An independent logical paper preserves ink
+through wide/tall resizes, while displayed strokes stay four logical pixels wide.
+Predictions are non-selectable text painted over subdued ink. A failing semantic
+click reproduction caught the underlying drag surface clearing predictions on
+mouse-down; delayed drag recognition fixes that, and clicking still inserts.
+
+Native `drawing` passed in `run-fmmji4fy` after the user unlocked macOS: genuine
+three-stroke input, live predictions, actual native size change with identical
+retained stroke coordinates, and source insertion. `run-vl18w6zg` additionally
+selected the live `\mathcal{A}` prediction and verified Typst `cal(A)` insertion.
+No fixture or inference result was injected. These checks are separate from
+framebuffer captures and held-out classifier accuracy.
+
+Final validation: 1,327 regular Rust tests, 15 xtask tests, strict all-target
+Clippy (also with the desktop UI feature), formatting, and 10 Python harness
+contracts pass. The final native run `run-p8wpw4o_` passes with the full dataset,
+separate calligraphic shortlist and point-stroke support. The complete 25-image
+release gallery was regenerated and validated. Fresh light/dark framebuffers
+`1790534349181-0001-main-draw-symbol.png` and
+`1790534353575-0001-main-draw-symbol.png` under
+`.tiptoptyp/screenshots/drawing-final` were inspected for layout, contrast and
+clipping; these are framebuffer evidence, not native composition evidence.
+
+The optimized held-out evaluation finds 342/421 expected commands in the full
+set's top eight and 122/128 calligraphic letters in the dedicated top four.
+See the dataset README for the non-writer-disjoint split and reproduction.

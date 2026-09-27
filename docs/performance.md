@@ -402,3 +402,25 @@ text. Scrolling *inside* a native tooltip neither dismisses it nor repaints the
 editor. Pointer movement away from the source-to-popup route, leaving the popup,
 Escape, and defocus also dismiss it. Hovers retain their configured delay but
 have no fade animation or fade setting.
+
+## Offline handwriting expansion (27 September 2026)
+
+On macOS 14.6.1, Apple M2 Max, rustc 1.98.1, the same release test executable
+compared Detypify alone with Detypify plus full Detexify and its calligraphic
+shortlist. The fixed input was the two-stroke dagger from the drawing fixture;
+no viewport or theme is involved in this worker-only measurement. The isolated
+probe ran after builds finished, with one test thread. Initial cold calls took
+44.73 ms for Detypify and another 12.52 ms to load/run Detexify. After those warmups,
+20 calls each averaged 5.99 ms (baseline) and 7.96 ms (combined), about 1.97 ms extra.
+These numbers do not measure end-to-end GUI latency or guarantee other hardware.
+
+Run `cargo test --release --bin tiptoptyp worker_cost_probe -- --ignored --nocapture
+--test-threads=1` to reproduce. Logs, fixture metadata and asset hashes are retained
+in `.tiptoptyp/profiles/handwriting-full`. All inference stays on the existing
+background worker; only one job per window runs, no idle work is added, and
+inputs are capped at 4,096 points. The coarse pass uses every accepted sample;
+the general fine pass is bounded to 64 classes × 3 templates. Calligraphic
+ranking uses the fixed calligraphic subset separately.
+
+The release executable grew from 52,946,272 to 58,296,272 bytes (+5.35 MB), mostly
+from the embedded quantized sample set. No new runtime dependency was added.

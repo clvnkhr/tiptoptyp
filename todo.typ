@@ -214,3 +214,9 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 //     header; minimize uses a minus. Both native viewer drag journeys passed.
 // Native snippet typing remains unverified: macOS became locked before that
 // journey; deterministic editor typing/undo/redo coverage passes.
+
+// Drawing follow-up (2026-09-27): NEW 19 now also includes all accepted
+// Detexify samples, including calligraphic letters. The canvas follows panel
+// size, keeps its ink across resizing, and overlays non-selectable predictions
+// over thicker subdued strokes. Native drawing/resize/cal(A) insertion passed.
+// Dataset provenance, output mappings and limitations: assets/handwriting/README.md.
