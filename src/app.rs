@@ -2829,7 +2829,7 @@ impl EditorApp {
                 .settings_window
                 .lock()
                 .unwrap()
-                .route_owner_shortcuts(settings_keys, &self.settings.effective_shortcuts());
+                .route_owner_shortcuts(settings_keys);
             context.request_repaint_of(viewport);
             // Preserve the existing owner routing for commands that belong to
             // the document or another child viewport.

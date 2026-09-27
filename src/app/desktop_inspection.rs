@@ -39,6 +39,13 @@ impl EditorApp {
         };
         let preview = self.preview_status_snapshot();
         let palette = self.preview_palette(context, self.preview.dark);
+        let (settings_query_fingerprint, settings_text_input_focused) = {
+            let settings_window = self.settings_window.lock().unwrap();
+            (
+                crate::desktop_test::fingerprint(&settings_window.ui.query),
+                settings_window.text_input_focused,
+            )
+        };
         let mut observation = serde_json::json!({
             "viewport": format!("{:?}", context.viewport_id()),
             "frame": context.cumulative_frame_nr(),
@@ -70,6 +77,8 @@ impl EditorApp {
             "find_focused": self.find_bar.child_focused,
             "replace_visible": self.find_bar.replace_visible,
             "settings_visible": self.settings_visible,
+            "settings_query_fingerprint": settings_query_fingerprint,
+            "settings_text_input_focused": settings_text_input_focused,
         });
         let find_viewport = scoped_child_viewport_id(context, find_bar::VIEWPORT_SALT);
         let controls_viewport = scoped_child_viewport_id(context, "preview-controls");

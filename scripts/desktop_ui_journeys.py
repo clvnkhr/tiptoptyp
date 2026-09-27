@@ -455,13 +455,21 @@ class EditorJourneys:
 
     def settings_search(self):
         self.settings()
+        self.key(3)  # Cmd+F focuses the Settings search, not document Find.
+        self.wait("Settings search receives its shortcut", lambda d: d["settings_text_input_focused"] and not d["find_visible"])
+        self.native("text", "backend")
+        self.wait("Settings search receives typed text", lambda d: d["settings_query_fingerprint"] == fingerprint("backend"))
+        self.key(3)
+        self.wait("repeated Cmd+F keeps Settings search focused", lambda d: d["settings_text_input_focused"] and not d["find_visible"])
         for query, label in (("backend", "Typst preview backend"), ("appearance", "Appearance")):
             self.setting_section(query, label)
             self.wait("search destination highlighted", lambda d: d["settings_highlight"] == label)
             if self.capture_review and label == "Appearance":
                 self.capture_viewport("settings")
         self.wait("highlight expires", lambda d: d["settings_highlight"] is None, timeout=5)
-        self.close_settings()
+        self.key(13)  # Cmd+W closes Settings, not the document tab.
+        self.wait("Cmd+W closes Settings but preserves the document", lambda d: not d["settings_visible"] and d["tabs"] == 1)
+        self.native_wait("document regains focus after Settings shortcut", lambda ws: not any("Settings" in w["AXTitle"] for w in ws) and any(w.get("AXFocused") for w in ws))
 
     def background(self):
         self.ensure_typesetting_tab()

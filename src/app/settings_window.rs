@@ -81,23 +81,9 @@ mod tests {
 
     #[test]
     fn settings_search_native_edit_commands_and_preference_clicks_survive_deferred_delivery() {
-        let context = egui::Context::default();
         let mut window = SettingsWindow::default();
-        window.synchronize(input(&context), &FontCatalog::default());
         window.ui.query = "theme".into();
-        let captures = CaptureController::disabled_for_tests();
-        let mut harness = Harness::builder()
-            .with_size(Vec2::new(700.0, 3000.0))
-            .build_ui_state(
-                move |ui, window: &mut SettingsWindow| {
-                    window.prepare_keyboard(ui.ctx());
-                    let actions = window.paint(ui, &captures, &mut false);
-                    window.text_input_focused = ui.ctx().text_edit_focused();
-                    window.accept_actions(actions);
-                    window.collect_owner_shortcuts(ui.ctx());
-                },
-                window,
-            );
+        let mut harness = settings_harness(window);
         harness.run();
         harness
             .get(by().role(egui::accesskit::Role::TextInput).value("theme"))
@@ -201,9 +187,42 @@ mod tests {
         assert!(close, "Cmd+W should close the Settings panel");
     }
 
+    #[test]
+    fn settings_uses_the_binding_that_captured_a_child_shortcut() {
+        let context = egui::Context::default();
+        let mut snapshot = input(&context);
+        snapshot.settings.shortcut_overrides.set(
+            ShortcutAction::CloseTab,
+            Some(crate::shortcuts::ShortcutChord::primary(egui::Key::K)),
+        );
+        let mut window = SettingsWindow::default();
+        window.synchronize(snapshot, &FontCatalog::default());
+        let mut harness = settings_harness(window);
+        harness.run();
+        let shortcut = harness
+            .state()
+            .input
+            .as_ref()
+            .unwrap()
+            .settings
+            .effective_shortcuts()
+            .egui(ShortcutAction::CloseTab)
+            .unwrap();
+        harness.key_press_modifiers(shortcut.modifiers, shortcut.logical_key);
+        harness.run();
+        let mut settings = AppSettings::default();
+        let (_, close) = harness.state_mut().take_actions(&mut settings);
+        assert!(
+            close,
+            "Settings should close on its effective custom binding"
+        );
+    }
+
     fn settings_harness(mut window: SettingsWindow) -> Harness<'static, SettingsWindow> {
         let context = egui::Context::default();
-        window.synchronize(input(&context), &FontCatalog::default());
+        if window.input.is_none() {
+            window.synchronize(input(&context), &FontCatalog::default());
+        }
         let captures = CaptureController::disabled_for_tests();
         Harness::builder()
             .with_size(Vec2::new(700.0, 3000.0))
@@ -218,10 +237,7 @@ mod tests {
                     window.accept_actions(actions);
                     window.collect_owner_shortcuts(ui.ctx());
                     let owner_keys = window.take_owner_keys();
-                    window.route_owner_shortcuts(
-                        owner_keys,
-                        &AppSettings::default().effective_shortcuts(),
-                    );
+                    window.route_owner_shortcuts(owner_keys);
                 },
                 window,
             )
@@ -484,7 +500,7 @@ pub(super) struct SettingsWindow {
     actions: Vec<SettingsAction>,
     close_requested: bool,
     focused: bool,
-    text_input_focused: bool,
+    pub(super) text_input_focused: bool,
     menu_commands: Vec<AppCommand>,
     owner_keys: Vec<egui::Event>,
     paste_deadline: Option<f64>,
@@ -513,11 +529,16 @@ impl SettingsWindow {
     /// Handle shortcuts captured by the native Settings viewport. Commands
     /// that belong to Settings are applied here; everything else is returned
     /// to the owning document viewport for its normal router.
-    pub(super) fn route_owner_shortcuts(
-        &mut self,
-        events: Vec<egui::Event>,
-        shortcuts: &crate::shortcuts::ShortcutBindings,
-    ) -> Vec<egui::Event> {
+    pub(super) fn route_owner_shortcuts(&mut self, events: Vec<egui::Event>) -> Vec<egui::Event> {
+        // Resolve against the same Settings snapshot used when the child
+        // captured these keys. Pending shortcut edits may not have reached
+        // the document owner yet.
+        let shortcuts = self
+            .input
+            .as_ref()
+            .expect("captured Settings shortcut needs its input snapshot")
+            .settings
+            .effective_shortcuts();
         let mut forwarded = Vec::new();
         for event in events {
             let action = match &event {
