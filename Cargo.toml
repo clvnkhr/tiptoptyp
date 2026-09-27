@@ -118,6 +118,7 @@ resources = [
     { src = "assets/fonts/README.md", target = "font-provenance.md" },
     { src = "assets/handwriting/LICENSE", target = "licenses/Detypify-MIT.txt" },
     { src = "assets/handwriting/DETEXIFY-LICENSE", target = "licenses/Detexify-MIT.txt" },
+    { src = "assets/handwriting/HYPERREF-LICENSE", target = "licenses/Hyperref-LPPL.txt" },
     { src = "assets/handwriting/UNICODEIT-LICENSE", target = "licenses/UnicodeIt-LPPL.txt" },
     { src = "assets/handwriting/README.md", target = "handwriting-provenance.md" },
     { src = "toolchain/provenance", target = "toolchain-provenance" },

@@ -183,6 +183,7 @@ fn generate_third_party_notices() -> Result<(), String> {
         root.join("toolchain/licenses/tex-fmt-LICENSE"),
         root.join("assets/handwriting/LICENSE"),
         root.join("assets/handwriting/UNICODEIT-LICENSE"),
+        root.join("assets/handwriting/HYPERREF-LICENSE"),
         root.join("assets/handwriting/DETEXIFY-LICENSE"),
         root.join("assets/fonts/notoemoji/OFL.txt"),
         root.join("assets/fonts/notosanssymbols/OFL.txt"),

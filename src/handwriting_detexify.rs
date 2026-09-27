@@ -266,6 +266,73 @@ mod tests {
         assert!(correct * 100 / total >= 65);
     }
     #[test]
+    fn typst_mappings_cover_script_greek_ipa_and_escaped_punctuation() {
+        for (tex, typst) in [
+            ("\\mathscr{A}", "scr(A)"),
+            ("\\mathds{h}", "bb(h)"),
+            ("\\Updelta", "upright(Delta)"),
+            ("\\textsca", "\"ᴀ\""),
+            ("\\textturnv", "\"ʌ\""),
+            ("\\textdollar", "\"$\""),
+            ("\\textbraceleft", "\"{\""),
+            ("\\ngeqq", "≧\u{338}"),
+            ("\\Aquarius", "♒"),
+        ] {
+            let symbol = labels()
+                .iter()
+                .find(|s| s.tex.as_deref() == Some(tex))
+                .unwrap();
+            assert_eq!(symbol.typst.as_deref(), Some(typst), "{tex}");
+            assert!(!symbol.tex_only, "{tex}");
+        }
+        assert!(labels().iter().filter(|s| s.typst.is_some()).count() >= 1050);
+        for symbol in labels() {
+            assert_eq!(symbol.tex_only, symbol.typst.is_none());
+        }
+    }
+    #[test]
+    fn every_typst_mapping_parses_as_math() {
+        for symbol in labels() {
+            if let Some(expression) = &symbol.typst {
+                let source = format!("$ {expression} $");
+                assert!(
+                    typst_syntax::parse(&source)
+                        .errors_and_warnings()
+                        .0
+                        .is_empty(),
+                    "{}: {source}",
+                    symbol.tex.as_deref().unwrap()
+                );
+            }
+        }
+    }
+    #[test]
+    #[ignore = "requires the Typst CLI; validates every mapped expression against its math library"]
+    fn every_typst_mapping_compiles() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = labels()
+            .iter()
+            .filter_map(|s| {
+                s.typst
+                    .as_ref()
+                    .map(|value| format!("$ {value} $ // {}\n", s.tex.as_deref().unwrap()))
+            })
+            .collect::<String>();
+        let input = directory.path().join("symbols.typ");
+        std::fs::write(&input, source).unwrap();
+        let result = std::process::Command::new("typst")
+            .arg("compile")
+            .arg(&input)
+            .arg(directory.path().join("symbols.pdf"))
+            .output()
+            .expect("Typst CLI must be installed for this test");
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    #[test]
     fn every_sample_has_a_label_and_bounded_coordinates() {
         let bytes = include_bytes!("../assets/handwriting/detexify-samples.bin");
         assert_eq!(bytes.len() % 130, 0);

@@ -333,7 +333,7 @@ impl Drawing {
                                 }),
                         )
                         .on_hover_text(if !tex && symbol.tex_only {
-                            "TeX only: no known Typst equivalent".to_string()
+                            "No verified Typst mapping yet".to_string()
                         } else if let Some(package) = &symbol.package {
                             format!("Click to insert. LaTeX package: {package}")
                         } else {
@@ -450,6 +450,46 @@ mod tests {
                 harness.state().1.as_deref(),
                 Some(if tex { "\\mathcal{A}" } else { "cal(A)" })
             );
+        }
+    }
+    #[test]
+    fn newly_mapped_predictions_are_clickable_in_typst_and_tex() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        let symbols: Vec<Symbol> =
+            serde_json::from_str(include_str!("../assets/handwriting/detexify-symbols.json"))
+                .unwrap();
+        for (command, caption, output) in [
+            ("\\mathscr{A}", "  scr(A)", "scr(A)"),
+            ("\\textturnv", "ʌ  \\textturnv", "\"ʌ\""),
+            ("\\textdollar", "$  \\textdollar", "\"$\""),
+        ] {
+            for tex in [false, true] {
+                let symbol = symbols
+                    .iter()
+                    .find(|s| s.tex.as_deref() == Some(command))
+                    .unwrap()
+                    .clone();
+                let label = if tex {
+                    format!("{}  {command}", symbol.char)
+                } else {
+                    caption.to_owned()
+                };
+                let mut drawing = Drawing::fixture();
+                drawing.results = vec![symbol];
+                let mut harness = Harness::builder().build_ui_state(
+                    |ui, state: &mut (Drawing, Option<String>)| {
+                        state.1 = state.0.show(ui, tex).or(state.1.take());
+                    },
+                    (drawing, None),
+                );
+                harness.run_steps(2);
+                harness.get_by_label(&label).click();
+                harness.run_steps(2);
+                assert_eq!(
+                    harness.state().1.as_deref(),
+                    Some(if tex { command } else { output })
+                );
+            }
         }
     }
     #[test]

@@ -43,21 +43,37 @@ def normalize(strokes):
 train,holdout=bytearray(),bytearray()
 metadata=[]
 unicode_map=dict(REPLACEMENTS)
+unicode_map.update(json.loads((out/'typst-unicode-mappings.json').read_text()))
+expressions = {
+    r'\colonapprox': 'colon approx', r'\Colonapprox': 'colon.double approx',
+    r'\colonsim': 'colon tilde.op', r'\Colonsim': 'colon.double tilde.op',
+    r'\Eqcolon': 'minus colon.double', r'\Eqqcolon': 'eq colon.double',
+    r'\idotsint': 'integral dots.h integral',
+    r'\dotsint': 'integral dots.h integral',
+}
 for symbol in json.loads((source/'symbols.json').read_text())['symbols']:
     command=symbol['command']
     rows=[json.loads(line) for line in (source/symbol['samples']['path']).read_text().splitlines()]
     rows=[r for r in rows if r['id'] not in rejected]
     index=len(metadata)
     char=unicode_map.get(command, '')
-    typst=char or None
-    styled=re.fullmatch(r"\\math(cal|frak|bb|bf|it|sf|tt)\{([A-Za-z])\}",command)
+    # ASCII punctuation can be math syntax (notably $, #, _, and brackets).
+    # Text/IPA symbols must also stay upright rather than become math variables.
+    typst=(json.dumps(char, ensure_ascii=False) if command.startswith('\\text')
+           or any(ord(c) < 128 for c in char) or char == '√' else char) if char else None
+    typst=expressions.get(command, typst)
+    styled=re.fullmatch(r"\\math(cal|scr|frak|bb|ds|bf|it|sf|tt)\{([A-Za-z])\}",command)
     if styled:
         style,letter=styled.groups()
-        function={'cal':'cal','frak':'frak','bb':'bb','bf':'bold','it':'italic','sf':'sans','tt':'mono'}[style]
+        function={'cal':'cal','scr':'scr','frak':'frak','bb':'bb','ds':'bb','bf':'bold','it':'italic','sf':'sans','tt':'mono'}[style]
         typst=f'{function}({letter})'
         if style == 'cal' and letter.isupper():
             char = dict(zip('BEFHILMR', 'ℬℰℱℋℐℒℳℛ')).get(letter, chr(0x1d49c + ord(letter) - ord('A')))
-    metadata.append({'char':char,'names':[typst or command],'tex':command,'typst':typst,'detexify':True,'tex_only':not bool(typst), 'package':symbol.get('package')})
+    if re.fullmatch(r'\\Up(delta|gamma|lambda|omega|phi|pi|psi|sigma|theta|upsilon|xi)', command):
+        greek=command[3:].capitalize()
+        typst=f'upright({greek})'
+    name = command if typst and typst.startswith('"') else typst or command
+    metadata.append({'char':char,'names':[name],'tex':command,'typst':typst,'detexify':True,'tex_only':not bool(typst), 'package':symbol.get('package')})
     for i,row in enumerate(rows):
         points=normalize(row['strokes'])
         if points:

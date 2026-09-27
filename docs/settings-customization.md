@@ -87,5 +87,6 @@ Open Explorer → Draw symbol, draw with the pointer, then choose a result. Reco
 The drawing canvas fills the panel; resizing preserves its ink and stroke width.
 Predictions appear as non-selectable text over subdued ink; click to insert.
 Detexify's full accepted sample set supplies additional LaTeX commands, including
-calligraphic letters (`\mathcal{A}` / Typst `cal(A)`). Unknown Typst equivalents
-are shown as TeX-only. See [recognition coverage](../assets/handwriting/README.md).
+calligraphic letters (`\mathcal{A}` / Typst `cal(A)`). Script letters (`\mathscr{A}` / `scr(A)`), phonetic letters and many other
+symbols also work in Typst. Unverified mappings are labelled as such and disabled
+only for Typst insertion. See [recognition coverage](../assets/handwriting/README.md).

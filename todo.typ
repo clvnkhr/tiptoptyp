@@ -220,3 +220,7 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 // size, keeps its ink across resizing, and overlays non-selectable predictions
 // over thicker subdued strokes. Native drawing/resize/cal(A) insertion passed.
 // Dataset provenance, output mappings and limitations: assets/handwriting/README.md.
+
+// Drawing mapping audit: expanded verified Typst output from 684 to 1,091 of
+// 1,123 Detexify definitions, including script letters, upright Greek and IPA.
+// Remaining 32 are unverified mappings, not necessarily TeX-only symbols.

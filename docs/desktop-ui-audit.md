@@ -273,3 +273,25 @@ clipping; these are framebuffer evidence, not native composition evidence.
 The optimized held-out evaluation finds 342/421 expected commands in the full
 set's top eight and 122/128 calligraphic letters in the dedicated top four.
 See the dataset README for the non-writer-disjoint split and reproduction.
+
+## 2026-09-27 — Typst handwriting mapping audit
+
+A failing regression demonstrated that `\\mathscr{A}` had no Typst output.
+Expanded Detexify mappings from 684 to 1,091 of 1,123 definitions. Added script
+styles, upright Greek, IPA, punctuation and symbol aliases; quoted syntax-sensitive
+characters and preserved negation marks. The remaining 32 are labelled unverified
+rather than TeX-only. Original sample and holdout binaries are byte-for-byte
+unchanged; mapping lookup/recognition scheduling has no material performance
+impact and adds no runtime dependency.
+
+Validation: 1,330 regular Rust tests, 15 xtask tests, strict all-target Clippy and
+formatting pass. The opt-in Typst CLI test additionally compiles every mapped
+expression with Typst 0.15.1. Semantic tests click new script/IPA/punctuation
+predictions and verify insertion in both Typst and TeX. No layout or painting
+contract changed, so no framebuffer/gallery regeneration was needed or claimed.
+
+`python3 scripts/test-desktop-ui.py --journey drawing` was attempted; its preflight
+stopped before interaction because macOS was locked (`desktop:false, locked:true`;
+Accessibility and input permission were both true). Evidence:
+`.tiptoptyp/desktop-ui-tests/run-mqmm9ii3/result.json`. This is an unavailable native
+check, not a pass; prior-turn native results do not establish this build's result.
