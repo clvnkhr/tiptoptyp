@@ -276,15 +276,18 @@ impl HandwritingEngine {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub(crate) struct HandwritingSettings {
     pub(crate) engine: HandwritingEngine,
     pub(crate) prefer_typst_names: bool,
+    pub(crate) prefer_math_mode: bool,
 }
 impl Default for HandwritingSettings {
     fn default() -> Self {
         Self {
             engine: HandwritingEngine::default(),
             prefer_typst_names: true,
+            prefer_math_mode: true,
         }
     }
 }

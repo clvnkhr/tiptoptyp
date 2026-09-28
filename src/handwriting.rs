@@ -139,10 +139,12 @@ pub(crate) fn settings_ui(ui: &mut egui::Ui, settings: &mut HandwritingSettings)
         }
     });
     let response = ui.checkbox(&mut settings.prefer_typst_names, "Prefer Typst symbol names")
-        .on_hover_text("Insert escaped punctuation first (\\$), then a verified full name (#sym.alpha), then Unicode. Off prefers Unicode. Delimiters remain escaped; Unicode is never wrapped in quotes.");
+        .on_hover_text("Insert escaped punctuation first (\\$), then a verified Typst name (alpha or #sym.alpha), then Unicode. Off prefers Unicode. Delimiters remain escaped; Unicode is never wrapped in quotes.");
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     crate::desktop_test::observe("settings.handwriting.names", &response);
     let _ = response;
+    ui.checkbox(&mut settings.prefer_math_mode, "Prefer Typst math-mode names")
+        .on_hover_text("Use xi instead of #sym.xi for insertion into math. Turn off for full names usable in markup.");
 }
 
 fn symbol_names() -> &'static std::collections::BTreeMap<String, String> {
@@ -155,7 +157,12 @@ fn symbol_names() -> &'static std::collections::BTreeMap<String, String> {
     })
 }
 
-fn prediction_insertion(symbol: &Symbol, tex: bool, prefer_names: bool) -> Option<String> {
+fn prediction_insertion(
+    symbol: &Symbol,
+    tex: bool,
+    prefer_names: bool,
+    prefer_math: bool,
+) -> Option<String> {
     // This dataset entry represents a layout operation, not a drawn character.
     if symbol.tex.as_deref() == Some("\\\\") {
         return None;
@@ -178,7 +185,11 @@ fn prediction_insertion(symbol: &Symbol, tex: bool, prefer_names: bool) -> Optio
     if prefer_names {
         let normalized = glyph.replace(['\u{fe0e}', '\u{fe0f}'], "");
         if let Some(name) = symbol_names().get(&normalized) {
-            return Some(format!("#sym.{name}"));
+            return Some(if prefer_math {
+                name.clone()
+            } else {
+                format!("#sym.{name}")
+            });
         }
         if let Some(expression) = &symbol.typst
             && [
@@ -198,18 +209,24 @@ struct Prediction {
     insertion: String,
     caption: String,
 }
-fn prediction_rows(results: &[Symbol], tex: bool, prefer_names: bool) -> Vec<Prediction> {
+fn prediction_rows(
+    results: &[Symbol],
+    tex: bool,
+    prefer_names: bool,
+    prefer_math: bool,
+) -> Vec<Prediction> {
     let mut seen = std::collections::HashSet::new();
     results
         .iter()
         .enumerate()
         .filter_map(|(index, symbol)| {
-            let insertion = prediction_insertion(symbol, tex, prefer_names)?;
+            let insertion = prediction_insertion(symbol, tex, prefer_names, prefer_math)?;
             if !seen.insert(insertion.clone()) {
                 return None;
             }
             let caption = match prediction_glyph(symbol) {
-                Some(glyph) if glyph != insertion => format!("{glyph}  {insertion}"),
+                Some(glyph) if glyph != insertion => format!("{insertion}  {glyph}"),
+                Some(glyph) => glyph,
                 _ => insertion.clone(),
             };
             Some(Prediction {
@@ -219,6 +236,29 @@ fn prediction_rows(results: &[Symbol], tex: bool, prefer_names: bool) -> Vec<Pre
             })
         })
         .collect()
+}
+
+// Keep the rightmost glyph visible; only the leading insertion text is elided.
+fn left_elide(text: &str, width: f32, measure: impl Fn(&str) -> f32) -> std::borrow::Cow<'_, str> {
+    if measure(text) <= width {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let boundaries: Vec<_> = text
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain(std::iter::once(text.len()))
+        .collect();
+    let mut low = 0;
+    let mut high = boundaries.len() - 1;
+    while low < high {
+        let middle = (low + high) / 2;
+        if measure(&format!("…{}", &text[boundaries[middle]..])) <= width {
+            high = middle;
+        } else {
+            low = middle + 1;
+        }
+    }
+    std::borrow::Cow::Owned(format!("…{}", &text[boundaries[low]..]))
 }
 
 fn prediction_glyph(symbol: &Symbol) -> Option<String> {
@@ -332,9 +372,9 @@ impl Drawing {
         serde_json::json!({
             "engine":self.engine,
             "strokes": self.strokes.iter().map(|s|s.iter().map(|p|[p.x,p.y]).collect::<Vec<_>>()).collect::<Vec<_>>(),
-            "predictions": prediction_rows(&self.results, tex, settings.prefer_typst_names).iter().map(|row| {
+            "predictions": prediction_rows(&self.results, tex, settings.prefer_typst_names, settings.prefer_math_mode).iter().map(|row| {
                 let s = &self.results[row.index];
-                serde_json::json!({"index":row.index,"typst":prediction_insertion(s,false,settings.prefer_typst_names),"tex":s.tex,"detexify":s.detexify,"caption":row.caption})
+                serde_json::json!({"index":row.index,"typst":prediction_insertion(s,false,settings.prefer_typst_names, settings.prefer_math_mode),"tex":s.tex,"detexify":s.detexify,"caption":row.caption})
             }).collect::<Vec<_>>(),
             "busy":self.pending || self.job.is_running(),
         })
@@ -413,7 +453,6 @@ impl Drawing {
             self.generation += 1;
             self.pending = false;
             self.error = None;
-            self.results.clear();
         }
         if response.dragged()
             && let Some(point) = response.interact_pointer_pos()
@@ -459,7 +498,7 @@ impl Drawing {
                 self.error = Some(error);
             }
         }
-        // Paint opaque result backgrounds after the ink. Each row has a single
+        // Paint translucent result backgrounds after the ink. Each row has a single
         // right-aligned command for the active language and never selects text.
         let mut overlay = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(4.0)));
         overlay.set_clip_rect(rect);
@@ -488,21 +527,52 @@ impl Drawing {
         );
         results_ui.set_clip_rect(result_rect.intersect(rect));
         results_ui.spacing_mut().item_spacing.y = 2.0;
+        // Hover must not expand a row or alter the scroll layout.
+        let widgets = &mut results_ui.visuals_mut().widgets;
+        for state in [
+            &mut widgets.inactive,
+            &mut widgets.hovered,
+            &mut widgets.active,
+        ] {
+            state.expansion = 0.0;
+            state.bg_stroke = egui::Stroke::NONE;
+        }
         egui::ScrollArea::vertical()
             .id_salt("handwriting-results")
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
             .auto_shrink([false, true])
             .show(&mut results_ui, |ui| {
-                for row in prediction_rows(&self.results, tex, settings.prefer_typst_names) {
+                for row in prediction_rows(
+                    &self.results,
+                    tex,
+                    settings.prefer_typst_names,
+                    settings.prefer_math_mode,
+                ) {
                     let mut tooltip = format!("Insert {}", row.insertion);
                     if tex && let Some(package) = &self.results[row.index].package {
                         tooltip.push_str(&format!("\nLaTeX package: {package}"));
                     }
+                    let font = egui::TextStyle::Monospace.resolve(ui.style());
+                    let caption = left_elide(
+                        &row.caption,
+                        (ui.available_width() - 2.0 * ui.spacing().button_padding.x).max(0.0),
+                        |text| {
+                            ui.painter()
+                                .layout_no_wrap(
+                                    text.to_owned(),
+                                    font.clone(),
+                                    ui.visuals().text_color(),
+                                )
+                                .size()
+                                .x
+                        },
+                    );
                     let prediction = ui
                         .add(
-                            egui::Button::new(&row.caption)
-                                .fill(ui.visuals().extreme_bg_color.to_opaque())
+                            egui::Button::new(egui::RichText::new(caption.as_ref()).monospace())
+                                .fill(ui.visuals().extreme_bg_color.gamma_multiply(0.85))
                                 .stroke(egui::Stroke::NONE)
-                                .wrap_mode(egui::TextWrapMode::Truncate),
+                                .wrap_mode(egui::TextWrapMode::Extend),
                         )
                         .on_hover_text(tooltip);
                     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
@@ -527,7 +597,6 @@ impl Drawing {
                 transform.to_model(rect.max),
             ));
             self.generation += 1;
-            self.results.clear();
             self.error = None;
             self.pending = true;
             ui.ctx().request_repaint();
@@ -548,7 +617,7 @@ mod tests {
             .find(|s| s.tex.as_deref() == Some("\\textdollar"))
             .unwrap();
         assert_eq!(
-            prediction_insertion(dollar, false, true).as_deref(),
+            prediction_insertion(dollar, false, true, false).as_deref(),
             Some("\\$")
         );
     }
@@ -574,23 +643,32 @@ mod tests {
             (symbol("", "\\mathscr{A}", Some("scr(A)")), "scr(A)", "𝒜"),
         ] {
             assert_eq!(
-                prediction_insertion(&candidate, false, true).as_deref(),
+                prediction_insertion(&candidate, false, true, false).as_deref(),
                 Some(expected)
             );
             assert_eq!(
-                prediction_insertion(&candidate, false, false).as_deref(),
+                prediction_insertion(&candidate, false, false, false).as_deref(),
                 Some(unicode)
             );
-            assert_eq!(prediction_insertion(&candidate, true, true), candidate.tex);
+            assert_eq!(
+                prediction_insertion(&candidate, true, true, false),
+                candidate.tex
+            );
         }
         assert!(
-            prediction_insertion(&symbol("", "\\\\", Some("#linebreak()")), false, true).is_none()
+            prediction_insertion(
+                &symbol("", "\\\\", Some("#linebreak()")),
+                false,
+                true,
+                false
+            )
+            .is_none()
         );
         let mut unsupported = symbol("", "\\ataribox", None);
         unsupported.tex_only = true;
-        assert!(prediction_insertion(&unsupported, false, true).is_none());
+        assert!(prediction_insertion(&unsupported, false, true, false).is_none());
         assert_eq!(
-            prediction_insertion(&unsupported, true, true).as_deref(),
+            prediction_insertion(&unsupported, true, true, false).as_deref(),
             Some("\\ataribox")
         );
         // Same glyph may legitimately have distinct TeX commands, but an identical
@@ -600,7 +678,7 @@ mod tests {
             symbol("$", "\\textdollar", None),
             symbol("α", "\\alpha", None),
         ];
-        let rows = prediction_rows(&candidates, false, true);
+        let rows = prediction_rows(&candidates, false, true, false);
         assert_eq!(rows.iter().map(|r| r.index).collect::<Vec<_>>(), [0, 2]);
     }
     #[test]
@@ -640,22 +718,26 @@ mod tests {
                 },
                 (drawing, None),
             );
-            let alpha = if tex { "α  \\alpha" } else { "α  #sym.alpha" };
+            let alpha = if tex { "\\alpha  α" } else { "alpha  α" };
             for size in [egui::vec2(230.0, 300.0), egui::vec2(500.0, 700.0)] {
                 harness.set_size(size);
                 harness.run_steps(2);
                 let first = harness.get_by_label(alpha).rect();
-                let second = harness.get_by_label("$  \\$").rect();
+                let second = harness.get_by_label("\\$  $").rect();
                 assert!(second.top() >= first.bottom());
                 assert!((first.right() - second.right()).abs() < 0.5);
                 assert!(first.left() >= 0.0 && first.right() <= size.x);
+                harness.event(egui::Event::PointerMoved(first.center()));
+                harness.run_steps(3);
+                assert_eq!(harness.get_by_label(alpha).rect(), first);
+                assert_eq!(harness.get_by_label("\\$  $").rect(), second);
             }
             let ink = harness.state().0.strokes.clone();
             harness.get_by_label(alpha).click();
             harness.run_steps(2);
             assert_eq!(
                 harness.state().1.as_deref(),
-                Some(if tex { "\\alpha" } else { "#sym.alpha" })
+                Some(if tex { "\\alpha" } else { "alpha" })
             );
             assert_eq!(harness.state().0.strokes, ink);
             harness.get_by_label("Clear").click();
@@ -700,6 +782,57 @@ mod tests {
         }
         assert!(drawing.results.is_empty());
         assert!(drawing.pending);
+    }
+    #[test]
+    fn long_rows_elide_from_the_left_preserving_the_symbol() {
+        let measure = |text: &str| text.chars().count() as f32;
+        assert_eq!(
+            left_elide("triangle.stroked.t  △", 10.0, measure),
+            "…oked.t  △"
+        );
+        assert_eq!(left_elide("ξ", 10.0, measure), "ξ");
+        assert_eq!(left_elide("unicode  ξ", 4.0, measure), "…  ξ");
+    }
+    #[test]
+    fn math_names_and_unicode_only_glyphs() {
+        let xi = symbol("ξ", "\\xi", None);
+        assert_eq!(
+            prediction_insertion(&xi, false, true, true).as_deref(),
+            Some("xi")
+        );
+        assert_eq!(
+            prediction_insertion(&xi, false, true, false).as_deref(),
+            Some("#sym.xi")
+        );
+        let rows = prediction_rows(&[xi], false, false, true);
+        assert_eq!(rows[0].caption, "ξ");
+        assert!(HandwritingSettings::default().prefer_math_mode);
+    }
+    #[test]
+    fn drawing_stroke_keeps_predictions_until_replacement() {
+        use egui_kittest::Harness;
+        let mut drawing = Drawing::fixture();
+        drawing.results = vec![symbol("ξ", "\\xi", None)];
+        let mut harness = Harness::builder().build_ui_state(
+            |ui, drawing: &mut Drawing| {
+                drawing.show(ui, false, HandwritingSettings::default());
+            },
+            drawing,
+        );
+        harness.run_steps(2);
+        let point = egui::pos2(100.0, 180.0);
+        harness.event(egui::Event::PointerMoved(point));
+        harness.event(egui::Event::PointerButton {
+            pos: point,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        harness.run_steps(2);
+        harness.event(egui::Event::PointerMoved(point + egui::vec2(20.0, 20.0)));
+        harness.run_steps(2);
+        assert_eq!(harness.state().results[0].char, "ξ");
+        assert!(harness.state().strokes.len() > 1);
     }
     #[test]
     fn selected_engine_returns_only_its_own_ranked_candidates() {

@@ -67,7 +67,7 @@ the sample or holdout binaries, recognition ranking, or background-worker work.
 
 The canvas fills its panel. Logical drawing coordinates preserve the full paper
 and proportions across wide/tall resizing. Ink remains four logical pixels wide.
-Ink uses the normal text color. Predictions are compact, right-aligned rows painted over the ink with opaque backgrounds. Each row shows the glyph (when available) and the exact command for the current language. Clicking inserts that command. Empty drawings do not start recognition; work remains bounded to one
+Ink uses the normal text color. Predictions are compact, right-aligned rows painted over the ink with translucent backgrounds. Each row shows a monospace command followed by its glyph on the right; raw Unicode insertion shows only the glyph. Long rows elide on the left to preserve the rightmost glyph; tooltips retain the full insertion. Hover does not reserve scrollbar space or expand the rows. Previous predictions remain while adding strokes and are replaced on completion; Clear flushes them. Clicking inserts that command. Empty drawings do not start recognition; work remains bounded to one
 worker per window and 4,096 input points.
 
 ## Selection, insertion and bundled size
@@ -88,8 +88,9 @@ runtime dependency. Both assets stay bundled so users can switch offline.
 The separate 533 KiB held-out evaluation file is test-only. The shared verified
 Typst name catalogue is about 22 KiB.
 
-Typst insertion defaults to escaped punctuation, then a verified full
-`#sym.name`, then an unquoted Unicode glyph. Style expressions such as `cal(A)`
+Typst insertion defaults to escaped punctuation, then a verified math-mode
+`name`, then an unquoted Unicode glyph. Disable **Prefer Typst math-mode names**
+for full `#sym.name` references. Style expressions such as `cal(A)`
 remain available where a symbol alias does not exist. Disable **Prefer Typst
 symbol names** for Unicode; delimiters such as `$` still use `\$`. TeX always
 uses the original command when one is available. Layout-only `\\` is excluded.

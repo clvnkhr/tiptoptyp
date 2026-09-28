@@ -341,3 +341,38 @@ language-appropriate commands without redundant group labels. The maintained
 25-image gallery was regenerated in one session and `--validate-latest` passes;
 its drawing scene was also inspected. These are viewport framebuffer captures,
 not proof of native child-view composition.
+
+## 2026-09-28 — handwriting row refinements
+
+Result rows now show monospace insertion text followed by the glyph on the right;
+Unicode-only output shows only the glyph, following the user’s revised preference. Long labels elide from the left, retaining the rightmost symbol and full insertion tooltip. Backgrounds use 85%
+alpha. Math-mode Typst names are the default, with a Settings toggle for full
+`#sym` names. All 1,113 catalogue names compile inside Typst math (some existing
+aliases emit deprecation warnings). Editing a stroke retains published predictions
+until a new generation finishes; Clear still flushes them immediately.
+
+A semantic hover regression failed with a two-pixel row-width change. egui's
+button styling derives padding from the state's border width, so overriding only
+the drawn border was insufficient. The result overlay now fixes border/expansion
+across states and avoids animated scrollbar space. The regression passes at two
+panel sizes in both languages; additional tests cover held-stroke predictions,
+math/markup insertion and Unicode captions. Recognition work remains bounded and
+these presentation preferences do not trigger inference; no timing speedup is
+claimed.
+
+Native journey `run-cd3wg77m` failed before drawing when Cmd+N did not create a
+scratch tab; it is not interaction coverage. On the corrected build, the complete
+native drawing journey passes as `run-0lxl5fsv`, build
+`2b856f4e5c07-dirty.1790588295`, SHA-256
+`10a40254e08e90d538a2d5f6ac68add9a85ed1ba8ac24ae5d544bc90b729bdd4`.
+
+Final deterministic validation passes: 1,337 Rust tests, 15 xtask tests, formatting
+and strict Clippy. A focused left-elision test covers Unicode-safe suffixes and
+retaining the final symbol. The revised Unicode-only caption is glyph-only.
+
+Fresh final viewport capture inspected:
+`.tiptoptyp/screenshots/drawing-left-elision/1790588987290-0001-main-draw-symbol.png`.
+The maintained gallery was regenerated in one session; all 25 PNGs validate and
+the drawing scene was inspected. These captures verify the result-row appearance,
+not native preview composition. Truncation and hover geometry are covered by
+focused deterministic tests.
