@@ -172,39 +172,12 @@ fn rank(cloud: &Cloud, samples: &[Sample]) -> Vec<usize> {
         .map(|s| s.0)
         .collect()
 }
-fn rank_calligraphic(cloud: &Cloud, samples: &[Sample]) -> Vec<usize> {
-    let mut scores = vec![f32::INFINITY; labels().len()];
-    for sample in samples {
-        if labels()[sample.class]
-            .tex
-            .as_deref()
-            .is_some_and(|s| s.starts_with("\\mathcal{"))
-        {
-            scores[sample.class] = scores[sample.class].min(distance(cloud, &sample.cloud));
-        }
-    }
-    let mut classes: Vec<_> = (0..scores.len())
-        .filter(|&i| scores[i].is_finite())
-        .collect();
-    classes.sort_by(|&a, &b| scores[a].total_cmp(&scores[b]));
-    classes.truncate(4);
-    classes
-}
 pub(crate) fn recognize(strokes: &[Vec<Pos2>]) -> Vec<super::handwriting::Symbol> {
     static SAMPLES: OnceLock<Vec<Sample>> = OnceLock::new();
     normalize(strokes)
         .map(|cloud| {
             let samples = SAMPLES.get_or_init(|| load_samples(&Default::default()));
-            let mut classes = rank(&cloud, samples);
-            for class in rank_calligraphic(&cloud, samples) {
-                if !classes
-                    .iter()
-                    .any(|&i| labels()[i].tex == labels()[class].tex)
-                {
-                    classes.push(class);
-                }
-            }
-            classes
+            rank(&cloud, samples)
                 .into_iter()
                 .map(|class| labels()[class].clone())
                 .collect()
@@ -244,25 +217,6 @@ mod tests {
         eprintln!(
             "Detexify held-out top-eight: {correct}/{total}; mixed-ranking calligraphic subset {cal_correct}/{cal_total}"
         );
-        let (mut cal_correct, mut cal_total) = (0, 0);
-        for record in &records {
-            let (class, cloud) = decode(record);
-            if labels()[class]
-                .tex
-                .as_deref()
-                .unwrap()
-                .starts_with("\\mathcal{")
-            {
-                cal_total += 1;
-                cal_correct += usize::from(
-                    rank_calligraphic(&cloud, &samples)
-                        .iter()
-                        .any(|&i| labels()[i].tex == labels()[class].tex),
-                );
-            }
-        }
-        eprintln!("Dedicated calligraphic top-four: {cal_correct}/{cal_total}");
-        assert!(cal_correct * 100 / cal_total >= 90);
         assert!(correct * 100 / total >= 65);
     }
     #[test]

@@ -87,6 +87,7 @@ The accepted scenes and their framebuffer targets are:
 | `editor-context-menu` | `popup` | Editor right-click menu |
 | `explorer-context-menu` | `popup` | Explorer right-click menu |
 | `unicode-completion` | `main` | Hebrew, mathematical, and alchemical glyphs in symbol completions |
+| `draw-symbol` | `main` | Dark handwriting ink with ranked, right-aligned language-specific commands on opaque backgrounds |
 | `font-completion` | `main` | Fuzzy font completion with a lazily loaded font sample |
 | `settings-font-picker` | `settings` | Searchable font picker and the same live font sample used in hover cards |
 | `git-editor` | `main` | Default-open Git section, badges, line totals, and gutter markers |
@@ -257,4 +258,4 @@ hide-on-app-switch policy from blocking a deterministic framebuffer capture.
 It does not revive explicitly hidden targets or change ordinary interactive
 popup visibility. The resulting image still proves only that viewport's pixels.
 
-`draw-symbol` captures the maximized Explorer drawing panel with fixed strokes and result labels. Model accuracy is tested separately with real offline inference.
+`draw-symbol` captures the maximized Explorer drawing panel with fixed strokes and compact, right-aligned rows displaying the active language’s insertion forms. Opaque row backgrounds preserve legibility over normal-darkness ink. Model accuracy is tested separately with real offline inference.

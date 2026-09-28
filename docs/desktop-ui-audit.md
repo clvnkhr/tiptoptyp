@@ -295,3 +295,49 @@ stopped before interaction because macOS was locked (`desktop:false, locked:true
 Accessibility and input permission were both true). Evidence:
 `.tiptoptyp/desktop-ui-tests/run-mqmm9ii3/result.json`. This is an unavailable native
 check, not a pass; prior-turn native results do not establish this build's result.
+
+## 2026-09-28 — One handwriting engine and language-specific insertion
+
+A failing regression reproduced `$` being offered as the quoted Typst string
+`"$"`. The output resolver now prefers escaped ASCII punctuation, a full verified
+`#sym.name`, then unquoted Unicode. A Settings preference chooses Unicode instead
+of names without exposing raw delimiters. The shared name catalogue is exported
+from bundled Typst 0.15.1 and every alias is compiler-verified; deprecated aliases
+are excluded. An additional compiler check validates all ASCII punctuation
+escapes in both markup and math. TeX retains its own commands and package hints.
+
+Settings selects exactly one recognizer for either document language. Detexify
+is the default; Detypify is optional. Both assets remain bundled for offline
+switching (4.43 MiB Detypify and 5.03 MiB Detexify; runtime code excluded).
+The forced calligraphic list is removed. Baseline work dispatched both engines
+and returned up to 20 candidates; selection dispatches one engine and returns
+at most eight ranked candidates. Engine switches preserve the ink, invalidate
+old generations and wait for the current worker before launching another.
+No timing speedup is claimed, no idle repaint loop is added, and output-format
+changes do not trigger recognition.
+
+The panel uses normal-darkness ink and compact, right-aligned command rows with
+opaque backgrounds. It removes the redundant drawing prompt and result-group
+headings. Semantic UI tests cover row order/alignment at two panel sizes,
+language-specific click insertion, Clear, settings selection and persistence.
+State tests cover engine-exclusive results and rejection of an in-flight result
+after switching engines. Invalid JSON engine options name the field and choices.
+
+The native drawing journey passes in `run-mpzyoija`: real three-stroke drawing,
+recognition, native resize with retained ink, ranked-result insertion, a Settings
+switch to Detypify and Unicode output, insertion from that engine, and Clear.
+This uses live inference and native clicks, not injected drawing/model results.
+The build was `a23804c2a007-dirty.1790586364` and the fixture binary SHA-256 was
+`1a8791cd68be60c40592c60e1b7e2bb787492cbeae616c0533d70b14df7894fc`.
+
+Required validation: 1,334 regular Rust tests and 15 xtask tests pass, alongside
+formatting and strict Clippy. Native input evidence is distinct from framebuffer
+visual evidence; no composed native-preview claim is made by this audit.
+
+Fresh optimized viewport captures were inspected for both `test.typ` and
+`manual-tests/tex-preview.tex`, under `.tiptoptyp/screenshots/drawing-commands`
+and `drawing-commands-tex`. Both show dark ink, right-aligned ranked rows and
+language-appropriate commands without redundant group labels. The maintained
+25-image gallery was regenerated in one session and `--validate-latest` passes;
+its drawing scene was also inspected. These are viewport framebuffer captures,
+not proof of native child-view composition.

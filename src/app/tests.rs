@@ -260,6 +260,7 @@ fn explorer_view_returns_navigation_without_effects_and_does_not_paint_hidden_gi
                         order: ExplorerOrder::default(),
                         git_visible: false,
                         tex: false,
+                        handwriting: Default::default(),
                     },
                     &mut state.0,
                     &mut crate::handwriting::Drawing::default(),

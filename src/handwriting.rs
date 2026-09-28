@@ -1,4 +1,5 @@
-//! Offline Detypify inference. Model loading and recognition only run on a worker.
+//! Offline handwriting recognition. Exactly one selected engine runs on a worker.
+use crate::settings::{HandwritingEngine, HandwritingSettings};
 use crate::worker::{LatestJob, LatestJobPoll};
 use eframe::egui::{self, Pos2};
 use std::sync::OnceLock;
@@ -7,11 +8,11 @@ use tract_onnx::prelude::*;
 #[derive(Clone, serde::Deserialize)]
 pub(crate) struct Symbol {
     pub char: String,
-    pub names: Vec<String>,
     pub tex: Option<String>,
     #[serde(default)]
     pub typst: Option<String>,
     #[serde(default)]
+    #[allow(dead_code)] // Exposed by the real-app drawing journey snapshot.
     pub detexify: bool,
     #[serde(default)]
     pub tex_only: bool,
@@ -117,16 +118,194 @@ fn recognize_symbols(strokes: &[Vec<Pos2>]) -> Result<Vec<Symbol>, String> {
         .collect();
     Ok(results)
 }
-fn recognize(strokes: Vec<Vec<Pos2>>) -> Result<Vec<Symbol>, String> {
-    let mut results = recognize_symbols(&strokes)?;
-    results.extend(crate::handwriting_detexify::recognize(&strokes));
-    Ok(results)
+fn recognize(strokes: Vec<Vec<Pos2>>, engine: HandwritingEngine) -> Result<Vec<Symbol>, String> {
+    match engine {
+        HandwritingEngine::Detypify => recognize_symbols(&strokes),
+        HandwritingEngine::Detexify => Ok(crate::handwriting_detexify::recognize(&strokes)),
+    }
 }
+
+pub(crate) fn settings_ui(ui: &mut egui::Ui, settings: &mut HandwritingSettings) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Handwriting recognition");
+        for engine in HandwritingEngine::ALL {
+            let response = ui.selectable_value(&mut settings.engine, engine, engine.label()).on_hover_text(match engine {
+                HandwritingEngine::Detypify => "411 symbol classes; neural model. Works with Typst and TeX. Model and labels: 4.43 MiB, plus ONNX runtime code.",
+                HandwritingEngine::Detexify => "1,123 symbol definitions, including calligraphic letters; sample matching. Works with Typst and TeX. Samples and labels: 5.03 MiB.",
+            });
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            crate::desktop_test::observe(&format!("settings.handwriting.{}", engine.label()), &response);
+            let _ = response;
+        }
+    });
+    let response = ui.checkbox(&mut settings.prefer_typst_names, "Prefer Typst symbol names")
+        .on_hover_text("Insert escaped punctuation first (\\$), then a verified full name (#sym.alpha), then Unicode. Off prefers Unicode. Delimiters remain escaped; Unicode is never wrapped in quotes.");
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    crate::desktop_test::observe("settings.handwriting.names", &response);
+    let _ = response;
+}
+
+fn symbol_names() -> &'static std::collections::BTreeMap<String, String> {
+    static NAMES: OnceLock<std::collections::BTreeMap<String, String>> = OnceLock::new();
+    NAMES.get_or_init(|| {
+        serde_json::from_str(include_str!(
+            "../assets/handwriting/typst-symbol-names.json"
+        ))
+        .expect("verified Typst symbol names")
+    })
+}
+
+fn prediction_insertion(symbol: &Symbol, tex: bool, prefer_names: bool) -> Option<String> {
+    // This dataset entry represents a layout operation, not a drawn character.
+    if symbol.tex.as_deref() == Some("\\\\") {
+        return None;
+    }
+    if tex {
+        return symbol
+            .tex
+            .clone()
+            .filter(|s| !s.is_empty())
+            .or_else(|| prediction_glyph(symbol));
+    }
+    if symbol.tex_only {
+        return None;
+    }
+    let glyph = prediction_glyph(symbol)?;
+    // Escapes beat both named and Unicode output so punctuation cannot become syntax.
+    if glyph.len() == 1 && glyph.as_bytes()[0].is_ascii_punctuation() {
+        return Some(format!("\\{glyph}"));
+    }
+    if prefer_names {
+        let normalized = glyph.replace(['\u{fe0e}', '\u{fe0f}'], "");
+        if let Some(name) = symbol_names().get(&normalized) {
+            return Some(format!("#sym.{name}"));
+        }
+        if let Some(expression) = &symbol.typst
+            && [
+                "cal(", "scr(", "frak(", "bb(", "bold(", "italic(", "sans(", "mono(", "upright(",
+            ]
+            .iter()
+            .any(|prefix| expression.starts_with(prefix))
+        {
+            return Some(expression.clone());
+        }
+    }
+    Some(glyph)
+}
+
+struct Prediction {
+    index: usize,
+    insertion: String,
+    caption: String,
+}
+fn prediction_rows(results: &[Symbol], tex: bool, prefer_names: bool) -> Vec<Prediction> {
+    let mut seen = std::collections::HashSet::new();
+    results
+        .iter()
+        .enumerate()
+        .filter_map(|(index, symbol)| {
+            let insertion = prediction_insertion(symbol, tex, prefer_names)?;
+            if !seen.insert(insertion.clone()) {
+                return None;
+            }
+            let caption = match prediction_glyph(symbol) {
+                Some(glyph) if glyph != insertion => format!("{glyph}  {insertion}"),
+                _ => insertion.clone(),
+            };
+            Some(Prediction {
+                index,
+                insertion,
+                caption,
+            })
+        })
+        .collect()
+}
+
+fn prediction_glyph(symbol: &Symbol) -> Option<String> {
+    if !symbol.char.is_empty() {
+        return Some(symbol.char.clone());
+    }
+
+    let typst = symbol.typst.as_deref()?;
+    if let Ok(glyph) = serde_json::from_str::<String>(typst)
+        && !glyph.is_empty()
+    {
+        return Some(glyph);
+    }
+    if !typst.is_ascii() {
+        return Some(typst.to_owned());
+    }
+    if typst == "dash.em.three" {
+        return Some("⸻".into());
+    }
+    if let Some(letter) = typst
+        .strip_prefix("scr(")
+        .and_then(|value| value.strip_suffix(')'))
+        .and_then(|value| value.chars().next())
+    {
+        return script_glyph(letter).map(str::to_owned);
+    }
+    match typst {
+        "bb(h)" => return Some("𝕙".into()),
+        "bb(k)" => return Some("𝕜".into()),
+        "integral dots.h integral" => return Some("∫⋯∫".into()),
+        "colon approx" => return Some(":≈".into()),
+        "colon.double approx" => return Some("::≈".into()),
+        "colon tilde.op" => return Some(":∼".into()),
+        "colon.double tilde.op" => return Some("::∼".into()),
+        "minus colon.double" => return Some("−::".into()),
+        "eq colon.double" => return Some("=::".into()),
+        _ => {}
+    }
+    if let Some(name) = typst
+        .strip_prefix("upright(")
+        .and_then(|value| value.strip_suffix(')'))
+    {
+        return greek_glyph(name).map(str::to_owned);
+    }
+    None
+}
+
+fn script_glyph(letter: char) -> Option<&'static str> {
+    const UPPER: [&str; 26] = [
+        "𝒜", "ℬ", "𝒞", "𝒟", "ℰ", "ℱ", "𝒢", "ℋ", "ℐ", "𝒥", "𝒦", "ℒ", "ℳ", "𝒩", "𝒪", "𝒫", "𝒬", "ℛ",
+        "𝒮", "𝒯", "𝒰", "𝒱", "𝒲", "𝒳", "𝒴", "𝒵",
+    ];
+    const LOWER: [&str; 26] = [
+        "𝒶", "𝒷", "𝒸", "𝒹", "ℯ", "𝒻", "ℊ", "𝒽", "𝒾", "𝒿", "𝓀", "𝓁", "𝓂", "𝓃", "ℴ", "𝓅", "𝓆", "𝓇",
+        "𝓈", "𝓉", "𝓊", "𝓋", "𝓌", "𝓍", "𝓎", "𝓏",
+    ];
+    match letter {
+        'A'..='Z' => Some(UPPER[(letter as u8 - b'A') as usize]),
+        'a'..='z' => Some(LOWER[(letter as u8 - b'a') as usize]),
+        _ => None,
+    }
+}
+
+fn greek_glyph(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "Delta" => "Δ",
+        "Gamma" => "Γ",
+        "Lambda" => "Λ",
+        "Omega" => "Ω",
+        "Phi" => "Φ",
+        "Pi" => "Π",
+        "Psi" => "Ψ",
+        "Sigma" => "Σ",
+        "Theta" => "Θ",
+        "Upsilon" => "Υ",
+        "Xi" => "Ξ",
+        _ => return None,
+    })
+}
+
 #[derive(Default)]
 pub(crate) struct Drawing {
+    engine: HandwritingEngine,
     strokes: Vec<Vec<Pos2>>,
     artboard: Option<egui::Rect>,
     job: LatestJob<(u64, Vec<Symbol>)>,
+    job_generation: u64,
     generation: u64,
     pending: bool,
     results: Vec<Symbol>,
@@ -143,28 +322,34 @@ impl Drawing {
                 vec![egui::pos2(60.0, 80.0), egui::pos2(160.0, 80.0)],
                 vec![egui::pos2(110.0, 40.0), egui::pos2(110.0, 180.0)],
             ],
-            results: symbols()
-                .iter()
-                .filter(|symbol| {
-                    matches!(
-                        symbol.char.as_str(),
-                        "†" | "‡" | "⊥" | "Δ" | "Λ" | "∀" | "∧" | "∠"
-                    )
-                })
-                .cloned()
-                .chain(crate::handwriting_detexify::fixture_predictions())
-                .collect(),
+            results: crate::handwriting_detexify::fixture_predictions(),
             ..Self::default()
         }
     }
 
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-    pub(crate) fn inspection(&self) -> serde_json::Value {
+    pub(crate) fn inspection(&self, tex: bool, settings: HandwritingSettings) -> serde_json::Value {
         serde_json::json!({
+            "engine":self.engine,
             "strokes": self.strokes.iter().map(|s|s.iter().map(|p|[p.x,p.y]).collect::<Vec<_>>()).collect::<Vec<_>>(),
-            "predictions": self.results.iter().enumerate().map(|(index,s)|serde_json::json!({"index":index,"typst":if s.tex_only { None } else { Some(s.typst.as_deref().unwrap_or(&s.char)) },"tex":s.tex,"detexify":s.detexify})).collect::<Vec<_>>(),
+            "predictions": prediction_rows(&self.results, tex, settings.prefer_typst_names).iter().map(|row| {
+                let s = &self.results[row.index];
+                serde_json::json!({"index":row.index,"typst":prediction_insertion(s,false,settings.prefer_typst_names),"tex":s.tex,"detexify":s.detexify,"caption":row.caption})
+            }).collect::<Vec<_>>(),
             "busy":self.pending || self.job.is_running(),
         })
+    }
+    fn configure(&mut self, engine: HandwritingEngine) {
+        if self.engine == engine {
+            return;
+        }
+        self.engine = engine;
+        self.generation += 1;
+        self.results.clear();
+        self.error = None;
+        self.pending = !self.strokes.is_empty();
+        // Let any current worker finish before starting the selected engine.
+        // Its generation cannot publish results after this switch.
     }
     pub(crate) fn poll(&mut self) {
         match self.job.poll() {
@@ -172,7 +357,10 @@ impl Drawing {
                 self.results = results;
                 self.error = None
             }
-            LatestJobPoll::Failed(error) => self.error = Some(error),
+            LatestJobPoll::Failed(error) if self.job_generation == self.generation => {
+                self.error = Some(error)
+            }
+            LatestJobPoll::Failed(_) => self.job.supersede(),
             _ => {}
         }
     }
@@ -186,20 +374,15 @@ impl Drawing {
         }
     }
 
-    pub(crate) fn show(&mut self, ui: &mut egui::Ui, tex: bool) -> Option<String> {
+    pub(crate) fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        tex: bool,
+        settings: HandwritingSettings,
+    ) -> Option<String> {
+        self.configure(settings.engine);
         self.poll();
         let mut selected = None;
-        ui.horizontal(|ui| {
-            ui.label("Draw a symbol");
-            if ui.small_button("Clear").clicked() {
-                self.strokes.clear();
-                self.artboard = None;
-                self.results.clear();
-                self.error = None;
-                self.generation += 1;
-                self.pending = false;
-            }
-        });
         let size = egui::vec2(
             ui.available_width().max(1.0),
             (ui.clip_rect().bottom() - ui.cursor().top()).max(1.0),
@@ -250,19 +433,12 @@ impl Drawing {
                 ui.painter().with_clip_rect(rect).circle_filled(
                     transform.to_screen(stroke[0]),
                     2.0,
-                    ui.visuals()
-                        .extreme_bg_color
-                        .lerp_to_gamma(ui.visuals().text_color(), 0.25),
+                    ui.visuals().text_color(),
                 );
             }
             ui.painter().with_clip_rect(rect).add(egui::Shape::line(
                 stroke.iter().map(|p| transform.to_screen(*p)).collect(),
-                egui::Stroke::new(
-                    4.0,
-                    ui.visuals()
-                        .extreme_bg_color
-                        .lerp_to_gamma(ui.visuals().text_color(), 0.25),
-                ),
+                egui::Stroke::new(4.0, ui.visuals().text_color()),
             ));
         }
         if response.drag_stopped() {
@@ -272,91 +448,76 @@ impl Drawing {
             self.pending = false;
             let strokes = self.strokes.clone();
             let generation = self.generation;
+            self.job_generation = generation;
+            let engine = self.engine;
             if let Err(error) =
                 self.job
                     .start_and_repaint("symbol-recognition", ui.ctx(), move || {
-                        recognize(strokes).map(|results| (generation, results))
+                        recognize(strokes, engine).map(|results| (generation, results))
                     })
             {
                 self.error = Some(error);
             }
         }
-        // Paint last so predictions remain readable over the ink. Labels do not
-        // select text or occupy extra panel height; clicking still inserts a result.
-        let mut overlay = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(8.0)));
+        // Paint opaque result backgrounds after the ink. Each row has a single
+        // right-aligned command for the active language and never selects text.
+        let mut overlay = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(4.0)));
         overlay.set_clip_rect(rect);
+        let clear = overlay.small_button("Clear").on_hover_text("Clear drawing");
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        crate::desktop_test::observe("drawing.clear", &clear);
+        if clear.clicked() {
+            self.strokes.clear();
+            self.artboard = None;
+            self.results.clear();
+            self.error = None;
+            self.generation += 1;
+            self.pending = false;
+        }
         if let Some(error) = &self.error {
             overlay.label(error);
         }
-        if self.job.is_running() {
-            overlay.label("Recognizing…");
-        }
-        let group = |symbol: &Symbol| {
-            if !symbol.detexify {
-                0
-            } else if symbol
-                .tex
-                .as_deref()
-                .is_some_and(|s| s.starts_with("\\mathcal{"))
-            {
-                2
-            } else {
-                1
-            }
-        };
-        for (kind, title) in [(0, "Symbols:"), (1, "More symbols:"), (2, "Calligraphic:")] {
-            if !self.results.iter().any(|s| group(s) == kind) {
-                continue;
-            }
-            overlay.horizontal_wrapped(|ui| {
-                ui.add(egui::Label::new(title).selectable(false));
-                for (_index, symbol) in self
-                    .results
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, s)| group(s) == kind)
-                {
-                    let name = if tex || (symbol.detexify && symbol.names[0] == symbol.char) {
-                        symbol.tex.as_deref().unwrap_or(&symbol.char)
-                    } else {
-                        &symbol.names[0]
-                    };
+        let result_rect = egui::Rect::from_min_max(
+            egui::pos2(clear.rect.right() + 4.0, rect.top() + 4.0),
+            rect.max - egui::vec2(4.0, 4.0),
+        );
+        let mut results_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(result_rect)
+                .layout(egui::Layout::top_down(egui::Align::Max)),
+        );
+        results_ui.set_clip_rect(result_rect.intersect(rect));
+        results_ui.spacing_mut().item_spacing.y = 2.0;
+        egui::ScrollArea::vertical()
+            .id_salt("handwriting-results")
+            .auto_shrink([false, true])
+            .show(&mut results_ui, |ui| {
+                for row in prediction_rows(&self.results, tex, settings.prefer_typst_names) {
+                    let mut tooltip = format!("Insert {}", row.insertion);
+                    if tex && let Some(package) = &self.results[row.index].package {
+                        tooltip.push_str(&format!("\nLaTeX package: {package}"));
+                    }
                     let prediction = ui
                         .add(
-                            egui::Label::new(format!("{}  {}", symbol.char, name))
-                                .wrap_mode(egui::TextWrapMode::Extend)
-                                .selectable(false)
-                                .sense(if tex || !symbol.tex_only {
-                                    egui::Sense::click()
-                                } else {
-                                    egui::Sense::hover()
-                                }),
+                            egui::Button::new(&row.caption)
+                                .fill(ui.visuals().extreme_bg_color.to_opaque())
+                                .stroke(egui::Stroke::NONE)
+                                .wrap_mode(egui::TextWrapMode::Truncate),
                         )
-                        .on_hover_text(if !tex && symbol.tex_only {
-                            "No verified Typst mapping yet".to_string()
-                        } else if let Some(package) = &symbol.package {
-                            format!("Click to insert. LaTeX package: {package}")
-                        } else {
-                            "Click to insert this symbol".to_string()
-                        });
+                        .on_hover_text(tooltip);
                     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
                     crate::desktop_test::observe(
-                        &format!("drawing.prediction.{_index}"),
+                        &format!("drawing.prediction.{}", row.index),
                         &prediction,
                     );
                     if prediction.clicked() {
-                        selected = Some(if tex {
-                            symbol.tex.clone().unwrap_or_else(|| symbol.char.clone())
-                        } else {
-                            symbol.typst.clone().unwrap_or_else(|| symbol.char.clone())
-                        });
+                        selected = Some(row.insertion);
                     }
-                    ui.add_space(8.0);
                 }
             });
-        }
         if response.clicked()
             && selected.is_none()
+            && !clear.clicked()
             && self.strokes.iter().map(Vec::len).sum::<usize>() < 4096
             && let Some(point) = response.interact_pointer_pos()
         {
@@ -377,6 +538,185 @@ impl Drawing {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn typst_symbol_insertion_escapes_delimiters_and_never_quotes_unicode() {
+        let symbols: Vec<Symbol> =
+            serde_json::from_str(include_str!("../assets/handwriting/detexify-symbols.json"))
+                .unwrap();
+        let dollar = symbols
+            .iter()
+            .find(|s| s.tex.as_deref() == Some("\\textdollar"))
+            .unwrap();
+        assert_eq!(
+            prediction_insertion(dollar, false, true).as_deref(),
+            Some("\\$")
+        );
+    }
+    fn symbol(character: &str, tex: &str, typst: Option<&str>) -> Symbol {
+        Symbol {
+            char: character.into(),
+            tex: Some(tex.into()),
+            typst: typst.map(str::to_owned),
+            detexify: false,
+            tex_only: false,
+            package: None,
+        }
+    }
+    #[test]
+    fn insertion_precedence_and_raw_unicode_apply_to_both_engines() {
+        for (candidate, expected, unicode) in [
+            (symbol("$", "\\textdollar", Some("\"$\"")), "\\$", "\\$"),
+            (symbol("#", "\\#", None), "\\#", "\\#"),
+            (symbol("%", "\\%", None), "\\%", "\\%"),
+            (symbol("α", "\\alpha", None), "#sym.alpha", "α"),
+            (symbol("₫", "\\textdong", Some("\"₫\"")), "#sym.dong", "₫"),
+            (symbol("ʌ", "\\textturnv", Some("\"ʌ\"")), "ʌ", "ʌ"),
+            (symbol("", "\\mathscr{A}", Some("scr(A)")), "scr(A)", "𝒜"),
+        ] {
+            assert_eq!(
+                prediction_insertion(&candidate, false, true).as_deref(),
+                Some(expected)
+            );
+            assert_eq!(
+                prediction_insertion(&candidate, false, false).as_deref(),
+                Some(unicode)
+            );
+            assert_eq!(prediction_insertion(&candidate, true, true), candidate.tex);
+        }
+        assert!(
+            prediction_insertion(&symbol("", "\\\\", Some("#linebreak()")), false, true).is_none()
+        );
+        let mut unsupported = symbol("", "\\ataribox", None);
+        unsupported.tex_only = true;
+        assert!(prediction_insertion(&unsupported, false, true).is_none());
+        assert_eq!(
+            prediction_insertion(&unsupported, true, true).as_deref(),
+            Some("\\ataribox")
+        );
+        // Same glyph may legitimately have distinct TeX commands, but an identical
+        // insertion is never offered twice. Keep the first, highest-ranked result.
+        let candidates = vec![
+            symbol("$", "\\$", None),
+            symbol("$", "\\textdollar", None),
+            symbol("α", "\\alpha", None),
+        ];
+        let rows = prediction_rows(&candidates, false, true);
+        assert_eq!(rows.iter().map(|r| r.index).collect::<Vec<_>>(), [0, 2]);
+    }
+    #[test]
+    fn settings_select_one_engine_and_roundtrip_the_unicode_preference() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        let mut harness =
+            Harness::builder().build_ui_state(settings_ui, HandwritingSettings::default());
+        harness.run_steps(2);
+        assert_eq!(harness.state().engine, HandwritingEngine::Detexify);
+        harness.get_by_label("Detypify").click();
+        harness.run_steps(2);
+        assert_eq!(harness.state().engine, HandwritingEngine::Detypify);
+        harness.get_by_label("Prefer Typst symbol names").click();
+        harness.run_steps(2);
+        assert!(!harness.state().prefer_typst_names);
+        let saved = serde_json::to_string(harness.state()).unwrap();
+        assert_eq!(
+            serde_json::from_str::<HandwritingSettings>(&saved).unwrap(),
+            *harness.state()
+        );
+        harness.get_by_label("Detexify").click();
+        harness.run_steps(2);
+        assert_eq!(harness.state().engine, HandwritingEngine::Detexify);
+    }
+    #[test]
+    fn ranked_rows_align_right_and_click_inserts_the_displayed_language() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        for tex in [false, true] {
+            let mut drawing = Drawing::fixture();
+            drawing.results = vec![symbol("α", "\\alpha", None), symbol("$", "\\$", None)];
+            let mut harness = Harness::builder().build_ui_state(
+                move |ui, state: &mut (Drawing, Option<String>)| {
+                    state.1 = state
+                        .0
+                        .show(ui, tex, HandwritingSettings::default())
+                        .or(state.1.take());
+                },
+                (drawing, None),
+            );
+            let alpha = if tex { "α  \\alpha" } else { "α  #sym.alpha" };
+            for size in [egui::vec2(230.0, 300.0), egui::vec2(500.0, 700.0)] {
+                harness.set_size(size);
+                harness.run_steps(2);
+                let first = harness.get_by_label(alpha).rect();
+                let second = harness.get_by_label("$  \\$").rect();
+                assert!(second.top() >= first.bottom());
+                assert!((first.right() - second.right()).abs() < 0.5);
+                assert!(first.left() >= 0.0 && first.right() <= size.x);
+            }
+            let ink = harness.state().0.strokes.clone();
+            harness.get_by_label(alpha).click();
+            harness.run_steps(2);
+            assert_eq!(
+                harness.state().1.as_deref(),
+                Some(if tex { "\\alpha" } else { "#sym.alpha" })
+            );
+            assert_eq!(harness.state().0.strokes, ink);
+            harness.get_by_label("Clear").click();
+            harness.run_steps(2);
+            assert!(harness.state().0.strokes.is_empty());
+            assert!(harness.state().0.results.is_empty());
+            assert!(!harness.state().0.pending);
+        }
+    }
+    #[test]
+    fn engine_switch_preserves_ink_and_rejects_the_in_flight_result() {
+        let mut drawing = Drawing::fixture();
+        let ink = drawing.strokes.clone();
+        let (release, wait) = std::sync::mpsc::channel();
+        drawing
+            .job
+            .start("old-engine", move || {
+                wait.recv().unwrap();
+                Ok((0, vec![symbol("α", "\\alpha", None)]))
+            })
+            .unwrap();
+        drawing.configure(HandwritingEngine::Detypify);
+        assert!(
+            drawing.job.is_running(),
+            "wait for the old worker, never overlap engines"
+        );
+        assert!(drawing.pending);
+        assert_eq!(drawing.strokes, ink);
+        assert!(drawing.results.is_empty());
+        let generation = drawing.generation;
+        drawing.configure(HandwritingEngine::Detypify);
+        assert_eq!(
+            drawing.generation, generation,
+            "idle settings cannot resubmit work"
+        );
+        release.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while drawing.job.is_running() {
+            assert!(std::time::Instant::now() < deadline);
+            drawing.poll();
+            std::thread::yield_now();
+        }
+        assert!(drawing.results.is_empty());
+        assert!(drawing.pending);
+    }
+    #[test]
+    fn selected_engine_returns_only_its_own_ranked_candidates() {
+        let strokes = vec![
+            vec![egui::pos2(20.0, 30.0), egui::pos2(80.0, 30.0)],
+            vec![egui::pos2(50.0, 0.0), egui::pos2(50.0, 100.0)],
+        ];
+        for engine in HandwritingEngine::ALL {
+            let results = recognize(strokes.clone(), engine).unwrap();
+            assert!(!results.is_empty() && results.len() <= 8);
+            assert!(
+                results
+                    .iter()
+                    .all(|symbol| symbol.detexify == (engine == HandwritingEngine::Detexify))
+            );
+        }
+    }
     #[test]
     fn canvas_resize_preserves_shape_and_pointer_round_trip() {
         for size in [
@@ -420,89 +760,19 @@ mod tests {
         }
     }
     #[test]
-    fn predictions_insert_commands_without_text_selection() {
-        use egui_kittest::{Harness, kittest::Queryable as _};
-        for tex in [false, true] {
-            let mut harness = Harness::builder().build_ui_state(
-                |ui, state: &mut (Drawing, Option<String>)| {
-                    if let Some(value) = state.0.show(ui, tex) {
-                        state.1 = Some(value);
-                    }
-                },
-                (Drawing::fixture(), None),
-            );
-            harness.run_steps(2);
-            let original_strokes = harness.state().0.strokes.clone();
-            for size in [egui::vec2(230.0, 300.0), egui::vec2(500.0, 700.0)] {
-                harness.set_size(size);
-                harness.run_steps(2);
-                assert_eq!(harness.state().0.strokes, original_strokes);
-            }
-            harness
-                .get_by_label(if tex {
-                    "𝒜  \\mathcal{A}"
-                } else {
-                    "𝒜  cal(A)"
-                })
-                .click();
-            harness.run_steps(2);
-            assert_eq!(
-                harness.state().1.as_deref(),
-                Some(if tex { "\\mathcal{A}" } else { "cal(A)" })
-            );
-        }
-    }
-    #[test]
-    fn newly_mapped_predictions_are_clickable_in_typst_and_tex() {
-        use egui_kittest::{Harness, kittest::Queryable as _};
-        let symbols: Vec<Symbol> =
-            serde_json::from_str(include_str!("../assets/handwriting/detexify-symbols.json"))
-                .unwrap();
-        for (command, caption, output) in [
-            ("\\mathscr{A}", "  scr(A)", "scr(A)"),
-            ("\\textturnv", "ʌ  \\textturnv", "\"ʌ\""),
-            ("\\textdollar", "$  \\textdollar", "\"$\""),
-        ] {
-            for tex in [false, true] {
-                let symbol = symbols
-                    .iter()
-                    .find(|s| s.tex.as_deref() == Some(command))
-                    .unwrap()
-                    .clone();
-                let label = if tex {
-                    format!("{}  {command}", symbol.char)
-                } else {
-                    caption.to_owned()
-                };
-                let mut drawing = Drawing::fixture();
-                drawing.results = vec![symbol];
-                let mut harness = Harness::builder().build_ui_state(
-                    |ui, state: &mut (Drawing, Option<String>)| {
-                        state.1 = state.0.show(ui, tex).or(state.1.take());
-                    },
-                    (drawing, None),
-                );
-                harness.run_steps(2);
-                harness.get_by_label(&label).click();
-                harness.run_steps(2);
-                assert_eq!(
-                    harness.state().1.as_deref(),
-                    Some(if tex { command } else { output })
-                );
-            }
-        }
-    }
-    #[test]
     fn bundled_model_recognizes_a_dagger_offline() {
         let strokes = vec![
             vec![egui::pos2(20.0, 30.0), egui::pos2(80.0, 30.0)],
             vec![egui::pos2(50.0, 0.0), egui::pos2(50.0, 100.0)],
         ];
-        let results = recognize(strokes).unwrap();
+        let results = recognize(strokes, HandwritingEngine::Detypify).unwrap();
         assert!(
             results.iter().any(|s| s.char == "†"),
             "{:?}",
-            results.iter().map(|s| &s.names).collect::<Vec<_>>()
+            results
+                .iter()
+                .map(|s| (&s.char, &s.tex, &s.typst))
+                .collect::<Vec<_>>()
         );
     }
     #[test]
@@ -518,17 +788,13 @@ mod tests {
         let start = std::time::Instant::now();
         crate::handwriting_detexify::recognize(&strokes);
         eprintln!("Detexify cold: {:?}", start.elapsed());
-        for combined in [false, true] {
+        for engine in HandwritingEngine::ALL {
             let start = std::time::Instant::now();
             for _ in 0..20 {
-                if combined {
-                    std::hint::black_box(recognize(strokes.clone()).unwrap());
-                } else {
-                    std::hint::black_box(recognize_symbols(&strokes).unwrap());
-                }
+                std::hint::black_box(recognize(strokes.clone(), engine).unwrap());
             }
             eprintln!(
-                "combined={combined}, warm mean over 20: {:?}",
+                "engine={engine:?}, warm mean over 20: {:?}",
                 start.elapsed() / 20
             );
         }

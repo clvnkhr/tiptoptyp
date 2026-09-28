@@ -500,6 +500,8 @@ impl SettingsPanel<'_> {
                         ui.selectable_value(&mut edited.writing_language, language, language.label());
                     }
                 }).response.on_hover_text("Auto reads top-level #set text(lang: \"en\", region: \"us\") in Typst. Use region: \"gb\" for UK English. lang: \"uk\" means Ukrainian. Other languages are not checked by Harper. Computed/imported settings use the UK fallback.");
+                settings_target_anchor(ui, SettingsTarget::Handwriting, &mut settings_scroll_target);
+                crate::handwriting::settings_ui(ui, &mut edited.handwriting);
                 settings_target_anchor(ui, SettingsTarget::UnicodeWarnings, &mut settings_scroll_target);
                 ui.checkbox(&mut edited.unicode_warnings, SettingsTarget::UnicodeWarnings.label());
                 ui.checkbox(&mut edited.auto_pair_delimiters, SettingsTarget::AutoPairDelimiters.label());

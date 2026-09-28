@@ -7,12 +7,12 @@ The model runs locally through tract's Rust ONNX runtime, with transformer suppo
 
 The upstream fixed-shape ONNX export contains a constant indexing Loop unsupported by tract. `scripts/prepare-handwriting-model.py` materializes that tensor, simplifies the graph, and compares eight seeded inputs against the original ONNX Runtime output before saving. The initial validation had zero maximum absolute output difference. Learned weights are unchanged.
 
-The canvas follows upstream's 224×224, 10-pixel-padding, 8-pixel-stroke preprocessing, using a native antialiased line rasterizer. Classification is approximate: the user selects a result before text is inserted. The neural model is unchanged; the Detexify sample matcher described below runs alongside it.
+The canvas follows upstream's 224×224, 10-pixel-padding, 8-pixel-stroke preprocessing, using a native antialiased line rasterizer. Classification is approximate: the user selects a result before text is inserted. Settings selects exactly one recognizer for each drawing. Both recognizers support both Typst and TeX; the document language controls insertion, not model selection. Detexify is the default for its broader symbol coverage.
 
 ## Full Detexify samples
 
 Detypify's 411 outputs do not include calligraphic Latin letters. A separate
-local point-cloud matcher now supplements them with every accepted sample from
+local point-cloud matcher provides an alternative using every accepted sample from
 [Detexify Next](https://github.com/kirel/detexify-next) revision
 `ba0742b03b01a7a958110ced23d509a72d85744e` (MIT; `DETEXIFY-LICENSE`):
 39,494 samples across 1,123 symbol definitions. The upstream rejected list is
@@ -24,15 +24,12 @@ ink points and stored as 16-bit values in 130-byte records (2-byte class index,
 64 little-endian coordinates). The sample asset is 5,134,220 bytes. A coarse
 8×8 descriptor selects 64 classes and at most three reference samples each;
 symmetric nearest-point distances then rank up to eight distinct commands.
-There is no runtime download or additional dependency. Four separately ranked
-calligraphic suggestions are retained so similar letters and font variants in
-the larger dataset do not crowd them out. Predictor groups are shown separately
-because their scores are not comparable.
+There is no runtime download or additional dependency. Results are one distance-ranked list of up to eight commands; calligraphic candidates compete in that same list. No second recognizer or extra calligraphic list is appended.
 
 The separate evaluation fixture contains every tenth accepted sample. Evaluation
 removes those records from its reference set; production uses the full set.
 The sampled evaluation finds 342/421 expected commands among eight general
-suggestions and 122/128 calligraphic letters among four dedicated suggestions.
+suggestions. The former dedicated calligraphic list has been removed so the result order reflects the selected recognizer alone.
 This split is not writer-disjoint and does not establish general handwriting
 accuracy. The classifier recognizes individual symbols, not whole formulas.
 
@@ -41,7 +38,7 @@ mapped). These include `cal(A)`, `scr(A)`, `bb(h)`, upright Greek, IPA letters
 and marks, punctuation, currencies, zodiac signs and mathematical aliases.
 TeX/miTeX insertion retains the original LaTeX command. Unicode symbols work in
 Typst even when they have no named `sym` alias. Text/IPA characters and ASCII
-punctuation are quoted so they remain upright and cannot become Typst syntax.
+punctuation may be quoted in the internal mapping metadata; insertion resolves the actual character and never emits those string delimiters.
 Negated relations retain combining negation marks; `\triangle` is △, not Δ.
 Glyph shapes can differ between fonts and LaTeX packages; a mapping does not
 promise identical font outlines.
@@ -58,7 +55,7 @@ it does not require these websites at generation time or runtime.
 Three definitions still have no Typst insertion: `\\textraisevibyi` (a raised
 phonetic glyph without a settled text equivalent), `\\texttoneletterstem` (a
 font-specific tone component), and `\\ataribox` (the Atari logo). They remain
-available in TeX and show “No verified Typst mapping yet.” This is a short list
+available in TeX and are omitted in Typst. This is a short list
 of unresolved conversions, not a limitation of Typst. Tooltips also identify
 required LaTeX packages from upstream metadata.
 
@@ -70,7 +67,39 @@ the sample or holdout binaries, recognition ranking, or background-worker work.
 
 The canvas fills its panel. Logical drawing coordinates preserve the full paper
 and proportions across wide/tall resizing. Ink remains four logical pixels wide.
-Predictions are non-selectable text painted last, in normal text color; ink blends
-only 25% of that color into the background. Clicking an available prediction still
-inserts it. Empty drawings do not start recognition; work remains bounded to one
+Ink uses the normal text color. Predictions are compact, right-aligned rows painted over the ink with opaque backgrounds. Each row shows the glyph (when available) and the exact command for the current language. Clicking inserts that command. Empty drawings do not start recognition; work remains bounded to one
 worker per window and 4,096 input points.
+
+## Selection, insertion and bundled size
+
+Settings → Handwriting recognition selects `detexify` (default) or `detypify`.
+An engine switch preserves the ink, rejects any old completion and queues one
+recognition with the selected engine after the current worker finishes. Repaints
+and output-format changes never launch another inference.
+
+| Recognizer | Production assets | Bytes | MiB |
+| --- | --- | ---: | ---: |
+| Detypify | ONNX model + 411 labels | 4,640,866 | 4.43 |
+| Detexify | 39,494 samples + 1,123 labels | 5,269,345 | 5.03 |
+
+These are embedded asset contributions, not differential executable sizes.
+Detypify additionally uses tract's linked ONNX runtime; Detexify has no extra
+runtime dependency. Both assets stay bundled so users can switch offline.
+The separate 533 KiB held-out evaluation file is test-only. The shared verified
+Typst name catalogue is about 22 KiB.
+
+Typst insertion defaults to escaped punctuation, then a verified full
+`#sym.name`, then an unquoted Unicode glyph. Style expressions such as `cal(A)`
+remain available where a symbol alias does not exist. Disable **Prefer Typst
+symbol names** for Unicode; delimiters such as `$` still use `\$`. TeX always
+uses the original command when one is available. Layout-only `\\` is excluded.
+
+Regenerate the name catalogue with:
+
+```sh
+python3 scripts/prepare-handwriting-symbol-names.py toolchain/bin/typst-aarch64-apple-darwin
+```
+
+It enumerates the bundled Typst 0.15.1 `sym` module, checks every exported alias
+against the compiler, rejects deprecated names, and keeps verified Detypify
+canonical names where available. Runtime insertion never probes the compiler.

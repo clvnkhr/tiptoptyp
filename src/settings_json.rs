@@ -151,6 +151,7 @@ mod tests {
     #[test]
     fn impossible_choices_identify_the_field_and_allowed_options() {
         for (path, field, valid) in [
+            ("/handwriting/engine", "handwriting.engine", "detexify"),
             ("/writing_language", "writing_language", "british"),
             ("/interface_theme", "interface_theme", "System"),
             ("/tex/build_engine", "tex.build_engine", "tectonic"),

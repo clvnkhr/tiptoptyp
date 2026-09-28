@@ -875,6 +875,7 @@ enum SettingsTarget {
     Indentation,
     AsciiPunctuation,
     EnglishGrammar,
+    Handwriting,
     UnicodeWarnings,
     MitexDollars,
     Snippets,
@@ -907,7 +908,7 @@ enum SettingsTarget {
 }
 
 impl SettingsTarget {
-    const ALL: [Self; 44] = [
+    const ALL: [Self; 45] = [
         Self::Appearance,
         Self::TypstSyntax,
         Self::LightTheme,
@@ -923,6 +924,7 @@ impl SettingsTarget {
         Self::Indentation,
         Self::AsciiPunctuation,
         Self::EnglishGrammar,
+        Self::Handwriting,
         Self::UnicodeWarnings,
         Self::MitexDollars,
         Self::Snippets,
@@ -970,6 +972,7 @@ impl SettingsTarget {
             Self::AutoPairDelimiters => "Auto-close delimiters",
             Self::Indentation => "Tab inserts",
             Self::AsciiPunctuation => "Use ASCII punctuation when typing",
+            Self::Handwriting => "Handwriting recognition",
             Self::EnglishGrammar => "Offline English spelling and grammar (Typst / TeX)",
             Self::UnicodeWarnings => "Flag invisible and confusable characters",
             Self::Snippets => "Custom snippets",
@@ -1020,6 +1023,7 @@ impl SettingsTarget {
             | Self::Indentation
             | Self::AsciiPunctuation
             | Self::EnglishGrammar
+            | Self::Handwriting
             | Self::UnicodeWarnings
             | Self::MitexDollars
             | Self::Snippets
@@ -1068,6 +1072,9 @@ impl SettingsTarget {
             Self::WrapLines => "editor soft wrapping",
             Self::LineNumbers => "editor gutter",
             Self::StickyContextRows => "editor headings scopes sections breadcrumbs",
+            Self::Handwriting => {
+                "drawing symbol recognizer detexify detypify model engine typst names unicode insertion"
+            }
             Self::EnglishGrammar => {
                 "writing proofreading spelling grammar english harper offline tex typst language dialect british american UK US auto"
             }
@@ -7327,6 +7334,7 @@ impl EditorApp {
                 error: self.workspace_error.as_deref(),
                 order: self.settings.explorer_order,
                 git_visible: self.git.visible,
+                handwriting: self.settings.handwriting,
                 tex: self.document().kind() == DocumentKind::Tex
                     || self.document().config().is_some(),
             },

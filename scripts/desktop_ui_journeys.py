@@ -315,9 +315,29 @@ class EditorJourneys:
         old_size = state["document"]["native_size"]
         self.wait("drawing survives resize", lambda d: d["native_size"] != old_size and d["drawing"]["strokes"] == strokes)
         self.wait_target("drawing.canvas")
-        prediction = next(p for p in self.snapshot()["document"]["drawing"]["predictions"] if p["detexify"] and p["tex"] == "\\mathcal{A}")
+        prediction = next(p for p in self.snapshot()["document"]["drawing"]["predictions"] if p["typst"] is not None)
         self.click("drawing.prediction." + str(prediction["index"]))
         self.source_is(prediction["typst"])
+        self.key(6)
+        self.source_is("")
+        self.settings()
+        self.setting_section("handwriting", "Handwriting recognition")
+        self.click("settings.handwriting.Detypify")
+        self.click("settings.handwriting.names")
+        self.close_settings()
+        state = self.wait("only Detypify re-recognizes retained ink", lambda d: d["drawing"]["engine"] == "detypify" and not d["drawing"]["busy"] and bool(d["drawing"]["predictions"]) and all(not p["detexify"] for p in d["drawing"]["predictions"]), timeout=30)
+        assert state["document"]["drawing"]["strokes"] == strokes
+        prediction = state["document"]["drawing"]["predictions"][0]
+        assert not prediction["typst"].startswith("#sym."), "Unicode preference should apply"
+        self.click("drawing.prediction." + str(prediction["index"]))
+        self.source_is(prediction["typst"])
+        self.settings()
+        self.setting_section("handwriting", "Handwriting recognition")
+        self.click("settings.handwriting.Detexify")
+        self.click("settings.handwriting.names")
+        self.close_settings()
+        self.click("drawing.clear")
+        self.wait("Clear discards ink and old predictions", lambda d: not d["drawing"]["strokes"] and not d["drawing"]["predictions"] and not d["drawing"]["busy"])
         self.click("explorer.maximize.Draw symbol")
         self.close_scratch(count)
 

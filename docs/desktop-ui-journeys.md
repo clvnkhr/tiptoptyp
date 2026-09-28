@@ -199,5 +199,5 @@ The native driver rejects a locked desktop before attempting input.
 
 `--journey drawing` maximizes Draw symbol, draws three native pointer strokes,
 waits for real Detexify predictions, resizes the window, checks the retained ink,
-and clicks a prediction to insert into a scratch document. No model result or
+and clicks the first insertable ranked prediction into a scratch document. It then switches to Detypify and Unicode output through Settings, checks that the retained ink is re-recognized by only that engine, inserts a result, and clears the canvas. The expected insertion comes from the same language/preference resolver used by the displayed row. No model result or
 canvas state is injected into the app.

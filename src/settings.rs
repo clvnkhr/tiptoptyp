@@ -258,6 +258,37 @@ impl WritingLanguage {
     }
 }
 
+/// Exactly one offline recognizer runs for each drawing, in either document language.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum HandwritingEngine {
+    Detypify,
+    #[default]
+    Detexify,
+}
+impl HandwritingEngine {
+    pub(crate) const ALL: [Self; 2] = [Self::Detypify, Self::Detexify];
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Detypify => "Detypify",
+            Self::Detexify => "Detexify",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct HandwritingSettings {
+    pub(crate) engine: HandwritingEngine,
+    pub(crate) prefer_typst_names: bool,
+}
+impl Default for HandwritingSettings {
+    fn default() -> Self {
+        Self {
+            engine: HandwritingEngine::default(),
+            prefer_typst_names: true,
+        }
+    }
+}
+
 /// Persisted user choices for the current settings schema.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum ToolbarStyle {
@@ -305,6 +336,8 @@ pub(crate) struct AppSettings {
     pub(crate) snippets: Vec<crate::snippets::Snippet>,
     #[serde(default)]
     pub(crate) writing_language: WritingLanguage,
+    #[serde(default)]
+    pub(crate) handwriting: HandwritingSettings,
     #[serde(default)]
     pub(crate) unicode_warnings: bool,
     #[serde(default = "default_true")]
@@ -391,6 +424,7 @@ impl Default for AppSettings {
             english_grammar: false,
             snippets: Vec::new(),
             writing_language: WritingLanguage::Auto,
+            handwriting: HandwritingSettings::default(),
             unicode_warnings: false,
             sticky_context_rows: true,
             auto_pair_delimiters: true,
@@ -465,6 +499,7 @@ impl AppSettings {
             english_grammar,
             snippets,
             writing_language,
+            handwriting,
             unicode_warnings,
             sticky_context_rows,
             auto_pair_delimiters,
@@ -831,6 +866,7 @@ mod tests {
             english_grammar: false,
             snippets: Vec::new(),
             writing_language: WritingLanguage::Auto,
+            handwriting: HandwritingSettings::default(),
             unicode_warnings: false,
             sticky_context_rows: false,
             auto_pair_delimiters: false,

@@ -29,6 +29,7 @@ pub(super) struct Input<'a> {
     pub order: ExplorerOrder,
     pub git_visible: bool,
     pub tex: bool,
+    pub handwriting: crate::settings::HandwritingSettings,
 }
 
 pub(super) struct ContextMenu {
@@ -329,7 +330,7 @@ pub(super) fn show(
                 }
             }
             ExplorerSection::DrawSymbol => {
-                output.insert_symbol = drawing.show(ui, input.tex);
+                output.insert_symbol = drawing.show(ui, input.tex, input.handwriting);
             }
             ExplorerSection::Git => {
                 output.git = Some(show_git(ui));
