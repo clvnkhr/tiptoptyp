@@ -153,8 +153,8 @@ def strokes_picture(strokes):
 
 def output(command, mode, package):
     if command == r"\\":
-        # Show its effect in context: this command starts a new math line.
-        return r"\ensuremath{\begin{gathered}a\\b\end{gathered}}"
+        # This command changes layout; it has no standalone glyph to render.
+        return r"\textcolor{gray}{line-break control}"
     if command == r"\----":
         return r"---"
     if package == "tipa":
@@ -247,7 +247,7 @@ def main():
 \begin{center}
 {\Large Handwriting symbol atlas}\quad{\small 1,123 Detexify definitions; one accepted sample per symbol}
 \end{center}
-\noindent Each drawing is the first accepted Detexify stroke sample, simplified for print while retaining pen lifts. “Typst insertion” is the current app mapping; — means no verified mapping. @SUMMARY@ TeX output is rendered with the listed package in this document’s shared TeX environment, so package/font variants may differ from another installation. Commands are shown literally in monospace. If a local font cannot show a mapped character, its cell gives the Unicode codepoint.\par\smallskip
+\noindent Each drawing is the first accepted Detexify stroke sample, simplified for print while retaining pen lifts. “Typst insertion” is the current app mapping; — means no verified mapping. @SUMMARY@ TeX output is rendered with the listed package in this document’s shared TeX environment, so package/font variants may differ from another installation. Commands are shown literally in monospace. Commands without a standalone glyph are labeled by effect. If a local font cannot show a mapped character, its cell gives the Unicode codepoint.\par\smallskip
 \small
 \begin{longtable}{@{}S C T O @{\hspace{2mm}} S C T O@{}}
 \toprule
