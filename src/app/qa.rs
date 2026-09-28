@@ -1072,8 +1072,10 @@ mod tests {
         assert!(harness.get_by_label("Fetch").rect().right() <= width);
         assert!(harness.get_by_label("Stage all").rect().left() >= 0.0);
         assert!(
-            harness.get_by_label("4 files · 2 staged").rect().bottom()
-                <= harness.get_by_label("Stage all").rect().top()
+            (harness.get_by_label("4 files · 2 staged").rect().center().y
+                - harness.get_by_label("Stage all").rect().center().y)
+                .abs()
+                < 1.0
         );
     }
 }

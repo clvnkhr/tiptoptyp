@@ -29,6 +29,9 @@ use std::path::Path;
 #[derive(Default)]
 pub(super) struct SettingsUiState {
     pub(super) json_mode: bool,
+    pub(super) json_search: bool,
+    pub(super) json_query: String,
+    pub(super) json_match: Option<usize>,
     pub(super) json_draft: Option<crate::settings_json::Draft>,
     pub(super) query: String,
     /// The owner sets this when a shortcut should return focus to the search
@@ -40,6 +43,7 @@ pub(super) struct SettingsUiState {
 }
 
 pub(super) enum SettingsAction {
+    OpenDocumentation(String),
     ChooseTool(ToolPickerTarget),
     ShowOverrides { dark: bool },
     ShowShortcuts,
@@ -124,24 +128,90 @@ impl SettingsPanel<'_> {
             }
         }
         ui.weak("Changes are checked as you type and applied only when saved. Tool-specific configuration keys are validated by the tool itself.");
+        let mut find = false;
+        let mut focus_match = false;
+        if self.state.focus_search {
+            self.state.json_search = true;
+        }
+        if self.state.json_search {
+            ui.horizontal(|ui| {
+                ui.label("Find in JSON");
+                let query = ui.text_edit_singleline(&mut self.state.json_query);
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("settings.json.find", &query);
+                if self.state.focus_search {
+                    query.request_focus();
+                    self.state.focus_search = false;
+                }
+                focus_match = (query.has_focus() || query.lost_focus())
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                find = query.changed() || focus_match;
+                if query.changed() {
+                    self.state.json_match = None;
+                }
+                focus_match |= ui.button("Next match").clicked();
+                find |= focus_match;
+                if ui.small_button("Close search").clicked() {
+                    self.state.json_search = false;
+                }
+            });
+        }
         egui::ScrollArea::vertical()
             .id_salt("settings-json-scroll")
             .show(ui, |ui| {
-                let response = ui.add(
-                    egui::TextEdit::multiline(&mut draft.text)
-                        .code_editor()
-                        .desired_width(f32::INFINITY)
-                        .desired_rows(30),
+                let response = super::settings_code::editor(
+                    ui,
+                    "settings-json",
+                    &mut draft.text,
+                    "json",
+                    self.settings,
+                    30,
                 );
+                if find && !self.state.json_query.is_empty() {
+                    let start = self.state.json_match.map_or(0, |i| {
+                        draft.text.floor_char_boundary(
+                            (i + self.state.json_query.len()).min(draft.text.len()),
+                        )
+                    });
+                    let found = draft.text[start..]
+                        .find(&self.state.json_query)
+                        .map(|i| i + start)
+                        .or_else(|| draft.text[..start].find(&self.state.json_query));
+                    self.state.json_match = found;
+                    if let Some(found) = found {
+                        let first = draft.text[..found].chars().count();
+                        let last = first + self.state.json_query.chars().count();
+                        if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), response.id) {
+                            state
+                                .cursor
+                                .set_char_range(Some(egui::text::CCursorRange::two(
+                                    egui::text::CCursor::new(first),
+                                    egui::text::CCursor::new(last),
+                                )));
+                            state.store(ui.ctx(), response.id);
+                        }
+                        if focus_match {
+                            response.request_focus();
+                        }
+                    }
+                }
                 #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
                 crate::desktop_test::observe("settings.json", &response);
                 if response.changed() {
+                    self.state.json_match = None;
                     draft.validate();
                 }
             });
     }
 
     pub(super) fn show(&mut self, ui: &mut egui::Ui) {
+        let documentation_id = egui::Id::new(("settings-documentation", ui.ctx().viewport_id()));
+        if let Some(url) = ui
+            .ctx()
+            .data_mut(|data| data.remove_temp::<String>(documentation_id))
+        {
+            self.actions.push(SettingsAction::OpenDocumentation(url));
+        }
         let _span = crate::performance::span("ui.settings");
         if self.snapshot_scene == Some(UiSnapshotScene::SettingsFontPicker) {
             ui.heading("Font selection");
@@ -441,9 +511,12 @@ impl SettingsPanel<'_> {
                     );
                 }
 
-                let _comfy = ui.checkbox(&mut edited.comfy_preview, "Comfy preview — match page and text to the interface");
+                let _comfy = ui.checkbox(&mut edited.comfy_background, "Comfy background — match page to the interface");
                 #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
                 if ui.is_rect_visible(_comfy.rect) { crate::desktop_test::observe("settings.comfy", &_comfy); }
+                let _comfy_text = ui.checkbox(&mut edited.comfy_text, "Comfy text — match text to the interface");
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                if ui.is_rect_visible(_comfy_text.rect) { crate::desktop_test::observe("settings.comfy.text", &_comfy_text); }
                 settings_target_anchor(
                     ui,
                     SettingsTarget::PageTheme,
@@ -521,9 +594,34 @@ impl SettingsPanel<'_> {
                 settings_target_anchor(ui, SettingsTarget::AsciiPunctuation, &mut settings_scroll_target);
                 ui.checkbox(&mut edited.ascii_punctuation, SettingsTarget::AsciiPunctuation.label())
                     .on_hover_text("Convert full-width punctuation, including 。 to a period. Off preserves the characters sent by your keyboard. Pasted text is unchanged.");
+                settings_target_anchor(ui, SettingsTarget::Templates, &mut settings_scroll_target);
+                egui::CollapsingHeader::new("Document templates").default_open(self.state.query.to_lowercase().contains("template")).show(ui, |ui| {
+                    ui.weak("These templates appear in New from template. Changes are saved with Settings.");
+                    let mut remove = None;
+                    for (index, template) in edited.templates.iter_mut().enumerate() {
+                        ui.push_id(("template", index), |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label("Name"); ui.text_edit_singleline(&mut template.name);
+                                if ui.small_button("Remove").clicked() { remove = Some(index); }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.selectable_value(&mut template.language, crate::document_templates::Language::Typst, "Typst");
+                                ui.selectable_value(&mut template.language, crate::document_templates::Language::Tex, "TeX");
+                            });
+                            super::settings_code::editor(ui, "template-source", &mut template.source, template.language.extension(), self.settings, 8);
+                            ui.separator();
+                        });
+                    }
+                    if let Some(index) = remove { edited.templates.remove(index); }
+                    if ui.button("Add template").clicked() { edited.templates.push(crate::document_templates::Template {name:"New template".into(), language:crate::document_templates::Language::Typst, source:String::new()}); }
+                    if ui.button("Restore default templates").clicked() { edited.templates = crate::document_templates::defaults(); }
+                });
                 settings_target_anchor(ui, SettingsTarget::Snippets, &mut settings_scroll_target);
                 ui.collapsing("Custom snippets", |ui| {
-                    ui.label("Type a prefix, then accept its completion. Use ${1:default} for a field and $0 for the final cursor.");
+                    ui.label("Example: type eq and accept completion; Tab moves through fields, and $0 is the final cursor. Repeated $1 mirrors the first field.");
+                    ui.monospace("Prefix: eq · Language: Typst · Description: Display equation");
+                    let mut example = "$ ${1:x} = ${2:y} $\n$0";
+                    super::settings_code::editor(ui, "snippet-example", &mut example, "typ", self.settings, 2);
                     let mut remove = None;
                     for (index, snippet) in edited.snippets.iter_mut().enumerate() {
                         ui.push_id(index, |ui| {
@@ -539,7 +637,7 @@ impl SettingsPanel<'_> {
                                 }
                             });
                             ui.text_edit_singleline(&mut snippet.description).on_hover_text("Description shown in completion suggestions");
-                            ui.add(egui::TextEdit::multiline(&mut snippet.body).code_editor().desired_rows(3));
+                            super::settings_code::editor(ui, "snippet-body", &mut snippet.body, if snippet.language == crate::snippets::Language::Tex { "tex" } else { "typ" }, self.settings, 5);
                             ui.separator();
                         });
                     }
@@ -826,6 +924,7 @@ impl SettingsPanel<'_> {
                     &mut edited.typst,
                     staged_typst,
                     deterministic_settings,
+                    self.settings,
                 ) {
                     self.actions.push(SettingsAction::ChooseTool(ToolPickerTarget::Typst));
                 }
@@ -847,6 +946,7 @@ impl SettingsPanel<'_> {
                     &mut edited.tinymist,
                     staged_tinymist,
                     deterministic_settings,
+                    self.settings,
                 ) {
                     self.actions.push(SettingsAction::ChooseTool(ToolPickerTarget::Tinymist));
                 }
@@ -859,18 +959,21 @@ impl SettingsPanel<'_> {
                 ui.add_space(theme::SPACE.small);
                 ui.scope(|ui| {
                     ui.strong("TeX tools");
-                    show_tex_preferences(ui, &mut edited.tex, self.tex_tools);
+                    show_tex_preferences(ui, &mut edited.tex, self.tex_tools, self.settings);
                     for (kind, preference, resolution) in [
                         (crate::toolchain::ToolKind::Tectonic, &mut edited.tex.tectonic, &self.tex_tools.tectonic),
                         (crate::toolchain::ToolKind::Texlab, &mut edited.tex.texlab, &self.tex_tools.texlab),
                         (crate::toolchain::ToolKind::Badness, &mut edited.tex.badness, &self.tex_tools.badness),
                         (crate::toolchain::ToolKind::TexFmt, &mut edited.tex.tex_fmt, &self.tex_tools.tex_fmt),
                     ] {
-                        if tool_preference_editor(ui, kind.label(), preference, resolution, deterministic_settings) {
+                        if tool_preference_editor(ui, kind.label(), preference, resolution, deterministic_settings, self.settings) {
                             self.actions.push(SettingsAction::ChooseTool(ToolPickerTarget::Tex(kind)));
                         }
                         if !deterministic_settings && let Some(reason) = &resolution.fallback_reason { fallback_notice(ui, kind.label(), reason); }
                     }
+                    configuration_editor(ui, "TexLab configuration (JSON)", &mut edited.tex.texlab_configuration, || crate::tex::settings::TexSettings::default().texlab_configuration, self.settings, &mut edited.tex.texlab_ignored_codes);
+                    configuration_editor(ui, "Badness configuration (JSON)", &mut edited.tex.badness_configuration, || crate::tex::settings::TexSettings::default().badness_configuration, self.settings, &mut edited.tex.badness_ignored_codes);
+
                 });
                 settings_target_anchor(
                     ui,
@@ -1270,6 +1373,7 @@ fn show_tex_preferences(
     ui: &mut egui::Ui,
     settings: &mut crate::tex::settings::TexSettings,
     tools: &crate::tex::tools::TexTools,
+    _app_settings: &AppSettings,
 ) {
     use crate::tex::settings::{BuildEngine, Formatter};
     ui.checkbox(&mut settings.build_enabled, "Build TeX documents");
@@ -1316,48 +1420,6 @@ fn show_tex_preferences(
         "Use TeX formatter for auto-miTeX math",
     )
     .on_hover_text("Only math payloads are formatted. Surrounding Typst remains unchanged.");
-    ui.horizontal(|ui| {
-        ui.label("Ignored diagnostic codes:");
-        let id = ui.id().with("ignored-codes-draft");
-        let mut codes = ui
-            .ctx()
-            .data(|data| data.get_temp::<(Vec<String>, String)>(id))
-            .filter(|(original, _)| original == &settings.ignored_diagnostic_codes)
-            .map(|(_, text)| text)
-            .unwrap_or_else(|| settings.ignored_diagnostic_codes.join(", "));
-        if ui
-            .add(egui::TextEdit::singleline(&mut codes).hint_text("e.g. redundant-script-braces"))
-            .changed()
-        {
-            settings.ignored_diagnostic_codes = codes
-                .split(',')
-                .map(str::trim)
-                .filter(|code| !code.is_empty())
-                .map(str::to_owned)
-                .collect();
-        }
-        ui.ctx().data_mut(|data| {
-            data.insert_temp(id, (settings.ignored_diagnostic_codes.clone(), codes))
-        });
-    });
-    ui.label(
-        egui::RichText::new(
-            "Defaults: no codes are ignored. Enter comma-separated codes (for example redundant-script-braces). Problems shows codes beside the provider: Badness · Code: \"redundant-script-braces\".",
-        )
-        .weak(),
-    );
-    configuration_editor(
-        ui,
-        "TexLab configuration (JSON)",
-        &mut settings.texlab_configuration,
-        || crate::tex::settings::TexSettings::default().texlab_configuration,
-    );
-    configuration_editor(
-        ui,
-        "Badness configuration (JSON)",
-        &mut settings.badness_configuration,
-        || crate::tex::settings::TexSettings::default().badness_configuration,
-    );
     ui.label(
         egui::RichText::new(
             "The main buffer is built from the editor; included files are read from disk.",
@@ -1366,13 +1428,57 @@ fn show_tex_preferences(
     );
 }
 
+fn ignored_codes_editor(ui: &mut egui::Ui, ignored_codes: &mut Vec<String>) {
+    ui.horizontal(|ui| {
+        ui.label("Ignored diagnostic codes:");
+        let id = ui.id().with("ignored-codes-draft");
+        let mut codes = ui
+            .ctx()
+            .data(|data| data.get_temp::<(Vec<String>, String)>(id))
+            .filter(|(original, _)| original == &*ignored_codes)
+            .map(|(_, text)| text)
+            .unwrap_or_else(|| ignored_codes.join(", "));
+        if ui
+            .add(egui::TextEdit::singleline(&mut codes).hint_text("e.g. redundant-script-braces"))
+            .changed()
+        {
+            *ignored_codes = codes
+                .split(',')
+                .map(str::trim)
+                .filter(|code| !code.is_empty())
+                .map(str::to_owned)
+                .collect();
+        }
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(id, (ignored_codes.clone(), codes)));
+    });
+    ui.weak("Comma-separated codes, for this provider only. Empty means no exclusions.");
+}
+
 fn configuration_editor(
     ui: &mut egui::Ui,
     label: &str,
     value: &mut serde_json::Value,
     default: impl FnOnce() -> serde_json::Value,
+    app_settings: &AppSettings,
+    ignored_codes: &mut Vec<String>,
 ) {
-    egui::CollapsingHeader::new(label).show(ui, |ui| {
+    let (example, docs) = if label.starts_with("TexLab") {
+        (
+            r#"{"texlab":{"diagnosticsDelay":500}}"#,
+            "https://github.com/latex-lsp/texlab/wiki/Configuration#texlabdiagnosticsdelay",
+        )
+    } else {
+        (
+            r#"{"lineWidth":100,"indentWidth":2}"#,
+            "https://badness.dev/guide/editor-setup.html",
+        )
+    };
+    let header = egui::CollapsingHeader::new(label).show(ui, |ui| {
+        super::settings_controls::documentation_link(ui, "Configuration options", docs);
+        ui.weak("Example override:");
+        ui.monospace(example);
+        ignored_codes_editor(ui, ignored_codes);
         ui.weak(
             "These are the settings sent to the language server. Edit and apply to override them.",
         );
@@ -1383,12 +1489,7 @@ fn configuration_editor(
             .filter(|(original, _)| original == value)
             .map(|(_, draft)| draft)
             .unwrap_or_else(|| serde_json::to_string_pretty(value).unwrap());
-        ui.add(
-            egui::TextEdit::multiline(&mut text)
-                .code_editor()
-                .desired_width(f32::INFINITY)
-                .desired_rows(6),
-        );
+        super::settings_code::editor(ui, "configuration-code", &mut text, "json", app_settings, 6);
         let parsed = serde_json::from_str::<serde_json::Value>(&text)
             .map_err(|e| e.to_string())
             .and_then(|v| {
@@ -1414,6 +1515,11 @@ fn configuration_editor(
         ui.ctx()
             .data_mut(|data| data.insert_temp(id, (value.clone(), text)));
     });
+    header.header_response.on_hover_ui(|ui| {
+        ui.label("Override this language server’s settings; the defaults are shown in the editor.");
+        ui.monospace(example);
+        super::settings_controls::documentation_link(ui, "Configuration options", docs);
+    });
 }
 
 #[cfg(test)]
@@ -1429,14 +1535,37 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    fn documentation_link_queues_the_exact_url_without_opening_a_browser() {
+        let mut harness = Harness::builder().build_ui(|ui| {
+            super::super::settings_controls::documentation_link(
+                ui,
+                "Options",
+                "https://badness.dev/reference/cli.html#options",
+            );
+        });
+        harness.run();
+        harness.get_by_label("Options").click();
+        harness.run();
+        let id = egui::Id::new(("settings-documentation", harness.ctx.viewport_id()));
+        assert_eq!(
+            harness
+                .ctx
+                .data_mut(|data| data.remove_temp::<String>(id))
+                .as_deref(),
+            Some("https://badness.dev/reference/cli.html#options")
+        );
+    }
+
+    #[test]
     fn ignored_diagnostic_codes_keep_the_comma_while_typing() {
         use crate::tex::settings::TexSettings;
         use egui_kittest::kittest::by;
-        let tools = crate::tex::tools::TexTools::resolve(&TexSettings::default());
         let mut harness = Harness::builder()
             .with_size(Vec2::new(900.0, 1200.0))
             .build_ui_state(
-                |ui, settings: &mut TexSettings| show_tex_preferences(ui, settings, &tools),
+                |ui, settings: &mut TexSettings| {
+                    ignored_codes_editor(ui, &mut settings.badness_ignored_codes)
+                },
                 TexSettings::default(),
             );
         harness.run();
@@ -1452,10 +1581,7 @@ mod tests {
             .get(by().role(egui::accesskit::Role::TextInput))
             .type_text(" second");
         harness.run();
-        assert_eq!(
-            harness.state().ignored_diagnostic_codes,
-            ["first", "second"]
-        );
+        assert_eq!(harness.state().badness_ignored_codes, ["first", "second"]);
     }
 
     #[test]
@@ -1465,7 +1591,9 @@ mod tests {
         let mut harness = Harness::builder()
             .with_size(Vec2::new(700.0, 600.0))
             .build_ui_state(
-                |ui, settings: &mut TexSettings| show_tex_preferences(ui, settings, &tools),
+                |ui, settings: &mut TexSettings| {
+                    show_tex_preferences(ui, settings, &tools, &AppSettings::default())
+                },
                 TexSettings::default(),
             );
         harness.run();

@@ -1296,7 +1296,15 @@ pub(super) fn explorer_index_row(
     let left = rect.left() + theme::SPACE.small + indent;
     let show_detail = detail.is_some() && rect.width() >= METRICS.explorer.detail_breakpoint;
     let detail_width = if show_detail {
-        METRICS.explorer.detail_width
+        painter
+            .layout_no_wrap(
+                detail.unwrap_or_default().into(),
+                font.clone(),
+                ui.visuals().weak_text_color(),
+            )
+            .size()
+            .x
+            + theme::SPACE.small
     } else {
         0.0
     };

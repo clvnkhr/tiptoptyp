@@ -376,3 +376,55 @@ The maintained gallery was regenerated in one session; all 25 PNGs validate and
 the drawing scene was inspected. These captures verify the result-row appearance,
 not native preview composition. Truncation and hover geometry are covered by
 focused deterministic tests.
+
+## 2026-09-28 — Settings code editors and compact explorer controls
+
+Settings JSON, binary environment/configuration, templates, and snippets now share
+cached syntax highlighting and the main editor's line-number baseline and wrapped
+line mapping. JSON rainbow brackets skip quoted/escaped delimiters. Cmd+F stays in
+JSON; typing preserves query focus, and Enter/Next selects the source match.
+The native snippet journey exposed Enter losing focus before selection; its fix
+is covered by a semantic typing regression and the real JSON-search/edit/save path.
+The journey now replaces the snippets property in the complete settings document,
+rather than attempting to save an incomplete settings object. Clipboard input is
+acknowledged before the fixture restores the previous clipboard.
+
+Templates are persisted editable Typst/TeX sources. Examples and picker previews
+are read-only highlighted buffers. TexLab and Badness suppression lists are
+provider-specific. Tool help includes concrete arguments/environment examples
+and documentation links routed through the app's external-link action. Comfy
+background and foreground are independent; the existing shortcut toggles both.
+
+Contents rows reserve the measured line-number width instead of a fixed column.
+Git bulk actions share the Changes row and have one detailed tooltip each.
+Drawing has icon Clear/Undo/Redo controls, capped at 32 history entries. Both
+recognizers return up to 16 candidates using their existing bounded search.
+Typst refuses multi-character stand-ins, and bundled Noto Sans covers Latin/IPA
+characters including ʟ. Deterministic coverage includes provider isolation,
+JSON enums/roundtrips, links, bracket/string handling, history, and Git row geometry.
+
+Performance: syntax/theme results remain cached; gutters share existing linear
+row mapping and paint only visible rows. No idle polling or new workers were
+introduced. Returning 16 predictions does not expand Detexify's 64-class search.
+No timing benchmark is claimed for these changes.
+
+Verification: formatting and all-target clippy with warnings denied passed;
+`cargo test --no-fail-fast` passed 1,344 tests, and xtask passed 15 tests.
+Final tests ran without overlapping builds after an earlier build-identity
+collision exposed shared executable replacement between test runners.
+
+Native macOS journeys passed: drawing (`run-abo3n47a`), window focus
+(`run-1biiefns`), snippets through JSON search/edit/save (`run-yxl_1lqi`),
+PDFium/Tinymist theme/comfy transitions (`run-lxz58efk`), and Settings search,
+JSON validation, typing, maximize/restore and close (`run-hxlefnja`). Evidence
+lives in `.tiptoptyp/desktop-ui-tests/`. The click driver permits an older
+position only for a non-clicking pointer move, then requires fresh, settled
+geometry before posting the click; idle windows no longer fail prematurely.
+
+All 25 maintained gallery images were regenerated and validated. Fresh Settings
+JSON capture `run-qy9r1kmm/1790604160580-0003-settings.png` was inspected for
+syntax/rainbow colors and line-number alignment. Git capture
+`.tiptoptyp/screenshots/agent-review/settings-explorer/1790604281652-0001-main-git-panel.png`
+was inspected for the single-row bulk actions. Updated drawing, main Contents,
+and Settings gallery frames were also inspected. Framebuffers establish these
+egui layouts, not native child-view desktop composition.

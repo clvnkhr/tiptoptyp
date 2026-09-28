@@ -280,6 +280,36 @@ mod tests {
     }
 
     #[test]
+    fn json_find_stays_in_json_and_keeps_typed_query_focused() {
+        let mut harness = settings_harness(SettingsWindow::default());
+        harness.run();
+        harness.get_by_label("Edit settings as JSON").click();
+        harness.run();
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::F);
+        harness.run();
+        assert!(harness.state().ui.json_mode);
+        assert!(harness.state().ui.json_search);
+        let input = harness.get(by().role(egui::accesskit::Role::TextInput));
+        input.type_text("writing");
+        harness.run();
+        harness
+            .get(by().role(egui::accesskit::Role::TextInput))
+            .type_text("_language");
+        harness.run();
+        assert_eq!(harness.state().ui.json_query, "writing_language");
+        assert!(harness.state().ui.json_mode);
+        assert!(harness.state().ui.json_match.is_some());
+        harness.key_press(egui::Key::Enter);
+        harness.run();
+        let editor = harness.get(by().role(egui::accesskit::Role::MultilineTextInput));
+        editor.type_text("replacement_key");
+        harness.run();
+        let draft = harness.state().ui.json_draft.as_ref().unwrap();
+        assert!(draft.text.contains("replacement_key"));
+        assert!(!draft.text.contains("writing_language"));
+        assert_eq!(harness.state().ui.json_query, "writing_language");
+    }
+    #[test]
     fn settings_json_rejects_invalid_text_then_saves_valid_edits() {
         let mut harness = settings_harness(SettingsWindow::default());
         harness.run();
@@ -392,7 +422,7 @@ mod tests {
             window.synchronize(input(&context), &FontCatalog::default());
         }
         let captures = CaptureController::disabled_for_tests();
-        Harness::builder()
+        let mut harness = Harness::builder()
             .with_size(Vec2::new(700.0, 3000.0))
             .build_ui_state(
                 move |ui, window: &mut SettingsWindow| {
@@ -406,7 +436,18 @@ mod tests {
                     window.consume_shortcuts(ui.ctx(), &captures);
                 },
                 window,
-            )
+            );
+        theme::configure_editor_fonts(
+            &harness.ctx,
+            Default::default(),
+            Default::default(),
+            false,
+            400,
+            400,
+            None,
+        );
+        harness.run_steps(2);
+        harness
     }
 
     fn input(context: &egui::Context) -> SettingsWindowInput {
@@ -686,7 +727,6 @@ impl SettingsWindow {
         self.close_requested = true;
     }
     pub(super) fn request_search_focus(&mut self) {
-        self.ui.json_mode = false;
         self.ui.focus_search = true;
     }
     pub(super) fn has_actions(&self) -> bool {

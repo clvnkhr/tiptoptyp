@@ -1281,7 +1281,7 @@ mod tests {
             let summary = harness.get_by_label("4 files · 2 staged").rect();
             let staging = harness.get_by_label("Stage all").rect();
             assert!(
-                summary.bottom() <= staging.top(),
+                (summary.center().y - staging.center().y).abs() < 1.0,
                 "{summary:?} vs {staging:?}"
             );
             assert!(summary.left() >= 0.0 && summary.right() <= width);
@@ -1319,7 +1319,7 @@ mod tests {
                     .all(|pair| pair[0].right() < pair[1].left())
             );
             let edge = columns.last().unwrap().right();
-            for label in ["Push", "Unstage all", "Commit staged changes"] {
+            for label in ["Push", "Stage all", "Commit staged changes"] {
                 assert!(
                     (harness.get_by_label(label).rect().right() - edge).abs() < 0.5,
                     "{label} at {width}"

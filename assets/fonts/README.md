@@ -11,6 +11,7 @@ Source: https://github.com/google/fonts/tree/809e4d8b8d7e9364a914909bb777679606c
 - Noto Sans Math: mathematical operators and alphabets.
 - Noto Sans Symbols: alchemical symbols and other symbols.
 - Noto Sans Symbols 2: additional symbols and supplementary Unicode blocks.
+- Noto Sans: Latin extensions and IPA, including ʟ.
 - Noto Sans Hebrew: Hebrew letters used in symbol completions.
 
 Pinned Google Fonts revision: `809e4d8b8d7e9364a914909bb777679606c178b8`.
@@ -22,6 +23,7 @@ Pinned Google Fonts revision: `809e4d8b8d7e9364a914909bb777679606c178b8`.
 | `notosansmath/NotoSansMath-Regular.ttf` | `3f495fe933c06786e4d5f6d86b8ee70b6753a68ee3b9d87528726de0f6e2c47d` |
 | `notosanssymbols2/NotoSansSymbols2-Regular.ttf` | `7d5fb73b7ca67a6798101741f5d280a3d016a56a197afcd4199dbb57b4b82a21` |
 | `notosanshebrew/NotoSansHebrew[wdth,wght].ttf` | `7ef36a2c3593758cdb622e1bdef4f84523e92fbc3ccc667438dd80ff54c2de88` |
+| `notosans/NotoSans[wdth,wght].ttf` | `bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d` |
 
-The package copies all five copyright/license notices to `Resources/licenses`
+The package copies all six copyright/license notices to `Resources/licenses`
 and this provenance record to `Resources/font-provenance.md`.

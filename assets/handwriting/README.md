@@ -23,8 +23,8 @@ Python with `unicodeit==0.7.5`. Coordinates are normalized to 32 equally spaced
 ink points and stored as 16-bit values in 130-byte records (2-byte class index,
 64 little-endian coordinates). The sample asset is 5,134,220 bytes. A coarse
 8×8 descriptor selects 64 classes and at most three reference samples each;
-symmetric nearest-point distances then rank up to eight distinct commands.
-There is no runtime download or additional dependency. Results are one distance-ranked list of up to eight commands; calligraphic candidates compete in that same list. No second recognizer or extra calligraphic list is appended.
+symmetric nearest-point distances then rank up to 16 distinct commands.
+There is no runtime download or additional dependency. Results are one distance-ranked list of up to 16 commands; calligraphic candidates compete in that same list. No second recognizer or extra calligraphic list is appended.
 
 The separate evaluation fixture contains every tenth accepted sample. Evaluation
 removes those records from its reference set; production uses the full set.
@@ -33,13 +33,13 @@ suggestions. The former dedicated calligraphic list has been removed so the resu
 This split is not writer-disjoint and does not establish general handwriting
 accuracy. The classifier recognizes individual symbols, not whole formulas.
 
-1,120 of the 1,123 definitions have Typst output (436 more than initially
+1,099 of the 1,123 definitions have Typst output (436 more than initially
 mapped). These include `cal(A)`, `scr(A)`, `bb(h)`, upright Greek, IPA letters
 and marks, punctuation, currencies, zodiac signs and mathematical aliases.
 TeX/miTeX insertion retains the original LaTeX command. Unicode symbols work in
 Typst even when they have no named `sym` alias. Text/IPA characters and ASCII
 punctuation may be quoted in the internal mapping metadata; insertion resolves the actual character and never emits those string delimiters.
-Negated relations retain combining negation marks; `\triangle` is △, not Δ.
+Multi-character approximations are unavailable for Typst; `\triangle` is △, not Δ.
 Glyph shapes can differ between fonts and LaTeX packages; a mapping does not
 promise identical font outlines.
 
@@ -61,7 +61,7 @@ required LaTeX packages from upstream metadata.
 
 Validation: `cargo test handwriting` includes syntax checks for every mapping
 and semantic click/insertion tests for both languages. With Typst installed,
-`cargo test every_typst_mapping_compiles -- --ignored` compiles all 1,120 mapped
+`cargo test every_typst_mapping_compiles -- --ignored` compiles all 1,099 mapped
 expressions against the actual math library. Updating mappings does not alter
 the sample or holdout binaries, recognition ranking, or background-worker work.
 
@@ -104,3 +104,9 @@ python3 scripts/prepare-handwriting-symbol-names.py toolchain/bin/typst-aarch64-
 It enumerates the bundled Typst 0.15.1 `sym` module, checks every exported alias
 against the compiler, rejects deprecated names, and keeps verified Detypify
 canonical names where available. Runtime insertion never probes the compiler.
+
+The UI now requests up to 16 candidates per recognizer. Detexify still evaluates
+the same 64-class shortlist; this increases only the number returned/displayed.
+All multi-scalar character approximations are excluded in Typst, including doubled
+floors/ceilings and combined negation stand-ins; their TeX commands remain available.
+Drawing controls provide Clear and bounded (32 edits) undo/redo history.

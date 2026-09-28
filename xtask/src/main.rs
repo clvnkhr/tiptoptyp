@@ -190,6 +190,7 @@ fn generate_third_party_notices() -> Result<(), String> {
         root.join("assets/fonts/notosansmath/OFL.txt"),
         root.join("assets/fonts/notosanssymbols2/OFL.txt"),
         root.join("assets/fonts/notosanshebrew/OFL.txt"),
+        root.join("assets/fonts/notosans/OFL.txt"),
         root.join("docs/licenses/ghostty-MIT.txt"),
         root.join("docs/licenses/simdutf-MIT.txt"),
         root.join("docs/licenses/highway-BSD3.txt"),
@@ -319,6 +320,7 @@ fn verify_package(target: &str) -> Result<(), String> {
         ("notosansmath", "NotoSansMath"),
         ("notosanssymbols2", "NotoSansSymbols2"),
         ("notosanshebrew", "NotoSansHebrew"),
+        ("notosans", "NotoSans"),
     ] {
         verify_hash(
             &resources.join(format!("licenses/{name}-OFL.txt")),

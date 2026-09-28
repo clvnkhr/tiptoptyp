@@ -494,6 +494,7 @@ impl EditorApp {
         use super::settings_panel::SettingsAction;
         for action in actions {
             match action {
+                SettingsAction::OpenDocumentation(url) => self.open_external_link(&url),
                 SettingsAction::ChooseTool(target) => {
                     self.choose_tool_binary(target, frame, context)
                 }

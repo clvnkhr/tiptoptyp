@@ -168,7 +168,7 @@ fn rank(cloud: &Cloud, samples: &[Sample]) -> Vec<usize> {
     scores
         .into_iter()
         .filter(|(class, _)| commands.insert(labels()[*class].tex.as_deref()))
-        .take(8)
+        .take(crate::handwriting::MAX_PREDICTIONS)
         .map(|s| s.0)
         .collect()
 }
@@ -231,11 +231,9 @@ mod tests {
             ("\\textdollar", "\"$\""),
             ("\\landdownint", "∫"),
             ("\\sqiint", "∯"),
-            ("\\llceil", "\"⌈⌈\""),
             ("\\nnearrow", "↗"),
             ("\\textthreequartersemdash", "\"‒\""),
             ("\\textbraceleft", "\"{\""),
-            ("\\ngeqq", "≧\u{338}"),
             ("\\Aquarius", "♒"),
         ] {
             let symbol = labels()
@@ -245,7 +243,7 @@ mod tests {
             assert_eq!(symbol.typst.as_deref(), Some(typst), "{tex}");
             assert!(!symbol.tex_only, "{tex}");
         }
-        assert!(labels().iter().filter(|s| s.typst.is_some()).count() >= 1120);
+        assert!(labels().iter().filter(|s| s.typst.is_some()).count() >= 1099);
         for symbol in labels() {
             assert_eq!(symbol.tex_only, symbol.typst.is_none());
         }

@@ -85,6 +85,8 @@ fn raster(strokes: &[Vec<Pos2>]) -> Vec<f32> {
     }
     pixels
 }
+pub(crate) const MAX_PREDICTIONS: usize = 16;
+
 fn recognize_symbols(strokes: &[Vec<Pos2>]) -> Result<Vec<Symbol>, String> {
     static MODEL: OnceLock<Result<Arc<TypedRunnableModel>, String>> = OnceLock::new();
     let model = MODEL
@@ -113,7 +115,7 @@ fn recognize_symbols(strokes: &[Vec<Pos2>]) -> Result<Vec<Symbol>, String> {
     ranking.sort_by(|a, b| b.1.total_cmp(a.1));
     let results: Vec<_> = ranking
         .into_iter()
-        .take(8)
+        .take(MAX_PREDICTIONS)
         .map(|(index, _)| symbols()[index].clone())
         .collect();
     Ok(results)
@@ -178,6 +180,9 @@ fn prediction_insertion(
         return None;
     }
     let glyph = prediction_glyph(symbol)?;
+    if glyph.chars().count() != 1 {
+        return None;
+    }
     // Escapes beat both named and Unicode output so punctuation cannot become syntax.
     if glyph.len() == 1 && glyph.as_bytes()[0].is_ascii_punctuation() {
         return Some(format!("\\{glyph}"));
@@ -344,6 +349,8 @@ pub(crate) struct Drawing {
     engine: HandwritingEngine,
     strokes: Vec<Vec<Pos2>>,
     artboard: Option<egui::Rect>,
+    undo: Vec<(Vec<Vec<Pos2>>, Option<egui::Rect>)>,
+    redo: Vec<(Vec<Vec<Pos2>>, Option<egui::Rect>)>,
     job: LatestJob<(u64, Vec<Symbol>)>,
     job_generation: u64,
     generation: u64,
@@ -352,6 +359,33 @@ pub(crate) struct Drawing {
     error: Option<String>,
 }
 impl Drawing {
+    fn checkpoint(&mut self) {
+        if self.undo.len() == 32 {
+            self.undo.remove(0);
+        }
+        self.undo.push((self.strokes.clone(), self.artboard));
+        self.redo.clear();
+    }
+    fn history(&mut self, redo: bool) {
+        let from = if redo { &mut self.redo } else { &mut self.undo };
+        let Some((strokes, artboard)) = from.pop() else {
+            return;
+        };
+        let previous = (std::mem::replace(&mut self.strokes, strokes), self.artboard);
+        self.artboard = artboard;
+        if redo {
+            self.undo.push(previous);
+        } else {
+            self.redo.push(previous);
+        }
+        self.generation += 1;
+        self.error = None;
+        self.pending = !self.strokes.is_empty();
+        if !self.pending {
+            self.results.clear();
+        }
+    }
+
     pub(crate) fn fixture() -> Self {
         Self {
             artboard: Some(egui::Rect::from_min_max(
@@ -440,6 +474,7 @@ impl Drawing {
         ui.painter()
             .rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);
         if response.drag_started() && self.strokes.iter().map(Vec::len).sum::<usize>() < 4096 {
+            self.checkpoint();
             // Extend the logical paper to the current panel before accepting
             // ink in its margins. A later resize fits the entire paper.
             self.artboard = Some(egui::Rect::from_min_max(
@@ -502,22 +537,65 @@ impl Drawing {
         // right-aligned command for the active language and never selects text.
         let mut overlay = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(4.0)));
         overlay.set_clip_rect(rect);
-        let clear = overlay.small_button("Clear").on_hover_text("Clear drawing");
-        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-        crate::desktop_test::observe("drawing.clear", &clear);
-        if clear.clicked() {
-            self.strokes.clear();
-            self.artboard = None;
-            self.results.clear();
-            self.error = None;
-            self.generation += 1;
-            self.pending = false;
-        }
+        let mut control_clicked = false;
+        let controls = overlay
+            .horizontal(|ui| {
+                for (label, icon, enabled) in [
+                    (
+                        "Clear",
+                        crate::app::icons::UiIcon::Trash,
+                        !self.strokes.is_empty(),
+                    ),
+                    (
+                        "Undo stroke",
+                        crate::app::icons::UiIcon::Previous,
+                        !self.undo.is_empty(),
+                    ),
+                    (
+                        "Redo stroke",
+                        crate::app::icons::UiIcon::Next,
+                        !self.redo.is_empty(),
+                    ),
+                ] {
+                    let button = ui
+                        .add_enabled_ui(enabled, |ui| {
+                            crate::app::icons::square_icon_button(ui, icon, label, 24.0)
+                        })
+                        .inner
+                        .on_hover_text(label);
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    crate::desktop_test::observe(
+                        match label {
+                            "Clear" => "drawing.clear",
+                            "Undo stroke" => "drawing.undo",
+                            _ => "drawing.redo",
+                        },
+                        &button,
+                    );
+                    if button.clicked() {
+                        control_clicked = true;
+                        match label {
+                            "Clear" => {
+                                self.checkpoint();
+                                self.strokes.clear();
+                                self.artboard = None;
+                                self.results.clear();
+                                self.error = None;
+                                self.generation += 1;
+                                self.pending = false;
+                            }
+                            "Undo stroke" => self.history(false),
+                            _ => self.history(true),
+                        }
+                    }
+                }
+            })
+            .response;
         if let Some(error) = &self.error {
             overlay.label(error);
         }
         let result_rect = egui::Rect::from_min_max(
-            egui::pos2(clear.rect.right() + 4.0, rect.top() + 4.0),
+            egui::pos2(controls.rect.right() + 4.0, rect.top() + 4.0),
             rect.max - egui::vec2(4.0, 4.0),
         );
         let mut results_ui = ui.new_child(
@@ -587,10 +665,11 @@ impl Drawing {
             });
         if response.clicked()
             && selected.is_none()
-            && !clear.clicked()
+            && !control_clicked
             && self.strokes.iter().map(Vec::len).sum::<usize>() < 4096
             && let Some(point) = response.interact_pointer_pos()
         {
+            self.checkpoint();
             self.strokes.push(vec![transform.to_model(point)]);
             self.artboard = Some(egui::Rect::from_min_max(
                 transform.to_model(rect.min),
@@ -784,6 +863,34 @@ mod tests {
         assert!(drawing.pending);
     }
     #[test]
+    fn stroke_history_restores_exact_ink_and_discards_redo_on_new_input() {
+        let mut drawing = Drawing::fixture();
+        let original = drawing.strokes.clone();
+        drawing.checkpoint();
+        drawing.strokes.push(vec![Pos2::new(1.0, 2.0)]);
+        let changed = drawing.strokes.clone();
+        drawing.history(false);
+        assert_eq!(drawing.strokes, original);
+        drawing.history(true);
+        assert_eq!(drawing.strokes, changed);
+        drawing.history(false);
+        drawing.checkpoint();
+        assert!(drawing.redo.is_empty());
+        for _ in 0..100 {
+            drawing.checkpoint();
+        }
+        assert_eq!(drawing.undo.len(), 32);
+    }
+    #[test]
+    fn multiple_character_approximations_have_no_typst_output() {
+        let candidate = symbol("⌊⌊", "\\llfloor", Some("\"⌊⌊\""));
+        assert!(prediction_insertion(&candidate, false, true, true).is_none());
+        assert_eq!(
+            prediction_insertion(&candidate, true, true, true).as_deref(),
+            Some("\\llfloor")
+        );
+    }
+    #[test]
     fn long_rows_elide_from_the_left_preserving_the_symbol() {
         let measure = |text: &str| text.chars().count() as f32;
         assert_eq!(
@@ -842,7 +949,7 @@ mod tests {
         ];
         for engine in HandwritingEngine::ALL {
             let results = recognize(strokes.clone(), engine).unwrap();
-            assert!(!results.is_empty() && results.len() <= 8);
+            assert_eq!(results.len(), MAX_PREDICTIONS);
             assert!(
                 results
                     .iter()

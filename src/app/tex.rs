@@ -314,8 +314,12 @@ impl EditorApp {
             .chain(self.tex_diagnostics.iter().flatten())
             .chain(self.writing.diagnostics.iter())
             .filter(|diagnostic| {
-                diagnostic_code(diagnostic)
-                    .is_none_or(|code| !self.settings.tex.ignores_diagnostic_code(&code))
+                diagnostic_code(diagnostic).is_none_or(|code| {
+                    !self
+                        .settings
+                        .tex
+                        .ignores_diagnostic_code(diagnostic.provider.as_deref(), &code)
+                })
             })
             .cloned()
             .collect();

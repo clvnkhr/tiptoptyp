@@ -341,6 +341,8 @@ impl EditorApp {
             .flatten();
         self.highlighter
             .set_rainbow_brackets(self.settings.rainbow_brackets);
+        self.generic_highlighter
+            .set_rainbow_brackets(self.settings.rainbow_brackets);
         let indent_spaces = self.settings.indent_spaces;
         let auto_pair_enabled = self.settings.auto_pair_delimiters && document_kind.is_typst();
         let auto_pair_syntax = &mut self.auto_pair_syntax;

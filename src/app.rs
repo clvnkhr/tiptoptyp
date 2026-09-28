@@ -13,6 +13,7 @@ use icons::{UiIcon, icon_button, paint_ui_icon, square_icon_button, static_icon}
 use icons::{closed_eye_icon_geometry, eye_icon_geometry, refresh_icon_geometry};
 mod completion_popup;
 mod navigation;
+mod settings_code;
 mod settings_controls;
 use navigation::EditorSelection;
 mod explorer_view;
@@ -879,6 +880,7 @@ enum SettingsTarget {
     UnicodeWarnings,
     MitexDollars,
     Snippets,
+    Templates,
     GitDiffStyle,
     RainbowBrackets,
     AutoSave,
@@ -908,7 +910,7 @@ enum SettingsTarget {
 }
 
 impl SettingsTarget {
-    const ALL: [Self; 45] = [
+    const ALL: [Self; 46] = [
         Self::Appearance,
         Self::TypstSyntax,
         Self::LightTheme,
@@ -928,6 +930,7 @@ impl SettingsTarget {
         Self::UnicodeWarnings,
         Self::MitexDollars,
         Self::Snippets,
+        Self::Templates,
         Self::GitDiffStyle,
         Self::RainbowBrackets,
         Self::AutoSave,
@@ -976,6 +979,7 @@ impl SettingsTarget {
             Self::EnglishGrammar => "Offline English spelling and grammar (Typst / TeX)",
             Self::UnicodeWarnings => "Flag invisible and confusable characters",
             Self::Snippets => "Custom snippets",
+            Self::Templates => "Document templates",
             Self::MitexDollars => "Auto-enable miTeX in compatible Typst documents",
             Self::GitDiffStyle => "Git diff style",
             Self::RainbowBrackets => "Rainbow brackets",
@@ -1027,6 +1031,7 @@ impl SettingsTarget {
             | Self::UnicodeWarnings
             | Self::MitexDollars
             | Self::Snippets
+            | Self::Templates
             | Self::GitDiffStyle
             | Self::RainbowBrackets
             | Self::AutoSave
@@ -1086,7 +1091,8 @@ impl SettingsTarget {
             Self::AutoPairDelimiters => {
                 "editor automatic pairing brackets quotes dollar backspace matching"
             }
-            Self::Snippets => "custom snippets templates tabstop linked fields completion prefix",
+            Self::Snippets => "custom snippets tabstop linked fields completion prefix",
+            Self::Templates => "new from template article letter notes source starting document",
             Self::MitexDollars => {
                 "mitex latex tex dollar inline display block math package version translation"
             }

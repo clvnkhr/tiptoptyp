@@ -700,33 +700,23 @@ pub(super) fn show_panel(ui: &mut egui::Ui, input: Input<'_>, cache: &mut Cache)
             if input.snapshot.initialized {
                 let staged = input.snapshot.entries.staged;
                 ui.add_enabled_ui(!input.busy, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.strong("Changes");
-                        ui.weak(format!(
-                            "{} files · {staged} staged",
-                            input.snapshot.entries.len()
-                        ));
-                        if action_button(ui, !input.dirty && input.snapshot.entries.revertible, "Revert all", input.toolbar_style)
-                        .on_hover_text("Discard unstaged changes and delete unstaged new files after confirmation. Keep staged changes.")
-                        .clicked() {
-                            output.operation = Some(Operation::Revert(input.snapshot.entries.iter()
-                                .filter(|entry| entry.revertible())
-                                .map(|entry| entry.path.clone()).collect()));
-                        }
-                    });
                     right_action_row(ui, |ui| {
-                        if action_button(ui, staged > 0, "Unstage all", input.toolbar_style)
-                            .on_hover_text("Remove all changes from the staging area. Keep all working files and edits.")
-                            .clicked()
-                        {
-                            output.operation = Some(Operation::UnstageAll);
-                        }
                         if action_button(ui, !input.dirty && input.snapshot.entries.stageable, "Stage all", input.toolbar_style)
-                            .on_hover_text("Stage all working changes, excluding .tiptoptyp temporary files.")
-                            .clicked()
-                        {
+                            .on_hover_text("Stage all working changes, excluding .tiptoptyp temporary files.").clicked() {
                             output.operation = Some(Operation::StageAll);
                         }
+                        if action_button(ui, staged > 0, "Unstage all", input.toolbar_style)
+                            .on_hover_text("Remove all changes from the staging area. Keep all working files and edits.").clicked() {
+                            output.operation = Some(Operation::UnstageAll);
+                        }
+                        if action_button(ui, !input.dirty && input.snapshot.entries.revertible, "Revert all", input.toolbar_style)
+                            .on_hover_text("Discard unstaged changes and delete unstaged new files after confirmation. Keep staged changes.").clicked() {
+                            output.operation = Some(Operation::Revert(input.snapshot.entries.iter().filter(|entry| entry.revertible()).map(|entry| entry.path.clone()).collect()));
+                        }
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.strong("Changes");
+                            ui.add(egui::Label::new(egui::RichText::new(format!("{} files · {staged} staged", input.snapshot.entries.len())).weak()).truncate());
+                        });
                     });
                     ui.add_space(theme::SPACE.small);
                     egui::ScrollArea::vertical()
@@ -1048,7 +1038,7 @@ fn action_button(
         "Diff" | "Staged diff" => UiIcon::Diff,
         _ => UiIcon::Commit,
     };
-    icons::toolbar_button(ui, enabled, false, icon, label, style, false).on_hover_text(label)
+    icons::toolbar_button(ui, enabled, false, icon, label, style, false)
 }
 
 #[cfg(test)]

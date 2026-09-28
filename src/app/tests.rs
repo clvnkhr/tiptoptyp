@@ -8049,7 +8049,7 @@ fn ignored_tex_diagnostic_codes_are_filtered_without_disabling_other_results() {
     let context = egui::Context::default();
     let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
     app.document_mut().replace_untitled_kind(DocumentKind::Tex);
-    app.settings.tex.ignored_diagnostic_codes = vec!["redundant-script-braces".into()];
+    app.settings.tex.badness_ignored_codes = vec!["redundant-script-braces".into()];
     app.tex_diagnostics[0] = vec![
         Diagnostic {
             provider: Some("Badness".into()),

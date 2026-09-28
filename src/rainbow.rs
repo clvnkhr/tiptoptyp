@@ -134,7 +134,15 @@ pub(crate) fn apply(
     if !settings.enabled {
         return;
     }
-    let brackets = spans(root);
+    apply_spans(job, spans(root), settings, dark);
+}
+
+fn apply_spans(
+    job: &mut LayoutJob,
+    brackets: Vec<BracketSpan>,
+    settings: RainbowBrackets,
+    dark: bool,
+) {
     if brackets.is_empty() {
         return;
     }
@@ -195,10 +203,87 @@ pub(crate) fn apply(
     job.sections = sections;
 }
 
+/// JSON delimiters outside strings, including temporarily incomplete edits.
+pub(crate) fn apply_json(job: &mut LayoutJob, settings: RainbowBrackets, dark: bool) {
+    if !settings.enabled {
+        return;
+    }
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut depth = [0usize; 4];
+    let mut brackets = Vec::new();
+    for (i, ch) in job.text.char_indices() {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                quoted = false;
+            }
+            continue;
+        }
+        if ch == '"' {
+            quoted = true;
+            continue;
+        }
+        let (family, opening) = match ch {
+            '{' => (BracketFamily::Curly, true),
+            '}' => (BracketFamily::Curly, false),
+            '[' => (BracketFamily::Square, true),
+            ']' => (BracketFamily::Square, false),
+            _ => continue,
+        };
+        let d = &mut depth[family as usize];
+        if !opening {
+            *d = d.saturating_sub(1);
+        }
+        brackets.push(BracketSpan {
+            bytes: i..i + 1,
+            family,
+            depth: *d,
+        });
+        if opening {
+            *d += 1;
+        }
+    }
+    apply_spans(job, brackets, settings, dark);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use typst_syntax::Source;
+
+    #[test]
+    fn json_rainbow_preserves_unicode_and_ignores_quoted_delimiters() {
+        let text = r#"{"x":"ʟ [ \" {", "nested":[{}]}"#;
+        let mut job = LayoutJob::simple(
+            text.into(),
+            eframe::egui::FontId::monospace(14.0),
+            eframe::egui::Color32::WHITE,
+            f32::INFINITY,
+        );
+        apply_json(&mut job, RainbowBrackets::default(), false);
+        assert_eq!(job.text, text);
+        let mut end = 0;
+        for section in &job.sections {
+            assert_eq!(section.byte_range.start.0, end);
+            end = section.byte_range.end.0;
+            let part = &text[section.byte_range.start.0..end];
+            if section.format.color != eframe::egui::Color32::WHITE {
+                assert!(matches!(part, "{" | "}" | "[" | "]"));
+                assert!(!text[..section.byte_range.start.0].ends_with("ʟ "));
+            }
+        }
+        assert_eq!(end, text.len());
+        let colored = job
+            .sections
+            .iter()
+            .filter(|s| s.format.color != eframe::egui::Color32::WHITE)
+            .count();
+        assert_eq!(colored, 6);
+    }
 
     #[test]
     fn family_labels_are_compact_for_settings_rows() {

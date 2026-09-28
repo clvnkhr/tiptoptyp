@@ -24,7 +24,7 @@ class EditorJourneys:
             self.native("raise", title)
         self.wait("document window focused", lambda d: d["focused"])
 
-    def paste_source(self, text):
+    def paste_source(self, text, check=None):
         import json
         import subprocess
         process = subprocess.Popen([str(self.driver), "paste", str(self.process.pid), text],
@@ -37,7 +37,10 @@ class EditorJourneys:
             if not receipt or json.loads(receipt).get("posted") != "paste":
                 raise RuntimeError("paste adapter failed before posting input")
             self.record("paste", bytes=len(text.encode("utf-8")), fingerprint=fingerprint(text))
-            self.source_is(text)
+            if check is None:
+                self.source_is(text)
+            else:
+                check()
         finally:
             _, error = process.communicate("restore\n", timeout=6)
             if process.returncode:
@@ -311,6 +314,10 @@ class EditorJourneys:
             self.native("drag", x+a[0], y+a[1], x+b[0], y+b[1])
         state = self.wait("drawing recognized", lambda d: len(d["drawing"]["strokes"]) == 3 and not d["drawing"]["busy"] and any(p["detexify"] for p in d["drawing"]["predictions"]), timeout=30)
         strokes = state["document"]["drawing"]["strokes"]
+        self.click("drawing.undo")
+        self.wait("Undo removes one stroke", lambda d: len(d["drawing"]["strokes"]) == 2)
+        self.click("drawing.redo")
+        self.wait("Redo restores exact ink", lambda d: d["drawing"]["strokes"] == strokes)
         self.native("resize-focused", 1100, 700)
         old_size = state["document"]["native_size"]
         self.wait("drawing survives resize", lambda d: d["native_size"] != old_size and d["drawing"]["strokes"] == strokes)
@@ -346,11 +353,14 @@ class EditorJourneys:
         self.settings()
         self.click("settings.json.mode")
         self.wait("JSON settings ready", lambda d: d["settings_json"]["visible"])
-        self.click("settings.json")
-        self.key(0)
+        self.key(3)
+        self.wait_target("settings.json.find")
+        self.native("text", '"snippets": []')
+        self.key(36, "none")
+        before = self.snapshot()["document"]["settings_json"]["fingerprint"]
         settings = {"snippets": [{"prefix": "env", "description": "Linked environment", "language": "both", "body": "\\begin{${1:name}}\n\\end{$1}$0"}]}
-        self.native("paste", json.dumps(settings))
-        self.wait("snippet settings validate", lambda d: d["settings_json"]["valid"])
+        encoded = json.dumps(settings)[1:-1]
+        self.paste_source(encoded, lambda: self.wait("snippet replacement validates", lambda d: d["settings_json"]["fingerprint"] != before and d["settings_json"]["valid"]))
         self.click("settings.json.save")
         self.wait("snippet settings saved", lambda d: d["settings_json"]["saved"])
         self.close_settings()
@@ -565,6 +575,8 @@ class EditorJourneys:
         self.wait("highlight expires", lambda d: d["settings_highlight"] is None, timeout=5)
         self.click("settings.json.mode")
         self.wait("JSON settings opens with valid current settings", lambda d: d["settings_json"]["visible"] and d["settings_json"]["valid"])
+        if self.capture_review:
+            self.capture_viewport("settings")
         self.click("settings.json")
         self.key(0)  # Select all in the focused JSON editor.
         self.native("text", "{broken")
@@ -588,7 +600,10 @@ class EditorJourneys:
         self.native("zoom-focused")
         self.native_wait("Settings restores its previous size", lambda ws: any(w.get("AXTitle") == settings_window["AXTitle"] and w.get("size") == size for w in ws))
         self.key(3)
-        self.wait("Cmd+F returns from JSON to Settings search", lambda d: not d["settings_json"]["visible"] and d["settings_text_input_focused"] and not d["find_visible"])
+        self.wait("Cmd+F stays in JSON", lambda d: d["settings_json"]["visible"] and not d["find_visible"])
+        self.wait_target("settings.json.find")
+        self.native("text", "writing_language")
+        self.wait("JSON find receives typing", lambda d: d["settings_json"]["query"] == "writing_language")
         self.key(13)  # Cmd+W closes Settings, not the document tab.
         self.wait("Cmd+W closes Settings but preserves the document", lambda d: not d["settings_visible"] and d["tabs"] == 1)
         self.native_wait("document regains focus after Settings shortcut", lambda ws: not any("Settings" in w["AXTitle"] for w in ws) and any(w.get("AXFocused") for w in ws))

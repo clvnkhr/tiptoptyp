@@ -80,6 +80,13 @@ for symbol in json.loads((source/'symbols.json').read_text())['symbols']:
     if re.fullmatch(r'\\Up(delta|gamma|lambda|omega|phi|pi|psi|sigma|theta|upsilon|xi)', command):
         greek=command[3:].capitalize()
         typst=f'upright({greek})'
+    # Multi-character stand-ins are not a single symbol equivalent.
+    literal = char
+    if not literal and typst and typst.startswith('"'):
+        try: literal = json.loads(typst)
+        except ValueError: pass
+    if len(literal) > 1 or typst in {'integral dots.h integral', 'colon approx', 'colon.double approx', 'colon tilde.op', 'colon.double tilde.op', 'minus colon.double', 'eq colon.double'}:
+        typst = None
     name = command if typst and typst.startswith('"') else typst or command
     metadata.append({'char':char,'names':[name],'tex':command,'typst':typst,'detexify':True,'tex_only':not bool(typst), 'package':symbol.get('package')})
     for i,row in enumerate(rows):

@@ -4,7 +4,11 @@ use std::sync::Arc;
 
 use eframe::egui::{FontData, FontDefinitions};
 
-const FONTS: [(&str, &[u8]); 5] = [
+const FONTS: [(&str, &[u8]); 6] = [
+    (
+        "tiptoptyp-noto-sans",
+        include_bytes!("../assets/fonts/notosans/NotoSans[wdth,wght].ttf"),
+    ),
     (
         "tiptoptyp-noto-emoji",
         include_bytes!("../assets/fonts/notoemoji/NotoEmoji[wght].ttf"),
@@ -68,7 +72,7 @@ mod tests {
     use eframe::egui::{Color32, FontFamily, FontId, epaint::text::Fonts};
     use skrifa::MetadataProvider;
 
-    pub(crate) const SYMBOLS: &str = "א ב ד ל ∅ ∖ ≀ 🜨 ∀ ∁ ⊰ ⟹ 𝔄 𝒜 ⨳ ⨌";
+    pub(crate) const SYMBOLS: &str = "ʟ א ב ד ל ∅ ∖ ≀ 🜨 ∀ ∁ ⊰ ⟹ 𝔄 𝒜 ⨳ ⨌";
 
     #[test]
     fn reported_and_related_symbols_have_bundled_glyphs_without_system_fonts() {

@@ -44,7 +44,7 @@ impl EditorApp {
             (
                 crate::desktop_test::fingerprint(&settings_window.ui.query),
                 settings_window.text_input_focused,
-                serde_json::json!({"visible": settings_window.ui.json_mode, "valid": settings_window.ui.json_draft.as_ref().is_some_and(|draft| draft.validation.is_ok()), "saved": settings_window.ui.json_draft.as_ref().is_some_and(|draft| draft.saved)}),
+                serde_json::json!({"fingerprint": settings_window.ui.json_draft.as_ref().map(|draft| crate::desktop_test::fingerprint(&draft.text)), "visible": settings_window.ui.json_mode, "query": settings_window.ui.json_query, "valid": settings_window.ui.json_draft.as_ref().is_some_and(|draft| draft.validation.is_ok()), "saved": settings_window.ui.json_draft.as_ref().is_some_and(|draft| draft.saved)}),
             )
         };
         let mut observation = serde_json::json!({
@@ -67,7 +67,7 @@ impl EditorApp {
             "preview_native_ready": preview.native_ready,
             "preview_failure": preview.failure_reason(),
             "dark": context.theme() == egui::Theme::Dark,
-            "comfy": self.settings.comfy_preview,
+            "comfy": self.settings.comfy_background && self.settings.comfy_text,
             "page_dark": self.preview.dark,
             "expected_palette": [palette.0.to_array(), palette.1.to_array()],
             "webview_palette": self.webview_palette.map(|p| [p.0.to_array(), p.1.to_array()]),

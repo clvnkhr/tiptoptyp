@@ -130,9 +130,9 @@ class Journey(EditorJourneys):
         self.native("key", code, flags)
 
     def click(self, name):
-        def target_in(state):
+        def target_in(state, require_fresh=True):
             target = state["targets"].get(name)
-            if not target or not target["enabled"] or target["age_ms"] > 500:
+            if not target or not target["enabled"] or (require_fresh and target["age_ms"] > 500):
                 raise AssertionError(f"missing, disabled or stale hit target: {name}")
             if name.startswith("panel.") and state["document"]["panel"] is None:
                 raise AssertionError("cannot click a hidden panel")
@@ -140,7 +140,9 @@ class Journey(EditorJourneys):
                 raise AssertionError("cannot click hidden Find controls")
             return target
 
-        target = target_in(self.snapshot())
+        # An idle viewport may not repaint. Its last position is sufficient
+        # for a pointer move; only fresh geometry may authorize the click.
+        target = target_in(self.snapshot(), require_fresh=False)
         deadline = time.monotonic() + 3
         while True:
             self.native("move", target["x"], target["y"])
@@ -319,6 +321,7 @@ class Journey(EditorJourneys):
                       and d["preview_pdfium_ready" if backend == "Pdfium" else "preview_native_ready"], timeout=60)
             for dark, comfy in ((False, False), (True, False), (True, True), (False, True), (False, False)):
                 self.settings()
+                self.native("resize-focused", 800, 900)
                 self.setting_section("appearance", "Appearance")
                 self.wait_target("settings.theme." + ("Dark" if dark else "Light"))
                 self.click("settings.theme." + ("Dark" if dark else "Light"))
@@ -326,6 +329,8 @@ class Journey(EditorJourneys):
                 if self.snapshot()["document"]["comfy"] != comfy:
                     self.wait_target("settings.comfy")
                     self.click("settings.comfy")
+                    self.wait_target("settings.comfy.text")
+                    self.click("settings.comfy.text")
                 self.close_settings()
                 field = "pdfium_palette" if backend == "Pdfium" else "webview_palette"
                 self.wait("renderer palette follows theme/comfy", lambda d: d["dark"] == dark and d["comfy"] == comfy

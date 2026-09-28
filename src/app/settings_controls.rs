@@ -485,6 +485,7 @@ pub(super) fn tool_preference_editor(
     preference: &mut ToolPreference,
     resolution: &ToolResolution,
     deterministic_snapshot: bool,
+    settings: &crate::settings::AppSettings,
 ) -> bool {
     let mut browse = false;
     ui.push_id(label, |ui| {
@@ -524,6 +525,7 @@ pub(super) fn tool_preference_editor(
             });
         }
         egui::CollapsingHeader::new("Command customization").show(ui, |ui| {
+            documentation_link(ui, "Command-line options", command_docs(resolution.kind));
             let id = ui.id().with("command-draft");
             let mut draft = ui.ctx().data_mut(|data| {
                 let cached = data.get_temp::<(crate::tool_command::CommandCustomization, crate::tool_command::CommandCustomization)>(id);
@@ -533,7 +535,7 @@ pub(super) fn tool_preference_editor(
             ui.add(egui::TextEdit::multiline(&mut draft.arguments).desired_rows(2).desired_width(f32::INFINITY));
             ui.label(egui::RichText::new("{args} keeps generated arguments. {arg:N} inserts one generated argument (zero-based). Remove {args} to replace the command arguments entirely.").small());
             command_help(ui.label("Environment (JSON object of strings)"), resolution.kind, "Environment");
-            ui.add(egui::TextEdit::multiline(&mut draft.environment).desired_rows(2).desired_width(f32::INFINITY));
+            super::settings_code::editor(ui, "command-environment", &mut draft.environment, "json", settings, 2);
             command_help(ui.label("Working directory (blank uses the document/project directory)"), resolution.kind, "Working directory");
             ui.add(egui::TextEdit::singleline(&mut draft.directory).desired_width(f32::INFINITY));
             let validation_id = id.with("validation");
@@ -554,41 +556,65 @@ pub(super) fn tool_preference_editor(
     browse
 }
 
+fn command_docs(kind: crate::toolchain::ToolKind) -> &'static str {
+    use crate::toolchain::ToolKind::*;
+    match kind {
+        Typst => "https://github.com/typst/typst/blob/main/crates/typst-cli/src/args.rs",
+        Tinymist => "https://myriad-dreamin.github.io/tinymist/feature/cli.html#servers",
+        Tectonic => "https://tectonic-typesetting.github.io/book/latest/ref/v1cli.html",
+        Texlab => "https://github.com/latex-lsp/texlab/blob/master/crates/texlab/src/main.rs",
+        Badness => "https://badness.dev/reference/cli.html#options",
+        TexFmt => "https://github.com/WGUNDERWOOD/tex-fmt#command-line-options",
+    }
+}
+pub(super) fn documentation_link(ui: &mut egui::Ui, title: &str, url: &str) {
+    if ui.link(title).on_hover_text(url).clicked() {
+        let id = egui::Id::new(("settings-documentation", ui.ctx().viewport_id()));
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(id, url.to_owned()));
+        ui.ctx().request_repaint();
+    }
+}
 fn command_help(response: egui::Response, kind: crate::toolchain::ToolKind, field: &str) {
-    use crate::toolchain::ToolKind;
-    let docs = match kind {
-        ToolKind::Typst => "https://github.com/typst/typst/tree/main/crates/typst-cli",
-        ToolKind::Tinymist => "https://myriad-dreamin.github.io/tinymist/feature/cli.html",
-        ToolKind::Tectonic => "https://tectonic-typesetting.github.io/book/latest/ref/v2cli.html",
-        ToolKind::Texlab => "https://github.com/latex-lsp/texlab/wiki/Configuration",
-        ToolKind::Badness => "https://badness.dev/guide/editor-setup.html",
-        ToolKind::TexFmt => "https://github.com/WGUNDERWOOD/tex-fmt#usage",
-    };
+    use crate::toolchain::ToolKind::*;
     response.on_hover_ui(|ui| {
-        match field {
+        let docs = match field {
             "Arguments" => {
-                ui.label("Default: {args}. This keeps the arguments generated for each operation. Add optional flags after it; quoting groups one argument and never runs a shell.");
-                let example = match kind {
-                    ToolKind::Typst => "{args} --font-path \"/Users/me/My Fonts\"",
-                    ToolKind::Tectonic => "{args} --keep-logs",
-                    ToolKind::TexFmt => "{args} --wraplen 100",
-                    _ => "{args}  (keep defaults; see the tool documentation for optional flags)",
+                let (example, reason) = match kind {
+                    Typst => ("{args} --font-path /Users/me/fonts", "Search an additional font directory."),
+                    Tinymist => ("{args} --font-path /Users/me/fonts", "Give the language server extra fonts."),
+                    Tectonic => ("{args} --keep-logs", "Keep the TeX compilation log for troubleshooting."),
+                    Texlab => ("{args} -vv --log-file /tmp/texlab.log", "Write verbose server diagnostics to a log file."),
+                    Badness => ("{args} --no-config", "Use built-in defaults instead of a discovered badness.toml."),
+                    TexFmt => ("{args} --wraplen 100", "Wrap formatted lines at 100 columns."),
                 };
-                ui.monospace(example);
-                ui.label("Use the binary's --help in a terminal to see flags for your installed version. Flags must be valid for the app's subcommand.");
+                ui.label(reason); ui.monospace(example);
+                ui.label("{args} preserves generated arguments. Quoting groups values; no shell expansion. Flags must suit the subcommand.");
+                command_docs(kind)
             }
             "Environment" => {
-                ui.label("Default: {}. Override selected variables inherited by the tool; values must be strings.");
-                ui.monospace(r#"{"RUST_LOG":"debug"}"#);
-                ui.label("Example for tools that support Rust logging. $HOME and ~ are literal; use complete paths.");
+                let (example, reason, docs) = match kind {
+                    Typst | Tinymist => (r#"{"TYPST_FONT_PATHS":"/Users/me/fonts"}"#, "Search an extra font directory.", "https://github.com/typst/typst/blob/main/crates/typst-cli/src/args.rs"),
+                    Tectonic => (r#"{"TECTONIC_CACHE_DIR":"/Users/me/tectonic-cache"}"#, "Store downloaded TeX resources in this directory.", "https://tectonic-typesetting.github.io/book/latest/getting-started/first-document.html#cache"),
+                    Badness => (r#"{"BADNESS_CONFIG":"/Users/me/paper/badness.toml"}"#, "Choose a project configuration file.", "https://badness.dev/reference/configuration.html"),
+                    Texlab | TexFmt => (r#"{"RUST_BACKTRACE":"1"}"#, "Include a stack trace if the Rust tool crashes. Normal operation is unchanged.", "https://doc.rust-lang.org/std/backtrace/index.html#environment-variables"),
+                };
+                ui.label(reason); ui.monospace(example);
+                ui.label("JSON object of strings; overrides inherited values. Use absolute paths, not $HOME or ~."); docs
             }
             _ => {
-                ui.label("Default: blank, preserving the document/project directory selected for the operation.");
-                ui.monospace("/Users/me/Documents/My Paper");
-                ui.label("An existing absolute directory. This changes where the tool resolves relative paths and discovers project configuration. Do not add shell quotes.");
+                ui.monospace("/Users/me/paper");
+                ui.label("An existing project directory, without quotes. Relative paths and project-file discovery start here. Blank keeps the document/project default.");
+                match kind {
+                    Badness => "https://badness.dev/reference/configuration.html",
+                    TexFmt => "https://github.com/WGUNDERWOOD/tex-fmt#configuration",
+                    Tinymist | Typst => "https://myriad-dreamin.github.io/tinymist/feature/compiler-settings.html#packages-roots-and-certificates",
+                    Texlab => "https://github.com/latex-lsp/texlab/wiki/Configuration#texlabrootdirectory",
+                    Tectonic => "https://tectonic-typesetting.github.io/book/latest/ref/tectonic-toml.html",
+                }
             }
-        }
-        ui.hyperlink_to(format!("{} documentation", kind.label()), docs);
+        };
+        documentation_link(ui, &format!("{} — {} documentation", kind.label(), field), docs);
     });
 }
 

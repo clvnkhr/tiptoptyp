@@ -327,7 +327,10 @@ pub(crate) struct AppSettings {
     #[serde(default)]
     pub(crate) theme_colors: crate::theme_transform::ThemeColorAdjustments,
     pub(crate) document_theme: DocumentTheme,
-    pub(crate) comfy_preview: bool,
+    #[serde(default)]
+    pub(crate) comfy_background: bool,
+    #[serde(default)]
+    pub(crate) comfy_text: bool,
     pub(crate) preview_preference: PreviewPreference,
     #[serde(default)]
     pub(crate) git_diff_style: GitDiffStyle,
@@ -337,6 +340,8 @@ pub(crate) struct AppSettings {
     pub(crate) english_grammar: bool,
     #[serde(default)]
     pub(crate) snippets: Vec<crate::snippets::Snippet>,
+    #[serde(default = "crate::document_templates::defaults")]
+    pub(crate) templates: Vec<crate::document_templates::Template>,
     #[serde(default)]
     pub(crate) writing_language: WritingLanguage,
     #[serde(default)]
@@ -418,7 +423,8 @@ impl Default for AppSettings {
             theme_invert: false,
             theme_hue_shift_degrees: 0,
             theme_colors: Default::default(),
-            comfy_preview: false,
+            comfy_background: false,
+            comfy_text: false,
             document_theme: DocumentTheme::FollowInterface,
             preview_preference: PreviewPreference::Interactive,
             git_diff_style: GitDiffStyle::Unified,
@@ -426,6 +432,7 @@ impl Default for AppSettings {
             line_numbers: true,
             english_grammar: false,
             snippets: Vec::new(),
+            templates: crate::document_templates::defaults(),
             writing_language: WritingLanguage::Auto,
             handwriting: HandwritingSettings::default(),
             unicode_warnings: false,
@@ -494,13 +501,15 @@ impl AppSettings {
             theme_hue_shift_degrees,
             theme_colors,
             document_theme,
-            comfy_preview,
+            comfy_background,
+            comfy_text,
             preview_preference,
             git_diff_style,
             line_wrap,
             line_numbers,
             english_grammar,
             snippets,
+            templates,
             writing_language,
             handwriting,
             unicode_warnings,
@@ -860,7 +869,8 @@ mod tests {
                 contrast: 115,
                 saturation: 80,
             },
-            comfy_preview: false,
+            comfy_background: false,
+            comfy_text: false,
             document_theme: DocumentTheme::Dark,
             preview_preference: PreviewPreference::Pdfium,
             git_diff_style: GitDiffStyle::Unified,
@@ -868,6 +878,7 @@ mod tests {
             line_numbers: false,
             english_grammar: false,
             snippets: Vec::new(),
+            templates: crate::document_templates::defaults(),
             writing_language: WritingLanguage::Auto,
             handwriting: HandwritingSettings::default(),
             unicode_warnings: false,

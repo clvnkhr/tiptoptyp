@@ -29,6 +29,7 @@ pub struct GenericSyntaxHighlighter {
     cached_dark_mode: bool,
     cached_job: LayoutJob,
     has_cache: bool,
+    rainbow: crate::rainbow::RainbowBrackets,
     theme_revision: u64,
     #[cfg(test)]
     parsed_lines_last: usize,
@@ -60,6 +61,7 @@ impl Default for GenericSyntaxHighlighter {
             cached_dark_mode: true,
             cached_job: LayoutJob::default(),
             has_cache: false,
+            rainbow: Default::default(),
             theme_revision: 0,
             #[cfg(test)]
             parsed_lines_last: 0,
@@ -68,6 +70,13 @@ impl Default for GenericSyntaxHighlighter {
 }
 
 impl GenericSyntaxHighlighter {
+    pub(crate) fn set_rainbow_brackets(&mut self, settings: crate::rainbow::RainbowBrackets) {
+        if self.rainbow != settings {
+            self.rainbow = settings;
+            self.has_cache = false;
+        }
+    }
+
     pub fn set_custom_theme(&mut self, theme: Option<Theme>) {
         self.custom_theme = theme;
         self.has_cache = false;
@@ -102,7 +111,10 @@ impl GenericSyntaxHighlighter {
                     .and_then(|line| syntaxes.find_syntax_by_first_line(line))
             })
             .unwrap_or_else(|| syntaxes.find_syntax_plain_text());
-        let job = self.highlight_incrementally(source, syntax, dark_mode, extension);
+        let mut job = self.highlight_incrementally(source, syntax, dark_mode, extension);
+        if extension.is_some_and(|ext| ext.eq_ignore_ascii_case("json")) {
+            crate::rainbow::apply_json(&mut job, self.rainbow, dark_mode);
+        }
 
         self.cached_source.clear();
         self.cached_source.push_str(source);
