@@ -236,12 +236,21 @@ fn escaped_at(source: &str, byte: usize) -> bool {
         == 1
 }
 
+fn has_surround_typing(events: &[egui::Event]) -> bool {
+    events.iter().any(|event| {
+        matches!(event, egui::Event::Text(text)
+        if text.chars().count() == 1 && text.chars().next().and_then(pairing::closer).is_some())
+    })
+}
+
 pub(crate) struct PairingBuffer<'a> {
     source: &'a mut String,
     syntax: &'a mut PairSyntax,
     enabled: bool,
     indent_spaces: Option<u8>,
     typed_tab: bool,
+    surround: bool,
+    deleted_selection: Option<String>,
 }
 
 impl<'a> PairingBuffer<'a> {
@@ -261,12 +270,23 @@ impl<'a> PairingBuffer<'a> {
             syntax,
             enabled: enabled && !verbatim,
             indent_spaces: None,
+            surround: enabled && !verbatim && has_surround_typing(events),
+            deleted_selection: None,
             typed_tab: events.iter().any(|event| matches!(event, egui::Event::Key { key: egui::Key::Tab, pressed: true, modifiers, .. } if !modifiers.shift)) && !verbatim,
         }
     }
 }
 
 impl PairingBuffer<'_> {
+    pub(crate) fn with_surround(mut self, enabled: bool, events: &[egui::Event]) -> Self {
+        self.surround = enabled
+            && has_surround_typing(events)
+            && !events
+                .iter()
+                .any(|event| matches!(event, egui::Event::Paste(_) | egui::Event::Ime(_)));
+        self
+    }
+
     pub(crate) fn with_indentation(mut self, spaces: u8) -> Self {
         self.indent_spaces = Some(spaces.min(16));
         self
@@ -289,7 +309,22 @@ impl TextBuffer for PairingBuffer<'_> {
     fn delete_char_range(&mut self, range: Range<CharIndex>) {
         self.source.delete_char_range(range);
     }
+    fn delete_selected(&mut self, selection: &egui::text::CCursorRange) -> CCursor {
+        let range = selection.as_sorted_char_range();
+        self.deleted_selection =
+            (self.surround && !range.is_empty()).then(|| self.source.char_range(range).to_owned());
+        self.source.delete_selected(selection)
+    }
     fn insert_text_at(&mut self, cursor: &mut CCursor, text: &str, limit: usize) {
+        if let Some(selected) = self.deleted_selection.take()
+            && text.chars().count() == 1
+            && let Some(close) = text.chars().next().and_then(pairing::closer)
+        {
+            self.source
+                .insert_text_at(cursor, &format!("{text}{selected}{close}"), limit);
+            return;
+        }
+
         if self.typed_tab
             && text == "\t"
             && let Some(spaces) = self.indent_spaces
@@ -784,8 +819,8 @@ mod tests {
             true,
             selected,
         );
-        assert_eq!(doc.source(), "[]");
-        assert_eq!(cursor.primary.index.0, 1);
+        assert_eq!(doc.source(), "[文稿]");
+        assert_eq!(cursor.primary.index.0, 4);
         frame(
             &ctx,
             &mut doc,
@@ -794,7 +829,28 @@ mod tests {
             false,
             cursor,
         );
-        assert_eq!(doc.source(), "]");
+        assert_eq!(doc.source(), "[文稿");
+    }
+
+    #[test]
+    fn selected_text_replacement_stays_verbatim_when_disabled_or_pasted() {
+        for (events, enabled, expected) in [
+            (vec![egui::Event::Text("(".into())], false, "("),
+            (vec![egui::Event::Paste("(".into())], true, "("),
+            (vec![egui::Event::Text("word".into())], true, "word"),
+            (
+                vec![key(egui::Key::Backspace), egui::Event::Text("(".into())],
+                true,
+                "()",
+            ),
+        ] {
+            let ctx = egui::Context::default();
+            let mut syntax = PairSyntax::default();
+            let mut doc = DocumentSession::new(WindowSessionId::new(1), "α🦀", DocumentKind::Typst);
+            let selected = CCursorRange::two(CCursor::new(2), CCursor::new(0));
+            frame(&ctx, &mut doc, &mut syntax, events, enabled, selected);
+            assert_eq!(doc.source(), expected);
+        }
     }
 
     #[test]

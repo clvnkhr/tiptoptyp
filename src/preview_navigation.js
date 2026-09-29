@@ -183,8 +183,9 @@
     updateControls();
   };
   const updateControls = () => {
+    document.documentElement?.classList.toggle('tiptoptyp-preview-focused', document.hasFocus());
     const state = JSON.stringify({ type: 'preview-state', page: currentPage(), count: pages().length,
-      zoom: documentRenderer()?.currentScaleRatio ?? 1, back: back.length > 0, forward: forward.length > 0 });
+      focused: document.hasFocus(), zoom: documentRenderer()?.currentScaleRatio ?? 1, back: back.length > 0, forward: forward.length > 0 });
     if (state !== lastState) { lastState = state; window.ipc?.postMessage(state); }
   };
   window.tiptoptypPreviewAction = ({ action, value }) => {
@@ -232,6 +233,7 @@
       channel.setAttribute('intercept',String(fg[index]/255));
     });
     document.documentElement.style.setProperty('--tiptoptyp-paper', `rgb(${bg.join(',')})`);
+    document.documentElement.style.setProperty('--tiptoptyp-ink', `rgb(${fg.join(',')})`);
   };
   window.tiptoptypSetPalette = (bg,fg) => { palette = [bg,fg]; applyPalette(); };
   const mount = () => {
@@ -240,6 +242,15 @@
     // omitting it from the on-screen compositor. Keep filters inside the SVG,
     // one per page, and recolor the renderer's separate paper rectangles directly.
     style.textContent = `
+      html.tiptoptyp-preview-focused::after {
+        content: 'Preview focused · Esc to edit'; position: fixed; top: 4px; right: 4px;
+        z-index: 2147483647; pointer-events: none; padding: 3px 7px; border-radius: 3px;
+        font: 12px system-ui; color: var(--tiptoptyp-paper); background: var(--tiptoptyp-ink);
+      }
+      html.tiptoptyp-preview-focused::before {
+        content: ''; position: fixed; inset: 0; z-index: 2147483646; pointer-events: none;
+        border: 2px solid var(--tiptoptyp-ink);
+      }
       #typst-container-top { display: none !important; }
       body { background: var(--tiptoptyp-paper) !important; }
       #typst-container .typst-page-inner { fill: var(--tiptoptyp-paper); }
@@ -276,7 +287,15 @@
     updateControls();
   };
   window.addEventListener('tiptoptyp-preview-zoom', event => command(event.detail));
+  window.addEventListener('focus', updateControls);
+  window.addEventListener('blur', updateControls);
   window.addEventListener('keydown', event => {
+    if (!document.hasFocus()) return;
+    if (event.key === 'Escape') {
+      event.preventDefault(); event.stopImmediatePropagation();
+      window.ipc?.postMessage(JSON.stringify({type:'focus-editor'}));
+      return;
+    }
     if (event.target?.closest?.('input, textarea, [contenteditable]')) { event.stopImmediatePropagation(); return; }
     if (!event.metaKey && !event.ctrlKey && !event.altKey && event.key === 't') {
       event.preventDefault(); event.stopImmediatePropagation();

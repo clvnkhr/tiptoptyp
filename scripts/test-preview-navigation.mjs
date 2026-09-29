@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 const source = readFileSync(new URL('../src/preview_navigation.js', import.meta.url), 'utf8');
 function fixture() {
   const handlers = new Map();
+  let focused = true;
   const frames = [];
   let rescales = 0;
   let demands = 0;
@@ -39,12 +40,13 @@ function fixture() {
   const container = { documents: [{ impl: doc }] };
   const window = { addEventListener: (name, handler) => handlers.set(name, handler), ipc: { postMessage: value => messages.push(JSON.parse(value)) } };
   runInNewContext(source, {
-    document: { getElementById: () => container, readyState: 'loading', addEventListener() {} },
+    document: { hasFocus: () => focused, getElementById: () => container, readyState: 'loading', addEventListener() {} },
     window,
     performance: {now: () => 0},
     requestAnimationFrame: callback => { frames.push(callback); return frames.length; },
   });
   return {
+    setFocus(value) { focused = value; },
     doc, scroll, frames, container, messages, action: value => window.tiptoptypPreviewAction(value),
     get rescales() { return rescales; }, get clearedAnchors() { return clearedAnchors; },
     get demands() { return demands; },
@@ -151,4 +153,21 @@ test('redundant layout is skipped but replaced SVG invalidates geometry', () => 
   f.doc.hookedElem.firstElementChild = { ...f.doc.hookedElem.firstElementChild };
   f.doc.r.rescale();
   assert.equal(f.rescales, 2);
+});
+
+test('preview hotkeys require keyboard focus, and Escape returns to the editor', () => {
+  const f = fixture();
+  f.setFocus(false);
+  assert.equal(f.event('keydown', {key:'t'}).prevented, false);
+  assert.equal(f.event('keydown', {key:'Escape'}).prevented, false);
+  assert.equal(f.messages.length, 0);
+  f.setFocus(true);
+  f.event('focus');
+  assert.equal(f.messages.at(-1).focused, true);
+  assert.equal(f.event('keydown', {key:'Escape'}).prevented, true);
+  assert.equal(f.messages.at(-1).type, 'focus-editor');
+  f.setFocus(false);
+  f.event('blur');
+  assert.equal(f.messages.at(-1).focused, false);
+  assert.equal(f.frames.length, 0);
 });

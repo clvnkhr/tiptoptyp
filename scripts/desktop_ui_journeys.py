@@ -487,15 +487,117 @@ class EditorJourneys:
             self.stable_state(lambda d: len(d["fold_collapsed"]) == 1 and d["fold_headers"] == headers)
             self.key(37, "cmd+alt")
             self.wait("fold expands", lambda d: not d["fold_collapsed"] and d["fold_headers"] == headers)
+        self.key(125, "cmd")
+        self.wait("caret at document end", lambda d: d["cursor"] == [len(text), len(text)])
         target = "fold." + str(headers[0])
         self.wait_target(target)
         self.click(target)
-        self.wait("gutter click collapses", lambda d: len(d["fold_collapsed"]) == 1 and d["fold_headers"] == headers)
+        self.wait("gutter preserves visible caret", lambda d: len(d["fold_collapsed"]) == 1 and d["fold_headers"] == headers and d["cursor"] == [len(text), len(text)])
         self.wait_target(target)
         self.click(target)
         self.wait("same gutter control expands", lambda d: not d["fold_collapsed"] and d["fold_headers"] == headers)
         self.source_is(text)
         self.close_scratch(count)
+        self.folding_large()
+
+    def folding_large(self):
+        prefix = "\n".join(f"Prose line {i}." for i in range(8)) + "\n"
+        block = "#let large = {\n" + "\n".join(f"  let value{i} = {i}" for i in range(180)) + "\n}\n"
+        suffix = "\n".join(f"Following prose {i}." for i in range(100))
+        text = prefix + block + suffix
+        count = self.scratch(text)
+        self.key(125, "cmd")
+        self.wait("large document caret at end", lambda d: d["cursor"] == [len(text), len(text)])
+        self.stable_state(lambda d: d["cursor"] == [len(text), len(text)])
+        target = "fold.8"
+        def scroll_to_header():
+            for _ in range(30):
+                state = self.snapshot()
+                scroll = state["scrolls"]["editor"]
+                if scroll["offset"] < 1:
+                    break
+                self.native("move", scroll["x"], scroll["y"])
+                self.native("wheel", scroll["x"], scroll["y"], 100)
+            self.wait_target(target)
+        scroll_to_header()
+        self.click(target)
+        self.wait("large fold preserves distant caret", lambda d: 8 in d["fold_collapsed"] and d["cursor"] == [len(text), len(text)])
+        self.stable_state(lambda d: 8 in d["fold_collapsed"] and d["cursor"] == [len(text), len(text)])
+        assert self.snapshot()["scrolls"]["editor"]["offset"] < 1, "fold must not scroll to the distant caret"
+        self.click(target)
+        self.wait("large block expands without moving caret", lambda d: not d["fold_collapsed"] and d["cursor"] == [len(text), len(text)])
+        # Put the caret inside the block through ordinary keyboard navigation.
+        self.click("editor.source")
+        self.key(126, "cmd")
+        for _ in range(18): self.key(125, "none")
+        inside = self.snapshot()["document"]["cursor"][0]
+        assert len(prefix) < inside < len(prefix + block)
+        scroll_to_header()
+        self.click(target)
+        header_end = len(prefix) + len("#let large = {")
+        self.wait("hidden caret moves to visible fold header", lambda d: 8 in d["fold_collapsed"] and d["cursor"] == [header_end, header_end])
+        self.stable_state(lambda d: 8 in d["fold_collapsed"] and d["cursor"] == [header_end, header_end])
+        self.source_is(text)
+        self.close_scratch(count)
+
+    def selection_wrap(self):
+        text = "α🦀 words"
+        count = self.scratch(text)
+        for opening, closing in (("(", ")"), ("[", "]"), ("{", "}"), ("$", "$"), ('"', '"'), ("*", "*"), ("_", "_"), ("`", "`")):
+            self.key(0)
+            self.native("text", opening)
+            self.source_is(opening + text + closing)
+            self.key(6)
+            self.source_is(text)
+            self.key(6, "cmd+shift")
+            self.source_is(opening + text + closing)
+            self.key(6)
+            self.source_is(text)
+        self.close_scratch(count)
+
+    def preview_keyboard(self):
+        self.ensure_typesetting_tab()
+        for backend in ("Pdfium", "Interactive"):
+            self.choose_backend(backend)
+            self.click("editor.source")
+            self.key(125, "cmd")
+            before = self.snapshot()["document"]
+            self.key(15)  # Compile/reload must preserve the source keyboard owner.
+            self.wait("preview ready after compile", lambda d: d["preview_pdfium_ready" if backend == "Pdfium" else "preview_native_ready"])
+            target = self.snapshot()["targets"]["preview.page"]
+            self.native("move", target["x"], target["y"])
+            self.native("wheel", target["x"], target["y"], -3)
+            self.stable_state(lambda d: d["editor_keyboard_focused"] and not d["preview_keyboard_focused"])
+            self.native("text", "t")
+            self.wait("typing stays in source after preview build", lambda d: d["source_fingerprint"] != before["source_fingerprint"] and d["page_dark"] == before["page_dark"])
+            self.key(6)
+            self.wait("undo restores source", lambda d: d["source_fingerprint"] == before["source_fingerprint"])
+            for iteration in range(3):
+                self.click("preview.page")
+                self.wait("preview owns keyboard after click", lambda d: d["preview_keyboard_focused"])
+                if backend == "Interactive":
+                    self.native("text", "t")
+                    self.wait("focused preview accepts its shortcut", lambda d: d["page_dark"] != before["page_dark"] and d["source_fingerprint"] == before["source_fingerprint"])
+                    self.native("text", "t")
+                    self.wait("second inversion restores page", lambda d: d["page_dark"] == before["page_dark"])
+                if getattr(self, "capture_review", False) and backend == "Pdfium" and iteration == 0:
+                    self.capture_viewport("main")
+                self.key(53, "none")
+                self.wait("Escape returns to source", lambda d: d["editor_keyboard_focused"] and not d["preview_keyboard_focused"])
+                self.native("text", "t")
+                self.wait("t edits source instead of inverting preview", lambda d: d["source_fingerprint"] != before["source_fingerprint"] and d["page_dark"] == before["page_dark"])
+                self.key(6)
+                self.wait("source restored after focus roundtrip", lambda d: d["source_fingerprint"] == before["source_fingerprint"])
+
+            self.click("preview.page")
+            self.wait("preview focused before hiding", lambda d: d["preview_keyboard_focused"])
+            self.key(19)  # Cmd+2: hiding a focused preview must hand keyboard ownership to source.
+            self.wait("code-only view selected", lambda d: d["view_mode"] == "Code")
+            self.native("text", "t")
+            self.wait("hidden preview cannot retain keyboard input", lambda d: d["source_fingerprint"] != before["source_fingerprint"] and d["page_dark"] == before["page_dark"])
+            self.key(6)
+            self.key(20)  # Cmd+3 restores split view for the next backend.
+            self.wait("split view restored", lambda d: d["view_mode"] == "Split")
 
     def closing(self):
         text = "Unsaved fixture must survive cancellation."

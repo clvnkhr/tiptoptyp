@@ -14,6 +14,26 @@ pub(crate) struct FoldRegion {
     end_byte: usize,
 }
 
+impl FoldRegion {
+    pub(crate) fn visible_cursor(
+        &self,
+        mut cursor: egui::text::CCursorRange,
+        collapsed: bool,
+        source_len: usize,
+    ) -> egui::text::CCursorRange {
+        if collapsed {
+            for endpoint in [&mut cursor.primary, &mut cursor.secondary] {
+                if self.hidden_chars.contains(&endpoint.index.0)
+                    || (endpoint.index.0 == source_len && self.hidden_chars.end == source_len)
+                {
+                    *endpoint = egui::text::CCursor::new(self.hidden_chars.start.saturating_sub(1));
+                }
+            }
+        }
+        cursor
+    }
+}
+
 /// Vertical arrow navigation skips concealed rows. Other destinations (find,
 /// horizontal navigation, diagnostics) are revealed instead of retargeted.
 pub(crate) fn skip_hidden_row(
@@ -648,5 +668,39 @@ mod tests {
             for _ in 0..10_000 { black_box(folding.layout(Arc::clone(&original))); }
             eprintln!("folding: bytes={} source_rows={} visible_rows={} index_us={} cold_projection_us={} cached_mean_ns={}", source.len(), original.rows.len(), projected.rows.iter().filter(|r| r.size.y > 0.0).count(), index_time.as_micros(), cold.as_micros(), start.elapsed().as_nanos() / 10_000);
         }).drop_without_applying_deltas();
+    }
+}
+
+#[cfg(test)]
+mod cursor_tests {
+    use super::*;
+    use egui::text::{CCursor, CCursorRange};
+    #[test]
+    fn folding_only_retargets_hidden_selection_endpoints() {
+        let region = FoldRegion {
+            line: 2,
+            end_line: 10,
+            header: 10,
+            hidden_chars: 20..100,
+            header_byte: 10,
+            end_byte: 100,
+        };
+        for (a, b, collapsed, eof, expected) in [
+            (3, 4, true, 200, (3, 4)),
+            (150, 150, true, 200, (150, 150)),
+            (30, 40, true, 200, (19, 19)),
+            (150, 40, true, 200, (150, 19)),
+            (30, 40, false, 200, (30, 40)),
+            (100, 100, true, 100, (19, 19)),
+            (100, 100, true, 200, (100, 100)),
+        ] {
+            let cursor = CCursorRange {
+                primary: CCursor::new(a),
+                secondary: CCursor::new(b),
+                ..Default::default()
+            };
+            let actual = region.visible_cursor(cursor, collapsed, eof);
+            assert_eq!((actual.primary.index.0, actual.secondary.index.0), expected);
+        }
     }
 }

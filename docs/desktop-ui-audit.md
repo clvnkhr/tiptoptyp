@@ -428,3 +428,70 @@ syntax/rainbow colors and line-number alignment. Git capture
 was inspected for the single-row bulk actions. Updated drawing, main Contents,
 and Settings gallery frames were also inspected. Framebuffers establish these
 egui layouts, not native child-view desktop composition.
+
+
+## 2026-09-29 — Folding caret, selection wrapping and preview focus
+
+The native folding regression first failed in `run-sfpt7h41`: clicking Collapse
+replaced a visible caret elsewhere in the document with the fold's start. A
+subsequent reproduction exposed TextEdit moving the caret on mouse-down before
+the fold's mouse-up handler. Preserve the pre-press selection; only endpoints
+inside the newly hidden range move to the visible end of the header. Expansion
+preserves the selection. A brief existing editor attention highlight identifies
+the caret. The final native folding run `run-1fsop79b` passed a short fixture and
+a 290-line document with a 180-line fold, including distant/hidden carets,
+source preservation and scroll stability. Deterministic coverage includes
+forward/backward selections and folds ending at EOF.
+
+Typing a delimiter over selected Unicode text previously produced an empty pair;
+`live_editor_surrounds_selected_unicode_text` established that failure before the
+fix. The TextBuffer adapter now retains the deleted selection only for explicit
+surround typing and inserts the pair as one history edit. Existing default-on
+auto-close settings control it. Typst, TeX and plain-text editor tests cover all
+requested delimiters and undo/redo; disabled pairing, paste, ordinary text and
+mixed deletion/typing batches remain ordinary replacement. Native
+`selection_wrap` passed in `run-80wsbuud`.
+
+Both previews now display a focus outline and a compact “Preview focused” badge;
+Escape returns to the source. Tinymist publishes focus changes and ignores its
+keyboard shortcuts without document focus. Native construction keeps keyboard
+ownership with the parent; hiding/discarding a focused native viewer releases
+that focus. Code-only mode explicitly focuses the editor. That last transition
+failed natively in `run-f5l4ti40`: the editor remained unfocused after hiding the
+PDFium preview and swallowed typing. The final `preview_keyboard` run
+`run-og9690yy` passed both effective backends, compilation/hover/wheel negative
+checks, three click/Escape/typing round trips, focused Tinymist inversion, and
+switching a focused preview to code-only mode. The user's exact original surprise
+focus-transfer sequence was not established; these results do not claim otherwise.
+
+The native runner's target-availability wait now uses the same 500 ms freshness
+limit as its click routine. During the larger fixture's close confirmation,
+freshly advancing child frames were roughly 170 ms old in the parent snapshot;
+the former separate 100 ms wait rejected them although the click contract allowed
+them. Clicks still require fresh, settled geometry and verified action outcomes.
+
+Fresh framebuffer `.tiptoptyp/screenshots/agent-review/1790721784500-0002-main-preview-focus.png`
+(retained from `run-ad2ww8hb/1790721784500-0002-main.png`) was inspected: the
+PDFium outline and top-right focus badge are readable and unclipped. Its initial
+frame `1790721774601-0001-main.png` was also inspected. These files are under
+`.tiptoptyp/desktop-ui-tests/`; their fresh original captures were written under
+the isolated fixture's `.tiptoptyp/screenshots/`. This verifies the egui appearance,
+not native Tinymist composition. Tinymist focus was verified by real keyboard
+input and the live renderer state, without claiming a composed desktop capture.
+
+Performance: no new timers, workers, idle repaint loops or per-frame disk writes.
+Focus messages are event-driven and deduplicated. Selection copies occur only for
+explicit delimiter typing over a selection. Folding's attention animation uses
+the existing bounded timer. No material steady-state performance change or
+cross-platform timing claim is made.
+
+Validation: formatting, all-target Clippy with warnings denied, the complete Rust
+test suite, all 15 xtask tests, and all 9 JavaScript adapter tests passed. The
+toolbar harness now renders the real editor (including its fonts), so Code's
+focus destination exists in the accessibility tree. The nested-fold harness uses
+a bounded number of frames while the deliberate caret highlight animates; its
+fold geometry assertions are unchanged. Opt-in/ignored tests remain opt-in; native
+interaction results above are reported separately from the standard suite.
+
+The existing native background/app-switch journey also passed in `run-bbazewgv`;
+preview work did not activate the app while it was in the background.

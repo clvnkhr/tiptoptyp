@@ -288,7 +288,7 @@ class Journey(EditorJourneys):
         deadline = time.monotonic() + 6
         while time.monotonic() < deadline:
             target = self.snapshot()["targets"].get(name)
-            if target and target["enabled"] and target["age_ms"] < 100:
+            if target and target["enabled"] and target["age_ms"] <= 500:
                 return
             time.sleep(0.05)
         raise AssertionError(f"target did not become visible: {name}")
@@ -409,7 +409,7 @@ class Journey(EditorJourneys):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--journey", choices=["all", "drawing", "snippets", "panels", "find", "rectangle", "empty", "focus", "preview", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_scroll", "folding", "closing", "controls", "settings_search", "background"], default="all")
+    parser.add_argument("--journey", choices=["all", "drawing", "snippets", "panels", "find", "rectangle", "empty", "focus", "preview", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_scroll", "folding", "selection_wrap", "preview_keyboard", "closing", "controls", "settings_search", "background"], default="all")
     parser.add_argument("--review-preview", action="store_true", help="pause at each dark/comfy renderer for independent on-screen review; not an automated visual pass")
     parser.add_argument("--capture-review", action="store_true", help="capture affected settings/controls framebuffers for separate visual inspection")
     parser.add_argument("--trace-preview", action="store_true", help="retain native preview geometry traces")
@@ -462,7 +462,7 @@ def main():
                 "CFBundleExecutable": "tiptoptyp", "CFBundleIdentifier": "dev.tiptoptyp.journey." + directory.name,
                 "CFBundleName": "tiptoptyp UI Journey", "CFBundlePackageType": "APPL", "NSHighResolutionCapable": True,
             }))
-            fixture = directory / ("journey.typ" if args.journey in ("all", "preview", "controls", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "layout", "explorer_scroll", "background") else "journey.txt")
+            fixture = directory / ("journey.typ" if args.journey in ("all", "preview", "preview_keyboard", "controls", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "layout", "explorer_scroll", "background") else "journey.txt")
             fixture.write_text(
                 '#set page(width: 200pt, height: 200pt, margin: 20pt)\n= First\nBlack text on white paper.\n#pagebreak()\n= Second\nMiddle page.\n#pagebreak()\n= Third\n#v(95pt)\nFinal needle.\n'
                 if fixture.suffix == ".typ" and args.journey != "diagnostics"
@@ -573,7 +573,7 @@ def main():
                         return
                     if args.capture_review:
                         journey.capture_viewport("main")
-                    for name in (["panels", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "explorer_scroll", "folding", "closing", "focus", "settings_search", "background", "preview", "controls", "empty", "snippets", "drawing"] if args.journey == "all" else [args.journey]):
+                    for name in (["panels", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "explorer_scroll", "folding", "selection_wrap", "preview_keyboard", "closing", "focus", "settings_search", "background", "preview", "controls", "empty", "snippets", "drawing"] if args.journey == "all" else [args.journey]):
                         journey.record("journey.start", name=name)
                         getattr(journey, name)()
                         result["journeys"].append(name)

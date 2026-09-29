@@ -285,9 +285,29 @@ fn command_toolbar_menu_and_shortcut_effects_agree_once_per_owner() {
                     .with_os(egui::os::OperatingSystem::from_target_os())
                     .build_ui_state(
                         |ui, app: &mut EditorApp| {
+                            let fonts = egui::Id::new("command-test-fonts-ready");
+                            if !ui
+                                .ctx()
+                                .data(|d| d.get_temp::<bool>(fonts).unwrap_or(false))
+                            {
+                                theme::configure_editor_fonts(
+                                    ui.ctx(),
+                                    Default::default(),
+                                    Default::default(),
+                                    false,
+                                    400,
+                                    400,
+                                    None,
+                                );
+                                ui.ctx().data_mut(|d| d.insert_temp(fonts, true));
+                                return;
+                            }
                             app.handle_shortcuts(ui.ctx(), None);
                             app.process_native_menu_commands(ui.ctx(), None);
                             app.show_toolbar(ui, None);
+                            // Code now hands keyboard focus to the actual editor.
+                            // Include that target in the accessibility tree.
+                            app.show_editor(ui);
                         },
                         app,
                     );

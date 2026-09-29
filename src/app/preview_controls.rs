@@ -13,6 +13,8 @@ fn control(ui: &mut egui::Ui, icon: UiIcon, label: &str) -> egui::Response {
 pub(super) const SALT: &str = "preview-controls";
 #[derive(Clone, Default, serde::Deserialize)]
 pub(super) struct Snapshot {
+    #[serde(default)]
+    pub focused: bool,
     pub page: usize,
     pub count: usize,
     pub zoom: f32,
@@ -49,6 +51,7 @@ pub(super) struct Controls {
     pub query: String,
     pub edit_events: Vec<egui::Event>,
     pub focus_find: bool,
+    pub return_to_editor: bool,
     pub position: Option<Pos2>,
     pub available: Option<Rect>,
     pub web: Snapshot,
@@ -532,6 +535,7 @@ mod tests {
     fn outline_height_does_not_feed_back_from_the_previous_popup_size() {
         for count in [0, 3, 100] {
             let snapshot = Snapshot {
+                focused: false,
                 count: 3,
                 zoom: 1.0,
                 outline: (0..count).map(|i| (format!("Heading {i}"), 0)).collect(),
@@ -569,6 +573,7 @@ mod tests {
     #[test]
     fn controls_have_one_layout_and_emit_backend_actions() {
         let snapshot = Snapshot {
+            focused: false,
             page: 1,
             count: 4,
             zoom: 1.0,

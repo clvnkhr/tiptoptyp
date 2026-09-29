@@ -4,6 +4,27 @@ use super::*;
 use eframe::egui::text::{ByteIndex, LayoutJob, LayoutSection};
 
 impl EditorApp {
+    pub(super) fn focus_source_editor(&mut self, context: &egui::Context) {
+        if self.document().kind().preview_only() {
+            return;
+        }
+        if self.view_mode == ViewMode::Preview {
+            self.view_mode = ViewMode::Split;
+        }
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(webview) = &self.webview {
+            let _ = webview.focus_parent();
+        }
+        crate::window_host::focus(
+            context,
+            context.viewport_id(),
+            crate::window_host::FocusCause::UserAction,
+        );
+        let editor = source_editor_id(context);
+        context.memory_mut(|m| m.request_focus(editor));
+        context.request_repaint();
+    }
+
     pub(super) fn insert_editor_text(&mut self, context: &egui::Context, text: &str) {
         let snapshot = self.editor_snapshot(context);
         let range = snapshot.cursor.as_sorted_char_range();
@@ -322,6 +343,11 @@ impl EditorApp {
             });
         }
         let snapshot_before_edit = self.editor_snapshot(ui.ctx());
+        let fold_press_id = source_editor_id(ui.ctx()).with("fold-press-cursor");
+        if ui.input(|i| i.pointer.primary_pressed()) {
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(fold_press_id, snapshot_before_edit.cursor));
+        }
         let available_size = ui.available_size();
         let viewport_snapshot_id = source_editor_id(ui.ctx()).with("resize-anchor");
         let resize_anchor = self
@@ -344,7 +370,8 @@ impl EditorApp {
         self.generic_highlighter
             .set_rainbow_brackets(self.settings.rainbow_brackets);
         let indent_spaces = self.settings.indent_spaces;
-        let auto_pair_enabled = self.settings.auto_pair_delimiters && document_kind.is_typst();
+        let surround_enabled = self.settings.auto_pair_delimiters;
+        let auto_pair_enabled = surround_enabled && document_kind.is_typst();
         let auto_pair_syntax = &mut self.auto_pair_syntax;
         let highlighter = &mut self.highlighter;
         let active_tab = self
@@ -456,6 +483,7 @@ impl EditorApp {
                             auto_pair_enabled,
                             &input.events,
                         )
+                        .with_surround(surround_enabled, &input.events)
                         .with_indentation(indent_spaces)
                     });
                     &mut pairing
@@ -670,13 +698,21 @@ impl EditorApp {
                 if let Some(region) = gutter_clicked.or(marker_clicked) {
                     output.response.request_focus();
                     folding.toggle(region.line);
-                    if folding.is_collapsed(region.line) {
-                        output
-                            .state
-                            .cursor
-                            .set_char_range(Some(CCursorRange::one(CCursor::new(region.header))));
-                        output.state.clone().store(ui.ctx(), output.response.id);
-                    }
+                    // Gutter clicks must not inherit TextEdit's hit-testing
+                    // cursor. Only move an endpoint if it would become hidden.
+                    let cursor = region.visible_cursor(
+                        ui.ctx()
+                            .data(|d| d.get_temp(fold_press_id))
+                            .unwrap_or(snapshot_before_edit.cursor),
+                        folding.is_collapsed(region.line),
+                        document.source().chars().count(),
+                    );
+                    output.state.cursor.set_char_range(Some(cursor));
+                    output.state.clone().store(ui.ctx(), output.response.id);
+                    self.editor_attention = Some(EditorAttention {
+                        char_index: cursor.primary.index.0,
+                        started: Instant::now(),
+                    });
                     folds_changed = true;
                     // A discarded pass would replay this click and toggle
                     // back. Apply the new geometry on the next input frame.
@@ -994,6 +1030,10 @@ impl EditorApp {
             )
         });
 
+        if ui.input(|i| i.pointer.any_released()) {
+            ui.ctx()
+                .data_mut(|d| d.remove::<CCursorRange>(fold_press_id));
+        }
         let (
             editor_rect,
             corner_radius,
@@ -1002,6 +1042,15 @@ impl EditorApp {
             mut viewport_snapshot,
             painted_offset,
         ) = scroll_output.inner;
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        crate::desktop_test::observe_scroll(
+            "editor",
+            ui.ctx(),
+            scroll_output.inner_rect,
+            scroll_output.content_size.y,
+            scroll_output.state.offset.y,
+            false,
+        );
         // ScrollArea commits input/programmatic scrolling after its content
         // closure. Store geometry at that offset so consecutive resize frames
         // cannot accumulate drift from the previous frame's painted position.

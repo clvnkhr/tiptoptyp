@@ -8898,7 +8898,8 @@ fn folding_nested_typst_controls_stay_on_headers_after_click() {
     assert!(harness.query_by_label("Collapse line 6").is_some());
     assert!(harness.query_by_label("Collapse line 9").is_some());
     harness.get_by_label("Collapse line 6").click();
-    harness.run();
+    // The caret attention cue intentionally repaints for a short interval.
+    harness.run_steps(4);
     assert!(harness.state().app.folding().is_collapsed(5));
     assert!(harness.query_by_label("Expand line 6").is_some());
     assert!(harness.query_by_label("Collapse line 9").is_none());
@@ -9079,4 +9080,57 @@ fn linked_snippet_text_edit_replaces_both_fields_in_one_undo() {
     assert_eq!(app.document().source(), "begin{name}\nend{name}");
     app.undo_editor(&context, true);
     assert_eq!(app.document().source(), "begin{enumerate}\nend{enumerate}");
+}
+
+#[test]
+fn live_editor_surrounds_selected_unicode_text() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    app.snapshot_scene = None;
+    let id = source_editor_id(&context);
+    let frame = |app: &mut EditorApp, events| {
+        context
+            .run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 500.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.show_editor(ui),
+            )
+            .drop_without_applying_deltas();
+    };
+    for kind in [DocumentKind::Typst, DocumentKind::Tex, DocumentKind::Text] {
+        for (open, close) in [
+            ('(', ')'),
+            ('[', ']'),
+            ('{', '}'),
+            ('$', '$'),
+            ('"', '"'),
+            ('*', '*'),
+            ('_', '_'),
+            ('`', '`'),
+        ] {
+            app.document_mut().replace_loaded_unprojected(
+                "α🦀 words".into(),
+                directory.path().join("fixture"),
+                kind,
+                None,
+            );
+            frame(&mut app, Vec::new());
+            context.memory_mut(|m| m.request_focus(id));
+            let mut state = egui::text_edit::TextEditState::load(&context, id).unwrap();
+            state
+                .cursor
+                .set_char_range(Some(CCursorRange::two(CCursor::new(0), CCursor::new(8))));
+            state.store(&context, id);
+            frame(&mut app, vec![egui::Event::Text(open.to_string())]);
+            assert_eq!(app.document().source(), &format!("{open}α🦀 words{close}"));
+            app.undo_editor(&context, false);
+            assert_eq!(app.document().source(), "α🦀 words");
+            app.undo_editor(&context, true);
+            assert_eq!(app.document().source(), &format!("{open}α🦀 words{close}"));
+        }
+    }
 }

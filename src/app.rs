@@ -3373,7 +3373,10 @@ impl EditorApp {
                 self.explorer.toggle();
                 context.request_repaint();
             }
-            AppCommand::Code => self.view_mode = ViewMode::Code,
+            AppCommand::Code => {
+                self.view_mode = ViewMode::Code;
+                self.focus_source_editor(context);
+            }
             AppCommand::Split => {
                 self.restore_preview_window(context);
                 self.view_mode = ViewMode::Split;
@@ -5945,7 +5948,10 @@ impl EditorApp {
             return;
         };
         match value.get("type").and_then(|value| value.as_str()) {
-            Some("invert-preview") => {
+            Some("focus-editor") => {
+                self.preview_controls.return_to_editor = true;
+            }
+            Some("invert-preview") if self.preview_controls.web.focused => {
                 self.preview.dark = !self.preview.dark;
                 let mut edited = self
                     .pending_settings
@@ -8067,7 +8073,10 @@ impl EditorApp {
                 ui.visuals().panel_fill,
                 true,
             ) {
-                ui.allocate_rect(rect, Sense::hover());
+                let response = ui.allocate_rect(rect, Sense::hover());
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("preview.page", &response);
+                let _ = response;
                 ui.painter().rect_filled(rect, 0.0, preview_background(ui));
                 return;
             }
@@ -8805,6 +8814,9 @@ impl EditorApp {
         self.receive_tinymist_events(&context);
         self.tick_tinymist_recovery(&context);
         self.receive_web_links();
+        if std::mem::take(&mut self.preview_controls.return_to_editor) {
+            self.focus_source_editor(&context);
+        }
         self.handle_shortcuts(&context, frame);
         // Menu-driven TextEdit commands may inject semantic events. Process
         // them after shortcut normalization so they reach the focused widget

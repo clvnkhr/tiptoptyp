@@ -39,6 +39,8 @@ impl EditorApp {
     /// Native objects stay on the owning UI thread; discard their cached
     /// presentation identity together so a recreated view cannot inherit it.
     pub(super) fn discard_webview(&mut self) {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        self.release_webview_focus();
         #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
         crate::desktop_test::reset_renderer();
         #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -1392,6 +1394,7 @@ impl EditorApp {
             let palette = self.preview_palette(context, self.preview.dark);
             let palette_script = preview_palette_script(palette);
             let builder = wry::WebViewBuilder::new()
+                .with_focused(false)
                 .with_url(&url)
                 .with_initialization_script(include_str!("../preview_navigation.js"))
                 .with_initialization_script(palette_script)
@@ -1454,6 +1457,10 @@ impl EditorApp {
             let built = builder.build_as_child(&parent);
             match built {
                 Ok(webview) => {
+                    // Native preview creation is background rendering work.
+                    // with_focused(false) is unsupported on macOS, so explicitly
+                    // leave the parent as the keyboard owner after construction.
+                    let _ = webview.focus_parent();
                     #[cfg(target_os = "macos")]
                     crate::native_window::enable_native_webview_magnification(&webview);
                     self.webview = Some(webview);
@@ -1548,10 +1555,20 @@ impl EditorApp {
     }
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
+    fn release_webview_focus(&mut self) {
+        if std::mem::take(&mut self.preview_controls.web.focused)
+            && let Some(webview) = &self.webview
+        {
+            let _ = webview.focus_parent();
+        }
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     pub(super) fn hide_webview(&mut self) {
         if self.webview_applied.is_some_and(|applied| !applied.visible) {
             return;
         }
+        self.release_webview_focus();
         if let Some(webview) = &self.webview {
             let _ = webview.set_visible(false);
             if let Some(applied) = &mut self.webview_applied {

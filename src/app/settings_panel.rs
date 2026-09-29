@@ -577,7 +577,8 @@ impl SettingsPanel<'_> {
                 crate::handwriting::settings_ui(ui, &mut edited.handwriting);
                 settings_target_anchor(ui, SettingsTarget::UnicodeWarnings, &mut settings_scroll_target);
                 ui.checkbox(&mut edited.unicode_warnings, SettingsTarget::UnicodeWarnings.label());
-                ui.checkbox(&mut edited.auto_pair_delimiters, SettingsTarget::AutoPairDelimiters.label());
+                ui.checkbox(&mut edited.auto_pair_delimiters, SettingsTarget::AutoPairDelimiters.label())
+                    .on_hover_text("Typing an opening bracket, quote, dollar, asterisk, underscore or backtick surrounds selected text. Typst also pairs delimiters at an empty caret. Paste stays unchanged.");
                 settings_target_anchor(ui, SettingsTarget::Indentation, &mut settings_scroll_target);
                 ui.horizontal(|ui| {
                     ui.label(SettingsTarget::Indentation.label());

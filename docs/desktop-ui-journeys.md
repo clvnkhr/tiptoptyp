@@ -202,3 +202,25 @@ The native driver rejects a locked desktop before attempting input.
 waits for real Detexify predictions, resizes the window, checks the retained ink,
 and clicks the first insertable ranked prediction into a scratch document. It then switches to Detypify and Unicode output through Settings, checks that the retained ink is re-recognized by only that engine, inserts a result, and clears the canvas. The expected insertion comes from the same language/preference resolver used by the displayed row. No model result or
 canvas state is injected into the app.
+
+### Folding, selection wrapping and preview keyboard ownership
+
+`--journey folding` covers both the short fold fixture and a 290-line document
+with a 180-line code block. It wheels back to the fold header while leaving the
+caret at the document end, collapses/expands without moving that caret or
+scrolling to it, then folds with the caret inside the block and checks the visible
+header destination over repeated frames. The source must remain unchanged.
+
+`--journey selection_wrap` selects Unicode text and types every supported bracket
+or symmetric delimiter, then checks native undo and redo. Deterministic editor
+coverage also exercises Typst, TeX and plain text, disabled pairing, paste, and
+selection deletion followed by typing in the same input batch.
+
+`--journey preview_keyboard` verifies the effective PDFium and Tinymist backends.
+Compilation, pointer hover and wheel scrolling must preserve source typing.
+Switching a focused preview to code-only mode must restore source keyboard input.
+Three click/Escape round trips per backend check keyboard ownership. Tinymist's
+`t` shortcut must invert only the focused preview; typing after Escape must edit
+source without changing preview colors. `--capture-review` captures the PDFium
+focus outline and badge once; the root framebuffer cannot display the embedded
+Tinymist WebView, whose focus and keyboard behavior are checked separately.

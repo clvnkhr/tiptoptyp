@@ -135,6 +135,15 @@ impl EditorApp {
                 .focused_section()
                 .map(|section| section.title())
         );
+        interaction["preview_keyboard_focused"] =
+            serde_json::json!(if self.pdfium_preview_requested() {
+                self.pdfium_preview.has_focus(context)
+            } else {
+                self.preview_controls.web.focused
+                    && self.webview_applied.is_some_and(|state| state.visible)
+            });
+        interaction["editor_keyboard_focused"] =
+            serde_json::json!(context.memory(|m| m.has_focus(source_editor_id(context))));
         interaction["drawing"] = self.symbol_drawing.inspection(
             self.document().kind() == DocumentKind::Tex || self.document().config().is_some(),
             self.settings.handwriting,

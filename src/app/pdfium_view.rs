@@ -84,6 +84,13 @@ impl Default for PdfiumView {
 }
 
 impl PdfiumView {
+    pub(super) fn has_focus(&self, context: &egui::Context) -> bool {
+        context.input(|i| i.focused)
+            && self
+                .page_focus
+                .is_some_and(|id| context.memory(|m| m.has_focus(id)))
+    }
+
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     pub(super) fn inspected_palette(&self) -> [[u8; 4]; 2] {
         [self.palette.0.to_array(), self.palette.1.to_array()]
@@ -431,6 +438,10 @@ impl PdfiumView {
                         ui.id().with(("pdfium-page", index)),
                         Sense::click_and_drag(),
                     );
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    if index == self.page {
+                        crate::desktop_test::observe("preview.page", &response);
+                    }
                     if response.has_focus() || response.clicked() || response.drag_started() {
                         self.page_focus = Some(response.id);
                     }
@@ -576,6 +587,7 @@ impl PdfiumView {
 
     pub(super) fn controls_snapshot(&self) -> super::preview_controls::Snapshot {
         super::preview_controls::Snapshot {
+            focused: false,
             page: self.page,
             count: self.catalog.as_ref().map_or(0, |c| c.sizes.len()),
             zoom: self.zoom,
@@ -741,7 +753,8 @@ impl EditorApp {
         self.document().kind() == DocumentKind::Pdf
     }
     pub(super) fn show_pdfium_view(&mut self, ui: &mut egui::Ui, asset: bool) {
-        self.preview_controls.available = Some(ui.available_rect_before_wrap());
+        let viewport = ui.available_rect_before_wrap();
+        self.preview_controls.available = Some(viewport);
         let path = if asset {
             self.document().path().clone().unwrap_or_default()
         } else {
@@ -789,6 +802,51 @@ impl EditorApp {
             && crate::pdfium::safe_url(&link)
         {
             let _ = self.web_link_sender.send(link);
+        }
+        if view.has_focus(ui.ctx()) {
+            ui.painter().rect_stroke(
+                viewport.shrink(1.0),
+                0.0,
+                Stroke::new(2.0, ui.visuals().selection.stroke.color),
+                egui::StrokeKind::Inside,
+            );
+            let label = if asset {
+                "Preview focused"
+            } else {
+                "Preview focused · Esc to edit"
+            };
+            let galley =
+                ui.painter()
+                    .layout_no_wrap(label.to_owned(), theme::supporting_font(), palette.0);
+            let badge = Rect::from_min_size(
+                egui::pos2(
+                    viewport.right() - galley.size().x - 18.0,
+                    viewport.top() + 4.0,
+                ),
+                galley.size() + egui::vec2(14.0, 6.0),
+            );
+            ui.painter().rect_filled(badge, 3.0, palette.1);
+            ui.painter()
+                .galley(badge.min + egui::vec2(7.0, 3.0), galley, palette.0);
+        }
+        // egui clears widget focus at the beginning of an Escape frame.
+        // Consult the previous owner as well, before routing Escape to source.
+        if !asset
+            && ui.input(|i| i.focused)
+            && view
+                .page_focus
+                .is_some_and(|id| ui.memory(|m| m.has_focus(id) || m.had_focus_last_frame(id)))
+            && ui.input_mut(|i| i.consume_key(Modifiers::NONE, egui::Key::Escape))
+        {
+            // Resolve the source editor in its document callback, including
+            // when this viewer is hosted in the detached preview window.
+            self.preview_controls.return_to_editor = true;
+            let owner = if self.preview_controls.popout.is_some() {
+                ui.ctx().parent_viewport_id()
+            } else {
+                ui.ctx().viewport_id()
+            };
+            ui.ctx().request_repaint_of(owner);
         }
         let id = viewport_scoped_id(ui.ctx(), "pdf-synctex");
         if !asset
