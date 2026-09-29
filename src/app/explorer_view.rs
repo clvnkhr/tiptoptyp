@@ -977,6 +977,8 @@ pub(super) fn show_explorer_sections(
     mut add_body: impl FnMut(&mut egui::Ui, ExplorerSection),
 ) -> ExplorerSectionsOutput {
     let mut output = ExplorerSectionsOutput::default();
+    let mut section_edges = [(Rect::NOTHING, false); ExplorerSection::ALL.len()];
+    let mut visible_sections = 0;
     for section in spec.order.sections() {
         if (section == ExplorerSection::Git && !spec.git_visible)
             || spec.maximized.is_some_and(|maximized| maximized != section)
@@ -1031,9 +1033,49 @@ pub(super) fn show_explorer_sections(
         if rendered.section_clicked {
             output.focused_section = Some(section);
         }
+        if let Some(rect) = rendered.frame_rect {
+            section_edges[visible_sections] = (rect, rendered.resize_active);
+            visible_sections += 1;
+        }
+    }
+    // Draw after the fills so each shared edge has one visible rule, even
+    // when the next section is collapsed or the order has changed.
+    for pair in section_edges[..visible_sections].windows(2) {
+        let stroke = if pair[0].1 {
+            Stroke::new(1.5, ui.visuals().widgets.hovered.fg_stroke.color)
+        } else {
+            ui.visuals().widgets.noninteractive.bg_stroke
+        };
+        ui.painter()
+            .line_segment(explorer_section_divider(pair[0].0, pair[1].0), stroke);
     }
     output.searches = spec.searches;
     output
+}
+
+fn explorer_section_divider(upper: Rect, lower: Rect) -> [Pos2; 2] {
+    let y = lower.top();
+    [
+        Pos2::new(upper.left().min(lower.left()), y),
+        Pos2::new(upper.right().max(lower.right()), y),
+    ]
+}
+
+#[cfg(test)]
+#[test]
+fn explorer_dividers_only_span_shared_edges() {
+    let sections = [
+        Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(200.0, 40.0)),
+        Rect::from_min_max(Pos2::new(0.0, 40.0), Pos2::new(200.0, 90.0)),
+        Rect::from_min_max(Pos2::new(0.0, 90.0), Pos2::new(200.0, 130.0)),
+    ];
+    let dividers: Vec<_> = sections
+        .windows(2)
+        .map(|pair| explorer_section_divider(pair[0], pair[1]))
+        .collect();
+    assert_eq!(dividers.len(), 2);
+    assert_eq!(dividers[0], [Pos2::new(0.0, 40.0), Pos2::new(200.0, 40.0)]);
+    assert_eq!(dividers[1], [Pos2::new(0.0, 90.0), Pos2::new(200.0, 90.0)]);
 }
 
 pub(super) struct ExplorerSectionRenderSpec<'a> {
@@ -1055,6 +1097,8 @@ pub(super) struct ExplorerSectionRenderOutput {
     pub(super) toggle_maximized: bool,
     pub(super) search_focused: bool,
     pub(super) section_clicked: bool,
+    pub(super) frame_rect: Option<Rect>,
+    pub(super) resize_active: bool,
 }
 
 fn explorer_section_search(
@@ -1223,23 +1267,12 @@ pub(super) fn explorer_section_resizable(
                 add_body(ui);
             });
             if handle_height > 0.0 {
-                let (rect, response) = ui.allocate_exact_size(
+                let (_, response) = ui.allocate_exact_size(
                     Vec2::new(ui.available_width().max(0.0), handle_height),
                     Sense::drag(),
                 );
                 let response = response.on_hover_cursor(egui::CursorIcon::ResizeVertical);
-                let stroke = if response.hovered() || response.dragged() {
-                    Stroke::new(1.5, ui.visuals().widgets.hovered.fg_stroke.color)
-                } else {
-                    ui.visuals().widgets.noninteractive.bg_stroke
-                };
-                ui.painter().line_segment(
-                    [
-                        Pos2::new(rect.left(), rect.center().y),
-                        Pos2::new(rect.right(), rect.center().y),
-                    ],
-                    stroke,
-                );
+                output.resize_active = response.hovered() || response.dragged();
                 output.resize_delta = response.drag_delta().y;
                 output.resize_stopped = response.drag_stopped();
             }
@@ -1250,6 +1283,7 @@ pub(super) fn explorer_section_resizable(
             .ctx()
             .pointer_latest_pos()
             .is_some_and(|pos| frame.response.rect.contains(pos));
+    output.frame_rect = Some(frame.response.rect);
     output
 }
 

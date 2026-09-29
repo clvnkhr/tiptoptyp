@@ -1617,14 +1617,13 @@ pub fn content_panel_frame(style: &egui::Style) -> egui::Frame {
     egui::Frame::side_top_panel(style).inner_margin(egui::Margin::symmetric(SPACE.content as i8, 0))
 }
 
-/// A compact, theme-aware container for one independently scrolling Explorer
-/// section. Keeping this alongside the other shared frames prevents each
-/// section from inventing its own surface, border, or corner treatment.
+/// A flat surface for an independently scrolling Explorer section. The shared
+/// edges are drawn once by the Explorer view, outside these frames.
 pub fn explorer_section_frame(style: &egui::Style) -> egui::Frame {
     egui::Frame::new()
         .fill(style.visuals.widgets.noninteractive.bg_fill)
-        .stroke(style.visuals.widgets.noninteractive.bg_stroke)
-        .corner_radius(RADIUS.row)
+        .stroke(egui::Stroke::NONE)
+        .corner_radius(0)
 }
 
 pub fn popup_card_frame(style: &egui::Style) -> egui::Frame {
@@ -1951,12 +1950,9 @@ mod tests {
         assert_eq!(content.inner_margin, egui::Margin::symmetric(8, 0));
 
         let explorer = explorer_section_frame(&style);
-        assert_eq!(explorer.corner_radius, egui::CornerRadius::same(RADIUS.row));
+        assert_eq!(explorer.corner_radius, egui::CornerRadius::ZERO);
         assert_eq!(explorer.fill, style.visuals.widgets.noninteractive.bg_fill);
-        assert_eq!(
-            explorer.stroke,
-            style.visuals.widgets.noninteractive.bg_stroke
-        );
+        assert_eq!(explorer.stroke, egui::Stroke::NONE);
 
         let chip = status_chip_frame(&style);
         assert_eq!(chip.corner_radius, egui::CornerRadius::same(4));
