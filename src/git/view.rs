@@ -766,7 +766,11 @@ pub(super) fn show_panel(ui: &mut egui::Ui, input: Input<'_>, cache: &mut Cache)
                                                             ui.add_space(theme::SPACE.small);
                                                             ui.add(
                                                                 egui::Label::new(
-                                                                    egui::RichText::new(git_status_marker(entry))
+                                                                    egui::RichText::new(format!(
+                                                                        "{}{}",
+                                                                        entry.index,
+                                                                        entry.worktree
+                                                                    ))
                                                                     .monospace()
                                                                     .color(if entry.staged() {
                                                                         palette.success
@@ -944,31 +948,6 @@ fn change_row_height(ui: &egui::Ui) -> f32 {
         .max(ui.spacing().interact_size.y)
         .max(20.0)
         + 2.0
-}
-
-fn git_status_marker(entry: &Entry) -> String {
-    if entry.index == '?' && entry.worktree == '?' {
-        "?".to_owned()
-    } else {
-        format!("{}{}", entry.index, entry.worktree)
-    }
-}
-
-#[cfg(test)]
-#[test]
-fn untracked_git_status_is_one_question_mark() {
-    let entry = Entry {
-        path: "new.typ".into(),
-        index: '?',
-        worktree: '?',
-    };
-    assert_eq!(git_status_marker(&entry), "?");
-    let entry = Entry {
-        path: "edited.typ".into(),
-        index: 'M',
-        worktree: 'M',
-    };
-    assert_eq!(git_status_marker(&entry), "MM");
 }
 
 struct ChangeButtons {

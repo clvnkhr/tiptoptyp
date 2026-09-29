@@ -1257,7 +1257,7 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
         header_refresh_width: 24.0,
         header_row_height: 20.0,
         section_header_height: 20.0,
-        section_gap: 4.0,
+        section_gap: 0.0,
         row_height: 20.0,
         detail_breakpoint: 150.0,
         outline_indent: 10.0,
@@ -1743,7 +1743,7 @@ mod tests {
         assert_eq!(METRICS.popup.card_inner_margin, 9);
         assert_eq!(METRICS.icon.button_size, Vec2::new(22.0, 20.0));
         assert_eq!(METRICS.explorer.section_header_height, 20.0);
-        assert_eq!(METRICS.explorer.section_gap, 4.0);
+        assert_eq!(METRICS.explorer.section_gap, 0.0);
         assert_eq!(METRICS.explorer.row_height, 20.0);
         assert_eq!(METRICS.preview.page_margin, 28.0);
         assert_eq!(METRICS.preview.page_gap, 24.0);
