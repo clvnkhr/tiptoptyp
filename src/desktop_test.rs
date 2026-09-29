@@ -22,6 +22,8 @@ struct State {
     renderer_epoch: u64,
     targets: BTreeMap<String, (Value, Instant)>,
     observed_targets: BTreeMap<String, (Value, Instant)>,
+    scrolls: BTreeMap<String, Value>,
+    observed_scrolls: BTreeMap<String, Value>,
 }
 impl State {
     fn publish_document(&mut self, document: Value) {
@@ -29,6 +31,7 @@ impl State {
         // Freeze hit targets with their document frame. The next native pass
         // may start before the socket reader wakes; it must not mix frames.
         self.targets.clone_from(&self.observed_targets);
+        self.scrolls.clone_from(&self.observed_scrolls);
         self.published = self.requested;
     }
     fn reset_renderer(&mut self) {
@@ -155,7 +158,7 @@ fn snapshot() -> Value {
         .collect();
     json!({
         "schema": 1, "pid": std::process::id(), "build": crate::build_info::VERSION,
-        "request": request, "renderer_generation": state.renderer_epoch, "document": state.document, "targets": targets,
+        "request": request, "renderer_generation": state.renderer_epoch, "document": state.document, "targets": targets, "scrolls": state.scrolls,
         "renderer": state.renderer.as_ref().map(|(value, time)| json!({"value": value, "age_ms": time.elapsed().as_millis()})),
     })
 }
@@ -227,6 +230,32 @@ pub(crate) fn observe(name: &str, response: &egui::Response) {
         .unwrap()
         .observed_targets
         .insert(name.into(), (target, Instant::now()));
+}
+
+/// Read-only scroll geometry for a real wheel-input journey. No document text
+/// or off-screen rows enter the inspection stream.
+pub(crate) fn observe_scroll(
+    name: &str,
+    context: &egui::Context,
+    viewport: egui::Rect,
+    content_height: f32,
+    offset: f32,
+    sticky_search: bool,
+) {
+    let Some(probe) = PROBE.get() else {
+        return;
+    };
+    let origin = context.input(|input| input.viewport().inner_rect.map(|rect| rect.min));
+    let Some(origin) = origin else {
+        return;
+    };
+    let point = screen_point(origin, viewport, context.zoom_factor());
+    probe.state.lock().unwrap().observed_scrolls.insert(
+        name.into(),
+        json!({"x": point.x, "y": point.y, "offset": offset, "sticky_search": sticky_search,
+            "content_height": content_height, "viewport_height": viewport.height(),
+            "frame": context.cumulative_frame_nr()}),
+    );
 }
 
 fn screen_point(origin: egui::Pos2, hit: egui::Rect, zoom: f32) -> egui::Pos2 {

@@ -1078,6 +1078,73 @@ fn explorer_dividers_only_span_shared_edges() {
     assert_eq!(dividers[1], [Pos2::new(0.0, 90.0), Pos2::new(200.0, 90.0)]);
 }
 
+#[cfg(test)]
+#[test]
+fn explorer_search_initial_offset_does_not_reset_wheel_scrolling() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    #[derive(Default)]
+    struct State {
+        query: String,
+        offset: f32,
+    }
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(320.0, 250.0))
+        .build_ui_state(
+            |ui, state: &mut State| {
+                let rendered = explorer_section_resizable(
+                    ui,
+                    ExplorerSectionRenderSpec {
+                        id_salt: "wheel-regression",
+                        title: "Files",
+                        default_open: true,
+                        body_height: 140.0,
+                        show_resize_handle: false,
+                        maximized: false,
+                        search: Some(&mut state.query),
+                        focus_search: false,
+                        active_search: false,
+                    },
+                    |ui| {
+                        for index in 0..50 {
+                            ui.label(format!("file {index}"));
+                        }
+                    },
+                );
+                state.offset = rendered.scroll_offset.unwrap();
+            },
+            State::default(),
+        );
+    harness.run();
+    let initial = harness.state().offset;
+    assert!(initial > 0.0, "the empty search row starts above the list");
+    harness.get_by_label("file 0").hover();
+    harness.input_mut().events.push(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -160.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.run_steps(4);
+    assert!(harness.state().offset > initial + 20.0);
+    harness.run_steps(8);
+    assert!(harness.state().offset > initial + 20.0);
+
+    harness.state_mut().query = "file".into();
+    harness.run_steps(2);
+    let sticky_initial = harness.state().offset;
+    harness.get_by_label("file 0").hover();
+    harness.input_mut().events.push(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -160.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.run_steps(4);
+    assert!(harness.state().offset > sticky_initial + 20.0);
+    harness.run_steps(8);
+    assert!(harness.state().offset > sticky_initial + 20.0);
+}
+
 pub(super) struct ExplorerSectionRenderSpec<'a> {
     pub(super) id_salt: &'static str,
     pub(super) title: &'static str,
@@ -1099,6 +1166,8 @@ pub(super) struct ExplorerSectionRenderOutput {
     pub(super) section_clicked: bool,
     pub(super) frame_rect: Option<Rect>,
     pub(super) resize_active: bool,
+    #[cfg(test)]
+    pub(super) scroll_offset: Option<f32>,
 }
 
 fn explorer_section_search(
@@ -1234,14 +1303,18 @@ pub(super) fn explorer_section_resizable(
                         explorer_section_search(ui, spec.title, query, spec.focus_search);
                 });
             }
-            let scroll_id = ui.make_persistent_id(("section-search-scroll", spec.id_salt));
+            let scroll_salt = ("section-search-scroll", spec.id_salt);
+            // ScrollArea hashes its salt before combining it with the Ui id.
+            // Use the same id here or every frame looks like the first one
+            // and vertical_scroll_offset fights native wheel/drag input.
+            let scroll_id = ui.make_persistent_id(egui::IdSalt::new(scroll_salt));
             let first_scroll = egui::scroll_area::State::load(ui.ctx(), scroll_id).is_none();
             let sticky_id = scroll_id.with("sticky-search");
             let was_sticky = ui
                 .ctx()
                 .data(|data| data.get_temp::<bool>(sticky_id).unwrap_or(false));
             let mut scroll = egui::ScrollArea::both()
-                .id_salt(("section-search-scroll", spec.id_salt))
+                .id_salt(scroll_salt)
                 .max_width(ui.available_width().max(0.0))
                 .max_height(
                     (spec.body_height
@@ -1258,7 +1331,7 @@ pub(super) fn explorer_section_resizable(
             }
             ui.ctx()
                 .data_mut(|data| data.insert_temp(sticky_id, sticky_search));
-            scroll.show(ui, |ui| {
+            let scroll_output = scroll.show(ui, |ui| {
                 if !sticky_search && let Some(query) = spec.search.as_deref_mut() {
                     output.search_focused = explorer_section_search(ui, spec.title, query, false);
                     // Even a short list must permit scrolling up to reveal the search row.
@@ -1266,6 +1339,22 @@ pub(super) fn explorer_section_resizable(
                 }
                 add_body(ui);
             });
+            debug_assert_eq!(scroll_output.id, scroll_id);
+            #[cfg(test)]
+            {
+                output.scroll_offset = Some(scroll_output.state.offset.y);
+            }
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            crate::desktop_test::observe_scroll(
+                spec.title,
+                ui.ctx(),
+                scroll_output.inner_rect,
+                scroll_output.content_size.y,
+                scroll_output.state.offset.y,
+                sticky_search,
+            );
+            #[cfg(not(all(feature = "desktop-ui-tests", target_os = "macos")))]
+            let _ = scroll_output;
             if handle_height > 0.0 {
                 let (_, response) = ui.allocate_exact_size(
                     Vec2::new(ui.available_width().max(0.0), handle_height),

@@ -434,6 +434,47 @@ class EditorJourneys:
         self.wait("close panel button", lambda d: d["panel"] is None)
         self.wait("layout leaves source unchanged", lambda d: d["source_fingerprint"] == initial["source_fingerprint"])
 
+    def explorer_scroll(self):
+        self.ensure_typesetting_tab()
+        import time
+        def scroll_stays(section, sticky=False):
+            deadline = time.monotonic() + 10
+            while True:
+                state = self.snapshot()
+                scroll = state["scrolls"].get(section)
+                if (scroll and scroll["frame"] == state["document"]["frame"]
+                        and scroll["content_height"] > scroll["viewport_height"] + 100
+                        and scroll["sticky_search"] == sticky):
+                    break
+                if time.monotonic() >= deadline:
+                    raise AssertionError(f"{section} did not expose a scrollable list")
+                time.sleep(0.05)
+            before = scroll["offset"]
+            self.native("move", scroll["x"], scroll["y"])
+            self.native("wheel", scroll["x"], scroll["y"], -8)
+            deadline = time.monotonic() + 3
+            while True:
+                after = self.snapshot()["scrolls"][section]["offset"]
+                if after > before + 20:
+                    break
+                if time.monotonic() >= deadline:
+                    raise AssertionError(f"{section} did not scroll after wheel input: {before} -> {after}")
+                time.sleep(0.05)
+            for _ in range(8):
+                after = self.snapshot()["scrolls"][section]["offset"]
+                if after <= before + 20:
+                    raise AssertionError(f"{section} scroll reset after wheel input: {before} -> {after}")
+            self.record("explorer.scroll.stable", section=section, sticky=sticky, before=before, after=after)
+
+        scroll_stays("Files")
+        if self.explorer_scroll_checks_contents:
+            scroll_stays("Contents")
+            files = self.snapshot()["scrolls"]["Files"]
+            self.native("click", files["x"], files["y"])
+            self.wait("Files receives focus", lambda d: d["explorer_focused"] == "Files")
+            self.key(3)  # Cmd+F exposes the sticky Files search.
+            scroll_stays("Files", sticky=True)
+
     def folding(self):
         text = "#let block = {\n  let a = 1\n  a + 2\n}\n\nEnd."
         count = self.scratch(text)

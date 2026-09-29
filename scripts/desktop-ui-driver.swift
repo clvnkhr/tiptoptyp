@@ -228,6 +228,18 @@ if command == "paste" {
         event.post(tap: .cghidEventTap)
         Thread.sleep(forTimeInterval: 0.05)
     }
+} else if command == "wheel" {
+    guard args.count == 5,
+          let x = Double(args[2]), let y = Double(args[3]),
+          let lines = Int32(args[4]), x.isFinite, y.isFinite, lines != 0 else {
+        fail("wheel requires finite screen coordinates and a nonzero line delta")
+    }
+    guard let event = CGEvent(scrollWheelEvent2Source: source, units: .line,
+                              wheelCount: 1, wheel1: lines, wheel2: 0, wheel3: 0) else {
+        fail("cannot create wheel event")
+    }
+    event.location = CGPoint(x: x, y: y)
+    event.post(tap: .cghidEventTap)
 } else if command == "click" || command == "double-click" || command == "move" {
     guard args.count == 4, let x = Double(args[2]), let y = Double(args[3]), x.isFinite, y.isFinite else { fail("click requires finite screen coordinates") }
     let point = CGPoint(x: x, y: y)

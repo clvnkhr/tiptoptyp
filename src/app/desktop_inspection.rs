@@ -130,6 +130,11 @@ impl EditorApp {
             "completion_count": self.editor_completion.as_ref().map_or(0, |completion| completion.items.len()),
             "completion_selected": self.editor_completion.as_ref().map(|completion| completion.selected),
         });
+        interaction["explorer_focused"] = serde_json::json!(
+            self.explorer
+                .focused_section()
+                .map(|section| section.title())
+        );
         interaction["drawing"] = self.symbol_drawing.inspection(
             self.document().kind() == DocumentKind::Tex || self.document().config().is_some(),
             self.settings.handwriting,
