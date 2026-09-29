@@ -3979,58 +3979,114 @@ fn explorer_search_is_unicode_case_insensitive_and_retains_ancestors() {
 }
 
 #[test]
-fn explorer_search_covers_every_project_index_section() {
-    let root = PathBuf::from("/workspace");
-    let snapshot = WorkspaceSnapshot {
-        root: root.clone(),
-        nodes: Vec::new(),
-    };
-    let index = ProjectIndex {
-        outline: vec![crate::project_index::OutlineEntry {
-            path: root.join("paper.typ"),
-            line: 7,
-            level: 1,
-            title: "Introduction".to_owned(),
-        }],
-        subfiles: vec![root.join("appendix.typ")],
-        symbols: vec![crate::project_index::SymbolEntry {
-            path: root.join("paper.typ"),
-            line: 12,
-            name: "accent-color".to_owned(),
-            kind: crate::project_index::SymbolKind::Definition,
-        }],
-        packages: vec!["@preview/cetz:0.4.2".to_owned()],
-        tags: vec![crate::project_index::ReferenceEntry {
-            path: root.join("paper.typ"),
-            line: 19,
-            label: "<tag:overview>".to_owned(),
-        }],
-        references: vec![crate::project_index::ReferenceEntry {
-            path: root.join("paper.typ"),
-            line: 20,
-            label: "@fig:overview".to_owned(),
-        }],
-        ..ProjectIndex::default()
-    };
-
-    for (query, section) in [
-        ("introduction", 2),
-        ("appendix", 3),
-        ("ACCENT-COLOR", 4),
-        ("cetz", 5),
-        ("fig:overview", 7),
-        ("tag:overview", 6),
-    ] {
-        let query = normalize_explorer_query(query);
-        let matches = explorer_section_query_matches(Some(&snapshot), &index, &query);
-        assert!(matches[section], "query {query:?}: {matches:?}");
+fn explorer_section_search_sticks_and_does_not_filter_other_sections() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    struct State {
+        queries: [String; ExplorerSection::ALL.len()],
+        focus: Option<ExplorerSection>,
+        active: Option<ExplorerSection>,
     }
-
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(320.0, 440.0))
+        .build_ui_state(
+            |ui, state: &mut State| {
+                let defaults = std::array::from_fn(|i| ExplorerSection::ALL[i].default_open());
+                let open = explorer_section_open_states(ui, defaults);
+                let result = show_explorer_sections(
+                    ui,
+                    ExplorerSectionsSpec {
+                        order: ExplorerOrder::default(),
+                        defaults,
+                        open,
+                        heights: [120.0; ExplorerSection::ALL.len()],
+                        git_visible: false,
+                        maximized: None,
+                        searches: Some(state.queries.clone()),
+                        search_focus: state.focus.take(),
+                        active_search: state.active,
+                    },
+                    |ui, section| {
+                        ui.label(format!("{} body", section.title()));
+                    },
+                );
+                state.queries = result.searches.unwrap();
+                state.active = result.focused_search;
+            },
+            State {
+                queries: std::array::from_fn(|_| String::new()),
+                focus: Some(ExplorerSection::Files),
+                active: None,
+            },
+        );
+    harness.run();
+    harness.get_by_label("Find in Files").type_text("needle");
+    harness.run();
     assert_eq!(
-        explorer_section_query_matches(Some(&snapshot), &index, "does-not-exist"),
-        [true, false, false, false, false, false, false, false, false],
-        "an empty result keeps the Files surface open for its empty-state message"
+        harness.state().queries[ExplorerSection::Files.index()],
+        "needle"
     );
+    assert_eq!(
+        harness.state().queries[ExplorerSection::Contents.index()],
+        ""
+    );
+    let search = harness.get_by_label("Find in Files").rect();
+    let body = harness.get_by_label("Files body").rect();
+    assert!(search.bottom() <= body.top(), "{search:?} {body:?}");
+}
+
+#[test]
+fn each_searchable_explorer_section_owns_its_find_field() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    for section in ExplorerSection::ALL {
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(300.0, 240.0))
+            .build_ui(move |ui| {
+                let defaults = [true; ExplorerSection::ALL.len()];
+                show_explorer_sections(
+                    ui,
+                    ExplorerSectionsSpec {
+                        order: ExplorerOrder::default(),
+                        defaults,
+                        open: defaults,
+                        heights: [100.0; ExplorerSection::ALL.len()],
+                        git_visible: true,
+                        maximized: Some(section),
+                        searches: Some(std::array::from_fn(|_| String::new())),
+                        search_focus: section.searchable().then_some(section),
+                        active_search: None,
+                    },
+                    |ui, _| {
+                        ui.label("Section body");
+                    },
+                );
+            });
+        harness.run();
+        assert_eq!(
+            harness
+                .query_by_label(&format!("Find in {}", section.title()))
+                .is_some(),
+            section.searchable(),
+            "{section:?}"
+        );
+    }
+}
+
+#[test]
+fn find_command_targets_the_selected_explorer_section() {
+    let root = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+    app.explorer
+        .set_focused_section(Some(ExplorerSection::Tags));
+    app.execute_app_command(AppCommand::Find, &context, None);
+    assert_eq!(
+        app.explorer.take_search_focus(),
+        Some(ExplorerSection::Tags)
+    );
+    assert!(!app.find_bar.visible);
+    app.explorer.set_focused_section(None);
+    app.execute_app_command(AppCommand::Find, &context, None);
+    assert!(app.find_bar.visible);
 }
 
 #[test]
@@ -4109,6 +4165,29 @@ fn explorer_section_resize_clamps_to_a_usable_minimum() {
         ExplorerSection::Files,
         5.0
     ));
+}
+
+#[test]
+fn explorer_divider_collapses_only_after_deliberate_overshoot() {
+    let open = [true, false, true, false, false, false, false, false, false];
+    let mut layout = ExplorerSectionLayout::default();
+    let order = ExplorerOrder::default();
+    let (resized, collapsed) = layout.drag_after(open, 200.0, order, ExplorerSection::Files, -55.0);
+    assert!(resized);
+    assert_eq!(collapsed, None);
+    let (_, collapsed) = layout.drag_after(open, 200.0, order, ExplorerSection::Files, -15.0);
+    assert_eq!(collapsed, None);
+    let (_, collapsed) = layout.drag_after(open, 200.0, order, ExplorerSection::Files, -20.0);
+    assert_eq!(collapsed, Some(ExplorerSection::Files));
+
+    let mut layout = ExplorerSectionLayout::default();
+    let (_, collapsed) = layout.drag_after(open, 200.0, order, ExplorerSection::Files, 60.0);
+    assert_eq!(collapsed, None);
+    let (_, collapsed) = layout.drag_after(open, 200.0, order, ExplorerSection::Files, 30.0);
+    assert_eq!(collapsed, Some(ExplorerSection::Contents));
+    layout.end_drag(ExplorerSection::Files);
+    let (_, collapsed) = layout.drag_after(open, 200.0, order, ExplorerSection::Files, 5.0);
+    assert_eq!(collapsed, None);
 }
 
 #[test]
@@ -4239,7 +4318,7 @@ fn reordered_explorer_keeps_body_identity_and_collapsed_state() {
                 }
                 state.body_ids.fill(None);
                 let defaults = [true; ExplorerSection::ALL.len()];
-                let open = explorer_section_open_states(ui, false, defaults);
+                let open = explorer_section_open_states(ui, defaults);
                 show_explorer_sections(
                     ui,
                     ExplorerSectionsSpec {
@@ -4247,9 +4326,11 @@ fn reordered_explorer_keeps_body_identity_and_collapsed_state() {
                         defaults,
                         open,
                         heights: [44.0; ExplorerSection::ALL.len()],
-                        filtered: false,
                         git_visible: true,
                         maximized: None,
+                        searches: None,
+                        search_focus: None,
+                        active_search: None,
                     },
                     |ui, section| {
                         state.body_ids[section.index()] = Some(ui.id());
@@ -4301,7 +4382,7 @@ fn explorer_maximize_hides_siblings_and_restores_collapsed_states_and_sizes() {
             |ui, state: &mut State| {
                 state.bounds.fill(None);
                 let defaults = std::array::from_fn(|i| ExplorerSection::ALL[i].default_open());
-                let open = explorer_section_open_states(ui, false, defaults);
+                let open = explorer_section_open_states(ui, defaults);
                 let result = show_explorer_sections(
                     ui,
                     ExplorerSectionsSpec {
@@ -4309,9 +4390,11 @@ fn explorer_maximize_hides_siblings_and_restores_collapsed_states_and_sizes() {
                         defaults,
                         open,
                         heights: state.layout.body_heights(open, 400.0),
-                        filtered: false,
                         git_visible: true,
                         maximized: state.panel.maximized_section(true),
+                        searches: None,
+                        search_focus: None,
+                        active_search: None,
                     },
                     |ui, section| {
                         state.bounds[section.index()] = Some(ui.max_rect());
@@ -4376,14 +4459,16 @@ fn tag_and_reference_panels_have_independent_search_and_navigation() {
         (ExplorerSection::Tags, "<chapter>", "@chapter", 1),
         (ExplorerSection::References, "@chapter", "<chapter>", 2),
     ] {
-        let matches = explorer_section_query_matches(None, &index, label);
-        assert!(matches[section.index()]);
-        let other_section = if section == ExplorerSection::Tags {
-            ExplorerSection::References
+        let entries = if section == ExplorerSection::Tags {
+            &index.tags
         } else {
-            ExplorerSection::Tags
+            &index.references
         };
-        assert!(!matches[other_section.index()]);
+        assert!(
+            entries
+                .iter()
+                .any(|entry| reference_entry_matches_query(entry, label))
+        );
         let mut harness = Harness::builder()
             .with_size(Vec2::new(360.0, 200.0))
             .build_ui_state(
@@ -4402,6 +4487,51 @@ fn tag_and_reference_panels_have_independent_search_and_navigation() {
         harness.run();
         assert_eq!(*harness.state(), Some((main.clone(), line)));
     }
+}
+
+#[test]
+fn tag_references_expand_to_wrapping_line_links_and_navigate() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let root = Path::new("/workspace");
+    let main = root.join("main.typ");
+    let mut index = ProjectIndex {
+        tags: vec![crate::project_index::ReferenceEntry {
+            path: main.clone(),
+            line: 1,
+            label: "<chapter>".into(),
+        }],
+        references: (2..=13)
+            .map(|line| crate::project_index::ReferenceEntry {
+                path: main.clone(),
+                line,
+                label: "@chapter".into(),
+            })
+            .collect(),
+        ..ProjectIndex::default()
+    };
+    index.rebuild_tag_references();
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(100.0, 200.0))
+        .build_ui_state(
+            |ui, target| {
+                let outcome =
+                    show_project_index_section(ui, ExplorerSection::Tags, root, &index, "");
+                if outcome.target.is_some() {
+                    *target = outcome.target;
+                }
+            },
+            None::<(PathBuf, usize)>,
+        );
+    harness.run();
+    assert!(harness.query_by_label("2").is_none());
+    harness.get_by_label("▸").click();
+    harness.run();
+    let first = harness.get_all_by_label("2").next().unwrap().rect();
+    let last = harness.get_by_label("13").rect();
+    assert!(last.top() > first.top(), "{first:?} {last:?}");
+    harness.get_all_by_label("2").next().unwrap().click();
+    harness.run();
+    assert_eq!(*harness.state(), Some((main, 2)));
 }
 
 #[test]
@@ -5433,7 +5563,7 @@ fn hidden_git_section_clears_a_persisted_open_state() {
     let context = egui::Context::default();
     context
         .run_ui(Default::default(), |ui| {
-            let id = explorer_section_state_id(ui, "workspace-git", false);
+            let id = explorer_section_state_id(ui, "workspace-git");
             let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
                 ui.ctx(),
                 id,

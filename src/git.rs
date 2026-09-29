@@ -642,7 +642,7 @@ mod tests {
         harness.get_by_label("source/file-00002.typ").hover();
         harness.input_mut().events.push(egui::Event::MouseWheel {
             unit: egui::MouseWheelUnit::Point,
-            delta: egui::vec2(0.0, -380.0),
+            delta: egui::vec2(0.0, -260.0),
             phase: egui::TouchPhase::Move,
             modifiers: egui::Modifiers::NONE,
         });
@@ -650,7 +650,11 @@ mod tests {
         harness.run_steps(30);
         assert!(harness.state().0.rendered_change_rows <= 10);
         assert!(harness.query_by_label("source/file-00000.typ").is_none());
-        let target = harness.get_by_label("source/file-00012.typ").rect();
+        let target = harness
+            .get_all_by_label("source/file-00012.typ")
+            .next()
+            .unwrap()
+            .rect();
         let (sender, receiver) = std::sync::mpsc::channel();
         harness.state_mut().0.background_refresh = true;
         harness

@@ -300,7 +300,10 @@ mod tests {
         harness.state_mut().explorer.hide();
         press(&mut harness, A::ExplorerSearch);
         assert!(harness.state().explorer.panel_visible());
-        assert!(harness.state_mut().explorer.take_search_focus());
+        assert_eq!(
+            harness.state_mut().explorer.take_search_focus(),
+            Some(crate::explorer::ExplorerSection::Files)
+        );
         press(&mut harness, A::KeyboardShortcuts);
         assert!(harness.state().shortcut_editor_visible);
         harness.state_mut().process_close_pending = true;

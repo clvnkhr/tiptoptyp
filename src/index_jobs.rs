@@ -271,7 +271,7 @@ static RUNNER: LazyLock<Runner> = LazyLock::new(Runner::new);
 pub(crate) enum Poll {
     Idle,
     Pending,
-    Ready(ProjectIndex),
+    Ready(Box<ProjectIndex>),
     Failed(String),
 }
 
@@ -335,7 +335,7 @@ impl ProjectIndexClient {
                 {
                     self.pending = false;
                     return match completion.output {
-                        Ok(index) => Poll::Ready(index),
+                        Ok(index) => Poll::Ready(Box::new(index)),
                         Err(error) => Poll::Failed(error),
                     };
                 }

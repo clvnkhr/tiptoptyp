@@ -105,29 +105,6 @@ pub(super) fn show(
             output.refresh = true;
         }
     });
-    theme::panel_header(ui, "workspace-search-header", |ui| {
-        let show_clear = !state.query().is_empty();
-        let clear_width = if show_clear {
-            METRICS.icon.button_size.x + ui.spacing().item_spacing.x
-        } else {
-            0.0
-        };
-        let search = ui.add_sized(
-            [
-                (ui.available_width() - clear_width).max(1.0),
-                METRICS.explorer.header_row_height,
-            ],
-            egui::TextEdit::singleline(state.query_mut())
-                .id_salt("explorer-search")
-                .hint_text("Search Explorer"),
-        );
-        if state.take_search_focus() {
-            search.request_focus();
-        }
-        if show_clear && icon_button(ui, UiIcon::Close, "Clear Explorer search").clicked() {
-            state.query_mut().clear();
-        }
-    });
 
     // A tree row can be much wider than the pane. Keep the body width in a
     // clipped child UI so it becomes scrollable content instead of feeding
@@ -156,13 +133,18 @@ pub(super) fn show(
         .map(|node| node.path.as_path())
         .or(preview_path);
     let context = ui.ctx().clone();
-    let explorer_query = normalize_explorer_query(state.query());
+    let normalized_queries: [String; ExplorerSection::ALL.len()] = std::array::from_fn(|index| {
+        normalize_explorer_query(state.query(ExplorerSection::ALL[index]))
+    });
+    let explorer_query = &normalized_queries[ExplorerSection::Files.index()];
     let filter_active = !explorer_query.is_empty();
-    let mut section_defaults = if filter_active {
-        explorer_section_query_matches(snapshot, project_index, &explorer_query)
-    } else {
-        std::array::from_fn(|index| ExplorerSection::ALL[index].default_open())
-    };
+    let mut section_defaults =
+        std::array::from_fn(|index| ExplorerSection::ALL[index].default_open());
+    let search_focus = state.take_search_focus();
+    if let Some(section) = search_focus {
+        set_explorer_section_open(ui, section.id(), true);
+        section_defaults[section.index()] = true;
+    }
     let git_in_explorer = input.git_visible;
     section_defaults[ExplorerSection::Git.index()] = git_in_explorer;
     if !git_in_explorer {
@@ -178,7 +160,7 @@ pub(super) fn show(
         // let the user control the section normally.
         set_explorer_section_open(ui, "workspace-git", true);
     }
-    let mut open_sections = explorer_section_open_states(ui, filter_active, section_defaults);
+    let mut open_sections = explorer_section_open_states(ui, section_defaults);
     if !git_in_explorer {
         // A persisted open state must not reserve space for a hidden Git
         // section after the panel has been closed.
@@ -208,9 +190,11 @@ pub(super) fn show(
             defaults: section_defaults,
             heights: section_body_heights,
             open: open_sections,
-            filtered: filter_active,
             git_visible: git_in_explorer,
             maximized: state.maximized_section(git_in_explorer),
+            searches: Some(state.take_queries()),
+            search_focus,
+            active_search: state.active_search(),
         },
         |ui, section| match section {
             ExplorerSection::Files => {
@@ -225,7 +209,7 @@ pub(super) fn show(
                         open_matching_workspace_ancestors(
                             &mut tree_state,
                             &snapshot.nodes,
-                            &explorer_query,
+                            explorer_query,
                         );
                     }
                     if let Some(selected) = state.selected_path() {
@@ -275,7 +259,7 @@ pub(super) fn show(
                                     active,
                                     preview,
                                     &context,
-                                    &explorer_query,
+                                    explorer_query,
                                     input.statuses,
                                 );
                             })
@@ -296,6 +280,7 @@ pub(super) fn show(
                                 }
                             }
                             TreeAction::SetSelected(selected) => {
+                                state.set_focused_section(Some(ExplorerSection::Files));
                                 if let Some(path) = selected.into_iter().next() {
                                     state.select_path(path);
                                 } else {
@@ -318,7 +303,7 @@ pub(super) fn show(
                         && !snapshot
                             .nodes
                             .iter()
-                            .any(|node| workspace_node_matches_query(node, &explorer_query))
+                            .any(|node| workspace_node_matches_query(node, explorer_query))
                     {
                         ui.label(RichText::new("No matching files").weak());
                     }
@@ -341,9 +326,12 @@ pub(super) fn show(
                     section,
                     project_root,
                     project_index,
-                    &explorer_query,
+                    &normalized_queries[section.index()],
                 );
                 output.packages |= outcome.open_package_manager;
+                if outcome.focused {
+                    state.set_focused_section(Some(section));
+                }
                 if outcome.target.is_some() {
                     output.index_target = outcome.target;
                 }
@@ -351,13 +339,37 @@ pub(super) fn show(
         },
     );
 
+    if let Some(searches) = section_action.searches {
+        state.set_queries(searches);
+    }
+    state.set_active_search(section_action.focused_search);
+    state.update_section_focus(
+        section_action.focused_section,
+        ui.input(|input| input.pointer.primary_pressed()),
+        ui.ctx()
+            .pointer_latest_pos()
+            .is_some_and(|pointer| explorer_rect.contains(pointer)),
+    );
+
     if let Some(section) = section_action.toggle_maximized {
         state.toggle_section_maximized(section);
         output.repaint = true;
     }
-    if let Some((section, delta)) = section_action.resize
-        && section_layout.resize_after(open_sections, section_body_budget, order, section, delta)
-    {
+    let mut layout_changed = false;
+    if let Some((section, delta)) = section_action.resize {
+        let (resized, collapse) =
+            section_layout.drag_after(open_sections, section_body_budget, order, section, delta);
+        layout_changed = resized || delta.abs() > f32::EPSILON;
+        if let Some(section) = collapse {
+            set_explorer_section_open(ui, section.id(), false);
+            output.repaint = true;
+        }
+    }
+    if let Some(section) = section_action.resize_end {
+        section_layout.end_drag(section);
+        layout_changed = true;
+    }
+    if layout_changed {
         ui.ctx()
             .data_mut(|data| data.insert_temp(section_layout_id, section_layout));
         output.repaint = true;
@@ -626,53 +638,6 @@ pub(super) fn reference_entry_matches_query(
         || explorer_text_matches_query(&entry.line.to_string(), normalized_query)
 }
 
-pub(super) fn explorer_section_query_matches(
-    snapshot: Option<&WorkspaceSnapshot>,
-    index: &ProjectIndex,
-    normalized_query: &str,
-) -> [bool; ExplorerSection::ALL.len()] {
-    let mut matches = [
-        snapshot.is_some_and(|snapshot| {
-            snapshot
-                .nodes
-                .iter()
-                .any(|node| workspace_node_matches_query(node, normalized_query))
-        }),
-        false, // Git actions are not searchable, but keep the section slot stable.
-        index
-            .outline
-            .iter()
-            .any(|entry| outline_entry_matches_query(entry, normalized_query)),
-        index
-            .subfiles
-            .iter()
-            .any(|path| explorer_path_matches_query(path, normalized_query)),
-        index
-            .symbols
-            .iter()
-            .any(|entry| symbol_entry_matches_query(entry, normalized_query)),
-        index
-            .packages
-            .iter()
-            .any(|package| explorer_text_matches_query(package, normalized_query)),
-        index
-            .tags
-            .iter()
-            .any(|entry| reference_entry_matches_query(entry, normalized_query)),
-        index
-            .references
-            .iter()
-            .any(|entry| reference_entry_matches_query(entry, normalized_query)),
-        "draw symbol".contains(normalized_query),
-    ];
-    if !matches.into_iter().any(|matched| matched) {
-        // Keep one result surface visible so an empty search has a clear
-        // outcome instead of presenting closed section headers.
-        matches[0] = true;
-    }
-    matches
-}
-
 pub(super) fn workspace_entry_label(text: RichText, is_active: bool) -> egui::Label {
     let text = if is_active {
         // Emphasize weight, not size: Explorer inherits its local UI text
@@ -752,16 +717,19 @@ pub(super) fn extension_matches(extension: Option<&str>, expected: &[&str]) -> b
 
 pub(super) const EXPLORER_SECTION_MIN_BODY_HEIGHT: f32 = 44.0;
 pub(super) const EXPLORER_SECTION_RESIZE_HANDLE_HEIGHT: f32 = 5.0;
+pub(super) const EXPLORER_SECTION_COLLAPSE_OVERSHOOT: f32 = 28.0;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct ExplorerSectionLayout {
     pub(super) weights: [f32; ExplorerSection::ALL.len()],
+    overshoot: [f32; ExplorerSection::ALL.len()],
 }
 
 impl Default for ExplorerSectionLayout {
     fn default() -> Self {
         Self {
             weights: [1.0; ExplorerSection::ALL.len()],
+            overshoot: [0.0; ExplorerSection::ALL.len()],
         }
     }
 }
@@ -848,21 +816,51 @@ impl ExplorerSectionLayout {
         }
         true
     }
+
+    pub(super) fn drag_after(
+        &mut self,
+        open: [bool; ExplorerSection::ALL.len()],
+        available: f32,
+        order: ExplorerOrder,
+        upper: ExplorerSection,
+        delta: f32,
+    ) -> (bool, Option<ExplorerSection>) {
+        let before = self.body_heights(open, available);
+        let resized = self.resize_after(open, available, order, upper, delta);
+        let applied = self.body_heights(open, available)[upper.index()] - before[upper.index()];
+        let remaining = delta - applied;
+        let overshoot = &mut self.overshoot[upper.index()];
+        if remaining.signum() != overshoot.signum() {
+            *overshoot = 0.0;
+        }
+        *overshoot += remaining;
+        let collapse = if *overshoot <= -EXPLORER_SECTION_COLLAPSE_OVERSHOOT {
+            Some(upper)
+        } else if *overshoot >= EXPLORER_SECTION_COLLAPSE_OVERSHOOT {
+            order.next_open(open, upper)
+        } else {
+            None
+        };
+        if collapse.is_some() {
+            *overshoot = 0.0;
+        }
+        (resized, collapse)
+    }
+
+    pub(super) fn end_drag(&mut self, section: ExplorerSection) {
+        self.overshoot[section.index()] = 0.0;
+    }
 }
 
 pub(super) fn explorer_section_open_states(
     ui: &egui::Ui,
-    filtered: bool,
     defaults: [bool; ExplorerSection::ALL.len()],
 ) -> [bool; ExplorerSection::ALL.len()] {
     std::array::from_fn(|index| {
         let id_salt = ExplorerSection::ALL[index].id();
-        if filtered {
-            return defaults[index];
-        }
         egui::collapsing_header::CollapsingState::load_with_default_open(
             ui.ctx(),
-            explorer_section_state_id(ui, id_salt, false),
+            explorer_section_state_id(ui, id_salt),
             defaults[index],
         )
         .is_open()
@@ -876,7 +874,7 @@ pub(super) fn git_command_opens_explorer(git_visible: bool) -> bool {
 pub(super) fn set_explorer_section_open(ui: &egui::Ui, id_salt: &'static str, open: bool) {
     let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
         ui.ctx(),
-        explorer_section_state_id(ui, id_salt, false),
+        explorer_section_state_id(ui, id_salt),
         open,
     );
     if state.is_open() != open {
@@ -889,12 +887,8 @@ pub(super) fn explorer_section_layout_id(ui: &egui::Ui) -> egui::Id {
     ui.make_persistent_id("explorer-section-layout")
 }
 
-pub(super) fn explorer_section_state_id(
-    ui: &egui::Ui,
-    id_salt: &'static str,
-    filtered: bool,
-) -> egui::Id {
-    ui.make_persistent_id(("explorer-section", id_salt, filtered))
+pub(super) fn explorer_section_state_id(ui: &egui::Ui, id_salt: &'static str) -> egui::Id {
+    ui.make_persistent_id(("explorer-section", id_salt, false))
 }
 
 pub(super) fn workspace_tree_state_id(ui: &egui::Ui, root: &Path, filtered: bool) -> egui::Id {
@@ -904,7 +898,7 @@ pub(super) fn workspace_tree_state_id(ui: &egui::Ui, root: &Path, filtered: bool
 #[cfg(test)]
 pub(super) fn explorer_section_body_height(ui: &egui::Ui) -> f32 {
     let defaults = std::array::from_fn(|index| ExplorerSection::ALL[index].default_open());
-    let open_sections = explorer_section_open_states(ui, false, defaults)
+    let open_sections = explorer_section_open_states(ui, defaults)
         .into_iter()
         .filter(|is_open| *is_open)
         .count();
@@ -946,8 +940,10 @@ pub(super) fn explorer_section(
             default_open,
             body_height,
             show_resize_handle: false,
-            filtered: false,
             maximized: false,
+            search: None,
+            focus_search: false,
+            active_search: false,
         },
         add_body,
     );
@@ -958,20 +954,26 @@ pub(super) struct ExplorerSectionsSpec {
     pub(super) defaults: [bool; 9],
     pub(super) heights: [f32; 9],
     pub(super) open: [bool; 9],
-    pub(super) filtered: bool,
     pub(super) git_visible: bool,
     pub(super) maximized: Option<ExplorerSection>,
+    pub(super) searches: Option<[String; ExplorerSection::ALL.len()]>,
+    pub(super) search_focus: Option<ExplorerSection>,
+    pub(super) active_search: Option<ExplorerSection>,
 }
 
 #[derive(Default)]
 pub(super) struct ExplorerSectionsOutput {
     pub(super) resize: Option<(ExplorerSection, f32)>,
+    pub(super) resize_end: Option<ExplorerSection>,
     pub(super) toggle_maximized: Option<ExplorerSection>,
+    pub(super) searches: Option<[String; ExplorerSection::ALL.len()]>,
+    pub(super) focused_search: Option<ExplorerSection>,
+    pub(super) focused_section: Option<ExplorerSection>,
 }
 
 pub(super) fn show_explorer_sections(
     ui: &mut egui::Ui,
-    spec: ExplorerSectionsSpec,
+    mut spec: ExplorerSectionsSpec,
     mut add_body: impl FnMut(&mut egui::Ui, ExplorerSection),
 ) -> ExplorerSectionsOutput {
     let mut output = ExplorerSectionsOutput::default();
@@ -983,7 +985,7 @@ pub(super) fn show_explorer_sections(
         }
         let index = section.index();
         let maximized = spec.maximized == Some(section);
-        let (delta, toggle_maximized) = explorer_section_resizable(
+        let rendered = explorer_section_resizable(
             ui,
             ExplorerSectionRenderSpec {
                 id_salt: section.id(),
@@ -1002,56 +1004,128 @@ pub(super) fn show_explorer_sections(
                 },
                 show_resize_handle: !maximized
                     && spec.order.next_open(spec.open, section).is_some(),
-                filtered: spec.filtered,
                 maximized,
+                search: if section.searchable() {
+                    spec.searches.as_mut().map(|queries| &mut queries[index])
+                } else {
+                    None
+                },
+                focus_search: spec.search_focus == Some(section),
+                active_search: spec.active_search == Some(section),
             },
             |ui| add_body(ui, section),
         );
-        if delta.abs() > f32::EPSILON {
-            output.resize = Some((section, delta));
+        if rendered.resize_delta.abs() > f32::EPSILON {
+            output.resize = Some((section, rendered.resize_delta));
         }
-        if toggle_maximized {
+        if rendered.resize_stopped {
+            output.resize_end = Some(section);
+        }
+        if rendered.toggle_maximized {
             output.toggle_maximized = Some(section);
         }
+        if rendered.search_focused {
+            output.focused_search = Some(section);
+            output.focused_section = Some(section);
+        }
+        if rendered.section_clicked {
+            output.focused_section = Some(section);
+        }
     }
+    output.searches = spec.searches;
     output
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(super) struct ExplorerSectionRenderSpec {
+pub(super) struct ExplorerSectionRenderSpec<'a> {
     pub(super) id_salt: &'static str,
     pub(super) title: &'static str,
     pub(super) default_open: bool,
     pub(super) body_height: f32,
     pub(super) show_resize_handle: bool,
-    pub(super) filtered: bool,
     pub(super) maximized: bool,
+    pub(super) search: Option<&'a mut String>,
+    pub(super) focus_search: bool,
+    pub(super) active_search: bool,
+}
+
+#[derive(Default)]
+pub(super) struct ExplorerSectionRenderOutput {
+    pub(super) resize_delta: f32,
+    pub(super) resize_stopped: bool,
+    pub(super) toggle_maximized: bool,
+    pub(super) search_focused: bool,
+    pub(super) section_clicked: bool,
+}
+
+fn explorer_section_search(
+    ui: &mut egui::Ui,
+    section: &'static str,
+    query: &mut String,
+    focus: bool,
+) -> bool {
+    let clear_width = if query.is_empty() {
+        0.0
+    } else {
+        METRICS.explorer.header_row_height + ui.spacing().item_spacing.x
+    };
+    let mut focused = false;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let label = format!("Find in {section}");
+        let response = ui.add_sized(
+            [
+                (ui.available_width() - clear_width).max(1.0),
+                METRICS.explorer.header_row_height,
+            ],
+            egui::TextEdit::singleline(query)
+                .id(egui::Id::new((
+                    "explorer-section-search",
+                    ui.ctx().viewport_id(),
+                    section,
+                )))
+                .hint_text(label.clone()),
+        );
+        ui.ctx()
+            .accesskit_node_builder(response.id, |node| node.set_label(label));
+        if focus {
+            response.request_focus();
+        }
+        focused = response.has_focus() || focus;
+        if !query.is_empty()
+            && square_icon_button(
+                ui,
+                UiIcon::Close,
+                "Clear search",
+                METRICS.explorer.header_row_height,
+            )
+            .clicked()
+        {
+            query.clear();
+            response.request_focus();
+            focused = true;
+        }
+    });
+    focused
 }
 
 pub(super) fn explorer_section_resizable(
     ui: &mut egui::Ui,
-    spec: ExplorerSectionRenderSpec,
+    mut spec: ExplorerSectionRenderSpec<'_>,
     add_body: impl FnOnce(&mut egui::Ui),
-) -> (f32, bool) {
-    let state_id = explorer_section_state_id(ui, spec.id_salt, spec.filtered);
+) -> ExplorerSectionRenderOutput {
+    let state_id = explorer_section_state_id(ui, spec.id_salt);
     let state_id = if spec.maximized {
         state_id.with("maximized")
     } else {
         state_id
     };
-    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
+    let state = egui::collapsing_header::CollapsingState::load_with_default_open(
         ui.ctx(),
         state_id,
         spec.maximized || spec.default_open,
     );
-    if spec.filtered {
-        // Filtered results are transient and should always expose the sections
-        // that contain matches without mutating the user's normal open state.
-        state.set_open(spec.default_open);
-    }
-    let mut resize_delta = 0.0;
-    let mut toggle_maximized = false;
-    theme::explorer_section_frame(ui.style()).show(ui, |ui| {
+    let mut output = ExplorerSectionRenderOutput::default();
+    let frame = theme::explorer_section_frame(ui.style()).show(ui, |ui| {
         ui.set_width(ui.available_width().max(0.0));
         ui.spacing_mut().item_spacing.y = 0.0;
         let mut title_clicked = false;
@@ -1068,6 +1142,7 @@ pub(super) fn explorer_section_resizable(
                     .frame(false),
             );
             title_clicked = response.clicked();
+            output.section_clicked |= response.has_focus();
             let (icon, verb) = if spec.maximized {
                 (UiIcon::Restore, "Restore")
             } else {
@@ -1085,7 +1160,8 @@ pub(super) fn explorer_section_resizable(
                     &maximize,
                 );
             }
-            toggle_maximized = maximize.clicked();
+            output.toggle_maximized = maximize.clicked();
+            output.section_clicked |= maximize.has_focus();
         });
         if spec.maximized {
             // Maximize is temporary: never write the normal collapsed state.
@@ -1099,14 +1175,53 @@ pub(super) fn explorer_section_resizable(
             } else {
                 0.0
             };
-            egui::ScrollArea::both()
-                .id_salt((spec.id_salt, "scroll", spec.filtered))
+            let sticky_search = spec.search.as_ref().is_some_and(|query| !query.is_empty())
+                || spec.focus_search
+                || spec.active_search;
+            let search_height = if spec.search.is_some() {
+                METRICS.explorer.header_row_height + ui.spacing().item_spacing.y
+            } else {
+                0.0
+            };
+            if sticky_search && let Some(query) = spec.search.as_deref_mut() {
+                let fill = ui.visuals().panel_fill;
+                egui::Frame::new().fill(fill).show(ui, |ui| {
+                    output.search_focused =
+                        explorer_section_search(ui, spec.title, query, spec.focus_search);
+                });
+            }
+            let scroll_id = ui.make_persistent_id(("section-search-scroll", spec.id_salt));
+            let first_scroll = egui::scroll_area::State::load(ui.ctx(), scroll_id).is_none();
+            let sticky_id = scroll_id.with("sticky-search");
+            let was_sticky = ui
+                .ctx()
+                .data(|data| data.get_temp::<bool>(sticky_id).unwrap_or(false));
+            let mut scroll = egui::ScrollArea::both()
+                .id_salt(("section-search-scroll", spec.id_salt))
                 .max_width(ui.available_width().max(0.0))
-                .max_height((spec.body_height - handle_height).max(0.0))
+                .max_height(
+                    (spec.body_height
+                        - handle_height
+                        - if sticky_search { search_height } else { 0.0 })
+                    .max(0.0),
+                )
                 .min_scrolled_width(0.0)
                 .min_scrolled_height(0.0)
-                .auto_shrink([false, false])
-                .show(ui, add_body);
+                .auto_shrink([false, false]);
+            if spec.search.is_some() && (first_scroll || sticky_search != was_sticky) {
+                scroll =
+                    scroll.vertical_scroll_offset(if sticky_search { 0.0 } else { search_height });
+            }
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(sticky_id, sticky_search));
+            scroll.show(ui, |ui| {
+                if !sticky_search && let Some(query) = spec.search.as_deref_mut() {
+                    output.search_focused = explorer_section_search(ui, spec.title, query, false);
+                    // Even a short list must permit scrolling up to reveal the search row.
+                    ui.set_min_height(spec.body_height + search_height);
+                }
+                add_body(ui);
+            });
             if handle_height > 0.0 {
                 let (rect, response) = ui.allocate_exact_size(
                     Vec2::new(ui.available_width().max(0.0), handle_height),
@@ -1125,17 +1240,24 @@ pub(super) fn explorer_section_resizable(
                     ],
                     stroke,
                 );
-                resize_delta = response.drag_delta().y;
+                output.resize_delta = response.drag_delta().y;
+                output.resize_stopped = response.drag_stopped();
             }
         });
     });
-    (resize_delta, toggle_maximized)
+    output.section_clicked |= ui.input(|input| input.pointer.primary_pressed())
+        && ui
+            .ctx()
+            .pointer_latest_pos()
+            .is_some_and(|pos| frame.response.rect.contains(pos));
+    output
 }
 
 #[derive(Default)]
 pub(super) struct ExplorerProjectSectionOutcome {
     pub(super) open_package_manager: bool,
     pub(super) target: Option<(PathBuf, usize)>,
+    pub(super) focused: bool,
 }
 
 pub(super) fn show_project_index_section(
@@ -1163,6 +1285,7 @@ pub(super) fn show_project_index_section(
                     * METRICS.explorer.outline_indent;
                 let response =
                     explorer_index_row(ui, &entry.title, Some(&entry.line.to_string()), indent);
+                outcome.focused |= response.has_focus();
                 if response.clicked() {
                     outcome.target = Some((entry.path.clone(), entry.line));
                 }
@@ -1177,6 +1300,7 @@ pub(super) fn show_project_index_section(
                 shown = true;
                 let label = project_relative_path(root, path);
                 let response = explorer_index_row(ui, &label, None, 0.0);
+                outcome.focused |= response.has_focus();
                 if native_hover_text(response, path.display().to_string()).clicked() {
                     outcome.target = Some((path.clone(), 1));
                 }
@@ -1196,13 +1320,16 @@ pub(super) fn show_project_index_section(
                     symbol.line
                 );
                 let response = explorer_index_row(ui, &symbol.name, Some(kind), 0.0);
+                outcome.focused |= response.has_focus();
                 if native_hover_text(response, location).clicked() {
                     outcome.target = Some((symbol.path.clone(), symbol.line));
                 }
             }
         }
         ExplorerSection::Packages => {
-            if crate::app::icons::action_button(ui, "Browse packages…").clicked() {
+            let browse = crate::app::icons::action_button(ui, "Browse packages…");
+            outcome.focused |= browse.has_focus();
+            if browse.clicked() {
                 outcome.open_package_manager = true;
             }
             ui.separator();
@@ -1212,19 +1339,91 @@ pub(super) fn show_project_index_section(
                 .filter(|package| explorer_text_matches_query(package, query))
             {
                 shown = true;
-                explorer_index_row(ui, package, None, 0.0);
+                outcome.focused |= explorer_index_row(ui, package, None, 0.0).has_focus();
             }
         }
-        ExplorerSection::Tags | ExplorerSection::References => {
-            let entries = if section == ExplorerSection::Tags {
-                &index.tags
-            } else {
-                &index.references
-            };
-            let references = entries
+        ExplorerSection::Tags => {
+            for tag in index
+                .tags
                 .iter()
-                .filter(|entry| reference_entry_matches_query(entry, query));
-            for reference in references {
+                .filter(|entry| reference_entry_matches_query(entry, query))
+            {
+                shown = true;
+                let key = tag.label.trim_start_matches('<').trim_end_matches('>');
+                let tag_uses = index.reference_indexes_for_tag(key);
+                let location = format!("{}:{}", project_relative_path(root, &tag.path), tag.line);
+                let expansion_id =
+                    ui.make_persistent_id(("tag-references", &tag.path, tag.line, &tag.label));
+                let mut expanded = ui
+                    .ctx()
+                    .data_mut(|data| data.get_persisted::<bool>(expansion_id))
+                    .unwrap_or(false);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    if !tag_uses.is_empty() {
+                        let arrow = if expanded { "▾" } else { "▸" };
+                        let disclosure = ui
+                            .add_sized(
+                                [18.0, METRICS.explorer.row_height],
+                                egui::Button::new(arrow).frame(false),
+                            )
+                            .on_hover_text(if expanded {
+                                "Hide references"
+                            } else {
+                                "Show references"
+                            });
+                        outcome.focused |= disclosure.has_focus();
+                        if disclosure.clicked() {
+                            expanded = !expanded;
+                            ui.ctx()
+                                .data_mut(|data| data.insert_persisted(expansion_id, expanded));
+                        }
+                    } else {
+                        ui.add_space(18.0);
+                    }
+                    let response =
+                        explorer_index_row(ui, &tag.label, Some(&tag.line.to_string()), 0.0);
+                    outcome.focused |= response.has_focus();
+                    if native_hover_text(response, location).clicked() {
+                        outcome.target = Some((tag.path.clone(), tag.line));
+                    }
+                });
+                if expanded {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        ui.add_space(18.0);
+                        for (position, reference_index) in tag_uses.iter().enumerate() {
+                            if position > 0 {
+                                ui.label(",");
+                            }
+                            let reference = &index.references[*reference_index];
+                            let tooltip = format!(
+                                "{}:{}",
+                                project_relative_path(root, &reference.path),
+                                reference.line
+                            );
+                            let button = ui
+                                .add(
+                                    egui::Button::new(reference.line.to_string())
+                                        .small()
+                                        .frame(false),
+                                )
+                                .on_hover_text(tooltip);
+                            outcome.focused |= button.has_focus();
+                            if button.clicked() {
+                                outcome.target = Some((reference.path.clone(), reference.line));
+                            }
+                        }
+                    });
+                }
+            }
+        }
+        ExplorerSection::References => {
+            for reference in index
+                .references
+                .iter()
+                .filter(|entry| reference_entry_matches_query(entry, query))
+            {
                 shown = true;
                 let location = format!(
                     "{}:{}",
@@ -1237,6 +1436,7 @@ pub(super) fn show_project_index_section(
                     Some(&reference.line.to_string()),
                     0.0,
                 );
+                outcome.focused |= response.has_focus();
                 if native_hover_text(response, location).clicked() {
                     outcome.target = Some((reference.path.clone(), reference.line));
                 }

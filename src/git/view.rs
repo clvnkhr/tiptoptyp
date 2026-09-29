@@ -700,6 +700,8 @@ pub(super) fn show_panel(ui: &mut egui::Ui, input: Input<'_>, cache: &mut Cache)
             if input.snapshot.initialized {
                 let staged = input.snapshot.entries.staged;
                 ui.add_enabled_ui(!input.busy, |ui| {
+                    ui.spacing_mut().button_padding.y = 1.0;
+                    ui.spacing_mut().interact_size.y = 20.0;
                     right_action_row(ui, |ui| {
                         if action_button(ui, !input.dirty && input.snapshot.entries.stageable, "Stage all", input.toolbar_style)
                             .on_hover_text("Stage all working changes, excluding .tiptoptyp temporary files.").clicked() {
@@ -747,7 +749,7 @@ pub(super) fn show_panel(ui: &mut egui::Ui, input: Input<'_>, cache: &mut Cache)
                                     };
                                     egui::Frame::new()
                                         .fill(fill)
-                                        .inner_margin(egui::Margin::symmetric(0, 4))
+                                        .inner_margin(egui::Margin::symmetric(0, 1))
                                         .show(ui, |ui| {
                                             ui.push_id(&entry.path, |ui| {
                                                 right_action_row(ui, |ui| {
@@ -764,11 +766,7 @@ pub(super) fn show_panel(ui: &mut egui::Ui, input: Input<'_>, cache: &mut Cache)
                                                             ui.add_space(theme::SPACE.small);
                                                             ui.add(
                                                                 egui::Label::new(
-                                                                    egui::RichText::new(format!(
-                                                                        "{}{}",
-                                                                        entry.index,
-                                                                        entry.worktree
-                                                                    ))
+                                                                    egui::RichText::new(git_status_marker(entry))
                                                                     .monospace()
                                                                     .color(if entry.staged() {
                                                                         palette.success
@@ -808,19 +806,9 @@ pub(super) fn show_panel(ui: &mut egui::Ui, input: Input<'_>, cache: &mut Cache)
                 show_diff(ui, input.diff, input.diff_style, cache, &mut output);
                 ui.add_space(theme::SPACE.content);
                 ui.separator();
-                let response = ui.add_enabled(
-                    !input.busy,
-                    egui::TextEdit::multiline(&mut cache.commit_message)
-                        .hint_text("Describe your changes…")
-                        .desired_width(f32::INFINITY)
-                        .desired_rows(2),
-                );
-                if response.changed() {
-                    output.commit_message = Some(cache.commit_message.clone());
-                }
                 right_action_row(ui, |ui| {
                     let stage_all = staged == 0 && input.snapshot.entries.stageable;
-                    if action_button(ui, !input.busy && !input.dirty && (staged > 0 || stage_all) && !cache.commit_message.trim().is_empty(), if stage_all { "Stage all and commit" } else { "Commit staged changes" }, crate::settings::ToolbarStyle::Text)
+                    if action_button(ui, !input.busy && !input.dirty && (staged > 0 || stage_all) && !cache.commit_message.trim().is_empty(), if staged == 0 { "Stage and commit all" } else { "Commit staged changes" }, crate::settings::ToolbarStyle::Text)
                         .clicked()
                     {
                         output.operation = Some(if stage_all {
@@ -828,6 +816,15 @@ pub(super) fn show_panel(ui: &mut egui::Ui, input: Input<'_>, cache: &mut Cache)
                         } else {
                             Operation::Commit(cache.commit_message.clone())
                         });
+                    }
+                    let response = ui.add_enabled(
+                        !input.busy,
+                        egui::TextEdit::singleline(&mut cache.commit_message)
+                            .hint_text("Describe your changes…")
+                            .desired_width(ui.available_width().max(60.0)),
+                    );
+                    if response.changed() {
+                        output.commit_message = Some(cache.commit_message.clone());
                     }
                 });
                 egui::CollapsingHeader::new("Recent commits").show(ui, |ui| {
@@ -945,8 +942,33 @@ fn change_row_height(ui: &egui::Ui) -> f32 {
         .max(ui.text_style_height(&egui::TextStyle::Body))
         .max(ui.text_style_height(&egui::TextStyle::Monospace))
         .max(ui.spacing().interact_size.y)
-        .max(24.0)
-        + 8.0
+        .max(20.0)
+        + 2.0
+}
+
+fn git_status_marker(entry: &Entry) -> String {
+    if entry.index == '?' && entry.worktree == '?' {
+        "?".to_owned()
+    } else {
+        format!("{}{}", entry.index, entry.worktree)
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn untracked_git_status_is_one_question_mark() {
+    let entry = Entry {
+        path: "new.typ".into(),
+        index: '?',
+        worktree: '?',
+    };
+    assert_eq!(git_status_marker(&entry), "?");
+    let entry = Entry {
+        path: "edited.typ".into(),
+        index: 'M',
+        worktree: 'M',
+    };
+    assert_eq!(git_status_marker(&entry), "MM");
 }
 
 struct ChangeButtons {
@@ -1096,8 +1118,8 @@ mod tests {
                     (Cache::default(), None),
                 );
             harness.run_steps(3);
-            let label = if !staged && unstaged {
-                "Stage all and commit"
+            let label = if !staged {
+                "Stage and commit all"
             } else {
                 "Commit staged changes"
             };

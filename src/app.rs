@@ -27,10 +27,10 @@ use explorer_view::{
 #[cfg(test)]
 use explorer_view::{
     ExplorerSectionLayout, ExplorerSectionsSpec, add_workspace_nodes,
-    available_explorer_section_body_height, explorer_section_open_states,
-    explorer_section_query_matches, normalize_explorer_query, open_workspace_ancestors_for_path,
-    set_explorer_section_open, show_explorer_sections, show_project_index_section,
-    workspace_node_matches_query, workspace_tree_state_id,
+    available_explorer_section_body_height, explorer_section_open_states, normalize_explorer_query,
+    open_workspace_ancestors_for_path, reference_entry_matches_query, set_explorer_section_open,
+    show_explorer_sections, show_project_index_section, workspace_node_matches_query,
+    workspace_tree_state_id,
 };
 mod popup_layout;
 #[cfg(test)]
@@ -2324,7 +2324,7 @@ impl EditorApp {
         match self.project_index_job.poll() {
             ProjectIndexPoll::Ready(index) if !self.project_index_deadline.is_pending() => {
                 self.activity.index_error = None;
-                self.project_index = index;
+                self.project_index = *index;
             }
             ProjectIndexPoll::Failed(error) => {
                 self.activity.index_error = Some(error.clone());
@@ -3348,7 +3348,18 @@ impl EditorApp {
             AppCommand::Paste => self.request_editor_paste(context),
             AppCommand::SelectAll => self.select_all_editor(context),
             AppCommand::ToggleComment => self.toggle_comments(context),
-            AppCommand::Find => self.toggle_find(false, context),
+            AppCommand::Find => {
+                if let Some(section) = self
+                    .explorer
+                    .focused_section()
+                    .filter(|section| section.searchable())
+                {
+                    self.explorer.focus_section_search(section);
+                    context.request_repaint();
+                } else {
+                    self.toggle_find(false, context);
+                }
+            }
             AppCommand::FindReplace => self.toggle_find(true, context),
             AppCommand::Format => self.request_format_document(),
             AppCommand::SyncPreview => {

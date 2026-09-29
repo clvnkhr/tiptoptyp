@@ -64,6 +64,10 @@ impl ExplorerSection {
     pub(crate) const fn default_open(self) -> bool {
         matches!(self, Self::Files | Self::Contents)
     }
+
+    pub(crate) const fn searchable(self) -> bool {
+        !matches!(self, Self::Git | Self::DrawSymbol)
+    }
 }
 
 /// Every section occurs exactly once. Neither settings nor a reorder operation
@@ -241,8 +245,10 @@ pub(crate) struct ExplorerPanelState {
     width: Option<f32>,
     restore_pending: bool,
     startup_pending: bool,
-    query: String,
-    focus_search: bool,
+    queries: [String; ExplorerSection::ALL.len()],
+    focus_search: Option<ExplorerSection>,
+    focused_section: Option<ExplorerSection>,
+    active_search: Option<ExplorerSection>,
     reveal_git: bool,
     selected_path: Option<PathBuf>,
     maximized: Option<ExplorerSection>,
@@ -254,8 +260,10 @@ impl Default for ExplorerPanelState {
             width: None,
             restore_pending: false,
             startup_pending: true,
-            query: String::new(),
-            focus_search: false,
+            queries: std::array::from_fn(|_| String::new()),
+            focus_search: None,
+            focused_section: None,
+            active_search: None,
             reveal_git: true,
             selected_path: None,
             maximized: None,
@@ -276,10 +284,40 @@ impl ExplorerPanelState {
     }
 
     pub(crate) fn focus_search(&mut self) {
-        self.focus_search = true;
+        self.focus_section_search(ExplorerSection::Files);
     }
-    pub(crate) fn take_search_focus(&mut self) -> bool {
+    pub(crate) fn focus_section_search(&mut self, section: ExplorerSection) {
+        if section.searchable() {
+            self.focus_search = Some(section);
+            self.active_search = Some(section);
+        }
+    }
+    pub(crate) fn take_search_focus(&mut self) -> Option<ExplorerSection> {
         std::mem::take(&mut self.focus_search)
+    }
+    pub(crate) fn focused_section(&self) -> Option<ExplorerSection> {
+        self.focused_section
+    }
+    pub(crate) fn set_focused_section(&mut self, section: Option<ExplorerSection>) {
+        self.focused_section = section;
+    }
+    pub(crate) fn update_section_focus(
+        &mut self,
+        focused: Option<ExplorerSection>,
+        pointer_pressed: bool,
+        pointer_inside: bool,
+    ) {
+        if pointer_pressed && !pointer_inside {
+            self.focused_section = None;
+        } else if let Some(section) = focused {
+            self.focused_section = Some(section);
+        }
+    }
+    pub(crate) fn active_search(&self) -> Option<ExplorerSection> {
+        self.active_search
+    }
+    pub(crate) fn set_active_search(&mut self, section: Option<ExplorerSection>) {
+        self.active_search = section;
     }
     pub(crate) fn set_git_reveal(&mut self, reveal: bool) {
         self.reveal_git = reveal;
@@ -327,11 +365,18 @@ impl ExplorerPanelState {
     pub(crate) fn contents_visible(&self) -> bool {
         self.phase.contents_visible()
     }
-    pub(crate) fn query(&self) -> &str {
-        &self.query
+    pub(crate) fn query(&self, section: ExplorerSection) -> &str {
+        &self.queries[section.index()]
     }
-    pub(crate) fn query_mut(&mut self) -> &mut String {
-        &mut self.query
+    #[cfg(test)]
+    pub(crate) fn queries(&self) -> &[String; ExplorerSection::ALL.len()] {
+        &self.queries
+    }
+    pub(crate) fn take_queries(&mut self) -> [String; ExplorerSection::ALL.len()] {
+        std::mem::take(&mut self.queries)
+    }
+    pub(crate) fn set_queries(&mut self, queries: [String; ExplorerSection::ALL.len()]) {
+        self.queries = queries;
     }
     pub(crate) fn remember_width(&mut self, width: f32) {
         if self.contents_visible() && width.is_finite() && width >= EXPLORER_MIN_WIDTH {
@@ -360,15 +405,40 @@ mod panel_tests {
         let mut first = ExplorerPanelState::default();
         let mut second = ExplorerPanelState::default();
         first.focus_search();
-        assert!(first.take_search_focus());
-        assert!(!first.take_search_focus());
-        assert!(!second.take_search_focus());
+        assert_eq!(first.take_search_focus(), Some(ExplorerSection::Files));
+        assert_eq!(first.take_search_focus(), None);
+        assert_eq!(second.take_search_focus(), None);
         assert!(first.take_git_reveal());
         assert!(!first.take_git_reveal());
         assert!(second.take_git_reveal());
         first.set_git_reveal(true);
         first.set_git_reveal(false);
         assert!(!first.take_git_reveal());
+    }
+
+    #[test]
+    fn search_queries_and_focus_are_section_local() {
+        let mut panel = ExplorerPanelState::default();
+        let mut queries = panel.queries().clone();
+        queries[ExplorerSection::Files.index()] = "chapter".into();
+        queries[ExplorerSection::Tags.index()] = "lemma".into();
+        panel.set_queries(queries);
+        assert_eq!(panel.query(ExplorerSection::Files), "chapter");
+        assert_eq!(panel.query(ExplorerSection::Tags), "lemma");
+        assert_eq!(panel.query(ExplorerSection::Contents), "");
+        panel.set_focused_section(Some(ExplorerSection::Tags));
+        panel.focus_section_search(panel.focused_section().unwrap());
+        assert_eq!(panel.take_search_focus(), Some(ExplorerSection::Tags));
+        panel.focus_section_search(ExplorerSection::Git);
+        assert_eq!(panel.take_search_focus(), None);
+        panel.update_section_focus(Some(ExplorerSection::Files), true, false);
+        assert_eq!(
+            panel.focused_section(),
+            None,
+            "an outside click wins over stale text focus"
+        );
+        panel.update_section_focus(Some(ExplorerSection::Contents), true, true);
+        assert_eq!(panel.focused_section(), Some(ExplorerSection::Contents));
     }
 
     #[test]

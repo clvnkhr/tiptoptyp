@@ -3,6 +3,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fs, io,
     path::{Component, Path, PathBuf},
+    sync::Arc,
 };
 use typst_syntax::{LinkedNode, Source, SyntaxKind, ast};
 
@@ -82,6 +83,7 @@ pub struct ProjectIndex {
     pub packages: Vec<String>,
     pub tags: Vec<ReferenceEntry>,
     pub references: Vec<ReferenceEntry>,
+    pub(crate) tag_references: Option<Arc<HashMap<String, Vec<usize>>>>,
     /// Import/include expressions which require Typst evaluation. The indexer
     /// deliberately reports rather than follows them.
     pub unresolved_dependencies: Vec<UnresolvedDependency>,
@@ -89,6 +91,24 @@ pub struct ProjectIndex {
 }
 
 impl ProjectIndex {
+    pub(crate) fn reference_indexes_for_tag(&self, tag: &str) -> &[usize] {
+        self.tag_references
+            .as_ref()
+            .and_then(|uses| uses.get(tag))
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    pub(crate) fn rebuild_tag_references(&mut self) {
+        let mut uses = HashMap::<String, Vec<usize>>::new();
+        for (index, reference) in self.references.iter().enumerate() {
+            uses.entry(reference.label.trim_start_matches('@').to_owned())
+                .or_default()
+                .push(index);
+        }
+        self.tag_references = (!uses.is_empty()).then(|| Arc::new(uses));
+    }
+
     pub fn warning(&self) -> Option<&str> {
         self.completeness.warning.as_deref()
     }
@@ -232,6 +252,7 @@ pub(crate) fn analyze_project_cancellable(
     index.update_warning();
     index.subfiles.sort();
     index.packages = packages.into_iter().collect();
+    index.rebuild_tag_references();
     Some(index)
 }
 
@@ -724,6 +745,8 @@ See @chapter and @figure. #link(<appendix>)[Appendix]
             [("<chapter>", 1), ("<appendix>", 2)]
         );
         assert!(index.references.iter().all(|reference| reference.line == 2));
+        assert_eq!(index.reference_indexes_for_tag("chapter"), &[0]);
+        assert!(index.reference_indexes_for_tag("appendix").is_empty());
     }
 
     #[test]
