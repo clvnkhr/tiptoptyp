@@ -674,3 +674,23 @@ not a pass; framebuffer evidence is separate from native interaction evidence.
 
 The final TeX framebuffer `tex-after-marker/1790773303641-0001-main.png`
 was also inspected and has the alignment guide after each real ampersand.
+
+## Ordinary guides for unaligned math (2026-09-30)
+
+Math blocks with no genuine alignment markers now use ordinary indentation
+guides. Escaped ampersands do not activate alignment mode. Nested unaligned
+blocks inside aligned environments use ordinary guides locally and restore
+the parent's alignment after closing. Pure regressions compare marker-free
+Typst/TeX output against ordinary text and retain aligned-equation behavior.
+Only guide eligibility/state changes; drawing coordinates and interactions
+are unchanged, so deterministic state coverage is sufficient for this change.
+
+The existing cached parse already discovers alignment markers. Selection adds
+an empty-list check; unaligned blocks skip the special body-indentation scan.
+Nested scopes retain their enclosing indentation stack on cache rebuilds.
+Idle frames still reuse the cached per-row guide list, with no additional parsing
+or repaint requests. No material performance impact is expected; this statement
+is algorithmic, not a new wall-time benchmark.
+
+Formatting (workspace and xtask), strict all-target Clippy, the full Rust
+suites and 15 xtask tests passed for this eligibility change.

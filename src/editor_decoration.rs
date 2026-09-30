@@ -375,6 +375,7 @@ fn source_guide_levels(
     let mut offset = 0;
     let mut next = 0;
     let mut active: Vec<usize> = Vec::new();
+    let mut saved_stacks = vec![Vec::new(); blocks.len()];
     let mut bases = vec![0; blocks.len()];
     let mut alignments = vec![Vec::new(); blocks.len()];
     for line in source.split_inclusive('\n') {
@@ -382,20 +383,37 @@ fn source_guide_levels(
             .last()
             .is_some_and(|&index| blocks[index].range.end <= offset)
         {
-            active.pop();
+            let closed = active.pop().unwrap();
+            if active
+                .last()
+                .is_some_and(|&parent| !blocks[parent].markers.is_empty())
+            {
+                stack = saved_stacks[closed].clone();
+            }
         }
         let indent = indentation_columns(line.chars(), step, usize::MAX);
         while next < blocks.len() && blocks[next].range.start < offset + line.len() {
             if blocks[next].range.end > offset {
-                if active.is_empty() {
+                if !active.is_empty() {
+                    saved_stacks[next] = stack.clone();
+                }
+                if active
+                    .last()
+                    .is_none_or(|&parent| blocks[parent].markers.is_empty())
+                {
                     update_indent_stack(&mut stack, Some(indent));
                 }
-                bases[next] = math_body_indent(source, &blocks[next], step, indent);
+                if !blocks[next].markers.is_empty() {
+                    bases[next] = math_body_indent(source, &blocks[next], step, indent);
+                }
                 active.push(next);
             }
             next += 1;
         }
-        if let Some(&index) = active.last() {
+        if let Some(&index) = active
+            .last()
+            .filter(|&&index| !blocks[index].markers.is_empty())
+        {
             let block = &blocks[index];
             let first_marker = block.markers.partition_point(|&marker| marker < offset);
             let row_markers: Vec<_> = block.markers[first_marker..]
@@ -646,6 +664,42 @@ mod tests {
         assert_eq!(guides[1], vec![2, 14]);
         assert_eq!(guides[2], vec![2, 14]);
         assert_eq!(guides[3], vec![2, 14]);
+    }
+    #[test]
+    fn math_without_alignment_markers_uses_normal_indentation() {
+        for (source, kind) in [
+            (
+                "$\n  x\n       y\n  z\n$\n",
+                crate::document::DocumentKind::Typst,
+            ),
+            (
+                "\\begin{equation}\n  x\n       y\n  z\n\\end{equation}\n",
+                crate::document::DocumentKind::Tex,
+            ),
+            (
+                "\\begin{align}\n  x \\& y\n       z\n\\end{align}\n",
+                crate::document::DocumentKind::Tex,
+            ),
+        ] {
+            assert_eq!(
+                source_guide_levels(source, 2, kind),
+                source_guide_levels(source, 2, crate::document::DocumentKind::Text)
+            );
+        }
+        let unaligned_nested = "\\begin{equation}\n  a\n    \\begin{gathered}\n      b\n    \\end{gathered}\n      c\n\\end{equation}\n";
+        assert_eq!(
+            source_guide_levels(unaligned_nested, 2, crate::document::DocumentKind::Tex),
+            source_guide_levels(unaligned_nested, 2, crate::document::DocumentKind::Text)
+        );
+        let nested = "\\begin{align}\n  x & = 1\n    \\begin{gathered}\n      a\n          b\n    \\end{gathered}\n      continuation\n\\end{align}\n";
+        let rows = guide_columns(nested, 2, crate::document::DocumentKind::Tex);
+        assert_eq!(rows[4], vec![4, 6, 10]);
+        assert_eq!(rows[6], vec![2, 5]);
+        let aligned = "$\n  x & = 1\n       continuation\n$\n";
+        assert_ne!(
+            source_guide_levels(aligned, 2, crate::document::DocumentKind::Typst),
+            source_guide_levels(aligned, 2, crate::document::DocumentKind::Text)
+        );
     }
     #[test]
     fn marker_only_continuation_has_one_guide_after_ampersand() {
