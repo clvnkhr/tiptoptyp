@@ -616,3 +616,24 @@ tests and 15 xtask tests passed.
 
 The guide Settings native journey passed again in `run-_rjtqe_6`; the refreshed
 25-image gallery validated.
+
+## Block-local indentation guides (2026-09-30)
+
+The previous actual-column filter was still global: a deeply indented line
+received guides for shallower columns used anywhere else in the document.
+Guides now follow a local indentation stack. Increasing indentation introduces
+one level; dedenting removes deeper levels, and unindented code resets the
+stack. Wrapped continuations do not introduce levels. This retains irregular
+math alignment without importing another block's columns. The per-row guide
+list is cached with the galley and tab width; unchanged frames do not scan code.
+Regression coverage includes unrelated blocks, irregular jumps, dedents, blank
+lines, edits and tab-width invalidation.
+
+Fresh `local-indentation/1790770959727-0001-main.png` was inspected: the earlier
+2/4/6/8-space block keeps its own nested guides, while the later math block
+shows only 2/32-space guides and drops the alignment guide on dedent. This is
+viewport framebuffer evidence. Formatting, strict Clippy, full Rust suites and
+15 xtask tests passed.
+
+The native editor-preferences journey passed in `run-n2ewe48c`; the regenerated
+25-image gallery validated.
