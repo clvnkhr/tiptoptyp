@@ -298,3 +298,5 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 // diff is open; semantic typing/focus regression passes. Native editing, Undo/
 // Redo, navigation and Escape width checks passed; post-fix native Find rerun
 // remains pending because the desktop locked again.
+// 2026-09-30 verification: full native git_hunks journey passed in run-5wxcbd2p,
+// including post-fix Find typing/toggling and Escape divider stability.

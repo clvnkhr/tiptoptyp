@@ -800,3 +800,17 @@ alternate editor path, with no new worker or idle repaint loop.
 The final native rerun stopped at preflight because the desktop had locked again
 (`accessibility=true, input=true, desktop=false, locked=true`). The post-fix native
 Find checks remain pending; these partial native runs are not a full journey pass.
+
+### 2026-09-30: post-fix native verification completed
+
+The full `git_hunks` journey passed in `run-5wxcbd2p` on build
+`761274e5ad4f.1790806898`, with Accessibility/input permissions and an unlocked
+desktop confirmed. This closes the pending post-fix native Find check above:
+Find opens over the live comparison, owns query typing without editing source,
+and Cmd+F closes it while returning focus to the comparison. The same run passed
+all full-document editing, Undo/Redo, navigation, line-revert, owner-resize and
+Escape divider-stability checks. Requested/effective backend was switched and
+verified as PDFium before those interactions. Fresh end-of-document framebuffer
+`1790806939231-0003-main.png` was inspected for full-document pairing, the added
+last line and clipping. Native interaction results and framebuffer evidence
+remain separate; no whole-desktop composition capture was performed.
