@@ -482,3 +482,18 @@ ranking uses the fixed calligraphic subset separately.
 
 The release executable grew from 52,946,272 to 58,296,272 bytes (+5.35 MB), mostly
 from the embedded quantized sample set. No new runtime dependency was added.
+
+## Mathematical dictionary (30 September 2026)
+
+The 467-spelling Harper supplement is built once on first use by the background
+writing worker, then shared by document parsing and linting. Its word data takes
+5,260 bytes. It adds no per-frame work, file reads, worker jobs or idle repaints.
+
+An optimized macOS 14.6.1 arm64 test executable compared the curated dictionary
+with the merged dictionary on the same 1,800-byte Typst fixture, parser and
+British dialect. After three warmups, five samples per dictionary had medians
+of 13.073 ms and 13.080 ms, respectively, measured after other builds/tests
+finished. That difference is within local timing noise. Cold dictionary
+initialization and end-to-end GUI latency were not measured. The
+[run metadata](performance-results/math-dictionary-2026-09-30.json) records the
+command, workload, optimized profile and executable/dictionary hashes.

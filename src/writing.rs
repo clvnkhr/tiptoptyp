@@ -6,9 +6,36 @@ use crate::{
 use harper_core::{
     Dialect, Document,
     linting::{LintGroup, Linter},
-    spell::FstDictionary,
+    spell::{FstDictionary, MergedDictionary},
 };
-use std::path::Path;
+use std::{
+    path::Path,
+    sync::{Arc, LazyLock},
+};
+
+const MATH_WORDS: &str = include_str!("../assets/dictionaries/mathematics.txt");
+
+// Construct once on the writing worker, and reuse for parsing and linting. Keep
+// Harper's richer metadata for existing words; the supplement adds spellings
+// without guessing their grammatical roles or accepting arbitrary affixes.
+static WRITING_DICTIONARY: LazyLock<Arc<MergedDictionary>> = LazyLock::new(|| {
+    use harper_core::spell::Dictionary;
+    let curated = FstDictionary::curated();
+    let words = MATH_WORDS
+        .lines()
+        .filter(|word| !curated.contains_word_str(word))
+        .map(|word| {
+            (
+                word.chars().collect(),
+                harper_core::DictWordMetadata::default(),
+            )
+        })
+        .collect();
+    let mut dictionary = MergedDictionary::new();
+    dictionary.add_dictionary(curated);
+    dictionary.add_dictionary(Arc::new(FstDictionary::new(words)));
+    Arc::new(dictionary)
+});
 
 pub(crate) fn check(
     source: &str,
@@ -23,12 +50,13 @@ pub(crate) fn check(
         && matches!(kind, DocumentKind::Typst | DocumentKind::Tex)
         && let Some(dialect) = writing_dialect(source, kind, language)
     {
+        let dictionary = Arc::clone(&WRITING_DICTIONARY);
         let document = if kind == DocumentKind::Tex {
-            Document::new_curated(source, &harper_tex::TeX::default())
+            Document::new(source, &harper_tex::TeX::default(), dictionary.as_ref())
         } else {
-            Document::new_curated(source, &harper_typst::Typst)
+            Document::new(source, &harper_typst::Typst, dictionary.as_ref())
         };
-        let mut linter = LintGroup::new_curated(FstDictionary::curated(), dialect);
+        let mut linter = LintGroup::new_curated(dictionary, dialect);
         let excluded = excluded_typst_ranges(source, kind);
         let characters: Vec<char> = source.chars().collect();
         let indentation = indentation_ranges(&characters);
@@ -258,6 +286,136 @@ fn likely_name(source: &[char], start: usize, end: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mathematical_prose_is_accepted_in_typst_and_tex_without_hiding_errors() {
+        for kind in [DocumentKind::Typst, DocumentKind::Tex] {
+            let source = "These semigroups are nonautonomous.\nThe eigenfunctions are quasilinear.\nThis is the the misspelld conclusion.";
+            let issues = check(
+                source,
+                kind,
+                Path::new("fixture"),
+                true,
+                false,
+                crate::settings::WritingLanguage::British,
+            );
+            assert!(
+                issues.iter().all(|issue| issue.location.unwrap().line == 3),
+                "{kind:?}: {issues:?}"
+            );
+            assert!(
+                issues
+                    .iter()
+                    .any(|issue| issue.location.unwrap().column == 9),
+                "repeated words must still be checked: {issues:?}"
+            );
+            assert!(
+                issues
+                    .iter()
+                    .any(|issue| issue.location.unwrap().column == 17),
+                "ordinary misspellings must still be checked: {issues:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn mathematical_typos_and_repeated_terms_are_reported_in_both_adapters() {
+        for kind in [DocumentKind::Typst, DocumentKind::Tex] {
+            let issues = check(
+                "This semigrop is nonautonomus.\nThis operator is quasiliner.\nThis is a semigroup semigroup.",
+                kind,
+                Path::new("fixture"),
+                true,
+                false,
+                crate::settings::WritingLanguage::American,
+            );
+            for (line, column) in [(1, 6), (1, 18), (2, 18)] {
+                assert!(
+                    issues
+                        .iter()
+                        .any(|issue| issue.location == Some(DiagnosticLocation { line, column })),
+                    "{kind:?}: typo at {line}:{column} must be reported: {issues:?}"
+                );
+            }
+            assert!(
+                issues.iter().any(|issue| issue.location.unwrap().line == 3),
+                "repeated mathematical words must be reported: {issues:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn math_dictionary_is_reviewed_and_reused_and_suggests_math_spellings() {
+        use harper_core::spell::Dictionary;
+        let words: Vec<_> = MATH_WORDS.lines().collect();
+        assert!(words.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(
+            words
+                .iter()
+                .all(|word| word.len() >= 4
+                    && word.bytes().all(|letter| letter.is_ascii_lowercase()))
+        );
+        let dictionary = Arc::clone(&WRITING_DICTIONARY);
+        assert!(Arc::ptr_eq(&dictionary, &WRITING_DICTIONARY));
+        for word in ["color", "colour", "running", "children", "British"] {
+            assert_eq!(
+                dictionary.get_word_metadata_str(word),
+                FstDictionary::curated().get_word_metadata_str(word),
+                "existing grammatical and dialect metadata must survive: {word}"
+            );
+        }
+        for word in words {
+            assert!(dictionary.contains_word_str(word), "{word}");
+        }
+        for typo in [
+            "semigrop",
+            "nonautonomus",
+            "quasiliner",
+            "nonautonomouss",
+            "propogator",
+            "hler",
+        ] {
+            assert!(!dictionary.contains_word_str(typo), "{typo}");
+        }
+        assert!(
+            dictionary
+                .fuzzy_match_str("semigrop", 1, 10)
+                .iter()
+                .any(|result| { result.word.iter().collect::<String>() == "semigroup" })
+        );
+    }
+
+    #[test]
+    #[ignore = "opt-in optimized dictionary parse/lint cost comparison"]
+    fn math_dictionary_cost_measurement() {
+        use harper_core::spell::Dictionary;
+        if cfg!(debug_assertions) {
+            panic!("run with --release");
+        }
+        fn measure(dictionary: Arc<impl Dictionary + 'static>, source: &str) -> u128 {
+            let mut samples = Vec::new();
+            for iteration in 0..8 {
+                let started = std::time::Instant::now();
+                let document = Document::new(source, &harper_typst::Typst, dictionary.as_ref());
+                let mut linter = LintGroup::new_curated(Arc::clone(&dictionary), Dialect::British);
+                std::hint::black_box(linter.lint(&document));
+                if iteration >= 3 {
+                    samples.push(started.elapsed().as_micros());
+                }
+            }
+            samples.sort_unstable();
+            samples[samples.len() / 2]
+        }
+        let source = "This is the the example.\n$ x^2 + y^2 = z^2 $\n".repeat(40);
+        let baseline = measure(FstDictionary::curated(), &source);
+        let supplemented = measure(Arc::clone(&WRITING_DICTIONARY), &source);
+        eprintln!(
+            "math-dictionary-cost arch={} profile=release bytes={} warmup=3 samples=5 baseline_us={baseline} supplemented_us={supplemented}",
+            std::env::consts::ARCH,
+            source.len()
+        );
+    }
+
     #[test]
     fn leading_indentation_is_not_prose_spacing_but_inline_spaces_and_typos_are() {
         for kind in [DocumentKind::Typst, DocumentKind::Tex] {

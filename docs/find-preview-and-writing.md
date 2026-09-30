@@ -23,7 +23,13 @@ and Escape restoring editor focus. Existing semantic find/refocus tests remain.
 The two find screenshot scenes now target the native `find-replace` viewport;
 that framebuffer cannot prove the composed desktop's stacking by itself.
 
-## Writing checks: findings and choices (not implemented)
+## Writing checks: original findings and choices
+
+The initial investigation below predates the parser exclusions, language
+settings and bundled mathematical vocabulary. Typst and TeX now share a
+[reviewed math supplement](../assets/dictionaries/README.md) alongside Harper's
+curated dictionary. It accepts mathematical terminology and contributes spelling
+suggestions while keeping ordinary spelling and grammar rules enabled.
 
 `src/writing.rs` already uses `harper_typst::Typst` and `harper_tex::TeX`.
 It applies Harper's curated dictionary/rules with British English and has no

@@ -1,0 +1,39 @@
+{
+  "date": "2026-09-30",
+  "source_base_revision": "89e95fa",
+  "change": "Reviewed mathematical vocabulary merged into Harper",
+  "environment": {
+    "os": "macOS 14.6.1 (23G93)",
+    "architecture": "aarch64",
+    "rustc": "1.98.1 (48a229cea 2026-09-01)",
+    "profile": "release",
+    "optimization": "opt-level=3, thin LTO, codegen-units=1"
+  },
+  "command": "cargo test --release --bin tiptoptyp math_dictionary_cost_measurement -- --ignored --nocapture --test-threads=1",
+  "executable_sha256": "db361a67894c7e4091d51b35e3268e08fd86a6ca8396f8f2a9202f48436908d0",
+  "dictionary": {
+    "entries": 467,
+    "bytes": 5260,
+    "sha256": "ac8ab3494a9a8c8d7901017070cc94e139505860605fd127c04d0567b6f8a17a"
+  },
+  "workload": {
+    "fixture": "40 repetitions of: This is the the example.\n$ x^2 + y^2 = z^2 $\n",
+    "bytes": 1800,
+    "parser": "harper_typst::Typst",
+    "dialect": "British",
+    "operation": "Document parsing plus construction and execution of curated LintGroup",
+    "warmup_iterations_per_dictionary": 3,
+    "measured_iterations_per_dictionary": 5,
+    "statistic": "median microseconds",
+    "viewport_and_theme": "none; background writing computation only"
+  },
+  "result_after_other_builds_and_tests_finished": {
+    "curated_dictionary_us": 13073,
+    "supplemented_dictionary_us": 13080
+  },
+  "limitations": [
+    "One local warm workload; not a cross-platform or end-to-end GUI latency guarantee.",
+    "Dictionary initialization, cold startup and math-heavy diagnostic-count changes are not timed.",
+    "The 7 microsecond difference is within local timing noise; no speed improvement is claimed."
+  ]
+}

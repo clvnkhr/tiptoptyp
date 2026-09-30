@@ -539,3 +539,28 @@ is not evidence of active border colors or native Tinymist composition.
 Capture command: `cargo run --release -- --ui-theme catppuccin-latte
 --ui-snapshot-scene pdfium-preview --ui-screenshot-subdir screenshots/agent-review
 --ui-screenshot-exit test.typ`.
+
+## 2026-09-30 — unlocked native rerun and mathematics vocabulary
+
+After unlocking the desktop, all five affected real-app interaction journeys
+passed with Accessibility and input posting available:
+
+- `git_hunks`: `run-3jegt80p`, repeated keyboard/popup navigation and wraparound.
+- `editing`: `run-ptcnw102`, typing, undo/redo caret, Unicode and comments.
+- `diagnostics`: `run-xmu8r0ho`, broken source, Problems navigation and recovery.
+- `explorer_scroll`: `run-pg__a39d`, actual explorer scrolling and search.
+- `preview_keyboard`: `run-40d4y41g`, repeated PDFium/Tinymist focus transitions,
+  passive scrolling, preview shortcuts and return to source typing.
+
+Evidence is retained under `.tiptoptyp/desktop-ui-tests/<run>/result.json`.
+These are native interaction passes, not framebuffer or composed-pixel checks.
+They supersede the unavailable interaction check recorded above.
+
+Harper now shares a reviewed 467-spelling mathematics supplement between the
+Typst and TeX adapters. Regression tests retain typo and repeated-word detection,
+curated metadata and explicit spellings; no arbitrary affix exemption is added.
+Formatting, strict Clippy, the full Rust suites and xtask tests passed. The
+optimized same-fixture worker measurement was 13,073 us curated versus 13,080 us
+with the supplement, within local timing noise; metadata is recorded in
+`docs/performance-results/math-dictionary-2026-09-30.json`. No layout changes or
+additional screenshots are required for this vocabulary change.

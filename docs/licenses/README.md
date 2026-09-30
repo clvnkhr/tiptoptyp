@@ -21,3 +21,10 @@ notices in the packaged `THIRD_PARTY_NOTICES`:
 The Rust wrappers and portable-pty are covered by cargo-about's generated
 section. Zig's bundled compiler runtime uses the MIT license from the Zig
 0.15.2 distribution, retained here as well.
+
+## Mathematical vocabulary
+
+`mathgloss-MIT.txt` records the source and licence of the reviewed mathematical
+word supplement. It is included by `cargo xtask generate-notices`. See
+[`assets/dictionaries/README.md`](../../assets/dictionaries/README.md) for the
+pinned dataset, selection procedure and additions.
