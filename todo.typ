@@ -294,3 +294,7 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 // navigation arrows place the source cursor at changes. The old read-only hover
 // remains compact. Escape draws the normal code editor in the same frame to
 // preserve the code/preview divider width.
+// 2026-09-30 native follow-up: restored the Find overlay while the live document
+// diff is open; semantic typing/focus regression passes. Native editing, Undo/
+// Redo, navigation and Escape width checks passed; post-fix native Find rerun
+// remains pending because the desktop locked again.

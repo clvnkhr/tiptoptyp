@@ -769,3 +769,34 @@ attempts stopped before interaction because macOS reported
 This remains an unavailable native check, not a pass. Preparation evidence is
 `run-nwbbovq0`. The matched optimized algorithm measurement is recorded in
 `docs/performance.md`; it measures comparison work, not end-to-end typing latency.
+
+### 2026-09-30: unlocked live-diff native rerun
+
+Native input became available and `git_hunks` exercised the real editor in
+`run-fyvb56sh`, `run-ykuuohuu` and `run-32lsfqqq`. The latter run passed marker
+hover/click, repeated navigation, owner resizing, line revert, typing outside
+the original hunk, Undo/Redo, editing the last line, Escape preserving the pane
+width over repeated frames, and reopening the full-document comparison.
+The requested and effective preview backend were both PDFium. A fresh root
+framebuffer from the first run was inspected for aligned columns and Git colors;
+this is separate from native input evidence and not a whole-desktop capture.
+
+The runs corrected two test assumptions: changes within the same three-line
+context merge into one hunk, and returning from the end of a large document
+requires waiting for newly visible gutter geometry before clicking it. They also
+found a real regression: Find's state became visible while the docked diff's early
+render path omitted its overlay. The live diff now calls the same Find overlay as
+the regular editor. A semantic regression failed on the missing Find controls
+before the fix and passes afterward; it checks popup presence, typing/focus,
+unchanged source, and toggling closed while the comparison remains open.
+
+Formatting, strict all-target Clippy, 1,209 app unit tests plus core/integration/
+doc tests, and 15 xtask tests passed. The build-identity integration check initially
+collided with a simultaneous desktop-feature build replacing the app executable;
+its isolated rerun passed. The desktop-feature build compiled. No material
+performance impact is expected: the existing overlay is now rendered from the
+alternate editor path, with no new worker or idle repaint loop.
+
+The final native rerun stopped at preflight because the desktop had locked again
+(`accessibility=true, input=true, desktop=false, locked=true`). The post-fix native
+Find checks remain pending; these partial native runs are not a full journey pass.

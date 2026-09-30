@@ -777,3 +777,77 @@ fn explorer_drop_inserts_a_relative_path_at_the_caret_and_undoes_once() {
     harness.state_mut().undo_editor(&context, false);
     assert_eq!(harness.state().document().source(), "ab");
 }
+
+#[test]
+fn find_in_live_diff_is_visible_and_owns_typing_without_editing_source() {
+    let root = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&context, root.path(), egui::ViewportId::ROOT);
+    let path = root.path().join("main.typ");
+    let source = (0..17)
+        .map(|i| format!("alpha line {i}\n"))
+        .collect::<String>();
+    app.document_mut().replace_loaded_unprojected(
+        source.clone(),
+        path.clone(),
+        DocumentKind::Typst,
+        None,
+    );
+    app.git_editor = crate::git::editor::GitEditorState::document_fixture(
+        root.path(),
+        &path,
+        &source,
+        app.document().key(),
+    );
+    app.git_editor.open_chunk(0, &path);
+    app.open_app_popup(AppPopup::GitChunk {
+        anchor: Pos2::ZERO,
+        chunk: app.git_editor.chunk.clone().unwrap(),
+    });
+    let mut ready = false;
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(900.0, 500.0))
+        .build_ui_state(
+            move |ui, app: &mut EditorApp| {
+                if !ready {
+                    theme::configure_editor_fonts(
+                        ui.ctx(),
+                        Default::default(),
+                        Default::default(),
+                        false,
+                        400,
+                        400,
+                        None,
+                    );
+                    ready = true;
+                    return;
+                }
+                app.handle_shortcuts(ui.ctx(), None);
+                app.show_editor(ui);
+            },
+            app,
+        );
+    harness.run();
+    let chord = harness
+        .state()
+        .settings
+        .effective_shortcuts()
+        .egui(ShortcutAction::Find)
+        .unwrap();
+    harness.key_press_modifiers(chord.modifiers, chord.logical_key);
+    harness.run();
+    harness.get_by_label("Next match · Enter");
+    assert!(find_bar::has_focus(&harness.ctx));
+    harness.event(egui::Event::Text("alpha".into()));
+    harness.run();
+    assert_eq!(harness.state().find_bar.query, "alpha");
+    assert!(find_bar::has_focus(&harness.ctx));
+    assert_eq!(harness.state().document().source(), &source);
+    assert!(harness.state().document_diff.is_some());
+    harness.key_press_modifiers(chord.modifiers, chord.logical_key);
+    harness.run();
+    assert!(!harness.state().find_bar.visible);
+    assert!(harness.state().document_diff.is_some());
+    let editor = source_editor_id(&harness.ctx);
+    assert!(harness.ctx.memory(|m| m.has_focus(editor)));
+}

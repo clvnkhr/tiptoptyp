@@ -1296,7 +1296,7 @@ impl EditorApp {
         self.show_find_overlay(ui, scroll_output.inner_rect);
     }
 
-    fn show_find_overlay(&mut self, ui: &mut egui::Ui, editor: Rect) {
+    pub(super) fn show_find_overlay(&mut self, ui: &mut egui::Ui, editor: Rect) {
         let context = ui.ctx().clone();
         let owner_id = context.viewport_id();
         if !self.find_bar.visible {

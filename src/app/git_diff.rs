@@ -63,6 +63,7 @@ impl EditorApp {
         chunk: &crate::git::editor::ChunkDiff,
     ) {
         ui.set_min_width(ui.available_width());
+        let editor_bounds = ui.available_rect_before_wrap();
         if self.document_diff.is_none()
             && let Err(error) = self.prepare_document_diff(chunk)
         {
@@ -213,5 +214,6 @@ impl EditorApp {
             }
             None => {}
         }
+        self.show_find_overlay(ui, editor_bounds);
     }
 }
