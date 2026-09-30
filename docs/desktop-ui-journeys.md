@@ -72,7 +72,7 @@ now exercised through the real app, and the lower-level coverage retained.
 | panels | Cmd+5, repeated clicks on Terminal/Problems, hide/reopen; stable panel height across 30 fresh frames per sample; app remains responsive |
 | find | Cmd+F with Find focused, repeated Replace clicks, one close-button click; expected popup state and stable measured native height after every action |
 | empty | Cmd+W on the only tab, then Cmd+N; original window remains, new tab has no path and zero source bytes |
-| editing | Typing and Unicode replacement, undo/redo caret, acknowledged multiline paste, comment round trip |
+| editing | Typing and Unicode replacement, undo/redo caret and saved-state indicator, acknowledged multiline paste, comment round trip |
 | search | Query focus, next/previous, case/regex toggles, replace one/all, undo and Escape |
 | tabs | Previous/next with separate unsaved buffers and carets; original preview retained |
 | layout | Code/preview/split, explorer hide/maximize/restore, editor setting shortcuts, panel maximize/Activity/close |

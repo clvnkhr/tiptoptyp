@@ -23,6 +23,17 @@ fn main() {
         let mut document =
             DocumentSession::new(WindowSessionId::new(1), source, DocumentKind::Typst);
         let bytes = document.source().len();
+        measure("saved_dirty_check", bytes, 100_000, || {
+            assert!(!black_box(&document).is_dirty());
+        });
+        document.edit((), |text| {
+            text.pop();
+            text.push('x');
+        });
+        measure("unsaved_dirty_check", bytes, 100_000, || {
+            assert!(black_box(&document).is_dirty());
+        });
+        document.history_step(false, ()).unwrap();
         measure("snapshot", bytes, 100_000, || {
             black_box(document.snapshot());
         });

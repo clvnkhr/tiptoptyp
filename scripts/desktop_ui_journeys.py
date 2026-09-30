@@ -109,16 +109,18 @@ class EditorJourneys:
         # first can allow an asynchronous selection update to move the caret
         # before the regression assertion samples it.
         self.wait("typed caret follows text", lambda d: d["source_fingerprint"] == fingerprint("zzz")
-                  and d["cursor"] == [3, 3])
+                  and d["cursor"] == [3, 3] and d["dirty"])
         self.stable_state(lambda d: d["source_fingerprint"] == fingerprint("zzz") and d["cursor"] == [3, 3])
         self.click("editor.source")
         self.key(6)  # Undo
         self.source_is("")
+        self.wait("undo to saved contents clears unsaved state", lambda d: not d["dirty"])
         self.click("editor.source")
         self.key(123, "cmd")  # Move caret before replaying the edit.
         self.click("editor.source")
         self.key(6, "cmd+shift")
         self.source_is("zzz")
+        self.wait("redo restores unsaved state", lambda d: d["dirty"])
         self.wait("redo restores post-edit caret", lambda d: d["cursor"] == [3, 3])
         self.native("text", "!")
         self.source_is("zzz!")

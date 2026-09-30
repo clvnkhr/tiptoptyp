@@ -263,8 +263,10 @@ cannot leak into a new profiling session.
 cargo bench -p tiptoptyp-core --bench document
 ```
 
-This dependency-free optimized benchmark prints CSV for shared snapshots, no-op
-edits and edit/undo cycles at approximately 16 KiB, 256 KiB and 1 MiB. Each probe
+This dependency-free optimized benchmark prints CSV for clean/dirty status
+queries, shared snapshots, no-op edits and edit/undo cycles at approximately
+16 KiB, 256 KiB and 1 MiB. The dirty case changes the final character without
+changing byte length, so an uncached comparison must scan the whole buffer. Each probe
 has warmup iterations; source generation is outside the measured interval.
 `edit_and_undo` reports one complete cycle, not one keystroke. Each case also
 checks basic state invariants. This isolates core document operations and does
@@ -287,6 +289,62 @@ recorder/runner tests. It does not pretend headless tests replace desktop
 measurements. When fixing a performance bug, add a focused invariant test and
 record before/after evidence using this workflow. Investigating individual hot
 paths remains ongoing work, not an unchecked part of the profiling setup.
+
+For the editor's diagnostic refresh path:
+
+```sh
+cargo test --release --bin tiptoptyp diagnostic_refresh_cost_probe -- --ignored --nocapture
+```
+
+This uses 1, 100 and 1,000 synthetic warnings for one existing temporary file.
+Each case has ten warmups and five batches of 100 changed-revision refreshes;
+fixture generation is outside timing. It measures file targeting and inline
+diagnostic aggregation, including filesystem lookups, not provider execution or
+painting. Path matching is cached only within a refresh, so later refreshes
+still resolve symlinks and missing files afresh. Tests enforce one check per
+distinct diagnostic file across both provider lists, including negative matches.
+
+### Editor state and diagnostic refresh — 30 September 2026
+
+On Apple M2 Max / macOS 14.6.1 / Rust 1.98.1, matched release probes compared
+`fa80b0d` plus the new probes against the changes recorded in
+[the measurement data](performance-results/editor-work-2026-09-30.json).
+Preserved old/new executables were run in alternating order for three pairs,
+without concurrent builds. The data retains all samples and binary hashes;
+raw logs and binaries are in `.tiptoptyp/profiles/editor-work-2026-09-30/`.
+
+| Warm operation | Before | After |
+| --- | ---: | ---: |
+| Diagnostic refresh, 1 warning | 32.38 µs | 33.13 µs |
+| Diagnostic refresh, 100 warnings for one file | 1.575 ms | 0.075 ms |
+| Diagnostic refresh, 1,000 warnings for one file | 15.513 ms | 0.430 ms |
+| Repeated clean-state query, 1 MiB source | 25.13 µs | <0.001 µs |
+| Repeated dirty-state query, same-length edit near EOF | 26.05 µs | <0.001 µs |
+
+Diagnostic medians use the fifteen batch means; document medians use the three
+process means. The dirty-state cache is lazy and invalidated on edits, history,
+saved-copy changes and representation replacement. Its first read after a
+mutation can still compare the full buffer; repeated reads are constant-time.
+Read-only kinds still suppress the dirty indicator. There is no new polling,
+worker, persistent filesystem cache, dependency, or per-frame log output.
+
+These improvements do not remove the editor's no-op buffer comparison or speed
+up every operation. At 1 MiB the control no-op edit was 24.59 → 25.39 µs and
+edit/undo was 87.49 → 88.84 µs. The 256 KiB edit/undo control was slower,
+10.82 → 12.50 µs, while the 16 KiB control was 0.728 → 0.768 µs. These short
+allocation-heavy controls are retained rather than claiming a general typing
+speedup. The substantial measured reduction is file targeting during diagnostic
+refresh; provider execution, cold startup, painting and end-to-end keystroke
+latency are outside these headless probes. Results are local, not cross-platform
+guarantees.
+
+Matched native `large` runs (5-second warmup, 5-second measurement, Catppuccin
+Latte, 2800 × 1770 framebuffer, macOS CPU sampling) recorded no measured UI
+spans or repaint requests in either build. The main-thread samples were event
+waits; process CPU advanced 0.00 / 0.01 seconds. Both fresh viewport captures
+were inspected. The subsequent native input preflight reported a locked desktop,
+so these samples do not establish unlocked-desktop idle behavior or interaction
+coverage. Framebuffer captures also do not verify composed native child views.
 
 ## Architecture regression probes
 

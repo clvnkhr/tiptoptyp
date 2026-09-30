@@ -1,0 +1,413 @@
+{
+  "date": "2026-09-30",
+  "environment": {
+    "baseline_revision": "fa80b0d632320c50daad180ec6d1b48502ef4dbd",
+    "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+    "profile": "release (thin LTO, codegen-units=1)",
+    "workloads": "Headless core document reads/edits and diagnostic rebuilds; no viewport/theme. Native large idle sampled separately.",
+    "notes": "Fixtures generated outside measurement; warm filesystem cache. No concurrent builds during measurement.",
+    "cpu": "Apple M2 Max",
+    "baseline_binaries": {
+      "baseline-core": "12bfe5c2aec6a630989711578fe5d1af4070ca74340af8e34b8c4a45ed26db09",
+      "baseline-diagnostics": "3e04109ce999abfb1054f35bd0ddbc72bb55d0d35a3e7a68777208f0fa847389"
+    },
+    "after_binaries": {
+      "core": "0b07450322bfd8dd1ecd233c1286493c40aacdba3f87a953ae5db9dd4eb2f47a",
+      "diagnostics": "e2e6f5715fd4625aa02e059fcb459025437ead9be2906be41fad4e3d8d223070"
+    }
+  },
+  "scope": "Warm headless operation costs; no viewport/theme. No builds or profiling sessions ran during timed probes. Application startup, providers, painting, and end-to-end input latency are excluded.",
+  "order": [
+    [
+      "after",
+      "baseline"
+    ],
+    [
+      "baseline",
+      "after"
+    ],
+    [
+      "after",
+      "baseline"
+    ]
+  ],
+  "core": {
+    "baseline": {
+      "saved_dirty_check": {
+        "16376": [
+          431.3,
+          422.3,
+          427.4
+        ],
+        "262131": [
+          6288.6,
+          6522.9,
+          6484.2
+        ],
+        "1048570": [
+          25492.1,
+          25004.3,
+          25134.1
+        ]
+      },
+      "unsaved_dirty_check": {
+        "16376": [
+          440.0,
+          443.3,
+          443.0
+        ],
+        "262131": [
+          6573.1,
+          6595.9,
+          6699.1
+        ],
+        "1048570": [
+          26021.3,
+          26045.5,
+          26081.0
+        ]
+      },
+      "snapshot": {
+        "16376": [
+          4.2,
+          4.3,
+          4.4
+        ],
+        "262131": [
+          4.2,
+          4.1,
+          4.1
+        ],
+        "1048570": [
+          4.2,
+          4.1,
+          4.2
+        ]
+      },
+      "no_op_edit": {
+        "16376": [
+          417.4,
+          449.5,
+          438.0
+        ],
+        "262131": [
+          6084.9,
+          6183.9,
+          6145.0
+        ],
+        "1048570": [
+          25753.8,
+          24383.9,
+          24594.2
+        ]
+      },
+      "edit_and_undo": {
+        "16376": [
+          727.9,
+          654.8,
+          789.2
+        ],
+        "262131": [
+          10822.1,
+          10758.8,
+          11112.9
+        ],
+        "1048570": [
+          88795.2,
+          87485.2,
+          78072.1
+        ]
+      }
+    },
+    "after": {
+      "saved_dirty_check": {
+        "16376": [
+          0.6,
+          0.6,
+          0.6
+        ],
+        "262131": [
+          0.6,
+          0.6,
+          0.6
+        ],
+        "1048570": [
+          0.6,
+          0.6,
+          0.6
+        ]
+      },
+      "unsaved_dirty_check": {
+        "16376": [
+          0.6,
+          0.6,
+          0.6
+        ],
+        "262131": [
+          0.6,
+          0.6,
+          0.6
+        ],
+        "1048570": [
+          0.6,
+          0.6,
+          0.6
+        ]
+      },
+      "snapshot": {
+        "16376": [
+          3.9,
+          4.1,
+          4.0
+        ],
+        "262131": [
+          3.9,
+          4.1,
+          4.0
+        ],
+        "1048570": [
+          3.9,
+          3.8,
+          4.0
+        ]
+      },
+      "no_op_edit": {
+        "16376": [
+          409.3,
+          427.7,
+          427.2
+        ],
+        "262131": [
+          6174.4,
+          6364.1,
+          6321.5
+        ],
+        "1048570": [
+          26486.5,
+          23797.5,
+          25390.5
+        ]
+      },
+      "edit_and_undo": {
+        "16376": [
+          766.5,
+          831.7,
+          767.9
+        ],
+        "262131": [
+          12500.2,
+          11653.1,
+          13193.3
+        ],
+        "1048570": [
+          85869.4,
+          92713.8,
+          88839.0
+        ]
+      }
+    }
+  },
+  "diagnostics": {
+    "baseline": {
+      "1": [
+        28649,
+        31930,
+        32462,
+        31692,
+        32283,
+        33351,
+        30388,
+        32472,
+        31830,
+        34799,
+        32029,
+        32380,
+        34673,
+        35122,
+        35325
+      ],
+      "100": [
+        1650436,
+        1587099,
+        1556432,
+        1544235,
+        1574774,
+        1576489,
+        1569745,
+        1543234,
+        1569257,
+        1530248,
+        1680736,
+        1716712,
+        1677295,
+        1691830,
+        1566297
+      ],
+      "1000": [
+        15171433,
+        15708350,
+        15512898,
+        15455804,
+        15442472,
+        15461367,
+        15869690,
+        15533496,
+        15198418,
+        16196687,
+        15687650,
+        16200043,
+        15834722,
+        14945357,
+        15494862
+      ]
+    },
+    "after": {
+      "1": [
+        68528,
+        58734,
+        43816,
+        45604,
+        42267,
+        31374,
+        35421,
+        33410,
+        32281,
+        33132,
+        29115,
+        29453,
+        29087,
+        29075,
+        28997
+      ],
+      "100": [
+        84172,
+        89921,
+        87980,
+        84634,
+        83823,
+        74756,
+        76852,
+        74472,
+        75810,
+        74359,
+        70328,
+        70825,
+        70626,
+        70775,
+        69515
+      ],
+      "1000": [
+        427622,
+        407995,
+        404746,
+        402383,
+        404679,
+        433620,
+        430427,
+        430315,
+        433173,
+        431548,
+        437432,
+        432919,
+        427631,
+        436449,
+        432495
+      ]
+    }
+  },
+  "artifacts": ".tiptoptyp/profiles/editor-work-2026-09-30",
+  "native_idle": {
+    "baseline": {
+      "artifacts": ".tiptoptyp/profiles/1790725889253-24891-large-0",
+      "binary_sha256": "d1385d3e9d1d8aff2500917a3ad6a9d6437e084e16985b156ac223975c7acf1d",
+      "fixture_sha256": "5ce2455c087318a81fb02d53062d9c65de92afe11df220f443a15a0ee94f815e",
+      "warmup_seconds": 5,
+      "measurement_seconds": 5,
+      "theme": "Catppuccin Latte",
+      "framebuffer_pixels": [
+        2800,
+        1770
+      ],
+      "display_scale": 2,
+      "sampler": "macOS sample, 1ms",
+      "summary": {
+        "root_repaint_requests": [],
+        "secondary_repaint_requests": [],
+        "dropped_repaint_locations": 0,
+        "schema_version": 1,
+        "complete": true,
+        "measured_seconds": 5.0,
+        "dropped_scopes": 0,
+        "scopes": [],
+        "dropped_counters": 0,
+        "counters": [],
+        "input": null,
+        "input_phases": []
+      },
+      "cpu_seconds_advance": 0.0,
+      "framebuffer_inspected": true
+    },
+    "after": {
+      "artifacts": ".tiptoptyp/profiles/1790730195357-34473-large-0",
+      "binary_sha256": "b17b8a576d9d0d4db7ab1c5aec7758763ccc3d4c0d42f5cb3956920d077b3ac1",
+      "fixture_sha256": "5ce2455c087318a81fb02d53062d9c65de92afe11df220f443a15a0ee94f815e",
+      "warmup_seconds": 5,
+      "measurement_seconds": 5,
+      "theme": "Catppuccin Latte",
+      "framebuffer_pixels": [
+        2800,
+        1770
+      ],
+      "display_scale": 2,
+      "sampler": "macOS sample, 1ms",
+      "summary": {
+        "root_repaint_requests": [],
+        "secondary_repaint_requests": [],
+        "dropped_repaint_locations": 0,
+        "schema_version": 1,
+        "complete": true,
+        "measured_seconds": 5.0,
+        "dropped_scopes": 0,
+        "scopes": [],
+        "dropped_counters": 0,
+        "counters": [],
+        "input": null,
+        "input_phases": []
+      },
+      "cpu_seconds_advance": 0.01,
+      "framebuffer_inspected": true
+    }
+  },
+  "native_idle_limitation": "Subsequent native input preflight reported locked=true, desktop=false; unknown when locking occurred. These samples do not establish unlocked-desktop idle behavior or interaction coverage. Framebuffer captures are not composed native child-view evidence.",
+  "native_interaction": {
+    "available": false,
+    "preflight": {
+      "accessibility": true,
+      "desktop": false,
+      "input": true,
+      "locked": true
+    },
+    "artifacts": ".tiptoptyp/desktop-ui-tests/run-99k06q1_"
+  },
+  "warmup_and_iterations": {
+    "core_warmup_per_case": 32,
+    "core_iterations": {
+      "saved_dirty_check": 100000,
+      "unsaved_dirty_check": 100000,
+      "snapshot": 100000,
+      "no_op_edit": 1000,
+      "edit_and_undo": 200
+    },
+    "diagnostics_warmup_per_case": 10,
+    "diagnostics_batches_per_process": 5,
+    "diagnostics_refreshes_per_batch": 100
+  },
+  "checks": {
+    "cargo fmt --all -- --check": "passed",
+    "cargo clippy --all-targets -- -D warnings": "passed",
+    "cargo test --no-fail-fast": "passed",
+    "cargo test --manifest-path xtask/Cargo.toml": "passed",
+    "native editing and diagnostics journeys": "unavailable: locked desktop, no interaction performed"
+  }
+}

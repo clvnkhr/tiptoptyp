@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     ops::Range,
     path::{Path, PathBuf},
     sync::Arc,
@@ -99,6 +99,8 @@ pub(crate) struct EditorDerivedData {
     #[cfg(test)]
     diagnostic_rebuilds: usize,
     #[cfg(test)]
+    diagnostic_file_checks: usize,
+    #[cfg(test)]
     syntax_rebuilds: usize,
     #[cfg(test)]
     hover_queries: usize,
@@ -136,6 +138,8 @@ impl Default for EditorDerivedData {
             source_rebuilds: 0,
             #[cfg(test)]
             diagnostic_rebuilds: 0,
+            #[cfg(test)]
+            diagnostic_file_checks: 0,
             #[cfg(test)]
             syntax_rebuilds: 0,
             #[cfg(test)]
@@ -508,28 +512,36 @@ impl EditorDerivedData {
             virtual_path: virtual_path.to_owned(),
         };
 
-        let current_identity = current_path.map(FileIdentity::for_open_file);
-        let virtual_identity = current_path
-            .is_none()
-            .then(|| FileIdentity::virtual_path(virtual_path));
-        let targets_current_document = |diagnostic: &Diagnostic| match &diagnostic.source {
-            DiagnosticSource::Main => current_is_preview,
-            DiagnosticSource::File(path) => {
-                current_identity
-                    .as_ref()
-                    .is_some_and(|current| current.matches(path))
-                    || virtual_identity
-                        .as_ref()
-                        .is_some_and(|current| current.matches(path))
-            }
-            DiagnosticSource::Global => false,
-        };
-
+        // Resolve each distinct file once per refresh, not once per warning.
+        // Borrow paths from this batch and discard the cache afterward so a
+        // later refresh observes changed symlinks or newly created files.
+        let mut file_identity = None;
+        let mut file_matches = HashMap::new();
         let mut by_line: BTreeMap<usize, Vec<&Diagnostic>> = BTreeMap::new();
         for diagnostic in compiler.iter().chain(language_server) {
-            if targets_current_document(diagnostic)
-                && let Some(line) = diagnostic.line()
-            {
+            let Some(line) = diagnostic.line() else {
+                continue;
+            };
+            let targets_current_document = match &diagnostic.source {
+                DiagnosticSource::Main => current_is_preview,
+                DiagnosticSource::File(path) => *file_matches.entry(path).or_insert_with(|| {
+                    #[cfg(test)]
+                    {
+                        self.diagnostic_file_checks += 1;
+                    }
+                    file_identity
+                        .get_or_insert_with(|| {
+                            current_path.map_or_else(
+                                || FileIdentity::virtual_path(virtual_path),
+                                FileIdentity::for_open_file,
+                            )
+                        })
+                        .matches(path)
+                }),
+                DiagnosticSource::Global => false,
+            };
+
+            if targets_current_document {
                 let entries = by_line.entry(line).or_default();
                 if let Some(existing) = entries.iter_mut().find(|existing| {
                     existing.message == diagnostic.message
@@ -800,6 +812,48 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "manual optimized diagnostic refresh measurement; no timing threshold"]
+    fn diagnostic_refresh_cost_probe() {
+        use std::{hint::black_box, time::Instant};
+        let project = tempfile::tempdir().unwrap();
+        let path = project.path().join("main.typ");
+        std::fs::write(&path, "= Main").unwrap();
+        for count in [1, 100, 1_000] {
+            let diagnostics = (1..=count)
+                .map(|line| diagnostic(&path, line, "A representative warning"))
+                .collect::<Vec<_>>();
+            let mut data = EditorDerivedData::default();
+            let mut revision_number = 0;
+            let mut refresh = || {
+                revision_number += 1;
+                data.prepare_diagnostics(
+                    revision(revision_number),
+                    1,
+                    Some(&path),
+                    &path,
+                    true,
+                    &diagnostics,
+                    &[],
+                );
+                assert_eq!(black_box(data.line_diagnostics()).len(), count);
+            };
+            for _ in 0..10 {
+                refresh();
+            }
+            for batch in 0..5 {
+                let start = Instant::now();
+                for _ in 0..100 {
+                    refresh();
+                }
+                eprintln!(
+                    "diagnostic_refresh,count={count},batch={batch},ns={}",
+                    start.elapsed().as_nanos() / 100
+                );
+            }
+        }
+    }
+
+    #[test]
     fn delimiter_queries_use_character_offsets_and_invalidate_on_document_edits() {
         let mut data = EditorDerivedData::default();
         let source = "你好 🦀 #let x = (1, 2)";
@@ -1013,6 +1067,104 @@ mod tests {
         data.prepare_diagnostics(revision(1), 9, Some(&path), &path, true, &[], &[]);
         assert!(data.line_diagnostics().is_empty());
         assert_eq!(data.rebuild_counts(), (1, 2));
+    }
+
+    #[test]
+    fn diagnostics_resolve_each_distinct_file_once_per_refresh() {
+        let project = tempfile::tempdir().unwrap();
+        let path = project.path().join("main.typ");
+        let missing = project.path().join("missing.typ");
+        std::fs::write(&path, "= Main").unwrap();
+        let diagnostics = (1..=1_000)
+            .flat_map(|line| {
+                [
+                    diagnostic(&path, line, "shown"),
+                    diagnostic(&missing, line, "not shown"),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let mut data = EditorDerivedData::default();
+        // Both provider lists share the per-refresh cache, including misses.
+        for _ in 0..3 {
+            data.prepare_diagnostics(
+                revision(1),
+                1,
+                Some(&path),
+                &path,
+                true,
+                &diagnostics,
+                &diagnostics,
+            );
+            assert_eq!(data.line_diagnostics().len(), 1_000);
+            assert_eq!(data.diagnostic_file_checks, 2);
+        }
+        data.prepare_diagnostics(
+            revision(2),
+            1,
+            Some(&path),
+            &path,
+            true,
+            &diagnostics,
+            &diagnostics,
+        );
+        assert_eq!(data.diagnostic_file_checks, 4);
+        let mut unlocated = diagnostic(&path, 1, "no location");
+        unlocated.location = None;
+        data.prepare_diagnostics(revision(3), 1, Some(&path), &path, true, &[unlocated], &[]);
+        assert_eq!(data.diagnostic_file_checks, 4);
+        assert!(data.line_diagnostics().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn diagnostic_file_cache_does_not_survive_symlink_changes() {
+        let project = tempfile::tempdir().unwrap();
+        let path = project.path().join("main.typ");
+        let other = project.path().join("other.typ");
+        let alias = project.path().join("alias.typ");
+        std::fs::write(&path, "= Main").unwrap();
+        std::fs::write(&other, "= Other").unwrap();
+        std::os::unix::fs::symlink(&path, &alias).unwrap();
+        let diagnostics = [diagnostic(&alias, 1, "shown")];
+        let mut data = EditorDerivedData::default();
+        data.prepare_diagnostics(revision(1), 1, Some(&path), &path, true, &diagnostics, &[]);
+        assert_eq!(data.line_diagnostics().len(), 1);
+        std::fs::remove_file(&alias).unwrap();
+        std::os::unix::fs::symlink(&other, &alias).unwrap();
+        data.prepare_diagnostics(revision(1), 2, Some(&path), &path, true, &diagnostics, &[]);
+        assert!(data.line_diagnostics().is_empty());
+    }
+
+    #[test]
+    fn diagnostic_targeting_preserves_untitled_and_missing_file_ownership() {
+        let project = tempfile::tempdir().unwrap();
+        let path = project.path().join("unsaved.typ");
+        let mut main = diagnostic(&path, 1, "main");
+        main.source = DiagnosticSource::Main;
+        let mut global = main.clone();
+        global.source = DiagnosticSource::Global;
+        let diagnostics = [main, global, diagnostic(&path, 2, "file")];
+        for current in [None, Some(path.as_path())] {
+            for previewed in [false, true] {
+                let mut data = EditorDerivedData::default();
+                data.prepare_diagnostics(
+                    revision(1),
+                    1,
+                    current,
+                    &path,
+                    previewed,
+                    &diagnostics,
+                    &[],
+                );
+                let lines = data.line_diagnostics();
+                assert_eq!(lines.len(), if previewed { 2 } else { 1 });
+                assert_eq!(lines.last().unwrap().summary, "file");
+                if previewed {
+                    assert_eq!(lines[0].summary, "main");
+                }
+                assert_eq!(data.diagnostic_file_checks, 1);
+            }
+        }
     }
 
     #[test]

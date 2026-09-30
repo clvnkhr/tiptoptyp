@@ -1,4 +1,7 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{Arc, OnceLock},
+};
 
 /// Allocated by the window shell before creating a document or its services.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -114,6 +117,9 @@ pub struct DocumentSession<C> {
     source: String,
     source_snapshot: Arc<str>,
     saved_source: String,
+    // Compare contents at most once between mutations, even across many tabs
+    // and repaint passes. Invalidation needs no allocation or content scan.
+    unsaved_changes: OnceLock<bool>,
     path: Option<PathBuf>,
     epoch: u64,
     revision: u64,
@@ -133,6 +139,7 @@ impl<C> DocumentSession<C> {
             owner,
             source_snapshot: Arc::from(source.as_str()),
             saved_source: source.clone(),
+            unsaved_changes: OnceLock::from(false),
             source,
             path: None,
             epoch: 0,
@@ -172,7 +179,10 @@ impl<C> DocumentSession<C> {
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.kind.is_editable() && self.source != self.saved_source
+        self.kind.is_editable()
+            && *self
+                .unsaved_changes
+                .get_or_init(|| self.source != self.saved_source)
     }
 
     pub fn name(&self) -> String {
@@ -241,6 +251,7 @@ impl<C> DocumentSession<C> {
         }
         self.source.clone_from(&self.saved_source);
         self.source_snapshot = Arc::from(self.source.as_str());
+        self.unsaved_changes = OnceLock::from(false);
     }
 
     pub fn replace_untitled(&mut self, source: impl Into<String>) {
@@ -269,6 +280,7 @@ impl<C> DocumentSession<C> {
         self.source_snapshot = Arc::from(source.as_str());
         self.source = source;
         self.saved_source = saved_source;
+        self.unsaved_changes.take();
         self.epoch = self.epoch.wrapping_add(1);
         self.revision = self.revision.wrapping_add(1);
         self.saved_revision = self.revision;
@@ -284,6 +296,7 @@ impl<C> DocumentSession<C> {
         disk_fingerprint: Option<u64>,
     ) {
         self.saved_source = source.clone();
+        self.unsaved_changes = OnceLock::from(false);
         self.source_snapshot = Arc::from(source.as_str());
         self.source = source;
         self.path = path;
@@ -324,6 +337,7 @@ impl<C> DocumentSession<C> {
             self.kind = kind;
         }
         self.saved_source = snapshot.source.to_string();
+        self.unsaved_changes.take();
         self.saved_revision = snapshot.key.revision;
         self.disk_fingerprint = Some(receipt.disk_fingerprint);
         Ok(SaveStatus::Applied)
@@ -365,6 +379,7 @@ impl<C> DocumentSession<C> {
         {
             self.source = next.source.to_string();
             self.source_snapshot = next.source.clone();
+            self.unsaved_changes.take();
             self.revision = self.revision.wrapping_add(1);
             self.pending_edit = true;
         }
@@ -396,6 +411,7 @@ impl<C> Drop for EditTransaction<'_, C> {
     fn drop(&mut self) {
         let document = &mut self.document;
         if document.source != document.source_snapshot.as_ref() {
+            document.unsaved_changes.take();
             document.push_undo_snapshot(EditorSnapshot {
                 source: document.source_snapshot.clone(),
                 cursor: self.cursor.take().expect("transaction owns its cursor"),
@@ -506,6 +522,75 @@ mod tests {
     }
 
     #[test]
+    fn dirty_cache_is_reused_until_contents_or_saved_copy_change() {
+        let mut document = DocumentSession::new(WindowSessionId::new(1), "αβ", DocumentKind::Text);
+        assert_eq!(document.unsaved_changes.get(), Some(&false));
+        document.edit((), |text| text.replace_range(.., "αγ"));
+        assert!(document.unsaved_changes.get().is_none());
+        for _ in 0..100 {
+            assert!(document.is_dirty());
+        }
+        assert_eq!(document.unsaved_changes.get(), Some(&true));
+        document.edit((), |_| {});
+        assert_eq!(document.unsaved_changes.get(), Some(&true));
+        let save = document.prepare_save("draft.txt".into(), DocumentKind::Text);
+        document.record_save(save.committed(1)).unwrap();
+        assert!(document.unsaved_changes.get().is_none());
+        assert!(!document.is_dirty());
+        document.history_step(false, ());
+        assert!(document.unsaved_changes.get().is_none());
+        assert!(document.is_dirty());
+        document.history_step(true, ());
+        assert!(!document.is_dirty());
+    }
+
+    #[test]
+    fn dirty_state_matches_contents_across_document_transitions() {
+        // Exhaust short transition sequences, comparing against the contents
+        // rather than revision numbers (undo and manual reverts can be clean).
+        for sequence in 0..9usize.pow(4) {
+            let mut document =
+                DocumentSession::new(WindowSessionId::new(1), "αβ", DocumentKind::Text);
+            for step in 0..4 {
+                match (sequence / 9usize.pow(step)) % 9 {
+                    0 => document.edit((), |text| text.push('🦀')),
+                    1 => document.edit((), |text| {
+                        text.pop();
+                    }),
+                    2 => {
+                        document.history_step(false, ());
+                    }
+                    3 => {
+                        document.history_step(true, ());
+                    }
+                    4 => {
+                        let receipt = document
+                            .prepare_save("draft.txt".into(), DocumentKind::Text)
+                            .committed(1);
+                        document.record_save(receipt).unwrap();
+                    }
+                    5 => document.restore_saved_source(),
+                    6 => document.replace_untitled("αβ"),
+                    7 => document.replace_representation("αβ".into(), "αγ".into()),
+                    _ => {
+                        let kind = if document.kind().is_editable() {
+                            DocumentKind::Pdf
+                        } else {
+                            DocumentKind::Text
+                        };
+                        document.rename(format!("document-{step}").into(), kind);
+                    }
+                }
+                assert_eq!(
+                    document.is_dirty(),
+                    document.kind().is_editable() && document.source() != document.saved_source(),
+                    "sequence {sequence}, step {step}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn edit_unwind_still_versions_the_buffer_and_records_undo() {
         let mut document =
             DocumentSession::new(WindowSessionId::new(1), "before", DocumentKind::Text);
@@ -518,8 +603,10 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(document.revision(), 1);
         assert_eq!(document.snapshot().source(), "before after");
+        assert!(document.is_dirty());
         document.history_step(false, 0).unwrap();
         assert_eq!(document.source(), "before");
+        assert!(!document.is_dirty());
     }
 
     #[test]
