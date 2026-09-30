@@ -418,7 +418,7 @@ impl EditorApp {
         let scroll_area = egui::ScrollArea::new([!line_wrap, true])
             .id_salt(("source-editor-scroll", active_tab))
             .auto_shrink([false, false])
-            .animated(resize_anchor.is_none());
+            .animated(resize_anchor.is_none() && self.pending_hunk_popup.is_none());
         let scroll_area = if let Some(offset) = snapshot_scroll_offset {
             scroll_area.vertical_scroll_offset(offset)
         } else {
@@ -966,11 +966,12 @@ impl EditorApp {
             }
 
             let visuals = *ui.style().interact(&output.response);
-            let border = if output.response.has_focus() {
-                ui.visuals().selection.stroke
-            } else {
-                visuals.bg_stroke
-            };
+            let border = theme::panel_interaction_stroke(
+                ui.visuals(),
+                output.response.hovered(),
+                output.response.has_focus(),
+            )
+            .unwrap_or(visuals.bg_stroke);
             let sticky_context = sticky_context_enabled.then(|| {
                 let scroll_lines = sticky_context_scroll_lines(
                     &line_rows,
@@ -1206,6 +1207,7 @@ impl EditorApp {
             self.last_editor_caret = None;
             self.editor_completion = None;
         }
+        self.finish_hunk_navigation(ui.ctx(), scroll_output.inner_rect);
         self.show_editor_completion_popup(ui.ctx(), scroll_output.inner_rect);
         if let Some(char_index) = preview_jump_char {
             self.jump_source_to_preview(char_index);

@@ -9034,10 +9034,10 @@ fn native_preview_load_invalidates_queued_palette_even_when_preview_is_hidden() 
     let context = egui::Context::default();
     let directory = tempfile::tempdir().unwrap();
     let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
-    app.webview_palette = Some((Color32::BLACK, Color32::WHITE));
+    app.webview_style = Some(app.preview_webview_style(&context));
     assert!(!app.interactive_preview_active());
     app.handle_web_action(r#"{"type":"preview-loaded"}"#);
-    assert_eq!(app.webview_palette, None);
+    assert_eq!(app.webview_style, None);
     // A delayed notification only invalidates delivery, never the latest theme.
     app.preview.dark = true;
     app.handle_web_action(r#"{"type":"preview-loaded"}"#);
@@ -9132,5 +9132,171 @@ fn live_editor_surrounds_selected_unicode_text() {
             app.undo_editor(&context, true);
             assert_eq!(app.document().source(), &format!("{open}α🦀 words{close}"));
         }
+    }
+}
+
+#[test]
+fn explorer_border_tracks_actual_search_focus_and_releases_it_to_another_widget() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(350.0, 600.0))
+        .build_ui_state(
+            |ui, state: &mut (String, bool, bool)| {
+                let outside = ui.button("Outside explorer");
+                if outside.clicked() {
+                    outside.request_focus();
+                }
+                let response = theme::explorer_section_frame(ui.style()).show(ui, |ui| {
+                    ui.label("Files");
+                    ui.add(egui::TextEdit::singleline(&mut state.0).hint_text("Files search"));
+                });
+                state.1 = theme::focus_is_inside(ui.ctx(), response.response.rect);
+                state.2 = outside.has_focus();
+            },
+            (String::new(), false, false),
+        );
+    harness
+        .get_by_role(egui::accesskit::Role::TextInput)
+        .click();
+    harness.run();
+    assert!(harness.state().1);
+    assert!(!harness.state().2);
+    harness.get_by_label("Outside explorer").click();
+    harness.run();
+    assert!(!harness.state().1);
+    assert!(harness.state().2);
+}
+
+#[test]
+fn hunk_navigation_separates_keyboard_and_popup_and_discards_stale_pending_popups() {
+    use super::git_actions::HunkNavigation;
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+    let path = directory.path().join("hunks.txt");
+    let source = (0..180)
+        .map(|line| format!("Line {line}\n"))
+        .collect::<String>();
+    app.document_mut().replace_loaded_unprojected(
+        source.clone(),
+        path.clone(),
+        DocumentKind::Text,
+        None,
+    );
+    app.git_editor = crate::git::editor::GitEditorState::document_fixture(
+        directory.path(),
+        &path,
+        &source,
+        app.document().key(),
+    );
+    app.git_editor.open_chunk(0, &path);
+    let chunk = app.git_editor.chunk.clone().unwrap();
+    app.open_app_popup(AppPopup::GitChunk {
+        anchor: Pos2::ZERO,
+        chunk,
+    });
+    app.navigate_hunk(&context, false, HunkNavigation::Editor);
+    assert!(app.app_popup.is_none());
+    assert!(app.pending_hunk_popup.is_none());
+    assert!(app.git_editor.chunk.is_none());
+    assert!(matches!(
+        app.pending_editor_selection,
+        Some(EditorSelection::Focus(_))
+    ));
+
+    app.git_editor.open_chunk(0, &path);
+    app.navigate_hunk(&context, false, HunkNavigation::Popup);
+    assert!(
+        app.app_popup.is_none(),
+        "wait for destination editor geometry"
+    );
+    assert!(app.pending_hunk_popup.is_some());
+    app.pending_editor_selection = None;
+    app.last_editor_caret = Some(EditorCaretState {
+        key: app.document().key(),
+        char_index: 49,
+        rect: Rect::from_min_size(Pos2::new(30.0, 40.0), Vec2::new(1.0, 18.0)),
+    });
+    let viewport = Rect::from_min_size(Pos2::ZERO, Vec2::splat(400.0));
+    app.finish_hunk_navigation(&context, viewport);
+    assert!(
+        app.app_popup.is_none(),
+        "wait a settled frame after scrolling"
+    );
+    app.finish_hunk_navigation(&context, viewport);
+    let Some(AppPopup::GitChunk { anchor, chunk }) = &app.app_popup else {
+        panic!("missing destination popup")
+    };
+    assert_eq!(*anchor, Pos2::new(30.0, 58.0));
+    assert_eq!(chunk.hunk.changes[0].lines.start, 7);
+    app.close_app_popup();
+    app.git_editor.open_chunk(0, &path);
+    app.navigate_hunk(&context, false, HunkNavigation::Popup);
+    app.document_mut()
+        .edit(CCursorRange::default(), |source| source.push('x'));
+    app.finish_hunk_navigation(&context, viewport);
+    assert!(app.app_popup.is_none());
+    assert!(app.pending_hunk_popup.is_none());
+}
+
+#[test]
+fn hunk_popup_waits_for_real_editor_scroll_in_a_long_document() {
+    use super::git_actions::HunkNavigation;
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+    let path = directory.path().join("hunks.txt");
+    let source = "A line of text.\n".repeat(180);
+    app.document_mut().replace_loaded_unprojected(
+        source.clone(),
+        path.clone(),
+        DocumentKind::Text,
+        None,
+    );
+    app.git_editor = crate::git::editor::GitEditorState::document_fixture(
+        directory.path(),
+        &path,
+        &source,
+        app.document().key(),
+    );
+    app.git_editor.hunks[1].changes[0].lines = 85..86;
+    app.git_editor.hunks[2].changes[0].lines = 165..165;
+    let mut time = 0.0;
+    let mut frame = |app: &mut EditorApp| {
+        time += 0.016;
+        context
+            .run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 350.0))),
+                    time: Some(time),
+                    ..Default::default()
+                },
+                |ui| app.show_editor(ui),
+            )
+            .drop_without_applying_deltas();
+    };
+    frame(&mut app);
+    app.git_editor.open_chunk(0, &path);
+    for expected in [85, 165, 2] {
+        app.navigate_hunk(&context, false, HunkNavigation::Popup);
+        frame(&mut app);
+        assert!(app.pending_hunk_popup.is_some());
+        frame(&mut app);
+        let Some(AppPopup::GitChunk { anchor, chunk }) = &app.app_popup else {
+            panic!("destination popup not opened")
+        };
+        assert_eq!(chunk.hunk.changes[0].lines.start, expected);
+        let caret = app.last_editor_caret.unwrap();
+        assert_eq!(caret.char_index, expected * "A line of text.\n".len());
+        assert_eq!(*anchor, caret.rect.left_bottom());
+        assert!(
+            anchor.y > 20.0 && anchor.y < 330.0,
+            "offscreen anchor: {anchor:?}"
+        );
+        // The native popup controller closes the old popup before dispatching
+        // its next action, then restores that action's selected chunk.
+        let chunk = chunk.clone();
+        app.close_app_popup();
+        app.git_editor.chunk = Some(chunk);
     }
 }

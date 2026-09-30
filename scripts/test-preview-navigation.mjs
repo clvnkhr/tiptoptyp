@@ -12,7 +12,12 @@ function fixture() {
   let demands = 0;
   let clearedAnchors = 0;
   const messages = [];
-  const classes = { toggle() {} };
+  const activeClasses = new Set();
+  const classes = { toggle(name, enabled) { enabled ? activeClasses.add(name) : activeClasses.delete(name); } };
+  const styles = [];
+  const properties = new Map();
+  const element = () => ({ style: {}, children: [], setAttribute() {},
+    append(child) { this.children.push(child); }, get firstElementChild() { return this.children[0]; } });
   const scroll = {
     clientWidth: 800, clientHeight: 600, classList: classes,
     x: 0, y: 0,
@@ -40,13 +45,19 @@ function fixture() {
   const container = { documents: [{ impl: doc }] };
   const window = { addEventListener: (name, handler) => handlers.set(name, handler), ipc: { postMessage: value => messages.push(JSON.parse(value)) } };
   runInNewContext(source, {
-    document: { hasFocus: () => focused, getElementById: () => container, readyState: 'loading', addEventListener() {} },
+    document: { hasFocus: () => focused, getElementById: () => container, readyState: 'loading',
+      documentElement: {classList: classes, style: {setProperty: (key,value) => properties.set(key,value)}},
+      body: element(), head: {append: style => styles.push(style.textContent)},
+      createElement: element, createElementNS: element,
+      addEventListener: (name, handler) => handlers.set(name, handler) },
+    MutationObserver: class { observe() {} },
     window,
     performance: {now: () => 0},
     requestAnimationFrame: callback => { frames.push(callback); return frames.length; },
   });
   return {
     setFocus(value) { focused = value; },
+    styles, properties, activeClasses, palette: (...args) => window.tiptoptypSetPalette(...args),
     doc, scroll, frames, container, messages, action: value => window.tiptoptypPreviewAction(value),
     get rescales() { return rescales; }, get clearedAnchors() { return clearedAnchors; },
     get demands() { return demands; },
@@ -169,5 +180,23 @@ test('preview hotkeys require keyboard focus, and Escape returns to the editor',
   f.setFocus(false);
   f.event('blur');
   assert.equal(f.messages.at(-1).focused, false);
+  assert.equal(f.frames.length, 0);
+});
+
+test('preview focus uses a theme border, never a badge, with no layout or pointer interception', () => {
+  const f = fixture();
+  f.palette([255,255,255], [0,0,0], '1px solid rgba(1,2,3,1)', '2px solid rgba(4,5,6,1)');
+  f.event('DOMContentLoaded');
+  assert.equal(f.properties.get('--tiptoptyp-hover-border'), '1px solid rgba(1,2,3,1)');
+  assert.equal(f.properties.get('--tiptoptyp-focus-border'), '2px solid rgba(4,5,6,1)');
+  assert.match(f.styles[0], /html:hover::before/);
+  assert.match(f.styles[0], /position: fixed/);
+  assert.match(f.styles[0], /pointer-events: none/);
+  assert.doesNotMatch(f.styles[0], /Preview focused|::after/);
+  assert.ok(f.activeClasses.has('tiptoptyp-preview-focused'));
+  f.setFocus(false); f.event('blur');
+  assert.ok(!f.activeClasses.has('tiptoptyp-preview-focused'));
+  f.setFocus(true); f.event('focus');
+  assert.ok(f.activeClasses.has('tiptoptyp-preview-focused'));
   assert.equal(f.frames.length, 0);
 });

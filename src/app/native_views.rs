@@ -2,12 +2,47 @@
 use super::*;
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn preview_palette_script(palette: (Color32, Color32)) -> String {
-    format!(
-        "window.tiptoptypSetPalette?.({}, {});",
-        serde_json::json!([palette.0.r(), palette.0.g(), palette.0.b()]),
-        serde_json::json!([palette.1.r(), palette.1.g(), palette.1.b()])
-    )
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct WebviewStyle {
+    pub(super) palette: (Color32, Color32),
+    hover: Stroke,
+    focus: Stroke,
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+impl WebviewStyle {
+    fn script(self) -> String {
+        let css = |stroke: Stroke| {
+            format!(
+                "{}px solid rgba({},{},{},{})",
+                stroke.width,
+                stroke.color.r(),
+                stroke.color.g(),
+                stroke.color.b(),
+                f32::from(stroke.color.a()) / 255.0
+            )
+        };
+        format!(
+            "window.tiptoptypSetPalette?.({}, {}, {}, {});",
+            serde_json::json!([self.palette.0.r(), self.palette.0.g(), self.palette.0.b()]),
+            serde_json::json!([self.palette.1.r(), self.palette.1.g(), self.palette.1.b()]),
+            serde_json::json!(css(self.hover)),
+            serde_json::json!(css(self.focus)),
+        )
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+impl EditorApp {
+    pub(super) fn preview_webview_style(&self, context: &egui::Context) -> WebviewStyle {
+        let style = context.style_of(context.theme());
+        let visuals = &style.visuals;
+        WebviewStyle {
+            palette: self.preview_palette(context, self.preview.dark),
+            hover: visuals.widgets.hovered.bg_stroke,
+            focus: visuals.selection.stroke,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -51,7 +86,7 @@ impl EditorApp {
             self.webview_parent = None;
             self.webview_navigation = None;
             self.webview_reload_pending = false;
-            self.webview_palette = None;
+            self.webview_style = None;
         }
     }
 
@@ -1391,8 +1426,7 @@ impl EditorApp {
                 background.b(),
                 background.a(),
             );
-            let palette = self.preview_palette(context, self.preview.dark);
-            let palette_script = preview_palette_script(palette);
+            let palette_script = self.preview_webview_style(context).script();
             let builder = wry::WebViewBuilder::new()
                 .with_focused(false)
                 .with_url(&url)
@@ -1493,14 +1527,14 @@ impl EditorApp {
             }
             self.webview_url = Some(url);
             self.webview_reload_pending = false;
-            self.webview_palette = None;
+            self.webview_style = None;
         }
-        let palette = self.preview_palette(context, self.preview.dark);
+        let style = self.preview_webview_style(context);
         if let Some(webview) = &self.webview {
-            if self.webview_palette != Some(palette) {
-                let script = preview_palette_script(palette);
+            if self.webview_style != Some(style) {
+                let script = style.script();
                 if webview.evaluate_script(&script).is_ok() {
-                    self.webview_palette = Some(palette);
+                    self.webview_style = Some(style);
                 }
             }
             let diff = webview_property_diff(self.webview_applied, next_applied);

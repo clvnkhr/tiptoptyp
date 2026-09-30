@@ -210,6 +210,7 @@
     updateControls();
   };
   let palette = [[255,255,255],[0,0,0]];
+  let borders = ['1px solid transparent', '1px solid transparent'];
   let filter;
   const applyPalette = () => {
     if (!document.body) return;
@@ -234,23 +235,23 @@
     });
     document.documentElement.style.setProperty('--tiptoptyp-paper', `rgb(${bg.join(',')})`);
     document.documentElement.style.setProperty('--tiptoptyp-ink', `rgb(${fg.join(',')})`);
+    document.documentElement.style.setProperty('--tiptoptyp-hover-border', borders[0]);
+    document.documentElement.style.setProperty('--tiptoptyp-focus-border', borders[1]);
   };
-  window.tiptoptypSetPalette = (bg,fg) => { palette = [bg,fg]; applyPalette(); };
+  window.tiptoptypSetPalette = (bg,fg,hover,focus) => {
+    palette = [bg,fg]; borders = [hover,focus]; applyPalette();
+  };
   const mount = () => {
     const style = document.createElement('style');
     // WKWebView can apply an HTML-ancestor SVG filter in takeSnapshot while
     // omitting it from the on-screen compositor. Keep filters inside the SVG,
     // one per page, and recolor the renderer's separate paper rectangles directly.
     style.textContent = `
-      html.tiptoptyp-preview-focused::after {
-        content: 'Preview focused · Esc to edit'; position: fixed; top: 4px; right: 4px;
-        z-index: 2147483647; pointer-events: none; padding: 3px 7px; border-radius: 3px;
-        font: 12px system-ui; color: var(--tiptoptyp-paper); background: var(--tiptoptyp-ink);
-      }
-      html.tiptoptyp-preview-focused::before {
+      html:hover::before, html.tiptoptyp-preview-focused::before {
         content: ''; position: fixed; inset: 0; z-index: 2147483646; pointer-events: none;
-        border: 2px solid var(--tiptoptyp-ink);
+        border: var(--tiptoptyp-hover-border);
       }
+      html.tiptoptyp-preview-focused::before { border: var(--tiptoptyp-focus-border); }
       #typst-container-top { display: none !important; }
       body { background: var(--tiptoptyp-paper) !important; }
       #typst-container .typst-page-inner { fill: var(--tiptoptyp-paper); }

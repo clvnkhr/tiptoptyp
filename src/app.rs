@@ -1238,6 +1238,7 @@ pub struct EditorApp {
     // same one-shot reveal, preserving subsequent user choice.
     git_editor: crate::git::editor::GitEditorState,
     git_hunk_job: crate::worker::ExclusiveJob<String>,
+    pending_hunk_popup: Option<git_actions::PendingHunkPopup>,
     workspace_chooser_visible: bool,
     workspace_history_removals: Vec<PathBuf>,
     workspace: Option<WorkspaceTree>,
@@ -1323,7 +1324,7 @@ pub struct EditorApp {
     web_search_query: String,
     web_search_offset: usize,
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    webview_palette: Option<(Color32, Color32)>,
+    webview_style: Option<native_views::WebviewStyle>,
     browser_launch: Option<mpsc::Receiver<Result<String, String>>>,
     browser_repaint: crate::worker::RepaintTarget,
 }
@@ -1544,6 +1545,7 @@ impl EditorApp {
             git: crate::git::GitPanel::default(),
             git_editor: crate::git::editor::GitEditorState::default(),
             git_hunk_job: Default::default(),
+            pending_hunk_popup: None,
             workspace_chooser_visible: false,
             workspace_history_removals: Vec::new(),
             workspace: None,
@@ -1635,7 +1637,7 @@ impl EditorApp {
             web_search_query: String::new(),
             web_search_offset: 0,
             #[cfg(any(target_os = "macos", target_os = "windows"))]
-            webview_palette: None,
+            webview_style: None,
             browser_launch: None,
             browser_repaint: crate::worker::RepaintTarget::new(context, viewport),
         };
@@ -3580,6 +3582,7 @@ impl EditorApp {
     }
 
     fn close_app_popup(&mut self) {
+        self.pending_hunk_popup = None;
         let closes_git_chunk = matches!(self.app_popup, Some(AppPopup::GitChunk { .. }));
         self.app_popup = None;
         self.app_popup_had_focus = false;
@@ -5931,7 +5934,7 @@ impl EditorApp {
             crate::desktop_test::reset_renderer();
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             {
-                self.webview_palette = None;
+                self.webview_style = None;
             }
             return;
         }
@@ -6249,7 +6252,7 @@ impl EditorApp {
             && !self.webview_reload_pending
             && self.webview_url.as_deref()
                 == self.preview.connection.endpoint().map(url::Url::as_str)
-            && self.webview_palette == Some(self.preview_palette(context, self.preview.dark))
+            && self.webview_style == Some(self.preview_webview_style(context))
         {
             return;
         }

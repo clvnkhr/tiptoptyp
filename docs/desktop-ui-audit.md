@@ -495,3 +495,47 @@ interaction results above are reported separately from the standard suite.
 
 The existing native background/app-switch journey also passed in `run-bbazewgv`;
 preview work did not activate the app while it was in the background.
+
+
+## 2026-09-30 — Indentation, panel focus borders and Git navigation
+
+Harper reproduced a false spacing warning for first-line indentation and for
+indentation in a multiline Typst string. Checks now exclude lints wholly within
+leading spaces/tabs, using original scalar coordinates. Inline repeated spaces,
+misspellings and the separate Unicode checks remain eligible. Regression tests
+exercise Typst, TeX, tabs, CRLF and unchanged typo locations.
+
+The source editor, PDFium and explorer sections share the same hover/focus stroke
+selection. Explorer focus follows the actual focused widget's clipped hit area,
+including search inputs and blank panel space. Idle sections retain their single
+flat separators; interaction borders paint last and take no layout space.
+Tinymist receives the same theme strokes through its cached native style update.
+The previous preview focus badges are removed from both viewers. JavaScript
+coverage checks focus/blur, palette propagation and the absence of a badge or
+pointer-intercepting overlay.
+
+Git shortcut navigation leaves focus in source without a popup. Popup arrows
+navigate, settle the source selection/scroll, then open the destination diff at
+its caret. An intervening document edit cancels a pending popup. Deterministic
+coverage checks routing, cancellation and long-document scroll placement; the
+new `git_hunks` native journey checks repeated navigation and wraparound against
+a real temporary repository without changing user files.
+
+No persistent repaint loop or per-frame service work is added. Harper's extra
+indent scan runs once per background check; native styles are sent only when
+changed. Popup navigation requests two bounded layout passes.
+
+Native verification is pending: `python3 scripts/test-desktop-ui.py --journey
+git_hunks` stopped at preflight in `run-apvan0pd` with Accessibility/input granted
+but `desktop: false, locked: true`. No native interaction or visual pass is
+claimed for this attempt.
+
+Required formatting, strict Clippy, full Rust suites, xtask tests and the ten
+preview JavaScript tests passed. The `desktop-ui-tests` feature also compiles.
+A fresh light-mode framebuffer was captured and inspected:
+`.tiptoptyp/screenshots/agent-review/1790749556669-0001-main-pdfium-preview.png`.
+The idle PDFium/explorer layout and edges are intact; this unfocused capture
+is not evidence of active border colors or native Tinymist composition.
+Capture command: `cargo run --release -- --ui-theme catppuccin-latte
+--ui-snapshot-scene pdfium-preview --ui-screenshot-subdir screenshots/agent-review
+--ui-screenshot-exit test.typ`.

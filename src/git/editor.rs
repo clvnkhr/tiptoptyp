@@ -390,6 +390,22 @@ impl GitEditorState {
         Some(line)
     }
 
+    #[cfg(test)]
+    pub(crate) fn document_fixture(
+        root: &Path,
+        path: &Path,
+        source: &str,
+        document: DocumentKey,
+    ) -> Self {
+        let mut state = Self::snapshot_fixture(root, path, source, false);
+        state.current = Some(RequestKey {
+            workspace: root.into(),
+            path: Some(path.into()),
+            document,
+        });
+        state
+    }
+
     pub(crate) fn snapshot_fixture(
         root: &Path,
         path: &Path,

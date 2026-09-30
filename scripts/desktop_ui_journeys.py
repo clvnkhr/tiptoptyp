@@ -476,6 +476,8 @@ class EditorJourneys:
             self.wait("Files receives focus", lambda d: d["explorer_focused"] == "Files")
             self.key(3)  # Cmd+F exposes the sticky Files search.
             scroll_stays("Files", sticky=True)
+            if getattr(self, "capture_review", False):
+                self.capture_viewport("main")
 
     def folding(self):
         text = "#let block = {\n  let a = 1\n  a + 2\n}\n\nEnd."
@@ -556,6 +558,34 @@ class EditorJourneys:
             self.key(6)
             self.source_is(text)
         self.close_scratch(count)
+
+    def git_hunks(self):
+        source = self.directory / "hunks.txt"
+        if self.snapshot()["document"]["path"] != str(source):
+            import time
+            self.key(31)
+            time.sleep(0.8)
+            self.native("ax-press-description", "search")
+            self.native("text", source.name)
+            time.sleep(0.8)
+            self.native("ax-press-title", "Open")
+            self.wait("hunk fixture opened", lambda d: d["path"] == str(source), timeout=15)
+        lines = source.read_text().splitlines(keepends=True)
+        self.wait("three separated Git hunks", lambda d: d["git_hunk_count"] == 3)
+        self.click("editor.source")
+        self.key(126, "cmd")
+        for line in (5, 85, 165, 5):
+            self.key(125, "cmd+alt")
+            self.wait("keyboard hunk jump keeps editor focused", lambda d: d["editor_keyboard_focused"]
+                      and d["git_hunk_popup_line"] is None and d["cursor"][0] == sum(map(len, lines[:line])))
+        self.click("git.hunk.0")
+        self.wait("first hunk popup", lambda d: d["git_hunk_popup_line"] == 5)
+        for button, line in (("Next",85), ("Next",165), ("Next",5), ("Previous",165)):
+            self.click("git.hunk." + button)
+            self.wait("destination hunk popup", lambda d: d["git_hunk_popup_line"] == line)
+            self.stable_state(lambda d: d["git_hunk_popup_line"] == line)
+        self.key(53, "none")
+        self.wait("hunk popup dismissed", lambda d: d["git_hunk_popup_line"] is None)
 
     def preview_keyboard(self):
         self.ensure_typesetting_tab()

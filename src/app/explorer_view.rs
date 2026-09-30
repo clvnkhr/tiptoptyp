@@ -977,7 +977,7 @@ pub(super) fn show_explorer_sections(
     mut add_body: impl FnMut(&mut egui::Ui, ExplorerSection),
 ) -> ExplorerSectionsOutput {
     let mut output = ExplorerSectionsOutput::default();
-    let mut section_edges = [(Rect::NOTHING, false); ExplorerSection::ALL.len()];
+    let mut section_edges = [(Rect::NOTHING, false, None); ExplorerSection::ALL.len()];
     let mut visible_sections = 0;
     for section in spec.order.sections() {
         if (section == ExplorerSection::Git && !spec.git_visible)
@@ -1034,7 +1034,8 @@ pub(super) fn show_explorer_sections(
             output.focused_section = Some(section);
         }
         if let Some(rect) = rendered.frame_rect {
-            section_edges[visible_sections] = (rect, rendered.resize_active);
+            section_edges[visible_sections] =
+                (rect, rendered.resize_active, rendered.interaction_stroke);
             visible_sections += 1;
         }
     }
@@ -1048,6 +1049,14 @@ pub(super) fn show_explorer_sections(
         };
         ui.painter()
             .line_segment(explorer_section_divider(pair[0].0, pair[1].0), stroke);
+    }
+    // Paint interaction borders last so a shared divider cannot cover the
+    // focused section's top edge. These strokes consume no layout space.
+    for &(rect, _, stroke) in &section_edges[..visible_sections] {
+        if let Some(stroke) = stroke {
+            ui.painter()
+                .rect_stroke(rect, 0.0, stroke, StrokeKind::Inside);
+        }
     }
     output.searches = spec.searches;
     output
@@ -1165,6 +1174,7 @@ pub(super) struct ExplorerSectionRenderOutput {
     pub(super) search_focused: bool,
     pub(super) section_clicked: bool,
     pub(super) frame_rect: Option<Rect>,
+    pub(super) interaction_stroke: Option<Stroke>,
     pub(super) resize_active: bool,
     #[cfg(test)]
     pub(super) scroll_offset: Option<f32>,
@@ -1367,11 +1377,24 @@ pub(super) fn explorer_section_resizable(
             }
         });
     });
-    output.section_clicked |= ui.input(|input| input.pointer.primary_pressed())
-        && ui
-            .ctx()
-            .pointer_latest_pos()
-            .is_some_and(|pos| frame.response.rect.contains(pos));
+    let rect = frame.response.rect;
+    let hovered = ui.rect_contains_pointer(rect);
+    let panel = ui.interact(
+        rect,
+        state_id.with("focus"),
+        Sense::focusable_noninteractive(),
+    );
+    if hovered && ui.input(|input| input.pointer.primary_pressed()) {
+        output.section_clicked = true;
+        // Keep focus in a clicked search field or button; blank panel space
+        // gets its own keyboard owner so Cmd+F works there too.
+        if !theme::focus_is_inside(ui.ctx(), rect) {
+            panel.request_focus();
+        }
+    }
+    let focused = theme::focus_is_inside(ui.ctx(), rect);
+    output.section_clicked |= focused;
+    output.interaction_stroke = theme::panel_interaction_stroke(ui.visuals(), hovered, focused);
     output.frame_rect = Some(frame.response.rect);
     output
 }

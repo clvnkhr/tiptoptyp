@@ -1617,6 +1617,32 @@ pub fn content_panel_frame(style: &egui::Style) -> egui::Frame {
     egui::Frame::side_top_panel(style).inner_margin(egui::Margin::symmetric(SPACE.content as i8, 0))
 }
 
+/// Shared, layout-neutral interaction border for source, preview and explorer.
+/// Idle explorer sections keep their single separators instead of nested boxes.
+pub fn panel_interaction_stroke(
+    visuals: &egui::Visuals,
+    hovered: bool,
+    focused: bool,
+) -> Option<egui::Stroke> {
+    if focused {
+        Some(visuals.selection.stroke)
+    } else if hovered {
+        Some(visuals.widgets.hovered.bg_stroke)
+    } else {
+        None
+    }
+}
+
+pub fn focus_is_inside(context: &egui::Context, rect: Rect) -> bool {
+    context.input(|input| input.focused)
+        && context
+            .memory(|memory| memory.focused())
+            .and_then(|id| context.read_response(id))
+            .is_some_and(|response| {
+                response.interact_rect.is_positive() && rect.contains_rect(response.interact_rect)
+            })
+}
+
 /// A flat surface for an independently scrolling Explorer section. The shared
 /// edges are drawn once by the Explorer view, outside these frames.
 pub fn explorer_section_frame(style: &egui::Style) -> egui::Frame {
@@ -1723,6 +1749,23 @@ pub fn native_theme(theme: egui::Theme) -> egui::SystemTheme {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn interaction_borders_prioritize_focus_without_adding_idle_boxes() {
+        for visuals in [egui::Visuals::light(), egui::Visuals::dark()] {
+            assert_eq!(panel_interaction_stroke(&visuals, false, false), None);
+            assert_eq!(
+                panel_interaction_stroke(&visuals, true, false),
+                Some(visuals.widgets.hovered.bg_stroke)
+            );
+            for hovered in [true, false] {
+                assert_eq!(
+                    panel_interaction_stroke(&visuals, hovered, true),
+                    Some(visuals.selection.stroke)
+                );
+            }
+        }
+    }
+
     use std::path::Path;
 
     use super::*;

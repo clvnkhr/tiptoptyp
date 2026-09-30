@@ -7,6 +7,18 @@ use crate::git::{
     },
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum HunkNavigation {
+    Editor,
+    Popup,
+}
+
+pub(super) struct PendingHunkPopup {
+    key: DocumentKey,
+    chunk: ChunkDiff,
+    settled: bool,
+}
+
 impl EditorApp {
     pub(super) fn handle_hunk_shortcuts(
         &mut self,
@@ -26,7 +38,7 @@ impl EditorApp {
             return;
         };
         if matches!(action, Action::Next | Action::Previous) {
-            self.navigate_hunk(context, action == Action::Previous);
+            self.navigate_hunk(context, action == Action::Previous, HunkNavigation::Editor);
         } else if let Some(chunk) = self.git_editor.chunk.clone() {
             self.perform_hunk_action(context, action, self.document().key(), chunk);
         } else {
@@ -53,7 +65,19 @@ impl EditorApp {
         }
     }
 
-    fn navigate_hunk(&mut self, context: &egui::Context, previous: bool) {
+    pub(super) fn navigate_hunk(
+        &mut self,
+        context: &egui::Context,
+        previous: bool,
+        origin: HunkNavigation,
+    ) {
+        self.pending_hunk_popup = None;
+        if origin == HunkNavigation::Editor {
+            if matches!(self.app_popup, Some(AppPopup::GitChunk { .. })) {
+                self.close_app_popup();
+            }
+            self.git_editor.chunk = None;
+        }
         let Some(path) = self.document().path().clone() else {
             return;
         };
@@ -67,12 +91,49 @@ impl EditorApp {
             .count();
         if let Some(line) = self.git_editor.navigate(&path, line, previous) {
             self.apply_editor_location(None, Some((line + 1, 1)));
-            if let Some(chunk) = self.git_editor.chunk.clone() {
-                let anchor = self
-                    .last_editor_caret
-                    .map_or(Pos2::new(180.0, 80.0), |caret| caret.rect.left_bottom());
-                self.open_app_popup(AppPopup::GitChunk { anchor, chunk });
+            if origin == HunkNavigation::Popup {
+                self.pending_hunk_popup =
+                    self.git_editor.chunk.clone().map(|chunk| PendingHunkPopup {
+                        key: self.document().key(),
+                        chunk,
+                        settled: false,
+                    });
+            } else {
+                self.git_editor.chunk = None;
             }
+            context.request_repaint();
+        }
+    }
+
+    /// Open after the requested selection and scroll have reached the editor.
+    /// Opening immediately would anchor at the old caret and compete with the
+    /// editor's pending focus request, closing the new native popup on blur.
+    pub(super) fn finish_hunk_navigation(&mut self, context: &egui::Context, viewport: Rect) {
+        let Some(mut pending) = self.pending_hunk_popup.take() else {
+            return;
+        };
+        if pending.key != self.document().key()
+            || !self
+                .git_editor
+                .selection_is_current(pending.key, &pending.chunk)
+        {
+            return;
+        }
+        if !pending.settled || self.pending_editor_selection.is_some() {
+            pending.settled = true;
+            self.pending_hunk_popup = Some(pending);
+            context.request_repaint();
+            return;
+        }
+        if let Some(caret) = self
+            .last_editor_caret
+            .filter(|caret| caret.key == pending.key)
+        {
+            let anchor = viewport.clamp(caret.rect.left_bottom());
+            self.open_app_popup(AppPopup::GitChunk {
+                anchor,
+                chunk: pending.chunk,
+            });
         }
     }
 
@@ -92,7 +153,7 @@ impl EditorApp {
         }
         if matches!(action, Action::Next | Action::Previous) {
             self.git_editor.chunk = Some(chunk);
-            self.navigate_hunk(context, action == Action::Previous);
+            self.navigate_hunk(context, action == Action::Previous, HunkNavigation::Popup);
             return;
         }
         let source = match self.canonical_document_source() {

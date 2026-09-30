@@ -31,6 +31,7 @@ pub(crate) fn check(
         let mut linter = LintGroup::new_curated(FstDictionary::curated(), dialect);
         let excluded = excluded_typst_ranges(source, kind);
         let characters: Vec<char> = source.chars().collect();
+        let indentation = indentation_ranges(&characters);
         issues.extend(
             linter
                 .lint(&document)
@@ -40,6 +41,12 @@ pub(crate) fn check(
                     excluded
                         .get(next)
                         .is_none_or(|range| range.start >= lint.span.end)
+                })
+                .filter(|lint| {
+                    let next = indentation.partition_point(|range| range.end <= lint.span.start);
+                    !indentation.get(next).is_some_and(|range| {
+                        range.start <= lint.span.start && lint.span.end <= range.end
+                    })
                 })
                 .filter(|lint| {
                     lint.lint_kind != harper_core::linting::LintKind::Spelling
@@ -126,6 +133,25 @@ pub(crate) fn check(
         })
         .collect()
 }
+/// Preserve Harper's original scalar coordinates; indentation is source layout,
+/// not prose. Inline whitespace and all non-whitespace lints remain eligible.
+fn indentation_ranges(characters: &[char]) -> Vec<std::ops::Range<usize>> {
+    let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut line_start = true;
+    for (index, &ch) in characters.iter().enumerate() {
+        if line_start && matches!(ch, ' ' | '\t') {
+            if let Some(last) = ranges.last_mut().filter(|last| last.end == index) {
+                last.end += 1;
+            } else {
+                ranges.push(index..index + 1);
+            }
+        } else {
+            line_start = matches!(ch, '\r' | '\n');
+        }
+    }
+    ranges
+}
+
 /// Reads syntax rather than matching comments, examples, nested functions or strings.
 fn writing_dialect(
     source: &str,
@@ -232,6 +258,56 @@ fn likely_name(source: &[char], start: usize, end: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn leading_indentation_is_not_prose_spacing_but_inline_spaces_and_typos_are() {
+        for kind in [DocumentKind::Typst, DocumentKind::Tex] {
+            let source = "This is a sentence\r\n    with a misspelld word.\r\n\t\tThis is  another sentence.";
+            let issues = check(
+                source,
+                kind,
+                Path::new("fixture"),
+                true,
+                false,
+                crate::settings::WritingLanguage::British,
+            );
+            assert!(
+                !issues
+                    .iter()
+                    .any(|d| d.message.contains("spaces") && d.location.unwrap().column <= 4),
+                "{kind:?}: {issues:?}"
+            );
+            assert!(
+                issues
+                    .iter()
+                    .any(|d| d.message.contains("spaces") && d.location.unwrap().line == 3),
+                "{issues:?}"
+            );
+            assert!(
+                issues
+                    .iter()
+                    .any(|d| d.location.is_some_and(|l| l.line == 2 && l.column == 12)),
+                "typo coordinates must retain indentation: {issues:?}"
+            );
+        }
+    }
+    #[test]
+    fn leading_indentation_is_ignored_including_multiline_strings() {
+        for (kind, source) in [
+            (DocumentKind::Typst, "    Hello world."),
+            (DocumentKind::Tex, "\t\tHello world."),
+            (DocumentKind::Typst, "#text(\"Hello\n    world.\")"),
+        ] {
+            let issues = check(
+                source,
+                kind,
+                Path::new("fixture"),
+                true,
+                false,
+                crate::settings::WritingLanguage::British,
+            );
+            assert!(issues.is_empty(), "{source:?}: {issues:?}");
+        }
+    }
     #[test]
     fn language_detection_uses_real_top_level_text_rules_and_explicit_overrides() {
         use crate::settings::WritingLanguage::{American, Auto, British};

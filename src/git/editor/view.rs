@@ -37,6 +37,10 @@ pub(crate) fn show_markers(
                 ui.id().with(("git-hunk", index, part)),
                 egui::Sense::click(),
             );
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            if ui.is_rect_visible(response.rect) {
+                crate::desktop_test::observe(&format!("git.hunk.{index}"), &response);
+            }
             let label = change.label();
             response
                 .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
@@ -77,7 +81,14 @@ pub(crate) fn show_chunk(
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             for action in HunkAction::ALL.into_iter().rev() {
-                let shortcut = shortcuts.display(action.shortcut()).unwrap_or_default();
+                let tooltip = match action {
+                    HunkAction::Previous => "Previous hunk and show its diff".to_owned(),
+                    HunkAction::Next => "Next hunk and show its diff".to_owned(),
+                    _ => shortcuts.display(action.shortcut()).map_or_else(
+                        || action.label().to_owned(),
+                        |key| format!("{} · {key}", action.label()),
+                    ),
+                };
                 use crate::app::icons::{self, UiIcon};
                 let icon = match action {
                     HunkAction::Stage => UiIcon::Stage,
@@ -95,15 +106,12 @@ pub(crate) fn show_chunk(
                     toolbar_style,
                     false,
                 )
-                .on_hover_text(action.label());
+                .on_hover_text(tooltip);
                 response.widget_info(|| {
                     egui::WidgetInfo::labeled(egui::WidgetType::Button, !busy, action.label())
                 });
-                let response = if shortcut.is_empty() {
-                    response
-                } else {
-                    response.on_hover_text(format!("{} · {shortcut}", action.label()))
-                };
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe(&format!("git.hunk.{}", action.label()), &response);
                 if response.clicked() {
                     selected = Some(Action::RunHunk(action));
                 }

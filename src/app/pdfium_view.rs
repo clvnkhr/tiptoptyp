@@ -803,31 +803,13 @@ impl EditorApp {
         {
             let _ = self.web_link_sender.send(link);
         }
-        if view.has_focus(ui.ctx()) {
-            ui.painter().rect_stroke(
-                viewport.shrink(1.0),
-                0.0,
-                Stroke::new(2.0, ui.visuals().selection.stroke.color),
-                egui::StrokeKind::Inside,
-            );
-            let label = if asset {
-                "Preview focused"
-            } else {
-                "Preview focused · Esc to edit"
-            };
-            let galley =
-                ui.painter()
-                    .layout_no_wrap(label.to_owned(), theme::supporting_font(), palette.0);
-            let badge = Rect::from_min_size(
-                egui::pos2(
-                    viewport.right() - galley.size().x - 18.0,
-                    viewport.top() + 4.0,
-                ),
-                galley.size() + egui::vec2(14.0, 6.0),
-            );
-            ui.painter().rect_filled(badge, 3.0, palette.1);
+        if let Some(stroke) = theme::panel_interaction_stroke(
+            ui.visuals(),
+            ui.rect_contains_pointer(viewport),
+            view.has_focus(ui.ctx()),
+        ) {
             ui.painter()
-                .galley(badge.min + egui::vec2(7.0, 3.0), galley, palette.0);
+                .rect_stroke(viewport, 0.0, stroke, egui::StrokeKind::Inside);
         }
         // egui clears widget focus at the beginning of an Escape frame.
         // Consult the previous owner as well, before routing Escape to source.

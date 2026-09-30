@@ -70,7 +70,7 @@ impl EditorApp {
             "comfy": self.settings.comfy_background && self.settings.comfy_text,
             "page_dark": self.preview.dark,
             "expected_palette": [palette.0.to_array(), palette.1.to_array()],
-            "webview_palette": self.webview_palette.map(|p| [p.0.to_array(), p.1.to_array()]),
+            "webview_palette": self.webview_style.map(|style| [style.palette.0.to_array(), style.palette.1.to_array()]),
             "pdfium_palette": self.pdfium_preview.inspected_palette(),
             "panel": self.bottom_panel.selected().map(|tab| format!("{tab:?}")),
             "panel_rect": panel,
@@ -129,6 +129,12 @@ impl EditorApp {
             "completion_visible": self.editor_completion.as_ref().is_some_and(|completion| !completion.items.is_empty()),
             "completion_count": self.editor_completion.as_ref().map_or(0, |completion| completion.items.len()),
             "completion_selected": self.editor_completion.as_ref().map(|completion| completion.selected),
+        });
+        interaction["git_hunk_count"] = serde_json::json!(self.git_editor.hunks.len());
+        interaction["git_hunk_popup_line"] = serde_json::json!(match &self.app_popup {
+            Some(AppPopup::GitChunk { chunk, .. }) =>
+                chunk.hunk.changes.first().map(|change| change.lines.start),
+            _ => None,
         });
         interaction["explorer_focused"] = serde_json::json!(
             self.explorer
