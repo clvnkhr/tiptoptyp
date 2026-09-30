@@ -293,6 +293,40 @@ fn indentation_columns(chars: impl Iterator<Item = char>, step: usize, limit: us
     columns
 }
 
+/// Cache actual nonblank source-line indentation levels with the existing galley.
+#[derive(Default)]
+pub(crate) struct GuideLevels {
+    galley: Option<std::sync::Arc<egui::Galley>>,
+    step: usize,
+    levels: Vec<usize>,
+}
+impl GuideLevels {
+    fn update(&mut self, galley: &std::sync::Arc<egui::Galley>, step: usize) {
+        if self.step == step
+            && self
+                .galley
+                .as_ref()
+                .is_some_and(|old| std::sync::Arc::ptr_eq(old, galley))
+        {
+            return;
+        }
+        self.levels = actual_indentation_levels(&galley.job.text, step);
+        self.step = step;
+        self.galley = Some(galley.clone());
+    }
+}
+fn actual_indentation_levels(source: &str, step: usize) -> Vec<usize> {
+    let mut levels: Vec<_> = source
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| indentation_columns(line.chars(), step, usize::MAX))
+        .filter(|&column| column > 0)
+        .collect();
+    levels.sort_unstable();
+    levels.dedup();
+    levels
+}
+
 /// Only leading whitespace on visible physical rows receives guides. Wrapped
 /// continuations and folded zero-height rows stay clear.
 pub(crate) fn paint_guides(
@@ -300,6 +334,7 @@ pub(crate) fn paint_guides(
     output: &egui::text_edit::TextEditOutput,
     character: &str,
     indent: u8,
+    levels: &mut GuideLevels,
 ) {
     let font = crate::theme::editor_font();
     let color = ui.visuals().weak_text_color().gamma_multiply(0.4);
@@ -308,6 +343,7 @@ pub(crate) fn paint_guides(
         .layout_no_wrap(character.into(), font.clone(), color);
     let space = ui.fonts_mut(|fonts| fonts.glyph_width(&font, ' '));
     let step = usize::from(if indent == 0 { 4 } else { indent });
+    levels.update(&output.galley, step);
     let painter = ui
         .painter()
         .with_clip_rect(output.response.rect.intersect(ui.clip_rect()));
@@ -334,13 +370,16 @@ pub(crate) fn paint_guides(
                 step,
                 visible_columns,
             );
-            let first_column = (((painter.clip_rect().left() - row_origin.x) / space)
+            let left_column = ((painter.clip_rect().left() - row_origin.x) / space)
                 .floor()
-                .max(0.0) as usize
-                / step
-                + 1)
-                * step;
-            for column in (first_column..=columns.min(visible_columns)).step_by(step) {
+                .max(0.0) as usize;
+            let start = levels
+                .levels
+                .partition_point(|&column| column < left_column);
+            for &column in levels.levels[start..]
+                .iter()
+                .take_while(|&&column| column <= columns.min(visible_columns))
+            {
                 let pos = output.galley_pos
                     + row.pos.to_vec2()
                     + egui::vec2((column as f32 - 0.5) * space - glyph.size().x / 2.0, 0.0);
@@ -359,6 +398,39 @@ pub(crate) fn paint_guides(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn guides_use_only_actual_nonblank_indents_including_alignment() {
+        let source = "root\n  shallow\n                 aligned & rhs\n                 next\n           \n\t tabbed";
+        assert_eq!(actual_indentation_levels(source, 4), vec![2, 5, 17]);
+    }
+    #[test]
+    fn guide_levels_reuse_galley_and_refresh_on_edits_and_tab_size() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let ctx = ui.ctx();
+            let make = |source: &str| {
+                ctx.fonts_mut(|fonts| {
+                    fonts.layout_no_wrap(
+                        source.into(),
+                        egui::FontId::monospace(14.0),
+                        Color32::WHITE,
+                    )
+                })
+            };
+            let original = make("\tfirst\n                 aligned");
+            let mut cache = GuideLevels::default();
+            cache.update(&original, 4);
+            assert_eq!(cache.levels, vec![4, 17]);
+            let buffer = cache.levels.as_ptr();
+            cache.update(&original, 4);
+            assert_eq!(cache.levels.as_ptr(), buffer);
+            cache.update(&original, 2);
+            assert_eq!(cache.levels, vec![2, 17]);
+            cache.update(&make("  changed"), 2);
+            assert_eq!(cache.levels, vec![2]);
+        });
+        output.textures_delta.clear();
+    }
     #[test]
     fn indentation_counts_spaces_tabs_and_bounds_visible_work() {
         assert_eq!(indentation_columns("  body".chars(), 2, 80), 2);

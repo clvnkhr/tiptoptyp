@@ -386,6 +386,7 @@ impl EditorApp {
             &self.settings.highlight_rules,
             accent,
         );
+        let guide_levels = &mut self.guide_levels;
         let indentation_guides = self.settings.indentation_guides;
         let indentation_guide_character = &self.settings.indentation_guide_character;
         let highlighter = &mut self.highlighter;
@@ -597,6 +598,7 @@ impl EditorApp {
                     &output,
                     indentation_guide_character,
                     indent_spaces,
+                    guide_levels,
                 );
             }
             if current_char.is_some_and(|cursor| folding.reveal(cursor)) {

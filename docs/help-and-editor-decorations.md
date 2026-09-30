@@ -12,7 +12,8 @@ Under **Settings → Editor**:
 - **Wrap lines** toggles soft wrapping without rewriting source. The existing
   Toggle line wrapping action is available in View and Keyboard shortcuts.
 - **Indentation guides** is on by default. **Guide character** accepts one
-  visible character, such as `│` or `┆`. Guides use the configured space indent,
+  visible character, such as `│` or `┆`. Guides appear only at indentation columns used by nonblank source lines,
+  including arbitrary alignment columns. Tabs use the configured space indent,
   or four columns when Tab inserts tab characters. Wrapped continuations,
   folded rows and non-leading whitespace are not decorated.
 - **Highlight definitions and redefinitions** is optional. It emphasizes local

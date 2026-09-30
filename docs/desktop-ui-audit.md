@@ -595,3 +595,24 @@ See `help-and-editor-decorations.md` and the performance measurement metadata.
 Handoff checks passed: formatting (workspace and xtask), strict all-target
 Clippy, the full Rust test suites, and all 15 xtask tests. Native interaction
 results above are separate from those deterministic checks.
+
+## Actual indentation levels (2026-09-30)
+
+Fixed the guide renderer's fixed-step ladder: only positive indentation columns
+used by nonblank source lines are eligible, including alignment columns that
+are not multiples of the tab size. Blank lines do not introduce levels; wrapped
+continuations and folded rows remain excluded from painting. The ordered levels
+are cached by galley identity and tab width, with no source scan on unchanged
+frames. Visible-row and horizontal clipping still bound painting. Rebuilding
+levels scans source and sorts the collected columns only on layout changes.
+
+Regression tests establish the former failure with levels 2/5/17 (no intermediate
+levels and no whitespace-only level), tab width changes, edit invalidation and
+cache reuse. A fresh `actual-indentation` main viewport PNG with a 2/17/19-space
+math fixture was inspected: only those three columns are drawn, and the large
+alignment jump has no ladder of extra lines. This is framebuffer evidence, not
+a composed native-preview geometry check. Formatting, strict Clippy, full Rust
+tests and 15 xtask tests passed.
+
+The guide Settings native journey passed again in `run-_rjtqe_6`; the refreshed
+25-image gallery validated.

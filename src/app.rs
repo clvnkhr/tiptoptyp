@@ -1196,6 +1196,7 @@ pub struct EditorApp {
     process_close_pending: bool,
     highlighter: SyntaxHighlighter,
     auto_pair_syntax: crate::auto_pairs::PairSyntax,
+    guide_levels: crate::editor_decoration::GuideLevels,
     generic_highlighter: GenericSyntaxHighlighter,
 
     compiler: Compiler,
@@ -1506,6 +1507,7 @@ impl EditorApp {
             process_close_pending: false,
             highlighter,
             auto_pair_syntax: crate::auto_pairs::PairSyntax::default(),
+            guide_levels: crate::editor_decoration::GuideLevels::default(),
             generic_highlighter,
             compiler: Compiler::new(crate::worker::RepaintTarget::new(context, viewport)),
             asset_loader: AssetLoader::new(crate::worker::RepaintTarget::new(context, viewport)),
