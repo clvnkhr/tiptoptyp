@@ -637,3 +637,40 @@ viewport framebuffer evidence. Formatting, strict Clippy, full Rust suites and
 
 The native editor-preferences journey passed in `run-n2ewe48c`; the regenerated
 25-image gallery validated.
+
+## Syntax-aware math alignment guides (2026-09-30)
+
+Indentation nesting is inappropriate for equation padding: different left-hand
+sides can start at different columns while sharing an `&` alignment point.
+Typst now uses actual Equation/MathAlignPoint syntax. TeX uses a tolerant math
+reader for dollar/double-dollar, bracket/parenthesis delimiters and standard
+alignment, matrix/cases and equation environments. Escapes, comments and verbatim
+payloads do not create markers. Nested TeX environments restore the parent's
+alignment. Inline math leaves ordinary indentation unchanged.
+
+The structural math guide derives from equation rows, not padding before a
+marker-only continuation. The alignment guide sits after `&`, with no extra
+indentation guide before that marker; glyphs are painted only at clear gaps,
+never across unrelated text. Regressions cover varying left-hand-side padding,
+marker-only continuations, nested environments, multiple markers, escaping and
+inline math. Representative fixtures are retained under
+`tests/fixtures/indentation-guides`.
+
+Math parsing is cached by galley, tab width and document kind. The optimized
+local extraction measurement added about 0.31 ms for a 600-line Typst fixture
+and 0.06 ms for a 600-line TeX fixture on a cache miss; the former semantic
+extraction baseline had no parsing work. This is not a full typing benchmark.
+Metadata is in `performance-results/math-guide-parsing-2026-09-30.json`.
+
+Final marker placement was inspected in fresh
+`ampersand-continuation/1790773131387-0001-main.png`: the second marker has one
+guide to its right and no guide immediately to its left. The compact fixture
+keeps the continuation visible without soft wrapping. Formatting, strict
+Clippy, full Rust suites and 15 xtask tests pass. The final 25-image gallery
+was regenerated and validated. Native `editor_preferences` could not run in
+`run-sn084ztp`: its preflight reported desktop=false, locked=true, with input
+and Accessibility permissions true. This unavailable interaction check is
+not a pass; framebuffer evidence is separate from native interaction evidence.
+
+The final TeX framebuffer `tex-after-marker/1790773303641-0001-main.png`
+was also inspected and has the alignment guide after each real ampersand.

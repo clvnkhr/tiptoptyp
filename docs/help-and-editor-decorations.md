@@ -14,7 +14,12 @@ Under **Settings → Editor**:
 - **Indentation guides** is on by default. **Guide character** accepts one
   visible character, such as `│` or `┆`. Guides follow the current block: its own indentation and enclosing indentation
   levels only, including arbitrary alignment columns. Dedenting drops deeper
-  guides; levels from unrelated blocks do not carry over. Tabs use the configured space indent,
+  guides; levels from unrelated blocks do not carry over. In multiline Typst math
+  and standard TeX math environments, row padding is treated as equation
+  alignment rather than nesting. Alignment guides sit after genuine `&` markers,
+  carry through continuation rows and never cut through other text. Escaped
+  markers, comments and verbatim text are ignored; nested TeX environments restore
+  their parent's alignment on exit. Custom TeX macro expansion is not evaluated. Tabs use the configured space indent,
   or four columns when Tab inserts tab characters. Wrapped continuations,
   folded rows and non-leading whitespace are not decorated.
 - **Highlight definitions and redefinitions** is optional. It emphasizes local

@@ -1,0 +1,19 @@
+{
+  "date": "2026-09-30",
+  "platform": "macOS 14.6.1 aarch64",
+  "rustc": "1.98.1",
+  "profile": "rustc -O -C lto=thin using optimized repository typst_syntax dependencies",
+  "workload": "600 source lines, 100 repeated math-region extractions; 3 warmups, median of 5 samples",
+  "baseline": "no math semantic extraction (previous implementation), below timer resolution for 100 calls",
+  "typst": {
+    "bytes": 7800,
+    "rows": 600,
+    "median_us_per_100": 30953
+  },
+  "tex": {
+    "bytes": 10200,
+    "rows": 600,
+    "median_us_per_100": 5935
+  },
+  "scope": "Added math-region extraction only on layout cache misses. Not full guide rendering or app typing latency; idle frames reuse their galley cache. The fixtures differ between languages and are not a speed comparison between languages. Standalone production parser harness; no viewport or theme involved."
+}

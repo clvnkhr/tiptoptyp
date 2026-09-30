@@ -22,6 +22,7 @@ mod document_templates;
 mod editor_data;
 mod editor_decoration;
 mod editor_features;
+mod editor_math_guides;
 mod embedded_structure;
 mod embedded_tex;
 mod explorer;

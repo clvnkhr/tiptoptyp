@@ -293,16 +293,43 @@ fn indentation_columns(chars: impl Iterator<Item = char>, step: usize, limit: us
     columns
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Guide {
+    column: usize,
+    alignment: bool,
+}
+impl Guide {
+    fn indent(column: usize) -> Self {
+        Self {
+            column,
+            alignment: false,
+        }
+    }
+    fn alignment(column: usize) -> Self {
+        Self {
+            column,
+            alignment: true,
+        }
+    }
+}
+
 /// Cache actual nonblank source-line indentation levels with the existing galley.
 #[derive(Default)]
 pub(crate) struct GuideLevels {
     galley: Option<std::sync::Arc<egui::Galley>>,
     step: usize,
-    levels: Vec<Vec<usize>>,
+    kind: Option<crate::document::DocumentKind>,
+    levels: Vec<Vec<Guide>>,
 }
 impl GuideLevels {
-    fn update(&mut self, galley: &std::sync::Arc<egui::Galley>, step: usize) {
+    fn update(
+        &mut self,
+        galley: &std::sync::Arc<egui::Galley>,
+        step: usize,
+        kind: crate::document::DocumentKind,
+    ) {
         if self.step == step
+            && self.kind == Some(kind)
             && self
                 .galley
                 .as_ref()
@@ -310,32 +337,138 @@ impl GuideLevels {
         {
             return;
         }
-        let mut stack = Vec::new();
+        let source = &galley.job.text;
+        let source_levels = source_guide_levels(source, step, kind);
         self.levels.clear();
+        let mut physical_line = 0;
         let mut physical_start = true;
         for row in &galley.rows {
-            let level =
-                if physical_start && row.glyphs.iter().any(|glyph| !glyph.chr.is_whitespace()) {
-                    Some(indentation_columns(
-                        row.glyphs.iter().map(|glyph| glyph.chr),
-                        step,
-                        usize::MAX,
-                    ))
-                } else {
-                    None
-                };
-            update_indent_stack(&mut stack, level);
             self.levels.push(if physical_start {
-                stack.clone()
+                source_levels
+                    .get(physical_line)
+                    .cloned()
+                    .unwrap_or_default()
             } else {
                 Vec::new()
             });
+            if row.ends_with_newline {
+                physical_line += 1;
+            }
             physical_start = row.ends_with_newline;
         }
+        self.kind = Some(kind);
         self.step = step;
         self.galley = Some(galley.clone());
     }
 }
+fn source_guide_levels(
+    source: &str,
+    step: usize,
+    kind: crate::document::DocumentKind,
+) -> Vec<Vec<Guide>> {
+    let blocks: Vec<_> = crate::editor_math_guides::blocks(source, kind)
+        .into_iter()
+        .filter(|block| source[block.range.clone()].contains('\n'))
+        .collect();
+    let mut stack = Vec::new();
+    let mut result = Vec::new();
+    let mut offset = 0;
+    let mut next = 0;
+    let mut active: Vec<usize> = Vec::new();
+    let mut bases = vec![0; blocks.len()];
+    let mut alignments = vec![Vec::new(); blocks.len()];
+    for line in source.split_inclusive('\n') {
+        while active
+            .last()
+            .is_some_and(|&index| blocks[index].range.end <= offset)
+        {
+            active.pop();
+        }
+        let indent = indentation_columns(line.chars(), step, usize::MAX);
+        while next < blocks.len() && blocks[next].range.start < offset + line.len() {
+            if blocks[next].range.end > offset {
+                if active.is_empty() {
+                    update_indent_stack(&mut stack, Some(indent));
+                }
+                bases[next] = math_body_indent(source, &blocks[next], step, indent);
+                active.push(next);
+            }
+            next += 1;
+        }
+        if let Some(&index) = active.last() {
+            let block = &blocks[index];
+            let first_marker = block.markers.partition_point(|&marker| marker < offset);
+            let row_markers: Vec<_> = block.markers[first_marker..]
+                .iter()
+                .take_while(|&&marker| marker < offset + line.len())
+                .map(|&marker| source_column(&line[..marker - offset], step) + 1)
+                .collect();
+            if !row_markers.is_empty() {
+                alignments[index] = row_markers;
+            }
+            let mut guides: Vec<_> = stack.iter().copied().map(Guide::indent).collect();
+            guides.extend(
+                active
+                    .iter()
+                    .map(|&index| bases[index])
+                    .filter(|&base| base > 0)
+                    .map(Guide::indent),
+            );
+            guides.extend(alignments[index].iter().copied().map(Guide::alignment));
+            guides.sort_unstable_by_key(|guide| (guide.column, guide.alignment));
+            guides.dedup();
+            result.push(guides);
+        } else {
+            update_indent_stack(&mut stack, (!line.trim().is_empty()).then_some(indent));
+            result.push(stack.iter().copied().map(Guide::indent).collect());
+        }
+        offset += line.len();
+    }
+    result
+}
+fn math_body_indent(
+    source: &str,
+    block: &crate::editor_math_guides::MathBlock,
+    step: usize,
+    fallback_indent: usize,
+) -> usize {
+    let mut at = block.range.start;
+    let mut candidate = None;
+    let mut fallback = None;
+    for part in source[block.range.clone()].split_inclusive('\n') {
+        let text = part.trim();
+        if at > block.range.start
+            && !text.is_empty()
+            && !text.starts_with('&')
+            && !matches!(text, "$" | "$$" | "\\[" | "\\]" | "\\(" | "\\)")
+            && !text.starts_with("\\begin")
+            && !text.starts_with("\\end")
+        {
+            let level = indentation_columns(part.chars(), step, usize::MAX);
+            fallback = Some(fallback.map_or(level, |old: usize| old.min(level)));
+            if block
+                .markers
+                .get(block.markers.partition_point(|&marker| marker < at))
+                .is_some_and(|&marker| marker < at + part.len())
+            {
+                candidate = Some(candidate.map_or(level, |old: usize| old.min(level)));
+            }
+        }
+        at += part.len();
+    }
+    candidate.or(fallback).unwrap_or(fallback_indent)
+}
+
+fn source_column(source: &str, step: usize) -> usize {
+    source.chars().fold(0, |column, c| {
+        if c == '\t' {
+            column + step - column % step
+        } else {
+            column + 1
+        }
+    })
+}
+
 fn update_indent_stack(stack: &mut Vec<usize>, level: Option<usize>) {
     let Some(level) = level else {
         return;
@@ -348,14 +481,37 @@ fn update_indent_stack(stack: &mut Vec<usize>, level: Option<usize>) {
     }
 }
 
-/// Only leading whitespace on visible physical rows receives guides. Wrapped
-/// continuations and folded zero-height rows stay clear.
+fn alignment_boundary_clear(
+    chars: impl Iterator<Item = char>,
+    step: usize,
+    boundary: usize,
+) -> bool {
+    let mut column = 0;
+    let mut previous = None;
+    for c in chars {
+        let width = if c == '\t' { step - column % step } else { 1 };
+        if boundary == column {
+            return c.is_whitespace()
+                || previous.is_some_and(|c: char| c.is_whitespace() || c == '&');
+        }
+        if boundary < column + width {
+            return c.is_whitespace();
+        }
+        previous = Some(c);
+        column += width;
+    }
+    boundary == column && previous.is_some_and(|c| c.is_whitespace() || c == '&')
+}
+
+/// Structural guides occupy leading whitespace; alignment guides sit after &
+/// in a gap, never through other text. Wrapped and folded rows stay clear.
 pub(crate) fn paint_guides(
     ui: &egui::Ui,
     output: &egui::text_edit::TextEditOutput,
     character: &str,
     indent: u8,
     levels: &mut GuideLevels,
+    kind: crate::document::DocumentKind,
 ) {
     let font = crate::theme::editor_font();
     let color = ui.visuals().weak_text_color().gamma_multiply(0.4);
@@ -364,7 +520,7 @@ pub(crate) fn paint_guides(
         .layout_no_wrap(character.into(), font.clone(), color);
     let space = ui.fonts_mut(|fonts| fonts.glyph_width(&font, ' '));
     let step = usize::from(if indent == 0 { 4 } else { indent });
-    levels.update(&output.galley, step);
+    levels.update(&output.galley, step, kind);
     let painter = ui
         .painter()
         .with_clip_rect(output.response.rect.intersect(ui.clip_rect()));
@@ -395,14 +551,38 @@ pub(crate) fn paint_guides(
                 .floor()
                 .max(0.0) as usize;
             let row_levels = &levels.levels[row_index];
-            let start = row_levels.partition_point(|&column| column < left_column);
-            for &column in row_levels[start..]
+            let start = row_levels.partition_point(|guide| guide.column < left_column);
+            for guide in row_levels[start..]
                 .iter()
-                .take_while(|&&column| column <= columns.min(visible_columns))
+                .take_while(|guide| guide.column <= visible_columns)
             {
+                let column = guide.column;
+                if !guide.alignment
+                    && (column > columns
+                        || row_levels
+                            .binary_search_by_key(&(column + 1, true), |other| {
+                                (other.column, other.alignment)
+                            })
+                            .is_ok())
+                {
+                    continue;
+                }
+                if guide.alignment
+                    && !alignment_boundary_clear(
+                        row.glyphs.iter().map(|glyph| glyph.chr),
+                        step,
+                        column,
+                    )
+                {
+                    continue;
+                }
                 let pos = output.galley_pos
                     + row.pos.to_vec2()
-                    + egui::vec2((column as f32 - 0.5) * space - glyph.size().x / 2.0, 0.0);
+                    + egui::vec2(
+                        (column as f32 - if guide.alignment { 0.0 } else { 0.5 }) * space
+                            - glyph.size().x / 2.0,
+                        0.0,
+                    );
                 if painter
                     .clip_rect()
                     .intersects(egui::Rect::from_min_size(pos, glyph.size()))
@@ -418,6 +598,23 @@ pub(crate) fn paint_guides(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn guide_columns(
+        source: &str,
+        step: usize,
+        kind: crate::document::DocumentKind,
+    ) -> Vec<Vec<usize>> {
+        source_guide_levels(source, step, kind)
+            .into_iter()
+            .map(|row| row.into_iter().map(|guide| guide.column).collect())
+            .collect()
+    }
+    fn cached_columns(cache: &GuideLevels) -> Vec<Vec<usize>> {
+        cache
+            .levels
+            .iter()
+            .map(|row| row.iter().map(|guide| guide.column).collect())
+            .collect()
+    }
     #[test]
     fn guides_follow_local_ancestors_and_forget_unrelated_alignment_columns() {
         let mut stack = Vec::new();
@@ -437,6 +634,53 @@ mod tests {
         }
     }
     #[test]
+    fn aligned_math_uses_marker_not_left_hand_side_padding() {
+        let typst = "$\n       short & = 1 \\\n  muchlonger & = 2 \\\n             continuation\n$\nplain\n";
+        let guides = guide_columns(typst, 2, crate::document::DocumentKind::Typst);
+        assert_eq!(guides[1], vec![2, 14]);
+        assert_eq!(guides[2], vec![2, 14]);
+        assert_eq!(guides[3], vec![2, 14]);
+        assert!(guides.last().unwrap().is_empty());
+        let tex = "\\begin{align}\n       short & = 1 \\\\\n  muchlonger & = 2 \\\\\n             \\frac{a}{b}\n\\end{align}\n";
+        let guides = guide_columns(tex, 2, crate::document::DocumentKind::Tex);
+        assert_eq!(guides[1], vec![2, 14]);
+        assert_eq!(guides[2], vec![2, 14]);
+        assert_eq!(guides[3], vec![2, 14]);
+    }
+    #[test]
+    fn marker_only_continuation_has_one_guide_after_ampersand() {
+        let source = "$\n  norm(x) & = 1 \\\n          & <= 2 \\\n            = 3\n$\n";
+        let rows = source_guide_levels(source, 2, crate::document::DocumentKind::Typst);
+        assert_eq!(rows[2], vec![Guide::indent(2), Guide::alignment(11)]);
+        assert!(!rows[2].contains(&Guide::indent(10)));
+        assert_eq!(rows[3], rows[2]);
+        assert!(alignment_boundary_clear("          & <= 2".chars(), 2, 11));
+        assert!(!alignment_boundary_clear("text".chars(), 2, 2));
+        assert!(alignment_boundary_clear("\t&=".chars(), 4, 5));
+        let matrix = source_guide_levels(
+            "$\n  a & b & c\n$\n",
+            2,
+            crate::document::DocumentKind::Typst,
+        );
+        assert_eq!(
+            matrix[1],
+            vec![Guide::indent(2), Guide::alignment(5), Guide::alignment(9)]
+        );
+    }
+    #[test]
+    fn nested_math_environment_restores_parent_alignment_and_inline_math_does_not_change_indents() {
+        let tex = "\\begin{align}\n  x & = y\n    \\begin {matrix}\n      a & b\n    \\end {matrix}\n      continuation\n  z & = w\n\\end{align}\n";
+        let guides = guide_columns(tex, 2, crate::document::DocumentKind::Tex);
+        assert_eq!(guides[3], vec![2, 6, 9]);
+        assert_eq!(guides[5], vec![2, 5]);
+        let guides = guide_columns(
+            "       text $x & y$\n",
+            2,
+            crate::document::DocumentKind::Typst,
+        );
+        assert_eq!(guides, vec![vec![7]]);
+    }
+    #[test]
     fn guide_levels_reuse_galley_and_refresh_on_edits_and_tab_size() {
         let ctx = egui::Context::default();
         let mut output = ctx.run_ui(Default::default(), |ui| {
@@ -452,15 +696,15 @@ mod tests {
             };
             let original = make("\tfirst\n                 aligned");
             let mut cache = GuideLevels::default();
-            cache.update(&original, 4);
-            assert_eq!(cache.levels, vec![vec![4], vec![4, 17]]);
+            cache.update(&original, 4, crate::document::DocumentKind::Text);
+            assert_eq!(cached_columns(&cache), vec![vec![4], vec![4, 17]]);
             let buffer = cache.levels.as_ptr();
-            cache.update(&original, 4);
+            cache.update(&original, 4, crate::document::DocumentKind::Text);
             assert_eq!(cache.levels.as_ptr(), buffer);
-            cache.update(&original, 2);
-            assert_eq!(cache.levels, vec![vec![2], vec![2, 17]]);
-            cache.update(&make("  changed"), 2);
-            assert_eq!(cache.levels, vec![vec![2]]);
+            cache.update(&original, 2, crate::document::DocumentKind::Text);
+            assert_eq!(cached_columns(&cache), vec![vec![2], vec![2, 17]]);
+            cache.update(&make("  changed"), 2, crate::document::DocumentKind::Text);
+            assert_eq!(cached_columns(&cache), vec![vec![2]]);
         });
         output.textures_delta.clear();
     }

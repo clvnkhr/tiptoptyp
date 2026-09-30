@@ -599,6 +599,7 @@ impl EditorApp {
                     indentation_guide_character,
                     indent_spaces,
                     guide_levels,
+                    document_kind,
                 );
             }
             if current_char.is_some_and(|cursor| folding.reveal(cursor)) {
