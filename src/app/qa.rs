@@ -659,6 +659,7 @@ impl QaSession {
             }
             UiSnapshotScene::EditorContextMenu => {
                 app.app_popup = Some(AppPopup::Editor {
+                    math: None,
                     anchor: Pos2::new(430.0, 250.0),
                     link: None,
                     table: None,

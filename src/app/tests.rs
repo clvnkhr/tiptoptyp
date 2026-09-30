@@ -880,6 +880,7 @@ fn clicking_a_control_retires_its_tooltip_and_suppresses_stationary_reopen() {
                 origin: rect,
                 anchor: rect.left_bottom(),
                 detail: Arc::from("Show controls"),
+                git_diff: false,
                 opacity: 1.0,
             },
         )
@@ -908,6 +909,7 @@ fn retained_tooltip_survives_lifecycle_cleanup_after_leaving_source_token() {
                 origin: Rect::from_min_size(Pos2::ZERO, Vec2::splat(20.0)),
                 anchor: Pos2::new(0.0, 30.0),
                 detail: Arc::from("Retained documentation"),
+                git_diff: false,
                 opacity: 1.0,
             },
         )
@@ -1310,6 +1312,7 @@ fn context_menu_sizes_include_every_action_and_separator() {
                                     can_sync_preview: true,
                                     link,
                                     table: None,
+                                    math: None,
                                 },
                                 &ShortcutBindings::current_defaults(),
                                 &mut None,
@@ -3241,6 +3244,7 @@ fn editor_context_menu_exposes_the_link_under_the_pointer() {
                         can_sync_preview: true,
                         link: Some("https://example.com/docs"),
                         table: None,
+                        math: None,
                     },
                     &ShortcutBindings::current_defaults(),
                     action,
@@ -3287,6 +3291,7 @@ fn editor_context_menu_offers_the_static_table_under_the_pointer() {
                         can_sync_preview: true,
                         link: None,
                         table: Some(&table),
+                        math: None,
                     },
                     &ShortcutBindings::current_defaults(),
                     action,
@@ -3438,7 +3443,7 @@ fn prepared_table_edit_refuses_dynamic_cell_source() {
     let original_call = char_range_slice(source, table.source_range.clone())
         .unwrap()
         .to_owned();
-    table.cells[0][0] = "#unsafe-expression".to_owned();
+    table.cells[0][0] = "#let value = 1".to_owned();
     let key = DocumentKey {
         owner: tiptoptyp_core::document::WindowSessionId::new(1),
         epoch: 0,
@@ -9313,4 +9318,87 @@ fn hunk_popup_waits_for_real_editor_scroll_in_a_long_document() {
         app.close_app_popup();
         app.git_editor.chunk = Some(chunk);
     }
+}
+
+#[test]
+fn math_context_conversion_choices_follow_document_language() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    for (source, kind, choice) in [
+        ("$ α + x $", DocumentKind::Typst, "Inline math"),
+        ("\\[α + x\\]", DocumentKind::Tex, "align*"),
+    ] {
+        let target = crate::math_conversion::Target::at(source, 3, kind).unwrap();
+        let expected = EditorMenuAction::ConvertMath(target.clone(), choice.into());
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(360.0, 650.0))
+            .build_ui_state(
+                move |ui, action| {
+                    show_editor_context_menu_ui(
+                        ui,
+                        EditorContextMenuOptions {
+                            can_undo: false,
+                            can_redo: false,
+                            has_selection: false,
+                            can_format: true,
+                            can_sync_preview: false,
+                            link: None,
+                            table: None,
+                            math: Some(&target),
+                        },
+                        &ShortcutBindings::current_defaults(),
+                        action,
+                    );
+                },
+                None::<EditorMenuAction>,
+            );
+        harness.run();
+        harness.get_by_label("Convert to…").click();
+        harness.run();
+        harness.get_by_label_contains(choice).click();
+        harness.run();
+        assert_eq!(harness.state(), &Some(expected));
+    }
+}
+
+#[test]
+fn math_conversion_is_undoable_and_rejects_a_changed_formula() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+    app.snapshot_scene = None;
+    let source = "Before $ α + x $ after.";
+    app.document_mut().replace_loaded_unprojected(
+        source.into(),
+        directory.path().join("formula.typ"),
+        DocumentKind::Typst,
+        None,
+    );
+    context
+        .run_ui(egui::RawInput::default(), |ui| app.show_editor(ui))
+        .drop_without_applying_deltas();
+    let target = crate::math_conversion::Target::at(source, 12, DocumentKind::Typst).unwrap();
+    app.pending_app_popup_action = Some(AppPopupAction::Editor(EditorMenuAction::ConvertMath(
+        target.clone(),
+        "Inline math".into(),
+    )));
+    app.execute_pending_app_popup_action(&context, None);
+    assert_eq!(app.document().source(), "Before $α + x$ after.");
+    app.undo_editor(&context, false);
+    assert_eq!(app.document().source(), source);
+    app.document_mut().edit(CCursorRange::default(), |source| {
+        *source = "Before $ β + x $ after.".into()
+    });
+    app.pending_app_popup_action = Some(AppPopupAction::Editor(EditorMenuAction::ConvertMath(
+        target,
+        "Inline math".into(),
+    )));
+    app.execute_pending_app_popup_action(&context, None);
+    assert_eq!(app.document().source(), "Before $ β + x $ after.");
+    assert!(
+        app.notice
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("formula changed")
+    );
 }

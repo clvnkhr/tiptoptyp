@@ -209,6 +209,50 @@ impl EditorApp {
         }
     }
 
+    pub(super) fn apply_hunk_draft(
+        &mut self,
+        context: &egui::Context,
+        key: DocumentKey,
+        chunk: ChunkDiff,
+        text: String,
+    ) {
+        if self.document_flow_busy() || self.git_hunk_job.is_running() {
+            return;
+        }
+        if key != self.document().key() || !self.git_editor.selection_is_current(key, &chunk) {
+            self.show_file_error("This hunk is stale; reopen it before editing".into());
+            return;
+        }
+        let replacement = self
+            .canonical_document_source()
+            .and_then(|source| crate::git::editor::draft::Draft::apply(&source, &chunk.hunk, &text))
+            .and_then(|text| {
+                self.document()
+                    .project_canonical_change(
+                        key,
+                        tiptoptyp_core::text::AppliedTextEdits {
+                            text,
+                            mapped_offsets: [ScalarOffset::new(0); 2],
+                        },
+                    )
+                    .map_err(|error| error.to_string())
+            });
+        match replacement {
+            Ok(replacement) => {
+                let cursor = self.editor_snapshot(context).cursor;
+                self.document_mut()
+                    .edit(cursor, |source| *source = replacement.text);
+                self.find_bar.search.clear();
+                self.mark_edited();
+                self.notice = Some(Notice {
+                    message: "Applied hunk edits · Undo to restore".into(),
+                    kind: NoticeKind::Success,
+                });
+            }
+            Err(error) => self.show_file_error(error),
+        }
+    }
+
     pub(super) fn poll_hunk_action(&mut self) {
         match self.git_hunk_job.poll() {
             LatestJobPoll::Ready(message) => {

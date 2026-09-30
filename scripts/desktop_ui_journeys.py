@@ -578,6 +578,16 @@ class EditorJourneys:
             self.key(125, "cmd+alt")
             self.wait("keyboard hunk jump keeps editor focused", lambda d: d["editor_keyboard_focused"]
                       and d["git_hunk_popup_line"] is None and d["cursor"][0] == sum(map(len, lines[:line])))
+        self.wait_target("git.hunk.0")
+        target = self.snapshot()["targets"]["git.hunk.0"]
+        self.native("move", target["x"], target["y"])
+        self.wait("read-only hunk hover preserves editor focus", lambda d: d["hover_tooltip_open"] and d["git_hunk_popup_line"] is None and d["editor_keyboard_focused"])
+        if getattr(self, "capture_review", False):
+            state = self.snapshot()["document"]
+            card, pointer = state["hover_tooltip_rect"], state["pointer"]
+            self.native("click", card[0] + card[2] / 2 + target["x"] - pointer[0],
+                        card[1] + card[3] / 2 + target["y"] - pointer[1])
+            self.capture_viewport("diagnostic")
         self.click("git.hunk.0")
         self.wait("first hunk popup", lambda d: d["git_hunk_popup_line"] == 5)
         for button, line in (("Next",85), ("Next",165), ("Next",5), ("Previous",165)):
@@ -586,6 +596,42 @@ class EditorJourneys:
             self.stable_state(lambda d: d["git_hunk_popup_line"] == line)
         self.key(53, "none")
         self.wait("hunk popup dismissed", lambda d: d["git_hunk_popup_line"] is None)
+        self.click("editor.source")
+        self.key(126, "cmd")
+        self.wait_target("git.hunk.0")
+        self.click("git.hunk.0")
+        self.wait("hunk reopened for editing", lambda d: d["git_hunk_popup_line"] == 5 and d["git_hunk_rows"] is not None)
+        self.native("resize-focused", 1400, 850)
+        self.wait("docked hunk resizes with owner", lambda d: d["native_size"] == [1400, 850] and d["git_hunk_popup_line"] == 5)
+        windows = self.native("windows")
+        self.record("docked-hunk.windows", windows=windows)
+        if getattr(self, "capture_review", False): self.capture_viewport("main")
+        rows = self.snapshot()["document"]["git_hunk_rows"]
+        removed = rows.index("-")
+        added = rows.index("+")
+        self.click("git.hunk.line." + str(removed))
+        self.wait("removed line selected", lambda d: d["git_hunk_reverted"][removed])
+        self.click("git.hunk.line." + str(added))
+        self.wait("added line selected", lambda d: d["git_hunk_reverted"][added])
+        self.click("git.hunk.Apply")
+        self.wait("individual line revert applied", lambda d: d["git_hunk_count"] == 2 and d["git_hunk_popup_line"] is None)
+        self.key(6)
+        self.source_is("".join(lines))
+        self.wait("undo restores all hunks", lambda d: d["git_hunk_count"] == 3)
+        self.click("git.hunk.0")
+        self.wait_target("git.hunk.Edit")
+        self.click("git.hunk.Edit")
+        self.wait_target("git.hunk.editor")
+        self.click("git.hunk.editor")
+        self.key(0)
+        self.native("text", "manual hunk edit")
+        self.key(36, "none")
+        self.source_is("".join(lines))  # Draft typing must not reach the source editor.
+        if getattr(self, "capture_review", False): self.capture_viewport("main")
+        self.click("git.hunk.Apply")
+        self.wait("manual hunk edit applied", lambda d: d["source_fingerprint"] != fingerprint("".join(lines)) and d["git_hunk_popup_line"] is None)
+        self.key(6)
+        self.source_is("".join(lines))
 
     def preview_keyboard(self):
         self.ensure_typesetting_tab()

@@ -52,7 +52,7 @@ impl EditorApp {
                     egui::ScrollArea::both().show(ui, |ui| {
                         if let Some(template) = templates.get(*selected) {
                             let mut source = template.source.as_str();
-                            super::settings_code::editor(
+                            super::code_editor::editor(
                                 ui,
                                 "template-preview",
                                 &mut source,

@@ -19,6 +19,7 @@ use std::{
 };
 
 mod actions;
+pub(crate) mod draft;
 pub(crate) mod view;
 
 const EDIT_DEBOUNCE: Duration = Duration::from_millis(180);
@@ -1263,7 +1264,11 @@ mod tests {
                             ),
                             false,
                             crate::settings::GitDiffStyle::Unified,
-                            crate::settings::ToolbarStyle::Icons,
+                            &crate::settings::AppSettings {
+                                toolbar_style: crate::settings::ToolbarStyle::Icons,
+                                ..Default::default()
+                            },
+                            &mut draft::Draft::new(&hunks[*index]).unwrap(),
                         );
                     }
                 },

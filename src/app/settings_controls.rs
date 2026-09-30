@@ -535,7 +535,7 @@ pub(super) fn tool_preference_editor(
             ui.add(egui::TextEdit::multiline(&mut draft.arguments).desired_rows(2).desired_width(f32::INFINITY));
             ui.label(egui::RichText::new("{args} keeps generated arguments. {arg:N} inserts one generated argument (zero-based). Remove {args} to replace the command arguments entirely.").small());
             command_help(ui.label("Environment (JSON object of strings)"), resolution.kind, "Environment");
-            super::settings_code::editor(ui, "command-environment", &mut draft.environment, "json", settings, 2);
+            super::code_editor::editor(ui, "command-environment", &mut draft.environment, "json", settings, 2);
             command_help(ui.label("Working directory (blank uses the document/project directory)"), resolution.kind, "Working directory");
             ui.add(egui::TextEdit::singleline(&mut draft.directory).desired_width(f32::INFINITY));
             let validation_id = id.with("validation");

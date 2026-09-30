@@ -638,7 +638,7 @@ pub(crate) use table::{CellPosition, TableSelection};
 /// A conservative, rectangular table/grid model suitable for direct editing.
 ///
 /// Cell strings are Typst markup from inside their original `[...]` blocks.
-/// Only static content blocks are accepted. Named non-structural options are
+/// Content blocks preserve their markup, including inline function calls. Named non-structural options are
 /// kept as exact argument source and re-emitted unchanged.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EditableTable {
@@ -648,6 +648,7 @@ pub(crate) struct EditableTable {
     pub(crate) cells: Vec<Vec<String>>,
     cell_options: std::collections::BTreeMap<(usize, usize), table::CellOptions>,
     options: Vec<PreservedTableOption>,
+    rules: Vec<(usize, String)>,
     original_columns: usize,
     columns_were_explicit: bool,
     indentation: String,
@@ -712,7 +713,7 @@ impl std::error::Error for TableEditError {}
 /// under a character cursor.
 ///
 /// The parser deliberately refuses spreads, dynamic positional expressions,
-/// computed column counts, structural helpers, malformed syntax, comments
+/// computed column counts, unsupported structural helpers, malformed syntax, comments
 /// between arguments, and incomplete final rows. Returning `None` guarantees
 /// that opening and cancelling an editor can never discard unsupported source.
 pub(crate) fn editable_table_at(source: &str, char_cursor: usize) -> Option<EditableTable> {
@@ -800,6 +801,7 @@ fn parse_editable_table(node: &LinkedNode<'_>, source: &str) -> Option<EditableT
     let mut options = Vec::new();
     let mut flat_cells = Vec::new();
     let mut saw_cell = false;
+    let mut rules = Vec::new();
 
     for argument in args.children().filter(|child| !child.kind().is_trivia()) {
         let Some(argument_ast) = argument.get().cast::<ast::Arg>() else {
@@ -834,13 +836,25 @@ fn parse_editable_table(node: &LinkedNode<'_>, source: &str) -> Option<EditableT
                     return None;
                 }
                 saw_cell = true;
-                flat_cells.push(table::parse_cell(&argument, source, kind)?);
+                if let Some(rule) = table::horizontal_rule(&argument, source, kind) {
+                    if !flat_cells.len().is_multiple_of(columns) {
+                        return None;
+                    }
+                    rules.push((flat_cells.len() / columns, rule));
+                } else {
+                    flat_cells.push(table::parse_cell(&argument, source, kind)?);
+                }
             }
             ast::Arg::Spread(_) => return None,
         }
     }
 
     let (cells, cell_options) = table::place_cells(columns, flat_cells)?;
+    for (row, _) in &mut rules {
+        if *row == cells.len() {
+            *row = usize::MAX;
+        }
+    }
     let source_range = byte_range_to_char(source, node.range());
     let line_start = source[..node.offset()]
         .rfind('\n')
@@ -857,6 +871,7 @@ fn parse_editable_table(node: &LinkedNode<'_>, source: &str) -> Option<EditableT
         cells,
         cell_options,
         options,
+        rules,
         original_columns: columns,
         columns_were_explicit,
         indentation,
@@ -880,17 +895,17 @@ fn literal_column_count(expression: ast::Expr<'_>) -> Option<usize> {
     }
 }
 
-fn has_dynamic_content(node: &LinkedNode<'_>) -> bool {
+fn has_unsupported_cell_content(node: &LinkedNode<'_>) -> bool {
     matches!(
         node.kind(),
-        SyntaxKind::Hash
-            | SyntaxKind::Error
-            | SyntaxKind::FuncCall
+        SyntaxKind::Error
             | SyntaxKind::LetBinding
             | SyntaxKind::ModuleImport
             | SyntaxKind::ModuleInclude
             | SyntaxKind::Spread
-    ) || node.children().any(|child| has_dynamic_content(&child))
+    ) || node
+        .children()
+        .any(|child| has_unsupported_cell_content(&child))
 }
 
 fn has_descendant_kind(node: &LinkedNode<'_>, kind: SyntaxKind) -> bool {
@@ -919,6 +934,11 @@ impl EditableTable {
             return false;
         }
         self.cells.remove(row);
+        for (at, _) in &mut self.rules {
+            if *at != usize::MAX {
+                *at -= usize::from(*at > row);
+            }
+        }
         self.cell_options = std::mem::take(&mut self.cell_options)
             .into_iter()
             .filter_map(|((r, c), mut options)| {
@@ -989,6 +1009,12 @@ impl EditableTable {
         }
         let owners = self.cell_owners()?;
         for (r, row) in self.cells.iter().enumerate() {
+            arguments.extend(
+                self.rules
+                    .iter()
+                    .filter(|(at, _)| *at == r)
+                    .map(|(_, rule)| rule.clone()),
+            );
             for (c, cell) in row.iter().enumerate() {
                 if owners[r][c] != (r, c) {
                     continue;
@@ -1018,6 +1044,12 @@ impl EditableTable {
             }
         }
 
+        arguments.extend(
+            self.rules
+                .iter()
+                .filter(|(at, _)| *at >= self.row_count())
+                .map(|(_, rule)| rule.clone()),
+        );
         if arguments.is_empty() {
             return Ok(format!("{}()", self.kind.callee()));
         }
@@ -1092,7 +1124,7 @@ fn is_static_cell_source(cell: &str) -> bool {
     };
     positional.next().is_none()
         && !has_descendant_kind(&table, SyntaxKind::Error)
-        && !has_dynamic_content(&content)
+        && !has_unsupported_cell_content(&content)
 }
 
 fn find_first_kind<'a>(node: &LinkedNode<'a>, kind: SyntaxKind) -> Option<LinkedNode<'a>> {
@@ -1677,13 +1709,41 @@ mod tests {
     }
 
     #[test]
+    fn reported_notation_table_preserves_rules_and_markup_when_resized() {
+        let source = include_str!("../tests/fixtures/table-with-rules.typ");
+        let mut table = editable_table_at(source, source.find("table").unwrap()).unwrap();
+        assert_eq!(table.row_count(), 12);
+        table.add_row();
+        let rendered = format!("#{}", table.render_replacement().unwrap());
+        assert!(rendered.contains("#strong[Notation]"));
+        assert_eq!(rendered.matches("table.hline").count(), 3);
+        let round_trip = editable_table_at(&rendered, 2).unwrap();
+        assert_eq!(round_trip.cells, table.cells);
+        assert_eq!(round_trip.rules.last().unwrap().0, usize::MAX);
+        table.remove_row(0);
+        assert!(table.render_replacement().is_ok());
+    }
+
+    #[test]
+    fn table_with_rules_and_inline_markup_round_trips() {
+        let source = "#table(columns: (24%, 76%), stroke: none, table.hline(stroke: 0.8pt), [#strong[Notation]], [#strong[Meaning]], table.hline(stroke: 0.5pt), [$m(r)$], [See @def:admissible.], table.hline(stroke: 0.8pt))";
+        let table = editable_table_at(source, 2).expect("rules and inline markup are editable");
+        assert_eq!(table.row_count(), 2);
+        assert_eq!(table.cells[0][0], "#strong[Notation]");
+        let rendered = format!("#{}", table.render_replacement().unwrap());
+        let round_trip = editable_table_at(&rendered, 2).unwrap();
+        assert_eq!(round_trip.cells, table.cells);
+        assert_eq!(rendered.matches("table.hline").count(), 3);
+    }
+
+    #[test]
     fn table_parser_rejects_dynamic_or_lossy_shapes() {
         let cases = [
             "#table(columns: count, [A])",
             "#table(columns: 2, ..cells)",
             "#table(columns: 2, [A], [B], [incomplete])",
             "#table(columns: 2, [A], table.cell(colspan: 2)[B])",
-            "#table(columns: 2, [#value], [B])",
+            "#table(columns: 2, [#let value = 1], [B])",
             "#table(columns: 2, [A], /* keep me */ [B])",
             "#table([A], columns: 1)",
             "#table(columns: (1fr, ..sizes), [A], [B])",
@@ -1725,7 +1785,7 @@ mod tests {
             })
         ));
 
-        table.cells[0].push("#dynamic".into());
+        table.cells[0].push("#let value = 1".into());
         assert!(matches!(
             table.render_replacement(),
             Err(TableEditError::DynamicCell { row: 0, column: 1 })

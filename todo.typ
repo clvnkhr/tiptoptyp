@@ -141,7 +141,7 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 22. [x] sometimes, when switching from tex to typ, i get that tinymist is stale, tectonic and harper stays around from the tex file, and i dont get new diagnostics until first keyboard press. after, harper refreshed (yay) but tectonic stuck around (boo)
 23. [x] dragging the pdf preview options popup around, it moves in a very janky jumpy way, and the end result is only 50% of the way between start and final mouse position. Also i can only drag from the title "Preview". And the "v" button to close the popup should be a "-" minimise button.
 
-24. [ ] improve typst table editor: this isn't detected as a table for some reason
+24. [X] improve typst table editor: this isn't detected as a table for some reason
   ```typ
     #table(
     columns: (24%, 76%),
@@ -187,11 +187,11 @@ a second controller. Depends on 246 and relevant native gates 234/237.
     table.hline(stroke: 0.8pt),
   )
   ```
-25. [ ] improved git hunk popup: turn into a better editor:
+25. [X] improved git hunk popup: turn into a better editor:
   1. allow lines to be individually reverted in a hunk
   2. allow manual editing inside the hunk editor
   3. allow dragging around / resizing the hunk
-26. [ ] allow right-click on math brings up right-click menu with `> convert to... > ` with the options of inline math, display math. In TeX, can choose between inline math (`\(\)`) and the various display envs (`align, align*, gather, gather*, equation, equation*`)
+26. [X] allow right-click on math brings up right-click menu with `> convert to... > ` with the options of inline math, display math. In TeX, can choose between inline math (`\(\)`) and the various display envs (`align, align*, gather, gather*, equation, equation*`)
 // Implementation notes (2026-09-25):
 // NEW TODO 2: text commit actions and interaction coverage landed in e94766d.
 // NEW TODO 11: compact controls landed in e94766d; the toolbar placement and
@@ -274,3 +274,15 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 
 // Drawing mapping audit: expanded Typst output from 684 to 1,120 of 1,123
 // Detexify definitions. Three font-specific symbols still lack close Unicode.
+
+// Follow-up (2026-09-30), NEW 24–26 (descriptions preserved):
+// 24: the table editor preserves horizontal rules and inline Typst markup;
+//     rules remain on row boundaries after adding/removing rows. The reported
+//     table is retained as tests/fixtures/table-with-rules.typ.
+// 25: individual line reversions and manual edits produce an undoable draft.
+//     Per the later request, the editor is docked in the main code pane and
+//     resizes with it; independent window dragging was superseded. Hovering
+//     a gutter marker shows the compact read-only side-by-side diff instead.
+// 26: the math context menu converts enclosing Typst math between inline and
+//     display, and TeX to inline or the six requested display environments.
+//     Applying an obsolete menu cannot replace changed source.

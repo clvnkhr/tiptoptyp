@@ -305,7 +305,7 @@ impl UiSnapshotScene {
             Self::AssetPreview => "asset-hover",
             Self::GitPanel => ROOT_VIEWPORT_NAME,
             Self::GitEditor => ROOT_VIEWPORT_NAME,
-            Self::GitChunk => "popup",
+            Self::GitChunk => ROOT_VIEWPORT_NAME,
             Self::WindowColor => "logo-color",
             Self::SettingsWindow
             | Self::SettingsColors

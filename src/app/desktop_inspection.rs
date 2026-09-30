@@ -152,6 +152,21 @@ impl EditorApp {
                 chunk.hunk.changes.first().map(|change| change.lines.start),
             _ => None,
         });
+        interaction["git_hunk_reverted"] =
+            serde_json::json!(self.hunk_draft.as_ref().map(|draft| {
+                draft
+                    .rows
+                    .iter()
+                    .map(|row| row.reverted)
+                    .collect::<Vec<_>>()
+            }));
+        interaction["git_hunk_rows"] = serde_json::json!(
+            self.hunk_draft.as_ref().map(|draft| draft
+                .rows
+                .iter()
+                .map(|row| row.kind)
+                .collect::<Vec<_>>())
+        );
         interaction["explorer_focused"] = serde_json::json!(
             self.explorer
                 .focused_section()

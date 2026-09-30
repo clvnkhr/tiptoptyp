@@ -160,7 +160,7 @@ impl SettingsPanel<'_> {
         egui::ScrollArea::vertical()
             .id_salt("settings-json-scroll")
             .show(ui, |ui| {
-                let response = super::settings_code::editor(
+                let response = super::code_editor::editor(
                     ui,
                     "settings-json",
                     &mut draft.text,
@@ -638,7 +638,7 @@ impl SettingsPanel<'_> {
                                 ui.selectable_value(&mut template.language, crate::document_templates::Language::Typst, "Typst");
                                 ui.selectable_value(&mut template.language, crate::document_templates::Language::Tex, "TeX");
                             });
-                            super::settings_code::editor(ui, "template-source", &mut template.source, template.language.extension(), self.settings, 8);
+                            super::code_editor::editor(ui, "template-source", &mut template.source, template.language.extension(), self.settings, 8);
                             ui.separator();
                         });
                     }
@@ -651,7 +651,7 @@ impl SettingsPanel<'_> {
                     ui.label("Example: type eq and accept completion; Tab moves through fields, and $0 is the final cursor. Repeated $1 mirrors the first field.");
                     ui.monospace("Prefix: eq · Language: Typst · Description: Display equation");
                     let mut example = "$ ${1:x} = ${2:y} $\n$0";
-                    super::settings_code::editor(ui, "snippet-example", &mut example, "typ", self.settings, 2);
+                    super::code_editor::editor(ui, "snippet-example", &mut example, "typ", self.settings, 2);
                     let mut remove = None;
                     for (index, snippet) in edited.snippets.iter_mut().enumerate() {
                         ui.push_id(index, |ui| {
@@ -667,7 +667,7 @@ impl SettingsPanel<'_> {
                                 }
                             });
                             ui.text_edit_singleline(&mut snippet.description).on_hover_text("Description shown in completion suggestions");
-                            super::settings_code::editor(ui, "snippet-body", &mut snippet.body, if snippet.language == crate::snippets::Language::Tex { "tex" } else { "typ" }, self.settings, 5);
+                            super::code_editor::editor(ui, "snippet-body", &mut snippet.body, if snippet.language == crate::snippets::Language::Tex { "tex" } else { "typ" }, self.settings, 5);
                             ui.separator();
                         });
                     }
@@ -1519,7 +1519,7 @@ fn configuration_editor(
             .filter(|(original, _)| original == value)
             .map(|(_, draft)| draft)
             .unwrap_or_else(|| serde_json::to_string_pretty(value).unwrap());
-        super::settings_code::editor(ui, "configuration-code", &mut text, "json", app_settings, 6);
+        super::code_editor::editor(ui, "configuration-code", &mut text, "json", app_settings, 6);
         let parsed = serde_json::from_str::<serde_json::Value>(&text)
             .map_err(|e| e.to_string())
             .and_then(|v| {

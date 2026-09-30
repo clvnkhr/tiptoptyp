@@ -339,7 +339,7 @@ fn table_footer(ui: &mut egui::Ui, dialog: &TableEditorDialog) -> Option<TableEd
     }
     let mut action = None;
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Static Typst markup · Tab to move between cells").weak());
+        ui.label(RichText::new("Typst markup · Tab to move between cells").weak());
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if crate::app::icons::action_button_enabled(ui, !dialog.ui.importing, "Apply").clicked()
             {

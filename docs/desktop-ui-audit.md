@@ -712,3 +712,25 @@ in `run-tr8h4p4z` with Accessibility, input posting and unlocked desktop verifie
 Formatting, strict all-target Clippy, full Rust tests and 15 xtask tests passed.
 Guide lists remain cached; this removes a fallback calculation and adds no
 per-frame work or repaint requests. No material performance impact is expected.
+
+
+### 2026-09-30: docked hunk editor and read-only hover
+
+The Git editor stays inside the document's code pane. Marker hover reuses the
+compact paired diff renderer and the existing non-activating tooltip lifecycle;
+clicking retires that tooltip and opens the docked editor. Individual changed
+lines can be reverted in a draft, or the current side edited with the shared
+syntax-aware code field. Applying checks the original source and is one undo
+transaction. Navigation/repository actions are disabled while a draft differs
+from its original bytes. Tooltip sizing is cached by content, style, width and
+scale; no extra idle repaint loop or per-frame disk work was added.
+
+Native `git_hunks` passed in `run-ly5e16_n`: focus-preserving hover, repeated hunk
+navigation, owner resizing, individual line reversions, manual typing, Apply and
+Undo. Fresh diagnostic/docked/edit viewport PNGs were inspected for alignment,
+clipping, pairing and line numbers. These are separate viewport framebuffers,
+not proof of desktop composition. The 25-image gallery was regenerated and
+validated. Formatting, strict all-target Clippy, the full Rust suite (1,204 unit
+tests passed, 34 intentionally ignored, plus integration tests) and all 15 xtask
+tests passed. The reported table fixture and math conversions have focused
+parser/state/semantic regressions; native table/math journeys remain a gap.

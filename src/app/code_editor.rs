@@ -1,4 +1,4 @@
-//! Shared code editor for Settings documents and embedded configuration.
+//! Shared syntax-aware code fields with cached highlighting and line numbers.
 use crate::{
     generic_highlight::GenericSyntaxHighlighter, highlight::SyntaxHighlighter,
     settings::AppSettings,
@@ -15,13 +15,51 @@ struct Highlight {
     theme: Option<crate::presentation::ActiveThemeRequest>,
     overrides: Option<crate::syntax_theme::TypstStyleOverrides>,
 }
-pub(super) fn editor(
+pub(crate) fn editor(
     ui: &mut egui::Ui,
     salt: impl std::hash::Hash + std::fmt::Debug,
     text: &mut dyn egui::TextBuffer,
     extension: &str,
     settings: &AppSettings,
     rows: usize,
+) -> egui::Response {
+    source_editor(
+        ui,
+        salt,
+        text,
+        extension,
+        settings,
+        Options {
+            rows,
+            ..Default::default()
+        },
+    )
+}
+
+pub(crate) struct Options {
+    pub(crate) rows: usize,
+    pub(crate) start_line: usize,
+    pub(crate) editable: bool,
+    pub(crate) frame: Option<egui::Frame>,
+}
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            rows: 4,
+            start_line: 1,
+            editable: true,
+            frame: None,
+        }
+    }
+}
+
+pub(crate) fn source_editor(
+    ui: &mut egui::Ui,
+    salt: impl std::hash::Hash + std::fmt::Debug,
+    text: &mut dyn egui::TextBuffer,
+    extension: &str,
+    settings: &AppSettings,
+    options: Options,
 ) -> egui::Response {
     let id = ui.make_persistent_id(salt);
     let cache = ui.ctx().data_mut(|data| {
@@ -65,7 +103,7 @@ pub(super) fn editor(
         job.wrap.max_width = width;
         ui.fonts_mut(|fonts| fonts.layout_job(job))
     };
-    let lines = text.as_str().bytes().filter(|byte| *byte == b'\n').count() + 1;
+    let lines = text.as_str().bytes().filter(|byte| *byte == b'\n').count() + options.start_line;
     let font = crate::theme::editor_font();
     let color = ui.visuals().weak_text_color();
     let width = ui
@@ -76,13 +114,18 @@ pub(super) fn editor(
         + 8.0;
     ui.horizontal_top(|ui| {
         let (gutter, _) = ui.allocate_exact_size(egui::vec2(width, 1.0), egui::Sense::hover());
-        let output = egui::TextEdit::multiline(text)
+        let mut editor = egui::TextEdit::multiline(text)
             .id(id)
             .code_editor()
-            .desired_rows(rows)
+            .font(font.clone())
+            .interactive(options.editable)
+            .desired_rows(options.rows)
             .desired_width(f32::INFINITY)
-            .layouter(&mut layouter)
-            .show(ui);
+            .layouter(&mut layouter);
+        if let Some(frame) = options.frame {
+            editor = editor.frame(frame);
+        }
+        let output = editor.show(ui);
         for (line, rows) in super::logical_line_row_ranges(&output.galley.rows)
             .iter()
             .enumerate()
@@ -92,9 +135,11 @@ pub(super) fn editor(
             if row.size.y == 0.0 || !ui.clip_rect().intersects(rect) {
                 continue;
             }
-            let number = ui
-                .painter()
-                .layout_no_wrap((line + 1).to_string(), font.clone(), color);
+            let number = ui.painter().layout_no_wrap(
+                (line + options.start_line).to_string(),
+                font.clone(),
+                color,
+            );
             let position =
                 super::line_number_position(gutter.right() - 4.0, rect.top(), row, &number);
             ui.painter().galley(position, number, color);

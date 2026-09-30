@@ -1074,13 +1074,18 @@ impl EditorApp {
         {
             return;
         }
+        let git_diff = severity.is_none()
+            && context.data(|data| {
+                data.get_temp::<HoverTooltipOverlay>(native_tooltip_id)
+                    .is_some_and(|tip| tip.git_diff)
+            });
         show_native_tooltip_card(
             context,
             "diagnostic-tooltip-overlay",
             anchor,
             origin,
             detail,
-            severity,
+            git_diff,
             placement,
             &self.captures,
             &self.web_link_sender,
@@ -1095,6 +1100,9 @@ impl EditorApp {
             self.rename_dialog.is_some(),
         ) {
             self.close_app_popup();
+            return;
+        }
+        if matches!(self.app_popup, Some(AppPopup::GitChunk { .. })) {
             return;
         }
         let Some(popup) = self.app_popup.take() else {
@@ -1118,6 +1126,7 @@ impl EditorApp {
                 anchor,
                 link,
                 table,
+                math,
             } => (
                 *anchor,
                 editor_context_menu_size(
@@ -1125,6 +1134,10 @@ impl EditorApp {
                     table.is_some(),
                     self.document().kind().typesetting_language().is_some(),
                     &style,
+                ) + egui::vec2(
+                    0.0,
+                    math.as_ref()
+                        .map_or(0.0, |m| (m.choices().len() + 1) as f32 * 30.0),
                 ),
             ),
             AppPopup::GitChunk { anchor, .. } => (*anchor, Vec2::new(720.0, 440.0)),
@@ -1269,7 +1282,9 @@ impl EditorApp {
                                         &mut action,
                                     );
                                 }
-                                AppPopup::Editor { link, table, .. } => {
+                                AppPopup::Editor {
+                                    link, table, math, ..
+                                } => {
                                     let mut editor_action = None;
                                     show_editor_context_menu_ui(
                                         ui,
@@ -1281,6 +1296,7 @@ impl EditorApp {
                                             can_sync_preview,
                                             link: link.as_deref(),
                                             table: table.as_ref(),
+                                            math: math.as_ref(),
                                         },
                                         &shortcuts,
                                         &mut editor_action,
@@ -1300,23 +1316,8 @@ impl EditorApp {
                                         &mut action,
                                     );
                                 }
-                                AppPopup::GitChunk { chunk, .. } => {
-                                    if let Some(crate::git::editor::view::Action::RunHunk(
-                                        selected,
-                                    )) = crate::git::editor::view::show_chunk(
-                                        ui,
-                                        chunk,
-                                        &shortcuts,
-                                        self.git_hunk_job.is_running(),
-                                        self.settings.git_diff_style,
-                                        self.settings.toolbar_style,
-                                    ) {
-                                        action = Some(AppPopupAction::GitHunk(
-                                            selected,
-                                            self.document().key(),
-                                            chunk.clone(),
-                                        ));
-                                    }
+                                AppPopup::GitChunk { .. } => {
+                                    unreachable!("hunks belong to the code panel")
                                 }
                             },
                         );

@@ -73,6 +73,7 @@ struct DiffCell {
     kind: DiffLineKind,
     line: Option<usize>,
     changed: Option<Range<usize>>,
+    source_row: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -270,6 +271,7 @@ fn diff_cell(line: &str, kind: DiffLineKind, strip_prefix: bool) -> DiffCell {
         kind,
         line: None,
         changed: None,
+        source_row: None,
     }
 }
 
@@ -278,6 +280,7 @@ fn side_by_side_rows(content: &str) -> Vec<DiffRow> {
     let mut in_hunk = false;
     let mut old_line = 0;
     let mut new_line = 0;
+    let mut source_row = 0;
     let mut removed = Vec::<DiffCell>::new();
     let mut added = Vec::<DiffCell>::new();
 
@@ -335,13 +338,15 @@ fn side_by_side_rows(content: &str) -> Vec<DiffRow> {
             });
             continue;
         }
-        match line.as_bytes().first().copied() {
+        let current_kind = line.as_bytes().first().copied();
+        match current_kind {
             Some(b'-') => {
                 removed.push(DiffCell {
                     text: line.get(1..).unwrap_or_default().to_owned(),
                     kind: DiffLineKind::Removed,
                     line: Some(old_line),
                     changed: None,
+                    source_row: Some(source_row),
                 });
                 old_line = old_line.saturating_add(1);
             }
@@ -351,6 +356,7 @@ fn side_by_side_rows(content: &str) -> Vec<DiffRow> {
                     kind: DiffLineKind::Added,
                     line: Some(new_line),
                     changed: None,
+                    source_row: Some(source_row),
                 });
                 new_line = new_line.saturating_add(1);
             }
@@ -362,6 +368,7 @@ fn side_by_side_rows(content: &str) -> Vec<DiffRow> {
                     kind: DiffLineKind::Context,
                     line: Some(old_line),
                     changed: None,
+                    source_row: Some(source_row),
                 };
                 old_line = old_line.saturating_add(1);
                 let right = DiffCell {
@@ -392,12 +399,15 @@ fn side_by_side_rows(content: &str) -> Vec<DiffRow> {
                 });
             }
         }
+        if matches!(current_kind, Some(b' ' | b'+' | b'-')) {
+            source_row += 1;
+        }
     }
     flush_changes(&mut rows, &mut removed, &mut added);
     rows
 }
 
-fn hunk_line_starts(line: &str) -> Option<(usize, usize)> {
+pub(crate) fn hunk_line_starts(line: &str) -> Option<(usize, usize)> {
     let mut fields = line.split_whitespace();
     fields.next()?;
     let old = fields.next()?.strip_prefix('-')?;
@@ -467,6 +477,14 @@ fn show_change_counts(ui: &mut egui::Ui, counts: LineChangeCounts) {
 }
 
 fn show_side_by_side_diff(ui: &mut egui::Ui, rows: &[DiffRow], style: &DiffStyle) {
+    show_side_by_side_with_lines(ui, rows, style, &mut |_, _, _| {});
+}
+fn show_side_by_side_with_lines(
+    ui: &mut egui::Ui,
+    rows: &[DiffRow],
+    style: &DiffStyle,
+    line: &mut impl FnMut(&mut egui::Ui, usize, egui::Rect),
+) {
     let available_width = diff_available_width(ui).max(2.0);
     let gap = ui.spacing().item_spacing.x.min(available_width / 4.0);
     let line_height = ui
@@ -531,6 +549,11 @@ fn show_side_by_side_diff(ui: &mut egui::Ui, rows: &[DiffRow], style: &DiffStyle
                 ui.painter()
                     .rect_filled(rect, 0.0, style.background(cell.kind));
                 show_diff_cell(ui, rect, cell, line_number_width, galley.unwrap(), style);
+                if matches!(cell.kind, DiffLineKind::Added | DiffLineKind::Removed)
+                    && let Some(index) = cell.source_row
+                {
+                    line(ui, index, rect);
+                }
             } else {
                 ui.painter()
                     .rect_filled(rect, 0.0, style.background(DiffLineKind::Context));
@@ -1007,16 +1030,48 @@ impl ChangeButtons {
     }
 }
 
-pub(crate) fn show_colored_diff(ui: &mut egui::Ui, content: &str, diff_style: GitDiffStyle) {
+/// Reuse identical geometry and colors, optionally attaching changed-line controls.
+pub(crate) fn show_colored_diff_with_lines(
+    ui: &mut egui::Ui,
+    content: &str,
+    diff_style: GitDiffStyle,
+    mut line: impl FnMut(&mut egui::Ui, usize, egui::Rect),
+) {
     let style = DiffStyle::from_ui(ui);
     match diff_style {
         GitDiffStyle::Unified => {
-            let layout = style.layout_job(content);
-            ui.add(egui::Label::new(layout).selectable(true).extend());
+            let mut layout = style.layout_job(content);
+            layout.wrap.max_width = diff_available_width(ui);
+            let galley = ui.fonts_mut(|fonts| fonts.layout_job(layout));
+            let response = ui.add(egui::Label::new(galley.clone()).selectable(true).extend());
+            let mut visual = 0;
+            let mut source_row = 0;
+            for raw in content.split_inclusive('\n') {
+                let start = visual;
+                while visual < galley.rows.len() {
+                    let end = galley.rows[visual].ends_with_newline;
+                    visual += 1;
+                    if end {
+                        break;
+                    }
+                }
+                if matches!(raw.as_bytes().first(), Some(b' ' | b'+' | b'-')) {
+                    if raw.starts_with(['+', '-']) && start < visual {
+                        let min = galley.rows[start].rect().min + response.rect.min.to_vec2();
+                        let max = galley.rows[visual - 1].rect().max + response.rect.min.to_vec2();
+                        line(
+                            ui,
+                            source_row,
+                            egui::Rect::from_min_max(min, egui::pos2(response.rect.right(), max.y)),
+                        );
+                    }
+                    source_row += 1;
+                }
+            }
         }
         GitDiffStyle::SideBySide => {
             let rows = side_by_side_rows(content);
-            show_side_by_side_diff(ui, &rows, &style);
+            show_side_by_side_with_lines(ui, &rows, &style, &mut line);
         }
     }
 }
@@ -1239,6 +1294,7 @@ mod tests {
                         kind: DiffLineKind::Added,
                         line: Some(1),
                         changed: None,
+                        source_row: None,
                     };
                     let narrow = diff_cell_galley(ui, &cell, &style, 80.0);
                     let wide = diff_cell_galley(ui, &cell, &style, 800.0);

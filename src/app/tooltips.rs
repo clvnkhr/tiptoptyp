@@ -8,7 +8,6 @@ use super::{
 use crate::{
     asset::AssetThumbnailResult,
     child_view::{ChildViewHost, ChildViewSpec, scoped_child_viewport_id, viewport_scoped_id},
-    diagnostics::DiagnosticSeverity,
     document::DocumentKind,
     generic_highlight::GenericSyntaxHighlighter,
     highlight::SyntaxHighlighter,
@@ -32,6 +31,7 @@ pub(super) struct HoverTooltipOverlay {
     pub(super) anchor: Pos2,
     pub(super) detail: Arc<str>,
     pub(super) opacity: f32,
+    pub(super) git_diff: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -632,6 +632,20 @@ pub(super) fn typst_overrides_hover_text(
     hover_text_with_id(response, detail, id)
 }
 
+pub(crate) fn git_hunk_hover(response: egui::Response, diff: &str) -> egui::Response {
+    let id = native_hover_tooltip_id(&response.ctx);
+    let response = hover_text_with_id(response, diff, id);
+    response.ctx.data_mut(|data| {
+        if let Some(mut tooltip) = data.get_temp::<HoverTooltipOverlay>(id)
+            && tooltip.origin == response.rect
+        {
+            tooltip.git_diff = true;
+            data.insert_temp(id, tooltip);
+        }
+    });
+    response
+}
+
 pub(super) fn hover_text_with_id(
     response: egui::Response,
     detail: impl Into<String>,
@@ -665,6 +679,7 @@ pub(super) fn hover_text_with_id(
             anchor: response.rect.left_bottom() + egui::vec2(0.0, theme::SPACE.small),
             detail: Arc::from(detail.into()),
             opacity,
+            git_diff: false,
         };
         // Keep the currently visible native tooltip while the pointer crosses
         // another hoverable control on its way to that tooltip. Settings and
@@ -1039,7 +1054,7 @@ pub(super) fn show_native_tooltip_card(
     anchor: Pos2,
     origin: Rect,
     detail: Arc<str>,
-    _severity: Option<DiagnosticSeverity>,
+    git_diff: bool,
     placement: TooltipPlacement,
     captures: &CaptureController,
     link_sender: &mpsc::Sender<String>,
@@ -1055,12 +1070,52 @@ pub(super) fn show_native_tooltip_card(
     let preview = &detail[..preview_end];
     let available =
         (window_rect.size() - Vec2::splat(METRICS.popup.viewport_edge * 2.0)).max(Vec2::splat(1.0));
-    let body = tooltip_document_size(
-        context,
-        preview,
-        &style,
-        (available.x - frame_margin.x).max(1.0),
-    );
+    let body = if git_diff {
+        let width = (available.x - frame_margin.x).min(760.0);
+        type Cache = (Arc<str>, Arc<egui::Style>, f32, f32, Vec2);
+        let cache_id = egui::Id::new("git-hover-size");
+        let scale = context.pixels_per_point();
+        if let Some((_, _, _, _, size)) = context
+            .data(|data| data.get_temp::<Cache>(cache_id))
+            .filter(|(source, cached_style, cached_width, cached_scale, _)| {
+                source == &detail
+                    && cached_style == &style
+                    && *cached_width == width
+                    && *cached_scale == scale
+            })
+        {
+            size
+        } else {
+            let mut measure = egui::Ui::new(
+                context.clone(),
+                egui::Id::new("git-hover-measure"),
+                egui::UiBuilder::new()
+                    .max_rect(Rect::from_min_size(
+                        Pos2::ZERO,
+                        Vec2::new(width, f32::INFINITY),
+                    ))
+                    .invisible()
+                    .sizing_pass(),
+            );
+            measure.set_width(width);
+            crate::git::editor::view::show_hover_diff(&mut measure, &detail);
+            let size = measure.min_size();
+            context.data_mut(|data| {
+                data.insert_temp(
+                    cache_id,
+                    (detail.clone(), style.clone(), width, scale, size),
+                )
+            });
+            size
+        }
+    } else {
+        tooltip_document_size(
+            context,
+            preview,
+            &style,
+            (available.x - frame_margin.x).max(1.0),
+        )
+    };
     let width = (body.x + frame_margin.x).min(available.x);
     let height = (body.y + frame_margin.y)
         .clamp(1.0, METRICS.popup.tooltip_max_height)
@@ -1170,13 +1225,19 @@ pub(super) fn show_native_tooltip_card(
                 tooltip_frame
             };
             let frame_response = frame.show(ui, |ui| {
-                show_tooltip_document(
-                    ui,
-                    &detail,
-                    identity,
-                    interaction.focused || interaction.focus_requested,
-                    &link_sender,
-                );
+                if git_diff {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        crate::git::editor::view::show_hover_diff(ui, &detail);
+                    });
+                } else {
+                    show_tooltip_document(
+                        ui,
+                        &detail,
+                        identity,
+                        interaction.focused || interaction.focus_requested,
+                        &link_sender,
+                    );
+                }
             });
             let card_rect = frame_response.response.rect;
             let dismiss_requested = input.escape_pressed

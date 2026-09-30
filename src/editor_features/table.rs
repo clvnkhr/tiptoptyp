@@ -29,7 +29,7 @@ pub(super) fn parse_cell(
     kind: TableKind,
 ) -> Option<(String, CellOptions)> {
     if node.kind() == SyntaxKind::ContentBlock {
-        if has_dynamic_content(node) {
+        if has_unsupported_cell_content(node) {
             return None;
         }
         let range = node.range();
@@ -367,6 +367,25 @@ impl TableSelection {
         self.anchor = (0, column);
         self.focus = (rows.saturating_sub(1), column);
     }
+}
+
+/// Horizontal rules do not occupy cells. Keep them at their row boundary.
+pub(super) fn horizontal_rule(
+    node: &LinkedNode<'_>,
+    source: &str,
+    kind: TableKind,
+) -> Option<String> {
+    let call = node.get().cast::<ast::FuncCall>()?;
+    let ast::Expr::FieldAccess(access) = call.callee() else {
+        return None;
+    };
+    let ast::Expr::Ident(target) = access.target() else {
+        return None;
+    };
+    if target.as_str() != kind.callee() || access.field().as_str() != "hline" {
+        return None;
+    }
+    Some(source.get(node.range())?.to_owned())
 }
 
 #[cfg(test)]

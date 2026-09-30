@@ -39,6 +39,7 @@ mod index_jobs;
 mod language_support;
 mod launch;
 mod lsp;
+mod math_conversion;
 #[allow(unsafe_code)]
 mod native_menu;
 #[allow(unsafe_code)]

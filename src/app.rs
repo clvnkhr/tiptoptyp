@@ -11,9 +11,9 @@ mod writing;
 use icons::{UiIcon, icon_button, paint_ui_icon, square_icon_button, static_icon};
 #[cfg(test)]
 use icons::{closed_eye_icon_geometry, eye_icon_geometry, refresh_icon_geometry};
+pub(crate) mod code_editor;
 mod completion_popup;
 mod navigation;
-mod settings_code;
 mod settings_controls;
 use navigation::EditorSelection;
 mod explorer_view;
@@ -72,6 +72,7 @@ mod tooltips;
 use find_bar::FindBarState;
 use settings_window::SettingsWindow;
 use shortcut_editor::ShortcutEditorState;
+pub(crate) use tooltips::git_hunk_hover;
 use tooltips::*;
 mod qa;
 use qa::{QaSession, source_editor_snapshot_scroll_offset};
@@ -710,6 +711,7 @@ enum EditorMenuAction {
     Command(AppCommand),
     OpenLink(String),
     EditTable(EditableTable),
+    ConvertMath(crate::math_conversion::Target, String),
 }
 
 #[derive(Debug, Clone)]
@@ -809,6 +811,7 @@ enum AppPopup {
         anchor: Pos2,
         link: Option<String>,
         table: Option<EditableTable>,
+        math: Option<crate::math_conversion::Target>,
     },
     FontSelector {
         anchor: Pos2,
@@ -830,6 +833,7 @@ enum AppPopupAction {
         DocumentKey,
         crate::git::editor::ChunkDiff,
     ),
+    GitEdit(DocumentKey, crate::git::editor::ChunkDiff, String),
     Command(AppCommand),
     Editor(EditorMenuAction),
     Workspace(WorkspaceMenuAction),
@@ -1260,6 +1264,7 @@ pub struct EditorApp {
     git_editor: crate::git::editor::GitEditorState,
     git_hunk_job: crate::worker::ExclusiveJob<String>,
     pending_hunk_popup: Option<git_actions::PendingHunkPopup>,
+    hunk_draft: Option<crate::git::editor::draft::Draft>,
     workspace_chooser_visible: bool,
     workspace_history_removals: Vec<PathBuf>,
     workspace: Option<WorkspaceTree>,
@@ -1568,6 +1573,7 @@ impl EditorApp {
             git_editor: crate::git::editor::GitEditorState::default(),
             git_hunk_job: Default::default(),
             pending_hunk_popup: None,
+            hunk_draft: None,
             workspace_chooser_visible: false,
             workspace_history_removals: Vec::new(),
             workspace: None,
@@ -3597,6 +3603,12 @@ impl EditorApp {
     }
 
     fn open_app_popup(&mut self, popup: AppPopup) {
+        self.hunk_draft = match &popup {
+            AppPopup::GitChunk { chunk, .. } => {
+                crate::git::editor::draft::Draft::new(&chunk.hunk).ok()
+            }
+            _ => None,
+        };
         self.app_popup_generation = self.app_popup_generation.wrapping_add(1);
         self.app_popup = Some(popup);
         self.app_popup_had_focus = false;
@@ -7195,6 +7207,9 @@ impl EditorApp {
             return;
         };
         match action {
+            AppPopupAction::GitEdit(key, chunk, text) => {
+                self.apply_hunk_draft(context, key, chunk, text);
+            }
             AppPopupAction::GitHunk(action, key, chunk) => {
                 self.perform_hunk_action(context, action, key, chunk)
             }
@@ -7209,6 +7224,22 @@ impl EditorApp {
             }
             AppPopupAction::Editor(EditorMenuAction::OpenLink(target)) => {
                 self.follow_preview_link(&target)
+            }
+            AppPopupAction::Editor(EditorMenuAction::ConvertMath(target, choice)) => {
+                if self.document().source().get(target.range.clone())
+                    != Some(target.original.as_str())
+                {
+                    self.show_file_error(
+                        "The formula changed; reopen its menu before converting".into(),
+                    );
+                } else if let Some(replacement) = target.replacement(&choice) {
+                    let cursor = self.editor_snapshot(context).cursor;
+                    self.document_mut().edit(cursor, |source| {
+                        source.replace_range(target.range, &replacement)
+                    });
+                    self.find_bar.search.clear();
+                    self.mark_edited();
+                }
             }
             AppPopupAction::Editor(EditorMenuAction::EditTable(table)) => {
                 self.begin_table_editor(table)
@@ -7677,6 +7708,7 @@ impl EditorApp {
                 anchor: rect.left_bottom() + egui::vec2(0.0, METRICS.editor.tooltip_gap),
                 detail: detail.clone(),
                 opacity,
+                git_diff: false,
             };
             // Semantic hover results use the same native viewport as toolbar
             // and diagnostic tooltips. Route them through the same handoff
@@ -9074,7 +9106,10 @@ impl EditorApp {
             (self.packages_visible, "tiptoptyp-packages"),
             (self.encoding_import.is_some(), "tiptoptyp-encoding-import"),
             (self.template_picker.is_some(), "tiptoptyp-templates"),
-            (self.app_popup.is_some(), "tiptoptyp-popup-overlay"),
+            (
+                !matches!(self.app_popup, None | Some(AppPopup::GitChunk { .. })),
+                "tiptoptyp-popup-overlay",
+            ),
             (self.asset_hover.is_some(), "asset-hover-overlay"),
             (
                 self.diagnostic_tooltip.is_some() || retained_hover || deterministic_tooltip,
@@ -11505,6 +11540,7 @@ struct EditorContextMenuOptions<'a> {
     can_sync_preview: bool,
     link: Option<&'a str>,
     table: Option<&'a EditableTable>,
+    math: Option<&'a crate::math_conversion::Target>,
 }
 
 fn show_editor_context_menu_ui(
@@ -11520,6 +11556,19 @@ fn show_editor_context_menu_ui(
             ui.close();
         }
         ui.add(egui::Separator::default().spacing(theme::SPACE.control));
+    }
+    if let Some(math) = options.math {
+        ui.collapsing("Convert to…", |ui| {
+            for choice in math.choices() {
+                if menu_item(ui, choice, None).clicked() {
+                    *action = Some(EditorMenuAction::ConvertMath(
+                        math.clone(),
+                        (*choice).into(),
+                    ));
+                    ui.close();
+                }
+            }
+        });
     }
     if let Some(table) = options.table {
         if menu_item(ui, "Edit Table…", None).clicked() {
