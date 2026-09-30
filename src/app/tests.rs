@@ -9384,7 +9384,7 @@ fn math_conversion_is_undoable_and_rejects_a_changed_formula() {
     app.execute_pending_app_popup_action(&context, None);
     assert_eq!(app.document().source(), "Before $α + x$ after.");
     app.undo_editor(&context, false);
-    assert_eq!(app.document().source(), source);
+    assert_eq!(app.document().source(), &source);
     app.document_mut().edit(CCursorRange::default(), |source| {
         *source = "Before $ β + x $ after.".into()
     });
@@ -9401,4 +9401,77 @@ fn math_conversion_is_undoable_and_rejects_a_changed_formula() {
             .message
             .contains("formula changed")
     );
+}
+
+#[test]
+fn escaping_docked_diff_preserves_resizable_code_panel_width() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+    let path = directory.path().join("main.typ");
+    let source = (0..180).map(|i| format!("line {i}\n")).collect::<String>();
+    app.document_mut().replace_loaded_unprojected(
+        source.clone(),
+        path.clone(),
+        DocumentKind::Typst,
+        None,
+    );
+    app.settings.sticky_context_rows = false;
+    app.git_editor = crate::git::editor::GitEditorState::document_fixture(
+        directory.path(),
+        &path,
+        &source,
+        app.document().key(),
+    );
+    let frame = |app: &mut EditorApp, events| {
+        context
+            .run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 600.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::Panel::left("editor")
+                        .resizable(true)
+                        .default_size(600.0)
+                        .min_size(100.0)
+                        .max_size(800.0)
+                        .show(ui, |ui| app.show_editor(ui));
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        ui.label("Preview");
+                    });
+                },
+            )
+            .textures_delta
+            .clear();
+        egui::PanelState::load(&context, egui::Id::new("editor"))
+            .unwrap()
+            .size()
+            .x
+    };
+    for _ in 0..3 {
+        frame(&mut app, vec![]);
+    }
+    app.git_editor.open_chunk(0, &path);
+    app.open_app_popup(AppPopup::GitChunk {
+        anchor: Pos2::ZERO,
+        chunk: app.git_editor.chunk.clone().unwrap(),
+    });
+    let width = frame(&mut app, vec![]);
+    assert!(width > 500.0);
+    let escaped = frame(
+        &mut app,
+        vec![egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    );
+    assert!(app.app_popup.is_none());
+    assert_eq!(escaped, width, "Escape collapsed the code panel");
+    assert_eq!(frame(&mut app, vec![]), width);
+    assert_eq!(app.document().source(), &source);
 }

@@ -91,7 +91,7 @@ The accepted scenes and their framebuffer targets are:
 | `font-completion` | `main` | Fuzzy font completion with a lazily loaded font sample |
 | `settings-font-picker` | `settings` | Searchable font picker and the same live font sample used in hover cards |
 | `git-editor` | `main` | Default-open Git section, badges, line totals, and gutter markers |
-| `git-chunk` | `main` | Selected chunk compared with the last commit, with stage/unstage/revert and navigation buttons and shortcut labels |
+| `git-chunk` | `main` | Full-document comparison with an editable current column, normal syntax colors beneath Git overrides, and stage/unstage/revert/navigation controls |
 | `git-panel` | `main` | Repository status in the real Explorer Git subpanel using an in-memory fixture |
 | `asset-preview` | `asset-hover` | Image-only asset card |
 | `document-font-selector` | `popup` | Scrollable font selector for a `text(font: …)` argument |

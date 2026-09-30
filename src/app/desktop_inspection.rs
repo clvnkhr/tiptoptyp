@@ -147,25 +147,51 @@ impl EditorApp {
             });
 
         interaction["git_hunk_count"] = serde_json::json!(self.git_editor.hunks.len());
-        interaction["git_hunk_popup_line"] = serde_json::json!(match &self.app_popup {
-            Some(AppPopup::GitChunk { chunk, .. }) =>
-                chunk.hunk.changes.first().map(|change| change.lines.start),
-            _ => None,
+        interaction["git_hunk_popup_line"] = serde_json::json!(if let Some(diff) =
+            &self.document_diff
+        {
+            let at = self.last_editor_caret.map_or(0, |c| c.char_index);
+            let line = self
+                .document()
+                .source()
+                .chars()
+                .take(at)
+                .filter(|&c| c == '\n')
+                .count();
+            diff.hunks
+                .iter()
+                .flat_map(|h| &h.changes)
+                .find(|c| c.lines.contains(&line) || (c.lines.is_empty() && c.lines.start == line))
+                .map(|c| c.lines.start)
+        } else {
+            None
         });
-        interaction["git_hunk_reverted"] =
-            serde_json::json!(self.hunk_draft.as_ref().map(|draft| {
-                draft
-                    .rows
+        interaction["git_diff_open"] = serde_json::json!(self.document_diff.is_some());
+        interaction["git_diff_lines"] = serde_json::json!(
+            self.document_diff
+                .as_ref()
+                .map(|diff| [diff.before.lines().count(), diff.current.lines().count()])
+        );
+        interaction["git_diff_builds"] =
+            serde_json::json!(self.document_diff.as_ref().map(|diff| diff.builds));
+        interaction["git_diff_changed_pairs"] =
+            serde_json::json!(self.document_diff.as_ref().map(|diff| {
+                diff.pairs
                     .iter()
-                    .map(|row| row.reverted)
+                    .enumerate()
+                    .filter(|(_, p)| p.changed)
+                    .map(|(i, _)| i)
                     .collect::<Vec<_>>()
             }));
-        interaction["git_hunk_rows"] = serde_json::json!(
-            self.hunk_draft.as_ref().map(|draft| draft
-                .rows
-                .iter()
-                .map(|row| row.kind)
-                .collect::<Vec<_>>())
+        interaction["git_diff_hunks"] =
+            serde_json::json!(self.document_diff.as_ref().map(|diff| {
+                diff.hunks
+                    .iter()
+                    .filter_map(|h| h.changes.first().map(|c| c.lines.start))
+                    .collect::<Vec<_>>()
+            }));
+        interaction["editor_panel_width"] = serde_json::json!(
+            egui::PanelState::load(context, egui::Id::new("editor")).map(|p| p.size().x)
         );
         interaction["explorer_focused"] = serde_json::json!(
             self.explorer

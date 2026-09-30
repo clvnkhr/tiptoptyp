@@ -508,3 +508,27 @@ definition extraction happen only on source/configuration changes; guide
 painting visits visible rows and visible indentation columns only. This
 measurement excludes painting and cold/cache-miss work. Metadata is in
 `performance-results/editor-decorations-2026-09-30.json`.
+
+
+## Live document diff (2026-09-30)
+
+The combined editor compares source in memory rather than starting Git and
+writing comparison files for each edit. A same-release-profile macOS 14.6.1
+ARM64 probe used 4,000 lines and 24 warmed comparison requests: the existing
+Git-process comparison took 354.8 ms total, versus 9.16 ms for the live model
+(14.8 vs 0.38 ms per request). The first live request reuses its warmed source;
+subsequent requests each change the document. One thousand unchanged model
+requests took 87.3 ms and triggered no rebuilds.
+
+This measures the comparison utilities, not rendered typing latency, cold
+startup or whole-app CPU use; viewport/theme do not apply. Run metadata,
+fixture hash and raw output are retained in
+`.tiptoptyp/profiles/full-document-diff/measurement.log`. Repeat with
+`cargo test --release --bin tiptoptyp document_diff_measurement -- --ignored --nocapture`.
+
+Regression tests protect bounded comparison work, preservation of every line,
+layout reuse on unchanged source and unrelated settings, wrapped alignment,
+Unicode source/cursor identity, and invalidation on resized columns. Both
+laid-out columns and their logical row groups are cached; geometric gaps do not
+insert synthetic text into the document. No extra idle repaint loop was added.
+This local result does not establish a cross-platform performance guarantee.

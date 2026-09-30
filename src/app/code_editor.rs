@@ -53,15 +53,24 @@ impl Default for Options {
     }
 }
 
-pub(crate) fn source_editor(
-    ui: &mut egui::Ui,
-    salt: impl std::hash::Hash + std::fmt::Debug,
-    text: &mut dyn egui::TextBuffer,
+pub(crate) fn highlight_job(
+    ui: &egui::Ui,
+    id: egui::Id,
+    source: &str,
     extension: &str,
     settings: &AppSettings,
-    options: Options,
-) -> egui::Response {
-    let id = ui.make_persistent_id(salt);
+) -> egui::text::LayoutJob {
+    highlight_job_with_mitex(ui, id, source, extension, settings, false)
+}
+
+pub(crate) fn highlight_job_with_mitex(
+    ui: &egui::Ui,
+    id: egui::Id,
+    source: &str,
+    extension: &str,
+    settings: &AppSettings,
+    mitex_dollars: bool,
+) -> egui::text::LayoutJob {
     let cache = ui.ctx().data_mut(|data| {
         data.get_temp_mut_or_default::<Arc<Mutex<Highlight>>>(id.with("syntax"))
             .clone()
@@ -88,18 +97,35 @@ pub(crate) fn source_editor(
         .generic
         .set_rainbow_brackets(settings.rainbow_brackets);
     cache.typst.set_rainbow_brackets(settings.rainbow_brackets);
-    let path = format!("settings.{extension}");
+    cache.typst.set_mitex_dollars(mitex_dollars);
+    let definitions = settings.highlight_definitions && matches!(extension, "typ" | "tex");
+    let accent = crate::theme::palette(ui.ctx()).accent;
+    cache
+        .generic
+        .set_decorations(definitions, &settings.highlight_rules, accent);
+    cache
+        .typst
+        .set_decorations(definitions, &settings.highlight_rules, accent);
+    let path = format!("source.{extension}");
     let Highlight { generic, typst, .. } = &mut *cache;
+    if extension == "typ" {
+        typst.highlight(source, ui.visuals().dark_mode, generic)
+    } else {
+        generic.highlight(source, Some(Path::new(&path)), ui.visuals().dark_mode)
+    }
+}
+
+pub(crate) fn source_editor(
+    ui: &mut egui::Ui,
+    salt: impl std::hash::Hash + std::fmt::Debug,
+    text: &mut dyn egui::TextBuffer,
+    extension: &str,
+    settings: &AppSettings,
+    options: Options,
+) -> egui::Response {
+    let id = ui.make_persistent_id(salt);
     let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, width: f32| {
-        let mut job = if extension == "typ" {
-            typst.highlight(buffer.as_str(), ui.visuals().dark_mode, generic)
-        } else {
-            generic.highlight(
-                buffer.as_str(),
-                Some(Path::new(&path)),
-                ui.visuals().dark_mode,
-            )
-        };
+        let mut job = highlight_job(ui, id, buffer.as_str(), extension, settings);
         job.wrap.max_width = width;
         ui.fonts_mut(|fonts| fonts.layout_job(job))
     };

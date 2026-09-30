@@ -9,15 +9,6 @@ impl Action {
         Self::Unstage,
         Self::Revert,
     ];
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Stage => "Stage",
-            Self::Unstage => "Unstage",
-            Self::Revert => "Revert",
-            Self::Previous => "Previous",
-            Self::Next => "Next",
-        }
-    }
     pub(crate) fn shortcut(self) -> crate::shortcuts::ShortcutAction {
         use crate::shortcuts::ShortcutAction as S;
         match self {

@@ -48,6 +48,7 @@ use table_editor::show_table_editor_ui;
 mod extra_shortcuts;
 mod find_bar;
 mod git_actions;
+mod git_diff;
 mod image_view;
 mod lifecycle;
 mod mitex_mode;
@@ -828,12 +829,6 @@ enum AppPopup {
 
 #[derive(Debug, Clone)]
 enum AppPopupAction {
-    GitHunk(
-        crate::git::repository::hunks::Action,
-        DocumentKey,
-        crate::git::editor::ChunkDiff,
-    ),
-    GitEdit(DocumentKey, crate::git::editor::ChunkDiff, String),
     Command(AppCommand),
     Editor(EditorMenuAction),
     Workspace(WorkspaceMenuAction),
@@ -1264,7 +1259,7 @@ pub struct EditorApp {
     git_editor: crate::git::editor::GitEditorState,
     git_hunk_job: crate::worker::ExclusiveJob<String>,
     pending_hunk_popup: Option<git_actions::PendingHunkPopup>,
-    hunk_draft: Option<crate::git::editor::draft::Draft>,
+    document_diff: Option<crate::git::editor::document_diff::DocumentDiff>,
     workspace_chooser_visible: bool,
     workspace_history_removals: Vec<PathBuf>,
     workspace: Option<WorkspaceTree>,
@@ -1573,7 +1568,7 @@ impl EditorApp {
             git_editor: crate::git::editor::GitEditorState::default(),
             git_hunk_job: Default::default(),
             pending_hunk_popup: None,
-            hunk_draft: None,
+            document_diff: None,
             workspace_chooser_visible: false,
             workspace_history_removals: Vec::new(),
             workspace: None,
@@ -3603,12 +3598,13 @@ impl EditorApp {
     }
 
     fn open_app_popup(&mut self, popup: AppPopup) {
-        self.hunk_draft = match &popup {
-            AppPopup::GitChunk { chunk, .. } => {
-                crate::git::editor::draft::Draft::new(&chunk.hunk).ok()
-            }
-            _ => None,
-        };
+        self.document_diff = None;
+        if let AppPopup::GitChunk { chunk, .. } = &popup
+            && let Err(error) = self.prepare_document_diff(chunk)
+        {
+            self.show_file_error(error);
+            return;
+        }
         self.app_popup_generation = self.app_popup_generation.wrapping_add(1);
         self.app_popup = Some(popup);
         self.app_popup_had_focus = false;
@@ -3619,6 +3615,7 @@ impl EditorApp {
         self.pending_hunk_popup = None;
         let closes_git_chunk = matches!(self.app_popup, Some(AppPopup::GitChunk { .. }));
         self.app_popup = None;
+        self.document_diff = None;
         self.app_popup_had_focus = false;
         self.app_popup_blur_started = None;
         if closes_git_chunk {
@@ -7207,12 +7204,6 @@ impl EditorApp {
             return;
         };
         match action {
-            AppPopupAction::GitEdit(key, chunk, text) => {
-                self.apply_hunk_draft(context, key, chunk, text);
-            }
-            AppPopupAction::GitHunk(action, key, chunk) => {
-                self.perform_hunk_action(context, action, key, chunk)
-            }
             AppPopupAction::Command(command) => {
                 let viewport = focused_input_viewport(context);
                 if !self.route_edit_command_to_focused_widget(command, context, viewport) {
@@ -8936,11 +8927,6 @@ impl EditorApp {
                 document.source(),
                 projection.as_ref(),
             );
-            if matches!(self.app_popup, Some(AppPopup::GitChunk { .. }))
-                && self.git_editor.chunk.is_none()
-            {
-                self.close_app_popup();
-            }
         }
         self.record_status_transition();
         self.record_notice_transition();
@@ -9919,7 +9905,7 @@ fn paint_line_numbers(
     }
 }
 
-fn line_number_position(
+pub(crate) fn line_number_position(
     right: f32,
     top: f32,
     source: &egui::epaint::text::PlacedRow,

@@ -19,7 +19,8 @@ use std::{
 };
 
 mod actions;
-pub(crate) mod draft;
+pub(crate) mod document_diff;
+pub(crate) mod full_view;
 pub(crate) mod view;
 
 const EDIT_DEBOUNCE: Duration = Duration::from_millis(180);
@@ -528,7 +529,7 @@ pub(crate) fn marker_geometry(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git::editor::view::{Action as ViewAction, show_chunk, show_markers};
+    use crate::git::editor::view::{Action as ViewAction, show_markers};
     use crate::git::repository::snapshot;
     use std::{fs, thread};
 
@@ -1251,26 +1252,6 @@ mod tests {
                     {
                         *selected = Some(index);
                     }
-                    ui.add_space(90.0);
-                    if let Some(index) = selected {
-                        show_chunk(
-                            ui,
-                            &ChunkDiff {
-                                path: "/project/main.typ".into(),
-                                hunk: hunks[*index].clone(),
-                            },
-                            &crate::shortcuts::ShortcutBindings::defaults(
-                                crate::shortcuts::ShortcutPlatform::current(),
-                            ),
-                            false,
-                            crate::settings::GitDiffStyle::Unified,
-                            &crate::settings::AppSettings {
-                                toolbar_style: crate::settings::ToolbarStyle::Icons,
-                                ..Default::default()
-                            },
-                            &mut draft::Draft::new(&hunks[*index]).unwrap(),
-                        );
-                    }
                 },
                 None::<usize>,
             );
@@ -1280,7 +1261,5 @@ mod tests {
             .click();
         harness.run();
         assert_eq!(*harness.state(), Some(1));
-        harness.get_by_label_contains("+second edit");
-        assert!(harness.query_by_label_contains("+first edit").is_none());
     }
 }

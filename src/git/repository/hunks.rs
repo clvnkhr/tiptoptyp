@@ -122,43 +122,6 @@ pub(crate) fn revert(source: &str, hunk: &Hunk) -> Result<String, String> {
     Ok(result)
 }
 
-/// Replace the complete displayed hunk, including context, only if it still matches.
-pub(crate) fn replace(source: &str, hunk: &Hunk, replacement: &str) -> Result<String, String> {
-    let header = hunk.text.lines().next().ok_or("Missing hunk header")?;
-    let field = header
-        .split_whitespace()
-        .nth(2)
-        .and_then(|s| s.strip_prefix('+'))
-        .ok_or("Invalid hunk range")?;
-    let bytes = bytes_for_lines(source, range(field)?)?;
-    let mut after = String::new();
-    let mut previous = ' ';
-    for line in hunk.text.split_inclusive('\n').skip(1) {
-        match line.chars().next() {
-            Some('\\') if previous != '-' => {
-                if after.ends_with('\n') {
-                    after.pop();
-                }
-            }
-            Some('\\') => {}
-            Some(kind @ (' ' | '+')) => {
-                after.push_str(&line[1..]);
-                previous = kind;
-            }
-            Some('-') => {
-                previous = '-';
-            }
-            _ => return Err("Invalid hunk contents".into()),
-        }
-    }
-    if source.get(bytes.clone()) != Some(after.as_str()) {
-        return Err("The hunk changed; reopen it before editing".into());
-    }
-    let mut result = source.to_owned();
-    result.replace_range(bytes, replacement);
-    Ok(result)
-}
-
 fn overlaps(a: &Range<usize>, b: &Range<usize>) -> bool {
     if a.is_empty() && b.is_empty() {
         a.start == b.start

@@ -734,3 +734,38 @@ validated. Formatting, strict all-target Clippy, the full Rust suite (1,204 unit
 tests passed, 34 intentionally ignored, plus integration tests) and all 15 xtask
 tests passed. The reported table fixture and math conversions have focused
 parser/state/semantic regressions; native table/math journeys remain a gap.
+
+### 2026-09-30: full-document live diff and Escape sizing
+
+Replaced the docked draft/edit switch with one editable full-document comparison.
+The current column is the actual document, sharing its source widget identity,
+Undo/Redo history, auto-pairing, autosave and preview flow. All baseline/current
+lines remain visible; wrapped pairs align through geometric gaps without adding
+characters to the source. Syntax, rainbow brackets and custom decorations remain
+on unchanged lines; Git colors override changed lines. Marker clicks and the
+previous/next controls move the real cursor through the live comparison.
+
+Reintroduced the old empty Escape render pass to establish a failing regression:
+a 600-pixel resizable code pane shrank to its 100-pixel minimum. Escape now paints
+the ordinary editor in the same pass and preserves its width and source cursor.
+The failing reproduction is retained in the ignored profiling evidence folder.
+Deterministic coverage includes complete 180-line navigation, bounded large-file
+comparison, exhaustive short repeated-line cases, wrapping/cursor identity,
+Unicode/final-newline changes, direct semantic typing and layout-cache reuse.
+
+Formatting, strict all-target Clippy, the full Rust suite (1,208 app unit tests,
+35 intentionally ignored, plus core/integration/doc tests) and 15 xtask tests
+passed. The desktop-test build also compiled successfully. The fresh framebuffer
+`.tiptoptyp/screenshots/agent-review/1790800458813-0001-main-git-chunk.png`
+was inspected for paired alignment, syntax, line numbers and complete source.
+The 25-image gallery was regenerated and validated; representative light main
+and dark popup captures were inspected. Framebuffers do not prove native desktop
+composition or input behavior.
+
+The expanded native `git_hunks` journey checks editing beyond the original hunk,
+Undo/Redo, resizing, find-focus ownership and Escape divider stability. Both
+attempts stopped before interaction because macOS reported
+`accessibility=true, input=true, desktop=false, locked=true`.
+This remains an unavailable native check, not a pass. Preparation evidence is
+`run-nwbbovq0`. The matched optimized algorithm measurement is recorded in
+`docs/performance.md`; it measures comparison work, not end-to-end typing latency.

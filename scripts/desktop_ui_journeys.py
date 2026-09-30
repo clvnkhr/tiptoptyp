@@ -560,7 +560,7 @@ class EditorJourneys:
         self.close_scratch(count)
 
     def git_hunks(self):
-        source = self.directory / "hunks.txt"
+        source = self.directory / "hunks.typ"
         if self.snapshot()["document"]["path"] != str(source):
             import time
             self.key(31)
@@ -571,67 +571,75 @@ class EditorJourneys:
             self.native("ax-press-title", "Open")
             self.wait("hunk fixture opened", lambda d: d["path"] == str(source), timeout=15)
         lines = source.read_text().splitlines(keepends=True)
+        original = "".join(lines)
+        self.choose_backend("Pdfium")
+        self.key(20)  # Split: the docked editor must preserve this resizable pane.
+        self.wait("split editor shown", lambda d: d["view_mode"] == "Split" and d["editor_panel_width"] is not None)
         self.wait("three separated Git hunks", lambda d: d["git_hunk_count"] == 3)
         self.click("editor.source")
         self.key(126, "cmd")
         for line in (5, 85, 165, 5):
             self.key(125, "cmd+alt")
-            self.wait("keyboard hunk jump keeps editor focused", lambda d: d["editor_keyboard_focused"]
-                      and d["git_hunk_popup_line"] is None and d["cursor"][0] == sum(map(len, lines[:line])))
+            self.wait("keyboard hunk jump keeps normal editor focused", lambda d: d["editor_keyboard_focused"]
+                      and not d["git_diff_open"] and d["cursor"][0] == sum(map(len, lines[:line])))
         self.wait_target("git.hunk.0")
         target = self.snapshot()["targets"]["git.hunk.0"]
         self.native("move", target["x"], target["y"])
-        self.wait("read-only hunk hover preserves editor focus", lambda d: d["hover_tooltip_open"] and d["git_hunk_popup_line"] is None and d["editor_keyboard_focused"])
-        if getattr(self, "capture_review", False):
-            state = self.snapshot()["document"]
-            card, pointer = state["hover_tooltip_rect"], state["pointer"]
-            self.native("click", card[0] + card[2] / 2 + target["x"] - pointer[0],
-                        card[1] + card[3] / 2 + target["y"] - pointer[1])
-            self.capture_viewport("diagnostic")
+        self.wait("read-only hunk hover preserves editor focus", lambda d: d["hover_tooltip_open"] and not d["git_diff_open"] and d["editor_keyboard_focused"])
         self.click("git.hunk.0")
-        self.wait("first hunk popup", lambda d: d["git_hunk_popup_line"] == 5)
+        self.wait("full document diff opens at clicked change", lambda d: d["git_diff_open"] and d["git_diff_lines"] == [180, 180]
+                  and d["cursor"][0] == sum(map(len, lines[:5])))
         for button, line in (("Next",85), ("Next",165), ("Next",5), ("Previous",165)):
             self.click("git.hunk." + button)
-            self.wait("destination hunk popup", lambda d: d["git_hunk_popup_line"] == line)
-            self.stable_state(lambda d: d["git_hunk_popup_line"] == line)
-        self.key(53, "none")
-        self.wait("hunk popup dismissed", lambda d: d["git_hunk_popup_line"] is None)
-        self.click("editor.source")
-        self.key(126, "cmd")
-        self.wait_target("git.hunk.0")
-        self.click("git.hunk.0")
-        self.wait("hunk reopened for editing", lambda d: d["git_hunk_popup_line"] == 5 and d["git_hunk_rows"] is not None)
+            self.wait("navigation moves live editor cursor", lambda d: d["git_diff_open"] and d["cursor"][0] == sum(map(len, lines[:line])) and d["editor_keyboard_focused"])
+            self.stable_state(lambda d: d["git_diff_open"] and d["cursor"][0] == sum(map(len, lines[:line])))
         self.native("resize-focused", 1400, 850)
-        self.wait("docked hunk resizes with owner", lambda d: d["native_size"] == [1400, 850] and d["git_hunk_popup_line"] == 5)
-        windows = self.native("windows")
-        self.record("docked-hunk.windows", windows=windows)
+        self.wait("document diff resizes with owner", lambda d: d["native_size"] == [1400, 850] and d["git_diff_open"])
+        self.click("git.hunk.Next")  # Wrap to first changed line.
+        self.wait("first change selected", lambda d: d["cursor"][0] == sum(map(len, lines[:5])))
         if getattr(self, "capture_review", False): self.capture_viewport("main")
-        rows = self.snapshot()["document"]["git_hunk_rows"]
-        removed = rows.index("-")
-        added = rows.index("+")
-        self.click("git.hunk.line." + str(removed))
-        self.wait("removed line selected", lambda d: d["git_hunk_reverted"][removed])
-        self.click("git.hunk.line." + str(added))
-        self.wait("added line selected", lambda d: d["git_hunk_reverted"][added])
-        self.click("git.hunk.Apply")
-        self.wait("individual line revert applied", lambda d: d["git_hunk_count"] == 2 and d["git_hunk_popup_line"] is None)
+        pair = self.snapshot()["document"]["git_diff_changed_pairs"][0]
+        self.click("git.hunk.line." + str(pair))
+        expected = original.replace("005 changed", "005 original")
+        self.source_is(expected)
+        self.wait("line revert immediately refreshes live diff", lambda d: d["git_diff_open"] and len(d["git_diff_hunks"]) == 2)
         self.key(6)
-        self.source_is("".join(lines))
-        self.wait("undo restores all hunks", lambda d: d["git_hunk_count"] == 3)
+        self.source_is(original)
+        self.wait("undo restores live highlights", lambda d: len(d["git_diff_hunks"]) == 3)
+        builds = self.snapshot()["document"]["git_diff_builds"]
+        self.key(126, "cmd")
+        self.native("text", "Prefix ")
+        self.source_is("Prefix " + original)
+        self.wait("editing outside original hunk refreshes full diff", lambda d: d["git_diff_open"] and len(d["git_diff_hunks"]) == 4 and d["git_diff_builds"] > builds)
+        self.key(6)
+        self.source_is(original)
+        self.key(6, "cmd+shift")
+        self.source_is("Prefix " + original)
+        self.key(6)
+        self.source_is(original)
+        self.key(125, "cmd")
+        self.native("text", "Extra line")
+        self.source_is(original + "Extra line")
+        self.wait("last line is editable and not hidden", lambda d: d["git_diff_lines"] == [180, 181])
+        if getattr(self, "capture_review", False): self.capture_viewport("main")
+        self.key(6)
+        self.source_is(original)
+        width = self.snapshot()["document"]["editor_panel_width"]
+        self.key(53, "none")
+        self.wait("Escape returns to code without resizing pane", lambda d: not d["git_diff_open"] and d["editor_keyboard_focused"] and abs(d["editor_panel_width"] - width) < 1)
+        self.stable_state(lambda d: abs(d["editor_panel_width"] - width) < 1)
+        self.wait("original gutter markers refreshed", lambda d: d["git_hunk_count"] == 3)
+        self.key(126, "cmd")
         self.click("git.hunk.0")
-        self.wait_target("git.hunk.Edit")
-        self.click("git.hunk.Edit")
-        self.wait_target("git.hunk.editor")
-        self.click("git.hunk.editor")
-        self.key(0)
-        self.native("text", "manual hunk edit")
-        self.key(36, "none")
-        self.source_is("".join(lines))  # Draft typing must not reach the source editor.
-        if getattr(self, "capture_review", False): self.capture_viewport("main")
-        self.click("git.hunk.Apply")
-        self.wait("manual hunk edit applied", lambda d: d["source_fingerprint"] != fingerprint("".join(lines)) and d["git_hunk_popup_line"] is None)
-        self.key(6)
-        self.source_is("".join(lines))
+        self.wait("reopening uses fresh full-document baseline", lambda d: d["git_diff_open"] and d["git_diff_lines"] == [180, 180] and len(d["git_diff_hunks"]) == 3)
+        self.key(3)
+        self.wait("Find owns keyboard while document diff stays open", lambda d: d["find_focused"] and d["git_diff_open"])
+        self.native("text", "Line 085")
+        self.wait("Find query updates without stealing focus", lambda d: d["find_focused"] and d["find_query_fingerprint"] == fingerprint("Line 085") and d["find_selected"] is not None)
+        self.source_is(original)
+        self.key(3)
+        self.wait("closing Find preserves document diff", lambda d: not d["find_visible"] and d["git_diff_open"] and d["editor_keyboard_focused"])
+
 
     def preview_keyboard(self):
         self.ensure_typesetting_tab()

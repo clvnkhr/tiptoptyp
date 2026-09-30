@@ -77,7 +77,7 @@ now exercised through the real app, and the lower-level coverage retained.
 | tabs | Previous/next with separate unsaved buffers and carets; original preview retained |
 | layout | Code/preview/split, explorer hide/maximize/restore, editor setting shortcuts, panel maximize/Activity/close |
 | explorer_scroll | Native wheel input over long Files and Contents lists, then Files with Cmd+F's sticky search open; measured offsets advance and remain advanced across fresh frames |
-| git_hunks | Three changes across a 180-line temporary Git document; keyboard next-hunk jumps preserve editor focus without a popup, docked editor previous/next arrows open the destination diff across scrolling and wraparound; read-only marker hover preserves source focus, window resizing retains the editor, individual line reversions and manual edits apply and undo |
+| git_hunks | Three changes across a 180-line Typst Git document in a split editor/preview window; marker hover preserves focus, clicks open all lines at the selected change, navigation moves the live cursor, individual reversions and edits outside the original hunk refresh immediately and undo/redo, Find retains keyboard ownership, and Escape preserves the pane width |
 | folding | Repeated shortcut and gutter collapse/expand without losing headers or source |
 | closing | Dirty-close Cancel/Escape preserve text; explicit Discard closes only the requested tab |
 | controls | Both engines: stable outline popup size, app-switch hide/restore, outline/history/pages/zoom/fit/search, minimize/reopen, detach/return |

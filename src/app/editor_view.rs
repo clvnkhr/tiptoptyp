@@ -163,42 +163,19 @@ impl EditorApp {
     }
 
     pub(super) fn show_editor(&mut self, ui: &mut egui::Ui) {
+        if matches!(self.app_popup, Some(AppPopup::GitChunk { .. }))
+            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            let cursor = self.editor_snapshot(ui.ctx()).cursor.as_sorted_char_range();
+            self.close_app_popup();
+            self.pending_editor_selection =
+                Some(EditorSelection::Focus(cursor.start.0..cursor.end.0));
+            self.focus_source_editor(ui.ctx());
+            // Render the normal editor in this same pass. An empty return
+            // lets egui shrink the resizable side panel to its minimum.
+        }
         if let Some(AppPopup::GitChunk { chunk, .. }) = self.app_popup.clone() {
-            if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
-                self.close_app_popup();
-                self.focus_source_editor(ui.ctx());
-                return;
-            }
-            if self.hunk_draft.is_none() {
-                self.hunk_draft = crate::git::editor::draft::Draft::new(&chunk.hunk).ok();
-            }
-            let shortcuts = self.settings.effective_shortcuts();
-            if let Some(draft) = self.hunk_draft.as_mut() {
-                let action = crate::git::editor::view::show_chunk(
-                    ui,
-                    &chunk,
-                    &shortcuts,
-                    self.git_hunk_job.is_running(),
-                    crate::settings::GitDiffStyle::SideBySide,
-                    &self.settings,
-                    draft,
-                );
-                if let Some(action) = action {
-                    let key = self.document().key();
-                    self.close_app_popup();
-                    self.focus_source_editor(ui.ctx());
-                    self.pending_app_popup_action = match action {
-                        crate::git::editor::view::Action::RunHunk(action) => {
-                            Some(AppPopupAction::GitHunk(action, key, chunk))
-                        }
-                        crate::git::editor::view::Action::ApplyText(text) => {
-                            Some(AppPopupAction::GitEdit(key, chunk, text))
-                        }
-                        _ => None,
-                    };
-                    ui.ctx().request_repaint();
-                }
-            }
+            self.show_document_diff(ui, &chunk);
             return;
         }
 

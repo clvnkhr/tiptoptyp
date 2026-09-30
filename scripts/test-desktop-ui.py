@@ -478,9 +478,9 @@ def main():
             if args.journey in ("all", "git_hunks"):
                 subprocess.run(["git", "init", "-q", str(directory)], check=True)
                 original = "".join(f"Line {index:03} original text.\n" for index in range(180))
-                hunk_fixture = directory / "hunks.txt"
+                hunk_fixture = directory / "hunks.typ"
                 hunk_fixture.write_text(original)
-                subprocess.run(["git", "-C", str(directory), "add", "hunks.txt"], check=True)
+                subprocess.run(["git", "-C", str(directory), "add", "hunks.typ"], check=True)
                 subprocess.run(["git", "-C", str(directory), "-c", "user.name=UI Fixture",
                                 "-c", "user.email=fixture@example.invalid", "commit", "-qm", "Fixture"], check=True)
                 hunk_fixture.write_text(original.replace("005 original", "005 changed")

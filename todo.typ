@@ -286,3 +286,11 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 // 26: the math context menu converts enclosing Typst math between inline and
 //     display, and TeX to inline or the six requested display environments.
 //     Applying an obsolete menu cannot replace changed source.
+
+// Git diff follow-up (2026-09-30): the docked editor now has one combined,
+// live mode over the entire document. Old/current lines are aligned with
+// geometric gaps, syntax colors survive outside Git changes, and edits update
+// the diff immediately through normal source Undo/Redo. Marker clicks and the
+// navigation arrows place the source cursor at changes. The old read-only hover
+// remains compact. Escape draws the normal code editor in the same frame to
+// preserve the code/preview divider width.
