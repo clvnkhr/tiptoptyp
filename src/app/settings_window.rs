@@ -416,6 +416,67 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn help_and_editor_preferences_use_the_settings_owner_and_persist() {
+        let mut harness = settings_harness(SettingsWindow::default());
+        harness.run();
+        harness
+            .get(
+                by().label("Help & tips")
+                    .predicate(|n| n.role() == egui::accesskit::Role::Button),
+            )
+            .click();
+        harness.run();
+        assert!(harness.state().ui.help_mode);
+        harness.get(by().label("10 useful shortcuts"));
+        harness.get(by().label("Preview shortcuts"));
+        harness.get(by().label("Leave part of your code untouched"));
+        harness
+            .get(
+                by().label("Help & tips")
+                    .predicate(|n| n.role() == egui::accesskit::Role::Button),
+            )
+            .click();
+        harness.run();
+        for label in [
+            "Indentation guides",
+            "Highlight definitions and redefinitions",
+            "Wrap lines",
+        ] {
+            harness
+                .get(
+                    by().label(label)
+                        .predicate(|n| n.role() == egui::accesskit::Role::CheckBox),
+                )
+                .click();
+            harness.run();
+        }
+        let mut live = AppSettings::default();
+        harness.state_mut().take_actions(&mut live);
+        assert!(!live.indentation_guides);
+        assert!(live.highlight_definitions);
+        assert!(!live.line_wrap);
+        harness.get(by().label("Custom text highlights")).click();
+        harness.run();
+        let first = harness
+            .get(by().role(egui::accesskit::Role::TextInput).value("TODO:"))
+            .rect();
+        let second = harness
+            .get(by().role(egui::accesskit::Role::TextInput).value("FIXME:"))
+            .rect();
+        assert_eq!(first.left(), second.left());
+        assert!(second.top() >= first.bottom());
+        let header = harness.get(by().label("Text to match")).rect();
+        assert!(header.left() >= first.left() && header.right() <= first.right());
+        harness.get(by().label("Add highlight")).click();
+        harness.run();
+        harness.state_mut().take_actions(&mut live);
+        assert_eq!(live.highlight_rules.len(), 3);
+        assert_eq!(live.highlight_rules[2].text, "#mycomment");
+        let draft = crate::settings_json::Draft::new(&live);
+        assert_eq!(draft.validation.unwrap(), live);
+    }
+
     fn settings_harness(mut window: SettingsWindow) -> Harness<'static, SettingsWindow> {
         let context = egui::Context::default();
         if window.input.is_none() {
@@ -727,6 +788,7 @@ impl SettingsWindow {
         self.close_requested = true;
     }
     pub(super) fn request_search_focus(&mut self) {
+        self.ui.help_mode = false;
         self.ui.focus_search = true;
     }
     pub(super) fn has_actions(&self) -> bool {
@@ -952,6 +1014,7 @@ impl SettingsWindow {
                         owner_changed = true;
                     }
                     Some(ShortcutAction::Find | ShortcutAction::FindReplace) => {
+                        self.ui.help_mode = false;
                         focus_search = true;
                     }
                     Some(ShortcutAction::KeyboardShortcuts) => {
@@ -1100,6 +1163,18 @@ impl SettingsWindow {
                                 ));
                             }
                         }
+                        let help = ui
+                            .add(egui::Button::new("?").selected(self.ui.help_mode))
+                            .on_hover_text("Help & tips");
+                        help.widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Help & tips")
+                        });
+                        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                        crate::desktop_test::observe("settings.help", &help);
+                        if help.clicked() {
+                            self.ui.help_mode = !self.ui.help_mode;
+                            self.ui.json_mode = false;
+                        }
                         let label = if self.ui.json_mode {
                             "Show settings form"
                         } else {
@@ -1120,6 +1195,7 @@ impl SettingsWindow {
                         crate::desktop_test::observe("settings.json.mode", &json);
                         if json.clicked() {
                             self.ui.json_mode = !self.ui.json_mode;
+                            self.ui.help_mode = false;
                         }
                         json.on_hover_text(label);
                     });

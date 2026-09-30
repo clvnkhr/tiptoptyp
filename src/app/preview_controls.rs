@@ -159,7 +159,7 @@ impl Controls {
                         self.position.unwrap_or_default(),
                     ));
                 }
-                if handle.dragged()
+                if (handle.dragged() || handle.drag_stopped())
                     && let (Some(anchor), Some(pointer)) = (self.drag_anchor, pointer)
                 {
                     self.position = Some(drag_position(anchor, origin + pointer.to_vec2()));

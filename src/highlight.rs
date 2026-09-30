@@ -23,6 +23,8 @@ pub struct SyntaxHighlighter {
     cached_dark_mode: bool,
     cached_job: LayoutJob,
     has_cache: bool,
+    decoration_options: crate::editor_decoration::Options,
+    decorations: crate::editor_decoration::Decorations,
     cached_syntect_revision: u64,
     cached_code_mode: bool,
     styles: ResolvedTypstStyles,
@@ -39,6 +41,8 @@ impl Default for SyntaxHighlighter {
             cached_dark_mode: true,
             cached_job: LayoutJob::default(),
             has_cache: false,
+            decoration_options: Default::default(),
+            decorations: Default::default(),
             cached_syntect_revision: 0,
             cached_code_mode: false,
             styles: ResolvedTypstStyles::default(),
@@ -51,6 +55,16 @@ impl Default for SyntaxHighlighter {
 }
 
 impl SyntaxHighlighter {
+    pub(crate) fn set_decorations(
+        &mut self,
+        definitions: bool,
+        rules: &[crate::editor_decoration::HighlightRule],
+        accent: Color32,
+    ) {
+        if self.decoration_options.set(definitions, rules, accent) {
+            self.has_cache = false;
+        }
+    }
     pub(crate) fn set_mitex_dollars(&mut self, enabled: bool) {
         if self.mitex_dollars != enabled {
             self.mitex_dollars = enabled;
@@ -202,6 +216,8 @@ impl SyntaxHighlighter {
         // Typst's syntax-tree representation changes in the future.
         debug_assert_eq!(job.text, source);
 
+        self.decoration_options
+            .decorate(&mut self.decorations, &mut job, true);
         self.cached_dark_mode = dark_mode;
         self.cached_syntect_revision = syntect_revision;
         self.cached_code_mode = code_mode;

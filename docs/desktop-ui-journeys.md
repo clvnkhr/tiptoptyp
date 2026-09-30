@@ -225,3 +225,10 @@ Three click/Escape round trips per backend check keyboard ownership. Tinymist's
 source without changing preview colors. `--capture-review` captures the PDFium
 focus outline and badge once; the root framebuffer cannot display the embedded
 Tinymist WebView, whose focus and keyboard behavior are checked separately.
+
+`editor_preferences` opens Settings Help, checks its Find routing, changes and
+restores indentation guides, definition highlighting and word wrapping, opens the
+custom highlight section, and verifies that source text is unchanged. Use
+`--capture-review` to retain fresh Help/settings/editor viewport framebuffers.
+The `controls` journey also rejects an oversized short toolbar tooltip and, when
+capturing, focuses that tooltip's native viewport before the screenshot shortcut.

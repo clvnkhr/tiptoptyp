@@ -29,6 +29,8 @@ pub struct GenericSyntaxHighlighter {
     cached_dark_mode: bool,
     cached_job: LayoutJob,
     has_cache: bool,
+    decoration_options: crate::editor_decoration::Options,
+    decorations: crate::editor_decoration::Decorations,
     rainbow: crate::rainbow::RainbowBrackets,
     theme_revision: u64,
     #[cfg(test)]
@@ -61,6 +63,8 @@ impl Default for GenericSyntaxHighlighter {
             cached_dark_mode: true,
             cached_job: LayoutJob::default(),
             has_cache: false,
+            decoration_options: Default::default(),
+            decorations: Default::default(),
             rainbow: Default::default(),
             theme_revision: 0,
             #[cfg(test)]
@@ -70,6 +74,16 @@ impl Default for GenericSyntaxHighlighter {
 }
 
 impl GenericSyntaxHighlighter {
+    pub(crate) fn set_decorations(
+        &mut self,
+        definitions: bool,
+        rules: &[crate::editor_decoration::HighlightRule],
+        accent: Color32,
+    ) {
+        if self.decoration_options.set(definitions, rules, accent) {
+            self.has_cache = false;
+        }
+    }
     pub(crate) fn set_rainbow_brackets(&mut self, settings: crate::rainbow::RainbowBrackets) {
         if self.rainbow != settings {
             self.rainbow = settings;
@@ -116,6 +130,8 @@ impl GenericSyntaxHighlighter {
             crate::rainbow::apply_json(&mut job, self.rainbow, dark_mode);
         }
 
+        self.decoration_options
+            .decorate(&mut self.decorations, &mut job, false);
         self.cached_source.clear();
         self.cached_source.push_str(source);
         self.cached_extension = normalized_extension;

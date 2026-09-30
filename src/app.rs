@@ -57,6 +57,7 @@ mod terminal_panel;
 use crate::terminal::{BottomPanel, PanelTab, TerminalPane, terminal_id};
 mod workspace_view;
 use lifecycle::DocumentLifecycle;
+mod help;
 mod native_views;
 mod pdfium_view;
 mod preview_controls;
@@ -870,6 +871,9 @@ enum SettingsTarget {
     ThemeColors,
     PageTheme,
     WrapLines,
+    IndentationGuides,
+    DefinitionHighlights,
+    TextHighlights,
     LineNumbers,
     StickyContextRows,
     AutoPairDelimiters,
@@ -910,7 +914,7 @@ enum SettingsTarget {
 }
 
 impl SettingsTarget {
-    const ALL: [Self; 46] = [
+    const ALL: [Self; 49] = [
         Self::Appearance,
         Self::TypstSyntax,
         Self::LightTheme,
@@ -920,6 +924,9 @@ impl SettingsTarget {
         Self::ThemeColors,
         Self::PageTheme,
         Self::WrapLines,
+        Self::IndentationGuides,
+        Self::DefinitionHighlights,
+        Self::TextHighlights,
         Self::LineNumbers,
         Self::StickyContextRows,
         Self::AutoPairDelimiters,
@@ -970,6 +977,9 @@ impl SettingsTarget {
             Self::ThemeColors => "Color adjustments",
             Self::PageTheme => "Page",
             Self::WrapLines => "Wrap lines",
+            Self::IndentationGuides => "Indentation guides",
+            Self::DefinitionHighlights => "Highlight definitions and redefinitions",
+            Self::TextHighlights => "Custom text highlights",
             Self::LineNumbers => "Line numbers",
             Self::StickyContextRows => "Sticky context rows",
             Self::AutoPairDelimiters => "Auto-close delimiters",
@@ -1021,6 +1031,9 @@ impl SettingsTarget {
             | Self::ThemeColors
             | Self::PageTheme => SettingsSection::Appearance,
             Self::WrapLines
+            | Self::IndentationGuides
+            | Self::DefinitionHighlights
+            | Self::TextHighlights
             | Self::LineNumbers
             | Self::StickyContextRows
             | Self::AutoPairDelimiters
@@ -1074,7 +1087,14 @@ impl SettingsTarget {
             Self::PageTheme => {
                 "document light dark follow interface effective comfy preview page text"
             }
-            Self::WrapLines => "editor soft wrapping",
+            Self::WrapLines => "editor soft wrapping word wrap",
+            Self::IndentationGuides => "editor indent guide character tree lines whitespace",
+            Self::DefinitionHighlights => {
+                "editor declaration let macro renewcommand redefined highlight"
+            }
+            Self::TextHighlights => {
+                "editor literal match TODO FIXME custom style text foreground background weight italic underline"
+            }
             Self::LineNumbers => "editor gutter",
             Self::StickyContextRows => "editor headings scopes sections breadcrumbs",
             Self::Handwriting => {

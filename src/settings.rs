@@ -335,6 +335,14 @@ pub(crate) struct AppSettings {
     #[serde(default)]
     pub(crate) git_diff_style: GitDiffStyle,
     pub(crate) line_wrap: bool,
+    #[serde(default = "crate::editor_decoration::enabled")]
+    pub(crate) indentation_guides: bool,
+    #[serde(default = "crate::editor_decoration::default_guide")]
+    pub(crate) indentation_guide_character: String,
+    #[serde(default)]
+    pub(crate) highlight_definitions: bool,
+    #[serde(default = "crate::editor_decoration::default_rules")]
+    pub(crate) highlight_rules: Vec<crate::editor_decoration::HighlightRule>,
     pub(crate) line_numbers: bool,
     #[serde(default)]
     pub(crate) english_grammar: bool,
@@ -429,6 +437,10 @@ impl Default for AppSettings {
             preview_preference: PreviewPreference::Interactive,
             git_diff_style: GitDiffStyle::Unified,
             line_wrap: true,
+            indentation_guides: true,
+            indentation_guide_character: crate::editor_decoration::default_guide(),
+            highlight_definitions: false,
+            highlight_rules: crate::editor_decoration::default_rules(),
             line_numbers: true,
             english_grammar: false,
             snippets: Vec::new(),
@@ -506,6 +518,10 @@ impl AppSettings {
             preview_preference,
             git_diff_style,
             line_wrap,
+            indentation_guides,
+            indentation_guide_character,
+            highlight_definitions,
+            highlight_rules,
             line_numbers,
             english_grammar,
             snippets,
@@ -875,6 +891,10 @@ mod tests {
             preview_preference: PreviewPreference::Pdfium,
             git_diff_style: GitDiffStyle::Unified,
             line_wrap: false,
+            indentation_guides: false,
+            indentation_guide_character: "┆".into(),
+            highlight_definitions: true,
+            highlight_rules: crate::editor_decoration::default_rules(),
             line_numbers: false,
             english_grammar: false,
             snippets: Vec::new(),

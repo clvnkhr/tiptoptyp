@@ -990,11 +990,8 @@ pub struct PopupMetrics {
     pub modal_message_min_height: f32,
     pub modal_message_max_height: f32,
     pub tooltip_width: f32,
-    pub tooltip_text_padding: f32,
-    pub tooltip_min_width: f32,
     pub tooltip_max_width: f32,
     pub tooltip_title_height: f32,
-    pub tooltip_min_height: f32,
     pub tooltip_max_height: f32,
 }
 
@@ -1195,15 +1192,8 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
         modal_message_min_height: 24.0,
         modal_message_max_height: 180.0,
         tooltip_width: 360.0,
-        tooltip_text_padding: 18.0,
-        // Tiny natural-width cards make function/definition hovers difficult
-        // to scan and cause their contents to reflow as the pointer moves.
-        // Keep short cards useful while retaining the natural width for long
-        // documentation and the existing viewport cap.
-        tooltip_min_width: 280.0,
         tooltip_max_width: 620.0,
         tooltip_title_height: 26.0,
-        tooltip_min_height: 68.0,
         tooltip_max_height: 256.0,
     },
     text: TextMetrics {

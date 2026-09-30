@@ -175,13 +175,14 @@ fn tooltip_preview_is_bounded_utf8_safe_and_keeps_short_content_whole() {
 }
 
 #[test]
-fn tooltip_body_width_keeps_short_definitions_readable_and_caps_long_docs() {
-    assert_eq!(tooltip_body_width(1.0), METRICS.popup.tooltip_min_width,);
+fn tooltip_body_width_fits_short_content_and_caps_long_docs() {
+    assert_eq!(tooltip_body_width(1.0), 1.0);
     assert_eq!(
         tooltip_body_width(METRICS.popup.tooltip_max_width * 2.0),
         METRICS.popup.tooltip_max_width,
     );
-    assert!(tooltip_body_width(320.0) > METRICS.popup.tooltip_min_width);
+    assert_eq!(tooltip_body_width(320.0), 320.0);
+    assert_eq!(tooltip_body_width(51.2), 52.0);
 }
 
 #[test]
@@ -485,4 +486,37 @@ fn tooltip_markdown_treats_tinymist_separators_and_doc_failures_as_structure() {
     assert!(!source.contains("failed to parse docs"));
     assert!(source.contains("Theorem Environment"));
     assert!(source.contains("#example(```typ"));
+}
+
+#[test]
+fn native_tooltip_measurement_shrinks_on_content_change_and_ignores_markdown_urls() {
+    let context = egui::Context::default();
+    theme::configure_editor_fonts(
+        &context,
+        Default::default(),
+        Default::default(),
+        false,
+        theme::FONT_WEIGHT_NORMAL,
+        theme::FONT_WEIGHT_NORMAL,
+        None,
+    );
+    let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+        let style = ui.style().clone();
+        let short = tooltip_document_size(ui.ctx(), "Preview", &style, 600.0);
+        let linked = tooltip_document_size(
+            ui.ctx(),
+            "[Preview](https://example.org/a/very/very/very/long/path)",
+            &style,
+            600.0,
+        );
+        assert_eq!(short, linked);
+        let long =
+            tooltip_document_size(ui.ctx(), &"Long documentation ".repeat(40), &style, 300.0);
+        assert!(long.x <= 300.0);
+        assert!(long.y > short.y);
+        let again = tooltip_document_size(ui.ctx(), "Preview", &style, 600.0);
+        assert_eq!(short, again);
+        assert!(short.x < 100.0);
+    });
+    output.textures_delta.clear();
 }

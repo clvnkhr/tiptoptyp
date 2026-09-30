@@ -373,6 +373,21 @@ impl EditorApp {
         let surround_enabled = self.settings.auto_pair_delimiters;
         let auto_pair_enabled = surround_enabled && document_kind.is_typst();
         let auto_pair_syntax = &mut self.auto_pair_syntax;
+        let highlight_definitions = self.settings.highlight_definitions
+            && matches!(document_kind, DocumentKind::Typst | DocumentKind::Tex);
+        let accent = theme::palette(ui.ctx()).accent;
+        self.highlighter.set_decorations(
+            highlight_definitions,
+            &self.settings.highlight_rules,
+            accent,
+        );
+        self.generic_highlighter.set_decorations(
+            highlight_definitions,
+            &self.settings.highlight_rules,
+            accent,
+        );
+        let indentation_guides = self.settings.indentation_guides;
+        let indentation_guide_character = &self.settings.indentation_guide_character;
         let highlighter = &mut self.highlighter;
         let active_tab = self
             .tabs
@@ -576,6 +591,14 @@ impl EditorApp {
                 .char_range()
                 .map(|range| range.primary.index.0);
             let line_rows = logical_line_row_ranges(&output.galley.rows);
+            if indentation_guides {
+                crate::editor_decoration::paint_guides(
+                    ui,
+                    &output,
+                    indentation_guide_character,
+                    indent_spaces,
+                );
+            }
             if current_char.is_some_and(|cursor| folding.reveal(cursor)) {
                 folds_changed = true;
                 ui.ctx().request_repaint();

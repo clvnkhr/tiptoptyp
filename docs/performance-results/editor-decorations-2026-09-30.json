@@ -1,0 +1,21 @@
+{
+  "date": "2026-09-30",
+  "platform": "macOS 14.6.1 aarch64",
+  "rustc": "1.98.1",
+  "profile": "release (optimized, thin LTO)",
+  "base_commit": "2f4d240",
+  "fixture": {
+    "rows": 600,
+    "bytes": 17920,
+    "theme": "light",
+    "viewport": "layout jobs only; no GUI rendering"
+  },
+  "workload": "100 cached SyntaxHighlighter calls per sample; 3 warmups; median of 5 samples",
+  "baseline_us": 6806,
+  "decorated_us": 6939,
+  "earlier_repeat": {
+    "baseline_us": 6831,
+    "decorated_us": 6925
+  },
+  "scope": "Default literal highlights; definition highlighting disabled. Indentation guide painting is not included. Local cached-layout measurement, not a cross-platform GUI performance guarantee."
+}

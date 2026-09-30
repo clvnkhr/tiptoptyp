@@ -20,6 +20,7 @@ mod diagnostics;
 mod document;
 mod document_templates;
 mod editor_data;
+mod editor_decoration;
 mod editor_features;
 mod embedded_structure;
 mod embedded_tex;

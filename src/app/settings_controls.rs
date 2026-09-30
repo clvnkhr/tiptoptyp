@@ -697,3 +697,122 @@ pub(super) fn settings_status_has_detail(name: &str, status: &str, detail: &str)
         && !detail.eq_ignore_ascii_case(&format!("{name} {status}"))
         && !detail.eq_ignore_ascii_case(&format!("{name}: {status}"))
 }
+
+pub(super) fn show_text_highlight_editor(
+    ui: &mut egui::Ui,
+    rules: &mut Vec<crate::editor_decoration::HighlightRule>,
+    support: &theme::FontWeightSupport,
+) {
+    let accent = theme::palette(ui.ctx()).accent;
+    let mut remove = None;
+    egui::ScrollArea::horizontal()
+        .id_salt("text-highlights-scroll")
+        .show(ui, |ui| {
+            egui::Grid::new("text-highlights-grid")
+                .num_columns(10)
+                .striped(true)
+                .show(ui, |ui| {
+                    for label in [
+                        "On",
+                        "Text to match",
+                        "Foreground",
+                        "Background",
+                        "Weight",
+                        "Italic",
+                        "Underline",
+                        "Strike",
+                        "Sample",
+                        "",
+                    ] {
+                        ui.label(label);
+                    }
+                    ui.end_row();
+                    for (index, rule) in rules.iter_mut().enumerate() {
+                        ui.checkbox(&mut rule.enabled, "");
+                        let _match_field = ui.add(
+                            egui::TextEdit::singleline(&mut rule.text)
+                                .id_salt(("highlight-text", index))
+                                .desired_width(140.0)
+                                .char_limit(256),
+                        );
+                        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                        if ui.clip_rect().contains_rect(_match_field.rect) {
+                            crate::desktop_test::observe(
+                                &format!("settings.highlight.{index}"),
+                                &_match_field,
+                            );
+                        }
+                        optional_color_override(
+                            ui,
+                            (index, "foreground"),
+                            &mut rule.style.foreground,
+                            accent,
+                        );
+                        optional_color_override(
+                            ui,
+                            (index, "background"),
+                            &mut rule.style.background,
+                            Color32::TRANSPARENT,
+                        );
+                        optional_weight_override(
+                            ui,
+                            (index, "weight"),
+                            &mut rule.style.weight,
+                            theme::FONT_WEIGHT_NORMAL,
+                            support,
+                        );
+                        optional_bool_override(ui, (index, "italic"), "I", &mut rule.style.italic);
+                        optional_bool_override(
+                            ui,
+                            (index, "underline"),
+                            "U",
+                            &mut rule.style.underline,
+                        );
+                        optional_bool_override(
+                            ui,
+                            (index, "strike"),
+                            "S",
+                            &mut rule.style.strikethrough,
+                        );
+                        let mut job = egui::text::LayoutJob::simple(
+                            rule.text.clone(),
+                            theme::editor_font(),
+                            accent,
+                            f32::INFINITY,
+                        );
+                        let mut decorations = crate::editor_decoration::Decorations::default();
+                        decorations.prepare(&rule.text, false, false, std::slice::from_ref(rule));
+                        decorations.apply(&mut job, accent);
+                        ui.add_sized(
+                            [140.0, METRICS.settings.override_row_height],
+                            egui::Label::new(job).truncate(),
+                        );
+                        if ui.small_button("Remove").clicked() {
+                            remove = Some(index);
+                        }
+                        ui.end_row();
+                    }
+                });
+        });
+    if let Some(index) = remove {
+        rules.remove(index);
+    }
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(rules.len() < 100, egui::Button::new("Add highlight"))
+            .clicked()
+        {
+            rules.push(crate::editor_decoration::HighlightRule {
+                text: "#mycomment".into(),
+                enabled: true,
+                style: TypstStyleOverride {
+                    weight: Some(700),
+                    ..Default::default()
+                },
+            });
+        }
+        if ui.button("Restore default highlights").clicked() {
+            *rules = crate::editor_decoration::default_rules();
+        }
+    });
+}

@@ -564,3 +564,34 @@ optimized same-fixture worker measurement was 13,073 us curated versus 13,080 us
 with the supplement, within local timing noise; metadata is recorded in
 `docs/performance-results/math-dictionary-2026-09-30.json`. No layout changes or
 additional screenshots are required for this vocabulary change.
+
+## Settings help, editor decorations and compact tooltips (2026-09-30)
+
+Settings now has a Help title-bar button, effective shortcut tables, tool-specific
+regional suppression examples and tips. The bundled Badness 0.24.0 was checked
+with stdin fixtures: formatting-off preserves a region and lint-skip suppresses
+redundant-script-braces. Editor settings add default-on configurable indentation
+guides, optional definition highlighting and per-match styling (TODO/FIXME
+defaults). Existing wrap controls remain available. JSON validation and settings
+merge/roundtrip coverage include the new options.
+
+Native `editor_preferences` passed in `run-vco2xdey`: Help, focused settings
+search, toggles/restoration and typing in a custom match field leave source
+untouched. The preview-controls journey passed in `run-5dgd4w39`, including real
+PDFium/Tinymist transitions, compact tooltip width and drag-release positioning.
+The journey initially exposed release overshoot; applying the final pointer
+position fixes it. Fresh native viewport captures were inspected for Help,
+custom-rule table alignment, editor guides and compact tooltip appearance.
+These are viewport framebuffers, not evidence of composed desktop geometry.
+The 25-image maintained gallery was regenerated and validated.
+
+Pure tests cover byte-safe literal matches, definitions, visible/bounded guide
+work, decoration cache invalidation and tooltip text sizing/caps. Semantic tests
+cover settings ownership, persistence and table geometry. TeX definition
+highlighting is lexical and does not evaluate macro expansion. Tool-specific
+region directives do not disable compilation or every diagnostic provider.
+See `help-and-editor-decorations.md` and the performance measurement metadata.
+
+Handoff checks passed: formatting (workspace and xtask), strict all-target
+Clippy, the full Rust test suites, and all 15 xtask tests. Native interaction
+results above are separate from those deterministic checks.

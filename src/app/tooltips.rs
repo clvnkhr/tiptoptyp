@@ -17,7 +17,7 @@ use crate::{
     syntax_theme::ResolvedTypstStyles,
     theme::{self, METRICS},
 };
-use eframe::egui::{self, Pos2, Rect, RichText, Sense, Stroke, Vec2};
+use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 use std::{
     collections::{VecDeque, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
@@ -858,11 +858,130 @@ pub(super) fn repaint_tooltip_on_change(
 
 const TOOLTIP_PREVIEW_CHARS: usize = 600;
 
-fn tooltip_body_width(natural_width: f32) -> f32 {
-    (natural_width + METRICS.popup.tooltip_text_padding).clamp(
-        METRICS.popup.tooltip_min_width,
-        METRICS.popup.tooltip_max_width,
-    )
+pub(super) fn tooltip_body_width(natural_width: f32) -> f32 {
+    natural_width
+        .ceil()
+        .clamp(1.0, METRICS.popup.tooltip_max_width)
+}
+
+#[derive(Clone)]
+struct TooltipSizeCache {
+    parsed: Arc<ParsedTooltipMarkdown>,
+    style: Arc<egui::Style>,
+    width: f32,
+    size: Vec2,
+    font_witness: Arc<egui::Galley>,
+}
+
+pub(super) fn tooltip_document_size(
+    context: &egui::Context,
+    detail: &str,
+    style: &Arc<egui::Style>,
+    max_width: f32,
+) -> Vec2 {
+    let parsed = cached_tooltip_markdown(context, detail);
+    let id = viewport_scoped_id(context, "tooltip-natural-size");
+    let font_witness = context.fonts_mut(|fonts| {
+        fonts.layout_no_wrap(String::new(), theme::editor_font(), Color32::WHITE)
+    });
+    if let Some(cache) = context.data(|data| data.get_temp::<TooltipSizeCache>(id))
+        && Arc::ptr_eq(&cache.parsed, &parsed)
+        && cache.style == *style
+        && cache.width == max_width
+        && Arc::ptr_eq(&cache.font_witness, &font_witness)
+    {
+        return cache.size;
+    }
+    let mut jobs = Vec::new();
+    let mut spacing_height = 0.0;
+    for block in &parsed.blocks {
+        let mut job = egui::text::LayoutJob::default();
+        match block {
+            MarkdownBlock::Code { source, .. } => job.append(
+                source,
+                0.0,
+                egui::TextFormat {
+                    font_id: theme::editor_font(),
+                    ..Default::default()
+                },
+            ),
+            MarkdownBlock::Line {
+                prefix,
+                spans,
+                scale,
+            } => {
+                let mut font = egui::TextStyle::Body.resolve(style);
+                font.size *= scale;
+                job.append(
+                    prefix,
+                    0.0,
+                    egui::TextFormat {
+                        font_id: font.clone(),
+                        ..Default::default()
+                    },
+                );
+                for span in spans {
+                    let mut font = if span.code {
+                        theme::editor_font()
+                    } else if span.bold {
+                        theme::strong_ui_font()
+                    } else {
+                        font.clone()
+                    };
+                    font.size *= if span.code || span.bold { *scale } else { 1.0 };
+                    job.append(
+                        &span.text,
+                        0.0,
+                        egui::TextFormat {
+                            font_id: font,
+                            italics: span.italics,
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+            MarkdownBlock::Space => {
+                spacing_height += theme::SPACE.small;
+                continue;
+            }
+            MarkdownBlock::Separator => {
+                spacing_height += style.spacing.item_spacing.y * 2.0 + 1.0;
+                continue;
+            }
+        }
+        jobs.push(job);
+    }
+    let size = context.fonts_mut(|fonts| {
+        let natural = jobs
+            .iter()
+            .map(|job| fonts.layout_job(job.clone()).size().x)
+            .fold(1.0, f32::max);
+        let width = tooltip_body_width(natural).min(max_width.max(1.0));
+        let height = jobs
+            .iter()
+            .map(|job| {
+                let mut job = job.clone();
+                job.wrap.max_width = width;
+                fonts.layout_job(job).size().y
+            })
+            .sum::<f32>()
+            + spacing_height
+            + style.spacing.item_spacing.y * jobs.len().saturating_sub(1) as f32;
+        Vec2::new(width, height.ceil())
+    });
+    context.data_mut(|data| {
+        data.insert_temp(
+            id,
+            TooltipSizeCache {
+                parsed,
+                style: style.clone(),
+                width: max_width,
+                size,
+                font_witness,
+            },
+        )
+    });
+    size
 }
 
 /// Byte boundaries are found only in the preview, never by counting
@@ -920,7 +1039,7 @@ pub(super) fn show_native_tooltip_card(
     anchor: Pos2,
     origin: Rect,
     detail: Arc<str>,
-    severity: Option<DiagnosticSeverity>,
+    _severity: Option<DiagnosticSeverity>,
     placement: TooltipPlacement,
     captures: &CaptureController,
     link_sender: &mpsc::Sender<String>,
@@ -932,46 +1051,20 @@ pub(super) fn show_native_tooltip_card(
     let style = context.style_of(theme);
     let tooltip_frame = theme::tooltip_card_frame(&style);
     let frame_margin = tooltip_frame.total_margin().sum();
-    let body_font = egui::TextStyle::Body.resolve(&style);
     let preview_end = tooltip_preview_end(&detail);
     let preview = &detail[..preview_end];
-    let desired_card_width = if severity.is_some() {
-        METRICS.popup.tooltip_width
-    } else {
-        let natural_width = context.fonts_mut(|fonts| {
-            fonts
-                .layout(
-                    preview.to_owned(),
-                    body_font.clone(),
-                    style.visuals.text_color(),
-                    f32::INFINITY,
-                )
-                .size()
-                .x
-        });
-        tooltip_body_width(natural_width)
-    };
-    let available_width = (window_rect.width() - METRICS.popup.viewport_edge * 2.0).max(1.0);
-    let width = (desired_card_width + frame_margin.x).min(available_width);
-    let card_width = (width - frame_margin.x).max(1.0);
-    let body_height = context.fonts_mut(|fonts| {
-        fonts
-            .layout(
-                preview.to_owned(),
-                body_font,
-                style.visuals.text_color(),
-                (card_width - METRICS.popup.tooltip_text_padding).max(1.0),
-            )
-            .size()
-            .y
-    });
-    let available_height = (window_rect.height() - METRICS.popup.viewport_edge * 2.0).max(1.0);
-    let height = (METRICS.popup.tooltip_title_height + body_height + frame_margin.y)
-        .clamp(
-            METRICS.popup.tooltip_min_height,
-            METRICS.popup.tooltip_max_height,
-        )
-        .min(available_height);
+    let available =
+        (window_rect.size() - Vec2::splat(METRICS.popup.viewport_edge * 2.0)).max(Vec2::splat(1.0));
+    let body = tooltip_document_size(
+        context,
+        preview,
+        &style,
+        (available.x - frame_margin.x).max(1.0),
+    );
+    let width = (body.x + frame_margin.x).min(available.x);
+    let height = (body.y + frame_margin.y)
+        .clamp(1.0, METRICS.popup.tooltip_max_height)
+        .min(available.y);
     let root_local_card = place_native_tooltip_card(
         Rect::from_min_size(Pos2::ZERO, window_rect.size()),
         origin,

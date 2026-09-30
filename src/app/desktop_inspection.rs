@@ -79,6 +79,7 @@ impl EditorApp {
             "find_focused": self.find_bar.child_focused,
             "replace_visible": self.find_bar.replace_visible,
             "settings_visible": self.settings_visible,
+            "settings_help_visible": self.settings_window.lock().unwrap().ui.help_mode,
             "settings_json": settings_json,
             "writing_language": self.settings.writing_language,
             "settings_query_fingerprint": settings_query_fingerprint,
@@ -130,6 +131,21 @@ impl EditorApp {
             "completion_count": self.editor_completion.as_ref().map_or(0, |completion| completion.items.len()),
             "completion_selected": self.editor_completion.as_ref().map(|completion| completion.selected),
         });
+        interaction["indentation_guides"] = serde_json::json!(self.settings.indentation_guides);
+        interaction["highlight_definitions"] =
+            serde_json::json!(self.settings.highlight_definitions);
+        interaction["highlight_rules"] = serde_json::json!(self.settings.highlight_rules.len());
+        interaction["hover_tooltip_rect"] = context
+            .data(|data| data.get_temp::<TooltipGeometry>(tooltip_geometry_id(context)))
+            .map_or(serde_json::Value::Null, |geometry| {
+                serde_json::json!([
+                    geometry.card.min.x,
+                    geometry.card.min.y,
+                    geometry.card.width(),
+                    geometry.card.height()
+                ])
+            });
+
         interaction["git_hunk_count"] = serde_json::json!(self.git_editor.hunks.len());
         interaction["git_hunk_popup_line"] = serde_json::json!(match &self.app_popup {
             Some(AppPopup::GitChunk { chunk, .. }) =>

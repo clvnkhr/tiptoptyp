@@ -21,6 +21,27 @@ pub(crate) fn parse(text: &str) -> Result<AppSettings, String> {
     let roundtrip = serde_json::to_value(&settings).map_err(|e| e.to_string())?;
     reject_unknown(&original, &roundtrip, "settings")?;
     crate::snippets::validate(&settings.snippets)?;
+    if settings.indentation_guide_character.chars().count() != 1
+        || settings
+            .indentation_guide_character
+            .chars()
+            .any(|c| c.is_control() || c.is_whitespace())
+    {
+        return Err(
+            "indentation_guide_character: choose one visible character, e.g. │ or ┆".into(),
+        );
+    }
+    if settings.highlight_rules.len() > 100
+        || settings.highlight_rules.iter().any(|r| {
+            r.text.chars().count() > 256
+                || r.text.contains(['\n', '\r'])
+                || r.style
+                    .weight
+                    .is_some_and(|weight| !(1..=1000).contains(&weight))
+        })
+    {
+        return Err("highlight_rules: use at most 100 rules, each matching a single line of up to 256 characters; font weights must be 1–1000".into());
+    }
     for (name, valid) in [
         (
             "ui_scale_percent (75–150)",
@@ -32,8 +53,8 @@ pub(crate) fn parse(text: &str) -> Result<AppSettings, String> {
         ),
         ("hover_delay_ms (0–2000)", settings.hover_delay_ms <= 2000),
         (
-            "indent_spaces (1–16)",
-            (1..=16).contains(&settings.indent_spaces),
+            "indent_spaces (0–16; 0 means tabs)",
+            settings.indent_spaces <= 16,
         ),
         (
             "ui_font_weight (1–1000)",
@@ -190,5 +211,36 @@ mod tests {
         json["tex"]["typo"] = serde_json::json!(true);
         assert!(parse(&json.to_string()).unwrap_err().contains("typo"));
         assert!(parse("{").is_err());
+    }
+}
+
+#[cfg(test)]
+mod editor_option_tests {
+    use super::*;
+    #[test]
+    fn editor_decoration_options_roundtrip_and_reject_invalid_values() {
+        let mut settings = AppSettings {
+            indent_spaces: 0,
+            ..Default::default()
+        };
+        assert_eq!(
+            parse(&serde_json::to_string(&settings).unwrap()).unwrap(),
+            settings
+        );
+        for character in ["", "ab", "\n", " "] {
+            settings.indentation_guide_character = character.into();
+            assert!(
+                parse(&serde_json::to_string(&settings).unwrap())
+                    .unwrap_err()
+                    .contains("indentation_guide_character")
+            );
+        }
+        settings.indentation_guide_character = "┆".into();
+        settings.highlight_rules[0].text = "one\ntwo".into();
+        assert!(
+            parse(&serde_json::to_string(&settings).unwrap())
+                .unwrap_err()
+                .contains("highlight_rules")
+        );
     }
 }

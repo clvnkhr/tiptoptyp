@@ -670,7 +670,16 @@ class EditorJourneys:
                 if backend == "Pdfium":
                     target = self.snapshot()["targets"]["preview.open"]
                     self.native("move", target["x"], target["y"])
-                    self.wait("toolbar tooltip appears before opening controls", lambda d: d["hover_tooltip_open"])
+                    self.wait("toolbar tooltip appears before opening controls", lambda d: d["hover_tooltip_open"] and d["hover_tooltip_rect"] is not None)
+                    card = self.snapshot()["document"]["hover_tooltip_rect"]
+                    if card[2] >= 250:
+                        raise AssertionError("short toolbar tooltip retained a documentation-sized minimum width")
+                    if self.capture_review:
+                        state = self.snapshot()["document"]
+                        pointer = state["pointer"]
+                        self.native("click", card[0] + card[2] / 2 + target["x"] - pointer[0],
+                                    card[1] + card[3] / 2 + target["y"] - pointer[1])
+                        self.capture_viewport("diagnostic")
                 self.click("preview.open")
                 self.wait("opening controls dismisses the toolbar tooltip", lambda d: not d["hover_tooltip_open"])
             self.wait("controls opened", lambda d: d["preview_controls_open"])
@@ -727,6 +736,43 @@ class EditorJourneys:
             self.native_wait("native preview window exists", lambda ws: any(w["AXTitle"] == "tiptoptyp Preview" for w in ws))
             self.native("close", "tiptoptyp Preview")
             self.wait("preview returns to document", lambda d: not d["preview_popout"] and d["view_mode"] == "Split")
+
+    def editor_preferences(self):
+        count = self.scratch("#let sample = {\n  // TODO: inspect\n  (1, 2, 3)\n}\n")
+        original = self.snapshot()["document"]["source_fingerprint"]
+        self.settings()
+        self.click("settings.help")
+        self.wait("Help opens within Settings", lambda d: d["settings_help_visible"] and d["settings_visible"])
+        if self.capture_review:
+            self.capture_viewport("settings")
+        self.key(3)
+        self.wait_target("settings.search")
+        self.wait("Find returns to Settings search", lambda d: not d["settings_help_visible"] and d["settings_text_input_focused"])
+        for query, title, target, field in [
+            ("guides", "Indentation guides", "settings.editor.guides", "indentation_guides"),
+            ("definitions", "Highlight definitions and redefinitions", "settings.editor.definitions", "highlight_definitions"),
+            ("wrap", "Wrap lines", "settings.editor.wrap", "line_wrap"),
+        ]:
+            self.setting_section(query, title)
+            before = self.snapshot()["document"][field]
+            self.wait_target(target)
+            self.click(target)
+            self.wait("preference applies: " + field, lambda d: d[field] != before)
+            self.click(target)
+            self.wait("preference restores: " + field, lambda d: d[field] == before)
+        self.setting_section("highlights", "Custom text highlights")
+        self.wait_target("settings.highlight.1")
+        self.click("settings.highlight.1")
+        self.key(0)
+        self.native("text", "FIXME:")
+        self.wait("rule typing belongs to Settings", lambda d: d["settings_text_input_focused"] and d["source_fingerprint"] == original)
+        if self.capture_review:
+            self.capture_viewport("settings")
+        self.close_settings()
+        self.wait("preferences do not edit source", lambda d: d["source_fingerprint"] == original)
+        if self.capture_review:
+            self.capture_viewport("main")
+        self.close_scratch(count)
 
     def settings_search(self):
         self.settings()

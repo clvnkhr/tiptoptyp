@@ -497,3 +497,14 @@ finished. That difference is within local timing noise. Cold dictionary
 initialization and end-to-end GUI latency were not measured. The
 [run metadata](performance-results/math-dictionary-2026-09-30.json) records the
 command, workload, optimized profile and executable/dictionary hashes.
+
+### Editor decorations (2026-09-30)
+
+Decorations now run inside the existing syntax layout cache. The optimized
+600-row fixture measured 6,806 us without decorations and 6,939 us with the
+default rules over 100 cached calls (about 68–69 us/call); a repeat was
+6,831 / 6,925 us. This is no material local cache-hit difference. Matching and
+definition extraction happen only on source/configuration changes; guide
+painting visits visible rows and visible indentation columns only. This
+measurement excludes painting and cold/cache-miss work. Metadata is in
+`performance-results/editor-decorations-2026-09-30.json`.

@@ -29,6 +29,7 @@ use std::path::Path;
 #[derive(Default)]
 pub(super) struct SettingsUiState {
     pub(super) json_mode: bool,
+    pub(super) help_mode: bool,
     pub(super) json_search: bool,
     pub(super) json_query: String,
     pub(super) json_match: Option<usize>,
@@ -239,6 +240,10 @@ impl SettingsPanel<'_> {
             return;
         }
         ui.set_min_width(ui.available_width());
+        if self.state.help_mode {
+            super::help::show(ui, self.settings);
+            return;
+        }
         if self.state.json_mode {
             self.show_json(ui);
             return;
@@ -548,7 +553,9 @@ impl SettingsPanel<'_> {
                     settings_target_anchor(ui, target, &mut settings_scroll_target);
                 }
                 ui.horizontal_wrapped(|ui| {
-                    ui.checkbox(&mut edited.line_wrap, SettingsTarget::WrapLines.label());
+                    let _wrap = ui.checkbox(&mut edited.line_wrap, SettingsTarget::WrapLines.label());
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    crate::desktop_test::observe("settings.editor.wrap", &_wrap);
                     ui.checkbox(
                         &mut edited.line_numbers,
                         SettingsTarget::LineNumbers.label(),
@@ -563,6 +570,28 @@ impl SettingsPanel<'_> {
                                 .suffix(" ms")
                                 .logarithmic(true),
                         );
+                });
+                settings_target_anchor(ui, SettingsTarget::IndentationGuides, &mut settings_scroll_target);
+                ui.horizontal_wrapped(|ui| {
+                    let _guides = ui.checkbox(&mut edited.indentation_guides, "Indentation guides");
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    crate::desktop_test::observe("settings.editor.guides", &_guides);
+                    ui.label("Guide character");
+                    let before = edited.indentation_guide_character.clone();
+                    let response = ui.add(egui::TextEdit::singleline(&mut edited.indentation_guide_character).char_limit(1).desired_width(40.0));
+                    if response.changed() && (edited.indentation_guide_character.chars().count() != 1 || edited.indentation_guide_character.chars().any(|c| c.is_control() || c.is_whitespace())) {
+                        edited.indentation_guide_character = before;
+                    }
+                }).response.on_hover_text("Display-only lines at each indent level. Choose one visible character, e.g. │ or ┆. Saved whitespace is unchanged.");
+                settings_target_anchor(ui, SettingsTarget::DefinitionHighlights, &mut settings_scroll_target);
+                let _definitions = ui.checkbox(&mut edited.highlight_definitions, "Highlight definitions and redefinitions")
+                    .on_hover_text("Underline and emphasize local Typst declarations and TeX macro/environment definitions. This is source highlighting, not a compiler's symbol resolution.");
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("settings.editor.definitions", &_definitions);
+                settings_target_anchor(ui, SettingsTarget::TextHighlights, &mut settings_scroll_target);
+                egui::CollapsingHeader::new("Custom text highlights").open(self.state.query.to_lowercase().contains("highlight").then_some(true)).show(ui, |ui| {
+                    ui.weak("Literal, case-sensitive matches in source. Later rows win on overlap. Unset colors follow the theme accent.");
+                    super::settings_controls::show_text_highlight_editor(ui, &mut edited.highlight_rules, &self.font_configuration.editor_weight_support);
                 });
                 settings_target_anchor(ui, SettingsTarget::AutoPairDelimiters, &mut settings_scroll_target);
                 settings_target_anchor(ui, SettingsTarget::EnglishGrammar, &mut settings_scroll_target);
