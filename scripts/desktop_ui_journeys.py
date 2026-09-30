@@ -134,13 +134,13 @@ class EditorJourneys:
         self.source_is("é🙂z")
         self.wait("Unicode redo caret", lambda d: d["cursor"] == [3, 3])
         self.key(0)
-        self.paste_source("alpha\nbeta")
-        self.source_is("alpha\nbeta")
+        self.paste_source("  alpha\n\tbeta")
+        self.source_is("  alpha\n\tbeta")
         self.key(0)
-        self.key(44)  # Toggle comment on a selection.
-        self.source_is("// alpha\n// beta")
+        self.key(44)  # Toggle comment without moving the indentation.
+        self.source_is("  // alpha\n\t// beta")
         self.key(44)
-        self.source_is("alpha\nbeta")
+        self.source_is("  alpha\n\tbeta")
         self.close_scratch(count)
 
     def search(self):

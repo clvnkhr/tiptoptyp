@@ -694,3 +694,21 @@ is algorithmic, not a new wall-time benchmark.
 
 Formatting (workspace and xtask), strict all-target Clippy, the full Rust
 suites and 15 xtask tests passed for this eligibility change.
+
+### Marker-only equation guides and indented comments (2026-09-30)
+
+Reproduced the reported duplicate guide with a failing deterministic test:
+marker-only equations incorrectly used continuation padding as their body indent.
+They now retain the enclosing indent and one guide after the alignment marker.
+The exact reported equation is retained in
+`tests/fixtures/indentation-guides/marker-only.typ`. A fresh framebuffer at
+`.tiptoptyp/screenshots/agent-review/marker-only-equation/1790775724595-0001-main.png`
+was inspected; the extra half-column-offset guide is absent.
+
+Comment toggling inserts the marker after leading spaces/tabs and round trips
+Unicode selections and cursors. TeX uses `%`, Typst uses `//`.
+The native `editing` journey now checks indented comment round trips and passed
+in `run-tr8h4p4z` with Accessibility, input posting and unlocked desktop verified.
+Formatting, strict all-target Clippy, full Rust tests and 15 xtask tests passed.
+Guide lists remain cached; this removes a fallback calculation and adds no
+per-frame work or repaint requests. No material performance impact is expected.

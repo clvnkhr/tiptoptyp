@@ -452,7 +452,6 @@ fn math_body_indent(
 ) -> usize {
     let mut at = block.range.start;
     let mut candidate = None;
-    let mut fallback = None;
     for part in source[block.range.clone()].split_inclusive('\n') {
         let text = part.trim();
         if at > block.range.start
@@ -463,7 +462,6 @@ fn math_body_indent(
             && !text.starts_with("\\end")
         {
             let level = indentation_columns(part.chars(), step, usize::MAX);
-            fallback = Some(fallback.map_or(level, |old: usize| old.min(level)));
             if block
                 .markers
                 .get(block.markers.partition_point(|&marker| marker < at))
@@ -474,7 +472,7 @@ fn math_body_indent(
         }
         at += part.len();
     }
-    candidate.or(fallback).unwrap_or(fallback_indent)
+    candidate.unwrap_or(fallback_indent)
 }
 
 fn source_column(source: &str, step: usize) -> usize {
@@ -700,6 +698,13 @@ mod tests {
             source_guide_levels(aligned, 2, crate::document::DocumentKind::Typst),
             source_guide_levels(aligned, 2, crate::document::DocumentKind::Text)
         );
+    }
+    #[test]
+    fn marker_only_equations_do_not_turn_rhs_padding_into_body_indent() {
+        let source = "  $\n    & norm(x) \\\n    & <= C\n      integral_(r<theta)\n    &= C\n      frac(\n        a, b\n      )\n  $\n";
+        let rows = source_guide_levels(source, 2, crate::document::DocumentKind::Typst);
+        assert_eq!(rows[3], vec![Guide::indent(2), Guide::alignment(5)]);
+        assert_eq!(rows[6], rows[3]);
     }
     #[test]
     fn marker_only_continuation_has_one_guide_after_ampersand() {

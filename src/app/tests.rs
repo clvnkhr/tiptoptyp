@@ -6070,7 +6070,7 @@ fn toggle_line_comments_handles_selected_lines_and_round_trips() {
     let source = "  alpha\n\tbeta\n\n  gamma";
     let selected = 2..source.chars().count();
     let (commented, mapped) = toggle_line_comments(source, selected.clone(), "// ");
-    assert_eq!(commented, "//   alpha\n// \tbeta\n\n//   gamma");
+    assert_eq!(commented, "  // alpha\n\t// beta\n\n  // gamma");
     assert_eq!(mapped, 5..commented.chars().count());
 
     let (restored, restored_range) = toggle_line_comments(&commented, mapped, "// ");
@@ -6084,6 +6084,20 @@ fn toggle_line_comments_uses_the_cursor_line_for_an_empty_selection() {
     let (commented, cursor) = toggle_line_comments(source, 5..5, "// ");
     assert_eq!(commented, "one\n// two\nthree");
     assert_eq!(cursor, 8..8);
+}
+
+#[test]
+fn toggle_line_comments_preserves_indent_unicode_cursor_and_tex_prefix() {
+    for (source, prefix, expected, cursor) in [
+        ("  λ + x", "// ", "  // λ + x", 2),
+        ("\t\talpha", "% ", "\t\t% alpha", 2),
+    ] {
+        let (commented, mapped) = toggle_line_comments(source, cursor..cursor, prefix);
+        assert_eq!(commented, expected);
+        let (restored, range) = toggle_line_comments(&commented, mapped, prefix);
+        assert_eq!(restored, source);
+        assert_eq!(range, cursor..cursor);
+    }
 }
 
 #[test]

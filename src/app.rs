@@ -6804,7 +6804,11 @@ impl EditorApp {
         let (source, mapped_range) = toggle_line_comments(
             self.document().source(),
             selection.clone().unwrap_or(cursor..cursor),
-            "// ",
+            if self.document().kind() == DocumentKind::Tex {
+                "% "
+            } else {
+                "// "
+            },
         );
         if source == *self.document().source() {
             return;
@@ -11050,22 +11054,23 @@ fn toggle_line_comments(
         }
         let is_blank = content >= len || chars[content] == '\n';
         if !is_blank {
-            commentable_lines.push((line, content));
+            commentable_lines.push(content);
         }
     }
     if commentable_lines.is_empty() {
         return (source.to_owned(), selected);
     }
-    let uncomment = commentable_lines.iter().all(|(_, content)| {
-        chars.get(*content) == Some(&'/') && chars.get(content + 1) == Some(&'/')
-    });
-    for (line, content) in commentable_lines {
+    let marker: Vec<_> = prefix.trim_end().chars().collect();
+    if marker.is_empty() {
+        return (source.to_owned(), selected);
+    }
+    let uncomment = commentable_lines
+        .iter()
+        .all(|&content| chars.get(content..content + marker.len()) == Some(marker.as_slice()));
+    for content in commentable_lines {
         if uncomment {
-            let remove = if chars.get(content + 2) == Some(&' ') {
-                3
-            } else {
-                2
-            };
+            let remove =
+                marker.len() + usize::from(chars.get(content + marker.len()) == Some(&' '));
             edits.push(CommentEdit {
                 at: content,
                 remove,
@@ -11073,10 +11078,7 @@ fn toggle_line_comments(
             });
         } else {
             edits.push(CommentEdit {
-                // Keep the comment marker at column zero. This mirrors the
-                // editor's line-comment command and avoids shifting the
-                // marker when indentation changes.
-                at: line,
+                at: content,
                 remove: 0,
                 insert: prefix.to_owned(),
             });
