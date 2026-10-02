@@ -576,6 +576,45 @@ class EditorJourneys:
         self.key(20)  # Split: the docked editor must preserve this resizable pane.
         self.wait("split editor shown", lambda d: d["view_mode"] == "Split" and d["editor_panel_width"] is not None)
         self.wait("three separated Git hunks", lambda d: d["git_hunk_count"] == 3)
+        self.settings()
+        self.setting_section("independent main dividers", "Independent main dividers")
+        self.click("settings.dividers")
+        self.wait("independent dividers enabled", lambda d: d["independent_main_dividers"])
+        self.close_settings()
+        self.wait_target("divider.explorer")
+        state = self.snapshot()
+        border = state["targets"]["divider.explorer"]
+        preview_edge = state["targets"]["divider.editor"]["x"]
+        from concurrent.futures import ThreadPoolExecutor
+        moving_frames = 0
+        with ThreadPoolExecutor(max_workers=1) as worker:
+            drag = worker.submit(self.native, "drag", border["x"], border["y"], border["x"] + 35, border["y"])
+            while not drag.done():
+                frame = self.snapshot()
+                if abs(frame["targets"]["divider.explorer"]["x"] - border["x"]) > 0.5:
+                    moving_frames += 1
+                if abs(frame["targets"]["divider.editor"]["x"] - preview_edge) > 1:
+                    raise AssertionError("preview border moved during independent divider drag")
+            drag.result()
+        self.wait("Explorer divider moved", lambda d: abs(d["explorer_panel_width"] - state["document"]["explorer_panel_width"] - 35) < 2)
+        self.record("independent_resize.frames", intermediate=moving_frames)
+        moved = self.snapshot()
+        if abs(moved["targets"]["divider.editor"]["x"] - preview_edge) > 1:
+            raise AssertionError("independent Explorer resize moved preview border")
+        if abs(moved["targets"]["divider.explorer"]["x"] - border["x"] - 35) > 2:
+            raise AssertionError("Explorer divider did not follow the drag")
+        self.settings()
+        self.setting_section("independent main dividers", "Independent main dividers")
+        self.click("settings.dividers")
+        self.wait("fixed code width mode enabled", lambda d: not d["independent_main_dividers"])
+        self.close_settings()
+        self.wait_target("divider.explorer")
+        state = self.snapshot()
+        border = state["targets"]["divider.explorer"]
+        width = state["document"]["editor_panel_width"]
+        self.native("drag", border["x"], border["y"], border["x"] - 35, border["y"])
+        self.stable_state(lambda d: abs(d["editor_panel_width"] - width) < 1)
+
         self.click("editor.source")
         self.key(126, "cmd")
         for line in (5, 85, 165, 5):
@@ -641,6 +680,13 @@ class EditorJourneys:
         self.source_is(original)
         self.key(3)
         self.wait("closing Find preserves document diff", lambda d: not d["find_visible"] and d["git_diff_open"] and d["editor_keyboard_focused"])
+        self.choose_backend("Interactive")
+        self.wait_target("git.hunk.Next")
+        target = self.snapshot()["targets"]["git.hunk.Next"]
+        self.native("move", target["x"], target["y"])
+        self.wait("docked diff tooltip gets its own native window above preview", lambda d: d["git_diff_open"] and d["hover_tooltip_open"] and d["native_hover_window"])
+        if getattr(self, "capture_review", False): self.capture_viewport("main")
+
 
 
     def preview_keyboard(self):
@@ -662,7 +708,7 @@ class EditorJourneys:
             self.wait("undo restores source", lambda d: d["source_fingerprint"] == before["source_fingerprint"])
             for iteration in range(3):
                 self.click("preview.page")
-                self.wait("preview owns keyboard after click", lambda d: d["preview_keyboard_focused"])
+                self.wait("preview owns keyboard after click", lambda d: d["preview_keyboard_focused"] and not d["editor_keyboard_focused"])
                 if backend == "Interactive":
                     self.native("text", "t")
                     self.wait("focused preview accepts its shortcut", lambda d: d["page_dark"] != before["page_dark"] and d["source_fingerprint"] == before["source_fingerprint"])

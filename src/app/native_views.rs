@@ -801,10 +801,9 @@ impl EditorApp {
         let handoff_active = native_tooltip_handoff_active(context, false);
         let blocked_by_overlay = self.settings_visible
             || self.packages_visible
-            || self.git_editor.chunk.is_some()
             || self.rename_dialog.is_some()
             || self.table_editor.is_some()
-            || self.app_popup.is_some()
+            || matches!(self.app_popup, Some(ref popup) if !matches!(popup, AppPopup::GitChunk { .. }))
             || self.document_workflow.modal().is_some();
         if blocked_by_overlay {
             self.clear_asset_hover();
@@ -1067,9 +1066,8 @@ impl EditorApp {
         if !root_ready
             || self.settings_visible
             || self.packages_visible
-            || self.git_editor.chunk.is_some()
             || self.rename_dialog.is_some()
-            || self.app_popup.is_some()
+            || matches!(self.app_popup, Some(ref popup) if !matches!(popup, AppPopup::GitChunk { .. }))
             || self.document_workflow.modal().is_some()
         {
             return;

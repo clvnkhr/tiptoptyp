@@ -3766,9 +3766,21 @@ fn native_preview_bounds_stay_inside_the_panel_clip() {
     let clip = Rect::from_min_max(Pos2::new(120.0, 48.0), Pos2::new(400.0, 220.0));
 
     assert_eq!(
-        clipped_preview_rect(available, clip),
+        native_preview_content_rect(available, clip, false, false),
         Rect::from_min_max(Pos2::new(120.0, 48.0), Pos2::new(400.0, 220.0))
     );
+}
+
+#[test]
+fn native_preview_leaves_clearance_for_border_grips() {
+    let available = Rect::from_min_max(Pos2::new(96.0, 30.0), Pos2::new(420.0, 260.0));
+    let content = native_preview_content_rect(available, available, true, true);
+    assert_eq!(content.min, Pos2::new(100.0, 30.0));
+    assert_eq!(content.max, Pos2::new(420.0, 256.0));
+    assert!(available.contains_rect(content));
+    let narrow = Rect::from_min_size(Pos2::ZERO, Vec2::splat(2.0));
+    let content = native_preview_content_rect(narrow, narrow, true, true);
+    assert!(content.width() >= 0.0 && content.height() >= 0.0);
 }
 
 #[test]
@@ -9248,7 +9260,7 @@ fn hunk_navigation_separates_keyboard_and_popup_and_discards_stale_pending_popup
     };
     assert_eq!(*anchor, Pos2::new(30.0, 58.0));
     assert_eq!(chunk.hunk.changes[0].lines.start, 7);
-    app.close_app_popup();
+    app.close_document_diff();
     app.git_editor.open_chunk(0, &path);
     app.navigate_hunk(&context, false, HunkNavigation::Popup);
     app.document_mut()
@@ -9312,10 +9324,10 @@ fn hunk_popup_waits_for_real_editor_scroll_in_a_long_document() {
             anchor.y > 20.0 && anchor.y < 330.0,
             "offscreen anchor: {anchor:?}"
         );
-        // The native popup controller closes the old popup before dispatching
-        // its next action, then restores that action's selected chunk.
+        // Close the docked comparison explicitly; dismissing a temporary menu
+        // must leave that comparison alive.
         let chunk = chunk.clone();
-        app.close_app_popup();
+        app.close_document_diff();
         app.git_editor.chunk = Some(chunk);
     }
 }
@@ -9474,4 +9486,165 @@ fn escaping_docked_diff_preserves_resizable_code_panel_width() {
     assert_eq!(escaped, width, "Escape collapsed the code panel");
     assert_eq!(frame(&mut app, vec![]), width);
     assert_eq!(app.document().source(), &source);
+}
+
+#[test]
+fn native_preview_focus_retires_previous_editor_and_explorer_keyboard_owners() {
+    let root = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+    let editor = source_editor_id(&context);
+    context.memory_mut(|m| m.request_focus(editor));
+    app.explorer
+        .set_focused_section(Some(ExplorerSection::Files));
+    app.claim_native_preview_keyboard(&context);
+    assert!(context.memory(|m| m.focused()).is_none());
+    assert!(app.explorer.focused_section().is_none());
+    // A query field in the root viewport is also retired, not just source.
+    context.memory_mut(|m| m.request_focus(egui::Id::new("old-find")));
+    app.claim_native_preview_keyboard(&context);
+    assert!(context.memory(|m| m.focused()).is_none());
+}
+
+#[test]
+fn wrapped_resize_discards_unaligned_pass_and_keeps_caret_screen_position() {
+    let root = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+    app.settings.sticky_context_rows = false;
+    let source = (0..100)
+        .map(|i| {
+            format!(
+                "line {i}: alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu\n"
+            )
+        })
+        .collect::<String>();
+    app.document_mut().replace_unprojected_untitled(&source);
+    let at = source
+        .lines()
+        .take(40)
+        .map(|l| l.chars().count() + 1)
+        .sum::<usize>();
+    app.pending_editor_selection = Some(EditorSelection::Focus(at..at));
+    let render = |app: &mut EditorApp, width| {
+        let before = context.cumulative_pass_nr();
+        context
+            .run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 420.0))),
+                    time: Some(context.cumulative_frame_nr() as f64 * 0.25),
+                    ..Default::default()
+                },
+                |ui| app.show_editor(ui),
+            )
+            .textures_delta
+            .clear();
+        context.cumulative_pass_nr() - before
+    };
+    for _ in 0..4 {
+        render(&mut app, 700.0);
+    }
+    let before = app.last_editor_caret.unwrap().rect.center().y;
+    let passes = render(&mut app, 360.0);
+    assert!(
+        passes >= 2,
+        "unaligned resize was presented without a correction pass"
+    );
+    let after = app.last_editor_caret.unwrap().rect.center().y;
+    assert!(
+        (before - after).abs() < 1.0,
+        "caret moved: {before} -> {after}"
+    );
+    assert_eq!(
+        render(&mut app, 360.0),
+        1,
+        "settled view continued discarding passes"
+    );
+}
+
+#[test]
+fn opening_and_closing_a_menu_keeps_the_docked_document_diff() {
+    let root = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+    app.document_diff = Some(crate::git::editor::document_diff::DocumentDiff::new(
+        "old\n".into(),
+        "new\n",
+    ));
+    app.open_app_popup(AppPopup::File { anchor: Pos2::ZERO });
+    assert!(app.document_diff.is_some());
+    app.close_app_popup();
+    assert!(app.document_diff.is_some());
+    app.toggle_settings();
+    assert!(app.document_diff.is_some());
+    app.set_settings_visible(true);
+    assert!(app.document_diff.is_some());
+    app.close_document_diff();
+    assert!(app.document_diff.is_none());
+}
+
+#[test]
+#[ignore = "opt-in optimized active/idle resize presentation measurement"]
+fn measure_resize_presentation() {
+    use std::{num::NonZeroUsize, time::Instant};
+    for maximum_passes in [1, 2] {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        context.global_style_mut(|s| s.scroll_animation = egui::style::ScrollAnimation::none());
+        context
+            .options_mut(|options| options.max_passes = NonZeroUsize::new(maximum_passes).unwrap());
+        app.settings.sticky_context_rows = false;
+        let source = (0..100)
+            .map(|i| {
+                format!(
+                    "line {i}: alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu\n"
+                )
+            })
+            .collect::<String>();
+        app.document_mut().replace_unprojected_untitled(&source);
+        let at = source
+            .lines()
+            .take(40)
+            .map(|l| l.chars().count() + 1)
+            .sum::<usize>();
+        app.pending_editor_selection = Some(EditorSelection::Focus(at..at));
+        let render = |app: &mut EditorApp, width| {
+            let before = context.cumulative_pass_nr();
+            context
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 420.0))),
+                        ..Default::default()
+                    },
+                    |ui| app.show_editor(ui),
+                )
+                .textures_delta
+                .clear();
+            context.cumulative_pass_nr() - before
+        };
+        for _ in 0..20 {
+            render(&mut app, 700.0);
+        }
+        let start = Instant::now();
+        let mut passes = 0;
+        let mut maximum_jump = 0.0_f32;
+        for i in 0..40 {
+            let before = app.last_editor_caret.unwrap().rect.center().y;
+            passes += render(&mut app, if i % 2 == 0 { 360.0 } else { 700.0 });
+            maximum_jump =
+                maximum_jump.max((before - app.last_editor_caret.unwrap().rect.center().y).abs());
+        }
+        let active = start.elapsed();
+        let start = Instant::now();
+        let mut idle_passes = 0;
+        for _ in 0..100 {
+            idle_passes += render(&mut app, 700.0);
+        }
+        println!(
+            "resize_presentation profile=release fixture=100-lines theme=default-test-style warmup=20 widths=700,360 height=420 max_passes={maximum_passes} active_40_ms={} active_passes={passes} maximum_caret_jump={maximum_jump} idle_100_ms={} idle_passes={idle_passes}",
+            active.as_secs_f64() * 1000.0,
+            start.elapsed().as_secs_f64() * 1000.0
+        );
+    }
 }

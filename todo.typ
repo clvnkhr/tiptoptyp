@@ -300,3 +300,16 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 // remains pending because the desktop locked again.
 // 2026-09-30 verification: full native git_hunks journey passed in run-5wxcbd2p,
 // including post-fix Find typing/toggling and Escape divider stability.
+// 2026-10-02: source reflow now discards an unaligned resize pass before
+// presenting it; settled frames stay single-pass. Added Independent main
+// dividers in Editor settings (off retains the previous fixed code width).
+// Divider grips are paint-only. Native preview focus retires the previous
+// widget owner; docked diffs retain temporary menus and use native button tips.
+// Native divider/focus/popup checks are pending an unlocked desktop.
+// 2026-10-02 follow-up: grips now straddle the actual separator and appear only
+// at allocated resize handles. Independent divider compensation follows the
+// drawn width during drags; Tinymist leaves grip clearance in its native bounds.
+// Native git_hunks and preview_keyboard journeys passed (run-wpqo5bmk and
+// run-wkvmez5n), including PDFium/Tinymist keyboard ownership and diff tooltips.
+// Resize anchor corrections also bypass scroll animation, so the discard pass
+// presents the final aligned view immediately rather than an animated offset.

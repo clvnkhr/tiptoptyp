@@ -40,7 +40,7 @@ impl EditorApp {
                 .min_size(METRICS.chrome.bottom_panel_min_height.min(available))
                 .max_size(available)
         };
-        panel.show(ui, |ui| {
+        let rendered = panel.show(ui, |ui| {
             self.show_bottom_panel(ui);
             if self.bottom_panel.selected() == Some(PanelTab::Activity) {
                 // Activity content is short when there are few indicators.
@@ -49,6 +49,13 @@ impl EditorApp {
                 ui.allocate_space(ui.available_size().max(Vec2::ZERO));
             }
         });
+        if !maximized {
+            panel_handles::paint(
+                ui,
+                panel_handles::panel_center(ui, rendered.response.rect, true),
+                true,
+            );
+        }
         maximized || ui.available_height() < 1.0
     }
 

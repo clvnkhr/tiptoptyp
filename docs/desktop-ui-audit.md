@@ -814,3 +814,61 @@ verified as PDFium before those interactions. Fresh end-of-document framebuffer
 `1790806939231-0003-main.png` was inspected for full-document pairing, the added
 last line and clipping. Native interaction results and framebuffer evidence
 remain separate; no whole-desktop composition capture was performed.
+
+### 2026-10-02: resize presentation, divider grips and keyboard ownership
+
+Source reflow now discards the unaligned paint and presents the corrected scroll
+anchor in the same frame. A wrapped 100-line regression requires the correction
+pass, checks the caret stays within one point and verifies settled frames use one
+pass. The matched optimized presentation probe is recorded in `docs/performance.md`.
+
+Independent main dividers is available under Editor settings, with the previous
+fixed-code-width policy retained as the default. Compensation uses the Explorer
+width actually drawn on each pass, rather than PanelState's pre-drag saved width.
+The native `git_hunks` journey passed in `run-wpqo5bmk`: divider drags in both
+policies, full-document diff editing/navigation, Find typing/toggling, Escape,
+and a native toolbar tooltip with the effective Tinymist backend all passed.
+Temporary menus and Settings retain the docked comparison. The test's concurrent
+snapshot sampling did not observe intermediate drag frames on this macOS run;
+final native geometry passed, and no claim of continuous desktop frame timing is
+made. Earlier failures are retained: a wrong inspection target, a missed Settings
+focus transition and Settings dismissing the persistent comparison.
+
+The native `preview_keyboard` journey passed in `run-wkvmez5n` with both PDFium
+and Tinymist confirmed as effective backends. Clicking the preview clears the old
+editor keyboard owner; preview shortcuts, Escape back to source, typing and Undo
+passed. A deterministic negative test also checks an unrelated focused field and
+Explorer ownership are retired.
+
+Grips are paint-only, centered on the actual separator rule, with horizontal and
+vertical variants. Explorer grips are visible only when the upper section has an
+allocated resize handle; collapse/expand visibility and centered geometry have
+regression coverage. Fresh light framebuffer
+`panel-grips-final/1790932142458-0001-main.png` was inspected for these relationships.
+Native Tinymist content reserves four points next to shared grips. Bounds traces
+are retained in the native run's `app.log`, for example:
+
+```
+ui.preview.bounds available=(803.6,30.0)-(1400.0,826.0) clip=(803.6,30.0)-(1400.0,826.0) egui=(807.6,30.0)-(1400.0,826.0) native=(807.6,30.0)-(1400.0,826.0) viewport=(0.0,0.0)-(1400.0,850.0) zoom=1.000 egui_ppp=2.000 native_ppp=2.000
+```
+
+Framebuffer captures do not prove native child composition; no whole-desktop
+composition capture was performed. The native host existence and bounds checks
+are separate evidence. No worker, idle repaint loop or per-frame disk I/O was
+added; divider compensation and grip painting do constant work.
+
+Final formatting and strict all-target Clippy passed. Full tests passed: 1,217
+app unit tests plus core, integration and doc tests; 15 xtask tests passed. One
+older navigation test was updated to explicitly close the docked comparison,
+rather than use the transient-popup dismissal it previously relied on.
+
+The stable gallery was regenerated in one session and all 25 PNGs validated.
+The fresh dark `main--catppuccin-mocha.png` was inspected as well: centered
+vertical grips, shared horizontal rules, and no grips on collapsed sections.
+Resize anchoring explicitly disables animation for its correction; ordinary
+scrolling is unchanged. Its regression now uses the default animated scrolling
+style and advances the warmup clock to settle the initial cursor reveal.
+
+The post-animation-change native `git_hunks` rerun also passed in
+`run-ez2g_lpy`; effective PDFium/Tinymist backend checks and retained geometry
+traces accompany the interactions.

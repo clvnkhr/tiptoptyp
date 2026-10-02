@@ -57,20 +57,10 @@ impl EditorApp {
             }
         }
     }
-    pub(super) fn show_document_diff(
-        &mut self,
-        ui: &mut egui::Ui,
-        chunk: &crate::git::editor::ChunkDiff,
-    ) {
+    pub(super) fn show_document_diff(&mut self, ui: &mut egui::Ui) {
         ui.set_min_width(ui.available_width());
         let editor_bounds = ui.available_rect_before_wrap();
-        if self.document_diff.is_none()
-            && let Err(error) = self.prepare_document_diff(chunk)
-        {
-            self.close_app_popup();
-            self.show_file_error(error);
-            return;
-        }
+        let path = self.document().path().clone().unwrap_or_default();
         let pending_selection = self.pending_editor_selection.take();
         let takes_focus = pending_selection
             .as_ref()
@@ -138,7 +128,7 @@ impl EditorApp {
                     &mut buffer,
                     full_view::ViewConfig {
                         id: source_id,
-                        path: &chunk.path,
+                        path: &path,
                         settings,
                         repository_ready,
                         mitex_dollars,
@@ -168,9 +158,22 @@ impl EditorApp {
             char_index: cursor.primary.index.0,
             rect: caret,
         });
+        if output.edit.response.secondary_clicked() {
+            let anchor = output
+                .edit
+                .response
+                .interact_pointer_pos()
+                .unwrap_or(output.edit.response.rect.center());
+            self.open_app_popup(AppPopup::Editor {
+                anchor,
+                link: None,
+                table: None,
+                math: None,
+            });
+        }
         match output.action {
             Some(full_view::Action::Close) => {
-                self.close_app_popup();
+                self.close_document_diff();
                 let range = cursor.as_sorted_char_range();
                 self.pending_editor_selection =
                     Some(EditorSelection::Focus(range.start.0..range.end.0));
@@ -206,7 +209,7 @@ impl EditorApp {
                         action,
                         self.document().key(),
                         crate::git::editor::ChunkDiff {
-                            path: chunk.path.clone(),
+                            path: path.clone(),
                             hunk,
                         },
                     );

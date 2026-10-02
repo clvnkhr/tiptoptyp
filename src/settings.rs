@@ -335,6 +335,8 @@ pub(crate) struct AppSettings {
     #[serde(default)]
     pub(crate) git_diff_style: GitDiffStyle,
     pub(crate) line_wrap: bool,
+    #[serde(default)]
+    pub(crate) independent_main_dividers: bool,
     #[serde(default = "crate::editor_decoration::enabled")]
     pub(crate) indentation_guides: bool,
     #[serde(default = "crate::editor_decoration::default_guide")]
@@ -437,6 +439,7 @@ impl Default for AppSettings {
             preview_preference: PreviewPreference::Interactive,
             git_diff_style: GitDiffStyle::Unified,
             line_wrap: true,
+            independent_main_dividers: false,
             indentation_guides: true,
             indentation_guide_character: crate::editor_decoration::default_guide(),
             highlight_definitions: false,
@@ -518,6 +521,7 @@ impl AppSettings {
             preview_preference,
             git_diff_style,
             line_wrap,
+            independent_main_dividers,
             indentation_guides,
             indentation_guide_character,
             highlight_definitions,
@@ -891,6 +895,7 @@ mod tests {
             preview_preference: PreviewPreference::Pdfium,
             git_diff_style: GitDiffStyle::Unified,
             line_wrap: false,
+            independent_main_dividers: true,
             indentation_guides: false,
             indentation_guide_character: "┆".into(),
             highlight_definitions: true,

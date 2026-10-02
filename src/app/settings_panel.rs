@@ -543,6 +543,12 @@ impl SettingsPanel<'_> {
                 ui.add_space(theme::SPACE.small);
                 ui.separator();
                 settings_heading(ui, SettingsSection::Editor);
+                settings_target_anchor(ui, SettingsTarget::IndependentDividers, &mut settings_scroll_target);
+                let dividers = ui.checkbox(&mut edited.independent_main_dividers, SettingsTarget::IndependentDividers.label())
+                    .on_hover_text("Keep the code/preview divider in place when resizing Explorer. Disable to keep the code panel width fixed.");
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("settings.dividers", &dividers);
+                let _ = dividers;
                 for target in [
                     SettingsTarget::WrapLines,
                     SettingsTarget::LineNumbers,

@@ -163,19 +163,19 @@ impl EditorApp {
     }
 
     pub(super) fn show_editor(&mut self, ui: &mut egui::Ui) {
-        if matches!(self.app_popup, Some(AppPopup::GitChunk { .. }))
+        if self.document_diff.is_some()
             && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
             let cursor = self.editor_snapshot(ui.ctx()).cursor.as_sorted_char_range();
-            self.close_app_popup();
+            self.close_document_diff();
             self.pending_editor_selection =
                 Some(EditorSelection::Focus(cursor.start.0..cursor.end.0));
             self.focus_source_editor(ui.ctx());
             // Render the normal editor in this same pass. An empty return
             // lets egui shrink the resizable side panel to its minimum.
         }
-        if let Some(AppPopup::GitChunk { chunk, .. }) = self.app_popup.clone() {
-            self.show_document_diff(ui, &chunk);
+        if self.document_diff.is_some() {
+            self.show_document_diff(ui);
             return;
         }
 
@@ -1065,10 +1065,15 @@ impl EditorApp {
                 && !folds_changed
                 && let Some(anchor) = &resize_anchor
             {
-                ui.scroll_with_delta(egui::vec2(
-                    0.0,
-                    anchor.scroll_delta(&output.galley, output.galley_pos, ui.clip_rect()),
-                ));
+                let delta = anchor.scroll_delta(&output.galley, output.galley_pos, ui.clip_rect());
+                ui.scroll_with_delta_animation(
+                    egui::vec2(0.0, delta),
+                    egui::style::ScrollAnimation::none(),
+                );
+                if delta.abs() > 0.5 {
+                    ui.ctx()
+                        .request_discard("realign source before presenting resized text");
+                }
             }
             (
                 output.response.rect,

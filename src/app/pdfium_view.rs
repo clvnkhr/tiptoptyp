@@ -803,6 +803,9 @@ impl EditorApp {
         {
             let _ = self.web_link_sender.send(link);
         }
+        if view.has_focus(ui.ctx()) {
+            self.explorer.set_focused_section(None);
+        }
         if let Some(stroke) = theme::panel_interaction_stroke(
             ui.visuals(),
             ui.rect_contains_pointer(viewport),

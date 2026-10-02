@@ -52,6 +52,8 @@ mod git_diff;
 mod image_view;
 mod lifecycle;
 mod mitex_mode;
+mod panel_handles;
+pub(crate) use tooltips::native_hover_text;
 mod saves;
 mod tabs;
 mod terminal_panel;
@@ -870,6 +872,7 @@ enum SettingsTarget {
     ThemeColors,
     PageTheme,
     WrapLines,
+    IndependentDividers,
     IndentationGuides,
     DefinitionHighlights,
     TextHighlights,
@@ -913,7 +916,7 @@ enum SettingsTarget {
 }
 
 impl SettingsTarget {
-    const ALL: [Self; 49] = [
+    const ALL: [Self; 50] = [
         Self::Appearance,
         Self::TypstSyntax,
         Self::LightTheme,
@@ -923,6 +926,7 @@ impl SettingsTarget {
         Self::ThemeColors,
         Self::PageTheme,
         Self::WrapLines,
+        Self::IndependentDividers,
         Self::IndentationGuides,
         Self::DefinitionHighlights,
         Self::TextHighlights,
@@ -976,6 +980,7 @@ impl SettingsTarget {
             Self::ThemeColors => "Color adjustments",
             Self::PageTheme => "Page",
             Self::WrapLines => "Wrap lines",
+            Self::IndependentDividers => "Independent main dividers",
             Self::IndentationGuides => "Indentation guides",
             Self::DefinitionHighlights => "Highlight definitions and redefinitions",
             Self::TextHighlights => "Custom text highlights",
@@ -1029,7 +1034,8 @@ impl SettingsTarget {
             | Self::HueShift
             | Self::ThemeColors
             | Self::PageTheme => SettingsSection::Appearance,
-            Self::WrapLines
+            Self::IndependentDividers
+            | Self::WrapLines
             | Self::IndentationGuides
             | Self::DefinitionHighlights
             | Self::TextHighlights
@@ -1087,6 +1093,9 @@ impl SettingsTarget {
                 "document light dark follow interface effective comfy preview page text"
             }
             Self::WrapLines => "editor soft wrapping word wrap",
+            Self::IndependentDividers => {
+                "resize explorer code preview independent panel drag border width"
+            }
             Self::IndentationGuides => "editor indent guide character tree lines whitespace",
             Self::DefinitionHighlights => {
                 "editor declaration let macro renewcommand redefined highlight"
@@ -3598,7 +3607,6 @@ impl EditorApp {
     }
 
     fn open_app_popup(&mut self, popup: AppPopup) {
-        self.document_diff = None;
         if let AppPopup::GitChunk { chunk, .. } = &popup
             && let Err(error) = self.prepare_document_diff(chunk)
         {
@@ -3613,13 +3621,16 @@ impl EditorApp {
 
     fn close_app_popup(&mut self) {
         self.pending_hunk_popup = None;
-        let closes_git_chunk = matches!(self.app_popup, Some(AppPopup::GitChunk { .. }));
         self.app_popup = None;
-        self.document_diff = None;
         self.app_popup_had_focus = false;
         self.app_popup_blur_started = None;
-        if closes_git_chunk {
-            self.git_editor.chunk = None;
+    }
+
+    fn close_document_diff(&mut self) {
+        self.document_diff = None;
+        self.git_editor.chunk = None;
+        if matches!(self.app_popup, Some(AppPopup::GitChunk { .. })) {
+            self.close_app_popup();
         }
     }
 
@@ -4450,6 +4461,8 @@ impl EditorApp {
     /// Service restart, preview retention and tab rekeying intentionally stay
     /// with their entry points because those policies are not interchangeable.
     fn reset_transient_editor_state(&mut self) {
+        self.document_diff = None;
+        self.git_editor.chunk = None;
         self.pending_editor_selection = None;
         self.editor_attention = None;
         self.find_bar.search.clear();
@@ -5926,7 +5939,7 @@ impl EditorApp {
         }
     }
 
-    fn receive_web_links(&mut self) {
+    fn receive_web_links(&mut self, context: &egui::Context) {
         if let Some(receiver) = &self.browser_launch {
             match receiver.try_recv() {
                 Ok(result) => {
@@ -5952,8 +5965,21 @@ impl EditorApp {
             }
         }
         while let Ok(action) = self.web_action_receiver.try_recv() {
+            let focused_before = self.preview_controls.web.focused;
             self.handle_web_action(&action);
+            if self.preview_controls.web.focused && !focused_before {
+                self.claim_native_preview_keyboard(context);
+            }
         }
+    }
+
+    fn claim_native_preview_keyboard(&mut self, context: &egui::Context) {
+        let focused = context.memory(|memory| memory.focused());
+        if let Some(id) = focused {
+            context.memory_mut(|memory| memory.surrender_focus(id));
+        }
+        self.explorer.set_focused_section(None);
+        self.editor_completion = None;
     }
 
     fn handle_web_action(&mut self, action: &str) {
@@ -8111,7 +8137,12 @@ impl EditorApp {
         if status.should_attempt_native {
             let available = ui.available_rect_before_wrap();
             let clip = ui.clip_rect();
-            let rect = clipped_preview_rect(available, clip);
+            let rect = native_preview_content_rect(
+                available,
+                clip,
+                self.view_mode == ViewMode::Split,
+                self.bottom_panel.selected().is_some(),
+            );
             let Some(native_rect) = egui_rect_to_native(ui.ctx(), rect) else {
                 self.hide_webview();
                 return;
@@ -8865,7 +8896,7 @@ impl EditorApp {
         self.poll_document_dialog(&context);
         self.receive_tinymist_events(&context);
         self.tick_tinymist_recovery(&context);
-        self.receive_web_links();
+        self.receive_web_links(&context);
         if std::mem::take(&mut self.preview_controls.return_to_editor) {
             self.focus_source_editor(&context);
         }
@@ -8963,7 +8994,7 @@ impl EditorApp {
                     });
                 }
                 let show_contents = self.explorer.contents_visible();
-                egui::Panel::left(panel_id)
+                let explorer_panel = egui::Panel::left(panel_id)
                     .frame(theme::content_panel_frame(ui.style()))
                     .resizable(true)
                     .default_size(METRICS.chrome.explorer_default_width)
@@ -8973,6 +9004,42 @@ impl EditorApp {
                             self.show_workspace(ui);
                         }
                     });
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                panel_handles::observe("divider.explorer", &explorer_panel.response, false, false);
+                panel_handles::paint(
+                    ui,
+                    panel_handles::panel_center(ui, explorer_panel.response.rect, false),
+                    false,
+                );
+                if self.settings.independent_main_dividers
+                    && self.view_mode == ViewMode::Split
+                    && let Some(mut editor) =
+                        egui::PanelState::load(&context, egui::Id::new("editor"))
+                {
+                    let previous_width = context
+                        .data(|data| data.get_temp::<f32>(panel_id.with("presented-width")))
+                        .unwrap_or(persisted_width);
+                    let delta = explorer_panel.response.rect.width() - previous_width;
+                    if delta.abs() > 0.01 {
+                        let layout = theme::split_pane_layout(ui.available_width());
+                        let width = panel_handles::editor_width(
+                            editor.size().x,
+                            delta,
+                            layout.editor_minimum,
+                            layout.editor_maximum,
+                        );
+                        editor.outer_rect.max.x = editor.outer_rect.min.x + width;
+                        context.data_mut(|data| {
+                            data.insert_persisted(egui::Id::new("editor"), editor)
+                        });
+                    }
+                }
+                context.data_mut(|data| {
+                    data.insert_temp(
+                        panel_id.with("presented-width"),
+                        explorer_panel.response.rect.width(),
+                    )
+                });
                 if show_contents && let Some(state) = egui::PanelState::load(&context, panel_id) {
                     self.explorer.remember_width(state.size().x);
                 }
@@ -9015,7 +9082,7 @@ impl EditorApp {
                 }
                 ContentView::SplitSource | ContentView::SplitAsset => {
                     let layout = theme::split_pane_layout(ui.available_width());
-                    egui::Panel::left("editor")
+                    let editor_panel = egui::Panel::left("editor")
                         .frame(theme::content_panel_frame(ui.style()))
                         .resizable(true)
                         .default_size(layout.editor_width)
@@ -9028,6 +9095,13 @@ impl EditorApp {
                                 self.show_editor(ui);
                             }
                         });
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    panel_handles::observe("divider.editor", &editor_panel.response, false, false);
+                    panel_handles::paint(
+                        ui,
+                        panel_handles::panel_center(ui, editor_panel.response.rect, false),
+                        false,
+                    );
                     egui::CentralPanel::default()
                         .frame(theme::content_panel_frame(ui.style()).inner_margin(0.0))
                         .show(ui, |ui| self.show_preview(ui, frame));
@@ -10249,8 +10323,22 @@ fn preview_background(ui: &egui::Ui) -> Color32 {
     ui.visuals().panel_fill
 }
 
-fn clipped_preview_rect(available: Rect, clip: Rect) -> Rect {
-    available.intersect(clip)
+fn native_preview_content_rect(
+    available: Rect,
+    clip: Rect,
+    left_grip: bool,
+    bottom_grip: bool,
+) -> Rect {
+    let mut content = available;
+    // Native child views paint above egui, so leave room for the half of each
+    // border grip that extends into this pane. Layout and hit areas stay put.
+    if left_grip {
+        content.min.x = (content.min.x + 4.0).min(content.max.x);
+    }
+    if bottom_grip {
+        content.max.y = (content.max.y - 4.0).max(content.min.y);
+    }
+    content.intersect(clip)
 }
 
 fn trace_native_preview_bounds(

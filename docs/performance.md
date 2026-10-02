@@ -532,3 +532,28 @@ Unicode source/cursor identity, and invalidation on resized columns. Both
 laid-out columns and their logical row groups are cached; geometric gaps do not
 insert synthetic text into the document. No extra idle repaint loop was added.
 This local result does not establish a cross-platform performance guarantee.
+
+## Resize presentation correction (2026-10-02)
+
+An optimized deterministic UI probe compares forced single-pass presentation
+(which models the old unaligned resize paint) with two-pass presentation of the
+same anchoring algorithm. Both use the same 100-line wrapped fixture, default
+test style/fonts, one-point scale, 700/360-point widths, 420-point height and
+20-frame warmup on macOS ARM64. No startup or native compositor latency is
+included. Run with:
+
+```sh
+cargo test --release measure_resize_presentation -- --ignored --nocapture
+```
+
+| Warm workload | Forced single pass | Corrected presentation |
+| --- | ---: | ---: |
+| 40 alternating resizes | 55.559 ms / 40 passes | 56.998 ms / 80 passes |
+| Maximum presented caret jump | 1,440 points | 0 points |
+| 100 settled frames | 3.574 ms / 100 passes | 3.427 ms / 100 passes |
+
+The correction adds a bounded second pass only when reflow moves the anchor by
+more than half a point; idle frames do not request discard. This local probe
+compares presentation policies, not two historical binaries, CPU samples or
+cross-platform input latency. Its metadata and complete log are retained in
+`.tiptoptyp/profiles/panel-resize/measurement.log`.

@@ -438,6 +438,9 @@ def main():
             preflight = subprocess.run([str(driver), "preflight"], capture_output=True, text=True, timeout=6)
             result["preflight"] = preflight.stdout.strip()
             if preflight.returncode:
+                state = json.loads(preflight.stdout)
+                if state.get("locked") or not state.get("desktop"):
+                    raise RuntimeError("desktop is locked or unavailable; unlock it before native interaction checks. " + preflight.stdout)
                 raise RuntimeError("desktop driver lacks Accessibility/input permission; enable it for the launching host in macOS Privacy & Security. " + preflight.stdout)
         build = subprocess.run(["cargo", "build", "--locked", "--features", "desktop-ui-tests", "--bin", "tiptoptyp", "--message-format=json"],
                                cwd=ROOT, check=True, stdout=subprocess.PIPE, text=True, timeout=900)

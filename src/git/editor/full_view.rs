@@ -364,8 +364,8 @@ pub(crate) fn show(
                     label,
                     settings.toolbar_style,
                     false,
-                )
-                .on_hover_text(label);
+                );
+                let response = crate::app::native_hover_text(response, label);
                 #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
                 crate::desktop_test::observe(&format!("git.hunk.{label}"), &response);
                 if response.clicked() {

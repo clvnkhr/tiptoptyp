@@ -573,7 +573,7 @@ pub(super) fn diagnostic_hover_timing_id(context: &egui::Context) -> egui::Id {
     viewport_scoped_id(context, "tiptoptyp-diagnostic-hover-timing")
 }
 
-pub(super) fn native_hover_text(
+pub(crate) fn native_hover_text(
     response: egui::Response,
     detail: impl Into<String>,
 ) -> egui::Response {

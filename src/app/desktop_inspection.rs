@@ -131,10 +131,18 @@ impl EditorApp {
             "completion_count": self.editor_completion.as_ref().map_or(0, |completion| completion.items.len()),
             "completion_selected": self.editor_completion.as_ref().map(|completion| completion.selected),
         });
+        interaction["explorer_panel_width"] = serde_json::json!(
+            egui::PanelState::load(context, explorer_panel_id(context)).map(|state| state.size().x)
+        );
+        interaction["independent_main_dividers"] =
+            serde_json::json!(self.settings.independent_main_dividers);
         interaction["indentation_guides"] = serde_json::json!(self.settings.indentation_guides);
         interaction["highlight_definitions"] =
             serde_json::json!(self.settings.highlight_definitions);
         interaction["highlight_rules"] = serde_json::json!(self.settings.highlight_rules.len());
+        let hover_viewport = scoped_child_viewport_id(context, "diagnostic-tooltip-overlay");
+        interaction["native_hover_window"] =
+            serde_json::json!(eframe::window_host::window(context, hover_viewport).is_some());
         interaction["hover_tooltip_rect"] = context
             .data(|data| data.get_temp::<TooltipGeometry>(tooltip_geometry_id(context)))
             .map_or(serde_json::Value::Null, |geometry| {

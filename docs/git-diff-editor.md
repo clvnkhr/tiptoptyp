@@ -4,6 +4,8 @@ Hover a Git gutter marker for a compact read-only hunk comparison. Click it to
 open the full-document comparison in the existing code pane, with the cursor
 at that change. Previous/next navigate changes, wrapping around the document.
 Escape or Close returns to the regular editor without moving the pane divider.
+Temporary menus and the Find popup leave the comparison open; its button tips
+use the same native tooltip host as the regular editor, above the preview.
 
 The left column shows the baseline before the document's changes; the right
 column edits the current document directly. There is no separate draft, Apply

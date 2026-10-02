@@ -977,7 +977,7 @@ pub(super) fn show_explorer_sections(
     mut add_body: impl FnMut(&mut egui::Ui, ExplorerSection),
 ) -> ExplorerSectionsOutput {
     let mut output = ExplorerSectionsOutput::default();
-    let mut section_edges = [(Rect::NOTHING, false, None); ExplorerSection::ALL.len()];
+    let mut section_edges = [(Rect::NOTHING, false, None, false); ExplorerSection::ALL.len()];
     let mut visible_sections = 0;
     for section in spec.order.sections() {
         if (section == ExplorerSection::Git && !spec.git_visible)
@@ -1034,8 +1034,12 @@ pub(super) fn show_explorer_sections(
             output.focused_section = Some(section);
         }
         if let Some(rect) = rendered.frame_rect {
-            section_edges[visible_sections] =
-                (rect, rendered.resize_active, rendered.interaction_stroke);
+            section_edges[visible_sections] = (
+                rect,
+                rendered.resize_active,
+                rendered.interaction_stroke,
+                rendered.resize_handle_visible,
+            );
             visible_sections += 1;
         }
     }
@@ -1047,12 +1051,15 @@ pub(super) fn show_explorer_sections(
         } else {
             ui.visuals().widgets.noninteractive.bg_stroke
         };
-        ui.painter()
-            .line_segment(explorer_section_divider(pair[0].0, pair[1].0), stroke);
+        let divider = explorer_section_divider(pair[0].0, pair[1].0);
+        ui.painter().line_segment(divider, stroke);
+        if pair[0].3 {
+            super::panel_handles::paint(ui, divider[0].lerp(divider[1], 0.5), true);
+        }
     }
     // Paint interaction borders last so a shared divider cannot cover the
     // focused section's top edge. These strokes consume no layout space.
-    for &(rect, _, stroke) in &section_edges[..visible_sections] {
+    for &(rect, _, stroke, _) in &section_edges[..visible_sections] {
         if let Some(stroke) = stroke {
             ui.painter()
                 .rect_stroke(rect, 0.0, stroke, StrokeKind::Inside);
@@ -1085,6 +1092,43 @@ fn explorer_dividers_only_span_shared_edges() {
     assert_eq!(dividers.len(), 2);
     assert_eq!(dividers[0], [Pos2::new(0.0, 40.0), Pos2::new(200.0, 40.0)]);
     assert_eq!(dividers[1], [Pos2::new(0.0, 90.0), Pos2::new(200.0, 90.0)]);
+}
+
+#[cfg(test)]
+#[test]
+fn collapsed_explorer_sections_have_no_resize_grip() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let mut harness = Harness::builder().build_ui_state(
+        |ui, visible: &mut bool| {
+            *visible = explorer_section_resizable(
+                ui,
+                ExplorerSectionRenderSpec {
+                    id_salt: "grip-regression",
+                    title: "Files",
+                    default_open: true,
+                    body_height: 140.0,
+                    show_resize_handle: true,
+                    maximized: false,
+                    search: None,
+                    focus_search: false,
+                    active_search: false,
+                },
+                |ui| {
+                    ui.label("A file");
+                },
+            )
+            .resize_handle_visible;
+        },
+        false,
+    );
+    harness.run();
+    assert!(*harness.state());
+    harness.get_by_label("Files").click();
+    harness.run();
+    assert!(!*harness.state());
+    harness.get_by_label("Files").click();
+    harness.run();
+    assert!(*harness.state());
 }
 
 #[cfg(test)]
@@ -1176,6 +1220,7 @@ pub(super) struct ExplorerSectionRenderOutput {
     pub(super) frame_rect: Option<Rect>,
     pub(super) interaction_stroke: Option<Stroke>,
     pub(super) resize_active: bool,
+    pub(super) resize_handle_visible: bool,
     #[cfg(test)]
     pub(super) scroll_offset: Option<f32>,
 }
@@ -1366,6 +1411,7 @@ pub(super) fn explorer_section_resizable(
             #[cfg(not(all(feature = "desktop-ui-tests", target_os = "macos")))]
             let _ = scroll_output;
             if handle_height > 0.0 {
+                output.resize_handle_visible = true;
                 let (_, response) = ui.allocate_exact_size(
                     Vec2::new(ui.available_width().max(0.0), handle_height),
                     Sense::drag(),
