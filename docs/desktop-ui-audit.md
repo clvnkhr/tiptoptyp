@@ -872,3 +872,77 @@ style and advances the warmup clock to settle the initial cursor reveal.
 The post-animation-change native `git_hunks` rerun also passed in
 `run-ez2g_lpy`; effective PDFium/Tinymist backend checks and retained geometry
 traces accompany the interactions.
+
+### 2026-10-03: audit of the recent docked editor and divider commits
+
+Reviewed `361dcce`, `fd5a6b6`, `761274e`, `1541f07` and `c32e076`, including
+full-document alignment, editing/actions, shared highlighting, math conversion,
+resize state, native tooltip routing and preview keyboard ownership.
+
+Four confirmed bugs were fixed:
+
+- The full-diff layout cache omitted the language extension. A failing test
+  reused Typst highlighting for identical TeX text; the extension now participates
+  in the key, with a repeat-hit test confirming correct layouts still reuse it.
+- Restoring a line from a baseline without a final newline could join it to its
+  neighbor (`oldnext`). Line reverts now preserve logical boundaries, including
+  insertion after a current EOF without a newline, while keeping a final EOF
+  newline-free when appropriate. The boundary regression failed before the fix.
+- Stage/Unstage shortcuts in the live diff targeted the initially clicked hunk,
+  even after the caret moved to another hunk. The live view now selects actions
+  from the caret. Native `git_hunks` failed before the fix in `run-54vek7jc` and
+  passed afterward in `run-b0laciuk`. The extended journey checks the disposable
+  Git index contents: only the second hunk is staged, then the same hunk is
+  unstaged. Existing navigation, editing, Undo/Redo, Find and native tooltip
+  checks also passed, with effective PDFium and Tinymist backends confirmed.
+- Math conversion trimmed the newline terminating a TeX `%` comment, putting the
+  replacement closing delimiter inside that comment. TeX body bytes are now
+  preserved exactly across all offered delimiter choices, without introducing
+  blank lines inside math environments. Typst inline conversion also retains a
+  newline terminating `//`; syntax diagnostics confirm the result parses. The
+  TeX regression failed before the fix.
+
+Hunk formatting repeatedly counted every preceding line for each disjoint hunk.
+It now advances old/new offsets over disjoint ranges, making that step linear in
+pair count. Exhaustive short-sequence baseline recovery, missing-newline cases,
+and a 10,000-line/33-hunk round trip cover the result. Matching optimized
+component measurements are recorded in `docs/performance.md`.
+
+The retained native run traces check existing geometry; this audit changes no
+panel/native bounds or maintained visual layout. Deterministic syntax/behavior
+coverage is used rather than framebuffer captures. No whole-desktop composition
+verification is claimed. There is no new worker, idle repaint, profiling hook or
+per-frame disk I/O.
+
+The follow-up selection audit established a failing comment regression:
+`0..4` in `one\ntwo\nthree` commented only `one`, despite the active caret
+being at line two, column zero. Comment toggling now includes that active line,
+including a blank endpoint, but excludes a column-zero anchor on a reversed
+selection. Indentation and Unicode scalar offsets remain intact; selection
+orientation survives commenting and uncommenting. Focused Typst/TeX tests cover
+forward/reversed endpoints and blank-line round trips.
+
+The native `editing` journey also verifies upward keyboard and mouse selection
+from column zero includes the preceding newline, deletion removes that newline,
+Undo restores it, and both selection directions survive comment round trips.
+The existing column-zero character selection already behaved correctly. VS Code
+uses a distinct whole-line gutter selection (including the starting line's
+newline): see `CursorMoveCommands.line` in its source. VS Code's comment command
+excludes a final zero-column endpoint, whereas tiptoptyp intentionally includes
+it when it is the active caret, as requested. Sources:
+https://github.com/microsoft/vscode/blob/main/src/vs/editor/common/cursor/cursorMoveCommands.ts#L156-L208
+https://github.com/microsoft/vscode/blob/main/src/vs/editor/contrib/comment/browser/lineCommentCommand.ts#L315-L318
+
+The selection change adds work only when a comment command runs; it has no
+material idle or per-frame performance impact. The line-start native probes are
+bounded to four visible targets and compiled only for the desktop test feature.
+
+Final follow-up native interaction evidence: `editing` passed in
+`run-ae7c2a69`, including a blank final cursor line. The earlier character-drag
+and reversed-selection run also passed in `run-u_yp9f0b`. These are native input
+results, separate from deterministic Rust tests; no screenshot was necessary.
+
+Handoff checks passed: `cargo fmt --all -- --check`, strict all-target Clippy,
+`cargo test --no-fail-fast` (1,225 app tests plus core/integration/doc tests),
+and all 15 xtask tests. Evidence logs are retained as
+`/private/tmp/ttt-audit-handoff-{clippy,tests,xtask}.log`.

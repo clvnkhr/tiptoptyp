@@ -141,6 +141,42 @@ class EditorJourneys:
         self.source_is("  // alpha\n\t// beta")
         self.key(44)
         self.source_is("  alpha\n\tbeta")
+        self.key(0)
+        self.paste_source("one\ntwo\nthree")
+        self.key(126, "cmd")  # Start of document.
+        self.key(125, "shift")  # Caret at column zero of line two.
+        self.wait("downward selection ends on next line", lambda d: d["cursor"] == [4, 0])
+        self.key(44)
+        self.source_is("// one\n// two\nthree")
+        self.wait("comment preserves downward selection", lambda d: d["cursor"] == [10, 3])
+        self.key(44)
+        self.source_is("one\ntwo\nthree")
+        self.wait("uncomment preserves downward selection", lambda d: d["cursor"] == [4, 0])
+        self.key(124, "none")  # Collapse at line two's start.
+        self.key(126, "shift")
+        self.wait("upward selection includes preceding newline", lambda d: d["cursor"] == [0, 4])
+        self.key(44)
+        self.source_is("// one\ntwo\nthree")
+        self.wait("comment preserves upward selection", lambda d: d["cursor"] == [3, 7])
+        self.key(44)
+        self.source_is("one\ntwo\nthree")
+        self.wait("uncomment preserves upward selection", lambda d: d["cursor"] == [0, 4])
+        self.wait_target("editor.line_start.1")
+        self.drag("editor.line_start.1", "editor.line_start.0")
+        self.wait("upward mouse selection includes preceding newline", lambda d: d["cursor"] == [0, 4])
+        self.key(51, "none")
+        self.source_is("two\nthree")  # Deleting the selection removes its newline too.
+        self.key(6)
+        self.source_is("one\ntwo\nthree")
+        self.key(0)
+        self.paste_source("one\n")
+        self.key(126, "cmd")
+        self.key(125, "shift")
+        self.wait("blank endpoint selected", lambda d: d["cursor"] == [4, 0])
+        self.key(44)
+        self.source_is("// one\n// ")
+        self.key(44)
+        self.source_is("one\n")
         self.close_scratch(count)
 
     def search(self):
@@ -686,7 +722,24 @@ class EditorJourneys:
         self.native("move", target["x"], target["y"])
         self.wait("docked diff tooltip gets its own native window above preview", lambda d: d["git_diff_open"] and d["hover_tooltip_open"] and d["native_hover_window"])
         if getattr(self, "capture_review", False): self.capture_viewport("main")
-
+        # Action shortcuts must target the live caret, not the initially opened hunk.
+        self.click("git.hunk.editor")
+        self.key(126, "cmd")
+        self.key(125, "cmd+alt")
+        self.key(125, "cmd+alt")
+        at = sum(len(line) for line in original.splitlines(keepends=True)[:85])
+        self.wait("diff cursor reaches second hunk", lambda d: d["cursor"] == [at, at])
+        self.key(1, "cmd+alt")  # Stage the second hunk.
+        import subprocess
+        expected_index = original.replace("005 changed", "005 original").replace("165 changed", "165 original")
+        self.wait("keyboard stages only the hunk under the diff caret", lambda d:
+            subprocess.run(["git", "-C", str(self.directory), "show", ":hunks.typ"],
+                           capture_output=True, text=True, check=True).stdout == expected_index)
+        self.key(32, "cmd+alt")  # Unstage the same hunk (U).
+        committed = expected_index.replace("085 changed", "085 original")
+        self.wait("keyboard unstages the caret hunk", lambda d:
+            subprocess.run(["git", "-C", str(self.directory), "show", ":hunks.typ"],
+                           capture_output=True, text=True, check=True).stdout == committed)
 
 
     def preview_keyboard(self):

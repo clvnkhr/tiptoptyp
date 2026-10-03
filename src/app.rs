@@ -6839,6 +6839,7 @@ impl EditorApp {
         let (source, mapped_range) = toggle_line_comments(
             self.document().source(),
             selection.clone().unwrap_or(cursor..cursor),
+            cursor,
             if self.document().kind() == DocumentKind::Tex {
                 "% "
             } else {
@@ -6848,15 +6849,18 @@ impl EditorApp {
         if source == *self.document().source() {
             return;
         }
-        let cursor = self.editor_snapshot(context).cursor;
-        self.document_mut().edit(cursor, |buffer| *buffer = source);
+        let before_cursor = self.editor_snapshot(context).cursor;
+        self.document_mut()
+            .edit(before_cursor, |buffer| *buffer = source);
         self.find_bar.search.clear();
         self.mark_edited();
-        let cursor = if selection.is_some() {
-            CCursorRange::two(
-                CCursor::new(mapped_range.start),
-                CCursor::new(mapped_range.end),
-            )
+        let cursor = if let Some(selected) = selection {
+            let (anchor, caret) = if cursor == selected.start {
+                (mapped_range.end, mapped_range.start)
+            } else {
+                (mapped_range.start, mapped_range.end)
+            };
+            CCursorRange::two(CCursor::new(anchor), CCursor::new(caret))
         } else {
             CCursorRange::one(CCursor::new(mapped_range.start))
         };
@@ -11129,6 +11133,7 @@ struct CommentEdit {
 fn toggle_line_comments(
     source: &str,
     selected: Range<usize>,
+    cursor: usize,
     prefix: &str,
 ) -> (String, Range<usize>) {
     let chars = source.chars().collect::<Vec<_>>();
@@ -11142,7 +11147,13 @@ fn toggle_line_comments(
         .iter()
         .rposition(|character| *character == '\n')
         .map_or(0, |index| index + 1);
-    let last_selected = end.saturating_sub(1).max(start);
+    // A zero-column endpoint belongs to its line when it is the active caret.
+    // A reversed selection's anchor must not pull an extra line into the edit.
+    let last_selected = if cursor.min(len) == end {
+        end
+    } else {
+        end.saturating_sub(1).max(start)
+    };
     let line_end = chars[last_selected..]
         .iter()
         .position(|character| *character == '\n')
@@ -11154,6 +11165,10 @@ fn toggle_line_comments(
             line_starts.push(index + 1);
         }
     }
+    let cursor_line = chars[..cursor.min(len)]
+        .iter()
+        .rposition(|character| *character == '\n')
+        .map_or(0, |index| index + 1);
     let mut edits = Vec::new();
     let mut commentable_lines = Vec::new();
     for line in line_starts {
@@ -11162,7 +11177,7 @@ fn toggle_line_comments(
             content += 1;
         }
         let is_blank = content >= len || chars[content] == '\n';
-        if !is_blank {
+        if !is_blank || (start != end && line == cursor_line) {
             commentable_lines.push(content);
         }
     }

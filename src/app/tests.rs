@@ -6086,11 +6086,12 @@ fn interface_scale_preserves_native_display_density() {
 fn toggle_line_comments_handles_selected_lines_and_round_trips() {
     let source = "  alpha\n\tbeta\n\n  gamma";
     let selected = 2..source.chars().count();
-    let (commented, mapped) = toggle_line_comments(source, selected.clone(), "// ");
+    let (commented, mapped) = toggle_line_comments(source, selected.clone(), selected.end, "// ");
     assert_eq!(commented, "  // alpha\n\t// beta\n\n  // gamma");
     assert_eq!(mapped, 5..commented.chars().count());
 
-    let (restored, restored_range) = toggle_line_comments(&commented, mapped, "// ");
+    let (restored, restored_range) =
+        toggle_line_comments(&commented, mapped.clone(), mapped.end, "// ");
     assert_eq!(restored, source);
     assert_eq!(restored_range, selected);
 }
@@ -6098,7 +6099,7 @@ fn toggle_line_comments_handles_selected_lines_and_round_trips() {
 #[test]
 fn toggle_line_comments_uses_the_cursor_line_for_an_empty_selection() {
     let source = "one\ntwo\nthree";
-    let (commented, cursor) = toggle_line_comments(source, 5..5, "// ");
+    let (commented, cursor) = toggle_line_comments(source, 5..5, 5, "// ");
     assert_eq!(commented, "one\n// two\nthree");
     assert_eq!(cursor, 8..8);
 }
@@ -6109,12 +6110,54 @@ fn toggle_line_comments_preserves_indent_unicode_cursor_and_tex_prefix() {
         ("  λ + x", "// ", "  // λ + x", 2),
         ("\t\talpha", "% ", "\t\t% alpha", 2),
     ] {
-        let (commented, mapped) = toggle_line_comments(source, cursor..cursor, prefix);
+        let (commented, mapped) = toggle_line_comments(source, cursor..cursor, cursor, prefix);
         assert_eq!(commented, expected);
-        let (restored, range) = toggle_line_comments(&commented, mapped, prefix);
+        let (restored, range) =
+            toggle_line_comments(&commented, mapped.clone(), mapped.end, prefix);
         assert_eq!(restored, source);
         assert_eq!(range, cursor..cursor);
     }
+}
+
+#[test]
+fn toggle_line_comments_includes_the_active_cursor_line_at_column_zero() {
+    for prefix in ["// ", "% "] {
+        let source = "one\ntwo\nthree";
+        let (commented, mapped) = toggle_line_comments(source, 0..4, 4, prefix);
+        assert_eq!(commented, format!("{prefix}one\n{prefix}two\nthree"));
+        let (restored, restored_range) =
+            toggle_line_comments(&commented, mapped.clone(), mapped.end, prefix);
+        assert_eq!(restored, source);
+        assert_eq!(restored_range, 0..4);
+    }
+}
+
+#[test]
+fn toggle_line_comments_includes_a_blank_active_endpoint_but_skips_other_blank_lines() {
+    for source in ["one\n", "one\n  ", "one\n\ntwo\n"] {
+        let end = source.chars().count();
+        let (commented, mapped) = toggle_line_comments(source, 0..end, end, "// ");
+        let expected = match source {
+            "one\n" => "// one\n// ",
+            "one\n  " => "// one\n  // ",
+            _ => "// one\n\n// two\n// ",
+        };
+        assert_eq!(commented, expected);
+        let (restored, range) = toggle_line_comments(&commented, mapped.clone(), mapped.end, "// ");
+        assert_eq!(restored, source);
+        assert_eq!(range, 0..end);
+    }
+}
+
+#[test]
+fn toggle_line_comments_does_not_include_a_column_zero_anchor_line() {
+    let (commented, mapped) = toggle_line_comments("one\ntwo\nthree", 0..4, 0, "// ");
+    assert_eq!(commented, "// one\ntwo\nthree");
+    assert_eq!(mapped, 3..7);
+    let (restored, mapped_back) =
+        toggle_line_comments(&commented, mapped.clone(), mapped.start, "// ");
+    assert_eq!(restored, "one\ntwo\nthree");
+    assert_eq!(mapped_back, 0..4);
 }
 
 #[test]

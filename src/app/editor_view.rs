@@ -608,6 +608,22 @@ impl EditorApp {
                 .char_range()
                 .map(|range| range.primary.index.0);
             let line_rows = logical_line_row_ranges(&output.galley.rows);
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            for (line, rows) in line_rows.iter().take(4).enumerate() {
+                if let Some(row) = output.galley.rows.get(rows.start) {
+                    let mut target = output.response.clone();
+                    target.interact_rect = Rect::from_center_size(
+                        Pos2::new(
+                            output.galley_pos.x - 2.0,
+                            output.galley_pos.y + row.rect().center().y,
+                        ),
+                        Vec2::splat(1.0),
+                    );
+                    if ui.clip_rect().contains(target.interact_rect.center()) {
+                        crate::desktop_test::observe(&format!("editor.line_start.{line}"), &target);
+                    }
+                }
+            }
             if indentation_guides {
                 crate::editor_decoration::paint_guides(
                     ui,

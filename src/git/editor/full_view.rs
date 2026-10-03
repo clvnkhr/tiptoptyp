@@ -39,6 +39,7 @@ struct Layout {
 struct LayoutCache {
     old: String,
     new: String,
+    extension: String,
     width: f32,
     style: Arc<Style>,
     settings: AppSettings,
@@ -224,6 +225,7 @@ fn layout(
         .filter(|c| {
             c.new == current
                 && c.old == diff.before
+                && c.extension == extension
                 && c.width == width
                 && c.style == style
                 && c.settings.line_wrap == settings.line_wrap
@@ -280,6 +282,7 @@ fn layout(
             Arc::new(LayoutCache {
                 old: diff.before.clone(),
                 new: current.into(),
+                extension: extension.into(),
                 width,
                 style,
                 settings: settings.clone(),
@@ -577,6 +580,62 @@ mod tests {
             400,
             None,
         );
+    }
+
+    #[test]
+    fn identical_text_with_a_different_language_invalidates_layout() {
+        let context = Context::default();
+        fonts(&context);
+        context
+            .run_ui(Default::default(), |ui| {
+                let source = "\\section{Introduction}\n#let value = 2\n";
+                let settings = AppSettings::default();
+                let mut diff = DocumentDiff::new(source.into(), source);
+                let typst = layout(
+                    ui,
+                    Id::new("same-editor"),
+                    &mut diff,
+                    source,
+                    "typ",
+                    &settings,
+                    (400.0, false),
+                );
+                let tex = layout(
+                    ui,
+                    Id::new("same-editor"),
+                    &mut diff,
+                    source,
+                    "tex",
+                    &settings,
+                    (400.0, false),
+                );
+                let fresh = layout(
+                    ui,
+                    Id::new("fresh-editor"),
+                    &mut diff,
+                    source,
+                    "tex",
+                    &settings,
+                    (400.0, false),
+                );
+                assert!(
+                    !Arc::ptr_eq(&typst, &tex),
+                    "cached Typst layout reused for TeX"
+                );
+                assert_eq!(tex.new.job.sections, fresh.new.job.sections);
+                let repeated = layout(
+                    ui,
+                    Id::new("same-editor"),
+                    &mut diff,
+                    source,
+                    "tex",
+                    &settings,
+                    (400.0, false),
+                );
+                assert!(Arc::ptr_eq(&tex, &repeated));
+            })
+            .textures_delta
+            .clear();
     }
 
     #[test]

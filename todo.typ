@@ -313,3 +313,11 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 // run-wkvmez5n), including PDFium/Tinymist keyboard ownership and diff tooltips.
 // Resize anchor corrections also bypass scroll animation, so the discard pass
 // presents the final aligned view immediately rather than an animated offset.
+// 2026-10-03 audit: fixed docked-diff language cache invalidation, missing-newline
+// line reverts and Stage/Unstage shortcut selection after moving the caret.
+// Math conversions preserve comment-terminating newlines (TeX and Typst).
+// Sparse hunk formatting now advances offsets instead of rescanning prefixes;
+// the matched optimized component probe measured a 29.3% reduction.
+// Selection follow-up: Cmd+/ includes the active cursor line even at column
+// zero or on a blank endpoint, and preserves reversed selection direction.
+// Native editing checks cover upward mouse/keyboard newline selection and Undo.

@@ -43,7 +43,12 @@ impl EditorApp {
         }
         if matches!(action, Action::Next | Action::Previous) {
             self.navigate_hunk(context, action == Action::Previous, HunkNavigation::Editor);
-        } else if let Some(chunk) = self.git_editor.chunk.clone() {
+        } else if let Some(chunk) = self
+            .git_editor
+            .chunk
+            .clone()
+            .filter(|_| self.document_diff.is_none())
+        {
             self.perform_hunk_action(context, action, self.document().key(), chunk);
         } else {
             // Action shortcuts select the hunk under the caret, never an

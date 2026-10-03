@@ -557,3 +557,27 @@ more than half a point; idle frames do not request discard. This local probe
 compares presentation policies, not two historical binaries, CPU samples or
 cross-platform input latency. Its metadata and complete log are retained in
 `.tiptoptyp/profiles/panel-resize/measurement.log`.
+
+## Sparse hunk formatting audit (2026-10-03)
+
+The formatter used to count the full prefix twice for each separated hunk. It
+now advances line offsets only through the gap since the previous hunk, retaining
+identical unified-diff output. This removes the quadratic prefix-counting step.
+
+An isolated probe compiles the actual production `make_hunks` and unified-diff
+codec bodies with `rustc --edition=2024 -O`, comparing `c32e076` with the fixed
+implementation on macOS 14.6.1 ARM64, Rust 1.98.1. Both use 10,000 lines and 33
+separated replacements, five warmup calls, then 100 calls per sample. Three
+alternating before/after process pairs provide 15 samples per implementation,
+with other builds and native journeys finished before the matched run.
+
+| Active component workload | Before | After |
+| --- | ---: | ---: |
+| Median of 100 hunk-generation calls | 53.460 ms | 37.782 ms |
+
+This is a 29.3% reduction for the measured component, not whole-editor latency.
+It excludes alignment, startup, GUI rendering and idle/cache-hit behavior; none
+of those workloads is compared to these timings. The algorithm adds no idle work.
+The probe generator, compiler metadata, implementation hashes and complete logs
+are retained under `.tiptoptyp/profiles/recent-commit-audit/`; the generator reads
+production sources from its current checkout and builds the isolated probe.

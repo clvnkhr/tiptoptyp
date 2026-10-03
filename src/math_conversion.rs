@@ -42,7 +42,7 @@ impl Target {
         Some(Self {
             range: block.range,
             original: original.into(),
-            body: body.trim().into(),
+            body: body.into(),
             kind,
         })
     }
@@ -66,15 +66,18 @@ impl Target {
             return None;
         }
         Some(if self.kind == DocumentKind::Typst {
+            // A final newline may terminate a // comment. Remove padding but
+            // retain that newline before putting the closing delimiter back.
+            let body = self.body.trim_start().trim_end_matches([' ', '\t', '\r']);
             if choice == "Inline math" {
-                format!("${}$", self.body)
+                format!("${body}$")
             } else {
-                format!("$\n{}\n$", self.body)
+                format!("$\n{body}{}$", if body.ends_with('\n') { "" } else { "\n" })
             }
         } else if choice.starts_with("Inline math") {
             format!("\\({}\\)", self.body)
         } else {
-            format!("\\begin{{{choice}}}\n{}\n\\end{{{choice}}}", self.body)
+            format!("\\begin{{{choice}}}{}\\end{{{choice}}}", self.body)
         })
     }
 }
@@ -82,6 +85,29 @@ impl Target {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn tex_conversion_keeps_newlines_that_terminate_comments() {
+        let source = "\\[\nx % explanation\n\\]";
+        let target = Target::at(source, 4, DocumentKind::Tex).unwrap();
+        assert_eq!(
+            target.replacement(target.choices()[0]).unwrap(),
+            "\\(\nx % explanation\n\\)"
+        );
+    }
+    #[test]
+    fn typst_inline_conversion_keeps_its_closing_delimiter_out_of_comments() {
+        let source = "$\nx // explanation\n$";
+        let target = Target::at(source, 4, DocumentKind::Typst).unwrap();
+        let converted = target.replacement("Inline math").unwrap();
+        assert_eq!(converted, "$x // explanation\n$");
+        assert!(
+            typst_syntax::parse(&converted)
+                .errors_and_warnings()
+                .0
+                .is_empty()
+        );
+        assert!(Target::at(&converted, 1, DocumentKind::Typst).is_some());
+    }
     #[test]
     fn formula_contents_survive_all_delimiters() {
         for (source, kind) in [
@@ -92,7 +118,11 @@ mod tests {
             for choice in target.choices() {
                 let replacement = target.replacement(choice).unwrap();
                 let converted = Target::at(&replacement, 1, kind).unwrap();
-                assert_eq!(converted.body, target.body);
+                if kind == DocumentKind::Tex {
+                    assert_eq!(converted.body, target.body);
+                } else {
+                    assert_eq!(converted.body.trim(), target.body.trim());
+                }
             }
         }
     }

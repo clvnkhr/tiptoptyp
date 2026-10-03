@@ -78,11 +78,21 @@ impl DocumentDiff {
                 .filter(|p| p.new.is_some())
                 .count()
         });
-        let mut result = new[..at].concat();
-        if let Some(line) = row.old {
-            result.push_str(old[line]);
+        let mut lines = new[..at]
+            .iter()
+            .copied()
+            .chain(row.old.map(|line| old[line]))
+            .chain(new[at + usize::from(row.new.is_some())..].iter().copied())
+            .peekable();
+        let mut result = String::with_capacity(self.current.len());
+        while let Some(line) = lines.next() {
+            result.push_str(line);
+            // A baseline EOF without a newline can now sit in the middle of
+            // the edited document. Preserve logical line boundaries there.
+            if lines.peek().is_some() && !result.ends_with('\n') {
+                result.push('\n');
+            }
         }
-        result.push_str(&new[at + usize::from(row.new.is_some())..].concat());
         Some(result)
     }
 }
@@ -200,15 +210,14 @@ fn make_hunks(before: &str, current: &str, pairs: &[Pair]) -> Vec<Hunk> {
         }
     }
     let mut text = String::new();
+    let (mut through, mut a, mut b) = (0, 0, 0);
     for range in ranges {
-        let a = pairs[..range.start]
-            .iter()
-            .filter(|p| p.old.is_some())
-            .count();
-        let b = pairs[..range.start]
-            .iter()
-            .filter(|p| p.new.is_some())
-            .count();
+        // Ranges are ordered and disjoint: advance each line offset once,
+        // instead of rescanning the entire prefix for every separated hunk.
+        for pair in &pairs[through..range.start] {
+            a += usize::from(pair.old.is_some());
+            b += usize::from(pair.new.is_some());
+        }
         let ac = pairs[range.clone()]
             .iter()
             .filter(|p| p.old.is_some())
@@ -253,12 +262,48 @@ fn make_hunks(before: &str, current: &str, pairs: &[Pair]) -> Vec<Hunk> {
                 }
             }
         }
+        through = range.end;
+        a += ac;
+        b += bc;
     }
     parse_hunks(&text).expect("generated valid unified ranges")
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reverting_one_line_keeps_adjacent_lines_separate_without_final_newlines() {
+        let diff = DocumentDiff::new("old".into(), "changed\nnext\n");
+        assert_eq!(diff.revert_line(0).unwrap(), "old\nnext\n");
+        let diff = DocumentDiff::new("one\ntwo\n".into(), "changed");
+        assert_eq!(diff.revert_line(1).unwrap(), "changed\ntwo\n");
+        let diff = DocumentDiff::new("old".into(), "changed");
+        assert_eq!(diff.revert_line(0).unwrap(), "old");
+    }
+    #[test]
+    fn sparse_changes_keep_correct_offsets_across_many_hunks() {
+        let before = (0..10_000)
+            .map(|i| format!("line {i:05} original\n"))
+            .collect::<String>();
+        let current = (0..10_000)
+            .map(|i| {
+                format!(
+                    "line {i:05} {}\n",
+                    if i % 300 == 150 {
+                        "changed"
+                    } else {
+                        "original"
+                    }
+                )
+            })
+            .collect::<String>();
+        let diff = DocumentDiff::new(before.clone(), &current);
+        assert_eq!(diff.hunks.len(), 33);
+        assert_eq!(
+            DocumentDiff::baseline(&current, &diff.hunks).unwrap(),
+            before
+        );
+    }
     #[test]
     fn very_different_large_documents_use_a_bounded_coarse_alignment() {
         let before = (0..10_000)
