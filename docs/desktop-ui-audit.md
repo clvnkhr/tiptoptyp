@@ -984,3 +984,54 @@ the runner, not an additional editor interaction journey or visual QA claim.
 Handoff validation passed: fmt, strict all-target Clippy, full Rust tests (1,227
 app tests plus core/integration/doc tests), and all 15 xtask tests. Logs are
 `/private/tmp/ttt-startup-audit-{clippy,tests,xtask}.log`.
+
+### 2026-10-03: native TeX editing journeys
+
+Added `tex_editing`, `tex_intelligence` and `tex_save`, included in `all` and
+available together as `--journey tex`. The editing journey uses a named TeX file
+and a 320-line source, not an untyped scratch buffer. Coverage includes Unicode
+carets, undo/redo, comments and selection wrapping, literal command replacement,
+real diagnostic providers, Problems navigation, command completion acceptance,
+and native Save/manual Save/close/reopen.
+
+The failing native intelligence run `run-obmme923` exposed Harper treating
+`\[...\]` identifiers as prose while missing `\text{...}` inside equations.
+The deterministic delimiter/environment regression also failed before repair
+(`/private/tmp/ttt-tex-boundary-before.log`). A source-coordinate-preserving
+adapter now shares the existing TeX math scanner, retains prose-command bodies,
+and emits non-prose tokens for equation gaps. The tokens avoid the additional
+false whitespace warning in ordinary `with $x$.` prose. Four focused Rust tests
+cover delimiters/environments, spacing, Unicode offsets, nested groups, escaped
+commands and comments; Typst's parser is unchanged.
+
+Passing individual native evidence: `tex_editing` in `run-kj18oro8` (large source),
+`tex_intelligence` in `run-898ymo_t`, `tex_save` in `run-1f8ktqbh`, and the existing
+`dialogs` journey in `run-k0a4ugvo`. The intelligence run observed stale Harper
+results in seven snapshots. Badness refreshed before a stale snapshot was
+observed; its retention assertion is conditional on a pending revision and does
+not establish a slow-provider interval in this run. Initial completion probes
+outside a complete TeX document returned empty results from TexLab itself; the
+final fixture includes a document and a locally defined command, avoiding an
+external TeX package database prerequisite.
+
+The Save harness previously assumed native dialogs used the launch workspace;
+a failed TeX save landed in Documents. The exact generated fixture was removed,
+and both Save journeys now use native Go to Folder before confirming. A runner
+contract test protects that ordering. The existing Open fixture also used a
+literal `\n` TeX command; it now contains a real newline. Feature-enabled strict
+Clippy uncovered a helper placed after a test module; moving it before the
+module fixes that check without changing behavior.
+
+There is no pixel/layout or preview-composition change, so no screenshot was
+required. Added TeX scanning runs in the existing bounded writing worker after
+its debounce, with no new jobs, idle repaint loop or editor-thread parsing.
+These functional runs do not establish a typing-latency or performance gain.
+
+The combined `--journey tex` run passed all three journeys in one native app
+session (`run-5aqehg8i`), including settings restoration between journeys.
+Handoff checks passed: fmt, strict all-target Clippy (default and
+`desktop-ui-tests` feature), full Rust tests (1,231 app tests plus core,
+integration and docs), 15 xtask tests, and 11 runner contract tests. Logs are
+`/private/tmp/ttt-tex-final-{clippy,tests}.log`,
+`/private/tmp/ttt-tex-feature-clippy-final.log`, `/private/tmp/ttt-tex-xtask.log`
+and `/private/tmp/ttt-tex-combined-native.log`.

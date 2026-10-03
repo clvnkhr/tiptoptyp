@@ -131,6 +131,19 @@ impl EditorApp {
             "completion_count": self.editor_completion.as_ref().map_or(0, |completion| completion.items.len()),
             "completion_selected": self.editor_completion.as_ref().map(|completion| completion.selected),
         });
+        interaction.as_object_mut().unwrap().extend(
+            serde_json::json!({
+            "texlab_ready": self.tex_service.texlab_ready,
+            "badness_ready": self.tex_service.badness_ready,
+            "tex_diagnostic_counts": self.tex_diagnostics.iter().map(|diagnostics| diagnostics.len()).collect::<Vec<_>>(),
+            "tex_diagnostics_current": self.activity.diagnostics[1..].iter().map(|key| *key == Some(self.document().key())).collect::<Vec<_>>(),
+            "completion_pending": self.activity.completion.is_some(),
+            "writing_count": self.writing.diagnostics.len(),
+            "writing_lines": self.writing.diagnostics.iter().filter_map(|diagnostic| diagnostic.line()).collect::<Vec<_>>(),
+            "writing_fingerprint": crate::desktop_test::fingerprint(&format!("{:?}", self.writing.diagnostics)),
+            "writing_pending": matches!(self.writing.activity(), crate::activity::Activity::Pending(_) | crate::activity::Activity::Running),
+            }).as_object().unwrap().clone(),
+        );
         interaction["explorer_panel_width"] = serde_json::json!(
             egui::PanelState::load(context, explorer_panel_id(context)).map(|state| state.size().x)
         );

@@ -1,4 +1,5 @@
 //! Offline writing checks. Locations are Unicode scalar offsets, like Harper.
+mod tex_prose;
 use crate::{
     diagnostics::{Diagnostic, DiagnosticLocation, DiagnosticSeverity, DiagnosticSource},
     document::DocumentKind,
@@ -52,7 +53,7 @@ pub(crate) fn check(
     {
         let dictionary = Arc::clone(&WRITING_DICTIONARY);
         let document = if kind == DocumentKind::Tex {
-            Document::new(source, &harper_tex::TeX::default(), dictionary.as_ref())
+            Document::new(source, &tex_prose::TexProse, dictionary.as_ref())
         } else {
             Document::new(source, &harper_typst::Typst, dictionary.as_ref())
         };
@@ -501,6 +502,55 @@ mod tests {
             assert_eq!(
                 writing_dialect(source, DocumentKind::Typst, American),
                 Some(Dialect::American)
+            );
+        }
+    }
+
+    #[test]
+    fn tex_math_boundaries_do_not_invent_prose_spacing() {
+        let issues = check(
+            "\\documentclass{article}\n\\begin{document}\nA sample with $\\alpha + \\alpha$.\n\\end{document}\n",
+            DocumentKind::Tex,
+            Path::new("fixture.tex"),
+            true,
+            false,
+            crate::settings::WritingLanguage::Auto,
+        );
+        assert!(issues.is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn tex_delimited_math_is_not_prose_but_text_inside_it_is() {
+        for (open, close) in [
+            ("\\[", "\\]"),
+            ("\\(", "\\)"),
+            ("$", "$"),
+            ("$$", "$$"),
+            ("\\begin{align*}", "\\end{align*}"),
+            ("\\begin{equation}", "\\end{equation}"),
+        ] {
+            let source = format!(
+                "Prose before.\n{open} nonwordxyz + nonwordxyz\n\\text{{This is is readable.}} {close}\nThis is is prose."
+            );
+            let issues = check(
+                &source,
+                DocumentKind::Tex,
+                Path::new("fixture.tex"),
+                true,
+                false,
+                crate::settings::WritingLanguage::Auto,
+            );
+            assert!(
+                issues.iter().all(|d| d.line() != Some(2)),
+                "{open}: {issues:?}"
+            );
+            assert!(
+                issues.iter().any(|d| d.line() == Some(3)),
+                "math text {open}: {issues:?}"
+            );
+            assert!(
+                issues.iter().any(|d| d.line() == Some(4)),
+                "ordinary prose {open}: {issues:?}"
             );
         }
     }

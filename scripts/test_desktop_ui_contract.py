@@ -56,6 +56,23 @@ class ClickReadinessContract(unittest.TestCase):
         self.assertEqual(actions, [("move", 20, 10)])
 
 
+class SaveIsolationContract(unittest.TestCase):
+    def test_native_save_chooses_private_directory_before_confirming(self):
+        journey = object.__new__(runner.Journey)
+        actions = []
+        journey.key = lambda *args: actions.append(("key", *args))
+        journey.native = lambda *args: actions.append(args)
+        destination = Path("/private/tmp/ttt-ui-fixture/saved.tex")
+        with patch.object(runner.time, "sleep"):
+            journey.save_to_fixture(destination)
+        self.assertIn(("key", 5, "cmd+shift"), actions)
+        folder = actions.index(("text", str(destination.parent)))
+        filename = actions.index(("ax-set-text", destination.name))
+        confirm = actions.index(("ax-press-title", "Save"))
+        self.assertLess(folder, filename)
+        self.assertLess(filename, confirm)
+
+
 class HeightContract(unittest.TestCase):
     def test_accepts_constant_height_when_window_moves(self):
         for top in [0, 100, -200]:

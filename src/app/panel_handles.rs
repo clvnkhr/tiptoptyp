@@ -54,6 +54,29 @@ pub(super) fn paint(ui: &egui::Ui, center: Pos2, horizontal: bool) {
 pub(super) fn editor_width(width: f32, explorer_delta: f32, minimum: f32, maximum: f32) -> f32 {
     (width - explorer_delta).clamp(minimum, maximum.max(minimum))
 }
+
+#[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+pub(super) fn observe(name: &str, response: &egui::Response, horizontal: bool, top: bool) {
+    let mut target = response.clone();
+    let rect = target.rect;
+    target.rect = if horizontal {
+        Rect::from_center_size(
+            egui::pos2(
+                rect.center().x,
+                if top { rect.top() } else { rect.bottom() },
+            ),
+            egui::vec2(rect.width(), 6.0),
+        )
+    } else {
+        Rect::from_center_size(
+            egui::pos2(rect.right(), rect.center().y),
+            egui::vec2(6.0, rect.height()),
+        )
+    };
+    target.interact_rect = target.rect;
+    crate::desktop_test::observe(name, &target);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,26 +120,4 @@ mod tests {
         });
         output.textures_delta.clear();
     }
-}
-
-#[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-pub(super) fn observe(name: &str, response: &egui::Response, horizontal: bool, top: bool) {
-    let mut target = response.clone();
-    let rect = target.rect;
-    target.rect = if horizontal {
-        Rect::from_center_size(
-            egui::pos2(
-                rect.center().x,
-                if top { rect.top() } else { rect.bottom() },
-            ),
-            egui::vec2(rect.width(), 6.0),
-        )
-    } else {
-        Rect::from_center_size(
-            egui::pos2(rect.right(), rect.center().y),
-            egui::vec2(6.0, rect.height()),
-        )
-    };
-    target.interact_rect = target.rect;
-    crate::desktop_test::observe(name, &target);
 }

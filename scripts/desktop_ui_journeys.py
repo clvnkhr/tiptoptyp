@@ -4,6 +4,8 @@ The inspection socket supplies assertions and actual hit rectangles, never actio
 See docs/desktop-ui-audit.md for the lower-level tests these journeys promote.
 """
 
+from desktop_ui_tex_journeys import TexJourneys
+
 
 def fingerprint(text):
     value = 0xcbf29ce484222325
@@ -12,7 +14,7 @@ def fingerprint(text):
     return f"{value:016x}"
 
 
-class EditorJourneys:
+class EditorJourneys(TexJourneys):
     def focus_document_window(self):
         if self.snapshot()["document"]["focused"]:
             return
@@ -263,7 +265,7 @@ class EditorJourneys:
 
     def dialogs(self):
         opened = self.directory / "opened.tex"
-        opened.write_text("\\documentclass{article}\n\\begin{document}\nOpened.\\n\\end{document}\n")
+        opened.write_text("\\documentclass{article}\n\\begin{document}\nOpened.\n\\end{document}\n")
         self.key(31, "cmd")  # Cmd+O
         import time
         time.sleep(0.8)  # rfd creates the native panel asynchronously.
@@ -276,10 +278,7 @@ class EditorJourneys:
         self.key(45)  # New empty document.
         self.wait("dialog journey gets an empty tab", lambda d: d["path"] is None and d["source_bytes"] == 0)
         destination = self.directory / "saved.arbitrary"
-        self.key(1, "cmd+shift")  # Cmd+Shift+S
-        time.sleep(0.8)
-        self.native("ax-set-text", destination.name)
-        self.native("ax-press-title", "Save")
+        self.save_to_fixture(destination)
         self.wait("Save As accepts an arbitrary extension", lambda d: d["path"] == str(destination), timeout=15)
 
     def startup_preview(self):

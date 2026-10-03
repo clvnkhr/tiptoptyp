@@ -21,6 +21,10 @@ python3 scripts/test-desktop-ui.py --journey find
 python3 scripts/test-desktop-ui.py --journey empty
 python3 scripts/test-desktop-ui.py --journey focus
 python3 scripts/test-desktop-ui.py --journey preview
+python3 scripts/test-desktop-ui.py --journey tex
+python3 scripts/test-desktop-ui.py --journey tex_editing
+python3 scripts/test-desktop-ui.py --journey tex_intelligence
+python3 scripts/test-desktop-ui.py --journey tex_save
 ```
 
 The runner compiles a separate `desktop-ui-tests` feature build and copies it
@@ -72,6 +76,9 @@ now exercised through the real app, and the lower-level coverage retained.
 | panels | Cmd+5, repeated clicks on Terminal/Problems, hide/reopen; stable panel height across 30 fresh frames per sample; app remains responsive |
 | find | Cmd+F with Find focused, repeated Replace clicks, one close-button click; expected popup state and stable measured native height after every action |
 | empty | Cmd+W on the only tab, then Cmd+N; original window remains, new tab has no path and zero source bytes |
+| tex_editing | Named `.tex` file, Unicode caret and undo/redo, 320-line source, `%` comment round trips including active line endpoints, math/bracket selection wrapping, literal TeX command search/replace with undo/redo; disabled autosave leaves disk unchanged |
+| tex_intelligence | Real TexLab/Badness readiness and Badness lint output; Harper prose versus math/text boundaries, old Harper/Badness diagnostics retained until refreshed, Problems navigation, accepting a document-defined TexLab command with undo/redo |
+| tex_save | New untyped buffer saved as `.tex` through the native panel, exact disk contents, manual save, clean close and reopening the saved file |
 | editing | Typing and Unicode replacement, undo/redo caret and saved-state indicator, acknowledged multiline paste, upward mouse/keyboard newline selection, direction-preserving comment round trips including a zero-column or blank active endpoint |
 | search | Query focus, next/previous, case/regex toggles, replace one/all, undo and Escape |
 | tabs | Previous/next with separate unsaved buffers and carets; original preview retained |
@@ -111,8 +118,10 @@ operator acknowledgement, not an automated visual assertion. Manual viewport
 captures can be taken with Cmd+Shift+F12 and retained before fixture cleanup;
 Tinymist's native child is not composited into that framebuffer capture.
 
-Still to add: real save dialogs and TeX save-as; restored Typst → pinned TeX
-builds; automated assertions against composed on-screen pixels.
+Still to add: restored Typst → pinned TeX builds and automated assertions against
+composed on-screen pixels. Save journeys explicitly use the native Go to Folder
+action before confirming, so new documents stay inside the private fixture
+workspace even when macOS defaults the panel to Documents.
 The existing `scripts/test-native-windows.py` covers a separate native lifecycle
 fixture, not those complete editor journeys.
 
@@ -232,3 +241,18 @@ custom highlight section, and verifies that source text is unchanged. Use
 `--capture-review` to retain fresh Help/settings/editor viewport framebuffers.
 The `controls` journey also rejects an oversized short toolbar tooltip and, when
 capturing, focuses that tooltip's native viewport before the screenshot shortcut.
+
+### Native TeX editing
+
+The three `tex_*` journeys run individually, together with `--journey tex`,
+or as part of `all`, against named TeX files. Settings are changed through the real JSON editor and restored after
+the journey. They do not inject diagnostics, completion responses or editor
+handlers. The intelligence journey requires working pinned TexLab and Badness;
+Harper runs normally in its background worker. Its completion fixture includes
+a full document and a locally defined command, so it does not require external
+package completion databases. Read-only observations include provider readiness,
+diagnostic counts/current revision and fingerprints, never diagnostic text.
+
+These are interaction checks, not typing-latency benchmarks or PDF rendering
+proof. TeX formatting, SyncTeX navigation and mixed Typst/TeX preview transitions
+remain separate coverage gaps.

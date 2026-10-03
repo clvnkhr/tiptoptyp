@@ -325,3 +325,8 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 // system CJK bytes across font engines. Matched fresh-launch median improved
 // 646ms -> 598ms (7.5%); Typst/TeX changes were inconclusive. Repro runner and
 // environment/sample metadata are documented in docs/performance.md.
+
+// 2026-10-03: added native TeX editing/intelligence/save journeys (also grouped
+// with --journey tex). Fixed Harper display-math boundaries, prose in \text,
+// and math-gap spacing false positives. Native Save tests now choose their
+// private fixture folder explicitly; user todo descriptions are unchanged.
