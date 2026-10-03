@@ -597,6 +597,11 @@ state snapshot**, including native window initialization and document loading.
 It does not measure compositor presentation or preview readiness. It uses a
 fresh private settings store/workspace and the ordinary interactive app, without
 QA scenes or screenshots. CPU sampling is optional and belongs in separate runs.
+The runner saves metadata and completed observations after every launch, builds
+its native driver directory on fresh checkouts, and cleans up the app even if
+sampling or native quit input fails. Comparison launch order reverses each round
+to counterbalance systematic order effects. Failure-path regressions run with
+`python3 -m unittest discover -s scripts -p test_measure_startup.py`.
 Build both binaries with `cargo build --release --features desktop-ui-tests`,
 preserve them, then run:
 
@@ -639,3 +644,20 @@ custom themes do not decode default themes, grammar data is shared after first
 use, and two actual font engines retain borrowed pointers to the same CJK bytes.
 Existing highlighting and glyph-coverage tests still pass. No worker, idle
 repaint loop, production profiling hook or per-frame I/O was added.
+
+### Startup runner audit (2026-10-03)
+
+Reproduced three cleanup failures deterministically before fixing them: sampler
+launch failure, sampler timeout, and native quit-driver failure could leave the
+measured app alive. Cleanup now surrounds sampler launch and has a separate app
+finally block; bounded waits escalate to termination and kill. A fresh-checkout
+output-directory omission and loss of earlier observations after a later failed
+launch are also fixed. Eight Python regressions cover those paths and comparison
+order. Lazy syntax loading and borrowed platform font storage were reviewed;
+no further production change was required.
+
+A native sampled smoke run (one warmup plus one measured launch) completed in
+`.tiptoptyp/profiles/startup-audit-smoke/`, including automatic shutdown and CPU
+sample files. Its timings are diagnostic only: sampling and concurrent checks
+make it unsuitable for comparison with the earlier optimized measurements.
+There is no production performance change in this audit.

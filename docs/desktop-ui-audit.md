@@ -967,3 +967,20 @@ Matching optimized startup measurements, limitations and the new external
 runner are documented in `docs/performance.md`. Required fmt/strict Clippy,
 all app/core/integration/doc tests (1,227 app tests), and all 15 xtask tests
 passed. Logs: `/private/tmp/ttt-startup-final-{clippy,tests,xtask}.log`.
+
+### 2026-10-03: startup change audit
+
+Reviewed lazy syntax/theme initialization, shared platform CJK font lifetimes,
+and the startup measurement runner. Reproduced and fixed runner cleanup bugs
+for failed sampler launch, timed-out sampling and failed quit input; added
+bounded forced shutdown, fresh-checkout driver-directory setup, incremental
+measurement persistence and counterbalanced comparison order. Eight Python
+regressions pass. Production UI code and pixels are unchanged.
+
+The native sampled runner smoke test completed two launches and automatic
+shutdown; evidence is `.tiptoptyp/profiles/startup-audit-smoke/`. This exercises
+the runner, not an additional editor interaction journey or visual QA claim.
+
+Handoff validation passed: fmt, strict all-target Clippy, full Rust tests (1,227
+app tests plus core/integration/doc tests), and all 15 xtask tests. Logs are
+`/private/tmp/ttt-startup-audit-{clippy,tests,xtask}.log`.

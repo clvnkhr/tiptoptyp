@@ -16,6 +16,42 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def wait_or_kill(process, timeout):
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=6)
+
+
+def close_app(process):
+    if process.poll() is not None:
+        return
+    driver = ROOT / ".tiptoptyp/desktop-ui-tests/desktop-ui-driver"
+    try:
+        subprocess.run([str(driver), "key", str(process.pid), "12", "cmd"],
+                       capture_output=True, timeout=6, check=False)
+        process.wait(timeout=8)
+    except (OSError, subprocess.TimeoutExpired):
+        process.terminate()
+        wait_or_kill(process, 6)
+
+
+def prepare_driver():
+    driver = ROOT / ".tiptoptyp/desktop-ui-tests/desktop-ui-driver"
+    driver.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["swiftc", str(ROOT / "scripts/desktop-ui-driver.swift"), "-o", str(driver)],
+                   check=True, timeout=90)
+    return driver
+
+
+def save_measurements(output, result):
+    # Preserve completed observations even if a later launch fails.
+    temporary = output / "measurement.json.tmp"
+    temporary.write_text(json.dumps(result, indent=2) + "\n")
+    temporary.replace(output / "measurement.json")
+
+
 def measure(binary, fixture, evidence, ordinal, sample=False):
     with tempfile.TemporaryDirectory(prefix="ttt-start-", dir="/tmp") as temporary:
         directory = Path(temporary).resolve()
@@ -40,8 +76,9 @@ def measure(binary, fixture, evidence, ordinal, sample=False):
             started = time.perf_counter()
             process = subprocess.Popen([str(executable), *([] if fixture == "empty" else [str(path)])],
                                        cwd=directory, env=environment, stdout=log, stderr=log)
-            sampler = subprocess.Popen(["/usr/bin/sample", str(process.pid), "1", "1", "-mayDie", "-file", str(evidence / f"{ordinal}-cpu.txt")], stdout=log, stderr=log) if sample else None
+            sampler = None
             try:
+                sampler = subprocess.Popen(["/usr/bin/sample", str(process.pid), "1", "1", "-mayDie", "-file", str(evidence / f"{ordinal}-cpu.txt")], stdout=log, stderr=log) if sample else None
                 deadline = time.monotonic() + 20
                 while True:
                     if process.poll() is not None or time.monotonic() >= deadline:
@@ -68,17 +105,11 @@ def measure(binary, fixture, evidence, ordinal, sample=False):
                         "native_size": document["native_size"], "dark": document["dark"],
                         "backend": document["preview_backend"], "source_bytes": document["source_bytes"]}
             finally:
-                if sampler is not None:
-                    sampler.wait(timeout=8)
-                driver = ROOT / ".tiptoptyp/desktop-ui-tests/desktop-ui-driver"
-                if process.poll() is None:
-                    subprocess.run([str(driver), "key", str(process.pid), "12", "cmd"],
-                                   capture_output=True, timeout=6, check=False)
-                    try:
-                        process.wait(timeout=8)
-                    except subprocess.TimeoutExpired:
-                        process.terminate()
-                        process.wait(timeout=6)
+                try:
+                    if sampler is not None:
+                        wait_or_kill(sampler, 8)
+                finally:
+                    close_app(process)
 
 
 def main():
@@ -94,8 +125,7 @@ def main():
         parser.error("requires macOS and 1–20 runs")
     args.output.mkdir(parents=True, exist_ok=False)
     binaries = [args.binary.resolve(), *([args.compare.resolve()] if args.compare else [])]
-    driver = ROOT / ".tiptoptyp/desktop-ui-tests/desktop-ui-driver"
-    subprocess.run(["swiftc", str(ROOT / "scripts/desktop-ui-driver.swift"), "-o", str(driver)], check=True, timeout=90)
+    driver = prepare_driver()
     preflight = json.loads(subprocess.check_output([str(driver), "preflight"], text=True))
     result = {"desktop": preflight, "ui_scale_percent": 100, "metric": "process spawn to first fresh editor-state snapshot; excludes preview readiness and screen presentation",
               "cache": "fresh process and fresh settings/workspace; filesystem caches are not flushed",
@@ -107,14 +137,19 @@ def main():
               "binaries": [{"path": str(binary), "sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
                             "version": subprocess.check_output([str(binary), "--version"], text=True).strip(), "runs": []}
                            for binary in binaries]}
+    save_measurements(args.output, result)
     for ordinal in range(args.runs + 1):  # First launch is retained separately as warmup.
-        for index, binary in enumerate(binaries):
+        # Counterbalance launch order to reduce systematic cache/order bias.
+        order = range(len(binaries)) if ordinal % 2 == 0 else reversed(range(len(binaries)))
+        for index in order:
+            binary = binaries[index]
             observation = measure(binary, args.fixture, args.output, f"{ordinal}-{index}", args.sample)
             result["binaries"][index]["runs"].append(observation)
+            save_measurements(args.output, result)
             print(index, ordinal, f"{observation['milliseconds']:.2f} ms", flush=True)
     for binary in result["binaries"]:
         binary["median_ms_excluding_first"] = statistics.median(run["milliseconds"] for run in binary["runs"][1:])
-    (args.output / "measurement.json").write_text(json.dumps(result, indent=2) + "\n")
+    save_measurements(args.output, result)
     print(json.dumps([binary["median_ms_excluding_first"] for binary in result["binaries"]]))
 
 
