@@ -21,7 +21,7 @@ import tempfile
 import time
 
 sys.dont_write_bytecode = True
-from desktop_ui_journeys import EditorJourneys
+from desktop_ui_journeys import EditorJourneys, PREVIEW_SOURCE
 from desktop_ui_tex_journeys import TEX_JOURNEYS, TEX_SOURCE
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -410,7 +410,7 @@ class Journey(EditorJourneys):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--journey", choices=["all", "tex", *TEX_JOURNEYS, "drawing", "snippets", "panels", "find", "rectangle", "empty", "focus", "preview", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "controls", "settings_search", "editor_preferences", "background"], default="all")
+    parser.add_argument("--journey", choices=["all", "tex", *TEX_JOURNEYS, "drawing", "snippets", "panels", "find", "rectangle", "empty", "focus", "preview", "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "controls", "settings_search", "editor_preferences", "background"], default="all")
     parser.add_argument("--review-preview", action="store_true", help="pause at each dark/comfy renderer for independent on-screen review; not an automated visual pass")
     parser.add_argument("--capture-review", action="store_true", help="capture affected settings/controls framebuffers for separate visual inspection")
     parser.add_argument("--trace-preview", action="store_true", help="retain native preview geometry traces")
@@ -466,11 +466,11 @@ def main():
                 "CFBundleExecutable": "tiptoptyp", "CFBundleIdentifier": "dev.tiptoptyp.journey." + directory.name,
                 "CFBundleName": "tiptoptyp UI Journey", "CFBundlePackageType": "APPL", "NSHighResolutionCapable": True,
             }))
-            fixture = directory / ("journey.tex" if args.journey == "tex" or args.journey in TEX_JOURNEYS else "journey.typ" if args.journey in ("all", "preview", "preview_keyboard", "controls", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "layout", "explorer_scroll", "background") else "journey.txt")
+            fixture = directory / ("journey.tex" if args.journey == "tex" or args.journey in TEX_JOURNEYS else "journey.typ" if args.journey in ("all", "preview", "pdf_output", "preview_keyboard", "controls", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "layout", "explorer_scroll", "background") else "journey.txt")
             fixture.write_text(
                 TEX_SOURCE
                 if fixture.suffix == ".tex"
-                else '#set page(width: 200pt, height: 200pt, margin: 20pt)\n= First\nBlack text on white paper.\n#pagebreak()\n= Second\nMiddle page.\n#pagebreak()\n= Third\n#v(95pt)\nFinal needle.\n'
+                else PREVIEW_SOURCE
                 if fixture.suffix == ".typ" and args.journey != "diagnostics"
                 else '#let broken = {\n'
                 if args.journey == "diagnostics"
@@ -591,7 +591,7 @@ def main():
                         return
                     if args.capture_review:
                         journey.capture_viewport("main")
-                    for name in (["panels", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "focus", "settings_search", "editor_preferences", "background", "preview", "controls", "empty", "snippets", "drawing", *TEX_JOURNEYS] if args.journey == "all" else TEX_JOURNEYS if args.journey == "tex" else [args.journey]):
+                    for name in (["panels", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "focus", "settings_search", "editor_preferences", "background", "pdf_output", "preview", "controls", "empty", "snippets", "drawing", *TEX_JOURNEYS] if args.journey == "all" else TEX_JOURNEYS if args.journey == "tex" else [args.journey]):
                         journey.record("journey.start", name=name)
                         getattr(journey, name)()
                         result["journeys"].append(name)

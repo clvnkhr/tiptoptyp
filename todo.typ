@@ -330,3 +330,9 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 // with --journey tex). Fixed Harper display-math boundaries, prose in \text,
 // and math-gap spacing false positives. Native Save tests now choose their
 // private fixture folder explicitly; user todo descriptions are unchanged.
+
+// 2026-10-03: separated the engine's live-preview refresh from the PDF save
+// action (Cmd+R), with durable-save/stale/busy/failure status and destination
+// tooltip. Both Typst and TeX use it. Preview caches do not count as saved PDFs.
+// Fixed queued output ownership when changing the preview tab; native
+// pdf_output and preview_keyboard journeys passed. See desktop-ui-audit.md.

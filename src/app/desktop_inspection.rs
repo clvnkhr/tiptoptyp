@@ -142,6 +142,12 @@ impl EditorApp {
             "writing_lines": self.writing.diagnostics.iter().filter_map(|diagnostic| diagnostic.line()).collect::<Vec<_>>(),
             "writing_fingerprint": crate::desktop_test::fingerprint(&format!("{:?}", self.writing.diagnostics)),
             "writing_pending": matches!(self.writing.activity(), crate::activity::Activity::Pending(_) | crate::activity::Activity::Running),
+            "pdf_output_state": format!("{:?}", self.pdf_output_status()),
+            "pdf_output_path": self.pdf_output_record().pdf_output.path(self.pdf_output_key()),
+            "pdf_output_pending": self.document_workflow.pending_export.is_some(),
+            "pdf_output_revision": self.pdf_output_key().revision,
+            "compile_indicator_spinning": self.compile_indicator_spinning(),
+            "preview_generation": format!("{:?}", self.tinymist_sync.generation),
             }).as_object().unwrap().clone(),
         );
         interaction["explorer_panel_width"] = serde_json::json!(

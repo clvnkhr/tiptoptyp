@@ -176,6 +176,16 @@ impl EditorApp {
     }
 
     pub(super) fn set_compile_failure(&mut self, report: DiagnosticReport) {
+        if self.document_workflow.pending_export.take().is_some() {
+            let key = self.pdf_output_key();
+            self.pdf_output_record_mut()
+                .pdf_output
+                .failed(key, report.raw.clone());
+            self.notice = Some(Notice {
+                message: format!("PDF creation failed: {}", report.raw),
+                kind: NoticeKind::Error,
+            });
+        }
         self.activity.build = crate::activity::Activity::Failed(report.raw.clone());
         self.preview.content.invalidate();
         self.preview.status = PreviewStatus::Error;

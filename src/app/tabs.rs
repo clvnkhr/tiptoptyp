@@ -9,6 +9,7 @@ pub(super) struct TabRecord {
     pub(super) editor: Option<egui::text_edit::TextEditState>,
     pub(super) autosave: Option<Instant>,
     pub(super) workspace: PathBuf,
+    pub(super) pdf_output: super::pdf_output::PdfOutput,
 }
 
 #[cfg(test)]
@@ -51,6 +52,7 @@ impl Default for Tabs {
                 folding: Default::default(),
                 editor: None,
                 autosave: None,
+                pdf_output: Default::default(),
                 workspace: PathBuf::new(),
             },
             approved: Vec::new(),
@@ -121,6 +123,7 @@ impl Tabs {
                 folding: Default::default(),
                 editor: None,
                 autosave: None,
+                pdf_output: Default::default(),
                 workspace,
             },
         );
@@ -157,6 +160,7 @@ impl Tabs {
                 folding: Default::default(),
                 editor: None,
                 autosave: None,
+                pdf_output: Default::default(),
                 workspace: PathBuf::new(),
             },
             preview_explicit: true,
@@ -175,6 +179,7 @@ impl Tabs {
                 folding: Default::default(),
                 editor: None,
                 autosave: None,
+                pdf_output: Default::default(),
                 workspace,
             },
         );
@@ -194,6 +199,16 @@ impl Tabs {
             return &mut self.empty_record;
         };
         self.records.get_mut(&id).expect("active tab record")
+    }
+    pub(super) fn pdf_record(&self, tab: Option<u64>) -> &TabRecord {
+        tab.and_then(|id| self.records.get(&id))
+            .unwrap_or(&self.empty_record)
+    }
+    pub(super) fn pdf_record_mut(&mut self, tab: Option<u64>) -> &mut TabRecord {
+        match tab {
+            Some(id) => self.records.get_mut(&id).expect("PDF source tab"),
+            None => &mut self.empty_record,
+        }
     }
     pub(super) fn document_mut(&mut self, id: u64) -> Option<&mut DocumentSession> {
         self.index_of(id)?;
@@ -598,6 +613,16 @@ impl EditorApp {
         incoming.document.reactivate_after(previous);
         incoming.folding.rekey(old_key, incoming.document.key());
         let new_key = incoming.document.key();
+        incoming.pdf_output.rekey(old_key, new_key);
+        if let Some(pending) = &mut self.document_workflow.pending_export
+            && pending.source.tab == Some(id)
+            && pending.source.epoch == old_key.epoch
+        {
+            pending.source.epoch = new_key.epoch;
+        }
+        if let Some(dialog) = &mut self.document_workflow.pending_export_dialog {
+            dialog.rekey_pdf_source(Some(id), old_key.epoch, new_key.epoch);
+        }
         let incoming_editor = incoming.editor.take().unwrap_or_default();
         // Close approvals survive a pure view switch, never an intervening edit.
         for (_, key) in &mut self.tabs.approved {
@@ -631,6 +656,7 @@ impl EditorApp {
                 folding: Default::default(),
                 editor: None,
                 autosave: None,
+                pdf_output: Default::default(),
                 workspace: self.workspace_root.clone(),
             },
         );
@@ -727,15 +753,16 @@ impl EditorApp {
         }
         self.git_editor.request_refresh();
         if self.source_preview_available()
-            && switch_needs_compile(
-                preserve_preview,
-                self.pdfium_preview_requested(),
-                self.preview.content.pdf().is_some(),
-                matches!(
-                    self.preview.status,
-                    PreviewStatus::Compiling | PreviewStatus::Waiting
-                ),
-            )
+            && (self.document_workflow.pending_export.is_some()
+                || switch_needs_compile(
+                    preserve_preview,
+                    self.pdfium_preview_requested(),
+                    self.preview.content.pdf().is_some(),
+                    matches!(
+                        self.preview.status,
+                        PreviewStatus::Compiling | PreviewStatus::Waiting
+                    ),
+                ))
         {
             self.schedule_compile_now();
         }
@@ -864,6 +891,7 @@ impl EditorApp {
         }
         self.tabs.preview = Some(id);
         self.tabs.preview_explicit = true;
+        self.cancel_pdf_output_if_source_changed();
         self.web_search_query.clear();
         self.web_search_offset = 0;
         let _ = self.compiler.pause(self.preview_document_revision());

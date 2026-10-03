@@ -6,6 +6,8 @@ See docs/desktop-ui-audit.md for the lower-level tests these journeys promote.
 
 from desktop_ui_tex_journeys import TexJourneys
 
+PREVIEW_SOURCE = '#set page(width: 200pt, height: 200pt, margin: 20pt)\n= First\nBlack text on white paper.\n#pagebreak()\n= Second\nMiddle page.\n#pagebreak()\n= Third\n#v(95pt)\nFinal needle.\n'
+
 
 def fingerprint(text):
     value = 0xcbf29ce484222325
@@ -805,16 +807,123 @@ class EditorJourneys(TexJourneys):
         self.click("modal.discard")
         self.wait("discard closes only fixture tab", lambda d: not d["modal_open"] and d["tabs"] == count)
 
-    def choose_backend(self, backend):
+    def choose_backend(self, backend, save_pdf=True):
         self.settings()
+        if self.snapshot()["document"]["settings_json"]["visible"]:
+            self.click("settings.json.mode")
         self.setting_section("backend", "Typst preview backend")
         self.wait_target("settings.backend." + backend)
         self.click("settings.backend." + backend)
         self.close_settings()
-        self.key(15)
+        if save_pdf:
+            self.key(15)
+        else:
+            self.wait_target("build.preview")
+            generation = self.snapshot()["document"]["preview_generation"]
+            self.click("build.preview")
         self.wait("selected renderer ready", lambda d: d["preview_requested_backend"] == backend
                   and d["preview_backend"] == ("PDFium" if backend == "Pdfium" else "Tinymist")
-                  and d["preview_pdfium_ready" if backend == "Pdfium" else "preview_native_ready"], timeout=60)
+                  and d["preview_pdfium_ready" if backend == "Pdfium" else "preview_native_ready"]
+                  and (save_pdf or (not d["compile_indicator_spinning"] and
+                       (backend != "Interactive" or (d["preview_generation"] != "None" and d["preview_generation"] != generation)))), timeout=60)
+
+    def pdf_output(self):
+        """Preview activity must never imply an adjacent PDF was saved."""
+        import time
+        self.focus_document_window()
+        before = self.snapshot()["document"]
+        if before["find_visible"]:
+            self.click("find.close")
+            self.wait("PDF journey closes earlier Find", lambda d: not d["find_visible"])
+        fixture_directory = self.directory / "pdf-output"
+        fixture_directory.mkdir()
+        fixture = fixture_directory / "journey.typ"
+        fixture.write_text(PREVIEW_SOURCE)
+        destination = fixture.with_suffix(".pdf")
+        # The aggregate run can already have a journey.pdf from other tests.
+        # A new document path isolates output ownership without deleting files.
+        self.key(31)
+        time.sleep(0.8)
+        self.key(5, "cmd+shift")
+        time.sleep(0.3)
+        self.key(0)
+        self.native("text", str(fixture))
+        self.key(36, "none")
+        time.sleep(0.5)
+        self.native("ax-press-title", "Open")
+        self.wait("isolated three-page Typst document opened", lambda d: d["path"] == str(fixture), timeout=15)
+        self.key(35, "cmd+alt")
+        self.wait("PDF source is designated for preview", lambda d: d["preview_tab_id"] == d["active_tab_id"] and d["preview_path"] == str(fixture), timeout=30)
+        self.key(20)  # Split view so readiness refers to a visible renderer.
+        self.tex_settings([('"auto_save": true', '"auto_save": false')])
+        self.choose_backend("Interactive", save_pdf=False)
+        self.wait("Tinymist preview settles without a disk export", lambda d: d["preview_backend"] == "Tinymist" and d["preview_native_ready"] and d["preview_pages"] == 3 and not d["compile_indicator_spinning"], timeout=60)
+        self.stable_state(lambda d: d["pdf_output_state"] == "Unverified" and not d["pdf_output_pending"] and not destination.exists())
+
+        self.wait_target("build.pdf")
+        self.click("build.pdf")
+        saved = self.wait("PDF button confirms a committed file", lambda d: d["pdf_output_state"] == "Saved" and d["pdf_output_path"] == str(destination) and str(d["pdf_output_revision"]) == d["revision"] and not d["pdf_output_pending"], timeout=60)
+        first_pdf = destination.read_bytes()
+        if not first_pdf.startswith(b"%PDF-"):
+            raise AssertionError("PDF action did not create a PDF document")
+        first_mtime = destination.stat().st_mtime_ns
+        self.stable_state(lambda d: d["pdf_output_state"] == "Saved" and not d["pdf_output_pending"] and destination.read_bytes() == first_pdf and destination.stat().st_mtime_ns == first_mtime, frames=30)
+        self.record("pdf.saved", revision=saved["document"]["revision"], bytes=len(first_pdf))
+        if getattr(self, "capture_review", False):
+            self.capture_viewport("main")
+
+        edited = PREVIEW_SOURCE.replace("Black text on white paper.", "A changed paragraph awaiting PDF export.")
+        self.click("editor.source")
+        self.key(0)
+        self.paste_source(edited)
+        self.wait("typing marks the saved PDF stale", lambda d: d["pdf_output_state"] == "Stale" and not d["pdf_output_pending"])
+        generation = self.snapshot()["document"]["preview_generation"]
+        self.click("build.preview")
+        self.wait("updated Tinymist preview settles", lambda d: d["preview_backend"] == "Tinymist" and d["preview_native_ready"] and d["preview_pages"] == 3 and not d["compile_indicator_spinning"] and d["preview_generation"] != "None" and d["preview_generation"] != generation, timeout=60)
+        self.stable_state(lambda d: d["pdf_output_state"] == "Stale" and not d["pdf_output_pending"] and destination.read_bytes() == first_pdf and destination.stat().st_mtime_ns == first_mtime)
+
+        self.key(15)  # Cmd+R explicitly saves PDF; engine refresh above did not.
+        self.wait("Cmd+R updates the PDF to the new source revision", lambda d: d["pdf_output_state"] == "Saved" and not d["pdf_output_pending"] and str(d["pdf_output_revision"]) == d["revision"], timeout=60)
+        second_pdf = destination.read_bytes()
+        if not second_pdf.startswith(b"%PDF-") or second_pdf == first_pdf:
+            raise AssertionError("Cmd+R did not update the saved PDF contents")
+        second_mtime = destination.stat().st_mtime_ns
+        self.stable_state(lambda d: d["pdf_output_state"] == "Saved" and not d["pdf_output_pending"] and destination.read_bytes() == second_pdf and destination.stat().st_mtime_ns == second_mtime, frames=30)
+        self.click("editor.source")
+        self.key(0)
+        self.paste_source("#let broken = {\n")
+        self.click("build.pdf")
+        self.wait("failed PDF creation is visible and not queued", lambda d: d["pdf_output_state"] == "Failed" and not d["pdf_output_pending"] and not d["compile_indicator_spinning"], timeout=60)
+        self.stable_state(lambda d: d["pdf_output_state"] == "Failed" and not d["pdf_output_pending"] and destination.read_bytes() == second_pdf and destination.stat().st_mtime_ns == second_mtime, frames=30)
+
+        recovered = PREVIEW_SOURCE.replace("Black text on white paper.", "Recovered after a deliberate syntax error.")
+        self.click("editor.source")
+        self.key(0)
+        self.paste_source(recovered)
+        self.wait_target("build.pdf")
+        self.click("build.pdf")
+        self.wait("PDF action recovers after fixing the source", lambda d: d["pdf_output_state"] == "Saved" and not d["pdf_output_pending"] and str(d["pdf_output_revision"]) == d["revision"], timeout=60)
+        recovered_pdf = destination.read_bytes()
+        if not recovered_pdf.startswith(b"%PDF-") or recovered_pdf == second_pdf:
+            raise AssertionError("PDF retry did not write corrected source")
+        recovered_mtime = destination.stat().st_mtime_ns
+        self.stable_state(lambda d: d["pdf_output_state"] == "Saved" and not d["pdf_output_pending"] and destination.read_bytes() == recovered_pdf and destination.stat().st_mtime_ns == recovered_mtime, frames=30)
+        self.choose_backend("Pdfium", save_pdf=False)
+        self.wait("PDFium cache build settles without exporting", lambda d: d["preview_backend"] == "PDFium" and d["preview_pdfium_ready"] and not d["compile_indicator_spinning"], timeout=60)
+        self.stable_state(lambda d: not d["pdf_output_pending"] and destination.read_bytes() == recovered_pdf and destination.stat().st_mtime_ns == recovered_mtime)
+        self.record("pdf.preview-only", bytes=len(recovered_pdf), unchanged_on_backend_switch=True)
+
+        # Restore aggregate-run ownership and settings without overwriting its files.
+        self.tex_settings([('"auto_save": false', '"auto_save": true')])
+        self.choose_backend(before["preview_requested_backend"], save_pdf=False)
+        self.close_scratch(before["tabs"])
+        if before["preview_tab_id"] is not None:
+            self.click("tab." + str(before["preview_tab_id"]))
+            self.key(35, "cmd+alt")
+        if before["active_tab_id"] is not None:
+            self.click("tab." + str(before["active_tab_id"]))
+        if before["view_mode"] != "Split":
+            self.key(19 if before["view_mode"] == "Code" else 21)
 
     def controls(self):
         for backend in ("Pdfium", "Interactive"):

@@ -5,6 +5,8 @@ mod desktop_inspection;
 mod encoding_import;
 mod icon_sheet;
 pub(crate) mod icons;
+mod pdf_actions;
+mod pdf_output;
 mod templates;
 mod tex;
 mod writing;
@@ -172,8 +174,8 @@ use crate::{
     worker::{LatestJob, LatestJobPoll},
     workflow::{
         AppModal, AppModalChoice, DeferredDocumentAction, DialogPoll, DocumentDialogRequest,
-        DocumentDialogTarget, DocumentWorkflow, ExportDialogRequest, NoticeKind, PdfWriteIntent,
-        PendingDialog, PendingDocumentAction, PendingExport, poll_dialog,
+        DocumentDialogTarget, DocumentWorkflow, ExportDialogRequest, NoticeKind, PdfSource,
+        PdfWriteIntent, PendingDialog, PendingDocumentAction, PendingExport, poll_dialog,
     },
     workspace::{WorkspaceNode, WorkspaceSnapshot, WorkspaceTree},
     workspace_service::{WorkspaceClient, WorkspaceEvent},
@@ -2452,6 +2454,7 @@ impl EditorApp {
             .build
             .is_some()
         {
+            self.pdf_output_record_mut().pdf_output.invalidate();
             // Tinymist sees unsaved edits in every open source file. The CLI
             // PDF compiler can only see an imported subfile after it is saved, so
             // avoid rebuilding the designated main entry with stale disk data.
@@ -2862,15 +2865,7 @@ impl EditorApp {
         self.pending_asset_page = None;
         self.clear_editor_hover();
         self.clear_asset_hover();
-        if let Some(pending) = self.document_workflow.pending_export.take() {
-            self.notice = Some(Notice {
-                message: format!(
-                    "Queued {} canceled because another document is now active",
-                    pending.intent.dialog_title()
-                ),
-                kind: NoticeKind::Info,
-            });
-        }
+        self.cancel_pdf_output_if_source_changed();
     }
 
     fn handle_shortcuts(&mut self, context: &egui::Context, frame: Option<&eframe::Frame>) {
@@ -4573,7 +4568,7 @@ impl EditorApp {
         // uses a completion handler and is polled by normal egui frames instead.
         self.document_workflow.pending_export_dialog = Some(PendingDialog::new(
             ExportDialogRequest {
-                document_epoch: self.document().epoch(),
+                source: self.pdf_output_source(),
                 intent,
             },
             dialog.save_file(),
@@ -4587,12 +4582,12 @@ impl EditorApp {
             return;
         };
         if let Some(file) = selection {
-            if self.document().epoch() == request.document_epoch {
+            if self.pdf_output_source() == request.source {
                 self.finish_pdf_output(file.path().to_path_buf(), request.intent);
             } else {
                 self.notice = Some(Notice {
                     message: format!(
-                        "{} canceled because another document is now active",
+                        "{} canceled because its source changed",
                         request.intent.dialog_title()
                     ),
                     kind: NoticeKind::Info,
@@ -4871,7 +4866,7 @@ impl EditorApp {
         }
         self.document_workflow.pending_export = Some(PendingExport {
             path,
-            document_epoch: self.document().epoch(),
+            source: self.pdf_output_source(),
             intent,
             after_artifact_generation: if typst_output && !reusable {
                 self.preview
@@ -4907,7 +4902,7 @@ impl EditorApp {
         let Some(pdf) = output_preview.content.pdf() else {
             return;
         };
-        let document_epoch = self.document().epoch();
+        let source = self.pdf_output_source();
         let document_revision = if self.source_preview_available() {
             self.preview_document_revision()
         } else {
@@ -4915,21 +4910,38 @@ impl EditorApp {
         };
         let Some(pending) = take_ready_export(
             &mut self.document_workflow.pending_export,
-            document_epoch,
+            source,
             document_revision,
             output_preview.content.artifact_key(),
         ) else {
             return;
         };
+        let key = self.pdf_output_key();
+        let artifact = output_preview
+            .content
+            .artifact_key()
+            .expect("ready PDF artifact");
         match atomic_write(&pending.path, pdf) {
-            Err(error) => self.show_file_error(error),
+            Err(error) => {
+                self.pdf_output_record_mut()
+                    .pdf_output
+                    .failed(key, error.clone());
+                self.show_file_error(error);
+            }
             Ok(tiptoptyp::save_transaction::WriteDurability::Uncertain(error)) => {
-                self.show_file_error(format!(
+                let message = format!(
                     "Wrote {}, but could not confirm disk durability: {error}",
                     pending.path.display()
-                ));
+                );
+                self.pdf_output_record_mut()
+                    .pdf_output
+                    .failed(key, message.clone());
+                self.show_file_error(message);
             }
             Ok(tiptoptyp::save_transaction::WriteDurability::Synchronized) => {
+                self.pdf_output_record_mut()
+                    .pdf_output
+                    .saved(key, artifact, pending.path.clone());
                 self.notice = Some(Notice {
                     message: format!(
                         "{} {}",
@@ -6555,25 +6567,23 @@ impl EditorApp {
                 }
 
                 ui.separator();
-                if native_hover_text(
-                    icons::toolbar_button(
+                self.show_pdf_output_button(ui, frame, &shortcuts);
+                let refresh = icons::toolbar_button(
                         ui,
-                        self.source_preview_available(),
+                        self.source_preview_available() && !self.compilation_paused
+                            && (self.preview_document_kind() != DocumentKind::Tex || self.settings.tex.build_enabled),
                         false,
                         UiIcon::Compile,
                         self.compile_button_label(),
                         crate::settings::ToolbarStyle::TextAndIcons,
                         self.compile_indicator_spinning(),
-                    ),
-                    shortcut_tooltip(
-                        "Compile PDF from the previewed source",
-                        &shortcuts,
-                        ShortcutAction::Compile,
-                    ),
-                )
-                .clicked()
-                {
-                    self.compile_pdf(frame);
+                    );
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("build.preview", &refresh);
+                if native_hover_text(refresh,
+                    "Refresh live preview. The spinning gear shows preview work; it does not mean a PDF was saved. Use PDF to create the file.")
+                    .clicked() {
+                    self.refresh_preview();
                 }
 
                 if compilation_pause_button_visible(self.preview_document_kind()) {
@@ -9231,12 +9241,12 @@ fn preview_color_image(size: [usize; 2], rgba: &[u8]) -> ColorImage {
 
 fn take_ready_export(
     pending: &mut Option<PendingExport>,
-    document_epoch: u64,
+    source: PdfSource,
     document_revision: u64,
     artifact_key: Option<ArtifactKey>,
 ) -> Option<PendingExport> {
     let export = pending.as_ref()?;
-    if export.document_epoch != document_epoch {
+    if export.source != source {
         pending.take();
         return None;
     }

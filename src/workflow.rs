@@ -144,7 +144,7 @@ impl PdfWriteIntent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PendingExport {
     pub(crate) path: PathBuf,
-    pub(crate) document_epoch: u64,
+    pub(crate) source: PdfSource,
     pub(crate) intent: PdfWriteIntent,
     /// When present, an already-cached artifact was known to precede a queued
     /// rebuild. The export must wait for a strictly newer compiler generation
@@ -152,10 +152,31 @@ pub(crate) struct PendingExport {
     pub(crate) after_artifact_generation: Option<u64>,
 }
 
+/// Tabs have independent epoch counters. A PDF operation belongs to its
+/// preview tab as well as that document's lifetime, never to the active editor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PdfSource {
+    pub(crate) tab: Option<u64>,
+    pub(crate) epoch: u64,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ExportDialogRequest {
-    pub(crate) document_epoch: u64,
+    pub(crate) source: PdfSource,
     pub(crate) intent: PdfWriteIntent,
+}
+
+impl PendingDialog<ExportDialogRequest> {
+    pub(crate) fn rekey_pdf_source(&mut self, tab: Option<u64>, old_epoch: u64, new_epoch: u64) {
+        if self.request.source
+            == (PdfSource {
+                tab,
+                epoch: old_epoch,
+            })
+        {
+            self.request.source.epoch = new_epoch;
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

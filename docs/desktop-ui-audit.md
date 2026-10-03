@@ -1035,3 +1035,51 @@ integration and docs), 15 xtask tests, and 11 runner contract tests. Logs are
 `/private/tmp/ttt-tex-final-{clippy,tests}.log`,
 `/private/tmp/ttt-tex-feature-clippy-final.log`, `/private/tmp/ttt-tex-xtask.log`
 and `/private/tmp/ttt-tex-combined-native.log`.
+
+## 2026-10-03: preview work versus a saved PDF
+
+The engine gear now refreshes live preview. A separate fixed-size PDF action
+creates the user-facing file; Cmd+R retains that action, and Export PDF retains
+its destination dialog. Its icon/color distinguishes no confirmed save, a
+successful save, stale output, pending creation and failure. The tooltip shows
+the destination and explains that live preview does not write it. The same
+controls apply to Typst and TeX: Tinymist streams preview without PDF bytes;
+PDFium's Typst builds and Tectonic's TeX builds produce private preview PDFs.
+
+PDF status records only durable writes observed by this window, per tab. It
+does not claim to inspect files left by a previous app session or another
+process. Source edits and new canonical artifact generations make a previous
+receipt stale. Tab activation rebases service keys without discarding the
+receipt; unchanged Tinymist refresh does not manufacture staleness.
+
+The failing reproduction in `/private/tmp/ttt-pdf-owner-before.log` showed that
+changing the pinned preview during queued output could write the new preview
+into the previous destination. PDF requests and destination dialogs now carry
+the preview tab and document epoch. Preview changes cancel incompatible work;
+ordinary editor-tab changes preserve it. Reactivating its source requests a
+build for the rebased revision. Build failures clear the pending write and
+retain any previous saved file, allowing an explicit retry.
+
+Native `pdf_output` passed (`run-xytpnra5`): confirmed effective Tinymist,
+preview-only output absence, actual PDF bytes from button/Cmd+R, unchanged
+bytes and modification time during stale preview work, stable saved/failure
+states over 30 fresh frames, failed-build preservation/recovery, and PDFium
+cache work without rewriting the adjacent file. Native `preview_keyboard`
+also passed (`run-frclsngm`) with both backends. Logs:
+`/private/tmp/ttt-pdf-native.log` and
+`/private/tmp/ttt-pdf-preview-keyboard-native.log`.
+Native `tabs` passed (`run-2nxthu0b`), preserving both buffers/carets and the
+pinned preview; its log is `/private/tmp/ttt-pdf-tabs-native.log`.
+
+Fresh main framebuffers were captured during the PDF journey and the saved
+state was inspected: engine and green PDF check fit in the toolbar without
+clipping. These root framebuffers do not contain Tinymist's native child and
+are evidence for the toolbar only, not composed preview pixels.
+
+Required checks passed: fmt, strict all-target Clippy (default and
+`desktop-ui-tests`), full Rust tests (1,247 app tests plus core/integration/docs),
+15 xtask tests and 11 runner contracts. Logs are
+`/private/tmp/ttt-pdf-{clippy,all-tests,feature-clippy,xtask}.log`.
+Tracking uses one bounded receipt per tab with constant-time comparisons and
+no per-frame file I/O, additional worker, or idle repaint timer. No unrelated
+performance benchmark was needed.

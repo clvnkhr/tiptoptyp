@@ -1,6 +1,103 @@
 use super::*;
 
 #[test]
+fn changing_the_pinned_preview_cannot_write_its_pdf_to_the_previous_entry_destination() {
+    let context = egui::Context::default();
+    let root = tempfile::tempdir().unwrap();
+    let mut app = fixture(&context, root.path());
+    let first = app.tabs.active_id().unwrap();
+    app.select_preview_tab(first, &context);
+    let destination = root.path().join("first.pdf");
+    app.append_tab(&context);
+    let second = app.tabs.active_id().unwrap();
+    app.document_mut().replace_loaded_unprojected(
+        "second".into(),
+        root.path().join("second.typ"),
+        DocumentKind::Typst,
+        None,
+    );
+    app.activate_tab(first, &context);
+    app.document_workflow.pending_export = Some(PendingExport {
+        path: destination.clone(),
+        source: app.pdf_output_source(),
+        intent: PdfWriteIntent::Compile,
+        after_artifact_generation: None,
+    });
+    // The active document remains the same while the preview owner changes.
+    app.select_preview_tab(second, &context);
+    app.preview.accept_artifact(
+        ArtifactKey::unversioned(app.preview_document_revision()),
+        Arc::from(b"wrong document PDF".as_slice()),
+    );
+    app.complete_pending_export();
+    assert!(
+        !destination.exists(),
+        "another preview must not overwrite the first PDF"
+    );
+    assert!(app.document_workflow.pending_export.is_none());
+}
+
+#[test]
+fn a_pdf_receipt_and_queued_write_survive_switching_editor_tabs() {
+    let context = egui::Context::default();
+    let root = tempfile::tempdir().unwrap();
+    let mut app = fixture(&context, root.path());
+    app.lifecycle = DocumentLifecycle::Active;
+    let first = app.tabs.active_id().unwrap();
+    app.select_preview_tab(first, &context);
+    let destination = root.path().join("first.pdf");
+    let artifact = ArtifactKey::unversioned(app.preview_document_revision());
+    let key = app.pdf_output_key();
+    app.pdf_output_record_mut()
+        .pdf_output
+        .saved(key, artifact, destination.clone());
+    app.append_tab(&context);
+    let second = app.tabs.active_id().unwrap();
+    app.document_mut().replace_loaded_unprojected(
+        "second".into(),
+        root.path().join("second.typ"),
+        DocumentKind::Typst,
+        None,
+    );
+    assert_eq!(
+        app.pdf_output_status(),
+        super::super::pdf_output::PdfOutputStatus::Saved
+    );
+    app.document_workflow.pending_export = Some(PendingExport {
+        path: destination.clone(),
+        source: app.pdf_output_source(),
+        intent: PdfWriteIntent::Compile,
+        after_artifact_generation: None,
+    });
+    app.activate_tab(first, &context);
+    assert!(app.document_workflow.pending_export.is_some());
+    assert!(
+        app.compile_deadline.is_some(),
+        "rebased pending work must be rebuilt"
+    );
+    app.preview.accept_artifact(
+        ArtifactKey::unversioned(app.preview_document_revision()),
+        crate::pdf::test_pdf().into(),
+    );
+    app.complete_pending_export();
+    assert!(destination.exists());
+    assert_eq!(
+        app.pdf_output_status(),
+        super::super::pdf_output::PdfOutputStatus::Saved
+    );
+    app.activate_tab(second, &context);
+    assert_eq!(
+        app.pdf_output_status(),
+        super::super::pdf_output::PdfOutputStatus::Saved
+    );
+    app.select_preview_tab(second, &context);
+    assert_eq!(
+        app.pdf_output_status(),
+        super::super::pdf_output::PdfOutputStatus::Unverified
+    );
+}
+
+#[test]
 fn first_source_after_pdf_becomes_preview_and_later_sources_preserve_it() {
     for extension in ["typ", "tex"] {
         let context = egui::Context::default();

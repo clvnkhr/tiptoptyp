@@ -2613,14 +2613,20 @@ fn image_texture_rebuild_uses_raster_not_logical_dimensions() {
 fn queued_exports_follow_edits_but_never_cross_documents() {
     let mut pending = Some(PendingExport {
         path: PathBuf::from("old-document.pdf"),
-        document_epoch: 7,
+        source: PdfSource {
+            tab: Some(0),
+            epoch: 7,
+        },
         intent: PdfWriteIntent::Export,
         after_artifact_generation: None,
     });
     assert_eq!(
         take_ready_export(
             &mut pending,
-            8,
+            PdfSource {
+                tab: Some(0),
+                epoch: 8
+            },
             12,
             Some(ArtifactKey {
                 revision: 12,
@@ -2633,7 +2639,10 @@ fn queued_exports_follow_edits_but_never_cross_documents() {
 
     let expected = PendingExport {
         path: PathBuf::from("current-document.pdf"),
-        document_epoch: 8,
+        source: PdfSource {
+            tab: Some(0),
+            epoch: 8,
+        },
         intent: PdfWriteIntent::Compile,
         after_artifact_generation: None,
     };
@@ -2641,7 +2650,10 @@ fn queued_exports_follow_edits_but_never_cross_documents() {
     assert_eq!(
         take_ready_export(
             &mut pending,
-            8,
+            PdfSource {
+                tab: Some(0),
+                epoch: 8
+            },
             13,
             Some(ArtifactKey {
                 revision: 13,
@@ -2656,7 +2668,10 @@ fn queued_exports_follow_edits_but_never_cross_documents() {
 fn queued_export_waits_for_a_strictly_newer_current_artifact() {
     let expected = PendingExport {
         path: PathBuf::from("rebuilt-document.pdf"),
-        document_epoch: 8,
+        source: PdfSource {
+            tab: Some(0),
+            epoch: 8,
+        },
         intent: PdfWriteIntent::Export,
         after_artifact_generation: Some(41),
     };
@@ -2665,7 +2680,10 @@ fn queued_export_waits_for_a_strictly_newer_current_artifact() {
     assert_eq!(
         take_ready_export(
             &mut pending,
-            8,
+            PdfSource {
+                tab: Some(0),
+                epoch: 8
+            },
             13,
             Some(ArtifactKey {
                 revision: 13,
@@ -2679,7 +2697,10 @@ fn queued_export_waits_for_a_strictly_newer_current_artifact() {
     assert_eq!(
         take_ready_export(
             &mut pending,
-            8,
+            PdfSource {
+                tab: Some(0),
+                epoch: 8
+            },
             13,
             Some(ArtifactKey {
                 revision: 12,
@@ -2693,7 +2714,10 @@ fn queued_export_waits_for_a_strictly_newer_current_artifact() {
     assert_eq!(
         take_ready_export(
             &mut pending,
-            8,
+            PdfSource {
+                tab: Some(0),
+                epoch: 8
+            },
             13,
             Some(ArtifactKey {
                 revision: 13,
@@ -7352,6 +7376,7 @@ fn projected_application_toolbar_order_and_right_alignment_survive_resizing() {
             "auto-miTeX",
             "Find",
             "Typst",
+            "PDF",
             "Settings",
             if compact { "Files" } else { "Explorer" },
             if compact { "C" } else { "Code" },

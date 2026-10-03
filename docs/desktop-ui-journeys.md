@@ -21,6 +21,7 @@ python3 scripts/test-desktop-ui.py --journey find
 python3 scripts/test-desktop-ui.py --journey empty
 python3 scripts/test-desktop-ui.py --journey focus
 python3 scripts/test-desktop-ui.py --journey preview
+python3 scripts/test-desktop-ui.py --journey pdf_output
 python3 scripts/test-desktop-ui.py --journey tex
 python3 scripts/test-desktop-ui.py --journey tex_editing
 python3 scripts/test-desktop-ui.py --journey tex_intelligence
@@ -92,6 +93,7 @@ now exercised through the real app, and the lower-level coverage retained.
 | background | Switch to Tinymist with its pane hidden; frontend finishes loading; reveal reuses it and paints pages |
 | focus | Two document windows; Settings opened/closed from alternating owners; native focus returns to each owner; minimize/restore, Finder app switch, close second window once |
 | preview | Pin a real Typst fixture; switch PDFium → Tinymist through Settings; require the selected renderer to become ready; light/dark × comfy transitions; applied palette and live Tinymist DOM checks |
+| pdf_output | Tinymist live preview and engine refresh do not create an adjacent PDF; PDF button and Cmd+R commit actual PDF bytes, edits mark it stale without overwriting it, failed builds retain the old file and clear the queue, corrected builds recover, and PDFium cache refresh does not write the adjacent file |
 
 Find is a real native child viewport. The focus journey uses native Accessibility
 window actions and verifies native focus independently of the inspection socket.

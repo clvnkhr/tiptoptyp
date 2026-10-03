@@ -13,6 +13,7 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &AppSettings) {
         ui.heading("10 useful shortcuts");
         shortcut_table(ui, "help-main-shortcuts", &bindings, &[A::Open, A::Save, A::Find, A::FindReplace, A::Undo, A::Redo, A::Compile, A::Format, A::ToggleComment, A::ToggleLineWrap]);
         ui.heading("Preview shortcuts");
+        ui.label("The engine gear refreshes the live preview. PDF (Compile PDF shortcut) creates a file beside the previewed source; Export PDF lets you choose another destination. A green check confirms a save in this window, yellow means the PDF needs updating, and red means creation failed. Preview loading and private PDF caches do not save that file.");
         shortcut_table(ui, "help-preview-shortcuts", &bindings, &[A::PreviewPreviousPage, A::PreviewNextPage, A::PreviewFitWidth, A::PreviewZoomIn, A::PreviewZoomOut, A::PreviewZoomReset, A::SyncPreview, A::ComfyPreview]);
         ui.monospace("t   Switch Tinymist preview appearance (preview focused)\nEscape   Return focus to source");
         ui.label("Tinymist also accepts Cmd/Ctrl with + / − / 0 for zoom while focused. Use the floating preview controls for Find, Outline and Back/Forward after internal links.");
