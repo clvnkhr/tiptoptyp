@@ -19,8 +19,8 @@ use crate::theme::{self, METRICS};
 /// Syntax highlighting for non-Typst text files, backed by Syntect's bundled
 /// Sublime grammars. Typst keeps using its own incremental parser.
 pub struct GenericSyntaxHighlighter {
-    syntaxes: Arc<SyntaxSet>,
-    themes: Arc<ThemeSet>,
+    syntaxes: &'static LazyLock<Arc<SyntaxSet>>,
+    themes: &'static LazyLock<Arc<ThemeSet>>,
     custom_theme: Option<Theme>,
     cached_source: String,
     cached_extension: Option<String>,
@@ -48,13 +48,23 @@ impl Default for GenericSyntaxHighlighter {
     fn default() -> Self {
         // Hover rendering can construct a highlighter every frame. Decode the
         // bundled grammar/theme databases only once, shared across windows.
+        // Keep lazy references here: Typst and an empty window need neither.
         static SYNTAXES: LazyLock<Arc<SyntaxSet>> =
             LazyLock::new(|| Arc::new(SyntaxSet::load_defaults_newlines()));
         static THEMES: LazyLock<Arc<ThemeSet>> =
             LazyLock::new(|| Arc::new(ThemeSet::load_defaults()));
+        Self::with_databases(&SYNTAXES, &THEMES)
+    }
+}
+
+impl GenericSyntaxHighlighter {
+    fn with_databases(
+        syntaxes: &'static LazyLock<Arc<SyntaxSet>>,
+        themes: &'static LazyLock<Arc<ThemeSet>>,
+    ) -> Self {
         Self {
-            syntaxes: SYNTAXES.clone(),
-            themes: THEMES.clone(),
+            syntaxes,
+            themes,
             custom_theme: None,
             cached_source: String::new(),
             cached_extension: None,
@@ -114,7 +124,7 @@ impl GenericSyntaxHighlighter {
         }
 
         let normalized_extension = extension.map(str::to_ascii_lowercase);
-        let syntaxes = Arc::clone(&self.syntaxes);
+        let syntaxes = Arc::clone(self.syntaxes);
         let syntax = normalized_extension
             .as_deref()
             .and_then(|extension| syntaxes.find_syntax_by_extension(extension))
@@ -194,7 +204,7 @@ impl GenericSyntaxHighlighter {
             let mut highlighter =
                 HighlightLines::from_state(theme, state.0.clone(), state.1.clone());
             let mut job = LayoutJob::default();
-            match highlighter.highlight_line(line, &self.syntaxes) {
+            match highlighter.highlight_line(line, self.syntaxes) {
                 Ok(regions) => {
                     for (style, text) in regions {
                         job.append(text, 0.0, syntect_format(style, theme));
@@ -268,7 +278,7 @@ impl GenericSyntaxHighlighter {
         let mut job = LayoutJob::default();
 
         for line in LinesWithEndings::from(source) {
-            match highlighter.highlight_line(line, &self.syntaxes) {
+            match highlighter.highlight_line(line, self.syntaxes) {
                 Ok(regions) => {
                     for (style, text) in regions {
                         job.append(text, 0.0, syntect_format(style, selected_theme));
@@ -335,6 +345,28 @@ fn plain_format(dark_mode: bool) -> TextFormat {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn construction_defers_databases_and_custom_themes_do_not_load_defaults() {
+        static SYNTAXES: LazyLock<Arc<SyntaxSet>> =
+            LazyLock::new(|| Arc::new(SyntaxSet::load_defaults_newlines()));
+        static THEMES: LazyLock<Arc<ThemeSet>> =
+            LazyLock::new(|| panic!("custom theme must not decode defaults"));
+        let mut first = GenericSyntaxHighlighter::with_databases(&SYNTAXES, &THEMES);
+        let second = GenericSyntaxHighlighter::with_databases(&SYNTAXES, &THEMES);
+        assert!(LazyLock::get(&SYNTAXES).is_none());
+        assert!(LazyLock::get(&THEMES).is_none());
+        first.set_custom_theme(Some(Theme::default()));
+        assert_eq!(
+            first
+                .highlight("let x = 1;", Some(Path::new("x.rs")), true)
+                .text,
+            "let x = 1;"
+        );
+        assert!(LazyLock::get(&SYNTAXES).is_some());
+        assert!(LazyLock::get(&THEMES).is_none());
+        assert!(Arc::ptr_eq(first.syntaxes, second.syntaxes));
+    }
 
     #[test]
     #[ignore = "opt-in optimized TeX edit highlighting probe"]

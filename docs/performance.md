@@ -581,3 +581,61 @@ of those workloads is compared to these timings. The algorithm adds no idle work
 The probe generator, compiler metadata, implementation hashes and complete logs
 are retained under `.tiptoptyp/profiles/recent-commit-audit/`; the generator reads
 production sources from its current checkout and builds the isolated probe.
+
+## Native startup audit (2026-10-03)
+
+Startup now defers the generic Syntect grammar and default-theme databases until
+first use. Typst retains its own parser, and a supplied syntax theme no longer
+causes default themes to be decoded. Fixed platform CJK fallback bytes are held
+in one bounded process cache and registered as borrowed font data. This removes
+egui's full collection copy when creating a font engine and repeated reads for
+later windows/font changes. The font, face index, fallback order and glyph bytes
+are unchanged; user-selected fonts retain their existing loading behavior.
+
+`scripts/measure-startup.py` measures **process spawn to the first fresh editor
+state snapshot**, including native window initialization and document loading.
+It does not measure compositor presentation or preview readiness. It uses a
+fresh private settings store/workspace and the ordinary interactive app, without
+QA scenes or screenshots. CPU sampling is optional and belongs in separate runs.
+Build both binaries with `cargo build --release --features desktop-ui-tests`,
+preserve them, then run:
+
+```sh
+python3 scripts/measure-startup.py --binary /absolute/before --compare /absolute/after \
+  --fixture empty --runs 7 --output .tiptoptyp/profiles/startup-comparison
+```
+
+The two binaries were built with the same release profile (thin LTO, one codegen
+unit, stripped), Rust 1.98.1 on macOS 14.6.1 ARM64. Each run used a fresh process;
+filesystem caches were not flushed. Before/after launches alternated, with one
+initial launch per binary retained separately and excluded from the medians.
+No builds or other profiling workloads ran during the matched measurements.
+Both used the same 1400×900 window, dark default interface, 100% UI scale and
+1512×982-point display at 2× backing scale. All observed source sizes matched.
+
+| Launch workload | Measured pairs | Before median | After median |
+| --- | ---: | ---: | ---: |
+| No document argument, fresh history/default initial buffer | 7 | 646.447 ms | 598.117 ms |
+| Small Typst document | 5 | 627.674 ms | 620.179 ms |
+| Small TeX document | 5 | 556.521 ms | 557.358 ms |
+
+The no-argument median improved 7.5%. Typst/TeX differences are small relative to
+run-to-run variation; these samples do not establish a gain or regression for
+those workloads, packaged applications, large documents, cold filesystem caches
+or other platforms. Native OS/window setup still dominates much of startup.
+Preview/compiler readiness is a separate future measurement.
+
+Binary hashes, versions, compiler/display metadata and every sample are retained
+in `.tiptoptyp/profiles/startup-matched-{empty,typ,tex}/measurement.json`, with
+per-launch logs. The preserved binaries are in `startup-binaries/`. A separate
+bounded native CPU sample is in `startup-cpu-before/`; it mainly caught idle
+run-loop stacks after initialization, so it is not evidence ranking startup CPU
+hotspots. The optimized component probe (`startup_components_probe`, ignored by
+default) recorded the baseline font setup and first text-frame costs separately;
+its wall times are not CPU times or end-to-end window latency.
+
+Deterministic regressions verify that construction does not force databases,
+custom themes do not decode default themes, grammar data is shared after first
+use, and two actual font engines retain borrowed pointers to the same CJK bytes.
+Existing highlighting and glyph-coverage tests still pass. No worker, idle
+repaint loop, production profiling hook or per-frame I/O was added.

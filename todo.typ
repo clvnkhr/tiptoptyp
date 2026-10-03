@@ -321,3 +321,7 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 // Selection follow-up: Cmd+/ includes the active cursor line even at column
 // zero or on a blank endpoint, and preserves reversed selection direction.
 // Native editing checks cover upward mouse/keyboard newline selection and Undo.
+// 2026-10-03 startup: defer generic syntax databases until use and share immutable
+// system CJK bytes across font engines. Matched fresh-launch median improved
+// 646ms -> 598ms (7.5%); Typst/TeX changes were inconclusive. Repro runner and
+// environment/sample metadata are documented in docs/performance.md.

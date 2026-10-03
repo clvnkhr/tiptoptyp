@@ -8,7 +8,7 @@ use std::{
     collections::HashMap,
     io,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::Duration,
 };
 
@@ -561,6 +561,48 @@ pub(crate) fn terminal_font() -> FontId {
     FontId::monospace(13.0)
 }
 
+/// Shared bytes for the fixed platform CJK fallback.
+fn system_cjk_font() -> Option<(&'static str, &'static [u8])> {
+    // Fixed platform fallbacks, independent of user-selected font files. One
+    // bounded process cache keeps the original bytes alive without leaks.
+    static FONT: OnceLock<Option<(&'static str, Vec<u8>)>> = OnceLock::new();
+    FONT.get_or_init(|| {
+        let cjk_candidates: &[(&str, &str)] = if cfg!(target_os = "macos") {
+            &[
+                (
+                    "tiptoptyp-cjk-pingfang",
+                    "/System/Library/Fonts/PingFang.ttc",
+                ),
+                (
+                    "tiptoptyp-cjk-hiragino",
+                    "/System/Library/Fonts/Hiragino Sans GB.ttc",
+                ),
+            ]
+        } else if cfg!(target_os = "windows") {
+            &[(
+                "tiptoptyp-cjk-microsoft-yahei",
+                "C:\\Windows\\Fonts\\msyh.ttc",
+            )]
+        } else {
+            &[
+                (
+                    "tiptoptyp-cjk-noto",
+                    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                ),
+                (
+                    "tiptoptyp-cjk-noto-truetype",
+                    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+                ),
+            ]
+        };
+        cjk_candidates
+            .iter()
+            .find_map(|(name, path)| std::fs::read(path).ok().map(|bytes| (*name, bytes)))
+    })
+    .as_ref()
+    .map(|(name, bytes)| (*name, bytes.as_slice()))
+}
+
 /// Register editor weight roles and normal/strong weighted UI families while
 /// retaining every bundled glyph fallback.
 pub fn configure_editor_fonts(
@@ -715,53 +757,22 @@ where
     // Keep Latin editor/UI metrics stable while adding a platform-provided
     // CJK fallback. These paths are optional: missing fonts simply leave
     // the bundled fallback chain in place; no CJK font bytes are shipped.
-    let cjk_candidates: &[(&str, &str)] = if cfg!(target_os = "macos") {
-        &[
-            (
-                "tiptoptyp-cjk-pingfang",
-                "/System/Library/Fonts/PingFang.ttc",
-            ),
-            (
-                "tiptoptyp-cjk-hiragino",
-                "/System/Library/Fonts/Hiragino Sans GB.ttc",
-            ),
-        ]
-    } else if cfg!(target_os = "windows") {
-        &[(
-            "tiptoptyp-cjk-microsoft-yahei",
-            "C:\\Windows\\Fonts\\msyh.ttc",
-        )]
-    } else {
-        &[
-            (
-                "tiptoptyp-cjk-noto",
-                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-            ),
-            (
-                "tiptoptyp-cjk-noto-truetype",
-                "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-            ),
-        ]
-    };
-    for (name, path) in cjk_candidates {
-        let path = Path::new(path);
-        let Ok(bytes) = std::fs::read(path) else {
-            continue;
-        };
-        let data = egui::FontData::from_owned(bytes);
-        definitions
-            .font_data
-            .insert((*name).to_owned(), Arc::new(data));
+    if let Some((name, bytes)) = system_cjk_font() {
+        // Borrow process-owned immutable bytes. Owned FontData makes egui copy
+        // the entire collection when creating each window's font engine.
+        definitions.font_data.insert(
+            name.to_owned(),
+            Arc::new(egui::FontData::from_static(bytes)),
+        );
         for family in [FontFamily::Proportional, FontFamily::Monospace] {
             definitions
                 .families
                 .entry(family)
                 .or_default()
-                .push((*name).to_owned());
+                .push(name.to_owned());
         }
-        proportional_fallback.push((*name).to_owned());
-        monospace_fallback.push((*name).to_owned());
-        break;
+        proportional_fallback.push(name.to_owned());
+        monospace_fallback.push(name.to_owned());
     }
 
     for weight in EDITOR_FONT_WEIGHTS {
@@ -1739,6 +1750,76 @@ pub fn native_theme(theme: egui::Theme) -> egui::SystemTheme {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn system_cjk_fallback_reuses_borrowed_bytes_without_changing_the_font() {
+        if let Some((name, bytes)) = system_cjk_font() {
+            let (again_name, again_bytes) = system_cjk_font().unwrap();
+            assert_eq!(name, again_name);
+            assert!(std::ptr::eq(bytes.as_ptr(), again_bytes.as_ptr()));
+            for _ in 0..2 {
+                let context = egui::Context::default();
+                configure_editor_fonts(
+                    &context,
+                    Default::default(),
+                    Default::default(),
+                    false,
+                    400,
+                    400,
+                    None,
+                );
+                context
+                    .run_ui(Default::default(), |ui| {
+                        ui.fonts_mut(|fonts| {
+                            let data = &fonts.definitions().font_data[name];
+                            assert!(matches!(data.font, std::borrow::Cow::Borrowed(_)));
+                            assert!(std::ptr::eq(data.font.as_ptr(), bytes.as_ptr()));
+                            assert_eq!(data.index, 0);
+                            assert!(
+                                skrifa::FontRef::from_index(data.font.as_ref(), data.index).is_ok()
+                            );
+                        });
+                    })
+                    .textures_delta
+                    .clear();
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "opt-in startup component timing; use an optimized build"]
+    fn startup_components_probe() {
+        use std::time::Instant;
+        let context = egui::Context::default();
+        let start = Instant::now();
+        let configured = configure_editor_fonts(
+            &context,
+            Default::default(),
+            Default::default(),
+            false,
+            400,
+            400,
+            None,
+        );
+        let fonts = start.elapsed();
+        configure_styles(&context);
+        configure_ui_font(&context, configured.weighted_ui_loaded);
+        let start = Instant::now();
+        context
+            .run_ui(Default::default(), |ui| {
+                ui.label("Startup window: Latin text α + β");
+            })
+            .textures_delta
+            .clear();
+        let frame = start.elapsed();
+        let start = Instant::now();
+        let highlighter = crate::generic_highlight::GenericSyntaxHighlighter::default();
+        std::hint::black_box(highlighter);
+        eprintln!(
+            "startup components: fonts={fonts:?}, first_text_frame={frame:?}, generic_constructor={:?}",
+            start.elapsed()
+        );
+    }
+
     #[test]
     fn interaction_borders_prioritize_focus_without_adding_idle_boxes() {
         for visuals in [egui::Visuals::light(), egui::Visuals::dark()] {

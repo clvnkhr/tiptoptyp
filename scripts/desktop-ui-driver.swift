@@ -17,7 +17,8 @@ if command == "preflight" {
     let session = CGSessionCopyCurrentDictionary() as? [String: Any]
     let locked = session?["CGSSessionScreenIsLocked"] as? Bool ?? false
     let desktop = NSWorkspace.shared.frontmostApplication != nil && !locked
-    emit(["accessibility": trusted, "input": input, "desktop": desktop, "locked": locked])
+    emit(["accessibility": trusted, "input": input, "desktop": desktop, "locked": locked,
+          "screens": NSScreen.screens.map { ["width": $0.frame.width, "height": $0.frame.height, "scale": $0.backingScaleFactor] }])
     exit(trusted && input && desktop ? 0 : 2)
 }
 guard args.count >= 2, let pid = Int32(args[1]),

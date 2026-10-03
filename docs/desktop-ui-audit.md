@@ -946,3 +946,24 @@ Handoff checks passed: `cargo fmt --all -- --check`, strict all-target Clippy,
 `cargo test --no-fail-fast` (1,225 app tests plus core/integration/doc tests),
 and all 15 xtask tests. Evidence logs are retained as
 `/private/tmp/ttt-audit-handoff-{clippy,tests,xtask}.log`.
+
+### 2026-10-03: startup initialization
+
+Deferred generic syntax/default-theme database decoding to first use; Typst
+keeps its existing parser. Shared the fixed platform CJK fallback bytes across
+actual font engines, preserving the selected file, face, tweak and fallback
+order. Deterministic tests cover no eager database work, sharing after use,
+custom-theme avoidance and borrowed CJK pointers in two font engines.
+
+The native `startup_preview` journey passed in `run-r7aqbkf8`: fresh history,
+unbound initial buffer, Cmd+O and first-file preview targeting. First-use JSON
+editing/search/validation passed in `run-9zs9wgxi` (`settings_search`), and normal
+editing/Unicode/Undo/Redo/selection/comment interactions passed in
+`run-o_1hp46h` (`editing`). These are native input results, not screenshot or
+compositor verification. No pixels/geometry changed; existing font/glyph and
+highlighting coverage provides the proportionate evidence.
+
+Matching optimized startup measurements, limitations and the new external
+runner are documented in `docs/performance.md`. Required fmt/strict Clippy,
+all app/core/integration/doc tests (1,227 app tests), and all 15 xtask tests
+passed. Logs: `/private/tmp/ttt-startup-final-{clippy,tests,xtask}.log`.
