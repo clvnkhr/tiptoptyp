@@ -378,17 +378,51 @@ fn default_compile_pdf_path(
 
 const fn compilation_toggle_copy(paused: bool) -> (&'static str, &'static str) {
     if paused {
-        ("Resume", "Resume automatic preview updates")
+        ("Resume", "Resume preview updates")
     } else {
-        (
-            "Pause",
-            "Pause automatic preview updates; Compile PDF stays available",
-        )
+        ("Pause", "Pause preview updates")
     }
 }
 
-const fn compilation_pause_button_visible(kind: DocumentKind) -> bool {
-    matches!(kind, DocumentKind::Tex)
+/// Pause stops the compiler worker feed that drives the preview, so it exists
+/// only for CLI builds (Typst binary or TeX). Tinymist's interactive preview
+/// has no pause path and keeps its own refresh button.
+const fn compilation_pause_button_visible(
+    build: Option<crate::language_support::BuildEngineKind>,
+    interactive_requested: bool,
+) -> bool {
+    build.is_some() && !interactive_requested
+}
+
+fn compile_button_label(
+    build: Option<crate::language_support::BuildEngineKind>,
+    interactive_requested: bool,
+    tex_engine: crate::tex::settings::BuildEngine,
+) -> &'static str {
+    match build {
+        Some(crate::language_support::BuildEngineKind::Typst) => {
+            if interactive_requested {
+                "Tinymist"
+            } else {
+                "Typst"
+            }
+        }
+        Some(crate::language_support::BuildEngineKind::Tex) => tex_engine.label(),
+        None => "Compile",
+    }
+}
+
+const fn compile_button_enabled(
+    source_preview_available: bool,
+    interactive_requested: bool,
+    compilation_paused: bool,
+    preview_kind: DocumentKind,
+    tex_build_enabled: bool,
+) -> bool {
+    source_preview_available
+        && (interactive_requested
+            || (!compilation_paused
+                && (!matches!(preview_kind, DocumentKind::Tex) || tex_build_enabled)))
 }
 
 const fn compilation_notice(paused: bool) -> (&'static str, NoticeKind) {
@@ -3054,13 +3088,14 @@ impl EditorApp {
         {
             self.compile_pdf(frame);
         }
-        if compilation_pause_button_visible(self.preview_document_kind())
-            && shortcuts
-                .egui(ShortcutAction::ToggleCompilation)
-                .is_some_and(|shortcut| {
-                    context
-                        .input_mut_for(shortcut_viewport, |input| input.consume_shortcut(&shortcut))
-                })
+        if compilation_pause_button_visible(
+            self.preview_language_support().build,
+            self.interactive_preview_requested(),
+        ) && shortcuts
+            .egui(ShortcutAction::ToggleCompilation)
+            .is_some_and(|shortcut| {
+                context.input_mut_for(shortcut_viewport, |input| input.consume_shortcut(&shortcut))
+            })
         {
             self.toggle_compilation_paused();
         }
@@ -4939,9 +4974,7 @@ impl EditorApp {
                 self.show_file_error(message);
             }
             Ok(tiptoptyp::save_transaction::WriteDurability::Synchronized) => {
-                self.pdf_output_record_mut()
-                    .pdf_output
-                    .saved(key, artifact, pending.path.clone());
+                self.pdf_output_record_mut().pdf_output.saved(key, artifact);
                 self.notice = Some(Notice {
                     message: format!(
                         "{} {}",
@@ -6275,13 +6308,11 @@ impl EditorApp {
     }
 
     fn compile_button_label(&self) -> &'static str {
-        match self.preview_language_support().build {
-            Some(crate::language_support::BuildEngineKind::Typst) => "Typst",
-            Some(crate::language_support::BuildEngineKind::Tex) => {
-                self.settings.tex.build_engine.label()
-            }
-            None => "Compile",
-        }
+        compile_button_label(
+            self.preview_language_support().build,
+            self.interactive_preview_requested(),
+            self.settings.tex.build_engine,
+        )
     }
 
     fn compile_indicator_spinning(&self) -> bool {
@@ -6567,26 +6598,38 @@ impl EditorApp {
                 }
 
                 ui.separator();
-                self.show_pdf_output_button(ui, frame, &shortcuts);
+                let interactive = self.interactive_preview_requested();
+                // Tinymist's live preview never produces a PDF artifact, so its
+                // toolbar keeps a dedicated PDF export button. CLI builds are
+                // themselves PDF-producing; their compile button covers it.
+                if interactive {
+                    self.show_pdf_output_button(ui, frame, &shortcuts);
+                }
                 let refresh = icons::toolbar_button(
-                        ui,
-                        self.source_preview_available() && !self.compilation_paused
-                            && (self.preview_document_kind() != DocumentKind::Tex || self.settings.tex.build_enabled),
-                        false,
-                        UiIcon::Compile,
-                        self.compile_button_label(),
-                        crate::settings::ToolbarStyle::TextAndIcons,
-                        self.compile_indicator_spinning(),
-                    );
+                    ui,
+                    compile_button_enabled(
+                        self.source_preview_available(),
+                        interactive,
+                        self.compilation_paused,
+                        self.preview_document_kind(),
+                        self.settings.tex.build_enabled,
+                    ),
+                    false,
+                    UiIcon::Compile,
+                    self.compile_button_label(),
+                    crate::settings::ToolbarStyle::TextAndIcons,
+                    self.compile_indicator_spinning(),
+                );
                 #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
                 crate::desktop_test::observe("build.preview", &refresh);
-                if native_hover_text(refresh,
-                    "Refresh live preview. The spinning gear shows preview work; it does not mean a PDF was saved. Use PDF to create the file.")
-                    .clicked() {
+                if native_hover_text(refresh, "Refresh live preview").clicked() {
                     self.refresh_preview();
                 }
 
-                if compilation_pause_button_visible(self.preview_document_kind()) {
+                if compilation_pause_button_visible(
+                    self.preview_language_support().build,
+                    interactive,
+                ) {
                     let (pause_label, pause_hint) =
                         compilation_toggle_copy(self.compilation_paused);
                     if native_hover_text(
@@ -8492,9 +8535,7 @@ impl EditorApp {
 
     fn show_status_bar(&mut self, ui: &mut egui::Ui) {
         if self.tabs.is_empty() {
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.weak("Workspace ready · no open tabs");
-            });
+            ui.weak("Workspace ready · no open tabs");
             return;
         }
         self.record_status_transition();
@@ -8530,7 +8571,37 @@ impl EditorApp {
                     "Cursor position",
                 );
             }
+            if !fallbacks.is_empty() {
+                ui.separator();
+                let count = fallbacks.len();
+                let color = warning_color(ui.ctx());
+                let fallback_detail = fallbacks.join("\n");
+                native_hover_text(
+                    ui.label(
+                        RichText::new(count.to_string())
+                            .size(theme::TYPE.supporting)
+                            .strong()
+                            .color(color),
+                    ),
+                    &fallback_detail,
+                );
+                native_hover_text(static_icon(ui, UiIcon::Warning, color), &fallback_detail);
+            }
+            if let Some(counts) = self.git_line_change_counts() {
+                ui.separator();
+                let summary = Self::git_line_change_summary(ui.ctx(), counts);
+                native_hover_text(
+                    ui.label(summary),
+                    format!(
+                        "Git changes in this document\n{} added, {} modified, {} deleted",
+                        counts.added, counts.modified, counts.deleted
+                    ),
+                );
+            }
 
+            // This is intentionally the last right-to-left item: its child
+            // layout claims the remaining space and pins the icon and message
+            // to the far left edge, with the icon leading the text.
             let (icon, color, _) = if !self.may_run_compilation() && self.source_preview_available()
             {
                 (UiIcon::Waiting, neutral_color(ui.ctx()), None)
@@ -8559,7 +8630,7 @@ impl EditorApp {
                 NoticeKind::Error => error_color(ui.ctx()),
             };
             let status_response = ui
-                .horizontal(|ui| {
+                .with_layout(Layout::left_to_right(Align::Center), |ui| {
                     if matches!(self.status_preview().status, PreviewStatus::Ready(_))
                         && let Some(extension) = self.document_extension_label()
                     {
@@ -8591,33 +8662,6 @@ impl EditorApp {
                 self.open_app_popup(AppPopup::StatusLog {
                     anchor: status_response.rect.left_top(),
                 });
-            }
-            if !fallbacks.is_empty() {
-                ui.separator();
-                let count = fallbacks.len();
-                let color = warning_color(ui.ctx());
-                let fallback_detail = fallbacks.join("\n");
-                native_hover_text(
-                    ui.label(
-                        RichText::new(count.to_string())
-                            .size(theme::TYPE.supporting)
-                            .strong()
-                            .color(color),
-                    ),
-                    &fallback_detail,
-                );
-                native_hover_text(static_icon(ui, UiIcon::Warning, color), &fallback_detail);
-            }
-            if let Some(counts) = self.git_line_change_counts() {
-                ui.separator();
-                let summary = Self::git_line_change_summary(ui.ctx(), counts);
-                native_hover_text(
-                    ui.label(summary),
-                    format!(
-                        "Git changes in this document\n{} added, {} modified, {} deleted",
-                        counts.added, counts.modified, counts.deleted
-                    ),
-                );
             }
         });
     }

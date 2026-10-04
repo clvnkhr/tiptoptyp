@@ -1,7 +1,5 @@
 //! Tracks confirmed user-visible PDF writes, separately from preview caches.
 //! This is an in-memory receipt; observing it never stats or reads the output.
-use std::path::{Path, PathBuf};
-
 use crate::{compiler::ArtifactKey, document::DocumentKey};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,7 +16,6 @@ pub(super) enum PdfOutputStatus {
 struct SavedPdf {
     source: DocumentKey,
     artifact: ArtifactKey,
-    path: PathBuf,
 }
 
 #[derive(Debug)]
@@ -41,12 +38,8 @@ fn same_document(left: DocumentKey, right: DocumentKey) -> bool {
 impl PdfOutput {
     /// Call only after a successful, durable write to the chosen destination.
     /// An artifact produced for the preview alone is not a saved PDF receipt.
-    pub(super) fn saved(&mut self, source: DocumentKey, artifact: ArtifactKey, path: PathBuf) {
-        self.saved = Some(SavedPdf {
-            source,
-            artifact,
-            path,
-        });
+    pub(super) fn saved(&mut self, source: DocumentKey, artifact: ArtifactKey) {
+        self.saved = Some(SavedPdf { source, artifact });
         self.invalidated = false;
         self.failure = None;
     }
@@ -118,15 +111,6 @@ impl PdfOutput {
         }
     }
 
-    /// Remains available for stale output and a failed rewrite, but never for
-    /// another document owner or replacement epoch.
-    pub(super) fn path(&self, source: DocumentKey) -> Option<&Path> {
-        self.saved
-            .as_ref()
-            .filter(|saved| same_document(saved.source, source))
-            .map(|saved| saved.path.as_path())
-    }
-
     pub(super) fn error(&self, source: DocumentKey) -> Option<&str> {
         self.failure
             .as_ref()
@@ -153,7 +137,7 @@ mod tests {
 
     fn saved_output() -> PdfOutput {
         let mut output = PdfOutput::default();
-        output.saved(source(), artifact(), PathBuf::from("/project/paper.pdf"));
+        output.saved(source(), artifact());
         output
     }
 
@@ -164,7 +148,6 @@ mod tests {
             output.status(source(), Some(artifact()), false),
             PdfOutputStatus::Unverified
         );
-        assert!(output.path(source()).is_none());
     }
 
     #[test]
@@ -175,7 +158,6 @@ mod tests {
             output.status(source(), Some(artifact()), false),
             PdfOutputStatus::Saved
         );
-        assert_eq!(output.path(source()), Some(Path::new("/project/paper.pdf")));
     }
 
     #[test]
@@ -196,7 +178,6 @@ mod tests {
             ),
             PdfOutputStatus::Stale
         );
-        assert!(output.path(source().after_edit()).is_some());
     }
 
     #[test]
@@ -211,9 +192,8 @@ mod tests {
             output.status(source(), Some(artifact()), true),
             PdfOutputStatus::Building
         );
-        output.saved(source(), artifact(), PathBuf::from("/project/new.pdf"));
+        output.saved(source(), artifact());
         assert_eq!(output.status(source(), None, false), PdfOutputStatus::Saved);
-        assert_eq!(output.path(source()), Some(Path::new("/project/new.pdf")));
     }
 
     #[test]
@@ -234,13 +214,12 @@ mod tests {
                 output.status(replacement, Some(artifact()), false),
                 PdfOutputStatus::Unverified
             );
-            assert!(output.path(replacement).is_none());
             assert!(output.error(replacement).is_none());
         }
     }
 
     #[test]
-    fn failed_rewrite_keeps_the_previous_destination_and_retry_takes_precedence() {
+    fn failed_rewrite_persists_until_a_retry_succeeds() {
         let mut output = saved_output();
         output.failed(source(), "Disk full".into());
         assert_eq!(
@@ -248,7 +227,6 @@ mod tests {
             PdfOutputStatus::Failed
         );
         assert_eq!(output.error(source()), Some("Disk full"));
-        assert_eq!(output.path(source()), Some(Path::new("/project/paper.pdf")));
         output.invalidate();
         assert_eq!(
             output.status(source(), None, false),
@@ -259,7 +237,7 @@ mod tests {
             output.status(source(), None, true),
             PdfOutputStatus::Building
         );
-        output.saved(source(), artifact(), PathBuf::from("/project/paper.pdf"));
+        output.saved(source(), artifact());
         assert_eq!(output.status(source(), None, false), PdfOutputStatus::Saved);
         assert!(output.error(source()).is_none());
     }
@@ -272,7 +250,6 @@ mod tests {
             output.status(source(), None, false),
             PdfOutputStatus::Failed
         );
-        assert!(output.path(source()).is_none());
         assert_eq!(
             output.status(
                 DocumentKey {
@@ -310,11 +287,7 @@ mod tests {
     #[test]
     fn a_mismatched_artifact_revision_cannot_claim_fresh_output() {
         let mut output = PdfOutput::default();
-        output.saved(
-            source().after_edit(),
-            artifact(),
-            PathBuf::from("/project/paper.pdf"),
-        );
+        output.saved(source().after_edit(), artifact());
         assert_eq!(
             output.status(source().after_edit(), None, false),
             PdfOutputStatus::Stale
@@ -335,7 +308,6 @@ mod tests {
             PdfOutputStatus::Saved,
             "retained preview cache has an old service revision, not a source edit"
         );
-        assert!(output.path(reactivated).is_some());
         assert_eq!(
             output.status(
                 reactivated,

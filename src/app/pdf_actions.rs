@@ -63,33 +63,6 @@ impl EditorApp {
         )
     }
 
-    pub(super) fn pdf_output_tooltip(&self, shortcuts: &ShortcutBindings) -> String {
-        let key = self.pdf_output_key();
-        let output = &self.pdf_output_record().pdf_output;
-        let detail = match self.pdf_output_status() {
-            PdfOutputStatus::Unverified => "No PDF saved by this window for this document yet. An existing file has not been checked.".to_owned(),
-            PdfOutputStatus::Saved => format!("PDF saved: {}", output.path(key).expect("saved PDF path").display()),
-            PdfOutputStatus::Stale => format!("PDF needs updating: {}", output.path(key).expect("stale PDF path").display()),
-            PdfOutputStatus::Building => format!("Creating PDF: {}", self.document_workflow.pending_export.as_ref().expect("pending PDF").path.display()),
-            PdfOutputStatus::Failed => format!("PDF creation failed: {}", output.error(key).unwrap_or("unknown error")),
-        };
-        let destination = default_compile_pdf_path(
-            None,
-            self.pdf_output_record().document.kind(),
-            self.pdf_output_record().document.path().as_deref(),
-        )
-        .map_or_else(
-            || "Choose where to save the PDF.".to_owned(),
-            |path| format!("Save to {}.", path.display()),
-        );
-        format!(
-            "Save PDF · {}\n{detail}\n{destination}\nLive preview updates do not save this file. Status reflects writes made by this window.",
-            shortcuts
-                .display(ShortcutAction::Compile)
-                .unwrap_or_else(|| "unbound".into())
-        )
-    }
-
     pub(super) fn show_pdf_output_button(
         &mut self,
         ui: &mut egui::Ui,
@@ -129,7 +102,12 @@ impl EditorApp {
             .inner;
         #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
         crate::desktop_test::observe("build.pdf", &response);
-        if native_hover_text(response, self.pdf_output_tooltip(shortcuts)).clicked() {
+        if native_hover_text(
+            response,
+            shortcut_tooltip("Save PDF", shortcuts, ShortcutAction::Compile),
+        )
+        .clicked()
+        {
             self.compile_pdf(frame);
         }
     }
@@ -169,39 +147,124 @@ mod tests {
         app.compile_deadline = None;
         assert_eq!(app.pdf_output_status(), PdfOutputStatus::Unverified);
         assert!(!source.with_extension("pdf").exists());
-        let mut harness = Harness::builder()
-            .with_size(Vec2::new(1400.0, 80.0))
-            .build_ui_state(|ui, app: &mut EditorApp| app.show_toolbar(ui, None), app);
-        harness.run_steps(3);
-        let button_rect = harness.get_by_label("PDF").rect();
-        harness.get_by_label("PDF").click();
-        harness.run_steps(3);
-        assert_eq!(
-            fs::read(source.with_extension("pdf")).unwrap(),
-            pdf.as_ref()
-        );
-        assert_eq!(harness.state().pdf_output_status(), PdfOutputStatus::Saved);
-        assert!(
+        if cfg!(any(target_os = "macos", target_os = "windows")) {
+            // The PDF export button belongs to the Tinymist toolbar, which only
+            // exists where an interactive preview can run.
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(1400.0, 80.0))
+                .build_ui_state(|ui, app: &mut EditorApp| app.show_toolbar(ui, None), app);
+            harness.run_steps(3);
+            let button_rect = harness.get_by_label("PDF").rect();
+            harness.get_by_label("PDF").click();
+            harness.run_steps(3);
+            assert_eq!(
+                fs::read(source.with_extension("pdf")).unwrap(),
+                pdf.as_ref()
+            );
+            assert_eq!(harness.state().pdf_output_status(), PdfOutputStatus::Saved);
             harness
-                .state()
-                .pdf_output_tooltip(&harness.state().settings.effective_shortcuts())
-                .contains("PDF saved:")
-        );
-        harness
-            .state_mut()
-            .document_mut()
-            .edit(CCursorRange::default(), |source| source.push('!'));
-        harness.run_steps(3);
-        assert_eq!(harness.state().pdf_output_status(), PdfOutputStatus::Stale);
-        assert_eq!(
-            fs::read(source.with_extension("pdf")).unwrap(),
-            pdf.as_ref()
-        );
-        assert_eq!(
-            harness.get_by_label("PDF").rect(),
-            button_rect,
-            "state changes must not move the toolbar"
-        );
+                .state_mut()
+                .document_mut()
+                .edit(CCursorRange::default(), |source| source.push('!'));
+            harness.run_steps(3);
+            assert_eq!(harness.state().pdf_output_status(), PdfOutputStatus::Stale);
+            assert_eq!(
+                fs::read(source.with_extension("pdf")).unwrap(),
+                pdf.as_ref()
+            );
+            assert_eq!(
+                harness.get_by_label("PDF").rect(),
+                button_rect,
+                "state changes must not move the toolbar"
+            );
+        } else {
+            // Without an interactive preview the same export runs through the
+            // compile command instead of a toolbar button.
+            app.compile_pdf(None);
+            assert_eq!(
+                fs::read(source.with_extension("pdf")).unwrap(),
+                pdf.as_ref()
+            );
+            assert_eq!(app.pdf_output_status(), PdfOutputStatus::Saved);
+            app.document_mut()
+                .edit(CCursorRange::default(), |source| source.push('!'));
+            assert_eq!(app.pdf_output_status(), PdfOutputStatus::Stale);
+            assert_eq!(
+                fs::read(source.with_extension("pdf")).unwrap(),
+                pdf.as_ref()
+            );
+        }
+    }
+
+    #[test]
+    fn toolbar_shows_each_backends_button_set() {
+        // Compiler-fed previews (Typst CLI, TeX) pause their watch and compile
+        // without a separate export button; Tinymist swaps pause for PDF.
+        let interactive_platform = cfg!(any(target_os = "macos", target_os = "windows"));
+        let typst_default = if interactive_platform {
+            PreviewPreference::Interactive
+        } else {
+            PreviewPreference::Pdfium
+        };
+        for (kind, backend, expect_pause, expect_pdf, label) in [
+            (
+                DocumentKind::Typst,
+                PreviewPreference::Pdfium,
+                true,
+                false,
+                "Typst",
+            ),
+            (
+                DocumentKind::Tex,
+                PreviewPreference::Pdfium,
+                true,
+                false,
+                "Tectonic",
+            ),
+            (
+                DocumentKind::Tex,
+                PreviewPreference::Interactive,
+                true,
+                false,
+                "Tectonic",
+            ),
+            (
+                DocumentKind::Typst,
+                typst_default,
+                !interactive_platform,
+                interactive_platform,
+                if interactive_platform {
+                    "Tinymist"
+                } else {
+                    "Typst"
+                },
+            ),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let context = egui::Context::default();
+            let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+            app.document_mut().replace_untitled_kind(kind);
+            app.settings.preview_preference = backend;
+            app.preview.set_requested_backend(backend);
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(1600.0, 80.0))
+                .build_ui_state(|ui, app: &mut EditorApp| app.show_toolbar(ui, None), app);
+            harness.run_steps(3);
+            assert_eq!(
+                harness.query_by_label("Pause").is_some(),
+                expect_pause,
+                "{kind:?} with {backend:?}"
+            );
+            assert_eq!(
+                harness.query_by_label("PDF").is_some(),
+                expect_pdf,
+                "{kind:?} with {backend:?}"
+            );
+            assert!(
+                harness.get_by_label(label).rect().width() > 0.0,
+                "{kind:?} with {backend:?} must show {label}"
+            );
+        }
     }
 
     #[test]

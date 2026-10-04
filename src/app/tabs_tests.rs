@@ -48,9 +48,7 @@ fn a_pdf_receipt_and_queued_write_survive_switching_editor_tabs() {
     let destination = root.path().join("first.pdf");
     let artifact = ArtifactKey::unversioned(app.preview_document_revision());
     let key = app.pdf_output_key();
-    app.pdf_output_record_mut()
-        .pdf_output
-        .saved(key, artifact, destination.clone());
+    app.pdf_output_record_mut().pdf_output.saved(key, artifact);
     app.append_tab(&context);
     let second = app.tabs.active_id().unwrap();
     app.document_mut().replace_loaded_unprojected(
@@ -190,6 +188,9 @@ fn a_tex_tab_can_be_edited_beside_a_designated_typst_preview() {
     let root = tempfile::tempdir().unwrap();
     let mut app = fixture(&context, root.path());
     app.snapshot_scene = Some(UiSnapshotScene::Tabs);
+    // Pin the CLI backend so the Typst preview label is platform-stable.
+    app.settings.preview_preference = PreviewPreference::Pdfium;
+    app.preview.set_requested_backend(PreviewPreference::Pdfium);
     let preview = app.tabs.active_id().unwrap();
     app.select_preview_tab(preview, &context);
     app.append_tab(&context);

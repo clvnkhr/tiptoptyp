@@ -862,7 +862,7 @@ class EditorJourneys(TexJourneys):
 
         self.wait_target("build.pdf")
         self.click("build.pdf")
-        saved = self.wait("PDF button confirms a committed file", lambda d: d["pdf_output_state"] == "Saved" and d["pdf_output_path"] == str(destination) and str(d["pdf_output_revision"]) == d["revision"] and not d["pdf_output_pending"], timeout=60)
+        saved = self.wait("PDF button confirms a committed file", lambda d: d["pdf_output_state"] == "Saved" and str(d["pdf_output_revision"]) == d["revision"] and not d["pdf_output_pending"], timeout=60)
         first_pdf = destination.read_bytes()
         if not first_pdf.startswith(b"%PDF-"):
             raise AssertionError("PDF action did not create a PDF document")

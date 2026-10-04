@@ -617,7 +617,9 @@ mod tests {
                 .with_size(egui::vec2(1400.0, 80.0))
                 .build_ui_state(|ui, app: &mut EditorApp| app.show_toolbar(ui, None), app);
             harness.run_steps(3);
-            if kind == DocumentKind::Tex {
+            // The untitled Typst entry compiles through the Typst CLI only
+            // where no interactive Tinymist preview exists.
+            if kind == DocumentKind::Tex || !cfg!(any(target_os = "macos", target_os = "windows")) {
                 harness.get_by_label("Pause");
             } else {
                 assert!(harness.query_by_label("Pause").is_none());

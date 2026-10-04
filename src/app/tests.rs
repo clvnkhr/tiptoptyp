@@ -745,6 +745,39 @@ fn status_bar_displays_preview_completion_text_and_duration() {
 }
 
 #[test]
+fn status_bar_pins_message_to_the_left_edge_and_metrics_to_the_right() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    app.preview.status = PreviewStatus::Ready(Duration::from_millis(18));
+    *app.document_mut() = DocumentSession::new(
+        app.document().key().owner,
+        "hello".to_owned(),
+        DocumentKind::Typst,
+    );
+    let width = 900.0;
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(width, 80.0))
+        .build_ui_state(|ui, app: &mut EditorApp| app.show_status_bar(ui), app);
+    harness.run();
+    let message = harness.get_by_label("Preview ready in 18 ms").rect();
+    let counts = harness.get_by_label("1 lines · 5 chars").rect();
+    assert!(
+        message.left() > 16.0 && message.left() < 40.0,
+        "message must follow the leading icon at the far left: {message:?}"
+    );
+    assert!(
+        counts.right() > width - 40.0,
+        "document metrics must stay pinned to the right edge: {counts:?}"
+    );
+    assert!(
+        message.right() < counts.left(),
+        "left-aligned message and right-aligned metrics must not overlap"
+    );
+}
+
+#[test]
 fn file_open_and_save_report_successful_actions() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("notes.txt");
@@ -2230,8 +2263,6 @@ fn egui_color_conversion_preserves_unmultiplied_alpha_channels() {
 
 #[test]
 fn pausing_blocks_automatic_builds_but_not_explicit_pdf_or_capture_work() {
-    assert!(!compilation_pause_button_visible(DocumentKind::Typst));
-    assert!(compilation_pause_button_visible(DocumentKind::Tex));
     assert!(compilation_run_allowed(false, false, false));
     assert!(!compilation_run_allowed(true, false, false));
     assert!(compilation_run_allowed(true, true, false));
@@ -2260,14 +2291,11 @@ fn pausing_blocks_automatic_builds_but_not_explicit_pdf_or_capture_work() {
     ));
     assert_eq!(
         compilation_toggle_copy(false),
-        (
-            "Pause",
-            "Pause automatic preview updates; Compile PDF stays available"
-        )
+        ("Pause", "Pause preview updates")
     );
     assert_eq!(
         compilation_toggle_copy(true),
-        ("Resume", "Resume automatic preview updates")
+        ("Resume", "Resume preview updates")
     );
     assert_eq!(
         compilation_notice(true),
@@ -2277,6 +2305,83 @@ fn pausing_blocks_automatic_builds_but_not_explicit_pdf_or_capture_work() {
         compilation_notice(false),
         ("Automatic preview updates resumed", NoticeKind::Success)
     );
+}
+
+#[test]
+fn toolbar_build_buttons_follow_the_preview_backend() {
+    use crate::language_support::BuildEngineKind;
+    let tex = crate::tex::settings::BuildEngine::XeLatex;
+    assert_eq!(
+        compile_button_label(Some(BuildEngineKind::Typst), true, tex),
+        "Tinymist"
+    );
+    assert_eq!(
+        compile_button_label(Some(BuildEngineKind::Typst), false, tex),
+        "Typst"
+    );
+    assert_eq!(
+        compile_button_label(Some(BuildEngineKind::Tex), true, tex),
+        "XeLaTeX"
+    );
+    assert_eq!(compile_button_label(None, false, tex), "Compile");
+    // Pause belongs to compiler-fed previews only, never Tinymist.
+    assert!(compilation_pause_button_visible(
+        Some(BuildEngineKind::Typst),
+        false
+    ));
+    assert!(!compilation_pause_button_visible(
+        Some(BuildEngineKind::Typst),
+        true
+    ));
+    assert!(compilation_pause_button_visible(
+        Some(BuildEngineKind::Tex),
+        false
+    ));
+    assert!(!compilation_pause_button_visible(None, false));
+    // Tinymist refresh stays available regardless of pause state; CLI builds
+    // disable while paused and TeX additionally respects its build setting.
+    assert!(compile_button_enabled(
+        true,
+        true,
+        true,
+        DocumentKind::Typst,
+        true
+    ));
+    assert!(!compile_button_enabled(
+        false,
+        true,
+        false,
+        DocumentKind::Typst,
+        true
+    ));
+    assert!(!compile_button_enabled(
+        true,
+        false,
+        true,
+        DocumentKind::Typst,
+        true
+    ));
+    assert!(compile_button_enabled(
+        true,
+        false,
+        false,
+        DocumentKind::Typst,
+        true
+    ));
+    assert!(!compile_button_enabled(
+        true,
+        false,
+        false,
+        DocumentKind::Tex,
+        false
+    ));
+    assert!(compile_button_enabled(
+        true,
+        false,
+        false,
+        DocumentKind::Tex,
+        true
+    ));
 }
 
 #[test]
@@ -7366,7 +7471,10 @@ fn projected_application_toolbar_order_and_right_alignment_survive_resizing() {
             );
         harness.run_steps(3);
         let compact = harness.query_by_label("Files").is_some();
-        let labels = [
+        // The untitled Typst entry uses Tinymist where an interactive preview
+        // exists, and the Typst CLI binary elsewhere.
+        let interactive_platform = cfg!(any(target_os = "macos", target_os = "windows"));
+        let mut labels = vec![
             "Window color",
             "File",
             "Edit",
@@ -7375,15 +7483,26 @@ fn projected_application_toolbar_order_and_right_alignment_survive_resizing() {
             "Preview controls",
             "auto-miTeX",
             "Find",
-            "Typst",
-            "PDF",
+        ];
+        if !interactive_platform {
+            labels.push("Pause");
+        }
+        labels.push(if interactive_platform {
+            "Tinymist"
+        } else {
+            "Typst"
+        });
+        if interactive_platform {
+            labels.push("PDF");
+        }
+        labels.extend([
             "Settings",
             if compact { "Files" } else { "Explorer" },
             if compact { "C" } else { "Code" },
             if compact { "S" } else { "Split" },
             if compact { "P" } else { "Preview" },
             "Panel",
-        ];
+        ]);
         let mut previous_right = 0.0;
         for label in labels {
             let rect = harness.get_by_label(label).rect();
