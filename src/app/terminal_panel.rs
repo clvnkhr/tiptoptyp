@@ -180,6 +180,8 @@ impl EditorApp {
             ui.spacing_mut().item_spacing.y = 3.0;
             let restart =
                 square_icon_button(ui, UiIcon::Refresh, "Restart terminal", PANEL_ACTION_SIZE);
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            crate::desktop_test::observe("terminal.restart", &restart);
             let detail = if restart.hovered() {
                 format!(
                     "(start: {})",
@@ -193,6 +195,23 @@ impl EditorApp {
             native_hover_text(restart.clone(), detail);
             if restart.clicked() {
                 self.terminal.restart();
+            }
+            let off = ui
+                .add_enabled_ui(!self.terminal.is_off(), |ui| {
+                    square_icon_button(ui, UiIcon::Power, "Turn off terminal", PANEL_ACTION_SIZE)
+                })
+                .inner;
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            crate::desktop_test::observe("terminal.off", &off);
+            if native_hover_text(
+                off,
+                "Turn off the shell and its current command. Restart to start a new shell.",
+            )
+            .clicked()
+            {
+                self.terminal.turn_off();
+                let id = terminal_id(ui.ctx());
+                ui.memory_mut(|memory| memory.surrender_focus(id));
             }
         });
     }
@@ -339,7 +358,10 @@ fn terminal_panel_rects(available: Rect) -> (Rect, Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use egui_kittest::{Harness, kittest::Queryable as _};
+    use egui_kittest::{
+        Harness,
+        kittest::{NodeT as _, Queryable as _},
+    };
 
     #[test]
     fn panel_maximize_restores_large_resized_height_and_terminal_shortcut_focus() {
@@ -658,6 +680,76 @@ mod tests {
             assert_eq!(grid.height(), available.height());
             assert_eq!(actions.height(), available.height());
             assert!(actions.width() <= PANEL_ACTION_SIZE);
+        }
+    }
+
+    #[test]
+    fn terminal_off_button_is_compact_and_stays_off_across_panel_transitions() {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_window_for_tests(
+            &context,
+            root.path().into(),
+            egui::ViewportId::ROOT,
+        );
+        app.document_mut()
+            .replace_unprojected_untitled("unchanged source");
+        app.bottom_panel.select(PanelTab::Terminal);
+        app.terminal
+            .prepare_fixture(b"retained output", Path::new("/original"));
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(800.0, 260.0))
+            .build_ui_state(
+                |ui, app: &mut EditorApp| {
+                    if app.bottom_panel.is_visible() {
+                        app.show_bottom_panel(ui);
+                    }
+                },
+                app,
+            );
+        harness.run();
+        let input = harness.get_by_label("Terminal input").rect();
+        let restart = harness.get_by_label("Restart terminal").rect();
+        let off = harness.get_by_label("Turn off terminal").rect();
+        assert_eq!(off.size(), Vec2::splat(PANEL_ACTION_SIZE));
+        assert_eq!(off.left(), restart.left());
+        assert_eq!(off.top(), restart.bottom() + 3.0);
+        assert!(off.left() > input.right());
+        harness.get_by_label("Terminal input").click();
+        harness.run();
+        harness.get_by_label("Turn off terminal").click();
+        harness.run();
+        assert!(harness.state().terminal.is_off());
+        assert!(
+            harness
+                .get_by_label("Turn off terminal")
+                .accesskit_node()
+                .is_disabled()
+        );
+        let id = terminal_id(&harness.ctx);
+        assert!(!harness.ctx.memory(|memory| memory.has_focus(id)));
+        assert!(harness.query_by_label("Off").is_some());
+        let context = harness.ctx.clone();
+
+        for _ in 0..3 {
+            harness.get_by_label("Problems").click();
+            harness.run();
+            harness.get_by_label("Terminal").click();
+            harness.run();
+            harness.get_by_label("Close panel").click();
+            harness.run();
+            harness.state_mut().toggle_panel(&context);
+            harness.run();
+            assert!(harness.state().terminal.is_off());
+            assert_eq!(harness.state().terminal.status_text(), Some("Off"));
+            assert_eq!(harness.get_by_label("Terminal input").rect(), input);
+            assert!(
+                !harness
+                    .get_by_label("Restart terminal")
+                    .accesskit_node()
+                    .is_disabled()
+            );
+            assert_eq!(harness.state().document().source(), "unchanged source");
         }
     }
 

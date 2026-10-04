@@ -26,6 +26,11 @@ The enum and inventory share one declaration, so new UI icons automatically
 appear here. Regression tests cover finite ink, control-size bounds, and sheet
 capacity. The scene is also registered as a targeted screenshot-gallery scene.
 
+## 2026-10-04 addition
+
+The refreshed contact sheet includes the power icon used by the terminal's
+Off button, with the same stroke weight as Restart and the other controls.
+
 ## Visual audit — 2026-09-24
 
 The revised sheet contains 44 vector icons and both application identities.

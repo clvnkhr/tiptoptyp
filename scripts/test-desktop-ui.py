@@ -200,23 +200,78 @@ class Journey(EditorJourneys):
             assert_stable_height(baseline, document)
 
     def panels(self):
+        source = self.snapshot()["document"]["source_fingerprint"]
         self.key(23)  # Cmd+5: bottom panel, initially Problems
         state = self.wait("Problems opens", lambda d: d["panel"] == "Problems")
         baseline = height(state["document"])
         self.stable(baseline)
+
+        def shell_pid(filename):
+            destination = self.directory / filename
+            self.wait_target("terminal.input")
+            self.click("terminal.input")
+            self.native("text", f"echo $$ > '{destination}'")
+            self.key(36, "none")  # Return executes ordinary terminal input.
+            self.wait("terminal command writes its shell PID", lambda d: destination.exists()
+                      and destination.stat().st_size > 0 and not d["terminal_off"])
+            pid = int(destination.read_text().strip())
+            if pid <= 1 or pid in (self.process.pid, os.getpid()):
+                raise AssertionError("terminal command returned an invalid shell PID")
+            os.kill(pid, 0)
+            self.record("terminal.shell", pid=pid, receipt=filename)
+            if self.snapshot()["document"]["source_fingerprint"] != source:
+                raise AssertionError("terminal typing changed the document")
+            return pid
+
+        def shell_gone(pid):
+            try:
+                os.kill(pid, 0)
+                return False
+            except ProcessLookupError:
+                return True
+
+        def stopped(document):
+            return document["terminal_off"] and document["terminal_status"] == "Off" \
+                and document["source_fingerprint"] == source
+
+        self.click("panel.terminal")
+        self.wait("Terminal selected", lambda d: d["panel"] == "Terminal")
+        original_pid = shell_pid("terminal-first.pid")
+        self.click("terminal.off")
+        self.wait("off reaps the real shell", lambda d: stopped(d) and shell_gone(original_pid))
+        self.stable_state(stopped, frames=30)
+        off = self.snapshot()["targets"].get("terminal.off")
+        if not off or off["enabled"]:
+            raise AssertionError("terminal off control stays enabled after stopping")
+        if self.capture_review:
+            self.capture_viewport("main")
+
         for _ in range(3):
-            self.click("panel.terminal")
-            self.wait("Terminal selected", lambda d: d["panel"] == "Terminal")
             self.click("panel.problems")
-            self.wait("Problems selected", lambda d: d["panel"] == "Problems")
+            self.wait("Problems selected without restarting the shell",
+                      lambda d: d["panel"] == "Problems" and stopped(d))
             self.stable(baseline)
+            self.click("panel.terminal")
+            self.wait("Terminal remains off when reopened",
+                      lambda d: d["panel"] == "Terminal" and stopped(d))
             self.key(23)
-            self.wait("panel hidden", lambda d: d["panel"] is None)
+            self.wait("panel hidden without restarting the shell", lambda d: d["panel"] is None and stopped(d))
             self.key(23)
-            self.wait("Problems restored", lambda d: d["panel"] == "Problems")
+            self.wait("Terminal restored without restarting the shell",
+                      lambda d: d["panel"] == "Terminal" and stopped(d))
+            self.stable_state(stopped, frames=30)
             self.stable(baseline)
+        self.click("terminal.restart")
+        self.wait("Restart enables a new shell", lambda d: not d["terminal_off"])
+        restarted_pid = shell_pid("terminal-restarted.pid")
+        if restarted_pid == original_pid:
+            raise AssertionError("Restart reused the terminated shell")
+        self.click("terminal.off")
+        self.wait("off reaps the restarted shell", lambda d: stopped(d) and shell_gone(restarted_pid))
+        self.click("panel.problems")
+        self.wait("Problems selected", lambda d: d["panel"] == "Problems" and stopped(d))
         self.key(23)
-        self.wait("panel hidden", lambda d: d["panel"] is None)
+        self.wait("panel hidden", lambda d: d["panel"] is None and stopped(d))
 
     def find(self):
         for _ in range(3):

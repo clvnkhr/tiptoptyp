@@ -153,6 +153,8 @@ impl EditorApp {
         interaction["explorer_panel_width"] = serde_json::json!(
             egui::PanelState::load(context, explorer_panel_id(context)).map(|state| state.size().x)
         );
+        interaction["terminal_off"] = serde_json::json!(self.terminal.is_off());
+        interaction["terminal_status"] = serde_json::json!(self.terminal.status_text());
         interaction["independent_main_dividers"] =
             serde_json::json!(self.settings.independent_main_dividers);
         interaction["indentation_guides"] = serde_json::json!(self.settings.indentation_guides);

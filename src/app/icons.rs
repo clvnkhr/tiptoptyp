@@ -50,6 +50,7 @@ ui_icons! {
     Next,
     Previous,
     Refresh,
+    Power,
     Eye,
     EyeClosed,
     Up,
@@ -406,6 +407,24 @@ pub(crate) fn paint_ui_icon(painter: &egui::Painter, rect: Rect, icon: UiIcon, c
     let center = rect.center();
     let stroke = Stroke::new(1.25, color);
     match icon {
+        UiIcon::Power => {
+            let radius = rect.size().min_elem() * 0.37;
+            let points = (0..=32)
+                .map(|step| {
+                    let angle = std::f32::consts::FRAC_PI_4
+                        + step as f32 / 32.0 * std::f32::consts::PI * 1.5;
+                    center + Vec2::new(angle.sin(), -angle.cos()) * radius
+                })
+                .collect::<Vec<_>>();
+            painter.add(egui::Shape::line(points, stroke));
+            painter.line_segment(
+                [
+                    Pos2::new(center.x, center.y - radius),
+                    Pos2::new(center.x, center.y + radius * 0.1),
+                ],
+                stroke,
+            );
+        }
         UiIcon::Menu => {
             let bar_width = rect.width() * 0.76;
             let bar_height = (rect.height() * 0.1).max(1.0);

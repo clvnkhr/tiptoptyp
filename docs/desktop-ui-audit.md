@@ -1083,3 +1083,27 @@ Required checks passed: fmt, strict all-target Clippy (default and
 Tracking uses one bounded receipt per tab with constant-time comparisons and
 no per-frame file I/O, additional worker, or idle repaint timer. No unrelated
 performance benchmark was needed.
+
+## 2026-10-04: terminal off control
+
+The terminal action strip has a matching power icon below Restart. Off stops
+the shell and its foreground command through the existing worker cancellation
+path, keeps the last output available for selection/copy, and clears the cursor
+and IME composition. Switching or reopening panels cannot start another shell;
+Restart explicitly resets this state. Off is disabled while already off.
+
+Native `panels` passed (`run-ul1sptrq`): ordinary terminal input wrote each
+shell's PID, Off reaped both the original and restarted shell, and repeated
+panel transitions retained Off without changing the document. The first run
+(`run-abpb4fn4`) failed before Terminal opened; its trace recorded unrelated
+pointer movement during the tab click. Both runs remain in the evidence folder.
+The fresh terminal framebuffer was inspected for the two square controls,
+alignment and retained output. The icon inventory was also freshly captured.
+
+Required checks passed: fmt, strict all-target Clippy (default and
+`desktop-ui-tests`), full Rust tests (1,249 app tests plus core/integration/docs),
+15 xtask tests and 11 runner contracts. Logs are
+`/private/tmp/ttt-terminal-off-{clippy,tests,feature-clippy,xtask}.log` and
+`/private/tmp/ttt-terminal-off-native-rerun.log`. Off adds no background worker,
+idle repaint timer or per-frame disk access; cancellation/reaping never blocks
+the UI. No unrelated performance benchmark was needed.

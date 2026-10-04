@@ -20,6 +20,7 @@ pub(crate) fn terminal_id(context: &egui::Context) -> egui::Id {
 #[derive(Default)]
 pub(crate) struct TerminalPane {
     session: Option<Session>,
+    off: bool,
     fixture: Option<Engine>,
     fixture_cwd: Option<PathBuf>,
     size: Option<GridSize>,
@@ -48,6 +49,28 @@ impl TerminalPane {
             focus_requested: true,
             ..Self::default()
         };
+    }
+
+    pub(crate) fn turn_off(&mut self) {
+        self.sync_snapshot();
+        if let Some(session) = self.session.take() {
+            self.fixture_cwd = Some(session.cwd.clone());
+            // Session cancellation/reaping runs on its worker, never the UI.
+            drop(session);
+        }
+        self.fixture = None;
+        if let Some(grid) = &mut self.grid {
+            Arc::make_mut(grid).cursor = None;
+        }
+        self.off = true;
+        self.error = None;
+        self.preedit.clear();
+        self.focus_requested = false;
+        self.focused = false;
+    }
+
+    pub(crate) fn is_off(&self) -> bool {
+        self.off
     }
 
     pub(crate) fn set_visible(&mut self, visible: bool) {
@@ -121,6 +144,9 @@ impl TerminalPane {
     pub(crate) fn activity(&mut self) -> crate::activity::Activity {
         use crate::activity::Activity;
         self.sync_snapshot();
+        if self.off {
+            return Activity::Inactive("Turned off");
+        }
         if let Some(error) = &self.error {
             return Activity::Failed(error.clone());
         }
@@ -133,6 +159,9 @@ impl TerminalPane {
         }
     }
     pub(crate) fn status_text(&self) -> Option<&str> {
+        if self.off {
+            return Some("Off");
+        }
         match self.status.as_ref()? {
             Status::Starting => Some("Starting shell…"),
             Status::Exited(message) | Status::Failed(message) => Some(message),
@@ -177,6 +206,8 @@ impl TerminalPane {
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Terminal input")
         });
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        crate::desktop_test::observe("terminal.input", &response);
         if self.focus_requested || response.clicked() || response.drag_started() {
             response.request_focus();
             self.focus_requested = false;
@@ -192,8 +223,8 @@ impl TerminalPane {
                 },
             )
         });
-        let focused = response.has_focus() && ui.input(|input| input.focused);
-        if self.session.is_none() && self.fixture.is_none() && self.error.is_none() {
+        let focused = !self.off && response.has_focus() && ui.input(|input| input.focused);
+        if !self.off && self.session.is_none() && self.fixture.is_none() && self.error.is_none() {
             match Session::start(ui.ctx(), cwd, size, colors) {
                 Ok(session) => {
                     self.session = Some(session);
@@ -1097,5 +1128,51 @@ mod tests {
         pane.set_visible(false);
         assert!(pane.session.is_none());
         assert!(pane.grid.is_none());
+    }
+
+    #[test]
+    fn turning_off_freezes_output_clears_input_and_restart_resets_the_pane() {
+        let mut pane = TerminalPane::default();
+        pane.prepare_fixture(b"retained output", Path::new("/original"));
+        pane.grid = Some(Arc::new(pane.fixture.as_mut().unwrap().snapshot().unwrap()));
+        pane.selection = Some((0, 15));
+        pane.preedit = "unfinished".into();
+        pane.focused = true;
+        pane.request_focus();
+        pane.error = Some("previous error".into());
+        pane.turn_off();
+
+        assert!(pane.is_off());
+        assert!(pane.session.is_none());
+        assert!(pane.fixture.is_none());
+        assert!(pane.grid.as_ref().unwrap().cursor.is_none());
+        assert_eq!(
+            selected_text(pane.grid.as_ref().unwrap(), pane.selection.unwrap()),
+            "retained output"
+        );
+        assert!(pane.preedit.is_empty());
+        assert!(!pane.focused);
+        assert!(!pane.focus_requested);
+        assert!(pane.error.is_none());
+        assert_eq!(pane.status_text(), Some("Off"));
+        assert!(matches!(
+            pane.activity(),
+            crate::activity::Activity::Inactive("Turned off")
+        ));
+        assert_eq!(
+            pane.starting_directory(Path::new("/other")),
+            Path::new("/original")
+        );
+
+        pane.restart();
+        assert!(!pane.is_off());
+        assert!(pane.grid.is_none());
+        assert!(pane.selection.is_none());
+        assert!(pane.focus_requested);
+        assert_eq!(pane.status_text(), None);
+        assert_eq!(
+            pane.starting_directory(Path::new("/other")),
+            Path::new("/other")
+        );
     }
 }
