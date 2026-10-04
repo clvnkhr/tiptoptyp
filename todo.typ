@@ -192,6 +192,11 @@ a second controller. Depends on 246 and relevant native gates 234/237.
   2. allow manual editing inside the hunk editor
   3. allow dragging around / resizing the hunk
 26. [X] allow right-click on math brings up right-click menu with `> convert to... > ` with the options of inline math, display math. In TeX, can choose between inline math (`\(\)`) and the various display envs (`align, align*, gather, gather*, equation, equation*`)
+27. [ ] improve the terminal panel - why cant i interact with tui apps like opencode properly?
+28. [ ] terminal panel needs a button to open more terminals
+29. [ ] when a draggable divider is highlighted, the handle needs to be outlined in the same color as well
+30. [ ] impl translucency and blur of windows with gpui. maybe pull in a dependency
+
 // Implementation notes (2026-09-25):
 // NEW TODO 2: text commit actions and interaction coverage landed in e94766d.
 // NEW TODO 11: compact controls landed in e94766d; the toolbar placement and

@@ -78,3 +78,10 @@ This follow-up's complete gallery attempt stalled at `main--github-dark-default`
 and timed out after 113 seconds, restoring the previous gallery. All 68 restored
 PNGs validate; only the two fresh captures above verify this color change.
 The color change adds constant-sized text formatting, with no new IO or repaints.
+
+Left-edge follow-up: the shared status message (icon plus text, tick leading)
+moved from the right-aligned cluster to the far left of the status bar,
+left-aligned, with the leading icon retained; document counts, cursor position,
+fallbacks, and Git counts keep their right-pinned order. The no-tabs message
+uses the same left alignment. A kittest geometry regression pins the message
+left of the metrics and checks both edges.
