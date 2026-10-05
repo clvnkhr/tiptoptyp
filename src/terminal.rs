@@ -3,9 +3,11 @@ mod emoji;
 mod engine;
 mod input;
 mod session;
+mod tabs;
 mod view;
 
-pub(crate) use view::{TerminalPane, terminal_id};
+pub(crate) use tabs::{MAX_TERMINAL_PANES, TerminalTabs};
+pub(crate) use view::terminal_id;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum PanelTab {

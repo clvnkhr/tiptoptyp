@@ -40,6 +40,7 @@ ui_icons! {
     InitializeGit,
     Pause,
     Play,
+    Plus,
     Compile,
     CompileFilled,
     Spanner,
@@ -832,12 +833,12 @@ pub(crate) fn paint_ui_icon(painter: &egui::Painter, rect: Rect, icon: UiIcon, c
                 painter.line_segment(lash, stroke);
             }
         }
-        UiIcon::ZoomIn | UiIcon::ZoomOut => {
+        UiIcon::ZoomIn | UiIcon::ZoomOut | UiIcon::Plus => {
             plus_minus(
                 painter,
                 center,
                 (rect.width().min(rect.height()) - 2.0) * 0.25,
-                icon == UiIcon::ZoomIn,
+                icon != UiIcon::ZoomOut,
                 color,
             );
         }

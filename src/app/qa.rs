@@ -880,7 +880,7 @@ impl QaSession {
         if let Some(section) = app.explorer.maximized_section(true) {
             app.explorer.toggle_section_maximized(section);
         }
-        app.terminal = TerminalPane::default();
+        app.terminal = TerminalTabs::default();
         app.find_bar.visible = false;
         app.find_bar.replace_visible = false;
         app.view_mode = ViewMode::Split;

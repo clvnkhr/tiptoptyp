@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 import platform
 import plistlib
@@ -272,6 +273,86 @@ class Journey(EditorJourneys):
         self.wait("Problems selected", lambda d: d["panel"] == "Problems" and stopped(d))
         self.key(23)
         self.wait("panel hidden", lambda d: d["panel"] is None and stopped(d))
+
+        # Multiple shells: the add button opens further terminals, the
+        # numbered switcher moves between them, and each pane owns its shell.
+        # Off closes the shown pane; closing the last one clears the window.
+        # The earlier flow leaves the terminal empty, so counting starts at 0.
+        self.key(23)
+        self.wait("panel restored", lambda d: d["panel"] is not None)
+        self.click("panel.terminal")
+        self.wait("Terminal restored for multi-shell checks",
+                  lambda d: d["panel"] == "Terminal" and stopped(d))
+        state = self.snapshot()["document"]
+        count = state["terminal_count"]
+        self.wait_target("terminal.new")
+        self.click("terminal.new")
+        self.wait("add button opens a shell",
+                  lambda d: d["terminal_count"] == count + 1 and d["terminal_active"] == count,
+                  timeout=15)
+        second_pid = shell_pid("terminal-second.pid")
+        self.click("terminal.new")
+        self.wait("a third shell opens beside the second",
+                  lambda d: d["terminal_count"] == count + 2 and d["terminal_active"] == count + 1,
+                  timeout=15)
+        third_pid = shell_pid("terminal-third.pid")
+        if third_pid == second_pid:
+            raise AssertionError("add button reused the running shell")
+        self.click(f"terminal.{count}")
+        self.wait("switcher returns to the first of the new terminals",
+                  lambda d: d["terminal_active"] == count, timeout=15)
+        self.click("terminal.input")
+        first_pid = shell_pid("terminal-first-again.pid")
+        if first_pid != second_pid:
+            raise AssertionError("switching back did not return to the first shell")
+        self.record("terminal.panes", first_pid=first_pid, third_pid=third_pid)
+
+        # TUI mouse reporting: a real click inside vim must move its cursor,
+        # which vim reports back through a position file on disk.
+        target = self.directory / "tui-mouse.txt"
+        target.write_text("".join(f"line {index:02}\n" for index in range(1, 21)))
+        proof = self.directory / "tui-click.txt"
+        if proof.exists():
+            proof.unlink()
+        self.click("terminal.input")
+        self.native("text", f"vim -u NONE -N -n -i NONE -c 'set mouse=a' '{target}'")
+        self.key(36, "none")
+        time.sleep(1.5)
+        self.click("terminal.input")
+        time.sleep(0.3)
+        self.native("text", f":call writefile([string(getcurpos())], '{proof}')")
+        self.key(36, "none")
+        self.native("text", ":q!")
+        self.key(36, "none")
+        deadline = time.monotonic() + 15
+        while not proof.exists():
+            if time.monotonic() >= deadline:
+                raise AssertionError("vim never recorded the click position")
+            time.sleep(0.1)
+        match = re.search(r"\[\d+, (\d+),", proof.read_text())
+        if not match or int(match.group(1)) <= 1:
+            raise AssertionError(f"terminal click did not reach vim: {proof.read_text()!r}")
+        self.record("terminal.mouse", line=int(match.group(1)))
+        self.click(f"terminal.{count + 1}")
+        self.wait("switcher returns to the third terminal",
+                  lambda d: d["terminal_active"] == count + 1, timeout=15)
+        # Focus lands a frame after the switch; clicking the surface first
+        # matches the shell_pid pattern and avoids the race.
+        self.click("terminal.input")
+        self.native("text", "exit")
+        self.key(36, "none")
+        self.wait("exiting one shell leaves the other panes alone",
+                  lambda d: "exited" in (d["terminal_status"] or "")
+                  and d["terminal_count"] == count + 2, timeout=15)
+        self.click("terminal.off")
+        self.wait("off closes the exited pane",
+                  lambda d: d["terminal_count"] == count + 1 and d["terminal_active"] == count,
+                  timeout=15)
+        self.click("terminal.off")
+        self.wait("off closes the second pane",
+                  lambda d: d["terminal_count"] == count, timeout=15)
+        self.key(23)
+        self.wait("panel hidden with all terminals closed", lambda d: d["panel"] is None)
 
     def find(self):
         for _ in range(3):

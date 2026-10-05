@@ -5,11 +5,11 @@ use std::{
 };
 
 use eframe::egui::{self, Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
-use libghostty_vt::{render::CursorVisualStyle, style::Underline};
+use libghostty_vt::{mouse, render::CursorVisualStyle, style::Underline};
 
 use super::{
     engine::{Colors, Engine, Grid, GridSize},
-    input,
+    input::{self, MouseInput},
     session::{Command, Session, Status},
 };
 
@@ -17,10 +17,16 @@ pub(crate) fn terminal_id(context: &egui::Context) -> egui::Id {
     crate::child_view::viewport_scoped_id(context, "terminal-grid")
 }
 
+pub(crate) fn terminal_panel_colors(ui: &egui::Ui) -> Colors {
+    Colors {
+        foreground: ui.visuals().text_color(),
+        background: ui.visuals().extreme_bg_color,
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct TerminalPane {
     session: Option<Session>,
-    off: bool,
     fixture: Option<Engine>,
     fixture_cwd: Option<PathBuf>,
     size: Option<GridSize>,
@@ -37,6 +43,8 @@ pub(crate) struct TerminalPane {
     preedit: String,
     glyphs: GlyphCache,
     emoji: super::emoji::EmojiCache,
+    mouse_held: Option<egui::PointerButton>,
+    motion_cell: Option<(i32, i32)>,
 }
 
 impl TerminalPane {
@@ -44,33 +52,16 @@ impl TerminalPane {
         self.focus_requested = true;
     }
 
+    #[cfg(test)]
+    pub(crate) fn focus_requested_for_test(&self) -> bool {
+        self.focus_requested
+    }
+
     pub(crate) fn restart(&mut self) {
         *self = Self {
             focus_requested: true,
             ..Self::default()
         };
-    }
-
-    pub(crate) fn turn_off(&mut self) {
-        self.sync_snapshot();
-        if let Some(session) = self.session.take() {
-            self.fixture_cwd = Some(session.cwd.clone());
-            // Session cancellation/reaping runs on its worker, never the UI.
-            drop(session);
-        }
-        self.fixture = None;
-        if let Some(grid) = &mut self.grid {
-            Arc::make_mut(grid).cursor = None;
-        }
-        self.off = true;
-        self.error = None;
-        self.preedit.clear();
-        self.focus_requested = false;
-        self.focused = false;
-    }
-
-    pub(crate) fn is_off(&self) -> bool {
-        self.off
     }
 
     pub(crate) fn set_visible(&mut self, visible: bool) {
@@ -144,9 +135,6 @@ impl TerminalPane {
     pub(crate) fn activity(&mut self) -> crate::activity::Activity {
         use crate::activity::Activity;
         self.sync_snapshot();
-        if self.off {
-            return Activity::Inactive("Turned off");
-        }
         if let Some(error) = &self.error {
             return Activity::Failed(error.clone());
         }
@@ -159,9 +147,6 @@ impl TerminalPane {
         }
     }
     pub(crate) fn status_text(&self) -> Option<&str> {
-        if self.off {
-            return Some("Off");
-        }
         match self.status.as_ref()? {
             Status::Starting => Some("Starting shell…"),
             Status::Exited(message) | Status::Failed(message) => Some(message),
@@ -177,10 +162,7 @@ impl TerminalPane {
     }
 
     pub(crate) fn show(&mut self, ui: &mut egui::Ui, cwd: &Path) {
-        let colors = Colors {
-            foreground: ui.visuals().text_color(),
-            background: ui.visuals().extreme_bg_color,
-        };
+        let colors = terminal_panel_colors(ui);
         if let Some(error) = self.error.clone() {
             ui.horizontal_wrapped(|ui| {
                 ui.colored_label(ui.visuals().error_fg_color, error);
@@ -223,8 +205,8 @@ impl TerminalPane {
                 },
             )
         });
-        let focused = !self.off && response.has_focus() && ui.input(|input| input.focused);
-        if !self.off && self.session.is_none() && self.fixture.is_none() && self.error.is_none() {
+        let focused = response.has_focus() && ui.input(|input| input.focused);
+        if self.session.is_none() && self.fixture.is_none() && self.error.is_none() {
             match Session::start(ui.ctx(), cwd, size, colors) {
                 Ok(session) => {
                     self.session = Some(session);
@@ -322,6 +304,92 @@ impl TerminalPane {
                 self.send(Command::Key(key));
             }
         }
+        // A program that enabled a mouse tracking mode owns the pointer: click,
+        // drag, hover and wheel input are encoded to it instead of driving the
+        // local selection and scrollback. Shift bypasses reporting so text can
+        // still be selected, as on desktop terminals.
+        let app_mouse = app_mouse_mode(self.grid.as_deref(), ui);
+        if !app_mouse {
+            self.mouse_held = None;
+            self.motion_cell = None;
+        }
+        if app_mouse {
+            let ppp = ui.ctx().pixels_per_point();
+            let geometry = mouse_geometry(outer, rect, size, ppp);
+            let (screen_w, screen_h) =
+                (geometry.screen_width as f32, geometry.screen_height as f32);
+            let button_events = ui.input(|input| {
+                input
+                    .events
+                    .iter()
+                    .filter_map(|event| match event {
+                        egui::Event::PointerButton {
+                            button,
+                            pressed,
+                            pos,
+                            modifiers,
+                            ..
+                        } => Some((*button, *pressed, *pos, *modifiers)),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            });
+            for (button, pressed, pos, modifiers) in button_events {
+                let mapped = input::mouse_button(button);
+                if pressed {
+                    if let Some(mapped) = mapped
+                        && response.contains_pointer()
+                    {
+                        self.mouse_held = Some(button);
+                        self.motion_cell = None;
+                        let (x, y) = surface_position(pos, outer, ppp, screen_w, screen_h);
+                        self.send(Command::Mouse(MouseInput {
+                            action: mouse::Action::Press,
+                            button: Some(mapped),
+                            mods: input::mods(modifiers),
+                            x,
+                            y,
+                            geometry,
+                            any_button_pressed: true,
+                        }));
+                    }
+                } else if self.mouse_held == Some(button) {
+                    // Release a held button even outside the surface; a TUI
+                    // drag-select otherwise never sees its ending event.
+                    self.mouse_held = None;
+                    self.motion_cell = None;
+                    if let Some(mapped) = mapped {
+                        let (x, y) = surface_position(pos, outer, ppp, screen_w, screen_h);
+                        self.send(Command::Mouse(MouseInput {
+                            action: mouse::Action::Release,
+                            button: Some(mapped),
+                            mods: input::mods(modifiers),
+                            x,
+                            y,
+                            geometry,
+                            any_button_pressed: false,
+                        }));
+                    }
+                }
+            }
+            if (response.hovered() || response.dragged())
+                && let Some(pos) = response.interact_pointer_pos()
+                && let Some(cell_pos) = pointer_cell(pos, rect, cell)
+                && self.motion_cell != Some(cell_pos)
+            {
+                self.motion_cell = Some(cell_pos);
+                let (x, y) = surface_position(pos, outer, ppp, screen_w, screen_h);
+                self.send(Command::Mouse(MouseInput {
+                    action: mouse::Action::Motion,
+                    button: self.mouse_held.and_then(input::mouse_button),
+                    mods: input::mods(ui.input(|input| input.modifiers)),
+                    x,
+                    y,
+                    geometry,
+                    any_button_pressed: self.mouse_held.is_some(),
+                }));
+            }
+        }
         if response.hovered() {
             let delta = ui.input_mut(|input| {
                 let delta = input.smooth_scroll_delta.y;
@@ -332,23 +400,54 @@ impl TerminalPane {
             let lines = self.wheel_remainder.trunc() as isize;
             if lines != 0 {
                 self.wheel_remainder -= lines as f32;
-                self.send(Command::Scroll(lines));
-                self.selection = None;
+                if app_mouse {
+                    // Mouse-reporting programs receive wheel notches as
+                    // button 4/5 presses, bounded per frame to protect the
+                    // session's bounded input queue.
+                    let button = input::wheel_button_for_lines(lines);
+                    let geometry = mouse_geometry(outer, rect, size, ui.ctx().pixels_per_point());
+                    let mods = ui.input(|input| input.modifiers);
+                    let pos = ui.input(|input| input.pointer.hover_pos());
+                    for _ in 0..lines.unsigned_abs().min(MAX_WHEEL_EVENTS) {
+                        let Some(pos) = pos else { break };
+                        let (x, y) = surface_position(
+                            pos,
+                            outer,
+                            ui.ctx().pixels_per_point(),
+                            geometry.screen_width as f32,
+                            geometry.screen_height as f32,
+                        );
+                        self.send(Command::Mouse(MouseInput {
+                            action: mouse::Action::Press,
+                            button: Some(button),
+                            mods: input::mods(mods),
+                            x,
+                            y,
+                            geometry,
+                            any_button_pressed: self.mouse_held.is_some(),
+                        }));
+                    }
+                } else {
+                    self.send(Command::Scroll(lines));
+                    self.selection = None;
+                }
             }
         }
         if let Some(grid) = &self.grid {
-            if (response.drag_started() || response.clicked())
-                && let Some(pos) = response.interact_pointer_pos()
-            {
-                let index = cell_index(pos, rect, cell, grid);
-                self.selection_anchor = index;
-                self.selection = Some((index, index));
-            }
-            if response.dragged()
-                && let Some(pos) = response.interact_pointer_pos()
-            {
-                let index = cell_index(pos, rect, cell, grid);
-                self.selection = Some(selection_range(self.selection_anchor, index));
+            if !app_mouse {
+                if (response.drag_started() || response.clicked())
+                    && let Some(pos) = response.interact_pointer_pos()
+                {
+                    let index = cell_index(pos, rect, cell, grid);
+                    self.selection_anchor = index;
+                    self.selection = Some((index, index));
+                }
+                if response.dragged()
+                    && let Some(pos) = response.interact_pointer_pos()
+                {
+                    let index = cell_index(pos, rect, cell, grid);
+                    self.selection = Some(selection_range(self.selection_anchor, index));
+                }
             }
             paint(
                 ui,
@@ -388,6 +487,47 @@ fn grid_size(available: Vec2, cell: Vec2, scale: f32) -> GridSize {
         cell_width: (cell.x * scale).round().clamp(1.0, 512.0) as u16,
         cell_height: (cell.y * scale).round().clamp(1.0, 512.0) as u16,
     }
+}
+
+/// Wheel notches become at most this many reported button presses per frame,
+/// keeping a fast flick from flooding the session's bounded input queue.
+const MAX_WHEEL_EVENTS: usize = 8;
+
+fn app_mouse_mode(grid: Option<&Grid>, ui: &egui::Ui) -> bool {
+    grid.is_some_and(|grid| grid.mouse_tracking) && !ui.input(|input| input.modifiers.shift)
+}
+
+/// The surface geometry Ghostty converts pointer positions with: the full
+/// terminal area, its cell size, and the grid inset inside it.
+fn mouse_geometry(outer: Rect, grid: Rect, size: GridSize, scale: f32) -> mouse::EncoderSize {
+    let px = |value: f32| (value * scale).round().clamp(0.0, u32::MAX as f32) as u32;
+    mouse::EncoderSize {
+        screen_width: px(outer.width()).max(1),
+        screen_height: px(outer.height()).max(1),
+        cell_width: u32::from(size.cell_width.max(1)),
+        cell_height: u32::from(size.cell_height.max(1)),
+        padding_top: px(grid.min.y - outer.min.y),
+        padding_bottom: px(outer.max.y - grid.max.y),
+        padding_right: px(outer.max.x - grid.max.x),
+        padding_left: px(grid.min.x - outer.min.x),
+    }
+}
+
+fn surface_position(pos: Pos2, outer: Rect, scale: f32, width: f32, height: f32) -> (f32, f32) {
+    (
+        ((pos.x - outer.min.x) * scale).clamp(0.0, width),
+        ((pos.y - outer.min.y) * scale).clamp(0.0, height),
+    )
+}
+
+fn pointer_cell(pos: Pos2, rect: Rect, cell: Vec2) -> Option<(i32, i32)> {
+    if !rect.contains(pos) || cell.x <= 0.0 || cell.y <= 0.0 {
+        return None;
+    }
+    Some((
+        ((pos.x - rect.min.x) / cell.x).floor() as i32,
+        ((pos.y - rect.min.y) / cell.y).floor() as i32,
+    ))
 }
 
 fn cell_index(pos: Pos2, rect: Rect, cell: Vec2, grid: &Grid) -> usize {
@@ -453,7 +593,7 @@ const GLYPH_CACHE_CAPACITY: usize = 256;
 
 #[derive(Default)]
 struct GlyphCache {
-    entries: HashMap<(usize, [u32; 2], bool, bool), FittedGlyph>,
+    entries: HashMap<(usize, [u32; 2], bool), FittedGlyph>,
 }
 
 struct FittedGlyph {
@@ -464,26 +604,20 @@ struct FittedGlyph {
 }
 
 impl GlyphCache {
-    fn fit(
-        &mut self,
-        source: Arc<egui::Galley>,
-        size: Vec2,
-        bold: bool,
-    ) -> (Arc<egui::Galley>, Vec2) {
-        self.fit_kind(source, size, bold, false)
+    fn fit(&mut self, source: Arc<egui::Galley>, size: Vec2) -> (Arc<egui::Galley>, Vec2) {
+        self.fit_kind(source, size, false)
     }
 
     fn fit_kind(
         &mut self,
         source: Arc<egui::Galley>,
         size: Vec2,
-        bold: bool,
         icon: bool,
     ) -> (Arc<egui::Galley>, Vec2) {
         let (scale, offset) = if icon {
-            icon_placement(source.mesh_bounds, size, bold)
+            icon_placement(source.mesh_bounds, size)
         } else {
-            glyph_placement(source.mesh_bounds, size, bold)
+            glyph_placement(source.mesh_bounds, size)
         };
         if scale == 1.0 && offset == Vec2::ZERO {
             return (source, offset);
@@ -491,7 +625,6 @@ impl GlyphCache {
         let key = (
             Arc::as_ptr(&source) as usize,
             [size.x.to_bits(), size.y.to_bits()],
-            bold,
             icon,
         );
         if !self.entries.contains_key(&key) {
@@ -519,14 +652,11 @@ impl GlyphCache {
 
 /// Font ink may exceed its advance (emoji, private-use icons and combining
 /// marks). Fit that ink into Ghostty's allocation; never invent column widths.
-fn glyph_placement(bounds: Rect, size: Vec2, bold: bool) -> (f32, Vec2) {
+fn glyph_placement(bounds: Rect, size: Vec2) -> (f32, Vec2) {
     if !bounds.is_finite() || !bounds.is_positive() {
         return (1.0, Vec2::ZERO);
     }
-    let available = Vec2::new(
-        (size.x - if bold { 0.4 } else { 0.0 }).max(0.1),
-        size.y.max(0.1),
-    );
+    let available = Vec2::new(size.x.max(0.1), size.y.max(0.1));
     let scale = (available.x / bounds.width())
         .min(available.y / bounds.height())
         .min(1.0);
@@ -554,11 +684,11 @@ fn terminal_icon(text: &str) -> bool {
 
 // Symbols-only fonts have different ascenders and em sizes from the text face.
 // Normalize icon ink to the text's cap-height vicinity, preserving aspect ratio.
-fn icon_placement(bounds: Rect, size: Vec2, bold: bool) -> (f32, Vec2) {
+fn icon_placement(bounds: Rect, size: Vec2) -> (f32, Vec2) {
     if !bounds.is_finite() || !bounds.is_positive() {
         return (1.0, Vec2::ZERO);
     }
-    let width = (size.x - if bold { 0.4 } else { 0.0 }).max(0.1);
+    let width = size.x.max(0.1);
     let scale = (width / bounds.width()).min(size.y * 0.75 / bounds.height());
     let scaled = bounds * scale;
     (
@@ -683,10 +813,10 @@ fn paint(
                     font_id: if icon {
                         crate::theme::terminal_icon_font(font.size * 1.5)
                     } else {
-                        font.clone()
+                        // Real bold/italic faces; never shear or double-draw.
+                        crate::theme::terminal_styled_font(cell.style.bold, cell.style.italic)
                     },
                     color: foreground,
-                    italics: cell.style.italic,
                     ..Default::default()
                 };
                 let galley = painter.layout_job(egui::text::LayoutJob::single_section(
@@ -694,22 +824,15 @@ fn paint(
                     format,
                 ));
                 let (galley, offset) = if icon {
-                    glyphs.fit_kind(galley, ink_rect.size(), cell.style.bold, true)
+                    glyphs.fit_kind(galley, ink_rect.size(), true)
                 } else {
-                    glyphs.fit(galley, ink_rect.size(), cell.style.bold)
+                    glyphs.fit(galley, ink_rect.size())
                 };
                 painter.with_clip_rect(ink_rect.intersect(rect)).galley(
                     pos + offset,
                     galley.clone(),
                     foreground,
                 );
-                if cell.style.bold {
-                    painter.with_clip_rect(ink_rect.intersect(rect)).galley(
-                        pos + offset + Vec2::new(0.4, 0.0),
-                        galley,
-                        foreground,
-                    );
-                }
             }
             if cell.style.underline != Underline::None {
                 painter.line_segment(
@@ -787,22 +910,223 @@ mod tests {
     use super::*;
 
     #[test]
+    fn mouse_geometry_and_surface_positions_map_pointer_pixels() {
+        let size = GridSize {
+            cols: 10,
+            rows: 4,
+            cell_width: 16,
+            cell_height: 32,
+        };
+        let outer = Rect::from_min_size(Pos2::new(10.0, 20.0), Vec2::new(200.0, 160.0));
+        let grid = Rect::from_min_size(Pos2::new(18.0, 20.0), Vec2::new(192.0, 160.0));
+        let geometry = mouse_geometry(outer, grid, size, 2.0);
+        assert_eq!(geometry.screen_width, 400);
+        assert_eq!(geometry.screen_height, 320);
+        assert_eq!(geometry.cell_width, 16);
+        assert_eq!(geometry.cell_height, 32);
+        assert_eq!(geometry.padding_left, 16);
+        assert_eq!(geometry.padding_top, 0);
+        assert_eq!(geometry.padding_right, 0);
+        assert_eq!(geometry.padding_bottom, 0);
+        assert_eq!(
+            surface_position(Pos2::new(18.0, 20.0), outer, 2.0, 400.0, 320.0),
+            (16.0, 0.0)
+        );
+        assert_eq!(
+            surface_position(Pos2::new(999.0, -20.0), outer, 2.0, 400.0, 320.0),
+            (400.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn app_mouse_mode_requires_tracking_and_shift_bypasses_it() {
+        let mut engine = Engine::new(
+            GridSize {
+                cols: 20,
+                rows: 4,
+                cell_width: 8,
+                cell_height: 16,
+            },
+            Colors {
+                foreground: Color32::WHITE,
+                background: Color32::BLACK,
+            },
+        )
+        .unwrap();
+        let idle = engine.snapshot().unwrap();
+        let tracking_input = |shift: bool| egui::RawInput {
+            events: vec![egui::Event::ModifiersChanged(egui::Modifiers {
+                shift,
+                ..Default::default()
+            })],
+            ..Default::default()
+        };
+        for shift in [false, true] {
+            let context = egui::Context::default();
+            context
+                .run_ui(tracking_input(shift), |ui| {
+                    assert!(!app_mouse_mode(Some(&idle), ui));
+                })
+                .drop_without_applying_deltas();
+        }
+        engine.terminal.vt_write(b"\x1b[?1002;1006h");
+        let tracking = engine.snapshot().unwrap();
+        for shift in [false, true] {
+            let context = egui::Context::default();
+            context
+                .run_ui(tracking_input(shift), |ui| {
+                    assert_eq!(app_mouse_mode(Some(&tracking), ui), !shift);
+                })
+                .drop_without_applying_deltas();
+        }
+    }
+
+    #[test]
+    fn mouse_reporting_pane_clicks_do_not_start_a_local_selection() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        let mut pane = TerminalPane::default();
+        pane.prepare_fixture(b"\x1b[?1002;1006hreporting", Path::new("/project"));
+        let mut configured = false;
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(500.0, 220.0))
+            .build_ui_state(
+                move |ui, pane: &mut TerminalPane| {
+                    if !configured {
+                        crate::theme::configure_test_fonts(ui.ctx());
+                        configured = true;
+                        // Definitions apply next frame; painting now panics.
+                        return;
+                    }
+                    pane.show(ui, Path::new("/project"));
+                },
+                pane,
+            );
+        harness.run_steps(2);
+        assert!(
+            harness
+                .state()
+                .grid
+                .as_ref()
+                .is_some_and(|grid| grid.mouse_tracking)
+        );
+        harness.get_by_label("Terminal input").click();
+        harness.run_steps(1);
+        assert!(
+            harness.state().selection.is_none(),
+            "a reporting program receives clicks; local selection must not start"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn reporting_pane_click_reaches_a_live_tracking_program() {
+        use crate::terminal::session::Session;
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        use portable_pty::CommandBuilder;
+        use std::time::{Duration, Instant};
+        let root = tempfile::tempdir().unwrap();
+        let mut command = CommandBuilder::new("/bin/sh");
+        command.args([
+            "-c",
+            "stty -echo; stty -icanon min 1; printf '\\033[?1002;1006hREADY'; dd bs=1 count=9 2>/dev/null | od -An -t x1",
+        ]);
+        command.cwd(root.path());
+        let session = Session::start_command(
+            &egui::Context::default(),
+            root.path(),
+            GridSize {
+                cols: 80,
+                rows: 8,
+                cell_width: 8,
+                cell_height: 16,
+            },
+            Colors {
+                foreground: Color32::WHITE,
+                background: Color32::BLACK,
+            },
+            command,
+        )
+        .unwrap();
+        let pane = TerminalPane {
+            session: Some(session),
+            ..TerminalPane::default()
+        };
+        let mut configured = false;
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(700.0, 200.0))
+            .build_ui_state(
+                move |ui, pane: &mut TerminalPane| {
+                    if !configured {
+                        crate::theme::configure_test_fonts(ui.ctx());
+                        configured = true;
+                        // Definitions apply next frame; painting now panics.
+                        return;
+                    }
+                    pane.sync_snapshot();
+                    pane.show(ui, Path::new("/project"));
+                },
+                pane,
+            );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let grid_text = |harness: &Harness<'_, TerminalPane>| {
+            harness
+                .state()
+                .grid
+                .as_ref()
+                .map(|grid| {
+                    grid.rows
+                        .iter()
+                        .flat_map(|row| row.iter().map(|cell| cell.text.as_str()))
+                        .collect::<String>()
+                })
+                .unwrap_or_default()
+        };
+        loop {
+            harness.run_steps(2);
+            if grid_text(&harness).contains("READY") {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "tracking program did not start: {}",
+                grid_text(&harness)
+            );
+        }
+        harness.get_by_label("Terminal input").click();
+        loop {
+            harness.run_steps(2);
+            // The click's SGR press report always opens with button 0.
+            if grid_text(&harness)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .contains("1b 5b 3c 30 3b")
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "click never reached the program: {}",
+                grid_text(&harness)
+            );
+        }
+    }
+
+    #[test]
     fn icon_ink_is_normalized_without_overwriting_adjacent_text() {
-        for bold in [false, true] {
-            for width in [8.0, 16.0] {
-                let bounds = Rect::from_min_max(Pos2::new(2.0, 4.0), Pos2::new(7.0, 10.0));
-                let size = Vec2::new(width, 16.0);
-                let (scale, offset) = icon_placement(bounds, size, bold);
-                let ink = (bounds * scale).translate(offset);
-                assert!(
-                    Rect::from_min_size(Pos2::ZERO, size)
-                        .expand(0.001)
-                        .contains_rect(ink)
-                );
-                assert!(ink.height() > bounds.height());
-                if width == 16.0 {
-                    assert!((ink.height() - 12.0).abs() < 0.01);
-                }
+        for width in [8.0, 16.0] {
+            let bounds = Rect::from_min_max(Pos2::new(2.0, 4.0), Pos2::new(7.0, 10.0));
+            let size = Vec2::new(width, 16.0);
+            let (scale, offset) = icon_placement(bounds, size);
+            let ink = (bounds * scale).translate(offset);
+            assert!(
+                Rect::from_min_size(Pos2::ZERO, size)
+                    .expand(0.001)
+                    .contains_rect(ink)
+            );
+            assert!(ink.height() > bounds.height());
+            if width == 16.0 {
+                assert!((ink.height() - 12.0).abs() < 0.01);
             }
         }
         assert!(terminal_icon("\u{f03d3}"));
@@ -872,11 +1196,8 @@ mod tests {
                                 crate::theme::terminal_icon_font(font.size * 1.5),
                                 Color32::WHITE,
                             );
-                            let (scale, offset) = icon_placement(
-                                galley.mesh_bounds,
-                                Vec2::new(width * 2.0, 16.0),
-                                true,
-                            );
+                            let (scale, offset) =
+                                icon_placement(galley.mesh_bounds, Vec2::new(width * 2.0, 16.0));
                             eprintln!(
                                 "{name} U+{:X} original={:?} fitted={:?}",
                                 c as u32,
@@ -924,7 +1245,7 @@ mod tests {
         let mut cache = GlyphCache::default();
         let cold = Instant::now();
         for galley in &galleys {
-            black_box(cache.fit(galley.clone(), size, false));
+            black_box(cache.fit(galley.clone(), size));
         }
         let cold_ns = cold.elapsed().as_nanos();
         const ROUNDS: usize = 10_000;
@@ -938,7 +1259,7 @@ mod tests {
         let after = Instant::now();
         for _ in 0..ROUNDS {
             for galley in &galleys {
-                black_box(cache.fit(galley.clone(), size, false));
+                black_box(cache.fit(galley.clone(), size));
             }
         }
         let after_ns = after.elapsed().as_nanos();
@@ -963,21 +1284,16 @@ mod tests {
             Rect::from_min_max(Pos2::new(0.0, 3.0), Pos2::new(8.0, 15.0)),
         ] {
             for columns in [1.0, 2.0] {
-                for bold in [false, true] {
-                    let cell = Vec2::new(7.82666 * columns, 16.0);
-                    let (scale, offset) = glyph_placement(bounds, cell, bold);
-                    let ink = (bounds * scale).translate(offset);
-                    let available = Rect::from_min_size(Pos2::ZERO, cell).expand(0.001);
-                    assert!(available.contains_rect(ink));
-                    assert!(available.contains_rect(
-                        ink.translate(Vec2::new(if bold { 0.4 } else { 0.0 }, 0.0))
-                    ));
-                    assert!(scale > 0.0 && scale <= 1.0);
-                }
+                let cell = Vec2::new(7.82666 * columns, 16.0);
+                let (scale, offset) = glyph_placement(bounds, cell);
+                let ink = (bounds * scale).translate(offset);
+                let available = Rect::from_min_size(Pos2::ZERO, cell).expand(0.001);
+                assert!(available.contains_rect(ink));
+                assert!(scale > 0.0 && scale <= 1.0);
             }
         }
         assert_eq!(
-            glyph_placement(Rect::NOTHING, Vec2::ZERO, false),
+            glyph_placement(Rect::NOTHING, Vec2::ZERO),
             (1.0, Vec2::ZERO)
         );
     }
@@ -995,32 +1311,23 @@ mod tests {
                 let original = source.mesh_bounds;
                 let mut cache = GlyphCache::default();
                 let size = Vec2::new(7.0, 16.0);
-                let first = cache.fit(source.clone(), size, false).0;
+                let first = cache.fit(source.clone(), size).0;
                 for _ in 0..100 {
-                    assert!(Arc::ptr_eq(
-                        &first,
-                        &cache.fit(source.clone(), size, false).0
-                    ));
+                    assert!(Arc::ptr_eq(&first, &cache.fit(source.clone(), size).0));
                 }
                 assert_eq!(cache.entries.len(), 1);
-                let icon = cache.fit_kind(source.clone(), size, false, true).0;
+                let icon = cache.fit_kind(source.clone(), size, true).0;
                 assert!(!Arc::ptr_eq(&first, &icon));
                 assert!(Arc::ptr_eq(
                     &icon,
-                    &cache.fit_kind(source.clone(), size, false, true).0
+                    &cache.fit_kind(source.clone(), size, true).0
                 ));
-                let bold = cache.fit(source.clone(), size, true).0;
-                assert!(!Arc::ptr_eq(&first, &bold));
                 let recolored =
                     ui.painter()
                         .layout_no_wrap("😀".into(), FontId::monospace(13.0), Color32::RED);
-                assert!(!Arc::ptr_eq(&first, &cache.fit(recolored, size, false).0));
+                assert!(!Arc::ptr_eq(&first, &cache.fit(recolored, size).0));
                 for index in 0..GLYPH_CACHE_CAPACITY * 2 {
-                    cache.fit(
-                        source.clone(),
-                        Vec2::new(1.0 + index as f32 / 100.0, 16.0),
-                        false,
-                    );
+                    cache.fit(source.clone(), Vec2::new(1.0 + index as f32 / 100.0, 16.0));
                     assert!(cache.entries.len() <= GLYPH_CACHE_CAPACITY);
                 }
                 assert_eq!(
@@ -1074,6 +1381,58 @@ mod tests {
                 })
                 .drop_without_applying_deltas();
         }
+    }
+
+    #[test]
+    fn terminal_styled_faces_share_advances_and_resolve_bundled_hack() {
+        use crate::theme::terminal_styled_font;
+        let context = egui::Context::default();
+        crate::theme::configure_editor_fonts(
+            &context,
+            Default::default(),
+            Default::default(),
+            false,
+            400,
+            400,
+            None,
+        );
+        context
+            .run_ui(Default::default(), |ui| {
+                ui.fonts_mut(|fonts| {
+                    let regular = terminal_styled_font(false, false);
+                    let width = fonts.glyph_width(&regular, 'M');
+                    assert!(width > 0.0);
+                    for (bold, italic) in [(true, false), (false, true), (true, true)] {
+                        let face = terminal_styled_font(bold, italic);
+                        assert_ne!(
+                            face.family,
+                            regular.family,
+                            "bold={bold} italic={italic} must select its own face"
+                        );
+                        for character in ['M', 'i', ' ', '~'] {
+                            let advance = fonts.glyph_width(&face, character);
+                            assert!(
+                                (advance - width).abs() < 0.01,
+                                "bold={bold} italic={italic} {character:?} advances {advance}, but cells are {width} wide"
+                            );
+                        }
+                        // The styled face carries real ink, not a fallback blank.
+                        let galley = fonts.layout_no_wrap(
+                            "Ag".into(),
+                            face.clone(),
+                            Color32::WHITE,
+                        );
+                        let uv = galley.rows[0].glyphs[0].uv_rect;
+                        let atlas = fonts.image();
+                        assert!(
+                            (uv.min[1]..uv.max[1]).any(|y| (uv.min[0]..uv.max[0])
+                                .any(|x| atlas[(x as usize, y as usize)].a() != 0)),
+                            "bold={bold} italic={italic} has no visible ink"
+                        );
+                    }
+                });
+            })
+            .drop_without_applying_deltas();
     }
 
     #[test]
@@ -1131,44 +1490,19 @@ mod tests {
     }
 
     #[test]
-    fn turning_off_freezes_output_clears_input_and_restart_resets_the_pane() {
+    fn restart_resets_the_pane_without_keeping_prior_state() {
         let mut pane = TerminalPane::default();
-        pane.prepare_fixture(b"retained output", Path::new("/original"));
+        pane.prepare_fixture(b"previous output", Path::new("/original"));
         pane.grid = Some(Arc::new(pane.fixture.as_mut().unwrap().snapshot().unwrap()));
         pane.selection = Some((0, 15));
-        pane.preedit = "unfinished".into();
-        pane.focused = true;
-        pane.request_focus();
         pane.error = Some("previous error".into());
-        pane.turn_off();
-
-        assert!(pane.is_off());
+        pane.restart();
         assert!(pane.session.is_none());
         assert!(pane.fixture.is_none());
-        assert!(pane.grid.as_ref().unwrap().cursor.is_none());
-        assert_eq!(
-            selected_text(pane.grid.as_ref().unwrap(), pane.selection.unwrap()),
-            "retained output"
-        );
-        assert!(pane.preedit.is_empty());
-        assert!(!pane.focused);
-        assert!(!pane.focus_requested);
-        assert!(pane.error.is_none());
-        assert_eq!(pane.status_text(), Some("Off"));
-        assert!(matches!(
-            pane.activity(),
-            crate::activity::Activity::Inactive("Turned off")
-        ));
-        assert_eq!(
-            pane.starting_directory(Path::new("/other")),
-            Path::new("/original")
-        );
-
-        pane.restart();
-        assert!(!pane.is_off());
         assert!(pane.grid.is_none());
         assert!(pane.selection.is_none());
         assert!(pane.focus_requested);
+        assert!(pane.error.is_none());
         assert_eq!(pane.status_text(), None);
         assert_eq!(
             pane.starting_directory(Path::new("/other")),

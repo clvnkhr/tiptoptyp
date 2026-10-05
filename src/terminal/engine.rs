@@ -2,14 +2,14 @@ use std::sync::Arc;
 
 use eframe::egui::Color32;
 use libghostty_vt::{
-    RenderState, Terminal, TerminalOptions, key,
+    RenderState, Terminal, TerminalOptions, key, mouse,
     render::{CellIterator, CursorVisualStyle, Dirty, RowIterator},
     screen::CellWide,
     style::{PaletteIndex, RgbColor, Style},
     terminal::{Mode, ScrollViewport},
 };
 
-use super::input::KeyInput;
+use super::input::{KeyInput, MouseInput};
 
 // The pinned C implementation measures this in bytes (the wrapper docs say
 // lines). Ghostty rounds it to whole pages and always retains the active grid.
@@ -54,6 +54,8 @@ pub(super) struct Grid {
     pub background: Color32,
     pub scroll_offset: usize,
     pub scroll_total: usize,
+    /// The program enabled a mouse tracking mode; pointer input belongs to it.
+    pub mouse_tracking: bool,
 }
 
 /// All handles stay on their creating thread. Only `Grid` crosses to the UI.
@@ -64,6 +66,8 @@ pub(super) struct Engine {
     cells: CellIterator<'static>,
     keys: key::Encoder<'static>,
     key_event: key::Event<'static>,
+    mouse: mouse::Encoder<'static>,
+    mouse_event: mouse::Event<'static>,
     cached_rows: Vec<Arc<Vec<Cell>>>,
 }
 
@@ -80,6 +84,8 @@ impl Engine {
             cells: CellIterator::new()?,
             keys: key::Encoder::new()?,
             key_event: key::Event::new()?,
+            mouse: mouse::Encoder::new()?,
+            mouse_event: mouse::Event::new()?,
             cached_rows: Vec::new(),
         };
         // Bound unterminated application-control strings too.
@@ -159,6 +165,27 @@ impl Engine {
         Ok(paste_bytes(text, bracketed))
     }
 
+    /// Encodes one pointer event for the program, honoring the tracking mode
+    /// and output format it selected. Events it does not want encode to empty.
+    pub fn mouse(&mut self, input: MouseInput) -> Result<Vec<u8>, libghostty_vt::Error> {
+        self.mouse_event
+            .set_action(input.action)
+            .set_button(input.button)
+            .set_mods(input.mods)
+            .set_position(mouse::Position {
+                x: input.x,
+                y: input.y,
+            });
+        self.mouse
+            .set_options_from_terminal(&self.terminal)
+            .set_size(input.geometry)
+            .set_any_button_pressed(input.any_button_pressed)
+            .set_track_last_cell(true);
+        let mut bytes = Vec::new();
+        self.mouse.encode_to_vec(&self.mouse_event, &mut bytes)?;
+        Ok(bytes)
+    }
+
     pub fn snapshot(&mut self) -> Result<Grid, libghostty_vt::Error> {
         let snapshot = self.render.update(&self.terminal)?;
         let colors = snapshot.colors()?;
@@ -224,6 +251,7 @@ impl Engine {
             background: color(colors.background),
             scroll_offset: scroll.offset as usize,
             scroll_total: scroll.total as usize,
+            mouse_tracking: self.terminal.is_mouse_tracking()?,
         })
     }
 }
@@ -397,6 +425,21 @@ mod tests {
     }
 
     #[test]
+    fn negative_scroll_deltas_move_the_viewport_toward_older_lines() {
+        let mut engine = engine(20, 4);
+        for _ in 0..10 {
+            engine.terminal.vt_write(b"line\r\n");
+        }
+        engine.terminal.scroll_viewport(ScrollViewport::Bottom);
+        let bottom = engine.snapshot().unwrap().scroll_offset;
+        engine.terminal.scroll_viewport(ScrollViewport::Delta(-2));
+        let up = engine.snapshot().unwrap().scroll_offset;
+        assert_eq!(up + 2, bottom, "negative delta must scroll up");
+        engine.terminal.scroll_viewport(ScrollViewport::Delta(2));
+        assert_eq!(engine.snapshot().unwrap().scroll_offset, bottom);
+    }
+
+    #[test]
     fn paste_honors_mode_normalizes_newlines_and_cannot_escape_brackets() {
         assert_eq!(paste_bytes("a\r\nb\nc", false), b"a\rb\rc");
         assert_eq!(
@@ -406,5 +449,127 @@ mod tests {
         let mut engine = engine(20, 3);
         engine.terminal.vt_write(b"\x1b[?2004h");
         assert_eq!(engine.paste("hi").unwrap(), b"\x1b[200~hi\x1b[201~");
+    }
+
+    #[test]
+    fn mouse_events_follow_the_programs_tracking_and_format() {
+        use libghostty_vt::key::Mods;
+        let geometry = mouse::EncoderSize {
+            screen_width: 160,
+            screen_height: 64,
+            cell_width: 8,
+            cell_height: 16,
+            padding_top: 0,
+            padding_bottom: 0,
+            padding_right: 0,
+            padding_left: 0,
+        };
+        let input = |action, button, x, y, geometry| MouseInput {
+            action,
+            button: Some(button),
+            mods: Mods::empty(),
+            x,
+            y,
+            geometry,
+            any_button_pressed: true,
+        };
+
+        let mut engine = engine(20, 4);
+        // Silent until the program enables a tracking mode.
+        assert!(
+            engine
+                .mouse(input(
+                    mouse::Action::Press,
+                    mouse::Button::Left,
+                    20.0,
+                    16.0,
+                    geometry
+                ))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!engine.snapshot().unwrap().mouse_tracking);
+        engine.terminal.vt_write(b"\x1b[?1002;1006h");
+        assert!(engine.snapshot().unwrap().mouse_tracking);
+        // SGR reports 1-based cells: 8x16 pixel cells put (20,16) at 3;2.
+        assert_eq!(
+            engine
+                .mouse(input(
+                    mouse::Action::Press,
+                    mouse::Button::Left,
+                    20.0,
+                    16.0,
+                    geometry
+                ))
+                .unwrap(),
+            b"\x1b[<0;3;2M"
+        );
+        assert_eq!(
+            engine
+                .mouse(input(
+                    mouse::Action::Release,
+                    mouse::Button::Left,
+                    20.0,
+                    16.0,
+                    geometry
+                ))
+                .unwrap(),
+            b"\x1b[<0;3;2m"
+        );
+        // Drag motion carries button+32; hover motion stays unreported in
+        // button-event tracking.
+        assert_eq!(
+            engine
+                .mouse(input(
+                    mouse::Action::Motion,
+                    mouse::Button::Left,
+                    12.0,
+                    32.0,
+                    geometry
+                ))
+                .unwrap(),
+            b"\x1b[<32;2;3M"
+        );
+        let hover = MouseInput {
+            action: mouse::Action::Motion,
+            button: None,
+            mods: Mods::empty(),
+            x: 12.0,
+            y: 32.0,
+            geometry,
+            any_button_pressed: false,
+        };
+        assert!(engine.mouse(hover).unwrap().is_empty());
+        // Wheel notches arrive as buttons 4/5.
+        assert_eq!(
+            engine
+                .mouse(input(
+                    mouse::Action::Press,
+                    mouse::Button::Four,
+                    20.0,
+                    16.0,
+                    geometry
+                ))
+                .unwrap(),
+            b"\x1b[<64;3;2M"
+        );
+        // A grid inset shifts the reported cell, not the screen position.
+        let padded = mouse::EncoderSize {
+            padding_left: 8,
+            padding_top: 16,
+            ..geometry
+        };
+        assert_eq!(
+            engine
+                .mouse(input(
+                    mouse::Action::Press,
+                    mouse::Button::Left,
+                    20.0,
+                    16.0,
+                    padded
+                ))
+                .unwrap(),
+            b"\x1b[<0;2;1M"
+        );
     }
 }

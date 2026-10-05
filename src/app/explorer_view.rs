@@ -1046,7 +1046,8 @@ pub(super) fn show_explorer_sections(
     // Draw after the fills so each shared edge has one visible rule, even
     // when the next section is collapsed or the order has changed.
     for pair in section_edges[..visible_sections].windows(2) {
-        let stroke = if pair[0].1 {
+        let highlight = pair[0].1;
+        let stroke = if highlight {
             Stroke::new(1.5, ui.visuals().widgets.hovered.fg_stroke.color)
         } else {
             ui.visuals().widgets.noninteractive.bg_stroke
@@ -1054,7 +1055,12 @@ pub(super) fn show_explorer_sections(
         let divider = explorer_section_divider(pair[0].0, pair[1].0);
         ui.painter().line_segment(divider, stroke);
         if pair[0].3 {
-            super::panel_handles::paint(ui, divider[0].lerp(divider[1], 0.5), true);
+            super::panel_handles::paint(
+                ui,
+                divider[0].lerp(divider[1], 0.5),
+                true,
+                highlight.then_some(stroke),
+            );
         }
     }
     // Paint interaction borders last so a shared divider cannot cover the

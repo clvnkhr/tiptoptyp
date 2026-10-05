@@ -59,7 +59,7 @@ pub(crate) use tooltips::native_hover_text;
 mod saves;
 mod tabs;
 mod terminal_panel;
-use crate::terminal::{BottomPanel, PanelTab, TerminalPane, terminal_id};
+use crate::terminal::{BottomPanel, MAX_TERMINAL_PANES, PanelTab, TerminalTabs, terminal_id};
 mod workspace_view;
 use lifecycle::DocumentLifecycle;
 mod help;
@@ -1261,7 +1261,7 @@ pub struct EditorApp {
     explorer: ExplorerPanelState,
     activity: activity_panel::ActivityTracking,
     bottom_panel: BottomPanel,
-    terminal: TerminalPane,
+    terminal: TerminalTabs,
     settings_visible: bool,
     settings_open_requested: bool,
     settings_window: Arc<std::sync::Mutex<SettingsWindow>>,
@@ -1573,7 +1573,7 @@ impl EditorApp {
             explorer: ExplorerPanelState::default(),
             activity: Default::default(),
             bottom_panel: BottomPanel::default(),
-            terminal: TerminalPane::default(),
+            terminal: TerminalTabs::default(),
             settings_visible: false,
             settings_open_requested: false,
             settings_window: Arc::default(),
@@ -1942,7 +1942,7 @@ impl EditorApp {
         if !self.lifecycle.suspend() {
             return;
         }
-        self.terminal = TerminalPane::default();
+        self.terminal = TerminalTabs::default();
         self.bottom_panel = BottomPanel::default();
         self.tabs = tabs::Tabs::default();
         let _ = self.compiler.pause(self.document().revision());
@@ -9068,6 +9068,7 @@ impl EditorApp {
                     ui,
                     panel_handles::panel_center(ui, explorer_panel.response.rect, false),
                     false,
+                    panel_handles::panel_divider(ui, panel_id),
                 );
                 if self.settings.independent_main_dividers
                     && self.view_mode == ViewMode::Split
@@ -9159,6 +9160,7 @@ impl EditorApp {
                         ui,
                         panel_handles::panel_center(ui, editor_panel.response.rect, false),
                         false,
+                        panel_handles::panel_divider(ui, egui::Id::new("editor")),
                     );
                     egui::CentralPanel::default()
                         .frame(theme::content_panel_frame(ui.style()).inner_margin(0.0))

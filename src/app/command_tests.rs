@@ -159,11 +159,17 @@ fn panel_routes_close_and_reopen_a_focused_terminal_without_mutating_source() {
             } else {
                 1800.0
             };
+            let mut configured = false;
             let mut harness = Harness::builder()
                 .with_size(Vec2::new(width, 300.0))
                 .with_os(egui::os::OperatingSystem::from_target_os())
                 .build_ui_state(
-                    |ui, app: &mut EditorApp| {
+                    move |ui, app: &mut EditorApp| {
+                        if !configured {
+                            crate::theme::configure_test_fonts(ui.ctx());
+                            configured = true;
+                            return;
+                        }
                         app.handle_shortcuts(ui.ctx(), None);
                         app.process_native_menu_commands(ui.ctx(), None);
                         egui::Panel::top("terminal-test-toolbar")

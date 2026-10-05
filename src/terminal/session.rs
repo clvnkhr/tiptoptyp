@@ -18,7 +18,7 @@ use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system}
 
 use super::{
     engine::{Colors, Engine, Grid, GridSize},
-    input::KeyInput,
+    input::{KeyInput, MouseInput},
 };
 
 const QUEUE_CAPACITY: usize = 64;
@@ -28,6 +28,7 @@ pub(super) const MAX_PASTE_BYTES: usize = 256 * 1024;
 
 pub(super) enum Command {
     Key(KeyInput),
+    Mouse(MouseInput),
     Paste(String),
     Resize(GridSize),
     Colors(Colors),
@@ -99,7 +100,7 @@ impl Session {
         Self::start_command(context, cwd, size, colors, shell_command(cwd))
     }
 
-    fn start_command(
+    pub(super) fn start_command(
         context: &egui::Context,
         cwd: &Path,
         size: GridSize,
@@ -320,6 +321,9 @@ fn run(
                 Command::Key(input) => {
                     bytes = engine.key(input).map_err(|error| error.to_string())?
                 }
+                Command::Mouse(input) => {
+                    bytes = engine.mouse(input).map_err(|error| error.to_string())?
+                }
                 Command::Paste(text) => {
                     bytes = engine.paste(&text).map_err(|error| error.to_string())?
                 }
@@ -487,6 +491,65 @@ mod tests {
                 .join(" ")
                 .contains("1b 5b"),
             "query reply missing: {text}"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn real_pty_delivers_mouse_events_to_tracking_programs() {
+        use libghostty_vt::{key::Mods, mouse};
+        let root = tempfile::tempdir().unwrap();
+        // Button tracking with SGR: one left press at column 3, row 2.
+        let session = start_script(
+            root.path(),
+            "stty -echo; stty -icanon min 1; printf '\\033[?1002;1006hREADY'; dd bs=1 count=9 2>/dev/null | od -An -t x1",
+        );
+        until(|| text(&session.snapshot()).contains("READY"));
+        session
+            .send(Command::Mouse(MouseInput {
+                action: mouse::Action::Press,
+                button: Some(mouse::Button::Left),
+                mods: Mods::empty(),
+                x: 20.0,
+                y: 16.0,
+                geometry: mouse::EncoderSize {
+                    screen_width: 640,
+                    screen_height: 128,
+                    cell_width: 8,
+                    cell_height: 16,
+                    padding_top: 0,
+                    padding_bottom: 0,
+                    padding_right: 0,
+                    padding_left: 0,
+                },
+                any_button_pressed: true,
+            }))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !matches!(
+            session.snapshot().status,
+            Status::Exited(_) | Status::Failed(_)
+        ) {
+            assert!(
+                Instant::now() < deadline,
+                "mouse bytes were not consumed; grid: {}",
+                text(&session.snapshot())
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        let snapshot = session.snapshot();
+        assert!(
+            matches!(snapshot.status, Status::Exited(_)),
+            "{:?}",
+            snapshot.status
+        );
+        let text = text(&snapshot);
+        assert!(
+            text.split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .contains("1b 5b 3c 30 3b 33 3b 32 4d"),
+            "mouse press not delivered: {text}"
         );
     }
 

@@ -154,6 +154,8 @@ impl EditorApp {
         );
         interaction["terminal_off"] = serde_json::json!(self.terminal.is_off());
         interaction["terminal_status"] = serde_json::json!(self.terminal.status_text());
+        interaction["terminal_count"] = serde_json::json!(self.terminal.len());
+        interaction["terminal_active"] = serde_json::json!(self.terminal.active_index());
         interaction["independent_main_dividers"] =
             serde_json::json!(self.settings.independent_main_dividers);
         interaction["indentation_guides"] = serde_json::json!(self.settings.indentation_guides);

@@ -1,5 +1,8 @@
-use eframe::egui::{Event, ImeEvent, Key, Modifiers};
-use libghostty_vt::key::{Action, Key as GhostKey, Mods};
+use eframe::egui::{self, Event, ImeEvent, Key, Modifiers};
+use libghostty_vt::{
+    key::{Action, Key as GhostKey, Mods},
+    mouse,
+};
 
 #[derive(Clone, Debug)]
 pub(super) struct KeyInput {
@@ -8,6 +11,44 @@ pub(super) struct KeyInput {
     pub action: Action,
     pub unshifted: char,
     pub text: Option<String>,
+}
+
+/// One normalized pointer event for the Ghostty mouse encoder. The position is
+/// in physical pixels within the terminal surface the geometry describes.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct MouseInput {
+    pub action: mouse::Action,
+    pub button: Option<mouse::Button>,
+    pub mods: Mods,
+    pub x: f32,
+    pub y: f32,
+    pub geometry: mouse::EncoderSize,
+    pub any_button_pressed: bool,
+}
+
+pub(super) fn mouse_button(button: egui::PointerButton) -> Option<mouse::Button> {
+    match button {
+        egui::PointerButton::Primary => Some(mouse::Button::Left),
+        egui::PointerButton::Secondary => Some(mouse::Button::Right),
+        egui::PointerButton::Middle => Some(mouse::Button::Middle),
+        egui::PointerButton::Extra1 => Some(mouse::Button::Six),
+        egui::PointerButton::Extra2 => Some(mouse::Button::Seven),
+    }
+}
+
+/// Scroll notches reach mouse-reporting programs as button 4 (up) / 5 (down).
+pub(super) fn wheel_button(up: bool) -> mouse::Button {
+    if up {
+        mouse::Button::Four
+    } else {
+        mouse::Button::Five
+    }
+}
+
+/// Worker scroll lines share Ghostty's sign convention (up is negative),
+/// unlike TUI wheel buttons; keep the two mappings in one place.
+pub(super) fn wheel_button_for_lines(lines: isize) -> mouse::Button {
+    wheel_button(lines < 0)
 }
 
 /// Pair egui's physical key event with its text event so Kitty-enabled programs
@@ -78,7 +119,7 @@ fn text_input(text: &str) -> KeyInput {
     }
 }
 
-fn mods(modifiers: Modifiers) -> Mods {
+pub(super) fn mods(modifiers: Modifiers) -> Mods {
     let mut mods = Mods::empty();
     mods.set(Mods::SHIFT, modifiers.shift);
     mods.set(Mods::ALT, modifiers.alt);
@@ -188,5 +229,14 @@ mod tests {
         ]);
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].text.as_deref(), Some("你"));
+    }
+
+    #[test]
+    fn worker_scroll_lines_map_to_tui_wheel_buttons_without_flipping() {
+        use libghostty_vt::mouse::Button;
+        // Worker lines share Ghostty's convention (up is negative); wheel
+        // buttons do not. A scroll-up gesture must reach the program as 4.
+        assert_eq!(wheel_button_for_lines(-3), Button::Four);
+        assert_eq!(wheel_button_for_lines(3), Button::Five);
     }
 }

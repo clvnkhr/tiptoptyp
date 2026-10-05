@@ -54,6 +54,7 @@ impl EditorApp {
                 ui,
                 panel_handles::panel_center(ui, rendered.response.rect, true),
                 true,
+                panel_handles::panel_divider(ui, id),
             );
         }
         maximized || ui.available_height() < 1.0
@@ -178,6 +179,9 @@ impl EditorApp {
         );
         ui.scope_builder(egui::UiBuilder::new().max_rect(actions), |ui| {
             ui.spacing_mut().item_spacing.y = 3.0;
+            let empty = self.terminal.is_off();
+            // Restart stays available on a cleared window, where it opens
+            // the first pane again; off needs a pane to close.
             let restart =
                 square_icon_button(ui, UiIcon::Refresh, "Restart terminal", PANEL_ACTION_SIZE);
             #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
@@ -197,7 +201,7 @@ impl EditorApp {
                 self.terminal.restart();
             }
             let off = ui
-                .add_enabled_ui(!self.terminal.is_off(), |ui| {
+                .add_enabled_ui(!empty, |ui| {
                     square_icon_button(ui, UiIcon::Power, "Turn off terminal", PANEL_ACTION_SIZE)
                 })
                 .inner;
@@ -205,13 +209,59 @@ impl EditorApp {
             crate::desktop_test::observe("terminal.off", &off);
             if native_hover_text(
                 off,
-                "Turn off the shell and its current command. Restart to start a new shell.",
+                "Close this terminal and stop its shell. Closing the last one clears the window.",
             )
             .clicked()
             {
-                self.terminal.turn_off();
+                self.terminal.close_active();
                 let id = terminal_id(ui.ctx());
                 ui.memory_mut(|memory| memory.surrender_focus(id));
+            }
+            if self.terminal.len() > 1 {
+                for index in 0..self.terminal.len() {
+                    let selected = index == self.terminal.active_index();
+                    let label = format!("Terminal {}", index + 1);
+                    let switch = ui.add(
+                        egui::Button::new((index + 1).to_string())
+                            .selected(selected)
+                            .min_size(Vec2::splat(PANEL_ACTION_SIZE)),
+                    );
+                    switch.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Button,
+                            switch.enabled(),
+                            label.clone(),
+                        )
+                    });
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    crate::desktop_test::observe(&format!("terminal.{index}"), &switch);
+                    if native_hover_text(switch, label).clicked() {
+                        self.terminal.select(index);
+                    }
+                }
+            }
+            let full = self.terminal.len() >= MAX_TERMINAL_PANES;
+            let add = ui
+                .add_enabled_ui(!full, |ui| {
+                    square_icon_button(ui, UiIcon::Plus, "New terminal", PANEL_ACTION_SIZE)
+                })
+                .inner;
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            crate::desktop_test::observe("terminal.new", &add);
+            if native_hover_text(
+                add,
+                if full {
+                    format!("Up to {MAX_TERMINAL_PANES} terminals can be open at once")
+                } else if empty {
+                    "Open a terminal".to_owned()
+                } else {
+                    "Open another terminal".to_owned()
+                },
+            )
+            .clicked()
+            {
+                self.terminal.add();
+                ui.ctx().request_repaint();
             }
         });
     }
@@ -414,6 +464,9 @@ mod tests {
                             )
                         });
                         initialized = true;
+                        // Font definitions apply next frame; the build frame
+                        // must not paint styled terminal cells yet.
+                        return;
                     }
                     app.handle_shortcuts(ui.ctx(), None);
                     app.process_native_menu_commands(ui.ctx(), None);
@@ -545,10 +598,16 @@ mod tests {
         app.bottom_panel.select(PanelTab::Terminal);
         app.terminal.prepare_fixture(b"test", Path::new("/project"));
         let mut detail = None;
+        let mut configured = false;
         let mut harness = Harness::builder()
             .with_size(Vec2::new(500.0, 200.0))
             .build_ui_state(
                 move |ui, state: &mut (EditorApp, Option<Arc<str>>)| {
+                    if !configured {
+                        theme::configure_test_fonts(ui.ctx());
+                        configured = true;
+                        return;
+                    }
                     tooltips::install_hover_runtime_config(ui.ctx(), Duration::ZERO);
                     state.0.show_bottom_panel(ui);
                     let id = native_hover_tooltip_id(ui.ctx());
@@ -602,10 +661,16 @@ mod tests {
         app.bottom_panel.select(PanelTab::Problems);
         app.terminal
             .prepare_fixture(b"test terminal", Path::new("/project"));
+        let mut configured = false;
         let mut harness = Harness::builder()
             .with_size(Vec2::new(800.0, 260.0))
             .build_ui_state(
-                |ui, app: &mut EditorApp| {
+                move |ui, app: &mut EditorApp| {
+                    if !configured {
+                        theme::configure_test_fonts(ui.ctx());
+                        configured = true;
+                        return;
+                    }
                     app.handle_shortcuts(ui.ctx(), None);
                     app.process_native_menu_commands(ui.ctx(), None);
                     if app.bottom_panel.is_visible() {
@@ -684,7 +749,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_off_button_is_compact_and_stays_off_across_panel_transitions() {
+    fn closing_the_last_terminal_clears_the_window_and_parks_across_transitions() {
         let root = tempfile::tempdir().unwrap();
         let context = egui::Context::default();
         let mut app = EditorApp::dormant_window_for_tests(
@@ -697,10 +762,16 @@ mod tests {
         app.bottom_panel.select(PanelTab::Terminal);
         app.terminal
             .prepare_fixture(b"retained output", Path::new("/original"));
+        let mut configured = false;
         let mut harness = Harness::builder()
             .with_size(Vec2::new(800.0, 260.0))
             .build_ui_state(
-                |ui, app: &mut EditorApp| {
+                move |ui, app: &mut EditorApp| {
+                    if !configured {
+                        theme::configure_test_fonts(ui.ctx());
+                        configured = true;
+                        return;
+                    }
                     if app.bottom_panel.is_visible() {
                         app.show_bottom_panel(ui);
                     }
@@ -711,23 +782,41 @@ mod tests {
         let input = harness.get_by_label("Terminal input").rect();
         let restart = harness.get_by_label("Restart terminal").rect();
         let off = harness.get_by_label("Turn off terminal").rect();
-        assert_eq!(off.size(), Vec2::splat(PANEL_ACTION_SIZE));
-        assert_eq!(off.left(), restart.left());
+        let add = harness.get_by_label("New terminal").rect();
+        for button in [restart, off, add] {
+            assert_eq!(button.size(), Vec2::splat(PANEL_ACTION_SIZE));
+            assert_eq!(button.left(), restart.left());
+        }
         assert_eq!(off.top(), restart.bottom() + 3.0);
+        assert_eq!(add.top(), off.bottom() + 3.0);
         assert!(off.left() > input.right());
+        // A single pane shows no switcher numbers.
+        assert!(harness.query_by_label("Terminal 1").is_none());
         harness.get_by_label("Terminal input").click();
         harness.run();
         harness.get_by_label("Turn off terminal").click();
         harness.run();
+        // Closing the only pane clears the window and parks the buttons.
         assert!(harness.state().terminal.is_off());
+        assert!(harness.query_by_label("Terminal input").is_none());
         assert!(
             harness
                 .get_by_label("Turn off terminal")
                 .accesskit_node()
                 .is_disabled()
         );
-        let id = terminal_id(&harness.ctx);
-        assert!(!harness.ctx.memory(|memory| memory.has_focus(id)));
+        assert!(
+            !harness
+                .get_by_label("Restart terminal")
+                .accesskit_node()
+                .is_disabled()
+        );
+        assert!(
+            !harness
+                .get_by_label("New terminal")
+                .accesskit_node()
+                .is_disabled()
+        );
         assert!(harness.query_by_label("Off").is_some());
         let context = harness.ctx.clone();
 
@@ -742,15 +831,116 @@ mod tests {
             harness.run();
             assert!(harness.state().terminal.is_off());
             assert_eq!(harness.state().terminal.status_text(), Some("Off"));
-            assert_eq!(harness.get_by_label("Terminal input").rect(), input);
-            assert!(
-                !harness
-                    .get_by_label("Restart terminal")
-                    .accesskit_node()
-                    .is_disabled()
-            );
+            assert!(harness.query_by_label("Terminal input").is_none());
             assert_eq!(harness.state().document().source(), "unchanged source");
         }
+    }
+
+    #[test]
+    fn terminal_column_opens_switches_and_closes_terminals_in_order() {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_window_for_tests(
+            &context,
+            root.path().into(),
+            egui::ViewportId::ROOT,
+        );
+        app.document_mut()
+            .replace_unprojected_untitled("unchanged source");
+        app.bottom_panel.select(PanelTab::Terminal);
+        app.terminal
+            .replace_with_fixture_panes(&[b"only pane"], Path::new("/project"));
+        let mut configured = false;
+        let mut single = Harness::builder()
+            .with_size(Vec2::new(800.0, 260.0))
+            .build_ui_state(
+                move |ui, app: &mut EditorApp| {
+                    if !configured {
+                        theme::configure_test_fonts(ui.ctx());
+                        configured = true;
+                        return;
+                    }
+                    if app.bottom_panel.is_visible() {
+                        app.show_bottom_panel(ui);
+                    }
+                },
+                app,
+            );
+        single.run();
+        // A single pane shows no switcher, only the new-terminal button.
+        assert!(single.query_by_label("New terminal").is_some());
+        assert!(single.query_by_label("Terminal 1").is_none());
+        assert!(single.get_by_label("Terminal input").rect().width() > 100.0);
+
+        let root = tempfile::tempdir().unwrap();
+        let mut app = EditorApp::dormant_window_for_tests(
+            &context,
+            root.path().into(),
+            egui::ViewportId::ROOT,
+        );
+        app.bottom_panel.select(PanelTab::Terminal);
+        app.terminal.replace_with_fixture_panes(
+            &[b"first pane", b"second pane", b"third pane"],
+            Path::new("/project"),
+        );
+        let mut configured = false;
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(800.0, 260.0))
+            .build_ui_state(
+                move |ui, app: &mut EditorApp| {
+                    if !configured {
+                        theme::configure_test_fonts(ui.ctx());
+                        configured = true;
+                        return;
+                    }
+                    if app.bottom_panel.is_visible() {
+                        app.show_bottom_panel(ui);
+                    }
+                },
+                app,
+            );
+        harness.run();
+        assert_eq!(harness.state().terminal.len(), 3);
+        for label in ["Terminal 1", "Terminal 2", "Terminal 3"] {
+            assert!(harness.query_by_label(label).is_some(), "{label}");
+        }
+        // The column reads restart, off, switcher numbers, then add.
+        let restart = harness.get_by_label("Restart terminal").rect();
+        let off = harness.get_by_label("Turn off terminal").rect();
+        let first = harness.get_by_label("Terminal 1").rect();
+        let third = harness.get_by_label("Terminal 3").rect();
+        let add = harness.get_by_label("New terminal").rect();
+        assert!(restart.top() < off.top());
+        assert!(off.top() < first.top());
+        assert!(first.top() < third.top());
+        assert!(third.top() < add.top());
+        harness.get_by_label("Terminal 2").click();
+        harness.run();
+        assert_eq!(harness.state().terminal.active_index(), 1);
+        // Switching hands keyboard focus to the newly shown surface.
+        assert!(
+            harness
+                .ctx
+                .memory(|memory| memory.has_focus(terminal_id(&harness.ctx)))
+        );
+        // Closing the shown pane drops it from the column; the next pane
+        // takes its place without disturbing the others.
+        harness.get_by_label("Turn off terminal").click();
+        harness.run();
+        assert_eq!(harness.state().terminal.len(), 2);
+        assert_eq!(harness.state().terminal.active_index(), 1);
+        assert!(harness.query_by_label("Terminal 3").is_none());
+        assert!(harness.query_by_label("Terminal input").is_some());
+        harness.get_by_label("Turn off terminal").click();
+        harness.run();
+        assert_eq!(harness.state().terminal.len(), 1);
+        // A lone pane needs no switcher number.
+        assert!(harness.query_by_label("Terminal 1").is_none());
+        assert!(harness.query_by_label("Terminal input").is_some());
+        harness.get_by_label("Turn off terminal").click();
+        harness.run();
+        assert!(harness.state().terminal.is_off());
+        assert!(harness.query_by_label("Terminal input").is_none());
     }
 
     #[test]

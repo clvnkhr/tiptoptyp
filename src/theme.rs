@@ -558,7 +558,19 @@ pub(crate) fn terminal_icon_font(size: f32) -> FontId {
 }
 
 pub(crate) fn terminal_font() -> FontId {
-    FontId::monospace(13.0)
+    terminal_styled_font(false, false)
+}
+
+/// The terminal selects real faces per cell style instead of synthetic
+/// embolden and sheared obliques, which smear at terminal sizes.
+pub(crate) fn terminal_styled_font(bold: bool, italic: bool) -> FontId {
+    let family: &str = match (bold, italic) {
+        (false, false) => "tiptoptyp-terminal",
+        (true, false) => "tiptoptyp-terminal-bold",
+        (false, true) => "tiptoptyp-terminal-italic",
+        (true, true) => "tiptoptyp-terminal-bold-italic",
+    };
+    FontId::new(13.0, FontFamily::Name(Arc::from(family)))
 }
 
 /// Shared bytes for the fixed platform CJK fallback.
@@ -601,6 +613,22 @@ fn system_cjk_font() -> Option<(&'static str, &'static [u8])> {
     })
     .as_ref()
     .map(|(name, bytes)| (*name, bytes.as_slice()))
+}
+
+/// Default font setup for deterministic UI tests that render terminal
+/// grids. Production configures these families at startup; bare harnesses
+/// must install them before the first frame paints styled cells.
+#[cfg(test)]
+pub(crate) fn configure_test_fonts(context: &egui::Context) {
+    configure_editor_fonts(
+        context,
+        Default::default(),
+        Default::default(),
+        false,
+        400,
+        400,
+        None,
+    );
 }
 
 /// Register editor weight roles and normal/strong weighted UI families while
@@ -683,9 +711,42 @@ where
     definitions
         .families
         .insert(terminal_icon_font(13.0).family, symbol_names);
-    definitions
-        .families
-        .insert(terminal_font().family, terminal_fallback);
+    // Bundled Hack faces give the terminal real bold/italic instead of
+    // synthetic embolden and sheared obliques. All four faces share advances,
+    // so styled cells keep the grid columns.
+    const TERMINAL_FACES: [(&str, &str, &[u8]); 4] = [
+        (
+            "tiptoptyp-terminal",
+            "tiptoptyp-terminal-regular",
+            include_bytes!("../assets/fonts/hack/Hack-Regular.ttf"),
+        ),
+        (
+            "tiptoptyp-terminal-bold",
+            "tiptoptyp-terminal-bold",
+            include_bytes!("../assets/fonts/hack/Hack-Bold.ttf"),
+        ),
+        (
+            "tiptoptyp-terminal-italic",
+            "tiptoptyp-terminal-italic",
+            include_bytes!("../assets/fonts/hack/Hack-Italic.ttf"),
+        ),
+        (
+            "tiptoptyp-terminal-bold-italic",
+            "tiptoptyp-terminal-bold-italic",
+            include_bytes!("../assets/fonts/hack/Hack-BoldItalic.ttf"),
+        ),
+    ];
+    for (family, face, bytes) in TERMINAL_FACES {
+        definitions.font_data.insert(
+            face.to_owned(),
+            Arc::new(egui::FontData::from_static(bytes)),
+        );
+        let mut chain = vec![face.to_owned()];
+        chain.extend(terminal_fallback.iter().cloned());
+        definitions
+            .families
+            .insert(FontFamily::Name(Arc::from(family)), chain);
+    }
 
     let custom_editor_requested =
         editor_font.family.is_some() || editor_font.fallback_path.is_some();
@@ -773,6 +834,18 @@ where
         }
         proportional_fallback.push(name.to_owned());
         monospace_fallback.push(name.to_owned());
+        for family in [
+            "tiptoptyp-terminal",
+            "tiptoptyp-terminal-bold",
+            "tiptoptyp-terminal-italic",
+            "tiptoptyp-terminal-bold-italic",
+        ] {
+            definitions
+                .families
+                .entry(FontFamily::Name(Arc::from(family)))
+                .or_default()
+                .push(name.to_owned());
+        }
     }
 
     for weight in EDITOR_FONT_WEIGHTS {
