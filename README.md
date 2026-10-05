@@ -320,6 +320,12 @@ The installer does not quit an existing app or open the installed app. Launch it
 manually when ready. Set `TIPTOPTYP_APPLICATIONS_DIR="$HOME/Applications"` to install
 into a user-owned Applications directory instead.
 
+For an Intel Mac build from Apple Silicon, run `scripts/build-intel-mac.sh`
+(`--release` for an optimized binary). It cross-compiles the workspace for
+`x86_64-apple-darwin`, verifies the binary architecture, and smoke-tests it
+under Rosetta when available. The checked-in toolchain helpers and bundled
+PDFium are arm64-only, so this covers compilation, not a shippable Intel bundle.
+
 ## Keyboard shortcuts
 
 | Action | Shortcut |
