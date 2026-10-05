@@ -45,6 +45,7 @@ pub(crate) struct TerminalPane {
     emoji: super::emoji::EmojiCache,
     mouse_held: Option<egui::PointerButton>,
     motion_cell: Option<(i32, i32)>,
+    last_mouse_pos: Option<Pos2>,
 }
 
 impl TerminalPane {
@@ -309,15 +310,34 @@ impl TerminalPane {
         // local selection and scrollback. Shift bypasses reporting so text can
         // still be selected, as on desktop terminals.
         let app_mouse = app_mouse_mode(self.grid.as_deref(), ui);
+        let ppp = ui.ctx().pixels_per_point();
+        let geometry = mouse_geometry(outer, rect, size, ppp);
+        let (screen_w, screen_h) = (geometry.screen_width as f32, geometry.screen_height as f32);
         if !app_mouse {
-            self.mouse_held = None;
-            self.motion_cell = None;
+            // Leaving reporting with a held button (Shift bypass, tracking
+            // disabled mid-drag) must still release it, or the program keeps
+            // a stuck drag-select.
+            if let (Some(button), Some(pos)) = (self.mouse_held.take(), self.last_mouse_pos.take())
+            {
+                self.motion_cell = None;
+                if let Some(mapped) = input::mouse_button(button) {
+                    let (x, y) = surface_position(pos, outer, ppp, screen_w, screen_h);
+                    self.send(Command::Mouse(MouseInput {
+                        action: mouse::Action::Release,
+                        button: Some(mapped),
+                        mods: input::mods(ui.input(|input| input.modifiers)),
+                        x,
+                        y,
+                        geometry,
+                        any_button_pressed: false,
+                    }));
+                }
+            } else {
+                self.mouse_held = None;
+                self.motion_cell = None;
+            }
         }
         if app_mouse {
-            let ppp = ui.ctx().pixels_per_point();
-            let geometry = mouse_geometry(outer, rect, size, ppp);
-            let (screen_w, screen_h) =
-                (geometry.screen_width as f32, geometry.screen_height as f32);
             let button_events = ui.input(|input| {
                 input
                     .events
@@ -342,6 +362,7 @@ impl TerminalPane {
                     {
                         self.mouse_held = Some(button);
                         self.motion_cell = None;
+                        self.last_mouse_pos = Some(pos);
                         let (x, y) = surface_position(pos, outer, ppp, screen_w, screen_h);
                         self.send(Command::Mouse(MouseInput {
                             action: mouse::Action::Press,
@@ -358,6 +379,7 @@ impl TerminalPane {
                     // drag-select otherwise never sees its ending event.
                     self.mouse_held = None;
                     self.motion_cell = None;
+                    self.last_mouse_pos = None;
                     if let Some(mapped) = mapped {
                         let (x, y) = surface_position(pos, outer, ppp, screen_w, screen_h);
                         self.send(Command::Mouse(MouseInput {
@@ -378,6 +400,7 @@ impl TerminalPane {
                 && self.motion_cell != Some(cell_pos)
             {
                 self.motion_cell = Some(cell_pos);
+                self.last_mouse_pos = Some(pos);
                 let (x, y) = surface_position(pos, outer, ppp, screen_w, screen_h);
                 self.send(Command::Mouse(MouseInput {
                     action: mouse::Action::Motion,
@@ -405,18 +428,11 @@ impl TerminalPane {
                     // button 4/5 presses, bounded per frame to protect the
                     // session's bounded input queue.
                     let button = input::wheel_button_for_lines(lines);
-                    let geometry = mouse_geometry(outer, rect, size, ui.ctx().pixels_per_point());
                     let mods = ui.input(|input| input.modifiers);
                     let pos = ui.input(|input| input.pointer.hover_pos());
                     for _ in 0..lines.unsigned_abs().min(MAX_WHEEL_EVENTS) {
                         let Some(pos) = pos else { break };
-                        let (x, y) = surface_position(
-                            pos,
-                            outer,
-                            ui.ctx().pixels_per_point(),
-                            geometry.screen_width as f32,
-                            geometry.screen_height as f32,
-                        );
+                        let (x, y) = surface_position(pos, outer, ppp, screen_w, screen_h);
                         self.send(Command::Mouse(MouseInput {
                             action: mouse::Action::Press,
                             button: Some(button),
@@ -1107,6 +1123,112 @@ mod tests {
             assert!(
                 Instant::now() < deadline,
                 "click never reached the program: {}",
+                grid_text(&harness)
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn shift_mid_drag_releases_the_button_to_the_program() {
+        use crate::terminal::session::Session;
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        use portable_pty::CommandBuilder;
+        use std::time::{Duration, Instant};
+        let root = tempfile::tempdir().unwrap();
+        let mut command = CommandBuilder::new("/bin/sh");
+        // Consume SGR reports until one ends in a release, then confirm.
+        command.args([
+            "-c",
+            "stty -echo; stty -icanon min 1; printf '\\033[?1002;1006hREADY'; while true; do out=''; while IFS= read -r -n1 -d '' ch; do out=\"$out$ch\"; case \"$ch\" in M|m) break;; esac; done; printf '%s' \"$out\" | od -An -t x1; case \"$out\" in *m) break;; esac; done; printf DONE",
+        ]);
+        command.cwd(root.path());
+        let session = Session::start_command(
+            &egui::Context::default(),
+            root.path(),
+            GridSize {
+                cols: 80,
+                rows: 8,
+                cell_width: 8,
+                cell_height: 16,
+            },
+            Colors {
+                foreground: Color32::WHITE,
+                background: Color32::BLACK,
+            },
+            command,
+        )
+        .unwrap();
+        let pane = TerminalPane {
+            session: Some(session),
+            ..TerminalPane::default()
+        };
+        let mut configured = false;
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(700.0, 200.0))
+            .build_ui_state(
+                move |ui, pane: &mut TerminalPane| {
+                    if !configured {
+                        crate::theme::configure_test_fonts(ui.ctx());
+                        configured = true;
+                        // Definitions apply next frame; painting now panics.
+                        return;
+                    }
+                    pane.sync_snapshot();
+                    pane.show(ui, Path::new("/project"));
+                },
+                pane,
+            );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let grid_text = |harness: &Harness<'_, TerminalPane>| {
+            harness
+                .state()
+                .grid
+                .as_ref()
+                .map(|grid| {
+                    grid.rows
+                        .iter()
+                        .flat_map(|row| row.iter().map(|cell| cell.text.as_str()))
+                        .collect::<String>()
+                })
+                .unwrap_or_default()
+        };
+        loop {
+            harness.run_steps(2);
+            if grid_text(&harness).contains("READY") {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "tracking program did not start: {}",
+                grid_text(&harness)
+            );
+        }
+        let surface = harness.get_by_label("Terminal input").rect();
+        harness.drag_at(surface.center());
+        harness.run_steps(2);
+        harness.hover_at(surface.center() + Vec2::new(30.0, 20.0));
+        harness.run_steps(2);
+        // Shift bypasses reporting mid-drag; the held button must still be
+        // released to the program instead of sticking down.
+        harness.event(egui::Event::ModifiersChanged(egui::Modifiers {
+            shift: true,
+            ..Default::default()
+        }));
+        harness.run_steps(2);
+        harness.event(egui::Event::ModifiersChanged(egui::Modifiers::default()));
+        loop {
+            harness.run_steps(2);
+            let normalized = grid_text(&harness)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            if grid_text(&harness).contains("DONE") && normalized.contains("6d") {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "drag release never reached the program: {}",
                 grid_text(&harness)
             );
         }
