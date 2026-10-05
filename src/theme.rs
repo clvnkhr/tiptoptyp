@@ -1167,6 +1167,9 @@ pub struct MenuMetrics {
     pub row_height: f32,
     pub workspace_width: f32,
     pub editor_width: f32,
+    /// Reserved flyout column for the math conversion submenu, including
+    /// its card chrome. Must fit the longest conversion label.
+    pub submenu_width: f32,
     pub status_log_size: Vec2,
     pub font_selector_size: Vec2,
 }
@@ -1351,6 +1354,7 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
         row_height: 24.0,
         workspace_width: 220.0,
         editor_width: 280.0,
+        submenu_width: 210.0,
         status_log_size: Vec2::new(360.0, 250.0),
         font_selector_size: Vec2::new(360.0, 390.0),
     },

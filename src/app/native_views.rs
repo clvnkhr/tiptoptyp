@@ -1131,11 +1131,8 @@ impl EditorApp {
                     link.is_some(),
                     table.is_some(),
                     self.document().kind().typesetting_language().is_some(),
+                    math.is_some(),
                     &style,
-                ) + egui::vec2(
-                    0.0,
-                    math.as_ref()
-                        .map_or(0.0, |m| (m.choices().len() + 1) as f32 * 30.0),
                 ),
             ),
             AppPopup::GitChunk { anchor, .. } => (*anchor, Vec2::new(720.0, 440.0)),

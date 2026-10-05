@@ -11292,7 +11292,8 @@ fn menu_button<'a>(
     label: &'a str,
     shortcut: Option<KeyboardShortcut>,
 ) -> egui::Button<'a> {
-    let button = egui::Button::new(label).frame(false);
+    // Framed rows highlight on hover; frameless buttons show no background.
+    let button = egui::Button::new(label).frame(true);
     match shortcut {
         Some(shortcut) => button.shortcut_text(ui.ctx().format_shortcut(&shortcut)),
         None => button.right_text(""),
@@ -11688,6 +11689,60 @@ struct EditorContextMenuOptions<'a> {
     math: Option<&'a crate::math_conversion::Target>,
 }
 
+/// Hover-opened side menu for math conversion choices. The popup reserves a
+/// flyout column beside the parent menu; hovering the parent row reveals the
+/// choices there, and leaving both closes it. Returns the clicked choice.
+fn math_convert_submenu(
+    ui: &mut egui::Ui,
+    math: &crate::math_conversion::Target,
+    content: &Rect,
+) -> Option<&'static str> {
+    let id = egui::Id::new("math-convert-submenu");
+    let mut open: bool = ui.data(|data| data.get_temp(id).unwrap_or(false));
+    let row = ui.add_sized(
+        [ui.available_width().max(1.0), METRICS.menu.row_height],
+        egui::Button::new("Convert to…").frame(true).right_text("›"),
+    );
+    if row.hovered() || row.clicked() {
+        open = true;
+    }
+    let mut choice = None;
+    if open {
+        let flyout_height =
+            math.choices().len() as f32 * (METRICS.menu.row_height + theme::SPACE.small) + 24.0;
+        let top = row.rect.top().clamp(
+            content.top(),
+            (content.bottom() - flyout_height).max(content.top()),
+        );
+        let flyout = egui::Area::new(id.with("flyout"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(Pos2::new(
+                content.min.x + content.width() - METRICS.menu.submenu_width,
+                top,
+            ))
+            .show(ui.ctx(), |ui| {
+                theme::menu_card_frame(ui.style()).show(ui, |ui| {
+                    for name in math.choices() {
+                        if menu_item(ui, name, None).clicked() {
+                            choice = Some(*name);
+                        }
+                    }
+                });
+            });
+        // A few pixels of grace across the seam keep fast pointer moves inside.
+        let inside = flyout.response.hovered()
+            || ui
+                .ctx()
+                .pointer_hover_pos()
+                .is_some_and(|pointer| flyout.response.rect.expand(3.0).contains(pointer));
+        if !row.hovered() && !inside {
+            open = false;
+        }
+    }
+    ui.data_mut(|data| data.insert_temp(id, open));
+    choice
+}
+
 fn show_editor_context_menu_ui(
     ui: &mut egui::Ui,
     options: EditorContextMenuOptions<'_>,
@@ -11695,6 +11750,12 @@ fn show_editor_context_menu_ui(
     action: &mut Option<EditorMenuAction>,
 ) {
     ui.spacing_mut().item_spacing.y = theme::SPACE.small;
+    // The flyout column is reserved in the popup size whenever math targets
+    // exist. Narrow the parent column so rows never stretch into it.
+    let content = ui.max_rect();
+    if options.math.is_some() {
+        ui.set_width((content.width() - METRICS.menu.submenu_width).max(1.0));
+    }
     if let Some(link) = options.link {
         if menu_item(ui, "Open Link in Browser", None).clicked() {
             *action = Some(EditorMenuAction::OpenLink(link.to_owned()));
@@ -11702,18 +11763,14 @@ fn show_editor_context_menu_ui(
         }
         ui.add(egui::Separator::default().spacing(theme::SPACE.control));
     }
-    if let Some(math) = options.math {
-        ui.collapsing("Convert to…", |ui| {
-            for choice in math.choices() {
-                if menu_item(ui, choice, None).clicked() {
-                    *action = Some(EditorMenuAction::ConvertMath(
-                        math.clone(),
-                        (*choice).into(),
-                    ));
-                    ui.close();
-                }
-            }
-        });
+    if let Some(math) = options.math
+        && let Some(choice) = math_convert_submenu(ui, math, &content)
+    {
+        *action = Some(EditorMenuAction::ConvertMath(
+            math.clone(),
+            (*choice).into(),
+        ));
+        ui.close();
     }
     if let Some(table) = options.table {
         if menu_item(ui, "Edit Table…", None).clicked() {

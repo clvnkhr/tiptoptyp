@@ -1329,8 +1329,13 @@ fn context_menu_sizes_include_every_action_and_separator() {
                 }
                 for can_format in [false, true] {
                     for link in [None, Some("https://example.invalid")] {
-                        let size =
-                            editor_context_menu_size(link.is_some(), false, can_format, ui.style());
+                        let size = editor_context_menu_size(
+                            link.is_some(),
+                            false,
+                            can_format,
+                            false,
+                            ui.style(),
+                        );
                         let mut child = ui.new_child(
                             egui::UiBuilder::new().max_rect(Rect::from_min_size(Pos2::ZERO, size)),
                         );
@@ -3393,9 +3398,145 @@ fn editor_context_menu_exposes_the_link_under_the_pointer() {
         ))
     );
     assert!(
-        editor_context_menu_size(true, false, true, &egui::Style::default()).y
-            > editor_context_menu_size(false, false, true, &egui::Style::default()).y
+        editor_context_menu_size(true, false, true, false, &egui::Style::default()).y
+            > editor_context_menu_size(false, false, true, false, &egui::Style::default()).y
     );
+}
+
+#[test]
+fn editor_context_menu_reserves_a_math_flyout_column_without_per_choice_height() {
+    let style = egui::Style::default();
+    let plain = editor_context_menu_size(false, false, true, false, &style);
+    let math = editor_context_menu_size(false, false, true, true, &style);
+    assert_eq!(
+        math.x - plain.x,
+        METRICS.menu.submenu_width,
+        "the flyout column is reserved exactly once"
+    );
+    assert!(
+        math.y > plain.y,
+        "the Convert parent row still takes one line"
+    );
+    assert_eq!(
+        math.y - plain.y,
+        METRICS.menu.row_height + theme::SPACE.small,
+        "choices must not grow the window per item"
+    );
+}
+
+#[test]
+fn convert_submenu_hides_until_hovered_and_places_choices_beside_the_parent() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let source = "$ α + x $";
+    let target = crate::math_conversion::Target::at(source, 3, DocumentKind::Typst).unwrap();
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 480.0))
+        .build_ui_state(
+            move |ui, action| {
+                show_editor_context_menu_ui(
+                    ui,
+                    EditorContextMenuOptions {
+                        can_undo: true,
+                        can_redo: true,
+                        has_selection: true,
+                        can_format: true,
+                        can_sync_preview: true,
+                        link: None,
+                        table: None,
+                        math: Some(&target),
+                    },
+                    &ShortcutBindings::current_defaults(),
+                    action,
+                );
+            },
+            None::<EditorMenuAction>,
+        );
+    harness.run();
+    assert!(harness.query_by_label_contains("Display math").is_none());
+    harness.get_by_label("Convert to… ›").hover();
+    harness.run();
+    let parent = harness.get_by_label("Convert to… ›").rect();
+    let choice = harness.get_by_label_contains("Display math").rect();
+    assert!(
+        choice.left() >= parent.right() - 4.0,
+        "choices open beside the parent row: {parent:?} {choice:?}"
+    );
+    assert!(
+        (choice.top() - parent.top()).abs() < METRICS.menu.row_height * 2.0,
+        "the flyout anchors at the parent row: {parent:?} {choice:?}"
+    );
+    // Leaving both rows closes the flyout without selecting anything.
+    harness.get_by_label_contains("Undo").hover();
+    harness.run();
+    assert!(harness.query_by_label_contains("Display math").is_none());
+    assert!(harness.state().is_none());
+}
+
+#[test]
+fn menu_item_rows_highlight_their_background_on_hover() {
+    let context = egui::Context::default();
+    let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+        menu_item(ui, "Copy", None);
+    });
+    output.textures_delta.clear();
+    let idle_fills: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Rect(rect) => Some(rect.fill),
+            _ => None,
+        })
+        .collect();
+    let row = egui::Rect::from_min_size(egui::Pos2::new(10.0, 10.0), egui::Vec2::new(200.0, 32.0));
+    // Buttons paint with the previous frame's widget state, so hover needs
+    // two passes to appear.
+    let mut output = context.run_ui(
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::splat(400.0))),
+            events: vec![egui::Event::PointerMoved(Pos2::new(100.0, 26.0))],
+            ..Default::default()
+        },
+        |ui| {
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(row));
+            menu_item(&mut child, "Copy", None);
+        },
+    );
+    output.textures_delta.clear();
+    let mut output = context.run_ui(
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::splat(400.0))),
+            events: vec![egui::Event::PointerMoved(Pos2::new(100.0, 26.0))],
+            ..Default::default()
+        },
+        |ui| {
+            ui.ctx().data_mut(|data| {
+                data.insert_temp(
+                    egui::Id::new("menu-highlight-fill"),
+                    ui.visuals().widgets.hovered.weak_bg_fill,
+                )
+            });
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(row));
+            menu_item(&mut child, "Copy", None);
+        },
+    );
+    output.textures_delta.clear();
+    let hovered: egui::Color32 = context
+        .data(|data| data.get_temp(egui::Id::new("menu-highlight-fill")))
+        .unwrap();
+    assert_ne!(
+        hovered,
+        egui::Color32::TRANSPARENT,
+        "the theme must offer a visible hover fill"
+    );
+    assert!(
+        output.shapes.iter().any(|shape| match &shape.shape {
+            egui::Shape::Rect(rect) =>
+                rect.fill == hovered && rect.rect.contains(Pos2::new(100.0, 26.0)),
+            _ => false,
+        }),
+        "hovering a menu row paints its highlight"
+    );
+    assert!(idle_fills.iter().all(|fill| *fill != hovered));
 }
 
 #[test]
@@ -3437,8 +3578,8 @@ fn editor_context_menu_offers_the_static_table_under_the_pointer() {
         &Some(EditorMenuAction::EditTable(expected))
     );
     assert!(
-        editor_context_menu_size(false, true, true, &egui::Style::default()).y
-            > editor_context_menu_size(false, false, true, &egui::Style::default()).y
+        editor_context_menu_size(false, true, true, false, &egui::Style::default()).y
+            > editor_context_menu_size(false, false, true, false, &egui::Style::default()).y
     );
 }
 
@@ -9551,7 +9692,10 @@ fn math_context_conversion_choices_follow_document_language() {
                 None::<EditorMenuAction>,
             );
         harness.run();
-        harness.get_by_label("Convert to…").click();
+        // The submenu opens on hover, not click: choices stay hidden until
+        // the pointer reaches the parent row.
+        assert!(harness.query_by_label_contains(choice).is_none());
+        harness.get_by_label("Convert to… ›").hover();
         harness.run();
         harness.get_by_label_contains(choice).click();
         harness.run();

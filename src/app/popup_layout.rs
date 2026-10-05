@@ -57,10 +57,19 @@ pub(super) fn editor_context_menu_size(
     has_link: bool,
     can_edit_table: bool,
     can_format: bool,
+    has_math: bool,
     style: &egui::Style,
 ) -> Vec2 {
     let extra = usize::from(has_link) + usize::from(can_edit_table) + usize::from(can_format);
-    menu_popup_size(METRICS.menu.editor_width, 8 + extra, 1 + extra, style)
+    // The Convert row takes one line; its choices live in a reserved side
+    // column that needs no extra height.
+    let width = METRICS.menu.editor_width
+        + if has_math {
+            METRICS.menu.submenu_width
+        } else {
+            0.0
+        };
+    menu_popup_size(width, 8 + extra + usize::from(has_math), 2 + extra, style)
 }
 
 pub(super) fn command_popup_size(menu: CommandMenu, style: &egui::Style) -> Vec2 {
