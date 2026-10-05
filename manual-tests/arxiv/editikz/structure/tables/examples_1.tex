@@ -1,0 +1,226 @@
+\setlength{\aboverulesep}{0pt}
+\setlength{\belowrulesep}{0pt}
+\setlength{\tabcolsep}{2pt}
+\renewcommand{\arraystretch}{1.03}
+\setlength{\abovetopsep}{0pt}
+
+\setlength{\descw}{0.25\textwidth}
+
+\setlength{\imgw}{0.136\textwidth}
+
+\setlength{\imgh}{2.6cm}
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}p{\descw}}
+\newcolumntype{C}{>{\centering\arraybackslash}p{\imgw}}
+
+\newcommand{\exrowoneone}[6]{%
+  \imgcell{#1} &
+  \desc{#2} &
+  \imgcell{#3} &
+  \imgcellverygood{#4}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{7}\quad
+  P:\textbf{7}\quad
+  Q:\textbf{7}} 
+  &
+  \imgcell{#5}
+  &
+  \imgcellgood{#6}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{7}\quad
+  P:\textbf{5}\quad
+  Q:\textbf{5}} 
+  \\
+}
+
+\newcommand{\exrowonetwo}[6]{%
+  \imgcell{#1} &
+  \desc{#2} &
+  \imgcell{#3} &
+  \imgcell{#4}
+  &
+  \imgcell{#5}
+  &
+  \imgcellverygood{#6}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{7}\quad
+  P:\textbf{7}\quad
+  Q:\textbf{7}} 
+  \\
+}
+
+\newcommand{\exrowonethree}[6]{%
+  \imgcell{#1} &
+  \desc{#2} &
+  \imgcell{#3} &
+  \imgcellverygood{#4}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{7}\quad
+  P:\textbf{7}\quad
+  Q:\textbf{6}} 
+  &
+  \imgcellokay{#5}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{1}\quad
+  P:\textbf{4}\quad
+  Q:\textbf{5}} 
+  &
+  \imgcellverygood{#6}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{7}\quad
+  P:\textbf{7}\quad
+  Q:\textbf{7}} 
+  \\
+}
+
+\newcommand{\exrowonefour}[6]{%
+  \imgcell{#1} &
+  \desc{#2} &
+  \imgcell{#3} &
+  \imgcellokay{#4}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{6}\quad
+  P:\textbf{4}\quad
+  Q:\textbf{4}}
+  &
+  \imgcell{#5}
+  &
+  \imgcell{#6}
+  \\
+}
+
+\newcommand{\exrowonefive}[6]{%
+  \imgcell{#1} &
+  \desc{#2} &
+  \imgcell{#3} &
+  \imgcellokay{#4}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{4}\quad
+  P:\textbf{4}\quad
+  Q:\textbf{6}} 
+  &
+  \imgcellbad{#5}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{2}\quad
+  P:\textbf{2}\quad
+  Q:\textbf{2}} 
+  &
+  \imgcellgood{#6}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{5}\quad
+  P:\textbf{5}\quad
+  Q:\textbf{6}} 
+  \\
+}
+
+\newcommand{\exrowonesix}[6]{%
+  \imgcell{#1} &
+  \desc{#2} &
+  \imgcell{#3} &
+  \imgcellverygood{#4}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{6}\quad
+  P:\textbf{7}\quad
+  Q:\textbf{7}} 
+  &
+  \imgcell{#5} 
+  &
+  \imgcellgood{#6}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{5}\quad
+  P:\textbf{6}\quad
+  Q:\textbf{7}} 
+  \\
+}
+
+\newcommand{\exrowoneseven}[6]{%
+  \imgcell{#1} &
+  \desc{#2} &
+  \imgcell{#3} &
+  \imgcell{#4}
+  &
+  \imgcellokay{#5} 
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{5}\quad
+  P:\textbf{5}\quad
+  Q:\textbf{4}} 
+  &
+  \imgcellverygood{#6}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{7}\quad
+  P:\textbf{6}\quad
+  Q:\textbf{7}} 
+  \\
+}
+
+\begin{table}[t]
+\centering
+\caption{Scientific figure edits by GPT-5.6-Sol, Qwen3.5-9B, and EdiTikZ-9B-RL. Models receive the source image and VLM-generated edit instruction. Human annotations score edit application (E), source preservation (P), and visual quality (Q). Overall quality: \legendbox{green} very good, \legendbox{yellow} good, \legendbox{orange} bad, \legendbox{red} very bad.}
+\label{tab:editikz_examples_1}
+\begin{tabularx}{\textwidth}{@{}CYCCCC@{}}
+    \toprule
+    \headercell{Source} &
+    \headercell{Edit Instruction} &
+    \headercell{Ground Truth} &
+    \headercell{GPT-5.6-Sol} &
+    \headercell{Qwen3.5-9B} &
+    \headercell{EdiTikZ-9B-RL} \\
+    \midrule
+    \exrowoneone
+      {structure/examples_1/sample_0000_source.png}
+      {The red curved arrow originating from the left side of the circle and pointing towards the origin is removed. The single red data point located on the left side of the circle (near the label \smath{\lambda_\star}) is changed to blue. A label \smath{\lambda_2} is added in the upper-left quadrant, positioned near the corresponding blue data point. A label \smath{\lambda_3} is added in the upper-right quadrant, positioned near the corresponding blue data point.}
+      {structure/examples_1/sample_0000_gt.png}
+      {structure/examples_1/sample_0000_gpt.png}
+      {structure/examples_1/not_compiled.png}
+      {structure/examples_1/sample_0000_9b_rl.png}
+    \midrule
+    \exrowonetwo
+      {structure/examples_1/sample_0006_source.png}
+      {The grid structure is reduced from a 4x4 layout to a 3x3 layout. This involves removing the second row and the third column of cells, effectively shrinking the main container area.}
+      {structure/examples_1/sample_0006_gt.png}
+      {structure/examples_1/not_compiled.png}
+      {structure/examples_1/not_compiled.png}
+      {structure/examples_1/sample_0006_9b_rl.png}
+    \midrule
+    \exrowonethree
+      {structure/examples_1/sample_0012_source.png}
+      {The four right-pointing arrow symbols (\smath{\rightarrow}) located above the first four nodes on the top row are replaced with the Greek letters \smath{\alpha}, \smath{\beta}, \smath{\gamma}, and \smath{\delta} respectively, from left to right.}
+      {structure/examples_1/sample_0012_gt.png}
+      {structure/examples_1/sample_0012_gpt.png}
+      {structure/examples_1/sample_0012_base.png}
+      {structure/examples_1/sample_0012_9b_rl.png}
+    \midrule
+    \exrowonefour
+      {structure/examples_1/sample_0032_source.png}
+      {The text in the bottom-left cylinder node (originally 'Predictive world model') is changed to 'Specifically incorrect predictive world model'. The color of the bottom-left cylinder node is changed from light blue to green. The text in the bottom-right cylinder node (originally 'Predictive world model') is changed to 'Correct predictive world model'. A new rectangular node labeled 'Model Editing' is added to the right of the 'Correct predictive world model' node. A new cylindrical node labeled 'Desired incorrect model elements' is added above the 'Model Editing' node. The color of the new 'Model Editing' node and the 'Desired incorrect model elements' node is set to green. A new arrow is added connecting the 'Correct predictive world model' node to the 'Model Editing' node. A new arrow is added connecting the 'Desired incorrect model elements' node to the 'Model Editing' node. The feedback loop arrow at the bottom right is modified to originate from the 'Model Editing' node and point back to the 'Specifically incorrect predictive world model' node.}
+      {structure/examples_1/sample_0032_gt.png}
+      {structure/examples_1/sample_0032_gpt.png}
+      {structure/examples_1/not_compiled.png}
+      {structure/examples_1/not_compiled.png}
+    \midrule
+    \exrowonefive
+      {structure/examples_1/sample_0075_source.png}
+      {The large outer circular boundary becomes invisible, while all nodes change from hollow outlines to lightly filled circles in their respective colors to match their outline color. The lower orange node is relabeled from \smath{b_1} to \smath{u_1} and move the label from the right side to the left side of the orange node. The central blue node is relabeled from \smath{u_1} to \smath{y} and move the label from the left side to the right side of the blue center node. The three inner gray nodes on the left shift downward. On the outer ring, label \smath{u_3} moves from nearby the node positioned at \smath{10^\circ} to  nearby the node positioned \smath{-30^\circ}. All inner pathes change to a slightly thicker style. A new green connection is added between the orange node and the node \smath{u_3}. The former red connection from the central blue node is removed. The black connection between center blue node \smath{y} and the node on the \smath{60^\circ} moves to between the first blue node on the top and the node on the \smath{60^\circ}. The black connection from the first blue node on the top to the node at approximately \smath{60^\circ} is removed. The large outer circular boundary from the node on left of the top node to node \smath{u_3} changes from black to green. The path between \smath{y} and \smath{u_1} changes from orange to blue.}
+      {structure/examples_1/sample_0075_gt.png}
+      {structure/examples_1/sample_0075_gpt.png}
+      {structure/examples_1/sample_0075_base.png}
+      {structure/examples_1/sample_0075_9b_rl.png}
+    \midrule
+    \exrowonesix
+      {structure/examples_1/sample_0063_source.png}
+      {In the row for \smath{g'(s)}, change the sign from '+' to '-'. In the row for \smath{g(s)}, change the starting value at \smath{-\infty} from \smath{-\infty} to \smath{+\infty} and reverse the direction of the arrow so it points downwards towards \smath{-z_2}. In the row for \smath{\varphi'(s)}, swap the signs in the intervals: change '-' to '+' in the interval between \smath{-\infty} and \smath{s_0}, and change '+' to '-' in the interval between \smath{s_0} and \smath{+\infty}. In the row for \smath{\varphi(s)}, change the starting value at \smath{-\infty} from \smath{+\infty} to \smath{-\infty} and reverse the direction of the first arrow so it points upwards towards \smath{\varphi(s_0)}. In the row for \smath{\varphi(s)}, reverse the direction of the second arrow so it points downwards from \smath{s_0} towards \smath{z_1}. In the row for \smath{\varphi(s)},\smath{\varphi(s_0)} is removed.}
+      {structure/examples_1/sample_0063_gt.png}
+      {structure/examples_1/sample_0063_gpt.png}
+      {structure/examples_1/not_compiled.png}
+      {structure/examples_1/sample_0063_9b_rl.png}
+    \midrule
+    \exrowoneseven
+      {structure/examples_1/sample_0054_source.png}
+      {The overall topology of the diagram is changed from a single central tree (one top node branching down to a row of three) to a split structure (two top nodes on the left and right with ellipsis dots between them, branching down to a single central node at the bottom). The top-level node text is changed from a single \smathsmall{x^t = f_1(\mu_k^t)} to two separate nodes: \smathsmall{\tilde{x}_{k+1}^t = f_1(\mu_{k+1}^t)} on the left and \smathsmall{\tilde{x}_K^t = f_1(\mu_K^t)} on the right. The second row nodes are changed from a single \smathsmall{\mu_{k}^t=f_2(\mu_k^{t-1},a_k^{t-1},x_k^{t-1})} equation to two separate equations: \smathsmall{\mu_{k+1}^t=f_2(\mu_{k+1}^{t-1},a_{k+1}^{t-1},x_{k+1}^{t-1})} on the left and \smathsmall{\mu_{K}^t=f_2(\mu_K^{t-1},a_K^{t-1},\tilde{x}_K^{t-1})} on the right. The third row nodes are changed from a single \smathsmall{a_{k}^{t-1}=f_3(\mu_k^{t-1},\mu_{k+1}^{t-1},...,\mu_K^{t-1};X_{k-1})} equation to two separate equations: \smathsmall{a_{k+1}^{t-1}=f_{3,k+1}(\mu_k^{t-1},...,\mu_K^{t-1};X_{k-1})} on the left and \smathsmall{a_{K}^{t-1}=f_{3K}(\mu_k^{t-1},...,\mu_K^{t-1};X_{k-1})} on the right. The fourth row is changed from a row of three \smathsmall{\mu} equations to a single central equation \smathsmall{\mu_k^{t-1} = f_2(\mu_k^{t-2}, a_k^{t-2}, x^{t-2})}. The bottom row is changed from a row of three \smathsmall{\tilde{x}} equations to a single central equation \smathsmall{x^{t-2} = f_1(\mu_k^{t-2})}. The connectivity arrows are updated to match the new structure: arrows now flow from the two top nodes down to the two middle nodes, which then converge onto the single bottom node.}
+      {structure/examples_1/sample_0054_gt.png}
+      {structure/examples_1/not_compiled.png}
+      {structure/examples_1/sample_0054_base.png}
+      {structure/examples_1/sample_0054_9b_rl.png}
+    \bottomrule
+\end{tabularx}
+\end{table}

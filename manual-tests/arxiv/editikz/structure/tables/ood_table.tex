@@ -1,0 +1,152 @@
+\begin{table*}[t]
+\centering
+\caption{Performance of our EdiTikZ models on SPIQA and CharXiv against baselines.}
+\label{tab:ood_table}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lccccc|ccccc}
+\toprule
+&
+\multicolumn{5}{c}{\textbf{SPIQA}}
+&
+\multicolumn{5}{c}{\textbf{CharXiv}}
+\\
+\cmidrule(lr){2-6}
+\cmidrule(lr){7-11}
+
+\textbf{Model}
+&
+\textbf{EA}$\uparrow$
+&
+\textbf{SP}$\uparrow$
+&
+\textbf{VQ}$\uparrow$
+&
+\textbf{CR}$\uparrow$
+&
+\textbf{AT}$\downarrow$
+&
+\textbf{EA}$\uparrow$
+&
+\textbf{SP}$\uparrow$
+&
+\textbf{VQ}$\uparrow$
+&
+\textbf{CR}$\uparrow$
+&
+\textbf{AT}$\downarrow$
+\\
+\midrule
+
+GPT-5.6-Sol
+& \textbf{0.634}
+& \textbf{0.598}
+& \textbf{0.659}
+& 80.6\%
+& \textbf{1352}
+& \textbf{0.524}
+& \textbf{0.488}
+& \underline{0.552}
+& 68.3\%
+& \textbf{1594}
+\\
+
+\midrule
+
+Qwen3.5-27B
+& 0.234
+& 0.191
+& 0.277
+& 57.9\%
+& 1787
+& 0.206
+& 0.164
+& 0.247
+& 42.6\%
+& 2351
+\\
+
+\midrule
+
+Qwen3.5-4B
+& 0.063
+& 0.037
+& 0.083
+& 24.2\%
+& 2872
+& 0.076
+& 0.051
+& 0.127
+& 26.8\%
+& 3164
+\\
+
+EdiTikZ-4B
+& 0.158
+& 0.112
+& 0.309
+& 63.2\%
+& 2547
+& 0.154
+& 0.099
+& 0.364
+& 65.8\%
+& 2550
+\\
+
+EdiTikZ-4B-RL
+& 0.243
+& 0.174
+& 0.445
+& 85.8\%
+& \underline{1683}
+& 0.210
+& 0.145
+& 0.439
+& 81.1\%
+& \underline{1917}
+\\
+
+\midrule
+
+Qwen3.5-9B
+& 0.088
+& 0.066
+& 0.152
+& 34.2\%
+& 1888
+& 0.140
+& 0.092
+& 0.196
+& 37.9\%
+& 2428
+\\
+
+EdiTikZ-9B
+& 0.319
+& 0.238
+& 0.428
+& 74.2\%
+& 2166
+& 0.254
+& 0.185
+& 0.421
+& 71.1\%
+& 2883
+\\
+
+EdiTikZ-9B-RL
+& \underline{0.520}
+& \underline{0.466}
+& \underline{0.622}
+& \textbf{87.6\%}
+& 1981
+& \underline{0.399}
+& \underline{0.323}
+& \textbf{0.559}
+& \textbf{85.0\%}
+& 2541
+\\
+
+\bottomrule
+\end{tabular}
+\end{table*}

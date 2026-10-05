@@ -1,0 +1,257 @@
+\setlength{\aboverulesep}{0pt}
+\setlength{\belowrulesep}{0pt}
+\setlength{\tabcolsep}{2pt}
+\renewcommand{\arraystretch}{1.03}
+\setlength{\abovetopsep}{0pt}
+
+\newlength{\descw}
+\setlength{\descw}{0.25\textwidth}
+
+\newlength{\imgw}
+\setlength{\imgw}{0.136\textwidth}
+
+\newlength{\imgh}
+\setlength{\imgh}{2.6cm}
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}p{\descw}}
+\newcolumntype{C}{>{\centering\arraybackslash}p{\imgw}}
+
+\newcommand{\desc}[1]{%
+  \begin{minipage}[t]{\linewidth}
+    \vspace{-6pt}%
+    \raggedright
+    \fontsize{4}{4.6}\selectfont
+    \setlength{\parskip}{0pt}%
+    \setlength{\parindent}{0pt}%
+    #1%
+  \end{minipage}%
+}
+
+\newcommand{\imgcell}[1]{%
+  \begin{minipage}[t]{\imgw}\vspace{-6pt}\centering
+    \includegraphics[width=0.95\linewidth,height=\imgh,keepaspectratio]{#1}%
+ \end{minipage}%
+}
+\newcommand{\imgcellbad}[2][red]{%
+  \begin{minipage}[t]{\imgw}\vspace{-6pt}\centering
+    \tcbox[
+      enhanced,
+      arc=2mm,
+      colframe=#1,
+      colback=#1!4,
+      boxrule=0.5pt,
+      left=-0.4mm,right=-0.4mm,top=-0.4mm,bottom=-0.4mm,
+      nobeforeafter,
+      width=\linewidth,
+    ]{%
+      \includegraphics[width=0.95\linewidth,height=\imgh,keepaspectratio]{#2}%
+    }%
+  \end{minipage}%
+}
+\newcommand{\imgcellokay}[2][orange]{%
+  \begin{minipage}[t]{\imgw}\vspace{-6pt}\centering
+    \tcbox[
+      enhanced,
+      arc=2mm,
+      colframe=#1,
+      colback=#1!4,
+      boxrule=0.5pt,
+      left=-0.4mm,right=-0.4mm,top=-0.4mm,bottom=-0.4mm,
+      nobeforeafter,
+      width=\linewidth,
+    ]{%
+      \includegraphics[width=0.95\linewidth,height=\imgh,keepaspectratio]{#2}%
+    }%
+  \end{minipage}%
+}
+\newcommand{\imgcellgood}[2][yellow]{%
+  \begin{minipage}[t]{\imgw}\vspace{-6pt}\centering
+    \tcbox[
+      enhanced,
+      arc=2mm,
+      colframe=#1,
+      colback=#1!4,
+      boxrule=0.5pt,
+      left=-0.4mm,right=-0.4mm,top=-0.4mm,bottom=-0.4mm,
+      nobeforeafter,
+      width=\linewidth,
+    ]{%
+      \includegraphics[width=0.95\linewidth,height=\imgh,keepaspectratio]{#2}%
+    }%
+  \end{minipage}%
+}
+\newcommand{\imgcellverygood}[2][green]{%
+  \begin{minipage}[t]{\imgw}\vspace{-6pt}\centering
+    \tcbox[
+      enhanced,
+      arc=2mm,
+      colframe=#1,
+      colback=#1!4,
+      boxrule=0.5pt,
+      left=-0.4mm,right=-0.4mm,top=-0.4mm,bottom=-0.4mm,
+      nobeforeafter,
+      width=\linewidth,
+    ]{%
+      \includegraphics[width=0.95\linewidth,height=\imgh,keepaspectratio]{#2}%
+    }%
+  \end{minipage}%
+}
+
+\newcommand{\legendbox}[1]{%
+  \raisebox{-0.75mm}{%
+    \tcbox[
+      enhanced,
+      arc=1mm,
+      colframe=#1,
+      colback=#1!15,
+      boxrule=0.5pt,
+      left=0mm,right=0mm,top=0mm,bottom=0mm,
+      nobeforeafter,
+    ]{\rule{1mm}{1mm}}%
+  }%
+}
+
+\newcommand{\exrowone}[6]{%
+  \imgcell{#1} &
+  \desc{#2} &
+  \imgcell{#3} &
+  \imgcellokay{#4}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{4}\quad
+  P:\textbf{5}\quad
+  Q:\textbf{5}} 
+  &
+  \imgcellgood{#5}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{5}\quad
+  P:\textbf{6}\quad
+  Q:\textbf{6}} 
+  &
+  \imgcellgood{#6}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{6}\quad
+  P:\textbf{6}\quad
+  Q:\textbf{6}} 
+  \\
+}
+
+\newcommand{\exrowtwo}[6]{%
+  \imgcell{#1} &
+  \desc{#2} &
+  \imgcell{#3} &
+  \imgcellgood{#4}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{5}\quad
+  P:\textbf{4}\quad
+  Q:\textbf{6}} 
+  &
+  \imgcellokay{#5}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{3}\quad
+  P:\textbf{3}\quad
+  Q:\textbf{5}} 
+  &
+  \imgcellverygood{#6}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{7}\quad
+  P:\textbf{6}\quad
+  Q:\textbf{7}} 
+  \\
+}
+
+\newcommand{\exrowthree}[6]{%
+  \imgcell{#1} &
+  \desc{#2} &
+  \imgcell{#3} &
+  \imgcellokay{#4} 
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{3}\quad
+  P:\textbf{5}\quad
+  Q:\textbf{4}} 
+  &
+  \imgcellbad{#5} 
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{1}\quad
+  P:\textbf{2}\quad
+  Q:\textbf{2}} 
+  &
+  \imgcellverygood{#6} 
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{7}\quad
+  P:\textbf{7}\quad
+  Q:\textbf{7}} 
+  \\
+}
+
+\newcommand{\exrowfour}[6]{%
+  \imgcell{#1} &
+  \desc{#2} &
+  \imgcell{#3} &
+  \imgcellgood{#4} 
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{6}\quad
+  P:\textbf{5}\quad
+  Q:\textbf{5}} 
+  &
+  \imgcellokay{#5} 
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{4}\quad
+  P:\textbf{3}\quad
+  Q:\textbf{4}} 
+  &
+  \imgcellgood{#6} 
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{6}\quad
+  P:\textbf{5}\quad
+  Q:\textbf{6}} 
+  \\
+}
+
+\begin{table}[t]
+\centering
+\caption{Scientific figure edits by GPT-5.6-Sol and our EdiTikZ-9B models before and after RL. Models receive the source image and VLM-generated edit instruction. Human annotations score edit application (E), source preservation (P), and visual quality (Q). Overall quality: \legendbox{green} very good, \legendbox{yellow} good, \legendbox{orange} bad, \legendbox{red} very bad. More examples are in Appendix~\ref{subsubsec:Examples}.}
+\label{tab:editikz_examples}
+\begin{tabularx}{\textwidth}{@{}CYCCCC@{}}
+    \toprule
+    \headercell{Source} &
+    \headercell{Edit Instruction} &
+    \headercell{Ground Truth} &
+    \headercell{GPT-5.6-Sol} &
+    \headercell{EdiTikZ-9B} &
+    \headercell{EdiTikZ-9B-RL} \\
+    \midrule
+
+    \exrowone
+      {structure/examples/source_0485.png}
+      {The circular node labeled \smath{\psi} at the top is changed from having a black outline to having a light green fill. The rectangular boxes labeled \smath{A^a} and \smath{B^{\dots}} are changed from having a white fill to having a light blue fill. The label inside the right-hand box is changed from \smath{\{B^{\lambda|a}\}} to \smath{\{B^b\}}. A new rectangular box with a light red fill, labeled \smath{p(\lambda|a,b)}, is added below the right-hand box. The horizontal red arrow labeled \smath{a \in \{1,\dots,m\}} is rerouted. It now starts from the bottom of the left box, goes down, turns right, and points to the left side of the new red box. A new vertical red arrow labeled \smath{b} is added, connecting the bottom of the right box to the top of the new red box. The vertical red arrow labeled \smath{\lambda} is moved to originate from the bottom of the new red box instead of the right-hand box.}
+      {structure/examples/gt_0485.png}
+      {structure/examples/gpt_0485.png}
+      {structure/examples/sft_0485.png}
+      {structure/examples/rl_0485.png}
+    \midrule
+    \exrowtwo
+      {structure/examples/source_0474.png}
+      {The title 'Grids with shader=faceted interp' at the top of the plot is removed. The surface geometry is changed from a custom set of coordinates to a mathematical function (hyperbolic paraboloid), resulting in a saddle shape with a peak in the top-left middle and a valley in the bottom middle. The axis ranges are modified: the x-axis now spans from -2 to 2, the y-axis spans from -2 to 2, and the z-axis spans from -4 to 4.}
+      {structure/examples/gt_0474.png}
+      {structure/examples/gpt_0474.png}
+      {structure/examples/sft_0474.png}
+      {structure/examples/rl_0474.png}
+    \midrule
+    \exrowthree
+      {structure/examples/source_0109.png}
+      {The thick blue path (path1) is rerouted. In the first image, it goes from node 6 up to node 7, then right to node 11, and finally to node 15. In the second image, the path from node 6 goes right to node 10, then right to node 14, and finally up to node 15. The thin green path (path2) is rerouted. In the first image, it goes from node 7 right to node 11, then right to node 15. In the second image, the path from node 7 goes down to node 6, then right to node 10, then right to node 14, and finally up to node 15.}
+      {structure/examples/gt_0109.png}
+      {structure/examples/gpt_0109.png}
+      {structure/examples/sft_0109.png}
+      {structure/examples/rl_0109.png}
+    \midrule
+    \exrowfour
+      {structure/examples/source_0680.png}
+      {The point labeled \smath{\mathcal{R}_A^\gamma(x)} is moved from the right of \smath{\mathbb{P}_A(x)} to the left of it (between \smath{x} and \smath{\mathbb{P}_A(x)}). The black arrow moves through the point \smath{\mathcal{R}_A^\gamma(x)} to point to \smath{\mathbb{P}_A(x)} while the blue arrow from \smath{\mathbb{P}_A(x)} to \smath{\mathcal{R}_A^\gamma(x)} is reversed and positioned slightly below the black arrow. The red point \smath{v} and the red point \smath{y} are moved horizontally to the left, closer to the vertical dashed line \smath{H}. The red double-headed arrow now points from \smath{\mathbb{P}_A(x)} to \smath{v}. The two red lines connecting the top points (\smath{x} and \smath{\mathcal{R}_A^\gamma(x)}) to the bottom point \smath{y} are changed to double-headed arrows.}
+      {structure/examples/gt_0680.png}
+      {structure/examples/gpt_0680.png}
+      {structure/examples/sft_0680.png}
+      {structure/examples/rl_0680.png}
+    \bottomrule
+\end{tabularx}
+\end{table}

@@ -573,6 +573,110 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
     }
 
     #[test]
+    #[ignore = "builds arXiv manual fixtures with every installed engine; needs toolchains, packages and minutes"]
+    fn arxiv_manual_fixtures_build_with_every_installed_engine() {
+        use crate::tex::settings::BuildEngine;
+        fn copy_dir(source: &Path, destination: &Path) {
+            fs::create_dir_all(destination).unwrap();
+            for entry in fs::read_dir(source).unwrap() {
+                let entry = entry.unwrap();
+                let target = destination.join(entry.file_name());
+                if entry.file_type().unwrap().is_dir() {
+                    copy_dir(&entry.path(), &target);
+                } else {
+                    fs::copy(entry.path(), target).unwrap();
+                }
+            }
+        }
+        fn entry_point(directory: &Path) -> PathBuf {
+            let mut entries = fs::read_dir(directory)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| {
+                    path.extension().is_some_and(|extension| extension == "tex")
+                        && fs::read_to_string(path)
+                            .is_ok_and(|source| source.contains("\\documentclass"))
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(entries.len(), 1, "one document entry per fixture");
+            entries.pop().unwrap()
+        }
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("manual-tests/arxiv");
+        for name in ["editikz", "lax-frobenius"] {
+            let project = tempfile::tempdir().unwrap();
+            copy_dir(&fixtures.join(name), project.path());
+            let entry = entry_point(project.path());
+            let source = fs::read_to_string(&entry).unwrap();
+            for engine in [
+                BuildEngine::Tectonic,
+                BuildEngine::PdfLatex,
+                BuildEngine::XeLatex,
+                BuildEngine::LuaLatex,
+            ] {
+                let executable = match engine {
+                    BuildEngine::Tectonic => {
+                        crate::toolchain::resolve_tool(
+                            crate::toolchain::ToolKind::Tectonic,
+                            &crate::settings::ToolPreference::default(),
+                        )
+                        .program
+                    }
+                    _ => crate::tex::tools::distribution_tool(engine.executable()).unwrap_or_else(
+                        || panic!("install a TeX distribution for {}", engine.label()),
+                    ),
+                };
+                let options = TexOptions {
+                    engine,
+                    executable,
+                    command: Default::default(),
+                    only_cached: false,
+                    synctex: false,
+                };
+                let request = CompileRequest {
+                    revision: 1,
+                    input: super::super::CompileInput {
+                        language: tiptoptyp_core::document::TypesettingLanguage::Tex,
+                        source: source.clone(),
+                        source_dir: project.path().into(),
+                        project_root: project.path().into(),
+                        display_name: entry.file_name().unwrap().to_string_lossy().into_owned(),
+                    },
+                    engine: super::super::EngineConfig::Tex(options.clone()),
+                };
+                let mut backend = Backend::new();
+                backend.submit(&request, &options).unwrap();
+                let deadline = Instant::now() + Duration::from_secs(600);
+                let pdf = loop {
+                    let mut completed = None;
+                    for result in backend.poll() {
+                        match result.event {
+                            EngineEvent::Pdf { pdf, .. } => completed = Some(pdf),
+                            EngineEvent::Failed(report) => {
+                                panic!("{name} with {}: {}", engine.label(), report.raw)
+                            }
+                            _ => {}
+                        }
+                    }
+                    if let Some(pdf) = completed {
+                        break pdf;
+                    }
+                    assert!(
+                        Instant::now() < deadline,
+                        "{name} with {} timed out",
+                        engine.label()
+                    );
+                    std::thread::sleep(Duration::from_millis(50));
+                };
+                assert!(
+                    pdf.starts_with(b"%PDF-"),
+                    "{name} with {} produced no PDF",
+                    engine.label()
+                );
+            }
+        }
+    }
+
+    #[test]
     #[ignore = "executes pinned Tectonic; first run may download TeX packages"]
     fn real_tectonic_builds_unsaved_source_relative_inputs_errors_and_recovers() {
         let project = tempfile::tempdir().unwrap();

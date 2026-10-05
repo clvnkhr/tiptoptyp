@@ -1,0 +1,53 @@
+\section{Results}
+\label{sec:Results}
+
+\paragraph{Automatic Evaluation}
+Across all architectures, SFT improves Avg by 0.186--0.363 and compilation rate by 19.0--39.3 percentage points. RL further improves EdiTikZ-4B/9B to 0.674/0.726 Avg. EdiTikZ-4B-RL reaches proprietary-level performance, while EdiTikZ-9B-RL achieves the highest overall score (Table~\ref{tab:editikz_main}). Additional results are in Appendix~\ref{subsec:Results}.
+
+\subparagraph{Model Rankings Reverse after SFT}
+Qwen3.5-4B/9B initially underperform Qwen3-VL-4B/8B (0.249/0.345 vs.\ 0.314/0.354 Avg), but surpass them after SFT (0.612/0.643 vs.\ 0.538/0.540), showing that base editing performance does not necessarily reflect task-specific adaptation potential.
+
+\subparagraph{Visual Correctness vs.\ Code Similarity}
+Unlike prior TikZ-generation RL, where TED improves after RL~\citep{greisinger2026tikzilla,zeng2026davinci}, ours worsens despite consistent gains across rendered metrics. We hypothesize that editing weakens visual--code coupling, as visually equivalent edits may differ at the code level.
+
+\input{structure/tables/editikz_main}
+
+\paragraph{Human Evaluation}
+We conduct a human evaluation with 9 qualified annotators, who rate predictions from eight models on EA, SP, and VQ using a 1--7 Likert scale (Figure~\ref{fig:human_evaluation}). Each annotator evaluates 20 randomized figure groups with 10\% overlap, yielding 4,320 ratings. Quadratic-weighted agreement is high ($\kappa_{\mathrm{EA}}=0.801$, $\kappa_{\mathrm{SP}}=0.786$, $\kappa_{\mathrm{VQ}}=0.832$).
+
+\subparagraph{Human Evaluation Confirms Post-Training Gains}
+SFT raises the combined score of Qwen3.5-4B/9B from 6.40/8.78 to 14.71/15.18, with RL further improving it to 16.14/17.43, with gains across all three criteria. EdiTikZ-9B-RL nearly matches Gemini-3.1-Pro (17.43 vs.\ 17.72) and performs above GPT-5.6-Sol (16.75). SFT narrows the 4B--9B gap from 2.38 to 0.47 points, whereas RL widens it to 1.29 points.
+
+\subparagraph{Automatic Metrics Align with Humans}
+Our aggregate metric correlates strongly with combined human judgments ($\rho=0.823$). While TED correlates poorly ($\rho=0.374$), DSim and the criterion-specific EA, SP, and VQ metrics each reach $\rho\approx0.77$. $\mathcal{R}_{\mathrm{SSim}}$ correlates more strongly with human SP/VQ, whereas adding $\mathcal{R}_{\mathrm{IF}}$ improves EA correlation by 0.045 and raises overall correlation from 0.812 to 0.827, showing the intended complementarity.
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.85\textwidth]{structure/figures/human_evaluation.pdf}
+  \caption{Likert-scale (1-7) across three evaluation criteria (EA, SP, and VQ) with 95\% confidence intervals for eight VLMs (4 baseline, 4 fine-tuned).}
+  \label{fig:human_evaluation}
+\end{figure}
+
+\paragraph{Ablations: Data Mixtures}
+Table~\ref{tab:editikz_ablation_data_mixture_new} compares reconstruction and editing mixtures on two VLMs. Joint training performs best for 3B (0.432 Avg vs.\ 0.392 editing-only) and matches sequential training for 8B (0.539/0.540), with both exceeding editing-only (0.531). Thus, reconstruction consistently improves editing, while joint training additionally retains both capabilities.
+
+\paragraph{Ablations: Rewards and GDPO}
+Table~\ref{tab:editikz_ablation_rl_new} ablates our rewards and optimization algorithm. $\mathcal{R}_{\mathrm{IF}}$ outperforms $\mathcal{R}_{\mathrm{SSim}}$, by +0.031 EA. Combining both with GRPO adds +0.009 Avg, while GDPO increases this gain to +0.038, supporting independent normalization of the complementary rewards.
+
+\input{structure/tables/ablations_combined_new}
+
+\paragraph{Generalization under Severe Distribution Shift}
+We stress-test EdiTikZ on SPIQA~\cite{NEURIPS2024_SPIQA} and CharXiv~\cite{NEURIPS2024_CharXiv}, which contain complex architectural diagrams, multi-panel plots, tables, schematics, and charts across diverse scientific domains, produced with tools such as Matplotlib, MATLAB, DrawIO, ggplot, and Plotly rather than TikZ. We sample 300 SPIQA and 600 CharXiv figures and manually remove those requiring external data, leaving 190 and 497 instances, respectively. Since neither dataset provides editing pairs, we use GPT-5.6-Sol to generate synthetic edit instructions. We then evaluate model predictions reference-free using EA, SP, VQ, CR, and AT. OOD generations require $3$--$5\times$ more tokens than DaEdiTikZ-Bench and frequently exceed the 2K-token completion limit used during post-training. We stratify examples by mean generation length across all four models (Figure~\ref{fig:ood_evaluation}), ensuring identical examples within each bin.
+
+\subparagraph{RL Gains Increase with Difficulty}
+For short generations ($<$1K), SFT provides most of the gain over Qwen3.5-9B. With increasing length, SFT gains diminish while the additional benefit from RL grows, dominating from 1.5--4K tokens. RL also maintains $>$80\% compilation through 3--4K, consistently exceeding GPT-5.6-Sol, whereas SFT compilation degrades steadily.
+
+\subparagraph{Competitive within the Training Horizon}
+Within the trained $\leq$2K regime, EdiTikZ-9B-RL remains close to GPT-5.6-Sol, with $<$0.1 Avg difference across all bins. Beyond 2K, EdiTikZ degrades faster and the gap widens, although SFT and RL gains persist throughout the 2--8K regime.
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.75\textwidth]{structure/figures/ood_length_generalization_main.pdf}
+  \caption{OOD performance on SPIQA and CharXiv combined by generation length. Average score is $(\mathrm{EA}+\mathrm{SP}+\mathrm{VQ})/3$. The red dashed line marks the 2K-token post-training limit.}
+  \label{fig:ood_evaluation}
+\end{figure}

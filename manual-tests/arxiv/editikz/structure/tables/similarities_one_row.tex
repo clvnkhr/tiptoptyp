@@ -1,0 +1,134 @@
+\newlength{\simblockwidth}
+\setlength{\simblockwidth}{0.238\textwidth}
+
+\newlength{\simimagewidth}
+\setlength{\simimagewidth}{0.108\textwidth}
+
+\newlength{\simimageheight}
+\setlength{\simimageheight}{1.65cm}
+
+\newcommand{\simimage}[1]{%
+  \begin{minipage}[c][\simimageheight][c]{\simimagewidth}
+    \centering
+    \includegraphics[
+      width=\linewidth,
+      height=0.94\simimageheight,
+      keepaspectratio
+    ]{#1}%
+  \end{minipage}%
+}
+
+\newcommand{\simrange}[1]{%
+  \fontsize{8}{9}\selectfont
+  \textbf{#1}%
+}
+
+\newcommand{\simsubheader}[1]{%
+  \fontsize{7}{8}\selectfont
+  \textbf{#1}%
+}
+
+\newcommand{\similarityblock}[5]{%
+  \begin{tikzpicture}[
+    remember picture,
+    baseline=(#1.base)
+  ]
+    \node[
+      name=#1,
+      anchor=center,
+      inner xsep=2pt,
+      inner ysep=3pt,
+      outer sep=0pt,
+      fill=#2,
+      minimum width=\simblockwidth
+    ]{%
+      \begin{minipage}{\dimexpr\simblockwidth-4pt\relax}
+        \centering
+
+        \simrange{#3}
+
+        \vspace{-5.5pt}
+        \rule{\linewidth}{0.4pt}
+        \vspace{-9pt}
+
+        \begin{tabular}{@{}cc@{}}
+          \simimage{#4} &
+          \simimage{#5}
+        \end{tabular}
+
+        \vspace{-2pt}
+      \end{minipage}%
+    };
+  \end{tikzpicture}%
+}
+
+\begin{table*}[t]
+  \centering
+  \caption{Examples of scientific-figure edit pairs across semantic-similarity intervals and the percentage of implausible editing transformations in each interval. Gray cells denote excluded intervals.}
+  \label{tab:semantic_similarity_examples}
+
+  \setlength{\tabcolsep}{2pt}
+  \renewcommand{\arraystretch}{1}
+
+  \begin{tabular}{@{}cccc@{}}
+    \toprule
+    \similarityblock
+      {simtopone}
+      {black!10}
+      {$\boldsymbol{0.92\text{--}0.93}$ $\boldsymbol{(28\%)}$}
+      {structure/similarities/sim_092_1.png}
+      {structure/similarities/sim_092_2.png}
+    &
+    \similarityblock
+      {simtoptwo}
+      {black!10}
+      {$\boldsymbol{0.94\text{--}0.95}$ $\boldsymbol{(18\%)}$}
+      {structure/similarities/sim_094_1.png}
+      {structure/similarities/sim_094_2.png}
+    &
+    \similarityblock
+      {simtopthree}
+      {white}
+      {$\boldsymbol{0.96\text{--}0.97}$ $\boldsymbol{(8\%)}$}
+      {structure/similarities/sim_096_1.png}
+      {structure/similarities/sim_096_2.png}
+    &
+    \similarityblock
+      {simtopfour}
+      {white}
+      {$\boldsymbol{0.98\text{--}0.99}$ $\boldsymbol{(2\%)}$}
+      {structure/similarities/sim_098_1.png}
+      {structure/similarities/sim_098_2.png}
+    \\[4pt]
+    \midrule
+    \similarityblock
+      {simbottomone}
+      {black!10}
+      {$\boldsymbol{0.93\text{--}0.94}$ $\boldsymbol{(22\%)}$}
+      {structure/similarities/sim_093_1.png}
+      {structure/similarities/sim_093_2.png}
+    &
+    \similarityblock
+      {simbottomtwo}
+      {white}
+      {$\boldsymbol{0.95\text{--}0.96}$ $\boldsymbol{(10\%)}$}
+      {structure/similarities/sim_095_1.png}
+      {structure/similarities/sim_095_2.png}
+    &
+    \similarityblock
+      {simbottomthree}
+      {white}
+      {$\boldsymbol{0.97\text{--}0.98}$ $\boldsymbol{(6\%)}$}
+      {structure/similarities/sim_097_1.png}
+      {structure/similarities/sim_097_2.png}
+    &
+    \similarityblock
+      {simbottomfour}
+      {white}
+      {$\boldsymbol{0.99\text{--}0.9999}$ $\boldsymbol{(12\%)}$}
+      {structure/similarities/sim_099_1_new.png}
+      {structure/similarities/sim_099_2_new.png} 
+    \\[4pt]
+    \bottomrule
+  \end{tabular}
+\end{table*}

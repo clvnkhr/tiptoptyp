@@ -19,3 +19,22 @@ fit its text. Test both a focused and an unfocused document window.
 
 The TeX examples require the configured Tectonic tool and its standard article
 support. Generated PDFs and auxiliary files need not be committed.
+
+## arXiv projects
+
+`arxiv/` holds real arXiv sources for heavier manual TeX checks (many
+packages, TikZ figures, multi-file layouts, figures, bibliographies):
+
+- `arxiv/editikz/` — 39-file conference paper, 20 packages, TikZ libraries,
+  local `.sty`, natbib bibliography. Entry: `iclr2027_conference.tex`
+  (arXiv 2609.01409, CC BY-SA 4.0).
+- `arxiv/lax-frobenius/` — single file, 20 packages, 103 TikZ environments,
+  natbib bibliography. Entry: `LRS_Diag_Frob_Envelope.tex`
+  (arXiv 2604.24166, CC BY 4.0).
+
+Each fixture documents its provenance and any compatibility shims in its own
+README. Bibliographies intentionally have no committed `.bbl` and no backend
+BibTeX/Biber run, so citations stay unresolved while pages render; that also
+exercises the diagnostics panel. `cargo test arxiv_manual_fixtures -- --ignored`
+builds every fixture with Tectonic, pdfLaTeX, XeLaTeX and LuaLaTeX through the
+real compiler backend and requires toolchains, package downloads and minutes.

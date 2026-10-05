@@ -1,0 +1,235 @@
+\setlength{\aboverulesep}{0pt}
+\setlength{\belowrulesep}{0pt}
+\setlength{\tabcolsep}{2pt}
+\renewcommand{\arraystretch}{1.03}
+\setlength{\abovetopsep}{0pt}
+
+\setlength{\descw}{0.25\textwidth}
+
+\setlength{\imgw}{0.136\textwidth}
+
+\setlength{\imgh}{2.6cm}
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}p{\descw}}
+\newcolumntype{C}{>{\centering\arraybackslash}p{\imgw}}
+
+\newcommand{\exrowtwoone}[6]{%
+  \imgcell{#1} &
+  \desc{#2} &
+  \imgcell{#3} &
+  \imgcellgood{#4}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{5}\quad
+  P:\textbf{4}\quad
+  Q:\textbf{7}} 
+  &
+  \imgcellokay{#5}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{3}\quad
+  P:\textbf{4}\quad
+  Q:\textbf{7}} 
+  &
+  \imgcellbad{#6}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{2}\quad
+  P:\textbf{3}\quad
+  Q:\textbf{4}} 
+  \\
+}
+
+\newcommand{\exrowtwotwo}[6]{%
+  \imgcell{#1} &
+  \desc{#2} &
+  \imgcell{#3} &
+  \imgcellbad{#4}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{2}\quad
+  P:\textbf{3}\quad
+  Q:\textbf{3}} 
+  &
+  \imgcell{#5}
+  &
+  \imgcell{#6}
+  \\
+}
+
+\newcommand{\exrowtwothree}[6]{%
+  \imgcell{#1} &
+  \desc{#2} &
+  \imgcell{#3} &
+  \imgcellokay{#4}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{3}\quad
+  P:\textbf{4}\quad
+  Q:\textbf{7}} 
+  &
+  \imgcellokay{#5}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{3}\quad
+  P:\textbf{4}\quad
+  Q:\textbf{6}} 
+  &
+  \imgcellokay{#6}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{3}\quad
+  P:\textbf{3}\quad
+  Q:\textbf{4}} 
+  \\
+}
+
+\newcommand{\exrowtwofour}[6]{%
+  \imgcell{#1} &
+  \desc{#2} &
+  \imgcell{#3} &
+  \imgcell{#4}
+  &
+  \imgcell{#5}
+  &
+  \imgcellverygood{#6}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{7}\quad
+  P:\textbf{6}\quad
+  Q:\textbf{6}} 
+  \\
+}
+
+\newcommand{\exrowtwofive}[6]{%
+  \imgcell{#1} &
+  \desc{#2} &
+  \imgcell{#3} &
+  \imgcell{#4}
+  &
+  \imgcellgood{#5}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{6}\quad
+  P:\textbf{6}\quad
+  Q:\textbf{6}} 
+  &
+  \imgcellgood{#6}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{5}\quad
+  P:\textbf{5}\quad
+  Q:\textbf{6}} 
+  \\
+}
+
+\newcommand{\exrowtwosix}[6]{%
+  \imgcell{#1} &
+  \desc{#2} &
+  \imgcell{#3} &
+  \imgcellverygood{#4}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{6}\quad
+  P:\textbf{6}\quad
+  Q:\textbf{7}} 
+  &
+  \imgcellgood{#5}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{6}\quad
+  P:\textbf{4}\quad
+  Q:\textbf{6}} 
+  &
+  \imgcellverygood{#6}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{7}\quad
+  P:\textbf{6}\quad
+  Q:\textbf{6}} 
+  \\
+}
+
+\newcommand{\exrowtwoseven}[6]{%
+  \imgcell{#1} &
+  \desc{#2} &
+  \imgcell{#3} &
+  \imgcellgood{#4}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{5}\quad
+  P:\textbf{6}\quad
+  Q:\textbf{5}} 
+  &
+  \imgcellgood{#5}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{6}\quad
+  P:\textbf{5}\quad
+  Q:\textbf{6}} 
+  &
+  \imgcellgood{#6}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{5}\quad
+  P:\textbf{4}\quad
+  Q:\textbf{7}} 
+  \\
+}
+
+\begin{table}[t]
+\centering
+\caption{Scientific figure edits by Gemini-3.1-Pro, GPT-5.6-Sol, and EdiTikZ-9B-RL. Models receive the source image and VLM-generated edit instruction. Human annotations score edit application (E), source preservation (P), and visual quality (Q). Overall quality: \legendbox{green} very good, \legendbox{yellow} good, \legendbox{orange} bad, \legendbox{red} very bad.}
+\label{tab:editikz_examples_1}
+\begin{tabularx}{\textwidth}{@{}CYCCCC@{}}
+    \toprule
+    \headercell{Source} &
+    \headercell{Edit Instruction} &
+    \headercell{Ground Truth} &
+    \headercell{Gemini-3.1-Pro} &
+    \headercell{GPT-5.6-Sol} &
+    \headercell{EdiTikZ-9B-RL} \\
+    \midrule
+    \exrowtwoone
+    {structure/examples_2/sample_0068_source.png}
+    {The grid connectivity is changed. Specifically, the dashed lines connecting the outer boundary nodes to the main grid are replaced by solid lines. Solid lines are added between neighboring nodes nodes of the outer boundary. The blue rectangular region labeled 'S' is resized and repositioned. It now encloses the top-right 3x3 block of the grid, whereas it previously enclosed the entire 4x4 blocks. The label '\smath{S_{\partial}}' at the top is changed to '\smath{T}'. The label '\smath{S_{\partial}}' on the right is changed to '\smath{T}'. A new red rectangular box with a red node is added in the top-right corner. A new label '\smath{U}' is added above this red box.}
+    {structure/examples_2/sample_0068_gt.png}
+    {structure/examples_2/sample_0068_gemini.png}
+    {structure/examples_2/sample_0068_gpt.png}
+    {structure/examples_2/sample_0068_9b_rl.png}
+    \midrule
+    \exrowtwotwo
+    {structure/examples_2/sample_0106_source.png}
+    {Remove the blue transition node labeled \smath{r^1_1} and the nodes labeled \smath{p^1_1}, \smath{P^1_1}, \smath{W^1_1}, and \smath{S^12_1} and all connecting arrows at the left side of the diagram. Move the node labeled \smath{C^1_1} to the position previously occupied by \smath{r^1_1}, directly to the left of \smath{S^{11}_1}. Remove the blue dashed rectangular box and its label 'synchronisationsegment(\smath{r^1_1})'. Remove the text annotation 'No more transitions are added due to 2.b.' located in the top right corner. Add a red dashed path connecting \smath{C^1_1} to \smath{S^{11}_1}, then to \smath{S^{22}_1}, and finally to \smath{W_1^2}. Add the red text label '\smath{\text{lkc}(r^2_1)}' positioned below the red path to \smath{S^{22}_1}. Add an short vertical olive dashed path connecting \smath{W_2^2} to \smath{S^{22}_2} labeled '\smath{\text{lkc}(r^2_2)}' in olive to the right of the path. Add another short horizontal path connecting \smath{C_1^1} to \smath{S^{11}_1} just below the red path. The two middle points of these short paths are connected with two olive dashed line segments extending from the top left downwards and then to the right.}
+    {structure/examples_2/sample_0106_gt.png}
+    {structure/examples_2/sample_0106_gemini.png}
+    {structure/examples_2/not_compiled.png}
+    {structure/examples_2/not_compiled.png}
+    \midrule
+    \exrowtwothree
+    {structure/examples_2/sample_0104_source.png}
+    {The main diagonal ray and its vertex move leftward from approximately x=0.5 to x=0.3. The ray label changes from \smath{C_{\omega_{\mathsf{cr}},\frac{\pi}{4}}} to \smath{C_{a,\frac{\pi}{4}}} and move towards top right. The shaded region, dashed vertical line, dashed quarter-circle, solid arc, and segmented ultra-thick path to \smath{w} are removed. The labels \smath{V_1}, \smath{V_2}, \smath{V_3}, and \smath{\omega_{\mathsf{cr}}} are removed. A circular contour labeled \smath{\Gamma_w} is added near the origin, with arrowed arcs and two short arrowed internal segments around the dotted line to \smath{w}. Two small red points are added along the dotted line and one blue point is added on the lower-left part of \smath{\Gamma_w}. A horizontal double-headed arrow labeled \smath{q^R} is added below the x-axis. The main rays and the newly restored contour segments are drawn very thick.}
+    {structure/examples_2/sample_0104_gt.png}
+    {structure/examples_2/sample_0104_gemini.png}
+    {structure/examples_2/sample_0104_gpt.png}
+    {structure/examples_2/sample_0104_9b_rl.png}
+    \midrule
+    \exrowtwofour
+    {structure/examples_2/sample_0141_source.png}
+    {Remove the second panel (labeled (B)) located on the right side of the figure, which depicts a contour in the lower half-plane. Remove the panel label '\smath{(A)}' from the top-left corner of the remaining diagram. Change the label '\smath{C_R}' on the large outer semicircle to '\smath{C_2}'. Change the label '\smath{C_\varepsilon}' on the small inner semicircle to '\smath{C_1}'. Change the label '\smath{\varepsilon}' indicating the radius of the small semicircle to '\smath{r}'. Change the label '\smath{O}' at the origin to '\smath{x_0}'. Add the label '\smath{R}' at the rightmost point of the large semicircle on the real axis. Remove the arrowhead from the red dashed line representing the radius \smath{r}.}
+    {structure/examples_2/sample_0141_gt.png}
+    {structure/examples_2/not_compiled.png}
+    {structure/examples_2/not_compiled.png}
+    {structure/examples_2/sample_0141_9b_rl.png}
+    \midrule
+    \exrowtwofive
+    {structure/examples_2/sample_0110_source.png}
+    {The \smath{x_3} axis (dashed line pointing towards the viewer) is extended to a longer length, and its label '\smath{x_3}' is moved further out along the axis. The sign label '\smath{+}' at the point on the positive \smath{x_1} axis (inner point) is changed to '\smath{-}'. The sign label '\smath{-}' at the point on the negative \smath{x_1} axis (inner point) is changed to '\smath{+}'. The sign label '\smath{+}' at the point on the positive \smath{x_3} axis (front point) is changed to '\smath{-}'. The sign label '\smath{+}' at the point on the negative \smath{x_3} axis (back point) is changed to '\smath{-}'. A gray shaded region is added covering a large irregular area inside the diagram, roughly spanning from the left vertex marked '\smath{-}' across the central area toward the right vertex marked '\smath{+}', overlaying the underlying triangulated structure. Two closed red outline shapes are added: a larger red polygon/curve (partly dashed, partly solid) tracing an irregular boundary around the left-to-center portion of the diagram near the '\smath{-}' vertex, and a smaller red triangular outline near the right-center portion of the diagram close to the '\smath{-}' label on the right side, both overlapping the gray shaded region.}
+    {structure/examples_2/sample_0110_gt.png}
+    {structure/examples_2/not_compiled.png}
+    {structure/examples_2/sample_0110_gpt.png}
+    {structure/examples_2/sample_0110_9b_rl.png}
+    \midrule
+    \exrowtwosix
+    {structure/examples_2/sample_0250_source.png}
+    {The wavy line connecting the red ellipse (S) to the yellow ellipse (Cq) is removed together with its label ‘e02’. The wavy line connecting the two points inside the blue ellipse (U) is removed. A wavy line connecting the blue ellipse (U) to the yellow ellipse (Cq) is added to connect the rightmost point in U to the bottom point in Cq at it is labeled ‘e11’. The label 'e01' on the top horizontal line is changed to 'e12'. The label 'e01'' on the left horizontal line in U is changed to 'e13'. The label 'e02'' on the right wavy line in U is removed. The label 'M0i'' is changed to 'M1i''. The label 'P0 = M01 U M02' inside the yellow ellipse is changed to 'P1 = M11 U M12'.}
+    {structure/examples_2/sample_0250_gt.png}
+    {structure/examples_2//sample_0250_gemini.png}
+    {structure/examples_2/sample_0250_gpt.png}
+    {structure/examples_2/sample_0250_9b_rl.png}
+    \midrule
+    \exrowtwoseven
+    {structure/examples_2/sample_0399_source.png}
+    {The yellow result node 'beta != 1, gamma != 1' (positioned beside the bottom-row 'beta = gamma = 1' node) is repositioned to be reached from the 'C' branch's '\smath{2AB+3C^2}' box via the '!=0' path. The green result node labeled 'beta = gamma = 1' is moved from the bottom of the main vertical flow, positioned directly below 'A'' and reached by the '=0' branch arrow, to its original position on the right side, reached via a bold arrow from 'A''. The entire lower section of the flowchart is added. This includes the nodes 'B', 'B'', 'A'B'', and '\smath{2A'B' - C'^2}', the result node 'no O(4) solution', and the arrows connecting these added nodes. The mathematical expression in the decision box to the right of the fourth level is changed from '\smath{2AB + 3A'^2}' to '\smath{2AB + 3C^2}', with its '=0' branch continuing to point to 'no O(2) solution' and its '??' branch left unresolved as before. The decision node labeled 'A'' at the fourth level of the flowchart is changed to a node labeled 'C'.}
+    {structure/examples_2/sample_0399_gt.png}
+    {structure/examples_2//sample_0399_gemini.png}
+    {structure/examples_2/sample_0399_gpt.png}
+    {structure/examples_2/sample_0399_9b_rl.png}
+    
+    \bottomrule
+\end{tabularx}
+\end{table}

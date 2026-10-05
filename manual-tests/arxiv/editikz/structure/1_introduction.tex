@@ -1,0 +1,23 @@
+\section{Introduction}
+\label{sec:Introduction}
+
+VLMs are increasingly capable of assisting researchers in multimodal tasks~\citep{eger2026transformingsciencelargelanguage}, including understanding and generating figures~\citep{li-etal-2024-multimodal-arxiv, NEURIPS2024_CharXiv}, tables~\citep{NEURIPS_SciGen}, slides~\citep{Ge_2025_CVPR_AutoPresent}, and posters~\citep{NEURIPS2025_Paper2Poster}. These advances are driven by improvements in multimodal alignment~\citep{NEURIPS2023_VisualInstructionTuning}, reasoning~\citep{zhang2024multimodalchainofthoughtreasoninglanguage, huang2026visionr1incentivizingreasoningcapability}, and agentic systems~\citep{koh-etal-2024-visualwebarena} that combine planning and tool use to tackle complex scientific workflows~\citep{sun2026scienceboardevaluatingmultimodalautonomous}. Despite this progress, publication-ready figures rarely emerge in a single generation and typically require revisions to their content, layout, and visual details, making scientific figure editing an important yet underexplored capability.
+
+Graphics programming languages such as TikZ are the de facto standard in academia due to their precision, interpretability, and seamless integration into the \LaTeX{} ecosystem. However, their diverse syntax and steep learning curve make them difficult for humans to master~\citep{belouadi2024automatikz}. Prior work has focused on generating TikZ from text~\citep{greisinger2026tikzilla} or images~\citep{belouadi2024detikzify}, whereas existing editing efforts rely on proprietary agentic systems~\citep{lin2026autofigureeditgeneratingeditablescientific}, target specialized domains such as charts~\citep{zhao-etal-2025-chartedit}, or focus primarily on evaluation~\citep{rahman2026viseditbenchvisionlanguagemodelsedit,bo2026diagrammmumultimodalbenchmarkscientific}. Large-scale training supervision remains limited and predominantly synthetic~\citep{wang2026disciplinegen1mlargescaledatasetmultidisciplinary,bo2026diagrammmumultimodalbenchmarkscientific}.
+
+In this work, we take a different perspective. Scientific figures naturally evolve through iterative human revisions during research, paper writing, and community discussions. These revisions capture rich but previously overlooked expert decisions about how figures should change, yet remain unused as supervision for multimodal models. Inspired by how early instruction-tuning methods leverage naturally occurring software revisions~\citep{muennighoff2024octopack, wei2024coeditor, li-etal-2024-instructcoder}, we introduce a scalable framework that recovers plausible scientific figure revision pairs from real-world repositories. Applied to TikZ figures from arXiv, GitHub, and TeX SE, this yields DaEdiTikZ, the first large-scale dataset of revision-derived scientific figure edits, containing 391K edit pairs. Since figures and their programs already exist, we synthesize only the missing edit instruction using a VLM conditioned on rendered figures and TikZ code, yielding 781K directed editing instances. We also introduce DaEdiTikZ-Bench, a human-refined benchmark with 690 editing instances.
+
+Building on DaEdiTikZ, we train two small Qwen3.5-based EdiTikZ models that jointly learn to reconstruct figures as TikZ and edit them from instructions, followed by RL with complementary rewards for rendered fidelity and edit application. Across three human-evaluation criteria on DaEdiTikZ-Bench, our 9B model performs above GPT-5.6-Sol and on par with Gemini-3.1-Pro. Post-training gains transfer even beyond the 2K-token training horizon to substantially more complex out-of-distribution figures from SPIQA and CharXiv. Table~\ref{tab:editikz_examples} shows representative editing results. Our key contributions are as follows:
+
+\input{structure/tables/examples}
+
+\begin{itemize}
+\item \textbf{Revision-Derived Supervision:}
+We introduce a scalable framework for recovering plausible edit pairs from naturally occurring collections of related scientific figures.
+\item \textbf{Dataset and Benchmark:}
+We release DaEdiTikZ with 391K plausible edit pairs, yielding 781K directed editing instances, and DaEdiTikZ-Bench with 690 human-refined instances.
+\item \textbf{Editing-Specific Post-Training:}
+We jointly train reconstruction and editing during SFT followed by GDPO with complementary rewards for rendered fidelity and edit application.
+\item \textbf{EdiTikZ Models:}
+We release 4B and 9B EdiTikZ models. EdiTikZ-9B-RL outperforms all tested baselines in automatic evaluation and surpasses GPT-5.6-Sol in human evaluation.
+\end{itemize}

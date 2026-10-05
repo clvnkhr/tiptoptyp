@@ -1,0 +1,156 @@
+\begin{table*}[t]
+\centering
+\tiny
+\setlength{\tabcolsep}{1.2pt}
+\renewcommand{\arraystretch}{0.92}
+
+\begin{minipage}[t]{0.53\textwidth}
+\centering
+\caption{Ablation on DaEdiTikZ-Bench for data-mixing strategies on two VLMs.}
+\label{tab:editikz_ablation_data_mixture_new}
+
+\begin{tabular}{clccccc:c:cc}
+\toprule
+\textbf{VLM} &
+\textbf{Variant} &
+\textbf{TED}$\downarrow$ &
+\textbf{DSim}$\uparrow$ &
+\textbf{EA}$\uparrow$ &
+\textbf{SP}$\uparrow$ &
+\textbf{VQ}$\uparrow$ &
+\textbf{Avg}$\uparrow$ &
+\textbf{CR}$\uparrow$ &
+\textbf{AT}$\downarrow$ \\
+\midrule
+
+\multirow{5}{*}{%
+\rotatebox{90}{%
+\fontsize{4.5}{5.1}\selectfont
+\textbf{Qwen2.5-VL-3B}%
+}%
+}
+& Base
+& 0.810 & 0.329 & 0.062 & 0.062 & 0.213
+& \cellcolor{gray!3}0.171
+& 45.9\% & 747 \\
+
+& Only Recon
+& 0.751 & 0.615 & 0.016 & 0.277 & 0.426
+& \cellcolor{gray!16}0.317
+& 68.4\% & 800 \\
+
+& Only Edit
+& 0.741 & 0.626 & \underline{0.296} & \underline{0.309}
+& 0.472
+& \cellcolor{gray!22}0.392
+& 73.9\% & 723 \\
+
+& Recon$\rightarrow$Edit
+& \underline{0.720} & \underline{0.647} & 0.272 & 0.297
+& \underline{0.480}
+& \cellcolor{gray!22}\underline{0.395}
+& \underline{76.2\%} & \underline{686} \\
+
+& Recon+Edit
+& \textbf{0.707} & \textbf{0.700} & \textbf{0.309} & \textbf{0.332}
+& \textbf{0.525}
+& \cellcolor{gray!26}\textbf{0.432}
+& \textbf{82.2\%} & \textbf{623} \\
+
+\midrule
+
+\multirow{5}{*}{%
+\rotatebox{90}{%
+\fontsize{4.5}{5.1}\selectfont
+\textbf{Qwen3-VL-8B}%
+}%
+}
+& Base
+& 0.772 & 0.543 & 0.281 & 0.293 & 0.427
+& \cellcolor{gray!19}0.354
+& 67.2\% & \textbf{509} \\
+
+& Only Recon
+& 0.709 & 0.737 & 0.157 & 0.495 & 0.592
+& \cellcolor{gray!28}0.454
+& 85.1\% & 646 \\
+
+& Only Edit
+& 0.713 & 0.785 & 0.451 & 0.493 & 0.638
+& \cellcolor{gray!34}0.531
+& \textbf{90.6\%} & \underline{557} \\
+
+& Recon$\rightarrow$Edit
+& \underline{0.685} & \textbf{0.769} & \underline{0.459} & \textbf{0.512}
+& \textbf{0.640}
+& \cellcolor{gray!35}\underline{0.539}
+& \underline{87.1\%} & 593 \\
+
+& Recon+Edit
+& \textbf{0.676} & \underline{0.765} & \textbf{0.462} & \underline{0.509}
+& \underline{0.639}
+& \cellcolor{gray!35}\textbf{0.540}
+& 86.2\% & 579 \\
+
+\bottomrule
+\end{tabular}
+\end{minipage}
+\hfill
+\begin{minipage}[t]{0.45\textwidth}
+\centering
+\caption{Ablation on DaEdiTikZ-Bench for reward functions and algorithms using EdiTikZ-9B.}
+\label{tab:editikz_ablation_rl_new}
+
+\setlength{\tabcolsep}{1.2pt}
+\begin{tabular}{lccccc:c:cc}
+\toprule
+\textbf{Variant} &
+\textbf{TED}$\downarrow$ &
+\textbf{DSim}$\uparrow$ &
+\textbf{EA}$\uparrow$ &
+\textbf{SP}$\uparrow$ &
+\textbf{VQ}$\uparrow$ &
+\textbf{Avg}$\uparrow$ &
+\textbf{CR}$\uparrow$ &
+\textbf{AT}$\downarrow$ \\
+\midrule
+
+Post-SFT
+& \textbf{0.628} & 0.834 & 0.598 & 0.658
+& 0.753
+& \cellcolor{gray!3}0.643
+& 92.0\% & 545 \\
+
+\midrule
+
+$\mathcal{R}_{\mathrm{SSim}}$
+& 0.667 & 0.872 & 0.633 & 0.706
+& 0.805
+& \cellcolor{gray!13}0.670
+& 96.1\% & 489 \\
+
+$\mathcal{R}_{\mathrm{IF}}$
+& 0.671 & 0.866 & 0.664 & 0.721
+& 0.814
+& \cellcolor{gray!17}0.679
+& 95.2\% & \underline{488} \\
+
+Both (w. GRPO)
+& \underline{0.662} & \underline{0.879}
+& \underline{0.671} & \underline{0.728}
+& \underline{0.822}
+& \cellcolor{gray!20}\underline{0.688}
+& \underline{96.4\%} & \textbf{476} \\
+
+Both (w. GDPO)
+& 0.676 & \textbf{0.893}
+& \textbf{0.734} & \textbf{0.815}
+& \textbf{0.865}
+& \cellcolor{gray!35}\textbf{0.726}
+& \textbf{96.8\%} & \underline{488} \\
+
+\bottomrule
+\end{tabular}
+\end{minipage}
+
+\end{table*}

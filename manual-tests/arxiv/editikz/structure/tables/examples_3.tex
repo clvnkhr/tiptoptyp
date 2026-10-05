@@ -1,0 +1,245 @@
+\setlength{\aboverulesep}{0pt}
+\setlength{\belowrulesep}{0pt}
+\setlength{\tabcolsep}{2pt}
+\renewcommand{\arraystretch}{1.03}
+\setlength{\abovetopsep}{0pt}
+
+\setlength{\descw}{0.25\textwidth}
+
+\setlength{\imgw}{0.136\textwidth}
+
+\setlength{\imgh}{2.6cm}
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}p{\descw}}
+\newcolumntype{C}{>{\centering\arraybackslash}p{\imgw}}
+
+\newcommand{\descsmall}[1]{%
+  \begin{minipage}[t]{\linewidth}
+    \vspace{-6pt}%
+    \raggedright
+    \fontsize{3.5}{4.0}\selectfont
+    \setlength{\parskip}{0pt}%
+    \setlength{\parindent}{0pt}%
+    #1%
+  \end{minipage}%
+}
+
+\newcommand{\exrowthreeone}[6]{%
+  \imgcell{#1} &
+  \desc{#2} &
+  \imgcell{#3} &
+  \imgcellverygood{#4}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{7}\quad
+  P:\textbf{7}\quad
+  Q:\textbf{5}} 
+  &
+  \imgcellokay{#5}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{7}\quad
+  P:\textbf{3}\quad
+  Q:\textbf{1}} 
+  &
+  \imgcellverygood{#6}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{7}\quad
+  P:\textbf{7}\quad
+  Q:\textbf{7}} 
+  \\
+}
+
+\newcommand{\exrowthreetwo}[6]{%
+  \imgcell{#1} &
+  \desc{#2} &
+  \imgcell{#3} &
+  \imgcell{#4}
+  &
+  \imgcell{#5}
+  &
+  \imgcellverygood{#6}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{5}\quad
+  P:\textbf{7}\quad
+  Q:\textbf{7}} 
+  \\
+}
+
+\newcommand{\exrowthreethree}[6]{%
+  \imgcell{#1} &
+  \desc{#2} &
+  \imgcell{#3} &
+  \imgcellverygood{#4}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{6}\quad
+  P:\textbf{6}\quad
+  Q:\textbf{7}} 
+  &
+  \imgcellbad{#5}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{4}\quad
+  P:\textbf{2}\quad
+  Q:\textbf{2}} 
+  &
+  \imgcellgood{#6}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{6}\quad
+  P:\textbf{5}\quad
+  Q:\textbf{7}} 
+  \\
+}
+
+\newcommand{\exrowthreefour}[6]{%
+  \imgcell{#1} &
+  \desc{#2} &
+  \imgcell{#3} &
+  \imgcellokay{#4}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{3}\quad
+  P:\textbf{4}\quad
+  Q:\textbf{6}} 
+  &
+  \imgcell{#5}
+  &
+  \imgcellverygood{#6}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{7}\quad
+  P:\textbf{7}\quad
+  Q:\textbf{7}} 
+  \\
+}
+
+\newcommand{\exrowthreefive}[6]{%
+  \imgcell{#1} &
+  \desc{#2} &
+  \imgcell{#3} &
+  \imgcellgood{#4}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{4}\quad
+  P:\textbf{6}\quad
+  Q:\textbf{6}} 
+  &
+  \imgcellokay{#5}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{3}\quad
+  P:\textbf{5}\quad
+  Q:\textbf{2}} 
+  &
+  \imgcellverygood{#6}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{7}\quad
+  P:\textbf{6}\quad
+  Q:\textbf{6}} 
+  \\
+}
+
+\newcommand{\exrowthreesix}[6]{%
+  \imgcell{#1} &
+  \desc{#2} &
+  \imgcell{#3} &
+  \imgcell{#4}
+  &
+  \imgcell{#5}
+  &
+  \imgcellbad{#6}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{3}\quad
+  P:\textbf{2}\quad
+  Q:\textbf{1}} 
+  \\
+}
+
+\newcommand{\exrowthreeseven}[6]{%
+  \imgcell{#1} &
+  \descsmall{#2} &
+  \imgcell{#3} &
+  \imgcellokay{#4}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{4}\quad
+  P:\textbf{4}\quad
+  Q:\textbf{6}} 
+  &
+  \imgcellbad{#5}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{2}\quad
+  P:\textbf{2}\quad
+  Q:\textbf{5}} 
+  &
+  \imgcellokay{#6}
+  {\fontsize{8}{8}\selectfont
+  E:\textbf{3}\quad
+  P:\textbf{3}\quad
+  Q:\textbf{5}} 
+  \\
+}
+
+\begin{table}[t]
+\centering
+\caption{Scientific figure edits by GPT-5.6-Sol, Qwen3.5-4B, and EdiTikZ-4B-RL. Models receive the source image and VLM-generated edit instruction. Human annotations score edit application (E), source preservation (P), and visual quality (Q). Overall quality: \legendbox{green} very good, \legendbox{yellow} good, \legendbox{orange} bad, \legendbox{red} very bad.}
+\label{tab:editikz_examples_1}
+\begin{tabularx}{\textwidth}{@{}CYCCCC@{}}
+    \toprule
+    \headercell{Source} &
+    \headercell{Edit Instruction} &
+    \headercell{Ground Truth} &
+    \headercell{GPT-5.6-Sol} &
+    \headercell{Qwen3.5-4B} &
+    \headercell{EdiTikZ-4B-RL} \\
+    \midrule
+    \exrowthreeone
+    {structure/examples_3/sample_0426_source.png}
+    {The value in the top-left cell (Actual NQSO, Predicted NQSO) changed from 1374 to 1213. The value in the top-right cell (Actual NQSO, Predicted QSO) changed from 1 to 1073. The value in the bottom-left cell (Actual QSO, Predicted NQSO) changed from 3 to 1. The value in the bottom-right cell (Actual QSO, Predicted QSO) changed from 122 to 213.}
+    {structure/examples_3/sample_0426_gt.png}
+    {structure/examples_3/sample_0426_gpt.png}
+    {structure/examples_3/sample_0426_base.png}
+    {structure/examples_3/sample_0426_4b_rl.png}
+    \midrule
+    \exrowthreetwo
+    {structure/examples_3/sample_0194_source.png}
+    {In the first blue node, change the text '64 maps' to '32 maps'. In the second blue node (max-pool), change the text '3x3' to '2x2'. In the third blue node, change the text '64 maps' to '48 maps'. In the fourth blue node (max-pool), change the text '3x3' to '2x2'. Remove the fifth blue node labeled 'conv 5x5 128 maps ReLU' from the main sequence. In the first green node, change the text '3072 units' to '100 units'. In the second green node, change the text '2048 units' to '100 units'. Remove the first red node labeled 'fully-conn 1024 units ReLU' from the bottom branch. In the second red node, change the text '1024 units' to '100 units'. Move the 'GRL' circle node one position to the left so it is located below the second max-pool node instead of the third convolution node. Change the connection arrow pointing to the 'GRL' node so it originates from the second max-pool node instead of the third convolution node. Change the connection arrow pointing to the first green node so it originates from the second max-pool node instead of the third convolution node. Change the node fill colors from clue to grey, from bright green to a darker green, and from a bright red to a darker red/brown.}
+    {structure/examples_3/sample_0194_gt.png}
+    {structure/examples_3/not_compiled.png}
+    {structure/examples_3/not_compiled.png}
+    {structure/examples_3/sample_0194_4b_rl.png}
+    \midrule
+    \exrowthreethree
+    {structure/examples_3/sample_0157_source.png}
+    {The purple square in the top-right quadrant is replaced by a purple right-angled triangle. The triangle's vertices are at the center of the figure, the point to the right of the center on the horizontal midline, and the point above the center on the vertical midline. Two small red right-angled triangles are added. One is located in the top-left quadrant, adjacent to the top-left corner of the new purple triangle. The other is in the bottom-right quadrant, adjacent to the bottom-right corner of the new purple triangle. Four mathematical labels are added to the four main quadrants of the figure. The label '\smath{d^{1/3}}' is added to the gray square in the bottom-left. The label '\smath{d^{1/2}}' is added to the white square in the top-left. The label '\smath{d^{1/2}}' is added to the white square in the bottom-right. The label '\smath{d}' is added to the white square in the top-right.}
+    {structure/examples_3/sample_0157_gt.png}
+    {structure/examples_3/sample_0157_gpt.png}
+    {structure/examples_3/sample_0157_base.png}
+    {structure/examples_3/sample_0157_4b_rl.png}
+    \midrule
+    \exrowthreefour
+    {structure/examples_3/sample_0018_source.png}
+    {The light green shaded region is changed from a parallelogram (bounded by y=0.5x and y=0.5x-0.5) to a triangle (bounded by the x-axis, the line y=0.5x, and the vertical line x=1). The dashed line segment forming the lower boundary of the original parallelogram (from (0, -0.5) to (2, 0.5)) is removed. The dashed line segment forming the upper boundary of the region (from (0,0) to (2,1)) is made thicker (ultra thick). A thick, red vertical line segment is added, extending from the origin (0,0) upwards to (0, 0.5). The vertical dashed lines at x=0 and x=2 are extended downwards to y=-0.5. The horizontal axis arrow is extended further to the right, and its label '\smath{\hat{x}_{i[j]}}' is moved further to the right. The vertical axis arrow is extended further downwards and upwards, and its label '\smath{x_{i[j]}}' is moved further upwards.}
+    {structure/examples_3/sample_0018_gt.png}
+    {structure/examples_3/sample_0018_gpt.png}
+    {structure/examples_3/not_compiled.png}
+    {structure/examples_3/sample_0018_4b_rl.png}
+    \midrule
+    \exrowthreefive
+    {structure/examples_3/sample_0184_source.png}
+    {Change the text in the top-right square node from 'NN' to 'kernel \ matrices'. Change the text in the middle square node from 'trained \ weights' to '\smath{\Theta}, \smath{\sigma_n}' and change its shape from a square to a circle. Change the text in the left square node from 'mean \ squared \ error' to 'Negative \ Log \ Likelihood'. Change the text in the bottom-right circle node from '$y$' to '\smath{\mathcal{N}(\mu, \sigma)}' and change its shape from a circle to a square. Move the top-left circle node labeled '\smath{\mathcal{D}}' from above the left square node to above the middle circle node. Change the straight arrow from the top-left circle '\smath{\mathcal{D}}' to point to the left square node 'Negative Log Likelihood' with a curved arrow. Add a new curved arrow from the top-left circle '\smath{\mathcal{D}}' pointing to the top-right square node 'kernel matrices'.}
+    {structure/examples_3/sample_0184_gt.png}
+    {structure/examples_3/sample_0184_gpt.png}
+    {structure/examples_3/sample_0184_base.png}
+    {structure/examples_3/sample_0184_4b_rl.png}
+    \midrule
+    \exrowthreesix
+    {structure/examples_3/sample_0331_source.png}
+    {The light blue filled hexagonal region is removed from the front face of the structure, located between the red and green highlighted paths. The red line is shortened to touch only the edge connecting the front and upper faces. The short black grid line on the upper-left top surface extending farther backwards is shortened. The black diagonal grid-line connected to the red line extending farther backwards on the upper-right top face is now shortened.}
+    {structure/examples_3/sample_0331_gt.png}
+    {structure/examples_3/not_compiled.png}
+    {structure/examples_3/not_compiled.png}
+    {structure/examples_3/sample_0331_4b_rl.png}
+    \midrule
+    \exrowthreeseven
+    {structure/examples_3/sample_0570_source.png}
+    {The horizontal dashed line at y=0.707 spanning the width of the plot, labeled 'Reference F1', is removed. The legend entries are updated to: 'F-T (XLM-T)', 'F-T (XLM-T sentiment)', 'PET (XLM-T)', and 'PET (XLM-T sentiment)'. The single dashed circle annotation (without a label) enclosing the convergence point of all curves near x='All' is removed. Two dashed oval annotations are added: one labeled '(a)' positioned around the point at x=100, and one labeled '(b)' positioned around the cluster of points near x='All'. The data series using red asterisk markers (F-T mBERT), staying low and volatile around 0.05-0.14 across most x-values with minor fluctuations, then rising sharply to approximately 0.83 at 'All', is removed. A new data series using blue triangle markers (PET XLM-T sentiment) is added as a distinct series. The plotted data series for the blue diamond-marker curve (previously EntLM mBERT) is replaced with new coordinate values representing PET (XLM-T), starting at approximately 0.53 (x=5), rising through 0.61 (x=10), 0.67 (x=20), 0.82 (x=30), 0.73 (x=40), 0.76 (x=50), 0.79 (x=100), and reaching approximately 0.87 at 'All'. The plotted data series for the red triangle-marker curve (previously F-T XLM-R) is replaced with new coordinate values representing F-T (XLM-T sentiment), starting high at approximately 0.92 (x=5), rising to 0.94 (x=10), staying around 0.92 (x=20), dipping to 0.87 (x=30-40), rising to 0.92 (x=50), dropping to 0.8 (x=100), and reaching approximately 0.91 at 'All'. The plotted data series for the red diamond-marker curve (previously F-T XLM-T on F1-score scale) is replaced with new coordinate values representing F-T (XLM-T) on the accuracy scale, starting at approximately 0.43 (x=5), dropping to 0.38 (x=10), then rising steadily through 0.5 (x=20), 0.55 (x=30), 0.62 (x=40), 0.64 (x=50), 0.8 (x=100), and reaching approximately 0.87 at 'All'. The Y-axis label is changed from 'F1-score' to 'Accuracy'.}
+    {structure/examples_3/sample_0570_gt.png}
+    {structure/examples_3/sample_0570_gpt.png}
+    {structure/examples_3/sample_0570_base.png}
+    {structure/examples_3/sample_0570_4b_rl.png}
+    \bottomrule
+\end{tabularx}
+\end{table}

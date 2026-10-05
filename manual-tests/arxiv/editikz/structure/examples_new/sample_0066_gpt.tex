@@ -1,0 +1,10 @@
+\begin{tikzpicture}[>=Stealth,person/.style={circle,draw,thick,minimum size=2.3cm,align=center,font=\large}]
+\node[person] (ferdinand) at (0,3.5) {Ferdinand\\Maria};
+\node[person] (princess)  at (4.5,3.5) {Princess\\Henriette};
+\node[person] (violante)  at (0,0) {Violante\\Bavaria};
+\draw[->,thick](ferdinand.east) -- node[above]{isMarried} (princess.west);
+\draw[->,thick](ferdinand.south) -- node[left,rotate=90]{hasChild} (violante.north);
+\draw[->,thick,blue,dashed](princess.218) -- node[midway,above,sloped,text=blue]{hasChild}coordinate[midway](prediction)(violante.38);
+\node[align=center] (target) at (4.4,-0.25){target prediction\\$\langle s,r,o\rangle$};
+\draw[->,thick] (target.north west) -- (prediction);
+\end{tikzpicture}

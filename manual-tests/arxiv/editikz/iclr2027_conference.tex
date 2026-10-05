@@ -1,0 +1,148 @@
+\documentclass{article}
+% Local compatibility shim: xcolor must see the table option before
+% the conference style pulls it in option-less (via eso-pic). Newer TeX
+% Live bundles resolve this without help; older ones (e.g. Tectonic) report
+% an option clash and miss table commands like \cellcolor.
+\PassOptionsToPackage{table}{xcolor}
+\usepackage{iclr2027_conference,times}
+
+\input{math_commands.tex}
+
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{graphicx}
+\usepackage{wrapfig}
+\usepackage{booktabs}
+\usepackage{nicematrix}
+\usepackage{tikz}
+\usepackage{diagbox}
+\usepackage{subcaption}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage[most]{tcolorbox}
+\usepackage{listings}
+\usepackage[normalem]{ulem}
+\usepackage[table]{xcolor}
+% amssymb instead of bbm: bbm ships only METAFONT bitmaps, which some
+% bundles (e.g. Tectonic) cannot turn into PDF fonts. \mathbb{1} renders
+% the same indicator function from base Type1 fonts.
+\usepackage{amssymb}
+\usepackage{adjustbox}
+\usepackage{arydshln}
+
+\usetikzlibrary{positioning,calc,arrows.meta,shapes.geometric,fit,backgrounds,spy}
+
+\hypersetup{
+    colorlinks=true,
+    allcolors=blue!50!black
+}
+
+\renewcommand{\arraystretch}{1.2}
+\newcommand{\se}[1]{\textcolor{red}{#1}}
+\newcommand{\reb}[1]{\textcolor{blue}{#1}}
+\newcommand{\sx}[1]{\sout{#1}}
+\newcommand{\redstrike}[1]{%
+  \textcolor{red}{\sout{\textcolor{black}{#1}}}%
+}
+\newcommand{\blueadd}[1]{%
+  \textcolor{blue!75!black}{#1}%
+}
+\newcommand{\greencorr}[1]{%
+  \textcolor{green!45!black}{#1}%
+}
+\newcommand{\smath}[1]{\scalebox{0.65}{$#1$}}
+\newcommand{\smathsmall}[1]{\scalebox{0.55}{$#1$}}
+\newcommand{\headercell}[1]{\normalsize\textbf{#1}}
+\setlength{\tabcolsep}{6pt}
+
+\definecolor{promptAccent}{RGB}{15,56,112}
+\definecolor{promptBack}{RGB}{245,248,255}
+
+\lstdefinestyle{mystyle}{
+  basicstyle=\fontsize{6}{4.5}\ttfamily,
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{gray!5},
+  columns=fullflexible
+}
+
+\newtcolorbox{PromptBox}[2][]{%
+  enhanced, breakable,
+  colback=promptBack, colframe=promptAccent,
+  coltitle=white, colbacktitle=promptAccent,
+  fonttitle=\bfseries\small\ttfamily,
+  fontupper=\ttfamily\scriptsize,
+  title={#2},
+  boxed title style={boxrule=0pt, colframe=promptAccent, colback=promptAccent,
+    top=2pt, bottom=2pt, left=6pt, right=6pt},
+  attach boxed title to top left={yshift=-1.5mm, xshift=4mm},
+  boxrule=0.75pt, arc=2pt, boxsep=5pt,
+  before skip=6pt, after skip=6pt,
+  borderline west={2pt}{0pt}{promptAccent},
+  drop shadow southeast,
+  sharp corners=south,
+  before upper={\vspace{2pt}},
+  #1
+}
+
+\title{%
+  \raisebox{-1.5ex}{\includegraphics[height=1.2cm]{structure/figures/editikz_no_background.png}}%
+  \hspace{0.05em}
+  EdiTikZ: Scientific Figure Editing from Revision Trajectories
+}
+
+\author{%
+Christian Greisinger\textsuperscript{1}, Zhixue Zhao\textsuperscript{2}, Steffen Eger\textsuperscript{1}\\
+{\small
+\textsuperscript{1}University of Technology Nuremberg \texttt{\{christian.greisinger,steffen.eger\}@utn.de}}\\
+{\small
+\textsuperscript{2}University of Sheffield \texttt{zhixue.zhao@sheffield.ac.uk}}%
+}
+
+\newcommand{\fix}{\marginpar{FIX}}
+\newcommand{\new}{\marginpar{NEW}}
+
+\iclrfinalcopy
+\begin{document}
+
+\maketitle
+\lhead{Preprint}
+
+\begin{abstract}
+Vision-language models (VLMs) have shown strong performance in generating scientific figures from text or images. However, publication-ready figures often require iterative refinement, making scientific figure editing an important yet largely unexplored step toward interactive figure creation. 
+Existing approaches rely on costly proprietary agentic systems, focus primarily on evaluation, or construct training supervision from synthetically generated edits. Instead, we leverage naturally occurring scientific revision and development trajectories as a scalable source of supervision. To this end, we introduce DaEdiTikZ, the first large-scale dataset of revision-derived scientific figure edits, constructed by mining 391K plausible TikZ edit pairs from arXiv, GitHub, and TeX SE and inferring 781K directed edit instructions with a VLM conditioned on rendered figures and TikZ code. We further introduce DaEdiTikZ-Bench, a human-refined benchmark with 690 instances, and train two compact Qwen3.5-based EdiTikZ models (4B and 9B) by jointly learning image-to-TikZ reconstruction and instruction-conditioned editing, followed by reinforcement learning (RL) with complementary rewards for rendered fidelity and edit application. Automatic evaluation places our 9B model above all tested baselines, while human evaluation with 9 annotators and 4,320 ratings places it above GPT-5.6-Sol and on par with Gemini-3.1-Pro. Under severe out-of-distribution shifts, it remains competitive with GPT-5.6-Sol near its 2K training sequence-length regime. Models and datasets are available on
+\href{https://huggingface.co/collections/nllg/editikz}{%
+  \raisebox{-0.18\height}{\includegraphics[height=1.1em]{structure/logos/huggingface.png}}%
+  \,Hugging Face}.
+Code will be released on
+\href{https://github.com/NL2G/EdiTikZ}{%
+  \raisebox{-0.18\height}{\includegraphics[height=1.1em]{structure/logos/github.png}}%
+  \,GitHub}.
+\end{abstract}
+
+\input{structure/1_introduction}
+
+\input{structure/2_related_work}
+
+\input{structure/3_dataset}
+
+\input{structure/4_methodology}
+
+\input{structure/5_experiments}
+
+\input{structure/6_results}
+
+\input{structure/7_conclusion}
+
+\section*{AI Use Statement}
+We did not use AI to design or refine the dataset and methodological approaches, to search for relevant literature, to provide feedback on experiments, or to analyze data or interpret results. Generative AI tools were used to create editing instructions for the construction of the dataset, the benchmark, and the out-of-distribution dataset, as explicitly described in Section~\ref{sec:Dataset and Benchmark}. In addition, we used generative AI tools to improve the grammar, wording, and readability of the manuscript (including figures, tables, and equations) as well as to assist with debugging and editing the code written by the authors. All AI-assisted work was reviewed and verified by the authors. We therefore take responsibility for the final content of this work, including text, statements, code, and artifacts created with the help of generative AI.
+
+\bibliography{iclr2027_conference}
+\bibliographystyle{plainnat}
+
+\appendix
+
+\input{structure/A_appendix}
+
+\end{document}

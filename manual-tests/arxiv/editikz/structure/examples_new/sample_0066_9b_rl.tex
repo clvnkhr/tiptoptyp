@@ -1,0 +1,10 @@
+\begin{tikzpicture}[scale=0.6, transform shape]
+\node[circle, draw, thick, minimum size=2cm, align=center] (A) at (0,0) {Ferdinand\\Maria};
+\node[circle, draw, thick, minimum size=2cm, align=center] (B) at (5,0) {Princess\\Henriette};
+\node[circle, draw, thick, minimum size=2cm, align=center] (C) at (0,-5) {Violante\\Bavaria};
+\draw[->, thick] (A) -- (B) node[midway, above] {isMarried};
+\draw[->, thick] (A) -- (C) node[midway, sloped, above] {hasChild};
+\draw[->, thick, blue, dashed] (B) -- (C) node[midway, sloped, above] {hasChild};
+\node[align=center] (D) at (6.5,-3) {target\\prediction\\$\langle s,r,o\rangle$};
+\draw[->, thick] (D) -- (3.25,-2);
+\end{tikzpicture}

@@ -1,0 +1,170 @@
+\newlength{\pipelinerowheight}
+\setlength{\pipelinerowheight}{1.60cm}
+
+\newcommand{\figimg}[1]{%
+  \parbox[c][\pipelinerowheight][c]{1.78cm}{%
+    \centering
+    \includegraphics[
+      width=1.72cm,
+      height=1.48cm,
+      keepaspectratio
+    ]{#1}%
+  }%
+}
+
+\newcommand{\instructioncell}[1]{%
+  \parbox[t][\pipelinerowheight][t]{3.72cm}{%
+    \vspace{-7.3pt}%
+    \hspace*{0.4mm}%
+    \parbox[t]{3.59cm}{%
+      \raggedright
+      \fontsize{3.15}{3.45}\selectfont
+      #1\par
+    }%
+  }%
+}
+
+\begin{figure*}[t]
+\centering
+
+\begin{adjustbox}{width=\textwidth}
+\begin{tikzpicture}[
+    stage/.style={
+        draw,
+        line width=0.55pt,
+        inner sep=0pt,
+        outer sep=0pt,
+        anchor=north west
+    },
+    pipeline arrow/.style={
+        -{Latex[length=2.2mm,width=1.6mm]},
+        line width=0.65pt
+    }
+]
+
+\node[stage] (pairs) {%
+\begin{tabular}{
+    @{}
+    >{\centering\arraybackslash}p{1.78cm}
+    @{\hspace{0.25mm}}
+    >{\centering\arraybackslash}p{1.78cm}
+    @{}
+}
+\multicolumn{2}{c}{%
+    \parbox[c][0.42cm][c]{3.56cm}{%
+        \centering\bfseries\small Image Pair
+    }%
+}
+\\[-0.4mm]
+\midrule
+\figimg{structure/benchmark_examples/sample_0281_1.png}
+&
+\figimg{structure/benchmark_examples/sample_0281_2.png}
+\\[-0.3mm]
+\midrule
+\figimg{structure/benchmark_examples/sample_0296_1.png}
+&
+\figimg{structure/benchmark_examples/sample_0296_2.png}
+\\
+\end{tabular}
+};
+
+\coordinate (pairsepTop) at ($(pairs.north)+(-0.0,-0.46cm)$);
+\coordinate (pairsepMidTop) at ($(pairs.north)+(-0.0,-1.9cm)$);
+\coordinate (pairsepMidBottom) at ($(pairs.north)+(-0.0,-2.04cm)$);
+\coordinate (pairsepBottom) at ($(pairs.south)+(-0.0,0.07cm)$);
+
+\draw[line width=0.35pt]
+    (pairsepTop)
+    --
+    (pairsepMidTop);
+
+\draw[line width=0.35pt]
+    (pairsepMidBottom)
+    --
+    (pairsepBottom);
+
+\node[
+    stage,
+    right=7mm of pairs.north east,
+    anchor=north west
+] (generated) {%
+\begin{tabular}{@{}p{3.65cm}@{}}
+\parbox[c][0.42cm][c]{3.65cm}{%
+    \centering\bfseries\small VLM Edit Instruction
+}
+\\[-0.4mm]
+\midrule
+\instructioncell{The four boundary lines \smath{\Sigma} are changed from a rotated, intersecting configuration to an orthogonal grid. The lines are now strictly horizontal and vertical, forming a rectangular frame around the center. \redstrike{The central shaded} \redstrike{region labeled \smath{O} is changed from a triangle to a rectangle aligned with the new} \redstrike{grid.} A new label \smath{\Sigma^{4}} is added \redstrike{to the bottom-left quadrant}. A new label \smath{\Theta^{4,1}} is added in the bottom-right corner, marking the angle between the bottom and right boundaries. A new label \smath{\Theta^{3,4}} is added in the bottom-left corner, marking the angle between the left and bottom boundaries. Two new coordinate labels, \smath{x^{4}_{1}} and \smath{x^{4}_{2}}, are added \redstrike{in the bottom quadrant}. The positions of the existing labels
+\smath{\Sigma^{1}}, \smath{\Sigma^{2}}, \smath{\Sigma^{3}}, \smath{\Theta^{1,2}}, \smath{\Theta^{2,3}}, and \smath{\Theta^{3,1}} are adjusted to the new geometry.}
+\\[-2.9mm]
+\midrule
+\instructioncell{A new black dot labeled \smath{-Mu} is added to the left of the origin \redstrike{on the dashed line}. A new black dot labeled \smath{(M+n)u} is added to the right of the existing \smath{nu} point \redstrike{on the dashed line}. The horizontal dashed line is extended to the left and right \redstrike{to encompass the new points}. Two new dotted lines are added, parallel to the original one, passing through the new points \smath{-Mu} and \smath{(M+n)u}. A new green wavy path is added, starting from the origin and ending at a green dot on the middle dotted line. The existing blue wavy path is extended further to the right, and its endpoint (blue dot) is moved to a new position on the middle dotted line. A new purple wavy path is added, starting from the origin and ending at a purple dot on the \redstrike{leftmost dotted line}.}
+\\[-2.9mm]
+\end{tabular}
+};
+
+\draw[pipeline arrow]
+    ($(pairs.east)$)
+    --
+    ($(generated.west)$);
+
+\node[
+    anchor=center,
+    inner sep=0pt,
+    fill=gray!20
+] at ($(generated.north east)+(-0.5mm,-0.5mm)$) {%
+    \includegraphics[
+        width=5.8mm,
+        height=5.8mm,
+        keepaspectratio
+    ]{structure/figures/qwen_logo.png}%
+};
+
+\node[
+    stage,
+    right=7mm of generated.north east,
+    anchor=north west
+] (corrected) {%
+\begin{tabular}{@{}p{3.65cm}@{}}
+\parbox[c][0.42cm][c]{3.65cm}{%
+    \centering\bfseries\small Human Correction
+}
+\\[-0.4mm]
+\midrule
+\instructioncell{The four boundary lines \smath{\Sigma} are changed from a rotated, intersecting configuration to an orthogonal grid. The lines are now strictly horizontal and vertical, forming a rectangular frame around the center. A new label \smath{\Sigma^{4}} is added
+\greencorr{at the top-left of the bottom-left quadrant}, \blueadd{representing the fourth boundary}. A new label \smath{\Theta^{4,1}} is added in the bottom-right
+corner, marking the angle between the bottom and right boundaries. A new label \smath{\Theta^{3,4}} is added in the bottom-left corner, marking the angle between the left and bottom boundaries. Two new coordinate labels,
+\smath{x^{4}_{1}}, \blueadd{pointing downward}, and \smath{x^{4}_{2}}, \blueadd{pointing right}, are added \greencorr{in the center of the bottom quadrant} \blueadd{and associated with the fourth boundary}.}
+\\[-2.9mm]
+\midrule
+\instructioncell{A new black dot labeled \smath{-Mu} is added to the left of the origin \greencorr{just below the dashed line}. A new black dot labeled \smath{(M+n)u} is added to the right of the existing \smath{nu} point. The horizontal dashed line is extended to the left and right. Two new dotted lines are added, parallel to the original one, passing through the new points \smath{-Mu} and \smath{(M+n)u}. A new green wavy path is added, starting from the origin, \blueadd{curving slightly downwards}, and ending at a green dot on the middle dotted line. The existing blue wavy path is extended further to the right,
+\blueadd{now curving just over the new rightmost dashed line}. Its endpoint (blue dot) is moved to a new position on the middle dotted line \blueadd{just below the green dot}. A new purple wavy path is added, starting from the origin, \blueadd{curving over the leftmost dotted line}, and ending at a purple dot on the \greencorr{middle dotted line} \blueadd{just below the blue dot}.}
+\\[-2.9mm]
+\end{tabular}
+};
+
+\draw[pipeline arrow]
+    ($(generated.east)$)
+    --
+    ($(corrected.west)$);
+
+\node[
+    anchor=north east,
+    inner sep=0pt,
+    fill=gray!20
+] at ($(corrected.north east)+(2.4mm,2.4mm)$) {%
+    \includegraphics[
+        width=5.8mm,
+        height=5.8mm,
+        keepaspectratio
+    ]{structure/figures/user-edit.png}%
+};
+
+\end{tikzpicture}
+\end{adjustbox}
+
+\caption{Examples of human-refined benchmark instructions. \redstrike{Red strikethrough} marks removed errors, \greencorr{green} marks corrections, and \blueadd{blue} marks added omissions.}
+\label{fig:instruction-annotation-pipeline}
+
+\end{figure*}

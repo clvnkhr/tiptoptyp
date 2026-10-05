@@ -1,0 +1,737 @@
+\section{Appendix}
+\label{sec:Appendix}
+
+\subsection{Related Work}
+\label{subsec:Related Work}
+
+\subsubsection{Image Editing}
+\label{subsubsec:Image Editing}
+Most image-editing progress has been driven by diffusion models~\citep{neurips2020-ddpm}. Early methods preserve source structure through attention manipulation~\citep{mokady2022null}, while InstructPix2Pix~\citep{Brooks2022InstructPix2PixLT} generates editing supervision by using GPT-3 for instructions and Stable Diffusion with Prompt-to-Prompt for paired before/after images. UltraEdit~\citep{zhao2024ultraeditinstructionbasedfinegrainedimage} instead anchors automatically generated edits in real photographs and artworks and adds region-level supervision. AnyEdit~\citep{Yu2024AnyEditMU} expands this setting to over 20 edit types with adaptive editing and automatic result selection. SeedEdit~\citep{wang2025seededit30fasthighquality} combines synthetic pairs with professional editing workflows, traditional operators, and video-derived image pairs, while ScaleEdit-12M~\citep{chen2026scaleedit12mscalingopensourceimage} scales data generation through an open-source multi-agent pipeline with adaptive synthesis and task-aware verification. These methods primarily target natural images rather than structurally constrained scientific graphics.
+
+\subsection{Dataset and Benchmark}
+\label{subsec:Dataset and Benchmark}
+
+\subsubsection{Inferring Edit Instructions}
+\label{subsubsec:Inferring Edit Instructions}
+For large-scale edit instruction inference, we use Qwen3.6-27B (non-thinking) conditioned jointly on image pair and TikZ code. Temperature is 0.1, top\_p is 1.0, and output tokens are set to 1024. On $4\times$ NVIDIA H100 (94 GB) GPUs with the vLLM~\citep{kwon2023efficient} framework, this took 11 days. The prompt is in Figure~\ref{fig:prompt_edit_instructions}.
+\refstepcounter{figure}
+\begin{PromptBox}{VLM Instruction Generation}
+Your task is to analyze the differences between two scientific figures given as: \\
+- Image 1 + TikZ Code 1 \\
+- Image 2 + TikZ Code 2 \\
+Provide detailed descriptions of the edits needed to transform the first scientific figure into the second. \\
+
+Requirements: \\
+
+0) Pair quality: Before listing any edits, decide whether Image 2 is a plausible edited version of Image 1. \\
+- \texttt{"ok"}: same underlying figure or scene with a plausible edit path. \\
+- \texttt{"identical"}: no visible differences and no code changes implying visible differences. \\
+- \texttt{"invalid"}: no plausible edit path or no shared figure identity (e.g., different figure type, different number of panels, different main subject, or no shared anchors). \\
+
+1) Code-first, render-grounded: Use the TikZ code to discover candidate differences between the figures. Only keep differences that produce a perceptible change in the rendered images. Describe edits using human-visible anchors from the images (rendered text, mathematics, relative location, appearance, connectivity), not code-only identifiers or absolute coordinates. \\
+
+2) Atomic and reconstructable: Each edit must describe exactly one logical change and include enough concrete before$\rightarrow$after detail that a human, given Image 1 alone, could plausibly recreate the corresponding part of Image 2. If many elements change in the same way, group them into one global edit, but enumerate the specific visible changes. \\
+
+Output requirements: \\
+- Report ONLY differences (no full image or code descriptions). \\
+- Output ONLY valid JSON (no extra text and no trailing commas). \\
+
+Return exactly the following JSON format: \\
+{\ttfamily
+\{ \\
+\hspace*{1.5em}"pair\_quality": "ok|identical|invalid", \\
+\hspace*{1.5em}"edits": [ \\
+\hspace*{3em}\{ \\
+\hspace*{4.5em}"intent": "add|remove|modify", \\
+\hspace*{4.5em}"operation": "text|annotation|geometry|style|data|structure|other", \\
+\hspace*{4.5em}"detailed\_change": "specific human-visible description" \\
+\hspace*{3em}\} \\
+\hspace*{1.5em}] \\
+\} \\
+}
+
+If \texttt{pair\_quality} is \texttt{"identical"}, return exactly: \\
+{\ttfamily
+\{ "pair\_quality": "identical", "edits": [] \}
+}
+
+If \texttt{pair\_quality} is \texttt{"invalid"}, return exactly: \\
+{\ttfamily
+\{ "pair\_quality": "invalid", "edits": [] \}
+} \\
+
+Operation guidance: \\
+- text: visible strings or mathematics (labels, titles, tick labels, axis names, legend entries). \\
+- annotation: explanatory or highlighting elements (arrows, callouts, braces, highlight boxes, emphasis marks). \\
+- geometry: position, shape, size, orientation, alignment, or spacing of visible elements. \\
+- style: appearance changes that do not alter the encoded meaning (color, line style, thickness, opacity, font). \\
+- data: changes to plotted or encoded values, including new points, curves, colormap normalization, or category-to-color mappings. \\
+- structure: high-level organization while preserving the same underlying figure identity (e.g., added or removed panels, plot type changes of the same data, topology changes in the same diagram). \\
+- other: visible changes not covered above (e.g., clipping, layer ordering, global transforms). \\
+
+TikZ Code 1: \\
+\{code\_1\} \\
+
+TikZ Code 2: \\
+\{code\_2\} \\
+
+Your output JSON:
+\label{fig:prompt_edit_instructions}
+\end{PromptBox}
+
+\clearpage
+
+\begin{table*}[t]
+\centering
+\caption{Summary statistics for DaEdiTikZ. A retained pair has both directions with \texttt{pair\_quality=ok}. Each valid direction forms a separate editing trajectory.}
+\label{tab:daeditikz_summary}
+\setlength{\tabcolsep}{8pt}
+\renewcommand{\arraystretch}{0.98}
+\begin{tabular}{lr}
+\toprule
+\textbf{Statistic} & \textbf{Value} \\
+\midrule
+Total groups & 87,051 \\
+Unique figures & 589,986 \\
+Candidate figure pairs / trajectories & 430,442 / 860,884 \\
+Bidirectional valid pairs / trajectories & 390,516 / 781,032 \\
+Total atomic edits & 3,282,215 \\
+Mean atomic edits per trajectory (median; P95 / P99) & 4.20 (4; 9 / 13) \\
+Mean atomic edit length & 22.3 words (127.0 characters) \\
+Mean trajectory length & 93.6 words (533.9 characters) \\
+\bottomrule
+\end{tabular}
+\end{table*}
+DaEdiTikZ connects 590K unique figures through 430K candidate pairs from 87K context groups. Pair validation retains 90.7\% of candidates, yielding 781K directional trajectories and 3.28M atomic edits. Figure reuse is limited. 69.3\% of figures occur in only one pair and 97.3\% in at most three (Table~\ref{tab:daeditikz_summary}).
+
+\begin{table*}[t]
+\centering
+\caption{Directional response quality and pair-level retention of all 430,442 candidate pairs.}
+\label{tab:daeditikz_retention}
+\setlength{\tabcolsep}{7pt}
+\renewcommand{\arraystretch}{0.98}
+\begin{tabular}{llrr}
+\toprule
+\textbf{Level} & \textbf{Outcome} & \textbf{Count} & \textbf{Percentage} \\
+\midrule
+\multirow{4}{*}{Forward direction}
+ & OK        & 401,357 & 93.24\% \\
+ & Invalid   &  17,770 &  4.13\% \\
+ & Identical &   4,151 &  0.96\% \\
+ & Missing   &   7,164 &  1.66\% \\
+\midrule
+\multirow{4}{*}{Backward direction}
+ & OK        & 400,892 & 93.13\% \\
+ & Invalid   &  18,191 &  4.23\% \\
+ & Identical &   4,243 &  0.99\% \\
+ & Missing   &   7,116 &  1.65\% \\
+\midrule
+\multirow{2}{*}{Candidate pair}
+ & Both directions valid  & 390,516 & 90.72\% \\
+ & Excluded      &  39,926 &  9.28\% \\
+\bottomrule
+\end{tabular}
+\end{table*}
+Quality is nearly symmetric across directions, with 93.2\% of both forward and backward responses accepted. 390.5K pairs support supervision in both directions (Table~\ref{tab:daeditikz_retention}).
+
+\clearpage
+
+\begin{table*}[t]
+\centering
+\caption{Frequency and description length of atomic edits by intent and operation.}
+\label{tab:daeditikz_edit_distribution}
+\small
+\setlength{\tabcolsep}{7pt}
+\renewcommand{\arraystretch}{0.98}
+\begin{tabular}{llrrrr}
+\toprule
+\textbf{Dimension} &
+\textbf{Category} &
+\textbf{Atomic edits} &
+\textbf{Share} &
+\textbf{Words/edit} &
+\textbf{Characters/edit} \\
+\midrule
+\multirow{3}{*}{Intent}
+& Add
+& 418,547
+& 12.75\%
+& 19.31
+& 107.47 \\
+& Modify
+& 2,515,332
+& 76.64\%
+& 23.53
+& 134.14 \\
+& Remove
+& 348,167
+& 10.61\%
+& 16.65
+& 99.19 \\
+\midrule
+\multirow{6}{*}{Operation}
+& Annotation
+& 372,974
+& 11.36\%
+& 20.24
+& 117.69 \\
+& Data
+& 322,790
+& 9.83\%
+& 32.33
+& 174.08 \\
+& Geometry
+& 657,043
+& 20.02\%
+& 25.90
+& 147.39 \\
+& Structure
+& 246,587
+& 7.51\%
+& 28.38
+& 164.97 \\
+& Style
+& 302,560
+& 9.22\%
+& 21.31
+& 119.78 \\
+& Text
+& 1,380,250
+& 42.05\%
+& 17.84
+& 103.68 \\
+\bottomrule
+\end{tabular}
+\end{table*}
+Most inferred atomic edits modify existing content (76.6\%), while additions and removals jointly account for 23.4\% (Table~\ref{tab:daeditikz_edit_distribution}). Text is the most frequent operation (42.1\%), followed by geometry (20.0\%), annotation (11.4\%), data (9.8\%), style (9.2\%), and structure (7.5\%). Description length also varies systematically with edit semantics. Data and structural changes require the longest descriptions, averaging 32.3 and 28.4 words per edit, whereas text edits average 17.8 words. Modifications are longer than additions and removals, consistent with the need to specify both an existing and a desired state. Manual inspection suggests that modifications are somewhat overrepresented, as the VLM occasionally describes additions or removals as replacements (e.g., replacing a label with nothing).
+
+\begin{table*}[t]
+\centering
+\caption{Intent distribution conditioned on operation.}
+\label{tab:daeditikz_intent_given_operation}
+\setlength{\tabcolsep}{9pt}
+\renewcommand{\arraystretch}{0.98}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Operation} & \textbf{Add} & \textbf{Modify} & \textbf{Remove} \\
+\midrule
+Annotation & 41.21\% & 27.94\% & 30.85\% \\
+Data       &  9.47\% & 81.18\% &  9.35\% \\
+Geometry   & 10.05\% & 81.08\% &  8.88\% \\
+Structure  & 23.52\% & 50.19\% & 26.28\% \\
+Style      &  0.70\% & 98.49\% &  0.81\% \\
+Text       &  7.84\% & 86.56\% &  5.61\% \\
+\bottomrule
+\end{tabular}
+\end{table*}
+Intent depends strongly on operation (Table~\ref{tab:daeditikz_intent_given_operation}). Text, geometry, data, and especially style edits predominantly modify existing content ($>$80\%). In contrast, 50.2\% of structure and 27.9\% of annotation edits modify an element. Structure is balanced across additions and removals (23.5\% vs. 26.3\%), whereas annotations include more additions (41.2\% vs. 30.9\%).
+
+\clearpage
+
+\begin{table*}[t]
+\centering
+\caption{Intent and Operation distribution across semantic similarity intervals.}
+\label{tab:daeditikz_similarity_composition}
+\scriptsize
+\setlength{\tabcolsep}{3.2pt}
+\renewcommand{\arraystretch}{0.95}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrrrrr}
+\toprule
+\multirow{2}{*}{\textbf{Similarity}} &
+\multicolumn{3}{c}{\textbf{Intent}} &
+\multicolumn{6}{c}{\textbf{Operation}} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-10}
+& \textbf{Add} & \textbf{Modify} & \textbf{Remove}
+& \textbf{Annotation} & \textbf{Data} & \textbf{Geometry}
+& \textbf{Structure} & \textbf{Style} & \textbf{Text} \\
+\midrule
+$[0.95,0.96)$ & 16.41 & 70.69 & 12.89 & 13.84 &  7.84 & 18.21 & 9.13 &  8.53 & 42.45 \\
+$[0.96,0.97)$ & 14.97 & 72.94 & 12.09 & 12.79 &  8.60 & 19.06 & 8.82 &  8.55 & 42.17 \\
+$[0.97,0.98)$ & 13.08 & 75.81 & 11.10 & 11.49 &  9.76 & 20.21 & 7.90 &  8.73 & 41.91 \\
+$[0.98,0.99)$ & 10.04 & 80.90 &  9.06 &  9.37 & 11.75 & 21.82 & 6.19 &  9.29 & 41.58 \\
+$[0.99,1.00]$ &  5.16 & 89.77 &  5.07 &  6.70 & 13.27 & 22.35 & 3.39 & 12.34 & 41.95 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table*}
+Lower-similarity pairs contain more additions and removals, whereas higher similarity pairs contain more modifications. Moreover, highly similar pairs primarily modify existing geometry, data, and style while annotation and structural changes correspond to lower similarity. Text remains stable at approximately 42\% across all intervals (Table~\ref{tab:daeditikz_similarity_composition}).
+
+\begin{table*}[t]
+\centering
+\caption{Candidate distribution, quality, and edit magnitude across semantic similarity intervals.}
+\label{tab:daeditikz_similarity_summary}
+\small
+\setlength{\tabcolsep}{5.2pt}
+\renewcommand{\arraystretch}{0.98}
+\begin{tabular}{lrrrrrrr}
+\toprule
+\textbf{Similarity} & \textbf{Pairs} & \textbf{Share} & \textbf{Retention}
+& \textbf{Invalid} & \textbf{Identical} & \textbf{Edits/traj.} & \textbf{Words/edit} \\
+\midrule
+$[0.95,0.96)$ & 95,641 & 22.22\% & 81.91\% & 12.09\% & 0.04\% & 5.29 & 20.86 \\
+$[0.96,0.97)$ & 83,942 & 19.50\% & 90.05\% &  5.24\% & 0.08\% & 4.96 & 21.39 \\
+$[0.97,0.98)$ & 79,764 & 18.53\% & 94.47\% &  1.81\% & 0.12\% & 4.48 & 22.11 \\
+$[0.98,0.99)$ & 80,295 & 18.65\% & 96.55\% & 0.47\% & 0.28\% & 3.82 & 23.23 \\
+$[0.99,1.00]$ & 90,098 & 20.93\% & 92.91\% &  0.22\% & 4.19\% & 2.61 & 25.35 \\
+\bottomrule
+\end{tabular}
+\end{table*}
+The five intervals each contain between 18.5\% and 22.2\% of candidates in Table~\ref{tab:daeditikz_similarity_summary}. Mean edit count decreases monotonically from 5.29 to 2.61 as similarity increases, while description length rises from 20.9 to 25.4 words per edit. Bidirectional retention peaks at 96.6\% in $[0.98,0.99)$. Lower similarities increasingly produce non-plausible edit pairs, whereas the highest interval contains more identical pairs that differ only at the code level (e.g., through refactoring).
+
+\clearpage
+
+\begin{table*}[t]
+\centering
+\caption{Source-specific characteristics.}
+\label{tab:daeditikz_source_characteristics}
+\small
+\setlength{\tabcolsep}{3.8pt}
+\renewcommand{\arraystretch}{1.05}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrrp{3.7cm}p{6.8cm}}
+\toprule
+\textbf{Source} &
+\textbf{Pairs} &
+\textbf{Share} &
+\textbf{Groups} &
+\textbf{Retention} &
+\textbf{Edits/traj.} &
+\textbf{Words/edit} &
+\textbf{Intent} &
+\textbf{Operation} \\
+\midrule
+arXiv
+& 402,411
+& 93.49\%
+& 79,246
+& 90.90\%
+& 4.23
+& 22.26
+& Modify 76.66\%, add 12.74\%, remove 10.59\%
+& Text 42.34\%, geometry 20.02\%, annotation 11.29\%, data 9.78\%,
+  style 9.09\%, structure 7.47\% \\
+GitHub
+& 21,891
+& 5.09\%
+& 3,032
+& 87.98\%
+& 4.12
+& 21.69
+& Modify 76.14\%, add 13.09\%, remove 10.77\%
+& Text 40.38\%, geometry 17.51\%, annotation 12.64\%, data 11.31\%,
+  style 9.49\%, structure 8.66\% \\
+TeX SE
+& 6,068
+& 1.41\%
+& 4,761
+& 89.26\%
+& 2.29
+& 26.52
+& Modify 77.11\%, add 11.49\%, remove 11.40\%
+& Geometry 36.04\%, style 23.26\%, text 16.73\%, annotation 11.76\%,
+  data 6.98\%, structure 5.23\% \\
+\bottomrule
+\end{tabular}%
+}
+\end{table*}
+ArXiv supplies most trajectories and is primarily text-centered, whereas GitHub contains more annotation and data edits. TeX SE provides a distinct form of supervision. Its trajectories contain fewer atomic edits (2.3 versus 4.2) but require the most detailed instructions (26.5 words per edit versus 22). It predominantly involves geometric and stylistic over textual refinements (Table~\ref{tab:daeditikz_source_characteristics}).
+
+\subsubsection{Dataset Quality Analysis}
+\label{subsubsec:Dataset Quality Analysis}
+Our dataset quality analysis involved one master's student and one PhD student. Both annotators completed the evaluation sheet in Figure~\ref{fig:vlm_instruction_sheet}.
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\textwidth]{structure/figures/vlm_instructions_annotation_sheet.png}
+  \caption{Screenshot of our excel sheet for evaluating the directional VLM-generated edit instructions.}
+  \label{fig:vlm_instruction_sheet}
+\end{figure}
+The guidelines for completing our evaluation form are summarized in Table~\ref{tab:instruction_error_guidelines}.
+\begin{table}[t]
+\centering
+\caption{Guidelines for annotating errors in VLM-generated edit instructions.}
+\label{tab:instruction_error_guidelines}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lp{0.72\linewidth}}
+\toprule
+\textbf{Category} & \textbf{Guideline} \\
+\midrule
+Error &
+The instruction contains at least one of omission, hallucination, or misinterpretation. \\
+\midrule
+Omission &
+A change is absent or only partially captured by the instruction. \\
+
+Hallucination &
+A change is specified for which no corresponding source-to-target change exists. \\
+
+Misinterpretation &
+A change is identified but describes
+one or more of its properties incorrectly. \\
+\midrule
+Attribute &
+An edited object's identity, appearance, style, text, shape, or other non-numeric property is described incorrectly. \\
+
+Numeric &
+A numerical value or quantitative change is described incorrectly (e.g., values, counts, dimensions, or magnitudes). \\
+
+Spatial &
+The spatial relation, position, orientation, direction, or arrangement of edited elements is described incorrectly. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{DaEdiTikZ-Bench}
+\label{subsubsec:DaEdiTikZ-Bench}
+Six annotators (four master’s students, one PhD student, one assistant professor) manually correct all 690 VLM-generated instructions from our benchmark. Similar to the dataset quality analysis, they were provided with the source image, target image, and the raw VLM response in JSON objects/entries. For omissions, they append another part of the JSON object (with \texttt{intent}, \texttt{operation}, and \texttt{detailed\_change}), where the missed change is described. For hallucination, the corresponding part of the JSON object is removed and misinterpretation keeps it but corrects the error. The correction sheet is in Figure~\ref{fig:vlm_correction_sheet}.
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\textwidth]{structure/figures/vlm_instructions_correction_sheet.png}
+  \caption{Screenshot of our excel sheet for correcting the directional VLM-generated edit instructions.}
+  \label{fig:vlm_correction_sheet}
+\end{figure}
+
+\subsection{Method}
+\label{subsec:Method}
+
+\subsubsection{Joint Reconstruction and Editing SFT}
+\label{subsubsec:Joint Reconstruction and Editing SFT}
+Figure~\ref{fig:prompt_editing} and~\ref{fig:prompt_reconstruction} present the prompts for joint editing and reconstruction SFT. The editing prompt is used across all training stages and evaluation of all models.
+\refstepcounter{figure}
+\begin{PromptBox}{Editing Prompt}
+This is an image of a scientific figure. Reconstruct it in TikZ and apply the following changes: \\
+\{edit\_instruction\} \\
+Wrap your code using \texttt{\textbackslash documentclass[tikz]\{standalone\}}, and include \texttt{\textbackslash begin\{document\}}...\texttt{\textbackslash end\{document\}}. Only output valid LaTeX code with no extra text.
+\label{fig:prompt_editing}
+\end{PromptBox}
+\refstepcounter{figure}
+\begin{PromptBox}{Reconstruction Prompt}
+This is an image of a scientific figure. Reconstruct it in TikZ. \\
+Wrap your code using \texttt{\textbackslash documentclass[tikz]\{standalone\}}, and include \texttt{\textbackslash begin\{document\}}...\texttt{\textbackslash end\{document\}}. Only output valid LaTeX code with no extra text.
+\label{fig:prompt_reconstruction}
+\end{PromptBox}
+
+\subsubsection{Editing-Specific Rewards}
+\label{subsubsec:Editing-Specific Rewards}
+The prompt template for our instruction-following reward $\mathcal{R}_{\mathrm{IF}}$ is shown in Figure~\ref{fig:prompt_instruction_following}. As our VLM-as-a-judge backbone, we use Qwen3.6-27B (thinking disabled). It uses greedy decoding (\texttt{temperature=0.0} and \texttt{top\_p=1.0}) and 128 output tokens. Judging is done with vLLM on 1 x Nvidia H100 (94 GB).
+\refstepcounter{figure}
+\begin{PromptBox}{VLM-as-a-Judge ($\mathcal{R}_{\mathrm{IF}}$)}
+You are a strict visual reward judge for scientific figure editing. \\
+You are given TWO images: \\
+- Image 1 is the source figure before editing. \\
+- Image 2 is the predicted figure after editing. \\
+You are also given a list of requested atomic edits. \\
+Judge whether Image 2 applies each requested atomic edit relative to Image 1. \\
+For each atomic edit, decide whether the rendered image visibly and fully applies that edit. \\
+Binary rating rubric: \\
+1 = APPLIED. All essential visible requirements are satisfied in the predicted figure, the correct target was modified, requested text or mathematics is legible, and conflicting old content is absent. \\
+0 = NOT APPLIED. The edit is absent, incomplete, incorrect, applied to the wrong target, contradicted by old content, insufficiently legible, or cannot be reliably verified. \\
+Important judging rules: \\
+- Score the predicted figure, not the source figure. \\
+- Use the source figure only to identify original objects, positions, labels, shapes, connections, and content that should be added, removed, or modified. \\
+- Judge only visible instruction faithfulness, not general similarity or visual beauty. \\
+- Do not give credit for incomplete or ambiguous attempts. \\
+- For an edit with multiple required parts, return 1 only if all essential parts are visibly satisfied. \\
+- For text and mathematical edits, return 1 only if the requested content is legible. \\
+- If an edit changes X to Y, return 1 only if Y is visible at the correct location and conflicting X is absent there. \\
+- For removals, return 1 only if the specified original content is absent from its original location. \\
+- Evaluate every edit independently and preserve the exact order. \\
+- Return exactly one integer per atomic edit. \\
+Return ONLY compact valid JSON in exactly this format:\\
+{\ttfamily
+\{ \\
+\hspace*{1.5em}"ratings": [0, 0, ..., 0] \\
+\} \\
+}
+The array length must exactly match the number of atomic edits. \\
+Atomic edits:\\
+\{atomic\_edits\} \\
+Your output JSON:
+\label{fig:prompt_instruction_following}
+\end{PromptBox}
+
+\subsubsection{Multi-Reward Optimization with GDPO}
+\label{subsubsec:Multi-Reward Optimization with GDPO}
+GDPO independently normalizes the advantages induced by $\mathcal{R}_{\mathrm{SSim}}$ and $\mathcal{R}_{\mathrm{IF}}$ across its rollout group before combining them with equal weights. For the policy loss, we adopt the constant-length normalization proposed by Dr.GRPO~\citep{liu2025understanding} where the summed token-level loss of each rollout is normalized by the fixed maximum completion length $L$ which avoids introducing a response-length-dependent optimization bias for TikZ programs. We further adopt DAPO's Clip-Higher strategy~\citep{yu2025dapo}, using asymmetric clipping with $\epsilon_{\mathrm{low}}=0.2$ and $\epsilon_{\mathrm{high}}=0.28$. The relaxed upper bound allows larger probability increases for low-probability exploratory tokens while the lower bound remains unchanged. Rollouts are sampled with \texttt{temperature=1.0} and \texttt{top\_p=0.99}, with a maximum completion length of 2048 tokens. Completions truncated at this limit are excluded from the policy loss. We disable KL regularization ($\beta=0$).
+
+\subsection{Experiments}
+\label{subsec:Experiments}
+
+\subsubsection{Models}
+\label{subsubsec:Models}
+We use separate hyperparameter configurations for models in the 3--4B (Small) and 8--9B (Large) parameter ranges during both SFT and RL. The configurations are summarized in Table~\ref{tab:summary_hyperparameters}. Input images are resized to $448\times448$. We exclude samples whose TikZ code exceeds 4,000 characters or whose instruction exceeds 2,000 characters. Optimization uses AdamW~\citep{loshchilov2019decoupledweightdecayregularization}. We train with Deepspeed ZeRO-2~\citep{rajbhandari2020zero}.
+\begin{table*}[t]
+\centering
+\caption{Training hyperparameters for the small (3--4B) and large (8--9B) models.}
+\label{tab:summary_hyperparameters}
+\small
+\setlength{\tabcolsep}{8pt}
+\renewcommand{\arraystretch}{1.02}
+\begin{tabular}{lcc|cc}
+\toprule
+\multirow{2}{*}{\textbf{Hyperparameter}} &
+\multicolumn{2}{c}{\textbf{SFT}} &
+\multicolumn{2}{c}{\textbf{RL}} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+& \textbf{Small} & \textbf{Large}
+& \textbf{Small} & \textbf{Large} \\
+\midrule
+Training duration (days)
+& 6 & 13 & 8 & 10 \\
+GPUs
+& 4 x H100 & 4 x H100 & 3 x H100 & 3 x H100 \\
+Epochs
+& 2 & 2 & 1 & 1 \\
+Per-device batch size
+& 10 & 6 & 10 & 6 \\
+Gradient accumulation steps
+& 4 & 7 & 6 & 10 \\
+Learning rate
+& $1\times10^{-4}$ & $2\times10^{-5}$
+& $2\times10^{-6}$ & $1\times10^{-6}$ \\
+Learning-rate scheduler
+& \texttt{cosine} & \texttt{cosine}
+& \texttt{constant} & \texttt{constant} \\
+Weight decay
+& $0.0$ & $0.0$ & $0.01$ & $0.01$ \\
+Generations per prompt
+& -- & -- & 8 & 8 \\
+\bottomrule
+\end{tabular}
+\end{table*}
+All open-source baselines and trained models are evaluated on
+DaEdiTikZ-Bench with a maximum of 2,048 output tokens, temperature $0.2$, top-$p$ $0.9$, and top-$k$ $50$. Proprietary GPT and Gemini models use their default reasoning settings and a maximum output budget of 10K tokens. For the out-of-distribution evaluation on CharXiv and SPIQA, we use temperature $0.1$ and a 10K-token output budget for both open-source and proprietary models to test extrapolation beyond the open models’ training output regime.
+
+\subsubsection{Metrics}
+\label{subsubsec:Metrics}
+TeX Edit Distance (TED) uses Extended Edit Distance~\citep{kusner2015icml-word} with \texttt{TexLexer}. DreamSim (DSim) uses an ensemble of CLIP~\citep{radford2021learning}, DINO~\citep{caron2021emerging}, and OpenCLIP (\texttt{ViT-B/16}). Average tokens (AT) are measured with the \texttt{o200k\_base} tokenizer. Figure~\ref{fig:prompt_evaluation} presents our task specific VLM-as-a-Judge metric for Edit Application (EA), Source preservation (SP), and Visual Quality (VQ).
+\refstepcounter{figure}
+\begin{PromptBox}{VLM-as-a-Judge (EA, SP, and VQ)}
+You are evaluating whether a predicted edited scientific figure correctly follows an edit instruction. \\\\
+You are given: \\
+1. The edit instruction \\
+2. The original source figure image before editing \\
+3. The predicted edited figure image \\
+4. A reference target figure image showing one intended edited result \\\\
+Important: \\
+- The edit instruction is the primary specification. \\
+- The reference target image is a helpful guide for the intended result, but it may contain minor artifacts, imperfect alignment, or details not fully described in the instruction. \\
+- Do not require the prediction to copy harmless imperfections from the reference target. \\
+- Reward predictions that correctly apply the instruction, preserve unrelated source content/avoid extra changes, and remain visually clean. \\\\
+Score the prediction on three criteria from 0 to 10. \\\\
+Criterion 1: edit\_application\_score \\
+How completely and correctly are the requested edits applied? \\
+0 = no requested edits are applied or the prediction is unrelated/unusable \\
+1-2 = almost all requested edits are missing or wrong \\
+3-4 = a few requested edits are attempted, but most are missing/wrong \\
+5-6 = some requested edits are correct, but important edits are missing or inaccurate \\
+7-8 = most requested edits are correct, with minor omissions or inaccuracies \\
+9 = essentially all requested edits are correct, with only tiny issues \\
+10 = all requested edits are applied correctly and completely \\\\
+Criterion 2: source\_preservation\_score \\
+How well does the prediction preserve all source content not required to change, and avoid adding/removing unrelated elements? \\
+0 = unchanged source content is completely lost, corrupted, replaced, or dominated by unrelated additions \\
+1-2 = most unchanged content is badly altered, removed, or many unrelated elements are added \\
+3-4 = many unchanged elements are altered, missing, misplaced, or extra unrelated elements are present \\
+5-6 = major unchanged structure is preserved, but several details change unnecessarily or some unrelated elements appear \\
+7-8 = most unchanged content is preserved, with only minor/moderate unrelated changes \\
+9 = nearly all unchanged content is preserved, with only tiny unrelated differences \\
+10 = all unchanged source content is preserved very well and no unrelated elements are introduced \\\\
+Criterion 3: visual\_quality\_score \\
+How visually clean, legible, and publication-ready is the predicted figure? \\
+0 = unusable rendering, blank image, or severe corruption \\
+1-2 = severe layout/rendering problems, mostly unreadable \\
+3-4 = many visual problems such as clipping, overlap, or unreadable labels \\
+5-6 = usable but visibly flawed or messy \\
+7-8 = mostly clean and legible, with minor/moderate visual issues \\
+9 = very clean, with only tiny visual issues \\
+10 = clean, legible, well-aligned, and publication-quality \\\\
+Return valid JSON only in exactly this format: \\
+{\ttfamily
+\{ \\
+\hspace*{1.5em}"edit\_application\_score": 0, \\
+\hspace*{1.5em}"edit\_application\_reasoning": "", \\
+\hspace*{1.5em}"source\_preservation\_score": 0, \\
+\hspace*{1.5em}"source\_preservation\_reasoning": "", \\
+\hspace*{1.5em}"visual\_quality\_score": 0, \\
+\hspace*{1.5em}"visual\_quality\_reasoning": "", \\
+\}
+}\\\\
+Use integer scores from 0 to 10. Keep each reasoning field to one concise sentence. \\\\
+Edit instruction: \\
+\{edit\_instruction\} \\\\
+Your output JSON:
+\label{fig:prompt_evaluation}
+\end{PromptBox}
+
+\subsection{Results}
+\label{subsec:Results}
+
+\subsubsection{Automatic Evaluation}
+\label{subsubsec:Automatic Evaluation}
+DaEdiTikZ-Bench enables evaluating inverse graphics by treating source and target figures of each editing pair as independent reconstruction examples. We evaluate all 690 figures using the same metrics where applicable, excluding EA and adapting SP (Table~\ref{tab:detikzify_evaluation_full}). Our EdiTikZ-4B and 9B models achieve 0.701 and 0.748 Avg, outperforming all evaluated baselines including GPT-5.6-Sol (0.652), Gemini-3.1-Pro (0.655), and improving substantially over their base models (+0.374/+0.430). Moreover, EdiTikZ-8B performs worse than DeTikZify-8B (0.624 vs.\ 0.672) suggesting that editing supervision does not improve reconstruction, whereas reconstruction supervision improves editing. We hypothesize that editing requires preserving large parts of the source figure while applying localized changes, so that additional reconstruction examples strengthen the capability needed for editing. Conversely, reconstruction does not require instruction following, and mixing its image-to-TikZ supervision with potentially noisy edit instructions may dilute its objective.
+
+\input{structure/tables/detikzify_evaluation_full}
+
+\subsubsection{Human Evaluation}
+\label{subsubsec:Human Evaluation}
+Five master's students, three PhD students, and one faculty member (5 male, 4 female) participate in the human evaluation. Each annotator receives detailed guidelines and an Excel sheet containing 20 benchmark examples, yielding 240 example-level annotations and 4,320 individual criterion ratings. Each row presents the source figure, edit instruction, and randomly ordered, anonymized outputs from Gemini-3.1-Pro, GPT-5.6-Sol, Qwen3.5-4B, EdiTikZ-4B, EdiTikZ-4B-RL, Qwen3.5-9B, EdiTikZ-9B, and EdiTikZ-9B-RL. Successfully compiled outputs are rated on 1--7 Likert scales for Edit Application (EA), Source Preservation (SP), and Visual Quality (VQ). Non-compilable outputs receive a score of 0. The complete rating criteria are provided below, and representative examples are shown in Figure~\ref{fig:human_eval_1},~\ref{fig:human_eval_2}, and~\ref{fig:human_eval_3}. Likert scale definitions are shown below:
+\begin{itemize}
+\item \textbf{Edit Application (EA)}: 7) All requested edits are applied correctly and completely. 6) Essentially all requested edits are correct, with only tiny issues. 5) Most requested edits are correct, with minor omissions or inaccuracies. 4) Some requested edits are correct, but important edits are missing or inaccurate. 3) A few requested edits are attempted, but most are missing or wrong. 2) Almost all requested edits are missing or wrong. 1) No requested edits are applied, or the prediction is unrelated or unusable.
+\item \textbf{Source Preservation (SP)}: 7) All unchanged source content is preserved very well, and no unrelated elements are introduced. 6) Nearly all unchanged content is preserved, with only tiny unrelated differences. 5) Most unchanged content is preserved, with only minor or moderate unrelated changes. 4) The major unchanged structure is preserved, but several details change unnecessarily or some unrelated elements appear. 3) Many unchanged elements are altered, missing, misplaced, or accompanied by extra unrelated elements. 2) Most unchanged content is badly altered or removed, or many unrelated elements are added. 1) Unchanged source content is completely lost, corrupted, replaced, or dominated by unrelated additions.
+\item \textbf{Visual Quality (VQ)}: 7) Clean, legible, well-aligned, and publication-quality. 6) Very clean, with only tiny visual issues. 5) Mostly clean and legible, with minor or moderate visual issues. 4) Usable but visibly flawed or messy. 3) Many visual problems, such as clipping, overlap, or unreadable labels. 2) Severe layout or rendering problems; mostly unreadable. 1) Unusable rendering, blank image, or severe corruption.
+\end{itemize}
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\textwidth]{structure/figures/example_1.png}
+  \caption{Example with perfect scores for EA, SP, and VQ.}
+  \label{fig:human_eval_1}
+\end{figure}
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\textwidth]{structure/figures/example_2.png}
+  \caption{Example with lower source preservation but high edit application and visual quality.}
+  \label{fig:human_eval_2}
+\end{figure}
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\textwidth]{structure/figures/example_5.png}
+  \caption{Example with lower scores for all three.}
+  \label{fig:human_eval_3}
+\end{figure}
+
+\subsubsection{Generalization under Severe Distribution Shift}
+\label{subsubsec:Generalization under Severe Distribution Shift}
+During pilot generation, synthetic instructions frequently collapsed to repetitive edit types, specified only one or two shallow changes, or referred to elements that were not visibly grounded in the input figure. We therefore condition GPT-5.6-Sol on the desired number of atomic edits and the exact numbers of \texttt{modify}, \texttt{add}, and \texttt{remove} intents. The prompt additionally specifies admissible operation types, atomicity and visual-grounding constraints, and nine diverse human-written examples of plausible scientific-figure edits. To avoid a fixed synthetic edit profile, we sample the requested number of edits and intent composition for each figure from the empirical DaEdiTikZ distribution. The complete prompt for generating synthetic edit instructions for the SPIQA and CharXiv analyses is provided in Figure~\ref{fig:prompt_synthetic}.
+\refstepcounter{figure}
+\begin{PromptBox}{OOD Edit-Instruction Generation}
+You are creating image-editing instructions for a scientific-figure editing evaluation benchmark. \\
+
+Inspect the supplied scientific figure carefully. \\
+
+Generate exactly \{num\_edits\} atomic edit instructions. \\
+
+The instructions must contain exactly:
+
+- \{num\_modify\} MODIFY operations \\
+- \{num\_add\} ADD operations \\
+- \{num\_remove\} REMOVE operations \\
+
+OPERATION DEFINITIONS \\
+
+MODIFY: \\
+Modify an existing visible element while preserving or replacing its role, appearance, value, position, structure, or content. \\
+
+ADD: \\
+Introduce a new element that is not currently present in the figure. \\
+
+REMOVE: \\
+Delete an existing visible element without replacing it as part of the same atomic operation. \\
+
+ATOMICITY \\
+Each edit object must represent exactly one atomic edit. \\
+Do not combine multiple independent edits into one instruction merely to satisfy the requested operation counts. \\
+A replacement of one visible element with another may be treated as a MODIFY operation when it represents a single coherent replacement. \\
+
+VALIDITY REQUIREMENTS \\
+- Every MODIFY or REMOVE instruction must refer to an element that is clearly visible and unambiguously identifiable in the supplied image. \\
+- Do not invent existing labels, values, curves, nodes, arrows, boxes, legends, colors, equations, annotations, or other elements. \\
+- Never refer to an existing element unless you can visually verify that it is present. \\
+- For ADD instructions, describe the new element's position or connection relative to clearly visible existing elements. \\
+- All requested edits must be visually executable from the supplied image alone. \\
+- Do not require information from the source paper, underlying numerical data, hidden metadata, or outside knowledge. \\
+- The edits must be mutually compatible. \\
+- Do not ask to modify, move, recolor, or relabel an element that another requested edit removes. \\
+- Do not produce redundant edits that accomplish essentially the same modification twice. \\
+
+DIVERSITY REQUIREMENTS \\
+Prefer meaningful textual, annotation-level, geometric, structural, stylistic, semantic, or data-level modifications. \\
+
+Possible edit targets include, but are not limited to: \\
+- labels, equations, symbols, and numerical values \\
+- axes, ticks, legends, titles, and plotted data \\
+- curves, bars, markers, arrows, and paths \\
+- nodes, blocks, connections, and graph topology \\
+- scientific diagrams, architectures, circuits, and geometry \\
+- annotations, boxes, braces, loops, regions, and grids \\
+- positions, dimensions, orientations, and spatial relationships \\
+- colors, line styles, marker styles, and fills when visually meaningful \\
+
+Do not force any particular edit type if it does not naturally apply to the shown figure. \\
+
+When multiple edits are requested, prefer edits that affect different meaningful aspects of the figure rather than repeatedly modifying nearly identical elements. \\
+
+SPECIFICITY \\
+Refer to visible elements using enough identifying information to make the edit unambiguous. \\
+
+Good references include: \\
+- the upper-right node \\
+- the dashed rectangle around the encoder \\
+- the blue curve labeled 'Method A' \\
+- the y-axis tick at 0.5 \\
+- the arrow connecting the first and second blocks \\
+
+Avoid vague references such as 'the line', 'the box', 'the node', or 'the label' when multiple such elements exist. \\
+
+STYLE EXAMPLES FROM REAL FIGURE-EDIT REQUESTS \\
+These examples demonstrate the desired specificity and variety only. \\
+Do not copy their content, entities, values, or sentence structures unless they naturally apply to the supplied figure. \\
+1. Change the input label from
+'$\hat{\boldsymbol{u}}^{\mathrm{sym}}$' to '$\boldsymbol{u}$'. \\
+2. Change the fill color of the 'Policy' block from white to light red. \\
+3. Add a new block labeled '$\mathbb{R}2\mathbb{C}$' at the end of the chain, after the Policy block. \\
+4. Replace the rectangular block labeled 'CLK' and 'MEM' with a D-shaped AND gate symbol. \\
+5. Adjust the y-axis tick marks to 0, 5, and 10. \\
+6. Replace the current 3D surface with a Rosenbrock-style surface containing a long curved valley. \\
+7. Move the rectangular path from the right side of the y-axis to the left side, with its vertical segment at $x=-1$ and its horizontal segments at $y=1$ and $y=-1$. \\
+8. Add a blue curly brace annotation to the right of the legend spanning the top two entries, accompanied by the label 'Grouped'. \\
+9. Remove the Greek letter labels '$\alpha$', '$\beta$', '$\gamma$', and '$\delta$' located above the first four nodes of the top horizontal line. \\
+
+OUTPUT FORMAT \\
+Return ONLY valid JSON. \\
+Do not use Markdown code fences. \\
+Do not include commentary before or after the JSON. \\
+Do not explain your reasoning. \\
+
+The JSON must have exactly this structure: \\
+{\ttfamily
+\{ \\
+\hspace*{1.5em}"edits": [ \\
+\hspace*{3em}\{ \\
+\hspace*{4.5em}"operation": "modify|add|remove", \\
+\hspace*{4.5em}"instruction": "..." \\
+\hspace*{3em}\} \\
+\hspace*{1.5em}] \\
+\} \\
+}\\
+Requirements: \\
+- "operation" must be exactly one of: "modify", "add", "remove". \\
+- "instruction" must contain exactly one complete atomic edit instruction. \\
+- Every instruction must be one sentence. \\
+- The "edits" array must contain exactly \{num\_edits\} objects. \\
+- There must be exactly \{num\_modify\} objects with operation "modify". \\
+- There must be exactly \{num\_add\} objects with operation "add". \\
+- There must be exactly \{num\_remove\} objects with operation "remove". \\
+
+Now generate the edit instructions for the supplied scientific figure.
+\label{fig:prompt_synthetic}
+\end{PromptBox}
+For the OOD evaluation, we adapt the prompt in Figure~\ref{fig:prompt_evaluation} to a reference free setting by omitting the target figure and all target-dependent instructions, and explicitly instructing the judge to evaluate the prediction from the source figure and edit instruction alone. The GPT-5.5 judge and decoding configuration remain unchanged. Table~\ref{tab:ood_table} provides the full results of our stress-tests on SPIQA and CharXiv. EdiTikZ generations are approximately $4$--$5\times$ longer than on DaEdiTikZ-Bench and exhibit substantially lower scores and compilation rates. GPT-5.6-Sol achieves the strongest overall performance on both datasets, while EdiTikZ-9B-RL remains competitive with higher compilation rates and slightly higher VQ on CharXiv. The improvement from SFT to RL is substantially larger across the OOD metrics than on DaEdiTikZ-Bench. Despite RL using only a small in-domain subset of DaEdiTikZ, its benefits transfer strongly to substantially more complex figures outside the training distribution. Across models, SP degrades most strongly, indicating that preserving unchanged content becomes particularly challenging as figure complexity increases.
+
+\input{structure/tables/ood_table}
+
+\subsubsection{Examples}
+\label{subsubsec:Examples}
+
+\input{structure/figures/tikz_code_example_1}
+
+\input{structure/figures/tikz_code_example_2}
+
+\input{structure/figures/tikz_code_example_3}
+
+\input{structure/tables/examples_1}
+
+\input{structure/tables/examples_2}
+
+\input{structure/tables/examples_3}

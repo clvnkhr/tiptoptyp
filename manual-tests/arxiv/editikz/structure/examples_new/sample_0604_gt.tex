@@ -1,0 +1,23 @@
+\begin{tikzpicture}[scale=.39]
+\node at (3.5,2.5) {$L=7$};
+\node at (.5,1.5) {$I_2$}; \foreach \x in {0,...,6} \node at (\x+.5,.5) {$\x$};
+\node at (-1.3,-.5) {$I_1$}; \foreach \y in {0,...,6} \node at (-.5,-\y-.5) {$\y$};
+\draw[very thick](0,0) -| (7,-1) -| cycle (1,-1) |- (2,-2) |- (3,-3) |- (4,-4) |- (5,-5) |- (6,-6) |- (7,-7) -- (7,-1) (3,-1) |- (4,-2) |- (5,-3) |- (6,-4) |- (7,-5);
+\foreach \x in {1,...,6} \draw[ultra thin] (\x,0) |- (7,-\x);
+\draw[dashed] (3,-5) -- (7,-1);
+\draw[dotted] (1.25,-3.25) -- (2,-2.5) (4.75,-6.75) -- (5.5,-6);
+\node at (3.5,-.5) [inner sep=.5pt,fill=white] {descendants};
+\node at (5.5,-2) [inner sep=.5pt,fill=white] {scatt.$\!$};
+\node at (1.5,-1.5) {b};
+\node at (2.5,-1.5) {b};
+\fill[pattern=north east lines] (2,-2) rectangle (3,-3);
+\fill[pattern=north east lines] (3,-2) rectangle (4,-3);
+\fill[pattern=crosshatch] (3,-3) rectangle (4,-4);
+\fill[pattern=crosshatch] (4,-3) rectangle (5,-4);
+\fill[pattern=crosshatch] (4,-4) rectangle (5,-5);
+\fill[pattern=north east lines] (5,-4) rectangle (6,-5);
+\fill[pattern=north east lines] (5,-5) rectangle (6,-6);
+\node at (6.5,-5.5) {b};
+\node at (6.5,-6.5) {b};
+\node at (0,-9) {};
+\end{tikzpicture}

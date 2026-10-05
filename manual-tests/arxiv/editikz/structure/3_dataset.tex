@@ -1,0 +1,35 @@
+\section{Dataset and Benchmark}
+\label{sec:Dataset and Benchmark}
+
+\paragraph{Revision-Derived Editing Supervision}
+Our key observation is that plausible scientific figure edits naturally arise throughout scientific revision and development processes, including (i) figures modified across arXiv or GitHub versions, (ii) related (sub-)figures in the same paper or repository, (iii) alternative TikZ programs retained in source files but not rendered in the document, and (iv) iterative refinements in TeX SE discussions (Figure~\ref{fig:revision_sources}). Exact figure lineage is difficult to recover reliably as figures may be added, removed, renamed, reordered, or moved across files, while surrounding anchors such as captions, references, and related text can also change. We therefore identify semantically similar pairs within shared scientific contexts and retain plausible editing transformations.
+
+\input{structure/figures/revision_pairs}
+
+\paragraph{Collecting Scientific Revision Traces}
+We extend DaTikZ-V4~\citep{greisinger2026tikzilla} by recovering TikZ from all historical versions of arXiv submissions containing \texttt{tikzpicture}, \texttt{circuitikz}, or \texttt{tikzcd}. We apply the TikZilla preprocessing pipeline, including document expansion, subfigure extraction, code standardization, dynamic package inclusion, filtering, rendering, and deduplication on the standardized TikZ body. Across 91K arXiv submissions, 38K contain at least two versions with modified TikZ code. Historical versions contribute 0.77M additional figures, increasing the unique arXiv corpus from 1.47M to 2.38M. Combined with GitHub and TeX SE, this yields a candidate corpus of 2.91M unique TikZ figures.
+
+\paragraph{Recovering Plausible Edit Pairs}
+We group figures by arXiv submission across versions, GitHub repository, and TeX SE discussion thread, yielding 222K groups, of which 123K contain at least two unique figures. We prune groups above the 90th size percentile and compute within-group cosine similarities using \texttt{DeTikZify-V2}'s image encoder. To determine the filtering threshold, we manually evaluate 50 pairs in each of eight similarity intervals (0.92--0.9999, width 0.01) and retain intervals containing fewer than 15\% implausible transformations (Table~\ref{tab:semantic_similarity_examples}). This produces 430,442 candidate pairs from 87,051 contributing groups, connecting 589,986 unique figures.
+
+\input{structure/tables/similarities_one_row}
+
+\paragraph{Inferring Edit Instructions}
+Because both endpoint figures are human-authored, we synthesize only the missing edit instruction using Qwen3.6-27B conditioned jointly on their renders and TikZ code. For each of the 430,442 candidate pairs, we infer both directions ($A\!\rightarrow\!B$ and $B\!\rightarrow\!A$), producing 860,884 candidate directional trajectories. The VLM classifies each direction as \texttt{ok}, \texttt{invalid}, or \texttt{identical}. For accepted transformations, it decomposes the transformation into atomic edits with an intent (\texttt{add}, \texttt{remove}, or \texttt{modify}), operation (\texttt{text}, \texttt{annotation}, \texttt{geometry}, \texttt{data}, \texttt{style}, or \texttt{structure}), and natural-language description. Requiring both directions to be accepted yields DaEdiTikZ with 390,516 figure pairs and 781,032 directional editing trajectories. Each trajectory contains 4.2 atomic edits on average, with descriptions averaging 22.3 words per atomic edit. Detailed analysis of DaEdiTikZ is in the Appendix~\ref{subsec:Dataset and Benchmark}.
+
+\input{structure/figures/dataset_construction}
+
+\paragraph{Dataset Quality Analysis}
+To validate instruction inference, two annotators evaluate 125 revision pairs, including 35 overlapping samples for agreement (Figure~\ref{fig:annotation_analysis}). They identify edit plausibility, omissions, hallucinations, and attribute, numeric, or spatial misinterpretations ($\kappa=0.82$), and rate overall quality on a 1--5 Likert scale (weighted $\kappa=0.79$). Overall, 98\% of retained transformations are plausible and 82.9\% of instructions are rated good (4) or very good (5). While 50\% contain at least one error, these are predominantly omissions (34\%) and misinterpretations (33\%), whereas hallucinations are rare (10\%). To quantify the benefit of code grounding, we repeat the analysis without TikZ code on 90 annotations. The error rate increases from 50\% to 80\%, with omissions increasing by 16 percentage points and numeric misinterpretations from 1\% to 8.5\%, indicating that code provides complementary grounding.
+
+\begin{figure*}[t]
+\centering
+    \includegraphics[width=\linewidth]{structure/figures/variant_comparison.pdf}
+\caption{Human evaluation of inferred edit instructions. Left: error rates with and without TikZ-code grounding, decomposed into omissions, hallucinations, and attribute, numeric, and spatial misinterpretations. Right: overall instruction quality rated on a 1--5 Likert scale.}
+\label{fig:annotation_analysis}
+\end{figure*}
+
+\paragraph{DaEdiTikZ-Bench}
+To reduce data contamination, we construct DaEdiTikZ-Bench from arXiv submissions published between March and June 2026. For diversity, one pair per submission is retained with 100 pairs sampled from each similarity interval (0.95--0.96, ..., 0.99--1.00), and 50 pairs spanning group sizes from one to ten. We manually inspect all 500 candidates and remove quality issues, trivial edits, and rendering artifacts, leaving 345 revision pairs and 690 editing instances. Six annotators manually correct every VLM-generated instruction by removing hallucinations, correcting misinterpretations, and adding omissions (Figure~\ref{fig:instruction-annotation-pipeline}).
+
+\input{structure/figures/benchmark_examples}

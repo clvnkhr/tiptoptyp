@@ -1,0 +1,96 @@
+\section{Editing-Specific Post-Training}
+\label{sec:Editing-Specific Post-Training}
+
+\paragraph{Joint Reconstruction and Editing SFT}
+DaEdiTikZ provides 752K source figure--instruction--TikZ target triplets $(I_s,u,y)$, where $y=(y_1,\ldots,y_T)$ and $I_t$ denotes the rendered target figure. We minimize:
+\begin{equation}
+\mathcal{L}_{\mathrm{edit}}(\theta)=
+\mathbb{E}_{(I_s,u,y)\sim\mathcal{D}_{\mathrm{edit}}}
+\left[-\sum_{t=1}^{T}\log p_\theta(y_t\mid y_{<t},I_s,u)\right]
+\label{eq:sft_edit}
+\end{equation}
+Since editing requires reconstructing the source figure while selectively modifying it, we jointly train with 752K image-to-TikZ reconstruction samples from DaTikZ-V4. Reconstruction uses the same objective over $(I_t,y)\sim\mathcal{D}_{\mathrm{rec}}$, conditioned only on $I_t$, strengthening the shared image-to-TikZ mapping while exposing the model to a broader distribution of scientific figures and TikZ programs.
+
+\paragraph{Editing-Specific Rewards}
+We further optimize the resulting SFT model using rewards computed from sampled TikZ rollouts $\hat y$ and their renderings $\hat I$. Unlike TikZilla, which trains a separate scientific image encoder~\citep{greisinger2026tikzilla}, we reuse a frozen copy of the SFT model's vision encoder. SFT already adapts this encoder to scientific figures on 1.5M editing and reconstruction samples. We freeze it during RL to prevent reward hacking. Given patch embeddings $\mathbf{x}=\{x_i\}_{i=1}^{N}$ and $\mathbf{z}=\{z_j\}_{j=1}^{M}$ of $I_t$ and $\hat I$, respectively, we compute:
+\begin{equation}
+D_{ij}
+=
+1-\cos(x_i,z_j),
+\qquad
+d_{\mathrm{EMD}}(\mathbf{x},\mathbf{z})
+=
+\min_{F\geq 0}
+\sum_{i=1}^{N}\sum_{j=1}^{M}F_{ij}D_{ij}
+\label{eq:selfsim_emd}
+\end{equation}
+subject to uniform marginals
+$\sum_jF_{ij}=1/N$ and $\sum_iF_{ij}=1/M$.
+The SelfSim reward is:
+\begin{equation}
+\mathcal{R}_{\mathrm{SSim}}
+=
+\operatorname{clip}
+\left(
+1+2\tanh[-d_{\mathrm{EMD}}(\mathbf{x},\mathbf{z})],
+0,1
+\right)
+\label{eq:selfsim_reward}
+\end{equation}
+However, target similarity alone is insufficient for editing. First, DaEdiTikZ contains similar source--target pairs, allowing high $\mathcal{R}_{\mathrm{SSim}}$ from preserving unchanged content without applying the requested edits. Second, VLM-inferred instructions may contain omissions or inaccuracies, such that the target may not exactly realize the instruction and can penalize valid instruction-following outputs. We therefore introduce a complementary reference-free instruction-following reward $\mathcal{R}_{\mathrm{IF}}$. A VLM judge (Qwen3.6-27B) receives $(I_s,u,\hat I)$ and verifies each of the $K$ atomic edits with a binary score $v_k\in\{0,1\}$. We set $\mathcal{R}_{\mathrm{IF}}=\frac{1}{K}\sum_k v_k(I_s, u, \hat I)$, giving proportional credit for partially applied instructions. Finally, we define compilation and format validity as $\mathcal{R}_{\mathrm{Comp}}=\mathbb{1}[\operatorname{compile}(\hat y)]$ and $\mathcal{R}_{\mathrm{Fmt}}=\mathbb{1}[\operatorname{valid\_format}(\hat y)]$, where the latter requires the expected standalone TikZ structure (\texttt{\textbackslash documentclass[tikz]\{standalone\}}, \texttt{\textbackslash begin\{document\}}, ..., \texttt{\textbackslash end\{document\}}). Compilation and format validity gate both rewards: $r_m=\mathcal{R}_{\mathrm{Comp}}\mathcal{R}_{\mathrm{Fmt}}\mathcal{R}_m$ for $m\in\mathcal{M}=\{\mathrm{SSim},\mathrm{IF}\}$, assigning failed rollouts zero reward. Figure~\ref{fig:method_figure} summarizes the two-stage pipeline.
+
+\input{structure/figures/methodology_figure}
+
+\paragraph{Multi-Reward Optimization with GDPO} 
+$\mathcal{R}_{\mathrm{SSim}}$ provides dense target-similarity feedback, whereas $\mathcal{R}_{\mathrm{IF}}$ measures discrete atomic edit application. Since standard multi-reward GRPO aggregates rewards before group normalization, its learning signal is sensitive to their distributions. We instead use Group reward-Decoupled Normalization Policy Optimization (GDPO)~\citep{liu2026gdpogrouprewarddecouplednormalization}, which normalizes each reward independently before aggregation. For $G$ rollouts, GDPO computes:
+\begin{equation}
+A_m^{(i,j)}
+=
+\frac{
+r_m^{(i,j)}-\operatorname{mean}_{j'}[r_m^{(i,j')}]
+}{
+\operatorname{std}_{j'}[r_m^{(i,j')}]+\varepsilon
+},
+\qquad
+A_{\mathrm{sum}}^{(i,j)}
+=
+\sum_{m\in\mathcal{M}} w_m A_m^{(i,j)}
+\label{eq:gdpo_reward_adv}
+\end{equation}
+Following GDPO, we normalize the aggregated advantages across the batch and optimize the clipped policy objective:
+\begin{align}
+\mathcal{J}_{\mathrm{GDPO}}(\theta)
+=
+\mathbb{E}_{x_i \sim \mathcal{D}_{\mathrm{edit}}}
+\Bigg[
+\frac{1}{G}
+\sum_{j=1}^{G}
+\frac{1}{L}
+\sum_{t=1}^{|o_{i,j}|}
+\min\Bigg(
+&\frac{
+\pi_{\theta}
+\!\left(\hat{y}_{i,j,t}\mid x_i,\hat{y}_{i,j}^{<t}\right)
+}{
+\pi_{\theta_{\mathrm{old}}}
+\!\left(\hat{y}_{i,j,t}\mid x_i,\hat{y}_{i,j}^{<t}\right)
+}
+ \widehat{A}_{\mathrm{sum}}^{(i,j)}, \nonumber\\
+&\hspace{-15em}\operatorname{clip}\!\Bigl(
+\frac{
+\pi_{\theta}
+\!\left(\hat{y}_{i,j,t}\mid x_i,\hat{y}_{i,j}^{<t}\right)
+}{
+\pi_{\theta_{\mathrm{old}}}
+\!\left(\hat{y}_{i,j,t}\mid x_i,\hat{y}_{i,j}^{<t}\right)
+},
+1-\epsilon_{\mathrm{low}},
+1+\epsilon_{\mathrm{high}}
+\Bigr)
+\widehat{A}_{\mathrm{sum}}^{(i,j)}
+\Bigg) \nonumber 
+  - \beta\,D_{\text{KL}}\!\big(p_\theta \,\|\, p_{\theta_{\text{SFT}}}\big)
+\Bigg]
+\label{eq:gdpo_objective}
+\end{align}
+Implementation details are provided in the Appendix~\ref{subsec:Method}.
