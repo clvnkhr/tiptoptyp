@@ -320,10 +320,24 @@ impl ResolvedTypstStyle {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(crate) struct ResolvedTypstStyles {
     styles: [ResolvedTypstStyle; TypstSyntaxRole::ALL.len()],
+    /// Paint-ready formats, one per role. `LayoutJob::append` merges adjacent
+    /// sections by format equality, which short-circuits on shared `Arc`s;
+    /// building a fresh format (including a formatted font family name) per
+    /// syntax leaf both costs time and defeats that merge fast path.
+    formats: [TextFormat; TypstSyntaxRole::ALL.len()],
 }
+
+impl PartialEq for ResolvedTypstStyles {
+    fn eq(&self, other: &Self) -> bool {
+        // Formats derive deterministically from styles.
+        self.styles == other.styles
+    }
+}
+
+impl Eq for ResolvedTypstStyles {}
 
 impl ResolvedTypstStyles {
     pub(crate) fn resolve(
@@ -335,11 +349,8 @@ impl ResolvedTypstStyles {
             let role = TypstSyntaxRole::ALL[index];
             resolve_role(role, palette, syntect_theme, overrides.get(role))
         });
-        Self { styles }
-    }
-
-    pub(crate) fn style(&self, role: TypstSyntaxRole) -> ResolvedTypstStyle {
-        self.styles[role as usize]
+        let formats = std::array::from_fn(|index| styles[index].text_format());
+        Self { styles, formats }
     }
 
     pub(crate) fn resolve_style(
@@ -352,8 +363,7 @@ impl ResolvedTypstStyles {
     }
 
     pub(crate) fn format(&self, tag: Option<Tag>) -> TextFormat {
-        self.style(tag.map_or(TypstSyntaxRole::Plain, TypstSyntaxRole::from_tag))
-            .text_format()
+        self.formats[tag.map_or(TypstSyntaxRole::Plain, TypstSyntaxRole::from_tag) as usize].clone()
     }
 }
 
@@ -496,13 +506,13 @@ mod tests {
     fn empty_overrides_keep_sensible_markup_defaults() {
         let styles = ResolvedTypstStyles::default();
         assert_eq!(
-            styles.style(TypstSyntaxRole::Strong).weight,
+            styles.styles[TypstSyntaxRole::Strong as usize].weight,
             theme::FONT_WEIGHT_BOLD
         );
-        assert!(styles.style(TypstSyntaxRole::Emphasis).italic);
-        assert!(styles.style(TypstSyntaxRole::Link).underline);
+        assert!(styles.styles[TypstSyntaxRole::Emphasis as usize].italic);
+        assert!(styles.styles[TypstSyntaxRole::Link as usize].underline);
         assert_ne!(
-            styles.style(TypstSyntaxRole::Error).background,
+            styles.styles[TypstSyntaxRole::Error as usize].background,
             Color32::TRANSPARENT
         );
     }
@@ -523,7 +533,7 @@ mod tests {
         );
         let styles =
             ResolvedTypstStyles::resolve(theme::default_syntax_palette(true), None, &overrides);
-        let style = styles.style(TypstSyntaxRole::Strong);
+        let style = styles.styles[TypstSyntaxRole::Strong as usize];
         assert_eq!(style.foreground, Color32::from_rgb(1, 2, 3));
         assert_eq!(
             style.background,
@@ -561,7 +571,7 @@ mod tests {
             Some(&imported),
             &Default::default(),
         );
-        let strong = styles.style(TypstSyntaxRole::Strong);
+        let strong = styles.styles[TypstSyntaxRole::Strong as usize];
         assert_eq!(strong.weight, theme::FONT_WEIGHT_NORMAL);
         assert!(strong.italic);
     }

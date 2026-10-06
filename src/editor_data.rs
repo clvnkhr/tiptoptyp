@@ -152,6 +152,14 @@ impl Default for EditorDerivedData {
     }
 }
 
+/// Fast path for tex completions: index entries only come from embedded TeX
+/// calls (`mi`, `mitex` and friends, all containing "mi"), raw tex/latex
+/// blocks (containing "tex"), or backslash commands. Without any marker a
+/// tree walk can find nothing; hits simply run it.
+fn tex_index_triggers_present(source: &str) -> bool {
+    source.contains('\\') || source.contains("mi") || source.contains("tex")
+}
+
 impl EditorDerivedData {
     pub(crate) fn mitex_compatible(&mut self, version: &str) -> bool {
         let Some(key) = self.source_key else {
@@ -257,11 +265,16 @@ impl EditorDerivedData {
     ) -> Option<Vec<crate::tinymist::CompletionItem>> {
         self.prepare_syntax();
         if self.tex_key != self.source_key {
-            self.tex_index = if self.mitex_dollars {
-                crate::tex_completion::Index::projected(&self.parsed_source)
+            // Index entries only come from embedded TeX calls (mi/mitex and
+            // friends) or raw tex/latex blocks. Without any of their markers
+            // a full tree walk can find nothing; skip it with a byte scan.
+            if !tex_index_triggers_present(&self.source_snapshot) {
+                self.tex_index = crate::tex_completion::Index::default();
+            } else if self.mitex_dollars {
+                self.tex_index = crate::tex_completion::Index::projected(&self.parsed_source);
             } else {
-                crate::tex_completion::Index::new(&self.parsed_source)
-            };
+                self.tex_index = crate::tex_completion::Index::new(&self.parsed_source);
+            }
             self.tex_key = self.source_key;
             #[cfg(test)]
             {
@@ -700,6 +713,41 @@ fn hover_leaf_range(leaf: &LinkedNode<'_>, cursor: usize) -> Option<Range<usize>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tex_index_guard_skips_trigger_free_sources() {
+        for source in ["", "plain prose\n", "= Heading\nBody $x + y$ here.\n"] {
+            assert!(
+                !tex_index_triggers_present(source),
+                "guard must skip {source:?}"
+            );
+            let mut data = EditorDerivedData::default();
+            data.prepare_source(&DocumentSnapshot::fixture(revision(1), source));
+            assert_eq!(data.tex_completions(0), None);
+        }
+        for source in [
+            "#mi(`\\alpha`)",
+            "```tex\nhello\n```\n",
+            "\\begin{equation}x\\end{equation}",
+            "mild prose",
+        ] {
+            assert!(
+                tex_index_triggers_present(source),
+                "guard must walk {source:?}"
+            );
+        }
+        // Triggered sources still complete.
+        let mut data = EditorDerivedData::default();
+        let source = "#mi(`\\newcommand{\\custom}{x} \\cu`)";
+        data.prepare_source(&DocumentSnapshot::fixture(revision(1), source));
+        let cursor = source.find("\\cu`)").unwrap() + 3;
+        assert!(
+            data.tex_completions(cursor)
+                .unwrap()
+                .iter()
+                .any(|item| item.label == "\\custom")
+        );
+    }
 
     #[test]
     fn asset_hover_reuses_syntax_across_pointer_moves() {

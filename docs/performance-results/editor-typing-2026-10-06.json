@@ -1,0 +1,26 @@
+{
+  "date": "2026-10-06",
+  "platform": "macOS 14.6.1 aarch64 (Apple M2 Max)",
+  "rustc": "1.98.1",
+  "profile": "release (optimized, thin LTO, one codegen unit)",
+  "base_commit": "2fa920b",
+  "command": "cargo test --release --bin tiptoptyp editor_typing_frame_cost_probe -- --ignored --nocapture --test-threads=1",
+  "fixture": {
+    "kind": "Typst",
+    "lines": 2000,
+    "bytes": 173780,
+    "viewport": "900x700 headless run_ui frames; no GPU painting or compositor latency"
+  },
+  "workload": "60 committed single-character frames at mid-document plus TIPTOPTYP_PROBE_MICRO subsystem samples; medians reported",
+  "before_after_typing_frame_median_ms": [32.572, 17.749],
+  "before_after_typing_frame_p95_ms": [39.991, 18.88],
+  "before_after_highlight_micro_median_ms": [14.047, 7.293],
+  "before_after_completion_micro_median_ms": [2.594, 0.573],
+  "small_document_17kb_typing_frame_median_ms": 1.749,
+  "changes": [
+    "cache TextFormat per syntax role instead of building one (format! Arc) per leaf",
+    "skip indentation-guide block walk when no line is indented and no math marker exists",
+    "skip TeX completion index walk when the source has no backslash, mi, or tex marker"
+  ],
+  "scope": "Headless CPU-side editor frames only: highlighting, completion, guides, egui layout. Excludes preview compilation, LSP servers, file I/O, painting, and end-to-end keystroke latency. Medians from back-to-back runs on a quiet machine; loaded-machine samples run hotter. Not a cross-platform guarantee."
+}

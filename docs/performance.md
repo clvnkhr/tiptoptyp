@@ -582,6 +582,49 @@ The probe generator, compiler metadata, implementation hashes and complete logs
 are retained under `.tiptoptyp/profiles/recent-commit-audit/`; the generator reads
 production sources from its current checkout and builds the isolated probe.
 
+## Editor typing frames (2026-10-06)
+
+A new opt-in `editor_typing_frame_cost_probe` commits one character per
+headless editor frame through the real Typst editor (highlighting, folding,
+completion, diagnostics plumbing included) on a 2,000-line fixture, plus
+subsystem micro samples with one edit per sample so revision caches rebuild.
+Run with
+`cargo test --release --bin tiptoptyp editor_typing_frame_cost_probe -- --ignored --nocapture --test-threads=1`.
+`TIPTOPTYP_PROBE_LINES` rescales the fixture, `TIPTOPTYP_PROBE_MICRO`
+adds the subsystem samples, and `TIPTOPTYP_PROBE_REPEAT` stretches the run
+for native sampling. `TIPTOPTYP_PROBE_NO_RAINBOW` and
+`TIPTOPTYP_PROBE_NO_GUIDES` toggle those passes for differential runs.
+
+Native sampling of the probe attributed the frame to several full-document
+passes per keystroke rather than one hotspot: our syntax tree was walked
+separately for highlighting, rainbow brackets, indentation guides, scope
+regions and the completion index, on top of egui layout. Three fixes roughly
+halved the frame, measured back-to-back on a quiet Apple M2 Max machine
+(medians; full data in
+`performance-results/editor-typing-2026-10-06.json`):
+
+| Typing frame, 174 KB Typst | Before | After |
+| --- | ---: | ---: |
+| Frame median | 32.572 ms | 17.749 ms |
+| Frame p95 | 39.991 ms | 18.880 ms |
+| Highlight rebuild micro | 14.047 ms | 7.293 ms |
+| Completion micro | 2.594 ms | 0.573 ms |
+
+A 17 KB fixture types at 1.749 ms, so the cost scales with the document and
+fixed per-frame overhead is small. The fixes: `TextFormat` is cached per
+syntax role instead of built (including a formatted font-family `Arc`) per
+leaf, which also restores `LayoutJob`'s merge fast path; the guide block
+walk is skipped when no line is indented and no math marker exists; the TeX
+completion index walk is skipped when the source has no backslash, `mi`, or
+`tex` marker. Deterministic tests pin the skip conditions and the direct
+Typst convert behavior is unchanged.
+
+This is CPU-side editor cost only, not preview compilation, LSP servers,
+painting, or end-to-end latency, and not a cross-platform guarantee.
+Remaining per-keystroke work is still linear in the document (highlight walk
+plus egui shaping); incremental region highlighting would be a larger
+follow-up.
+
 ## Native startup audit (2026-10-03)
 
 Startup now defers the generic Syntect grammar and default-theme databases until

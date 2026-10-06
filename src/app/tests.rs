@@ -10424,3 +10424,145 @@ fn measure_resize_presentation() {
         );
     }
 }
+
+/// Opt-in typing/scroll frame cost probe: commits one character per frame
+/// through the real editor (highlighting, folding, completion, diagnostics
+/// plumbing included), then scrolls with wheel events. Reports medians, not
+/// assertions; compare like-for-like binaries on a quiet machine.
+#[test]
+#[ignore = "opt-in editor typing/scroll frame cost probe"]
+fn editor_typing_frame_cost_probe() {
+    use std::time::Instant;
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    crate::theme::configure_test_fonts(&context);
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+    app.snapshot_scene = None;
+    // Representative Typst source: headings, prose, inline math, lists.
+    // TIPTOPTYP_PROBE_LINES scales the fixture (default 2000): a tiny
+    // document isolates per-frame fixed costs from per-byte scaling.
+    let lines: usize = std::env::var("TIPTOPTYP_PROBE_LINES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(2_000);
+    let body = (0..lines)
+        .map(|n| {
+            format!(
+                "= Section {n}\nProse with *strong* and $x_{n} + y$ inline math.\n- item one\n- item two\n\n"
+            )
+        })
+        .collect::<String>();
+    app.document_mut().replace_unprojected_untitled(&body);
+    let frame = |app: &mut EditorApp, events: Vec<egui::Event>| {
+        context
+            .run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 700.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.show_editor(ui),
+            )
+            .drop_without_applying_deltas();
+    };
+    frame(&mut app, Vec::new());
+    let middle = body.chars().count() / 2;
+    app.store_editor_cursor(
+        &context,
+        CCursorRange::two(CCursor::new(middle), CCursor::new(middle)),
+    );
+    let editor_id = source_editor_id(&context);
+    context.memory_mut(|memory| memory.request_focus(editor_id));
+    frame(&mut app, Vec::new());
+    if std::env::var("TIPTOPTYP_PROBE_NO_RAINBOW").is_ok() {
+        app.settings.rainbow_brackets.enabled = false;
+    }
+    if std::env::var("TIPTOPTYP_PROBE_NO_GUIDES").is_ok() {
+        app.settings.indentation_guides = false;
+    }
+    // TIPTOPTYP_PROBE_REPEAT stretches the run for native sampling.
+    let repeat: usize = std::env::var("TIPTOPTYP_PROBE_REPEAT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1);
+    let mut typing = Vec::with_capacity(60 * repeat);
+    for n in 0..60 * repeat {
+        let started = Instant::now();
+        frame(
+            &mut app,
+            vec![egui::Event::Text(if n % 2 == 0 {
+                "x".into()
+            } else {
+                "y".into()
+            })],
+        );
+        typing.push(started.elapsed().as_secs_f64() * 1_000.0);
+    }
+    typing.sort_by(|a, b| a.total_cmp(b));
+    let center = Pos2::new(450.0, 350.0);
+    let mut scroll = Vec::with_capacity(60);
+    for _ in 0..60 {
+        let started = Instant::now();
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(center),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: egui::Vec2::new(0.0, -3.0),
+                    modifiers: egui::Modifiers::default(),
+                    phase: egui::TouchPhase::Move,
+                },
+            ],
+        );
+        scroll.push(started.elapsed().as_secs_f64() * 1_000.0);
+    }
+    scroll.sort_by(|a, b| a.total_cmp(b));
+    let median = |samples: &[f64]| samples[samples.len() / 2];
+    let p95 = |samples: &[f64]| samples[samples.len() * 95 / 100];
+    println!(
+        "editor_frames fixture_bytes={} frames={} typing_total_ms={:.1} typing_median_ms={:.3} typing_p95_ms={:.3} scroll_total_ms={:.1} scroll_median_ms={:.3} scroll_p95_ms={:.3}",
+        body.len(),
+        typing.len(),
+        typing.iter().sum::<f64>(),
+        median(&typing),
+        p95(&typing),
+        scroll.iter().sum::<f64>(),
+        median(&scroll),
+        p95(&scroll),
+    );
+    if std::env::var("TIPTOPTYP_PROBE_MICRO").is_ok() {
+        // Per-revision cost of individual subsystems: one edit per sample so
+        // revision-keyed caches genuinely rebuild, as on real keystrokes.
+        fn micro(
+            app: &mut EditorApp,
+            median: impl Fn(&[f64]) -> f64,
+            label: &str,
+            mut work: impl FnMut(&mut EditorApp),
+        ) {
+            let mut samples = Vec::with_capacity(30);
+            for n in 0..30 {
+                app.document_mut().edit(CCursorRange::default(), |source| {
+                    source.push(if n % 2 == 0 { 'x' } else { 'y' })
+                });
+                let started = Instant::now();
+                work(app);
+                samples.push(started.elapsed().as_secs_f64() * 1_000.0);
+            }
+            samples.sort_by(|a, b| a.total_cmp(b));
+            println!("micro {label} median_ms={:.3}", median(&samples));
+        }
+        micro(&mut app, median, "prepare_source", |app: &mut EditorApp| {
+            app.prepare_editor_source_data();
+        });
+        micro(&mut app, median, "highlight", |app: &mut EditorApp| {
+            let source = app.document().source().to_owned();
+            let _ = app
+                .highlighter
+                .highlight(&source, false, &app.generic_highlighter);
+        });
+        micro(&mut app, median, "completion", |app: &mut EditorApp| {
+            app.request_editor_completion(middle, Rect::NOTHING, false);
+        });
+    }
+}

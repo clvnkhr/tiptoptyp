@@ -338,6 +338,16 @@ impl GuideLevels {
             return;
         }
         let source = &galley.job.text;
+        if !guide_triggers_present(source) {
+            // No indented line and no math alignment marker can only paint
+            // empty guides. Skip the block walk and fill rows directly.
+            self.levels.clear();
+            self.levels.resize_with(galley.rows.len(), Vec::new);
+            self.kind = Some(kind);
+            self.step = step;
+            self.galley = Some(galley.clone());
+            return;
+        }
         let source_levels = source_guide_levels(source, step, kind);
         self.levels.clear();
         let mut physical_line = 0;
@@ -361,6 +371,24 @@ impl GuideLevels {
         self.galley = Some(galley.clone());
     }
 }
+/// Fast path for [`GuideLevels::update`]: guide levels are empty unless some
+/// line is indented or a math alignment marker exists. Non-empty guides also
+/// need enclosing math blocks, but those need the same triggers, so this
+/// byte scan is a sound skip condition; false positives just run the walk.
+fn guide_triggers_present(source: &str) -> bool {
+    let mut line_start = true;
+    for byte in source.as_bytes() {
+        if *byte == b'&' {
+            return true;
+        }
+        if line_start && (*byte == b' ' || *byte == b'\t') {
+            return true;
+        }
+        line_start = *byte == b'\n';
+    }
+    false
+}
+
 fn source_guide_levels(
     source: &str,
     step: usize,
@@ -630,6 +658,33 @@ mod tests {
             .iter()
             .map(|row| row.iter().map(|guide| guide.column).collect())
             .collect()
+    }
+    #[test]
+    fn trigger_scan_matches_full_walk_on_plain_and_triggered_sources() {
+        for source in [
+            "",
+            "plain\ntext\n",
+            "= Heading\nBody with $x + y$ math, no indent.\n",
+            "  indented\n",
+            "\tindented\n",
+            " lead",
+            "a & b\n",
+            "$\n  x & = 1\n$\n",
+        ] {
+            // One direction only: no triggers must mean empty guides, so the
+            // update fast path cannot drop painted guides. Triggers may still
+            // walk to an empty result (a prose ampersand, unindented math).
+            if !guide_triggers_present(source) {
+                let full = source_guide_levels(source, 2, crate::document::DocumentKind::Typst);
+                assert!(
+                    full.iter().all(|row| row.is_empty()),
+                    "skip must be sound for {source:?}"
+                );
+            }
+        }
+        // Triggered sources keep their walked guides.
+        let guides = guide_columns("$\n  x & = 1\n$\n", 2, crate::document::DocumentKind::Typst);
+        assert!(guides.iter().any(|row| !row.is_empty()));
     }
     #[test]
     fn guides_follow_local_ancestors_and_forget_unrelated_alignment_columns() {
