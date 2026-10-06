@@ -516,6 +516,29 @@ mod tests {
     }
 
     #[test]
+    fn burst_queries_are_all_answered_in_one_vt_write() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let mut engine = engine(20, 3);
+        let replies = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let sink = replies.clone();
+        engine
+            .terminal
+            .on_pty_write(move |_, bytes| sink.borrow_mut().extend_from_slice(bytes))
+            .unwrap();
+        engine.terminal.vt_write(b"READY");
+        let mut burst = b"\x1b]11;?\x07\x1b]10;?\x07".to_vec();
+        for index in 0..16 {
+            burst.extend_from_slice(format!("\x1b]4;{index};?\x07").as_bytes());
+        }
+        engine.terminal.vt_write(&burst);
+        let out = String::from_utf8(replies.borrow().clone()).unwrap();
+        assert_eq!(out.matches("rgb:").count(), 18, "{out:?}");
+        assert!(out.contains("]11;rgb:0000/0000/0000"), "{out:?}");
+        assert!(out.contains("]4;15;rgb:ffff/ffff/ffff"), "{out:?}");
+    }
+
+    #[test]
     fn live_palette_switches_reach_programs_through_color_queries() {
         use std::cell::RefCell;
         use std::rc::Rc;

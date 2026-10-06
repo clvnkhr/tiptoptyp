@@ -511,6 +511,31 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
+    fn real_pty_answers_opencode_startup_burst() {
+        let root = tempfile::tempdir().unwrap();
+        // opencode's startup detection: OSC 10/11 plus all 16 palette slots,
+        // BEL-terminated, in one burst. Every answer must come back or it
+        // falls back to dark. Echo stays on so the slave's copies come back
+        // through the reader; the byte count proves nothing was dropped.
+        let session = start_script(root.path(), "stty -icanon min 1; printf READY; sleep 10");
+        until(|| text(&session.snapshot()).contains("READY"));
+        let mut burst = b"\x1b]11;?\x07\x1b]10;?\x07".to_vec();
+        for index in 0..16 {
+            burst.extend_from_slice(format!("\x1b]4;{index};?\x07").as_bytes());
+        }
+        session.send(Command::Output(burst)).unwrap();
+        until(|| text(&session.snapshot()).matches("rgb:").count() == 18);
+        let out = text(&session.snapshot());
+        for marker in ["^[]11;", "^[]10;", "^[]4;15;"] {
+            assert!(
+                out.contains(marker),
+                "burst answer missing {marker:?}: {out:?}"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
     fn real_pty_reports_theme_flips_to_programs_with_mode_2031() {
         let root = tempfile::tempdir().unwrap();
         // Opt into color-scheme reports, then read the 9-byte flip report (`ESC[?997;2n`).
