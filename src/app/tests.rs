@@ -10454,16 +10454,25 @@ fn editor_typing_frame_cost_probe() {
         .collect::<String>();
     app.document_mut().replace_unprojected_untitled(&body);
     let frame = |app: &mut EditorApp, events: Vec<egui::Event>| {
-        context
-            .run_ui(
-                egui::RawInput {
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 700.0))),
-                    events,
-                    ..Default::default()
-                },
-                |ui| app.show_editor(ui),
-            )
-            .drop_without_applying_deltas();
+        let mut output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 700.0))),
+                events,
+                ..Default::default()
+            },
+            |ui| app.show_editor(ui),
+        );
+        output.textures_delta.clear();
+        let shapes = std::mem::take(&mut output.shapes);
+        output.drop_without_applying_deltas();
+        shapes
+    };
+    // Tessellating the frame's shapes measures paint-prep CPU (mesh
+    // generation); GPU upload and compositing are not included.
+    let tessellate = |shapes: Vec<egui::epaint::ClippedShape>| {
+        let started = Instant::now();
+        let _ = context.tessellate(shapes, 1.0);
+        started.elapsed().as_secs_f64() * 1_000.0
     };
     frame(&mut app, Vec::new());
     let middle = body.chars().count() / 2;
@@ -10486,9 +10495,10 @@ fn editor_typing_frame_cost_probe() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(1);
     let mut typing = Vec::with_capacity(60 * repeat);
+    let mut typing_tess = Vec::with_capacity(60 * repeat);
     for n in 0..60 * repeat {
         let started = Instant::now();
-        frame(
+        let shapes = frame(
             &mut app,
             vec![egui::Event::Text(if n % 2 == 0 {
                 "x".into()
@@ -10497,13 +10507,16 @@ fn editor_typing_frame_cost_probe() {
             })],
         );
         typing.push(started.elapsed().as_secs_f64() * 1_000.0);
+        typing_tess.push(tessellate(shapes));
     }
     typing.sort_by(|a, b| a.total_cmp(b));
+    typing_tess.sort_by(|a, b| a.total_cmp(b));
     let center = Pos2::new(450.0, 350.0);
     let mut scroll = Vec::with_capacity(60);
+    let mut scroll_tess = Vec::with_capacity(60);
     for _ in 0..60 {
         let started = Instant::now();
-        frame(
+        let shapes = frame(
             &mut app,
             vec![
                 egui::Event::PointerMoved(center),
@@ -10516,20 +10529,24 @@ fn editor_typing_frame_cost_probe() {
             ],
         );
         scroll.push(started.elapsed().as_secs_f64() * 1_000.0);
+        scroll_tess.push(tessellate(shapes));
     }
     scroll.sort_by(|a, b| a.total_cmp(b));
+    scroll_tess.sort_by(|a, b| a.total_cmp(b));
     let median = |samples: &[f64]| samples[samples.len() / 2];
     let p95 = |samples: &[f64]| samples[samples.len() * 95 / 100];
     println!(
-        "editor_frames fixture_bytes={} frames={} typing_total_ms={:.1} typing_median_ms={:.3} typing_p95_ms={:.3} scroll_total_ms={:.1} scroll_median_ms={:.3} scroll_p95_ms={:.3}",
+        "editor_frames fixture_bytes={} frames={} typing_total_ms={:.1} typing_median_ms={:.3} typing_p95_ms={:.3} typing_tess_median_ms={:.3} scroll_total_ms={:.1} scroll_median_ms={:.3} scroll_p95_ms={:.3} scroll_tess_median_ms={:.3}",
         body.len(),
         typing.len(),
         typing.iter().sum::<f64>(),
         median(&typing),
         p95(&typing),
+        median(&typing_tess),
         scroll.iter().sum::<f64>(),
         median(&scroll),
         p95(&scroll),
+        median(&scroll_tess),
     );
     if std::env::var("TIPTOPTYP_PROBE_MICRO").is_ok() {
         // Per-revision cost of individual subsystems: one edit per sample so
