@@ -1329,13 +1329,7 @@ fn context_menu_sizes_include_every_action_and_separator() {
                 }
                 for can_format in [false, true] {
                     for link in [None, Some("https://example.invalid")] {
-                        let size = editor_context_menu_size(
-                            link.is_some(),
-                            false,
-                            can_format,
-                            false,
-                            ui.style(),
-                        );
+                        let size = sized_editor_menu(ui, link.is_some(), false, &[], can_format);
                         let mut child = ui.new_child(
                             egui::UiBuilder::new().max_rect(Rect::from_min_size(Pos2::ZERO, size)),
                         );
@@ -3220,21 +3214,33 @@ fn each_popup_open_gets_independent_scroll_memory() {
 #[test]
 fn fallback_menu_rows_keep_their_caption_left_aligned() {
     let context = egui::Context::default();
-    context
-        .run_ui(Default::default(), |ui| {
-            for shortcut in [
-                None,
-                Some(KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::S)),
-            ] {
-                let button = menu_button(ui, "Save", shortcut);
-                let atoms = button.atoms();
-                assert!(
-                    atoms.iter().skip(1).any(|atom| atom.grow),
-                    "a growing atom after the caption pins it to the left: {atoms:?}"
-                );
+    let row = egui::Rect::from_min_size(egui::Pos2::new(10.0, 10.0), egui::Vec2::new(200.0, 32.0));
+    let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(row));
+        menu_row(&mut child, "Save", "⌘S");
+    });
+    output.textures_delta.clear();
+    let mut caption = None;
+    let mut shortcut = None;
+    for shape in &output.shapes {
+        if let egui::Shape::Text(text) = &shape.shape {
+            if text.galley.text() == "Save" {
+                caption = Some(text.pos);
+            } else if text.galley.text() == "⌘S" {
+                shortcut = Some(text.pos);
             }
-        })
-        .drop_without_applying_deltas();
+        }
+    }
+    let caption = caption.expect("caption text");
+    let shortcut = shortcut.expect("shortcut text");
+    assert!(
+        caption.x < row.center().x,
+        "caption stays left: {caption:?} in {row:?}"
+    );
+    assert!(
+        shortcut.x > row.center().x,
+        "shortcut stays right: {shortcut:?} in {row:?}"
+    );
 }
 
 #[test]
@@ -3360,6 +3366,29 @@ fn tooltip_code_jobs_are_cached_while_a_popup_scrolls() {
     );
 }
 
+/// Window size for an editor menu with the given rows, measured from real
+/// fonts so tests assert the same stretch-to-fit sizing as production.
+fn sized_editor_menu(
+    ui: &egui::Ui,
+    has_link: bool,
+    has_table: bool,
+    choices: &[&str],
+    can_format: bool,
+) -> Vec2 {
+    let bindings = ShortcutBindings::current_defaults();
+    let rows = editor_menu_row_specs(
+        has_link,
+        has_table,
+        !choices.is_empty(),
+        can_format,
+        &bindings,
+        &|chord| ui.ctx().format_shortcut(&chord),
+    );
+    let separators = editor_menu_separators(has_link, has_table, can_format);
+    let geometry = editor_menu_geometry(ui.ctx(), ui.style(), &rows, choices, separators);
+    editor_context_menu_size(ui.style(), &geometry, !choices.is_empty())
+}
+
 #[test]
 fn editor_context_menu_exposes_the_link_under_the_pointer() {
     use egui_kittest::{Harness, kittest::Queryable as _};
@@ -3397,30 +3426,144 @@ fn editor_context_menu_exposes_the_link_under_the_pointer() {
             "https://example.com/docs".to_owned()
         ))
     );
+    let context = egui::Context::default();
+    crate::theme::configure_test_fonts(&context);
+    let with_link = std::cell::Cell::new(Vec2::ZERO);
+    let without_link = std::cell::Cell::new(Vec2::ZERO);
+    context
+        .run_ui(egui::RawInput::default(), |ui| {
+            with_link.set(sized_editor_menu(ui, true, false, &[], true));
+            without_link.set(sized_editor_menu(ui, false, false, &[], true));
+        })
+        .textures_delta
+        .clear();
     assert!(
-        editor_context_menu_size(true, false, true, false, &egui::Style::default()).y
-            > editor_context_menu_size(false, false, true, false, &egui::Style::default()).y
+        with_link.get().y > without_link.get().y,
+        "a link row grows the menu: {:?} vs {:?}",
+        with_link.get(),
+        without_link.get()
     );
 }
 
 #[test]
+fn menu_columns_fit_their_longest_labels_with_room_for_larger_fonts() {
+    let context = egui::Context::default();
+    crate::theme::configure_test_fonts(&context);
+    context
+        .run_ui(egui::RawInput::default(), |ui| {
+            // Every rendered row must fit inside the measured parent column, and
+            // every choice inside the measured flyout column, with room to spare
+            // for larger interface fonts.
+            let bindings = ShortcutBindings::current_defaults();
+            let rows = editor_menu_row_specs(true, true, true, true, &bindings, &|chord| {
+                ui.ctx().format_shortcut(&chord)
+            });
+            let geometry =
+                editor_menu_geometry(ui.ctx(), ui.style(), &rows, &["Inline math (\\(…\\))"], 4);
+            let widths = super::popup_layout::editor_menu_widths(
+                ui.ctx(),
+                ui.style(),
+                &rows,
+                &["Inline math (\\(…\\))"],
+            );
+            for row in &rows {
+                let need = super::popup_layout::menu_row_content_width(
+                    ui.ctx(),
+                    ui.style(),
+                    row.label,
+                    &row.right,
+                );
+                assert!(
+                    need <= widths.parent,
+                    "row {:?} needs {need} but the column fits {}",
+                    row.label,
+                    widths.parent
+                );
+            }
+            let widest = rows
+                .iter()
+                .map(|row| {
+                    super::popup_layout::menu_row_content_width(
+                        ui.ctx(),
+                        ui.style(),
+                        row.label,
+                        &row.right,
+                    )
+                })
+                .fold(0.0, f32::max);
+            assert!(
+                widths.parent - widest < 48.0,
+                "the parent column stretches to fit, not to a fixed width: {} vs {widest}",
+                widths.parent
+            );
+            let choice_need = super::popup_layout::menu_row_content_width(
+                ui.ctx(),
+                ui.style(),
+                "Inline math (\\(…\\))",
+                "",
+            );
+            assert!(
+                choice_need <= geometry.submenu_content,
+                "choice needs {choice_need} but the flyout fits {}",
+                geometry.submenu_content
+            );
+        })
+        .textures_delta
+        .clear();
+}
+
+#[test]
 fn editor_context_menu_reserves_a_math_flyout_column_without_per_choice_height() {
-    let style = egui::Style::default();
-    let plain = editor_context_menu_size(false, false, true, false, &style);
-    let math = editor_context_menu_size(false, false, true, true, &style);
-    assert_eq!(
-        math.x - plain.x,
-        METRICS.menu.submenu_width,
-        "the flyout column is reserved exactly once"
-    );
+    let context = egui::Context::default();
+    crate::theme::configure_test_fonts(&context);
+    let plain = std::cell::Cell::new(Vec2::ZERO);
+    let math = std::cell::Cell::new(Vec2::ZERO);
+    let many = std::cell::Cell::new(Vec2::ZERO);
+    context
+        .run_ui(egui::RawInput::default(), |ui| {
+            plain.set(sized_editor_menu(ui, false, false, &[], true));
+            math.set(sized_editor_menu(
+                ui,
+                false,
+                false,
+                &["Inline math", "Display math"],
+                true,
+            ));
+            many.set(sized_editor_menu(
+                ui,
+                false,
+                false,
+                &[
+                    "Inline math (\\(…\\))",
+                    "align",
+                    "align*",
+                    "gather",
+                    "gather*",
+                    "equation",
+                    "equation*",
+                ],
+                true,
+            ));
+        })
+        .textures_delta
+        .clear();
+    let (plain, math, many) = (plain.get(), math.get(), many.get());
     assert!(
-        math.y > plain.y,
-        "the Convert parent row still takes one line"
+        math.x > plain.x,
+        "a math menu reserves a flyout column: {plain:?} vs {math:?}"
     );
     assert_eq!(
         math.y - plain.y,
         METRICS.menu.row_height + theme::SPACE.small,
-        "choices must not grow the window per item"
+        "the Convert parent row takes one line: {plain:?} vs {math:?}"
+    );
+    assert_eq!(
+        many.y, math.y,
+        "choice count must not grow the window: {math:?} vs {many:?}"
+    );
+    assert!(
+        many.x > math.x,
+        "a wider choice stretches the flyout: {math:?} vs {many:?}"
     );
 }
 
@@ -3458,8 +3601,16 @@ fn convert_submenu_hides_until_hovered_and_places_choices_beside_the_parent() {
     let parent = harness.get_by_label("Convert to… ›").rect();
     let choice = harness.get_by_label_contains("Display math").rect();
     assert!(
+        parent.width() < 400.0,
+        "parent rows narrow for the measured column instead of stretching: {parent:?}"
+    );
+    assert!(
         choice.left() >= parent.right() - 4.0,
         "choices open beside the parent row: {parent:?} {choice:?}"
+    );
+    assert!(
+        choice.left() - parent.right() < 40.0,
+        "the flyout card attaches without a giant empty gap: {parent:?} {choice:?}"
     );
     assert!(
         (choice.top() - parent.top()).abs() < METRICS.menu.row_height * 2.0,
@@ -3470,6 +3621,86 @@ fn convert_submenu_hides_until_hovered_and_places_choices_beside_the_parent() {
     harness.run();
     assert!(harness.query_by_label_contains("Display math").is_none());
     assert!(harness.state().is_none());
+}
+
+#[test]
+fn rendered_menu_geometry_matches_sized_geometry_exactly() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    // Config: Convert + 8 command rows + Format, with separators after Redo
+    // and before Format. Rendered rows must stack to exactly the sized height
+    // (taller clips the last row, shorter leaves empty space) and fill
+    // exactly the measured column widths.
+    let source = "$ α + x $";
+    let target = crate::math_conversion::Target::at(source, 3, DocumentKind::Typst).unwrap();
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 480.0))
+        .build_ui_state(
+            move |ui, action| {
+                let bindings = ShortcutBindings::current_defaults();
+                let rows = editor_menu_row_specs(false, false, true, true, &bindings, &|chord| {
+                    ui.ctx().format_shortcut(&chord)
+                });
+                let separators = editor_menu_separators(false, false, true);
+                let geometry =
+                    editor_menu_geometry(ui.ctx(), ui.style(), &rows, target.choices(), separators);
+                let widths = super::popup_layout::editor_menu_widths(
+                    ui.ctx(),
+                    ui.style(),
+                    &rows,
+                    target.choices(),
+                );
+                ui.data_mut(|data| {
+                    data.insert_temp(
+                        egui::Id::new("menu-geometry-probe"),
+                        (
+                            widths.parent,
+                            geometry.rows_height,
+                            geometry.submenu_content,
+                        ),
+                    );
+                });
+                show_editor_context_menu_ui(
+                    ui,
+                    EditorContextMenuOptions {
+                        can_undo: true,
+                        can_redo: true,
+                        has_selection: true,
+                        can_format: true,
+                        can_sync_preview: true,
+                        link: None,
+                        table: None,
+                        math: Some(&target),
+                    },
+                    &bindings,
+                    action,
+                );
+            },
+            None::<EditorMenuAction>,
+        );
+    harness.run();
+    let (parent_content, rows_height, submenu_content): (f32, f32, f32) = harness
+        .ctx
+        .data(|data| data.get_temp(egui::Id::new("menu-geometry-probe")).unwrap());
+    let first = harness.get_by_label("Convert to… ›").rect();
+    let last = harness.get_by_label_contains("Format Document").rect();
+    assert!(
+        (last.bottom() - first.top() - rows_height).abs() < 1.0,
+        "rows stack to exactly the sized height: {} vs {rows_height}",
+        last.bottom() - first.top()
+    );
+    assert!(
+        (first.width() - parent_content).abs() < 1.0,
+        "parent rows fill exactly the measured column: {} vs {parent_content}",
+        first.width()
+    );
+    harness.get_by_label("Convert to… ›").hover();
+    harness.run();
+    let choice = harness.get_by_label_contains("Display math").rect();
+    assert!(
+        (choice.width() - submenu_content).abs() < 1.0,
+        "flyout rows fill exactly the measured column: {} vs {submenu_content}",
+        choice.width()
+    );
 }
 
 #[test]
@@ -3512,7 +3743,10 @@ fn menu_item_rows_highlight_their_background_on_hover() {
             ui.ctx().data_mut(|data| {
                 data.insert_temp(
                     egui::Id::new("menu-highlight-fill"),
-                    ui.visuals().widgets.hovered.weak_bg_fill,
+                    (
+                        ui.visuals().faint_bg_color,
+                        ui.visuals().widgets.hovered.bg_stroke.color,
+                    ),
                 )
             });
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(row));
@@ -3520,23 +3754,34 @@ fn menu_item_rows_highlight_their_background_on_hover() {
         },
     );
     output.textures_delta.clear();
-    let hovered: egui::Color32 = context
+    let (highlight, accent): (egui::Color32, egui::Color32) = context
         .data(|data| data.get_temp(egui::Id::new("menu-highlight-fill")))
         .unwrap();
     assert_ne!(
-        hovered,
+        highlight,
         egui::Color32::TRANSPARENT,
         "the theme must offer a visible hover fill"
+    );
+    // The hover fill must differ from the menu card surface itself: the old
+    // code painted `hovered.weak_bg_fill`, which the theme sets to the same
+    // elevated surface as the card, making hover invisible.
+    assert!(
+        output.shapes.iter().any(|shape| match &shape.shape {
+            egui::Shape::Rect(rect) =>
+                rect.fill == highlight && rect.rect.contains(Pos2::new(100.0, 26.0)),
+            _ => false,
+        }),
+        "hovering a menu row paints its highlight fill"
     );
     assert!(
         output.shapes.iter().any(|shape| match &shape.shape {
             egui::Shape::Rect(rect) =>
-                rect.fill == hovered && rect.rect.contains(Pos2::new(100.0, 26.0)),
+                rect.stroke.color == accent && rect.rect.contains(Pos2::new(100.0, 26.0)),
             _ => false,
         }),
-        "hovering a menu row paints its highlight"
+        "hovering a menu row paints its accent border"
     );
-    assert!(idle_fills.iter().all(|fill| *fill != hovered));
+    assert!(idle_fills.iter().all(|fill| *fill != highlight));
 }
 
 #[test]
@@ -3577,9 +3822,22 @@ fn editor_context_menu_offers_the_static_table_under_the_pointer() {
         harness.state(),
         &Some(EditorMenuAction::EditTable(expected))
     );
+    let context = egui::Context::default();
+    crate::theme::configure_test_fonts(&context);
+    let with_table = std::cell::Cell::new(Vec2::ZERO);
+    let without_table = std::cell::Cell::new(Vec2::ZERO);
+    context
+        .run_ui(egui::RawInput::default(), |ui| {
+            with_table.set(sized_editor_menu(ui, false, true, &[], true));
+            without_table.set(sized_editor_menu(ui, false, false, &[], true));
+        })
+        .textures_delta
+        .clear();
     assert!(
-        editor_context_menu_size(false, true, true, false, &egui::Style::default()).y
-            > editor_context_menu_size(false, false, true, false, &egui::Style::default()).y
+        with_table.get().y > without_table.get().y,
+        "a table row grows the menu: {:?} vs {:?}",
+        with_table.get(),
+        without_table.get()
     );
 }
 

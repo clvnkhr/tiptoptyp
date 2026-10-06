@@ -1126,3 +1126,63 @@ class EditorJourneys(TexJourneys):
         for _ in range(8):
             if self.snapshot()["renderer_generation"] != generation:
                 raise AssertionError("revealing the prepared preview reloaded it")
+
+    def context_menu(self):
+        import time
+        original = "$ x $\n\nBody text here.\n"
+        self.focus_document_window()
+        self.wait("menu fixture opened", lambda d: d["path"] == str(self.directory / "menu.typ"), timeout=15)
+        self.wait_target("editor.source")
+        self.click("editor.source")
+        self.wait_target("editor.caret")
+
+        def caret_point():
+            target = self.snapshot()["targets"].get("editor.caret")
+            if not target or not target["enabled"] or target["age_ms"] > 500:
+                raise AssertionError("missing, disabled or stale hit target: editor.caret")
+            return target["x"], target["y"]
+
+        # Home the caret, then step into the math on line 1. Keyboard
+        # navigation from a known state keeps the click point deterministic.
+        self.key(126, "cmd")
+        self.key(124, "none")
+        self.key(124, "none")
+        self.wait_target("editor.caret")
+        math_point = caret_point()
+        self.right_click_at(*math_point)
+        self.wait_target("menu.Convert to…")
+        convert = self.snapshot()["targets"]["menu.Convert to…"]
+        self.native("move", convert["x"], convert["y"])
+        self.wait_target("menu.Display math")
+        self.click("menu.Display math")
+        converted = "$\nx\n$\n\nBody text here.\n"
+        self.wait("display-math conversion rewrites the source",
+                  lambda d: d["source_fingerprint"] == fingerprint(converted), timeout=15)
+        self.key(6)
+        self.wait("undo restores the inline math",
+                  lambda d: d["source_fingerprint"] == fingerprint(original), timeout=15)
+
+        # A plain-text line offers the standard rows but no Convert row. The
+        # absent target can only be asserted once the new menu has painted
+        # fresh rows while the old entry keeps aging.
+        self.key(126, "cmd")
+        self.key(125, "none")
+        self.key(125, "none")
+        self.wait_target("editor.caret")
+        self.right_click_at(*caret_point())
+        # Paste is always enabled, unlike Undo right after an undo.
+        self.wait_target("menu.Paste")
+        deadline = time.monotonic() + 6
+        while True:
+            state = self.snapshot()
+            paste = state["targets"].get("menu.Paste")
+            convert = state["targets"].get("menu.Convert to…")
+            if paste and paste["enabled"] and paste["age_ms"] <= 500 and (
+                    convert is None or convert["age_ms"] > 1500):
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError("plain-text menu kept a fresh Convert row")
+            time.sleep(0.05)
+        self.key(53, "none")
+        self.wait("dismissed menu leaves the source alone",
+                  lambda d: d["source_fingerprint"] == fingerprint(original), timeout=15)

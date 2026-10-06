@@ -94,6 +94,7 @@ now exercised through the real app, and the lower-level coverage retained.
 | focus | Two document windows; Settings opened/closed from alternating owners; native focus returns to each owner; minimize/restore, Finder app switch, close second window once |
 | preview | Pin a real Typst fixture; switch PDFium → Tinymist through Settings; require the selected renderer to become ready; light/dark × comfy transitions; applied palette and live Tinymist DOM checks |
 | pdf_output | Tinymist live preview and engine refresh do not create an adjacent PDF; PDF button and Cmd+R commit actual PDF bytes, edits mark it stale without overwriting it, failed builds retain the old file and clear the queue, corrected builds recover, and PDFium cache refresh does not write the adjacent file |
+| context_menu | Right-click on math opens the editor menu with a Convert row; hovering reveals the side submenu; choosing Display math rewrites the source and undo restores it; a plain-text line offers the standard rows with no Convert row |
 
 Find is a real native child viewport. The focus journey uses native Accessibility
 window actions and verifies native focus independently of the inspection socket.

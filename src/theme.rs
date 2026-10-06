@@ -1353,8 +1353,8 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
     menu: MenuMetrics {
         row_height: 24.0,
         workspace_width: 220.0,
-        editor_width: 280.0,
-        submenu_width: 210.0,
+        editor_width: 240.0,
+        submenu_width: 170.0,
         status_log_size: Vec2::new(360.0, 250.0),
         font_selector_size: Vec2::new(360.0, 390.0),
     },

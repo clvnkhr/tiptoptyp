@@ -658,11 +658,28 @@ impl QaSession {
                 }
             }
             UiSnapshotScene::EditorContextMenu => {
+                // Math menu with an open Convert flyout: the submenu flag is
+                // seeded because deterministic captures have no pointer to
+                // hover with. The first captured frame still shows it open.
+                let path = app.workspace_root.join("menu-math.typ");
+                let disk_fingerprint = app.document().disk_fingerprint();
+                app.document_mut()
+                    .replace_loaded("$ x $".into(), path, DocumentKind::Typst, disk_fingerprint)
+                    .expect("QA math fixture replacement");
+                app.prepare_editor_source_data();
+                let math = crate::math_conversion::Target::at(
+                    app.document().source(),
+                    2,
+                    DocumentKind::Typst,
+                );
                 app.app_popup = Some(AppPopup::Editor {
-                    math: None,
+                    math,
                     anchor: Pos2::new(430.0, 250.0),
                     link: None,
                     table: None,
+                });
+                context.data_mut(|data| {
+                    data.insert_temp(egui::Id::new("math-convert-submenu"), true);
                 });
             }
             UiSnapshotScene::DocumentFontSelector => {

@@ -2,9 +2,16 @@
 use super::{METRICS, STATUS_LOG_ROW_HEIGHT};
 use crate::{
     native_menu::{CommandMenu, command_specs},
+    shortcuts::{ShortcutAction, ShortcutBindings},
     theme,
 };
-use eframe::egui::{self, Pos2, Vec2};
+use eframe::egui::{self, Pos2, Rect, Vec2};
+
+/// Minimum breathing room between a row caption and its right-aligned text.
+const MENU_ROW_GAP: f32 = 16.0;
+/// Bounds for measured menu content widths: never a sliver, never overflowing.
+const MENU_MIN_CONTENT_WIDTH: f32 = 180.0;
+const MENU_MAX_CONTENT_WIDTH: f32 = 400.0;
 
 pub(super) fn clamp_popup_anchor(anchor: Pos2, popup_size: Vec2, viewport_size: Vec2) -> Pos2 {
     let margin = METRICS.popup.viewport_edge;
@@ -53,23 +60,197 @@ pub(super) fn status_log_popup_size(entry_count: usize) -> Vec2 {
     )
 }
 
-pub(super) fn editor_context_menu_size(
+/// One rendered editor menu row for measurement: caption plus right-aligned
+/// text, exactly as `menu_row` paints them.
+pub(super) struct EditorMenuRow {
+    pub label: &'static str,
+    pub right: String,
+}
+
+/// The row list behind `editor_menu_rows`, without separators. Shared by
+/// window sizing and rendering so the popup always stretches to fit its
+/// actual content.
+pub(super) fn editor_menu_row_specs(
     has_link: bool,
-    can_edit_table: bool,
-    can_format: bool,
+    has_table: bool,
     has_math: bool,
+    can_format: bool,
+    shortcuts: &ShortcutBindings,
+    format: &dyn Fn(egui::KeyboardShortcut) -> String,
+) -> Vec<EditorMenuRow> {
+    let shortcut = |action: ShortcutAction| shortcuts.egui(action).map(format).unwrap_or_default();
+    let mut rows = Vec::new();
+    if has_link {
+        rows.push(EditorMenuRow {
+            label: "Open Link in Browser",
+            right: String::new(),
+        });
+    }
+    if has_math {
+        rows.push(EditorMenuRow {
+            label: "Convert to…",
+            right: "›".to_owned(),
+        });
+    }
+    if has_table {
+        rows.push(EditorMenuRow {
+            label: "Edit Table…",
+            right: String::new(),
+        });
+    }
+    for (label, action) in [
+        ("Undo", ShortcutAction::Undo),
+        ("Redo", ShortcutAction::Redo),
+        ("Cut", ShortcutAction::Cut),
+        ("Copy", ShortcutAction::Copy),
+        ("Paste", ShortcutAction::Paste),
+        ("Select All", ShortcutAction::SelectAll),
+        ("Toggle Comment", ShortcutAction::ToggleComment),
+        ("Reveal in Preview", ShortcutAction::SyncPreview),
+    ] {
+        rows.push(EditorMenuRow {
+            label,
+            right: shortcut(action),
+        });
+    }
+    if can_format {
+        rows.push(EditorMenuRow {
+            label: "Format Document",
+            right: shortcut(ShortcutAction::Format),
+        });
+    }
+    rows
+}
+
+/// Content width one row needs: padding, caption, gap, and right text.
+pub(super) fn menu_row_content_width(
+    context: &egui::Context,
     style: &egui::Style,
+    label: &str,
+    right: &str,
+) -> f32 {
+    let font = egui::TextStyle::Button.resolve(style);
+    let pad = style.spacing.button_padding.x;
+    let (caption, trailing) = context.fonts_mut(|fonts| {
+        let plain = egui::Color32::WHITE;
+        (
+            fonts
+                .layout_no_wrap(label.to_owned(), font.clone(), plain)
+                .size()
+                .x,
+            if right.is_empty() {
+                0.0
+            } else {
+                fonts.layout_no_wrap(right.to_owned(), font, plain).size().x
+            },
+        )
+    });
+    let gap = if right.is_empty() { 0.0 } else { MENU_ROW_GAP };
+    pad + caption + gap + trailing + pad
+}
+
+/// Measured content widths for the editor menu: the parent column stretches
+/// to its widest row, and the flyout card stretches to its widest choice.
+/// Neither includes card chrome; callers add frame margins.
+pub(super) struct EditorMenuWidths {
+    pub parent: f32,
+    pub submenu_choices: f32,
+}
+
+pub(super) fn editor_menu_widths(
+    context: &egui::Context,
+    style: &egui::Style,
+    rows: &[EditorMenuRow],
+    choices: &[&str],
+) -> EditorMenuWidths {
+    let parent = rows
+        .iter()
+        .map(|row| menu_row_content_width(context, style, row.label, &row.right))
+        .fold(0.0, f32::max)
+        .ceil()
+        .clamp(MENU_MIN_CONTENT_WIDTH, MENU_MAX_CONTENT_WIDTH);
+    let submenu_choices = if choices.is_empty() {
+        0.0
+    } else {
+        choices
+            .iter()
+            .map(|choice| menu_row_content_width(context, style, choice, ""))
+            .fold(0.0, f32::max)
+            .ceil()
+    };
+    EditorMenuWidths {
+        parent,
+        submenu_choices,
+    }
+}
+
+/// Separators rendered by `editor_menu_rows`: one after the link and table
+/// blocks, one after Redo, one before Format. Shared by sizing and rendering.
+pub(super) fn editor_menu_separators(has_link: bool, has_table: bool, can_format: bool) -> usize {
+    1 + usize::from(has_link) + usize::from(has_table) + usize::from(can_format)
+}
+
+/// Exact content height of a row/separator stack: fixed row and separator
+/// heights, with gaps between consecutive blocks only, never trailing.
+pub(super) fn editor_menu_content_height(rows: usize, separators: usize) -> f32 {
+    rows as f32 * METRICS.menu.row_height
+        + separators as f32 * theme::SPACE.control
+        + rows.saturating_add(separators).saturating_sub(1) as f32 * theme::SPACE.small
+}
+
+/// Everything both window sizing and rendering need, measured once from the
+/// same row list so the popup stretches to fit its actual content.
+pub(super) struct EditorMenuGeometry {
+    pub submenu_content: f32,
+    /// Parent card column: rows plus the nested card's own chrome. The nested
+    /// card drops its outer margin, so this is the full card chrome minus the
+    /// window-level outer margin on each side.
+    pub column_size: Vec2,
+    pub rows_height: f32,
+}
+
+pub(super) fn editor_menu_geometry(
+    context: &egui::Context,
+    style: &egui::Style,
+    rows: &[EditorMenuRow],
+    choices: &[&str],
+    separators: usize,
+) -> EditorMenuGeometry {
+    let widths = editor_menu_widths(context, style, rows, choices);
+    let margins = theme::menu_card_frame(style).total_margin().sum();
+    let outer = METRICS.popup.menu_outer_margin as f32;
+    let nested = Vec2::new(margins.x - 2.0 * outer, margins.y - 2.0 * outer);
+    let rows_height = editor_menu_content_height(rows.len(), separators);
+    EditorMenuGeometry {
+        submenu_content: widths.submenu_choices,
+        column_size: Vec2::new(widths.parent + nested.x, rows_height + nested.y),
+        rows_height,
+    }
+}
+
+/// Parent card column: inset by the outer margin on top/left/bottom so its
+/// border aligns with a plain menu card; the right side stays open for the
+/// attached flyout.
+pub(super) fn editor_parent_column(content: Rect, geometry: &EditorMenuGeometry) -> Rect {
+    let outer = METRICS.popup.menu_outer_margin as f32;
+    Rect::from_min_size(content.min + egui::vec2(outer, outer), geometry.column_size)
+}
+
+pub(super) fn editor_context_menu_size(
+    style: &egui::Style,
+    geometry: &EditorMenuGeometry,
+    has_flyout: bool,
 ) -> Vec2 {
-    let extra = usize::from(has_link) + usize::from(can_edit_table) + usize::from(can_format);
-    // The Convert row takes one line; its choices live in a reserved side
-    // column that needs no extra height.
-    let width = METRICS.menu.editor_width
-        + if has_math {
-            METRICS.menu.submenu_width
-        } else {
-            0.0
-        };
-    menu_popup_size(width, 8 + extra + usize::from(has_math), 2 + extra, style)
+    let frame = theme::menu_card_frame(style);
+    let margins = frame.total_margin().sum();
+    let outer = METRICS.popup.menu_outer_margin as f32;
+    let width = if has_flyout {
+        let flyout = geometry.submenu_content + margins.x;
+        geometry.column_size.x - frame.stroke.width + flyout + outer
+    } else {
+        geometry.column_size.x + 2.0 * outer
+    };
+    Vec2::new(width, geometry.rows_height + margins.y)
 }
 
 pub(super) fn command_popup_size(menu: CommandMenu, style: &egui::Style) -> Vec2 {

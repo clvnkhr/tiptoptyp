@@ -76,7 +76,7 @@ class Journey(EditorJourneys):
         self.log.flush()
 
     def native(self, command, *args):
-        if command in {"click", "double-click", "drag", "key", "move", "wheel", "text", "paste"}:
+        if command in {"click", "double-click", "drag", "key", "move", "wheel", "text", "paste", "right-click"}:
             foreground = subprocess.run(
                 [str(self.driver), "foreground", str(self.process.pid)],
                 capture_output=True,
@@ -160,6 +160,37 @@ class Journey(EditorJourneys):
         # geometry and the asserted action outcome are the click contract.
         self.record("target", name=name, target=observed)
         self.native("click", observed["x"], observed["y"])
+
+    def right_click(self, name):
+        def target_in(state, require_fresh=True):
+            target = state["targets"].get(name)
+            if not target or not target["enabled"] or (require_fresh and target["age_ms"] > 500):
+                raise AssertionError(f"missing, disabled or stale hit target: {name}")
+            return target
+
+        # Same settle-then-post contract as click(): only fresh geometry may
+        # authorize the event, and it is never retried once posted.
+        target = target_in(self.snapshot(), require_fresh=False)
+        deadline = time.monotonic() + 3
+        while True:
+            self.native("move", target["x"], target["y"])
+            observed = target_in(self.snapshot())
+            if abs(observed["x"] - target["x"]) <= 0.5 and abs(observed["y"] - target["y"]) <= 0.5:
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError(f"target did not settle before right-click: {name}")
+            target = observed
+        self.record("target", name=name, target=observed)
+        self.native("right-click", observed["x"], observed["y"])
+
+    def right_click_at(self, x, y):
+        # Raw coordinates for targets whose hit point is derived, not
+        # published (e.g. a caret position inside math text). Settles the
+        # pointer first so hover state is deterministic before posting.
+        self.native("move", x, y)
+        time.sleep(0.2)
+        self.record("target", name="<point>", target={"x": x, "y": y})
+        self.native("right-click", x, y)
 
     def drag(self, source_name, destination_name):
         state = self.snapshot()
@@ -546,7 +577,7 @@ class Journey(EditorJourneys):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--journey", choices=["all", "tex", *TEX_JOURNEYS, "drawing", "snippets", "panels", "find", "rectangle", "empty", "focus", "preview", "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "controls", "settings_search", "editor_preferences", "background"], default="all")
+    parser.add_argument("--journey", choices=["all", "tex", *TEX_JOURNEYS, "drawing", "snippets", "panels", "find", "rectangle", "empty", "focus", "preview", "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "controls", "settings_search", "editor_preferences", "background", "context_menu"], default="all")
     parser.add_argument("--review-preview", action="store_true", help="pause at each dark/comfy renderer for independent on-screen review; not an automated visual pass")
     parser.add_argument("--capture-review", action="store_true", help="capture affected settings/controls framebuffers for separate visual inspection")
     parser.add_argument("--trace-preview", action="store_true", help="retain native preview geometry traces")
@@ -629,6 +660,10 @@ def main():
                     .replace("085 original", "085 changed").replace("165 original", "165 changed"))
                 if args.journey == "git_hunks":
                     fixture = hunk_fixture
+            if args.journey == "context_menu":
+                menu_fixture = directory / "menu.typ"
+                menu_fixture.write_text("$ x $\n\nBody text here.\n")
+                fixture = menu_fixture
             environment = {key: value for key, value in os.environ.items()
                            if not key.startswith(("TIPTOPTYP_UI_", "TIPTOPTYP_PROFILE", "TIPTOPTYP_DESKTOP_TEST"))}
             environment["TIPTOPTYP_DESKTOP_TEST_DIR"] = str(directory)
@@ -727,7 +762,7 @@ def main():
                         return
                     if args.capture_review:
                         journey.capture_viewport("main")
-                    for name in (["panels", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "focus", "settings_search", "editor_preferences", "background", "pdf_output", "preview", "controls", "empty", "snippets", "drawing", *TEX_JOURNEYS] if args.journey == "all" else TEX_JOURNEYS if args.journey == "tex" else [args.journey]):
+                    for name in (["panels", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "focus", "settings_search", "editor_preferences", "background", "context_menu", "pdf_output", "preview", "controls", "empty", "snippets", "drawing", *TEX_JOURNEYS] if args.journey == "all" else TEX_JOURNEYS if args.journey == "tex" else [args.journey]):
                         journey.record("journey.start", name=name)
                         getattr(journey, name)()
                         result["journeys"].append(name)

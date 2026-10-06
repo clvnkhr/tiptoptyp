@@ -39,7 +39,9 @@ mod popup_layout;
 use popup_layout::app_popup_scroll_id;
 use popup_layout::{
     clamp_popup_above_anchor, clamp_popup_anchor, command_popup_size, editor_context_menu_size,
-    show_popup_contents, status_log_popup_size, workspace_context_menu_size,
+    editor_menu_content_height, editor_menu_geometry, editor_menu_row_specs,
+    editor_menu_separators, editor_parent_column, show_popup_contents, status_log_popup_size,
+    workspace_context_menu_size,
 };
 mod package_browser;
 use package_browser::{PackageBrowserAction, PackageFilter, show_package_browser_ui};
@@ -11287,25 +11289,69 @@ fn toggle_line_comments(
     (output.into_iter().collect(), map(start)..map(end))
 }
 
-fn menu_button<'a>(
-    ui: &egui::Ui,
-    label: &'a str,
-    shortcut: Option<KeyboardShortcut>,
-) -> egui::Button<'a> {
-    // Framed rows highlight on hover; frameless buttons show no background.
-    let button = egui::Button::new(label).frame(true);
-    match shortcut {
-        Some(shortcut) => button.shortcut_text(ui.ctx().format_shortcut(&shortcut)),
-        None => button.right_text(""),
+fn menu_row(ui: &mut egui::Ui, label: &str, right: &str) -> egui::Response {
+    let size = egui::vec2(ui.available_width().max(1.0), METRICS.menu.row_height);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    crate::desktop_test::observe(&format!("menu.{label}"), &response);
+    // Framed buttons paint a permanent box behind every row. Menu rows stay
+    // clean and only the hovered row carries a fill. Note the fill must not
+    // reuse `hovered.weak_bg_fill`: the theme sets it to the same elevated
+    // surface as the menu card itself, which made hover invisible.
+    if response.hovered() {
+        let visuals = ui.visuals();
+        ui.painter().rect_filled(
+            rect,
+            visuals.widgets.hovered.corner_radius,
+            visuals.faint_bg_color,
+        );
+        ui.painter().rect_stroke(
+            rect,
+            visuals.widgets.hovered.corner_radius,
+            visuals.widgets.hovered.bg_stroke,
+            egui::StrokeKind::Inside,
+        );
     }
+    let enabled = ui.is_enabled();
+    // Keep the accessible name identical to the framed button this replaced:
+    // caption, shortcut text included.
+    let accessible = if right.is_empty() {
+        format!("{label} ")
+    } else {
+        format!("{label} {right}")
+    };
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, accessible.clone())
+    });
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let text_color = if ui.is_enabled() {
+        ui.visuals().text_color()
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    let pad = ui.spacing().button_padding.x;
+    ui.painter().text(
+        rect.left_center() + egui::vec2(pad, 0.0),
+        egui::Align2::LEFT_CENTER,
+        label,
+        font.clone(),
+        text_color,
+    );
+    if !right.is_empty() {
+        ui.painter().text(
+            rect.right_center() - egui::vec2(pad, 0.0),
+            egui::Align2::RIGHT_CENTER,
+            right,
+            font,
+            ui.visuals().weak_text_color(),
+        );
+    }
+    response
 }
 
 fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: Option<KeyboardShortcut>) -> egui::Response {
-    let width = ui.available_width().max(1.0);
-    ui.add_sized(
-        [width, METRICS.menu.row_height],
-        menu_button(ui, label, shortcut),
-    )
+    let right = shortcut.map(|shortcut| ui.ctx().format_shortcut(&shortcut));
+    menu_row(ui, label, right.as_deref().unwrap_or(""))
 }
 
 fn menu_item_enabled(
@@ -11314,12 +11360,9 @@ fn menu_item_enabled(
     label: &str,
     shortcut: Option<KeyboardShortcut>,
 ) -> egui::Response {
-    let width = ui.available_width().max(1.0);
     ui.add_enabled_ui(enabled, |ui| {
-        ui.add_sized(
-            [width, METRICS.menu.row_height],
-            menu_button(ui, label, shortcut),
-        )
+        let right = shortcut.map(|shortcut| ui.ctx().format_shortcut(&shortcut));
+        menu_row(ui, label, right.as_deref().unwrap_or(""))
     })
     .inner
 }
@@ -11696,32 +11739,41 @@ fn math_convert_submenu(
     ui: &mut egui::Ui,
     math: &crate::math_conversion::Target,
     content: &Rect,
+    geometry: &popup_layout::EditorMenuGeometry,
 ) -> Option<&'static str> {
     let id = egui::Id::new("math-convert-submenu");
     let mut open: bool = ui.data(|data| data.get_temp(id).unwrap_or(false));
-    let row = ui.add_sized(
-        [ui.available_width().max(1.0), METRICS.menu.row_height],
-        egui::Button::new("Convert to…").frame(true).right_text("›"),
-    );
+    let row = menu_row(ui, "Convert to…", "›");
     if row.hovered() || row.clicked() {
         open = true;
     }
     let mut choice = None;
     if open {
-        let flyout_height =
-            math.choices().len() as f32 * (METRICS.menu.row_height + theme::SPACE.small) + 24.0;
+        let frame = theme::menu_card_frame(ui.style());
+        let margins = frame.total_margin().sum();
+        let flyout_height = editor_menu_content_height(math.choices().len(), 0) + margins.y;
         let top = row.rect.top().clamp(
             content.top(),
             (content.bottom() - flyout_height).max(content.top()),
         );
+        // Attach the flyout card to the parent card's right border, overlapping
+        // it by one border width so the two read as one continuous surface.
+        let column = editor_parent_column(*content, geometry);
+        let flyout_pos = Pos2::new(
+            column.min.x + column.width()
+                - METRICS.popup.menu_outer_margin as f32
+                - frame.stroke.width,
+            top,
+        );
         let flyout = egui::Area::new(id.with("flyout"))
             .order(egui::Order::Foreground)
-            .fixed_pos(Pos2::new(
-                content.min.x + content.width() - METRICS.menu.submenu_width,
-                top,
-            ))
+            .fixed_pos(flyout_pos)
             .show(ui.ctx(), |ui| {
-                theme::menu_card_frame(ui.style()).show(ui, |ui| {
+                frame.show(ui, |ui| {
+                    // Bound the column: auto-sized areas offer viewport-wide
+                    // space, which would balloon the buttons and shove the
+                    // card off its reserved column when constrained.
+                    ui.set_width(geometry.submenu_content);
                     for name in math.choices() {
                         if menu_item(ui, name, None).clicked() {
                             choice = Some(*name);
@@ -11750,12 +11802,48 @@ fn show_editor_context_menu_ui(
     action: &mut Option<EditorMenuAction>,
 ) {
     ui.spacing_mut().item_spacing.y = theme::SPACE.small;
-    // The flyout column is reserved in the popup size whenever math targets
-    // exist. Narrow the parent column so rows never stretch into it.
     let content = ui.max_rect();
-    if options.math.is_some() {
-        ui.set_width((content.width() - METRICS.menu.submenu_width).max(1.0));
+    // Measure from the same row list as window sizing so the popup stretches
+    // to fit its actual content; without math targets the flyout reserve is
+    // empty and the menu is a single plain card.
+    let specs = editor_menu_row_specs(
+        options.link.is_some(),
+        options.table.is_some(),
+        options.math.is_some(),
+        options.can_format,
+        shortcuts,
+        &|chord| ui.ctx().format_shortcut(&chord),
+    );
+    let separators = editor_menu_separators(
+        options.link.is_some(),
+        options.table.is_some(),
+        options.can_format,
+    );
+    let choices = options.math.map(|math| math.choices()).unwrap_or(&[]);
+    let geometry = editor_menu_geometry(ui.ctx(), ui.style(), &specs, choices, separators);
+    if options.math.is_none() {
+        editor_menu_rows(ui, options, shortcuts, action, &content, &geometry);
+        return;
     }
+    // The parent card spans only its own column so the flyout reserve stays
+    // transparent until the flyout card opens beside it.
+    let column = editor_parent_column(content, &geometry);
+    let mut column_ui = ui.new_child(egui::UiBuilder::new().max_rect(column));
+    theme::menu_card_frame(column_ui.style())
+        .outer_margin(egui::Margin::ZERO)
+        .show(&mut column_ui, |ui| {
+            editor_menu_rows(ui, options, shortcuts, action, &content, &geometry);
+        });
+}
+
+fn editor_menu_rows(
+    ui: &mut egui::Ui,
+    options: EditorContextMenuOptions<'_>,
+    shortcuts: &ShortcutBindings,
+    action: &mut Option<EditorMenuAction>,
+    content: &Rect,
+    geometry: &popup_layout::EditorMenuGeometry,
+) {
     if let Some(link) = options.link {
         if menu_item(ui, "Open Link in Browser", None).clicked() {
             *action = Some(EditorMenuAction::OpenLink(link.to_owned()));
@@ -11764,7 +11852,7 @@ fn show_editor_context_menu_ui(
         ui.add(egui::Separator::default().spacing(theme::SPACE.control));
     }
     if let Some(math) = options.math
-        && let Some(choice) = math_convert_submenu(ui, math, &content)
+        && let Some(choice) = math_convert_submenu(ui, math, content, geometry)
     {
         *action = Some(EditorMenuAction::ConvertMath(
             math.clone(),

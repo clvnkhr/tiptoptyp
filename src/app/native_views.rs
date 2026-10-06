@@ -1113,6 +1113,7 @@ impl EditorApp {
         let theme = context.theme();
         let style = context.style_of(theme);
         let rename_path = self.document().path().clone();
+        let shortcuts = self.settings.effective_shortcuts();
         let (anchor, desired_size) = match &popup {
             AppPopup::File { anchor } => (*anchor, command_popup_size(CommandMenu::File, &style)),
             AppPopup::Edit { anchor } => (*anchor, command_popup_size(CommandMenu::Edit, &style)),
@@ -1125,16 +1126,25 @@ impl EditorApp {
                 link,
                 table,
                 math,
-            } => (
-                *anchor,
-                editor_context_menu_size(
+            } => {
+                let can_format = self.document().kind().typesetting_language().is_some();
+                let rows = editor_menu_row_specs(
                     link.is_some(),
                     table.is_some(),
-                    self.document().kind().typesetting_language().is_some(),
                     math.is_some(),
-                    &style,
-                ),
-            ),
+                    can_format,
+                    &shortcuts,
+                    &|chord| context.format_shortcut(&chord),
+                );
+                let choices: &[&str] = math.as_ref().map(|target| target.choices()).unwrap_or(&[]);
+                let separators =
+                    editor_menu_separators(link.is_some(), table.is_some(), can_format);
+                let geometry = editor_menu_geometry(context, &style, &rows, choices, separators);
+                (
+                    *anchor,
+                    editor_context_menu_size(&style, &geometry, math.is_some()),
+                )
+            }
             AppPopup::GitChunk { anchor, .. } => (*anchor, Vec2::new(720.0, 440.0)),
             AppPopup::StatusLog { anchor } => {
                 (*anchor, status_log_popup_size(self.status_log.len()))
@@ -1150,8 +1160,17 @@ impl EditorApp {
                 .min((window_rect.height() - METRICS.popup.viewport_edge).max(1.0)),
         );
         let menu_frame = theme::menu_card_frame(&style);
-        let frame_margin = menu_frame.total_margin().sum();
-        let menu_content_size = frame_content_size(estimated_size, frame_margin);
+        // A math menu draws its own parent card, so there is no outer frame
+        // consuming margins: content fills the viewport exactly. Subtracting
+        // frame margins here (as plain menus do) would shrink the scroll area
+        // below the column and clip the last rows.
+        let is_math_menu = matches!(&popup, AppPopup::Editor { math: Some(_), .. });
+        let menu_content_size = if is_math_menu {
+            estimated_size
+        } else {
+            let frame_margin = menu_frame.total_margin().sum();
+            frame_content_size(estimated_size, frame_margin)
+        };
         let menu_width = menu_content_size.x;
         let menu_height = menu_content_size.y;
         let anchor = if matches!(popup, AppPopup::StatusLog { .. }) {
@@ -1160,7 +1179,6 @@ impl EditorApp {
             clamp_popup_anchor(anchor, estimated_size, window_rect.size())
         };
         let (can_undo, can_redo) = self.editor_history_availability(context);
-        let shortcuts = self.settings.effective_shortcuts();
         let has_selection = self.selected_editor_chars(context).is_some();
         let can_format = self.document().kind().typesetting_language().is_some();
         let can_export_pdf = self.source_preview_available();
@@ -1213,7 +1231,14 @@ impl EditorApp {
                 .order(egui::Order::Foreground)
                 .fixed_pos(Pos2::ZERO)
                 .show(ui.ctx(), |ui| {
-                    menu_frame.show(ui, |ui| {
+                    // A math menu draws its own parent and flyout cards so the
+                    // window never shows an empty reserved column.
+                    let frame = if matches!(&popup, AppPopup::Editor { math: Some(_), .. }) {
+                        egui::Frame::NONE
+                    } else {
+                        menu_frame
+                    };
+                    frame.show(ui, |ui| {
                         show_popup_contents(
                             ui,
                             Vec2::new(menu_width, menu_height),

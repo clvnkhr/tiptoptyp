@@ -689,6 +689,14 @@ impl EditorApp {
                         .translate(output.galley_pos.to_vec2()),
                 );
             }
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            if let Some(anchor) = completion_anchor {
+                // Collapsed caret position for native input journeys: clicking
+                // here addresses the character the caret sits beside.
+                let mut target = output.response.clone();
+                target.interact_rect = Rect::from_center_size(anchor.center(), Vec2::splat(1.0));
+                crate::desktop_test::observe("editor.caret", &target);
+            }
 
             paint_editor_line_backgrounds(
                 ui,

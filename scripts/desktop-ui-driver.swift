@@ -259,6 +259,17 @@ if command == "paste" {
         Thread.sleep(forTimeInterval: 0.08)
       }
     }
+} else if command == "right-click" {
+    guard args.count == 4, let x = Double(args[2]), let y = Double(args[3]), x.isFinite, y.isFinite else { fail("right-click requires finite screen coordinates") }
+    let point = CGPoint(x: x, y: y)
+    for type in [CGEventType.rightMouseDown, CGEventType.rightMouseUp] {
+      guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .right) else { fail("cannot create mouse event") }
+      event.flags = []
+      event.setIntegerValueField(.mouseEventClickState, value: 1)
+      event.post(tap: .cghidEventTap)
+      // Preserve distinct down/up delivery across native event-loop turns.
+      Thread.sleep(forTimeInterval: 0.05)
+    }
 } else if command == "drag" {
     guard args.count == 6,
           let x1 = Double(args[2]), let y1 = Double(args[3]),
