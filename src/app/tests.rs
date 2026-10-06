@@ -10107,14 +10107,15 @@ fn math_context_conversion_choices_follow_document_language() {
         );
     harness.run();
     assert!(harness.query_by_label("Convert to… ›").is_none());
-    harness.get_by_label_contains("Convert to display math").click();
+    harness
+        .get_by_label_contains("Convert to display math")
+        .click();
     harness.run();
     assert_eq!(harness.state(), &Some(expected));
     // TeX keeps the choice flyout: choices stay hidden until the pointer
     // reaches the parent row.
     let source = "\\[α + x\\]";
-    let target =
-        crate::math_conversion::Target::at(source, 3, DocumentKind::Tex).unwrap();
+    let target = crate::math_conversion::Target::at(source, 3, DocumentKind::Tex).unwrap();
     let expected = EditorMenuAction::ConvertMath(target.clone(), "align*".into());
     let mut harness = Harness::builder()
         .with_size(egui::vec2(360.0, 650.0))
