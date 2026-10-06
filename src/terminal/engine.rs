@@ -28,6 +28,22 @@ pub(super) struct Colors {
     pub foreground: Color32,
     pub background: Color32,
 }
+impl Colors {
+    /// Relative-luminance test shared by the ANSI palette switch and the
+    /// child theme hint: both key off the background, not the app chrome.
+    pub(super) fn is_light(&self) -> bool {
+        let background = self.background;
+        u32::from(background.r()) * 299
+            + u32::from(background.g()) * 587
+            + u32::from(background.b()) * 114
+            > 128_000
+    }
+    /// rxvt-style `fg;bg` pair so child TUI programs detect the theme:
+    /// light text on a dark background and vice versa.
+    pub(super) fn colorfgbg(&self) -> &'static str {
+        if self.is_light() { "0;15" } else { "15;0" }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub(super) struct Cell {
@@ -102,12 +118,7 @@ impl Engine {
             .set_default_cursor_color(Some(rgb(colors.foreground)))?;
         // ANSI's first sixteen colors need a light palette too: Ghostty's
         // default pale greens/yellows have poor contrast on a light workspace.
-        let background = colors.background;
-        let light = u32::from(background.r()) * 299
-            + u32::from(background.g()) * 587
-            + u32::from(background.b()) * 114
-            > 128_000;
-        let ansi = if light {
+        let ansi = if colors.is_light() {
             [
                 0x263238, 0xb91c1c, 0x267326, 0x8a6100, 0x1d4ed8, 0x8f2da8, 0x007582, 0x6b7280,
                 0x52525b, 0xd02020, 0x2e7d32, 0xa16207, 0x2563eb, 0xa21caf, 0x0e7490, 0x111827,
@@ -395,6 +406,55 @@ mod tests {
         );
         engine.terminal.scroll_viewport(ScrollViewport::Top);
         assert_eq!(engine.snapshot().unwrap().scroll_offset, 0);
+    }
+
+    #[test]
+    fn live_palette_switches_reach_programs_through_color_queries() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let mut engine = engine(20, 3);
+        let replies = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let sink = replies.clone();
+        engine
+            .terminal
+            .on_pty_write(move |_, bytes| sink.borrow_mut().extend_from_slice(bytes))
+            .unwrap();
+        let query = |engine: &mut Engine| {
+            replies.borrow_mut().clear();
+            engine.terminal.vt_write(b"\x1b]11;?\x1b\\");
+            engine.terminal.vt_write(b"\x1b]4;2;?\x1b\\");
+            String::from_utf8(replies.borrow().clone()).unwrap()
+        };
+        // Black background, dark-theme green.
+        let dark = query(&mut engine);
+        assert!(dark.contains("]11;rgb:0000/0000/0000"), "{dark:?}");
+        assert!(dark.contains("]4;2;rgb:5050/fafa/7b7b"), "{dark:?}");
+        engine
+            .set_colors(Colors {
+                foreground: Color32::BLACK,
+                background: Color32::WHITE,
+            })
+            .unwrap();
+        // Already-running programs see the switched theme on their next query.
+        let light = query(&mut engine);
+        assert!(light.contains("]11;rgb:ffff/ffff/ffff"), "{light:?}");
+        assert!(!light.contains("5050/fafa/7b7b"), "{light:?}");
+    }
+
+    #[test]
+    fn child_theme_hint_follows_background_luminance() {
+        let dark = Colors {
+            foreground: Color32::WHITE,
+            background: Color32::BLACK,
+        };
+        assert!(!dark.is_light());
+        assert_eq!(dark.colorfgbg(), "15;0");
+        let light = Colors {
+            foreground: Color32::BLACK,
+            background: Color32::WHITE,
+        };
+        assert!(light.is_light());
+        assert_eq!(light.colorfgbg(), "0;15");
     }
 
     #[test]

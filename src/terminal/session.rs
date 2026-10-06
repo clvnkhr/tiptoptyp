@@ -97,7 +97,7 @@ impl Session {
         size: GridSize,
         colors: Colors,
     ) -> Result<Self, String> {
-        Self::start_command(context, cwd, size, colors, shell_command(cwd))
+        Self::start_command(context, cwd, size, colors, shell_command(cwd, colors))
     }
 
     pub(super) fn start_command(
@@ -184,11 +184,15 @@ impl Drop for Session {
     }
 }
 
-fn shell_command(cwd: &Path) -> CommandBuilder {
+fn shell_command(cwd: &Path, colors: Colors) -> CommandBuilder {
     let mut command = CommandBuilder::new_default_prog();
     command.cwd(cwd);
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
+    // Child TUI programs detect the light/dark theme from this, not from
+    // escape queries alone. It is fixed at spawn; live palette switches for
+    // already-running programs arrive through the VT defaults instead.
+    command.env("COLORFGBG", colors.colorfgbg());
     command.env("TERM_PROGRAM", "tiptoptyp");
     command.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
     command
@@ -642,6 +646,32 @@ mod tests {
         shared.visible.store(true, Ordering::Release);
         shared.publish(None, Status::Running);
         assert!(shared.repaint_pending.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn spawned_shell_advertises_its_theme_to_child_programs() {
+        let dark = shell_command(
+            Path::new("/tmp"),
+            Colors {
+                foreground: egui::Color32::WHITE,
+                background: egui::Color32::BLACK,
+            },
+        );
+        assert_eq!(
+            dark.get_env("COLORFGBG"),
+            Some(std::ffi::OsStr::new("15;0"))
+        );
+        let light = shell_command(
+            Path::new("/tmp"),
+            Colors {
+                foreground: egui::Color32::BLACK,
+                background: egui::Color32::WHITE,
+            },
+        );
+        assert_eq!(
+            light.get_env("COLORFGBG"),
+            Some(std::ffi::OsStr::new("0;15"))
+        );
     }
 
     #[test]
