@@ -221,7 +221,7 @@ impl EditorApp {
                     .collect::<Vec<_>>()
             }));
         interaction["editor_panel_width"] = serde_json::json!(
-            egui::PanelState::load(context, egui::Id::new("editor")).map(|p| p.size().x)
+            egui::PanelState::load(context, editor_panel_id(context)).map(|p| p.size().x)
         );
         interaction["explorer_focused"] = serde_json::json!(
             self.explorer

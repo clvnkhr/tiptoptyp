@@ -10360,6 +10360,38 @@ fn opening_and_closing_a_menu_keeps_the_docked_document_diff() {
 }
 
 #[test]
+fn editor_panel_state_is_isolated_per_viewport() {
+    let context = egui::Context::default();
+    // The editor panel shares one egui context across document windows, so
+    // its id must carry the viewport like the explorer's. A global id lets
+    // one window's divider adjustment move another window's preview divider
+    // through the shared panel state.
+    assert_eq!(
+        editor_panel_id(&context),
+        crate::child_view::viewport_scoped_id(&context, "editor")
+    );
+    let scoped = editor_panel_id(&context);
+    let other_viewport = egui::Id::new((egui::ViewportId::ROOT, "other-window"));
+    assert_ne!(scoped, egui::Id::new("editor"));
+    assert_ne!(scoped, other_viewport);
+    // State stored under the scoped id round-trips, while the legacy global
+    // id stays empty: windows cannot see each other's widths.
+    context.data_mut(|data| {
+        data.insert_persisted(
+            scoped,
+            egui::PanelState {
+                outer_rect: Rect::from_min_size(Pos2::ZERO, Vec2::new(431.0, 600.0)),
+            },
+        );
+    });
+    assert_eq!(
+        egui::PanelState::load(&context, scoped).unwrap().size().x,
+        431.0
+    );
+    assert!(egui::PanelState::load(&context, egui::Id::new("editor")).is_none());
+}
+
+#[test]
 #[ignore = "opt-in optimized active/idle resize presentation measurement"]
 fn measure_resize_presentation() {
     use std::{num::NonZeroUsize, time::Instant};

@@ -205,6 +205,14 @@ fn explorer_panel_id(context: &egui::Context) -> egui::Id {
     viewport_scoped_id(context, "filesystem")
 }
 
+/// The editor panel shares one egui context across document windows, so its
+/// id must be viewport-scoped like the explorer's. A global id lets one
+/// window's independent-divider adjustment move another window's preview
+/// divider through the shared panel state.
+fn editor_panel_id(context: &egui::Context) -> egui::Id {
+    viewport_scoped_id(context, "editor")
+}
+
 fn explorer_width_restored_rect(rect: Rect, width: f32) -> Rect {
     Rect::from_min_size(rect.min, Vec2::new(width, rect.height()))
 }
@@ -9079,7 +9087,7 @@ impl EditorApp {
                 if self.settings.independent_main_dividers
                     && self.view_mode == ViewMode::Split
                     && let Some(mut editor) =
-                        egui::PanelState::load(&context, egui::Id::new("editor"))
+                        egui::PanelState::load(&context, editor_panel_id(&context))
                 {
                     let previous_width = context
                         .data(|data| data.get_temp::<f32>(panel_id.with("presented-width")))
@@ -9095,7 +9103,7 @@ impl EditorApp {
                         );
                         editor.outer_rect.max.x = editor.outer_rect.min.x + width;
                         context.data_mut(|data| {
-                            data.insert_persisted(egui::Id::new("editor"), editor)
+                            data.insert_persisted(editor_panel_id(&context), editor)
                         });
                     }
                 }
@@ -9147,7 +9155,7 @@ impl EditorApp {
                 }
                 ContentView::SplitSource | ContentView::SplitAsset => {
                     let layout = theme::split_pane_layout(ui.available_width());
-                    let editor_panel = egui::Panel::left("editor")
+                    let editor_panel = egui::Panel::left(editor_panel_id(&context))
                         .frame(theme::content_panel_frame(ui.style()))
                         .resizable(true)
                         .default_size(layout.editor_width)
@@ -9166,7 +9174,7 @@ impl EditorApp {
                         ui,
                         panel_handles::panel_center(ui, editor_panel.response.rect, false),
                         false,
-                        panel_handles::panel_divider(ui, egui::Id::new("editor")),
+                        panel_handles::panel_divider(ui, editor_panel_id(&context)),
                     );
                     egui::CentralPanel::default()
                         .frame(theme::content_panel_frame(ui.style()).inner_margin(0.0))
