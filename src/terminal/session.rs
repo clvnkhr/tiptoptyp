@@ -338,9 +338,20 @@ fn run(
                         .resize(pty_size(size))
                         .map_err(|error| error.to_string())?;
                 }
-                Command::Colors(colors) => engine
-                    .set_colors(colors)
-                    .map_err(|error| error.to_string())?,
+                Command::Colors(colors) => {
+                    let flipped = engine
+                        .set_colors(colors)
+                        .map_err(|error| error.to_string())?;
+                    // A light/dark flip reaches programs that enabled mode
+                    // 2031 as an unsolicited color-scheme report, matching
+                    // Ghostty: system theme switches propagate live.
+                    if let Some(report) = engine
+                        .color_scheme_notification(flipped)
+                        .map_err(|error| error.to_string())?
+                    {
+                        bytes.extend_from_slice(&report);
+                    }
+                }
                 Command::Scroll(delta) => engine
                     .terminal
                     .scroll_viewport(ScrollViewport::Delta(delta)),
@@ -495,6 +506,45 @@ mod tests {
                 .join(" ")
                 .contains("1b 5b"),
             "query reply missing: {text}"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn real_pty_reports_theme_flips_to_programs_with_mode_2031() {
+        let root = tempfile::tempdir().unwrap();
+        // Opt into color-scheme reports, then read the 9-byte flip report (`ESC[?997;2n`).
+        let session = start_script(
+            root.path(),
+            "stty -echo; stty -icanon min 1; printf '\\033[?2031hREADY'; dd bs=1 count=9 2>/dev/null | od -An -t x1",
+        );
+        until(|| text(&session.snapshot()).contains("READY"));
+        // The fixture session starts dark; switching light flips the scheme.
+        session
+            .send(Command::Colors(Colors {
+                foreground: egui::Color32::BLACK,
+                background: egui::Color32::WHITE,
+            }))
+            .unwrap();
+        until(|| {
+            matches!(
+                session.snapshot().status,
+                Status::Exited(_) | Status::Failed(_)
+            )
+        });
+        let snapshot = session.snapshot();
+        assert!(
+            matches!(snapshot.status, Status::Exited(_)),
+            "{:?}",
+            snapshot.status
+        );
+        let report = text(&snapshot)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            report.contains("1b 5b 3f 39 39 37 3b 32 6e"),
+            "theme flip report missing: {report}"
         );
     }
 

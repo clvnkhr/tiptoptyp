@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use eframe::egui::Color32;
 use libghostty_vt::{
@@ -6,7 +9,7 @@ use libghostty_vt::{
     render::{CellIterator, CursorVisualStyle, Dirty, RowIterator},
     screen::CellWide,
     style::{PaletteIndex, RgbColor, Style},
-    terminal::{Mode, ScrollViewport},
+    terminal::{ColorScheme, Mode, ScrollViewport},
 };
 
 use super::input::{KeyInput, MouseInput};
@@ -42,6 +45,14 @@ impl Colors {
     /// light text on a dark background and vice versa.
     pub(super) fn colorfgbg(&self) -> &'static str {
         if self.is_light() { "0;15" } else { "15;0" }
+    }
+    /// Contour/Ghostty color-scheme identity for mode 2031 reports.
+    pub(super) fn scheme(&self) -> ColorScheme {
+        if self.is_light() {
+            ColorScheme::Light
+        } else {
+            ColorScheme::Dark
+        }
     }
 }
 
@@ -85,10 +96,14 @@ pub(super) struct Engine {
     mouse: mouse::Encoder<'static>,
     mouse_event: mouse::Event<'static>,
     cached_rows: Vec<Arc<Vec<Cell>>>,
+    /// Live light/dark identity for `CSI ? 996 n` answers. Updated by every
+    /// palette switch so queries track the theme without a restart.
+    scheme_light: Arc<AtomicBool>,
 }
 
 impl Engine {
     pub fn new(size: GridSize, colors: Colors) -> Result<Self, libghostty_vt::Error> {
+        let scheme_light = Arc::new(AtomicBool::new(colors.is_light()));
         let mut engine = Self {
             terminal: Terminal::new(TerminalOptions {
                 cols: size.cols,
@@ -103,7 +118,17 @@ impl Engine {
             mouse: mouse::Encoder::new()?,
             mouse_event: mouse::Event::new()?,
             cached_rows: Vec::new(),
+            scheme_light: scheme_light.clone(),
         };
+        // Answer `CSI ? 996 n` color-scheme queries with the live theme so
+        // programs learn light/dark without a restart.
+        engine.terminal.on_color_scheme(move |_| {
+            Some(if scheme_light.load(Ordering::Acquire) {
+                ColorScheme::Light
+            } else {
+                ColorScheme::Dark
+            })
+        })?;
         // Bound unterminated application-control strings too.
         engine.terminal.set_apc_max_bytes(Some(1024 * 1024))?;
         engine.set_colors(colors)?;
@@ -111,7 +136,13 @@ impl Engine {
         Ok(engine)
     }
 
-    pub fn set_colors(&mut self, colors: Colors) -> Result<(), libghostty_vt::Error> {
+    /// Switches the palette, returning the new scheme when it flipped
+    /// light/dark. The worker turns a flip into an unsolicited
+    /// `CSI ? 997` report for programs that enabled mode 2031.
+    pub fn set_colors(
+        &mut self,
+        colors: Colors,
+    ) -> Result<Option<ColorScheme>, libghostty_vt::Error> {
         self.terminal
             .set_default_fg_color(Some(rgb(colors.foreground)))?
             .set_default_bg_color(Some(rgb(colors.background)))?
@@ -141,7 +172,31 @@ impl Engine {
             );
         }
         self.terminal.set_default_color_palette(Some(palette))?;
-        Ok(())
+        let scheme = colors.scheme();
+        let light = scheme == ColorScheme::Light;
+        let was_light = self.scheme_light.swap(light, Ordering::AcqRel);
+        if light == was_light {
+            Ok(None)
+        } else {
+            Ok(Some(scheme))
+        }
+    }
+
+    /// Unsolicited color-scheme bytes for the running program, or `None`
+    /// when it did not opt into mode 2031 reports or the scheme did not flip.
+    pub(super) fn color_scheme_notification(
+        &self,
+        flipped: Option<ColorScheme>,
+    ) -> Result<Option<Vec<u8>>, libghostty_vt::Error> {
+        let Some(scheme) = flipped else {
+            return Ok(None);
+        };
+        if !self.terminal.mode(Mode::COLOR_SCHEME_REPORT)? {
+            return Ok(None);
+        }
+        let mut report = [0; 16];
+        let len = scheme.encode_report(&mut report)?;
+        Ok(Some(report[..len].to_vec()))
     }
 
     pub fn resize(&mut self, size: GridSize) -> Result<(), libghostty_vt::Error> {
@@ -406,6 +461,58 @@ mod tests {
         );
         engine.terminal.scroll_viewport(ScrollViewport::Top);
         assert_eq!(engine.snapshot().unwrap().scroll_offset, 0);
+    }
+
+    #[test]
+    fn color_scheme_query_and_reports_track_theme_flips() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        fn query_scheme(engine: &mut Engine, replies: &Rc<RefCell<Vec<u8>>>) -> String {
+            replies.borrow_mut().clear();
+            engine.terminal.vt_write(b"\x1b[?996n");
+            String::from_utf8(replies.borrow().clone()).unwrap()
+        }
+        let mut engine = engine(20, 3);
+        let replies = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let sink = replies.clone();
+        engine
+            .terminal
+            .on_pty_write(move |_, bytes| sink.borrow_mut().extend_from_slice(bytes))
+            .unwrap();
+        // Black fixture background reports dark.
+        assert!(
+            query_scheme(&mut engine, &replies).contains("?997;1"),
+            "{:?}",
+            replies.borrow()
+        );
+        // No flip, no report, even with mode 2031 enabled.
+        engine.terminal.vt_write(b"\x1b[?2031h");
+        let dark = Colors {
+            foreground: Color32::WHITE,
+            background: Color32::BLACK,
+        };
+        assert_eq!(engine.set_colors(dark).unwrap(), None);
+        assert_eq!(engine.color_scheme_notification(None).unwrap(), None);
+        // A flip answers queries light but stays silent without opt-in...
+        engine.terminal.vt_write(b"\x1b[?2031l");
+        let light = Colors {
+            foreground: Color32::BLACK,
+            background: Color32::WHITE,
+        };
+        let flipped = engine.set_colors(light).unwrap();
+        assert!(
+            query_scheme(&mut engine, &replies).contains("?997;2"),
+            "{:?}",
+            replies.borrow()
+        );
+        assert_eq!(engine.color_scheme_notification(flipped).unwrap(), None);
+        // ...and reports the flipped scheme once the program opts in.
+        engine.terminal.vt_write(b"\x1b[?2031h");
+        let flipped = engine.set_colors(dark).unwrap();
+        assert_eq!(
+            engine.color_scheme_notification(flipped).unwrap(),
+            Some(b"\x1b[?997;1n".to_vec())
+        );
     }
 
     #[test]
