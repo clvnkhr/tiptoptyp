@@ -3842,6 +3842,136 @@ fn editor_context_menu_offers_the_static_table_under_the_pointer() {
 }
 
 #[test]
+fn secondary_press_selection_keeps_only_presses_inside_the_range() {
+    let range = CCursorRange::two(CCursor::new(4), CCursor::new(9));
+    assert_eq!(
+        editor_view::secondary_press_selection(Some(range), Some(6)),
+        Some(range)
+    );
+    assert_eq!(
+        editor_view::secondary_press_selection(Some(range), Some(4)),
+        Some(range)
+    );
+    assert_eq!(
+        editor_view::secondary_press_selection(Some(range), Some(9)),
+        Some(range)
+    );
+    assert_eq!(
+        editor_view::secondary_press_selection(Some(range), Some(3)),
+        None
+    );
+    assert_eq!(
+        editor_view::secondary_press_selection(Some(range), Some(10)),
+        None
+    );
+    assert_eq!(
+        editor_view::secondary_press_selection(Some(range), None),
+        None
+    );
+    assert_eq!(editor_view::secondary_press_selection(None, Some(6)), None);
+    // Reversed ranges compare by sorted order but restore verbatim.
+    let reversed = CCursorRange::two(CCursor::new(9), CCursor::new(4));
+    assert_eq!(
+        editor_view::secondary_press_selection(Some(reversed), Some(6)),
+        Some(reversed)
+    );
+    assert_eq!(
+        editor_view::secondary_press_selection(Some(reversed), Some(10)),
+        None
+    );
+}
+
+#[test]
+fn right_click_inside_selection_preserves_it_for_copy() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    crate::theme::configure_test_fonts(&context);
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+    app.snapshot_scene = None;
+    // Overflow the viewport so points below the first line land on text.
+    let body = (0..60)
+        .map(|_| "aaa bbb ccc")
+        .collect::<Vec<_>>()
+        .join("\n");
+    let char_count = body.chars().count();
+    app.document_mut().replace_unprojected_untitled(&body);
+    let frame = |app: &mut EditorApp, events: Vec<egui::Event>| {
+        context
+            .run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(640.0, 480.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.show_editor(ui),
+            )
+            .drop_without_applying_deltas();
+    };
+    let select = |app: &mut EditorApp, start: usize, end: usize| {
+        app.store_editor_cursor(
+            &context,
+            CCursorRange::two(CCursor::new(start), CCursor::new(end)),
+        );
+    };
+    let selection =
+        |app: &mut EditorApp| app.editor_snapshot(&context).cursor.as_sorted_char_range();
+    let secondary_click = |app: &mut EditorApp, pos: Pos2| {
+        frame(
+            app,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Secondary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                },
+            ],
+        );
+        frame(
+            app,
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Secondary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            }],
+        );
+    };
+    frame(&mut app, Vec::new());
+    // Selections only survive on the focused editor: egui collapses the
+    // range when the widget does not own IME events.
+    let editor_id = source_editor_id(&context);
+    context.memory_mut(|memory| {
+        memory.request_focus(editor_id);
+    });
+    // Whole-document selection: the press lands inside it and Copy keeps it.
+    // Any editor point qualifies; the center is deterministically on text.
+    select(&mut app, 0, char_count);
+    frame(&mut app, Vec::new());
+    secondary_click(&mut app, Pos2::new(320.0, 240.0));
+    assert_eq!(
+        {
+            let range = selection(&mut app);
+            (range.start.0, range.end.0)
+        },
+        (0, char_count),
+        "right-click inside the selection must not deselect it"
+    );
+    // A press outside a small selection still moves the caret there: a point
+    // on a far line clamps to a line end past the selected prefix.
+    select(&mut app, 0, 3);
+    frame(&mut app, Vec::new());
+    secondary_click(&mut app, Pos2::new(320.0, 400.0));
+    let collapsed = selection(&mut app);
+    assert_eq!(collapsed.start, collapsed.end);
+    assert!(
+        collapsed.start.0 > 3,
+        "an outside press moves the caret there: {collapsed:?}"
+    );
+}
+
+#[test]
 fn table_editor_controls_keep_rows_and_columns_rectangular() {
     use egui_kittest::{
         Harness,

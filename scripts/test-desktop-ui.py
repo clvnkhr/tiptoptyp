@@ -192,6 +192,14 @@ class Journey(EditorJourneys):
         self.record("target", name="<point>", target={"x": x, "y": y})
         self.native("right-click", x, y)
 
+    def double_click_at(self, x, y):
+        # Raw-coordinate double-click mirroring right_click_at: used to
+        # select the word under a caret point before right-clicking it.
+        self.native("move", x, y)
+        time.sleep(0.2)
+        self.record("target", name="<point>", target={"x": x, "y": y})
+        self.native("double-click", x, y)
+
     def drag(self, source_name, destination_name):
         state = self.snapshot()
         source = state["targets"].get(source_name)

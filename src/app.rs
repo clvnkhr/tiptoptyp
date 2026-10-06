@@ -1346,6 +1346,9 @@ pub struct EditorApp {
     app_popup_generation: u64,
     app_popup_had_focus: bool,
     app_popup_blur_started: Option<Instant>,
+    /// Selection stashed when a right press lands inside it. egui collapses
+    /// the caret on any press, so the click frame restores this instead.
+    secondary_press_guard: Option<CCursorRange>,
     pending_app_popup_action: Option<AppPopupAction>,
     document_workflow: DocumentWorkflow,
     save_job: crate::worker::ExclusiveJob<crate::save_io::SaveResult>,
@@ -1664,6 +1667,7 @@ impl EditorApp {
             app_popup_generation: 0,
             app_popup_had_focus: false,
             app_popup_blur_started: None,
+            secondary_press_guard: None,
             pending_app_popup_action: None,
             document_workflow: DocumentWorkflow::default(),
             save_job: Default::default(),

@@ -1186,3 +1186,28 @@ class EditorJourneys(TexJourneys):
         self.key(53, "none")
         self.wait("dismissed menu leaves the source alone",
                   lambda d: d["source_fingerprint"] == fingerprint(original), timeout=15)
+
+        # Selected text survives a right-click for Copy. Double-click the
+        # first word on the plain-text line, then right-click the same point:
+        # the press lands inside the selection and the Copy row stays enabled.
+        self.key(126, "cmd")
+        self.key(125, "none")
+        self.key(125, "none")
+        self.wait_target("editor.caret")
+        word_point = caret_point()
+        self.double_click_at(*word_point)
+        self.right_click_at(*word_point)
+        self.wait_target("menu.Copy")
+        copy = self.snapshot()["targets"].get("menu.Copy")
+        if not copy or not copy["enabled"]:
+            raise AssertionError("right-click deselected the word: Copy disabled")
+        self.click("menu.Copy")
+        import subprocess
+        deadline = time.monotonic() + 6
+        while True:
+            clip = subprocess.run(["pbpaste"], capture_output=True, text=True).stdout
+            if clip == "Body":
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError(f"Copy did not reach the clipboard: {clip!r}")
+            time.sleep(0.1)

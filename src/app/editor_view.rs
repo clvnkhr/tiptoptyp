@@ -451,6 +451,17 @@ impl EditorApp {
             .id_salt(("source-editor-scroll", active_tab))
             .auto_shrink([false, false])
             .animated(resize_anchor.is_none() && self.pending_hunk_popup.is_none());
+        // egui collapses the caret to the press point for any pointer button,
+        // including right-click. The stored state is still the previous
+        // frame's until the editor below runs, so stash a press inside the
+        // selection for the click frame to restore.
+        let pre_frame_selection =
+            egui::text_edit::TextEditState::load(ui.ctx(), source_editor_id(ui.ctx()))
+                .and_then(|state| state.cursor.char_range())
+                .filter(|range| {
+                    let sorted = range.as_sorted_char_range();
+                    sorted.start != sorted.end
+                });
         let scroll_area = if let Some(offset) = snapshot_scroll_offset {
             scroll_area.vertical_scroll_offset(offset)
         } else {
@@ -960,6 +971,30 @@ impl EditorApp {
                 }
             }
 
+            if output.response.changed() {
+                self.secondary_press_guard = None;
+            }
+            // A right press inside the selection keeps it: TextEdit already
+            // collapsed the caret above, so stash the pre-frame range for the
+            // click and put it back right away. A press outside keeps egui's
+            // moved caret and the menu applies there. Press and release may
+            // share one frame, so stash before handling the click below.
+            if output.response.hovered()
+                && ui.input(|input| input.pointer.button_pressed(egui::PointerButton::Secondary))
+            {
+                let press = output.response.interact_pointer_pos().map(|pointer| {
+                    output
+                        .galley
+                        .cursor_from_pos(pointer - output.galley_pos)
+                        .index
+                        .0
+                });
+                self.secondary_press_guard = secondary_press_selection(pre_frame_selection, press);
+                if let Some(selection) = self.secondary_press_guard {
+                    output.state.cursor.set_char_range(Some(selection));
+                    output.state.clone().store(ui.ctx(), output.response.id);
+                }
+            }
             if output.response.secondary_clicked() {
                 let anchor = ui
                     .ctx()
@@ -972,6 +1007,14 @@ impl EditorApp {
                         .index
                         .0
                 });
+                // The press frame already restored the range; repeat it here
+                // for presses whose release lands in a later frame.
+                if let Some(selection) =
+                    secondary_press_selection(self.secondary_press_guard, char_index)
+                {
+                    output.state.cursor.set_char_range(Some(selection));
+                    output.state.clone().store(ui.ctx(), output.response.id);
+                }
                 let target =
                     char_index.and_then(|char_index| self.editor_data.font_argument_at(char_index));
                 let link = char_index
@@ -1562,6 +1605,19 @@ fn search_match_color(context: &egui::Context, selected: bool) -> Color32 {
     let accent = theme::palette(context).accent;
     let alpha = if selected { 96 } else { 48 };
     Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), alpha)
+}
+
+/// Selection a right-click preserves: the pre-press range survives only when
+/// the press lands inside it, matching native text behavior. A press outside
+/// (or with no selection) keeps egui's moved caret instead.
+pub(super) fn secondary_press_selection(
+    pre_press: Option<CCursorRange>,
+    press: Option<usize>,
+) -> Option<CCursorRange> {
+    let selection = pre_press?;
+    let press = press?;
+    let sorted = selection.as_sorted_char_range();
+    (sorted.start.0 <= press && press <= sorted.end.0).then_some(selection)
 }
 
 /// Use glyph advances rather than a cursor rectangle spanning a soft wrap.
