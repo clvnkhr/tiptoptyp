@@ -4,6 +4,8 @@
 #show "[ ]": box(stroke: 1pt, height: 0.8em, width: 0.8em)
 = Outstanding work
 
+
+(current work is in `opencode -s ses_ef6ed9507ffe4pRp5Yo4scC07k`)
 Only unresolved tasks are listed here, in ascending order. Numbers are permanent;
 append new tasks starting at 339. The historical checklist and detailed work diary
 are preserved in #link("archive/todo-2026-09-23.typ")[the archived todo file].
@@ -196,6 +198,8 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 28. [ ] terminal panel needs a button to open more terminals
 29. [ ] when a draggable divider is highlighted, the handle needs to be outlined in the same color as well
 30. [ ] impl translucency and blur of windows with gpui. maybe pull in a dependency
+31. [ ] compile a version of our app that also works for intel macs, make a new script for this and put it in scripts/ and test the compilation
+32. [ ] 
 
 // Implementation notes (2026-09-25):
 // NEW TODO 2: text commit actions and interaction coverage landed in e94766d.
