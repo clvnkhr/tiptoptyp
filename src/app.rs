@@ -11738,13 +11738,18 @@ struct EditorContextMenuOptions<'a> {
 
 /// Hover-opened side menu for math conversion choices. The popup reserves a
 /// flyout column beside the parent menu; hovering the parent row reveals the
-/// choices there, and leaving both closes it. Returns the clicked choice.
+/// choices there, and leaving both closes it. A math target with a single
+/// alternative (Typst) renders as one direct row instead. Returns the clicked
+/// choice.
 fn math_convert_submenu(
     ui: &mut egui::Ui,
     math: &crate::math_conversion::Target,
     content: &Rect,
     geometry: &popup_layout::EditorMenuGeometry,
 ) -> Option<&'static str> {
+    if let Some((label, choice)) = math.single_alternative() {
+        return menu_row(ui, label, "").clicked().then_some(choice);
+    }
     let id = egui::Id::new("math-convert-submenu");
     let mut open: bool = ui.data(|data| data.get_temp(id).unwrap_or(false));
     let row = menu_row(ui, "Convert to…", "›");
@@ -11808,12 +11813,12 @@ fn show_editor_context_menu_ui(
     ui.spacing_mut().item_spacing.y = theme::SPACE.small;
     let content = ui.max_rect();
     // Measure from the same row list as window sizing so the popup stretches
-    // to fit its actual content; without math targets the flyout reserve is
-    // empty and the menu is a single plain card.
+    // to fit its actual content; without a TeX flyout the menu is a single
+    // plain card (a Typst target contributes one direct row, not a flyout).
     let specs = editor_menu_row_specs(
         options.link.is_some(),
         options.table.is_some(),
-        options.math.is_some(),
+        options.math,
         options.can_format,
         shortcuts,
         &|chord| ui.ctx().format_shortcut(&chord),
@@ -11823,9 +11828,16 @@ fn show_editor_context_menu_ui(
         options.table.is_some(),
         options.can_format,
     );
-    let choices = options.math.map(|math| math.choices()).unwrap_or(&[]);
+    let has_flyout = options
+        .math
+        .is_some_and(|math| math.single_alternative().is_none());
+    let choices = options
+        .math
+        .filter(|_| has_flyout)
+        .map(|math| math.choices())
+        .unwrap_or(&[]);
     let geometry = editor_menu_geometry(ui.ctx(), ui.style(), &specs, choices, separators);
-    if options.math.is_none() {
+    if !has_flyout {
         editor_menu_rows(ui, options, shortcuts, action, &content, &geometry);
         return;
     }

@@ -1128,21 +1128,30 @@ impl EditorApp {
                 math,
             } => {
                 let can_format = self.document().kind().typesetting_language().is_some();
+                // Only TeX keeps the choice flyout; a Typst target sizes as
+                // one direct row on a plain card.
+                let has_flyout = math
+                    .as_ref()
+                    .is_some_and(|target| target.single_alternative().is_none());
                 let rows = editor_menu_row_specs(
                     link.is_some(),
                     table.is_some(),
-                    math.is_some(),
+                    math.as_ref(),
                     can_format,
                     &shortcuts,
                     &|chord| context.format_shortcut(&chord),
                 );
-                let choices: &[&str] = math.as_ref().map(|target| target.choices()).unwrap_or(&[]);
+                let choices: &[&str] = math
+                    .as_ref()
+                    .filter(|_| has_flyout)
+                    .map(|target| target.choices())
+                    .unwrap_or(&[]);
                 let separators =
                     editor_menu_separators(link.is_some(), table.is_some(), can_format);
                 let geometry = editor_menu_geometry(context, &style, &rows, choices, separators);
                 (
                     *anchor,
-                    editor_context_menu_size(&style, &geometry, math.is_some()),
+                    editor_context_menu_size(&style, &geometry, has_flyout),
                 )
             }
             AppPopup::GitChunk { anchor, .. } => (*anchor, Vec2::new(720.0, 440.0)),
@@ -1160,12 +1169,17 @@ impl EditorApp {
                 .min((window_rect.height() - METRICS.popup.viewport_edge).max(1.0)),
         );
         let menu_frame = theme::menu_card_frame(&style);
-        // A math menu draws its own parent card, so there is no outer frame
+        // A flyout menu draws its own parent card, so there is no outer frame
         // consuming margins: content fills the viewport exactly. Subtracting
         // frame margins here (as plain menus do) would shrink the scroll area
         // below the column and clip the last rows.
-        let is_math_menu = matches!(&popup, AppPopup::Editor { math: Some(_), .. });
-        let menu_content_size = if is_math_menu {
+        let is_flyout_menu = match &popup {
+            AppPopup::Editor {
+                math: Some(target), ..
+            } => target.single_alternative().is_none(),
+            _ => false,
+        };
+        let menu_content_size = if is_flyout_menu {
             estimated_size
         } else {
             let frame_margin = menu_frame.total_margin().sum();
@@ -1231,9 +1245,9 @@ impl EditorApp {
                 .order(egui::Order::Foreground)
                 .fixed_pos(Pos2::ZERO)
                 .show(ui.ctx(), |ui| {
-                    // A math menu draws its own parent and flyout cards so the
-                    // window never shows an empty reserved column.
-                    let frame = if matches!(&popup, AppPopup::Editor { math: Some(_), .. }) {
+                    // A flyout menu draws its own parent and flyout cards so
+                    // the window never shows an empty reserved column.
+                    let frame = if is_flyout_menu {
                         egui::Frame::NONE
                     } else {
                         menu_frame

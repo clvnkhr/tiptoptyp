@@ -61,6 +61,21 @@ impl Target {
             ]
         }
     }
+    /// Direct menu label when only one conversion makes sense, or `None` when
+    /// the choices need a submenu. Typst has exactly two math forms, so the
+    /// menu offers the other one directly instead of a one-item flyout.
+    pub(crate) fn single_alternative(&self) -> Option<(&'static str, &'static str)> {
+        if self.kind != DocumentKind::Typst {
+            return None;
+        }
+        // Display math is emitted (and recognized) across lines; anything
+        // single-line converts the other way.
+        Some(if self.original.contains('\n') {
+            ("Convert to inline math", "Inline math")
+        } else {
+            ("Convert to display math", "Display math")
+        })
+    }
     pub(crate) fn replacement(&self, choice: &str) -> Option<String> {
         if !self.choices().contains(&choice) {
             return None;
@@ -85,6 +100,21 @@ impl Target {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn single_alternative_offers_the_other_typst_form_directly() {
+        let inline = Target::at("$ x $", 2, DocumentKind::Typst).expect("inline Typst math");
+        assert_eq!(
+            inline.single_alternative(),
+            Some(("Convert to display math", "Display math"))
+        );
+        let display = Target::at("$\nx\n$", 2, DocumentKind::Typst).expect("display Typst math");
+        assert_eq!(
+            display.single_alternative(),
+            Some(("Convert to inline math", "Inline math"))
+        );
+        let tex = Target::at("\\[ x \\]", 2, DocumentKind::Tex).expect("TeX math");
+        assert_eq!(tex.single_alternative(), None);
+    }
     #[test]
     fn tex_conversion_keeps_newlines_that_terminate_comments() {
         let source = "\\[\nx % explanation\n\\]";

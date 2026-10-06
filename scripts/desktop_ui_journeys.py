@@ -1150,11 +1150,8 @@ class EditorJourneys(TexJourneys):
         self.wait_target("editor.caret")
         math_point = caret_point()
         self.right_click_at(*math_point)
-        self.wait_target("menu.Convert to…")
-        convert = self.snapshot()["targets"]["menu.Convert to…"]
-        self.native("move", convert["x"], convert["y"])
-        self.wait_target("menu.Display math")
-        self.click("menu.Display math")
+        self.wait_target("menu.Convert to display math")
+        self.click("menu.Convert to display math")
         converted = "$\nx\n$\n\nBody text here.\n"
         self.wait("display-math conversion rewrites the source",
                   lambda d: d["source_fingerprint"] == fingerprint(converted), timeout=15)
@@ -1176,7 +1173,7 @@ class EditorJourneys(TexJourneys):
         while True:
             state = self.snapshot()
             paste = state["targets"].get("menu.Paste")
-            convert = state["targets"].get("menu.Convert to…")
+            convert = state["targets"].get("menu.Convert to display math")
             if paste and paste["enabled"] and paste["age_ms"] <= 500 and (
                     convert is None or convert["age_ms"] > 1500):
                 break

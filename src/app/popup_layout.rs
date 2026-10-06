@@ -73,7 +73,7 @@ pub(super) struct EditorMenuRow {
 pub(super) fn editor_menu_row_specs(
     has_link: bool,
     has_table: bool,
-    has_math: bool,
+    math: Option<&crate::math_conversion::Target>,
     can_format: bool,
     shortcuts: &ShortcutBindings,
     format: &dyn Fn(egui::KeyboardShortcut) -> String,
@@ -86,11 +86,20 @@ pub(super) fn editor_menu_row_specs(
             right: String::new(),
         });
     }
-    if has_math {
-        rows.push(EditorMenuRow {
-            label: "Convert to…",
-            right: "›".to_owned(),
-        });
+    if let Some(math) = math {
+        // Typst offers the single other form directly; TeX keeps the
+        // choice flyout behind a parent row.
+        if let Some((label, _)) = math.single_alternative() {
+            rows.push(EditorMenuRow {
+                label,
+                right: String::new(),
+            });
+        } else {
+            rows.push(EditorMenuRow {
+                label: "Convert to…",
+                right: "›".to_owned(),
+            });
+        }
     }
     if has_table {
         rows.push(EditorMenuRow {

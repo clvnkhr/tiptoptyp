@@ -1329,7 +1329,7 @@ fn context_menu_sizes_include_every_action_and_separator() {
                 }
                 for can_format in [false, true] {
                     for link in [None, Some("https://example.invalid")] {
-                        let size = sized_editor_menu(ui, link.is_some(), false, &[], can_format);
+                        let size = sized_editor_menu(ui, link.is_some(), false, None, can_format);
                         let mut child = ui.new_child(
                             egui::UiBuilder::new().max_rect(Rect::from_min_size(Pos2::ZERO, size)),
                         );
@@ -3372,21 +3372,21 @@ fn sized_editor_menu(
     ui: &egui::Ui,
     has_link: bool,
     has_table: bool,
-    choices: &[&str],
+    math: Option<&crate::math_conversion::Target>,
     can_format: bool,
 ) -> Vec2 {
     let bindings = ShortcutBindings::current_defaults();
-    let rows = editor_menu_row_specs(
-        has_link,
-        has_table,
-        !choices.is_empty(),
-        can_format,
-        &bindings,
-        &|chord| ui.ctx().format_shortcut(&chord),
-    );
+    let rows = editor_menu_row_specs(has_link, has_table, math, can_format, &bindings, &|chord| {
+        ui.ctx().format_shortcut(&chord)
+    });
     let separators = editor_menu_separators(has_link, has_table, can_format);
+    let has_flyout = math.is_some_and(|target| target.single_alternative().is_none());
+    let choices = math
+        .filter(|_| has_flyout)
+        .map(|target| target.choices())
+        .unwrap_or(&[]);
     let geometry = editor_menu_geometry(ui.ctx(), ui.style(), &rows, choices, separators);
-    editor_context_menu_size(ui.style(), &geometry, !choices.is_empty())
+    editor_context_menu_size(ui.style(), &geometry, has_flyout)
 }
 
 #[test]
@@ -3432,8 +3432,8 @@ fn editor_context_menu_exposes_the_link_under_the_pointer() {
     let without_link = std::cell::Cell::new(Vec2::ZERO);
     context
         .run_ui(egui::RawInput::default(), |ui| {
-            with_link.set(sized_editor_menu(ui, true, false, &[], true));
-            without_link.set(sized_editor_menu(ui, false, false, &[], true));
+            with_link.set(sized_editor_menu(ui, true, false, None, true));
+            without_link.set(sized_editor_menu(ui, false, false, None, true));
         })
         .textures_delta
         .clear();
@@ -3455,7 +3455,9 @@ fn menu_columns_fit_their_longest_labels_with_room_for_larger_fonts() {
             // every choice inside the measured flyout column, with room to spare
             // for larger interface fonts.
             let bindings = ShortcutBindings::current_defaults();
-            let rows = editor_menu_row_specs(true, true, true, true, &bindings, &|chord| {
+            let tex = crate::math_conversion::Target::at("\\[x\\]", 2, DocumentKind::Tex)
+                .expect("display TeX math");
+            let rows = editor_menu_row_specs(true, true, Some(&tex), true, &bindings, &|chord| {
                 ui.ctx().format_shortcut(&chord)
             });
             let geometry =
@@ -3513,65 +3515,47 @@ fn menu_columns_fit_their_longest_labels_with_room_for_larger_fonts() {
 }
 
 #[test]
-fn editor_context_menu_reserves_a_math_flyout_column_without_per_choice_height() {
+fn editor_context_menu_reserves_a_tex_flyout_column_without_per_choice_height() {
     let context = egui::Context::default();
     crate::theme::configure_test_fonts(&context);
     let plain = std::cell::Cell::new(Vec2::ZERO);
-    let math = std::cell::Cell::new(Vec2::ZERO);
-    let many = std::cell::Cell::new(Vec2::ZERO);
+    let single = std::cell::Cell::new(Vec2::ZERO);
+    let flyout = std::cell::Cell::new(Vec2::ZERO);
+    let typst = crate::math_conversion::Target::at("$ x $", 2, DocumentKind::Typst)
+        .expect("inline Typst math");
+    let tex = crate::math_conversion::Target::at("\\[ x \\]", 2, DocumentKind::Tex)
+        .expect("display TeX math");
+    assert_eq!(tex.choices().len(), 7);
     context
         .run_ui(egui::RawInput::default(), |ui| {
-            plain.set(sized_editor_menu(ui, false, false, &[], true));
-            math.set(sized_editor_menu(
-                ui,
-                false,
-                false,
-                &["Inline math", "Display math"],
-                true,
-            ));
-            many.set(sized_editor_menu(
-                ui,
-                false,
-                false,
-                &[
-                    "Inline math (\\(…\\))",
-                    "align",
-                    "align*",
-                    "gather",
-                    "gather*",
-                    "equation",
-                    "equation*",
-                ],
-                true,
-            ));
+            plain.set(sized_editor_menu(ui, false, false, None, true));
+            single.set(sized_editor_menu(ui, false, false, Some(&typst), true));
+            flyout.set(sized_editor_menu(ui, false, false, Some(&tex), true));
         })
         .textures_delta
         .clear();
-    let (plain, math, many) = (plain.get(), math.get(), many.get());
-    assert!(
-        math.x > plain.x,
-        "a math menu reserves a flyout column: {plain:?} vs {math:?}"
-    );
+    let (plain, single, flyout) = (plain.get(), single.get(), flyout.get());
     assert_eq!(
-        math.y - plain.y,
+        single.y - plain.y,
         METRICS.menu.row_height + theme::SPACE.small,
-        "the Convert parent row takes one line: {plain:?} vs {math:?}"
-    );
-    assert_eq!(
-        many.y, math.y,
-        "choice count must not grow the window: {math:?} vs {many:?}"
+        "the direct convert row takes one line: {plain:?} vs {single:?}"
     );
     assert!(
-        many.x > math.x,
-        "a wider choice stretches the flyout: {math:?} vs {many:?}"
+        flyout.x > plain.x,
+        "a TeX menu reserves a flyout column: {plain:?} vs {flyout:?}"
+    );
+    assert_eq!(
+        flyout.y, single.y,
+        "seven choices must not grow the window past one direct row: {single:?} vs {flyout:?}"
     );
 }
 
 #[test]
-fn convert_submenu_hides_until_hovered_and_places_choices_beside_the_parent() {
+fn typst_math_menu_offers_the_other_form_directly_without_a_flyout() {
     use egui_kittest::{Harness, kittest::Queryable as _};
     let source = "$ α + x $";
     let target = crate::math_conversion::Target::at(source, 3, DocumentKind::Typst).unwrap();
+    let expected = target.clone();
     let mut harness = Harness::builder()
         .with_size(egui::vec2(640.0, 480.0))
         .build_ui_state(
@@ -3595,11 +3579,54 @@ fn convert_submenu_hides_until_hovered_and_places_choices_beside_the_parent() {
             None::<EditorMenuAction>,
         );
     harness.run();
-    assert!(harness.query_by_label_contains("Display math").is_none());
+    // No parent row and no flyout: the single alternative stands alone.
+    assert!(harness.query_by_label("Convert to… ›").is_none());
+    harness
+        .get_by_label_contains("Convert to display math")
+        .click();
+    harness.run();
+    assert_eq!(
+        harness.state(),
+        &Some(EditorMenuAction::ConvertMath(
+            expected,
+            "Display math".to_owned()
+        ))
+    );
+}
+
+#[test]
+fn convert_submenu_hides_until_hovered_and_places_choices_beside_the_parent() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let source = "\\[ α + x \\]";
+    let target = crate::math_conversion::Target::at(source, 4, DocumentKind::Tex).unwrap();
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 480.0))
+        .build_ui_state(
+            move |ui, action| {
+                show_editor_context_menu_ui(
+                    ui,
+                    EditorContextMenuOptions {
+                        can_undo: true,
+                        can_redo: true,
+                        has_selection: true,
+                        can_format: true,
+                        can_sync_preview: true,
+                        link: None,
+                        table: None,
+                        math: Some(&target),
+                    },
+                    &ShortcutBindings::current_defaults(),
+                    action,
+                );
+            },
+            None::<EditorMenuAction>,
+        );
+    harness.run();
+    assert!(harness.query_by_label_contains("Inline math (").is_none());
     harness.get_by_label("Convert to… ›").hover();
     harness.run();
     let parent = harness.get_by_label("Convert to… ›").rect();
-    let choice = harness.get_by_label_contains("Display math").rect();
+    let choice = harness.get_by_label_contains("Inline math (").rect();
     assert!(
         parent.width() < 400.0,
         "parent rows narrow for the measured column instead of stretching: {parent:?}"
@@ -3619,7 +3646,7 @@ fn convert_submenu_hides_until_hovered_and_places_choices_beside_the_parent() {
     // Leaving both rows closes the flyout without selecting anything.
     harness.get_by_label_contains("Undo").hover();
     harness.run();
-    assert!(harness.query_by_label_contains("Display math").is_none());
+    assert!(harness.query_by_label_contains("Inline math (").is_none());
     assert!(harness.state().is_none());
 }
 
@@ -3630,16 +3657,17 @@ fn rendered_menu_geometry_matches_sized_geometry_exactly() {
     // and before Format. Rendered rows must stack to exactly the sized height
     // (taller clips the last row, shorter leaves empty space) and fill
     // exactly the measured column widths.
-    let source = "$ α + x $";
-    let target = crate::math_conversion::Target::at(source, 3, DocumentKind::Typst).unwrap();
+    let source = "\\[ α + x \\]";
+    let target = crate::math_conversion::Target::at(source, 4, DocumentKind::Tex).unwrap();
     let mut harness = Harness::builder()
         .with_size(egui::vec2(640.0, 480.0))
         .build_ui_state(
             move |ui, action| {
                 let bindings = ShortcutBindings::current_defaults();
-                let rows = editor_menu_row_specs(false, false, true, true, &bindings, &|chord| {
-                    ui.ctx().format_shortcut(&chord)
-                });
+                let rows =
+                    editor_menu_row_specs(false, false, Some(&target), true, &bindings, &|chord| {
+                        ui.ctx().format_shortcut(&chord)
+                    });
                 let separators = editor_menu_separators(false, false, true);
                 let geometry =
                     editor_menu_geometry(ui.ctx(), ui.style(), &rows, target.choices(), separators);
@@ -3695,7 +3723,7 @@ fn rendered_menu_geometry_matches_sized_geometry_exactly() {
     );
     harness.get_by_label("Convert to… ›").hover();
     harness.run();
-    let choice = harness.get_by_label_contains("Display math").rect();
+    let choice = harness.get_by_label_contains("equation*").rect();
     assert!(
         (choice.width() - submenu_content).abs() < 1.0,
         "flyout rows fill exactly the measured column: {} vs {submenu_content}",
@@ -3828,8 +3856,8 @@ fn editor_context_menu_offers_the_static_table_under_the_pointer() {
     let without_table = std::cell::Cell::new(Vec2::ZERO);
     context
         .run_ui(egui::RawInput::default(), |ui| {
-            with_table.set(sized_editor_menu(ui, false, true, &[], true));
-            without_table.set(sized_editor_menu(ui, false, false, &[], true));
+            with_table.set(sized_editor_menu(ui, false, true, None, true));
+            without_table.set(sized_editor_menu(ui, false, false, None, true));
         })
         .textures_delta
         .clear();
@@ -10051,44 +10079,72 @@ fn hunk_popup_waits_for_real_editor_scroll_in_a_long_document() {
 #[test]
 fn math_context_conversion_choices_follow_document_language() {
     use egui_kittest::{Harness, kittest::Queryable as _};
-    for (source, kind, choice) in [
-        ("$ α + x $", DocumentKind::Typst, "Inline math"),
-        ("\\[α + x\\]", DocumentKind::Tex, "align*"),
-    ] {
-        let target = crate::math_conversion::Target::at(source, 3, kind).unwrap();
-        let expected = EditorMenuAction::ConvertMath(target.clone(), choice.into());
-        let mut harness = Harness::builder()
-            .with_size(egui::vec2(360.0, 650.0))
-            .build_ui_state(
-                move |ui, action| {
-                    show_editor_context_menu_ui(
-                        ui,
-                        EditorContextMenuOptions {
-                            can_undo: false,
-                            can_redo: false,
-                            has_selection: false,
-                            can_format: true,
-                            can_sync_preview: false,
-                            link: None,
-                            table: None,
-                            math: Some(&target),
-                        },
-                        &ShortcutBindings::current_defaults(),
-                        action,
-                    );
-                },
-                None::<EditorMenuAction>,
-            );
-        harness.run();
-        // The submenu opens on hover, not click: choices stay hidden until
-        // the pointer reaches the parent row.
-        assert!(harness.query_by_label_contains(choice).is_none());
-        harness.get_by_label("Convert to… ›").hover();
-        harness.run();
-        harness.get_by_label_contains(choice).click();
-        harness.run();
-        assert_eq!(harness.state(), &Some(expected));
-    }
+    // Typst offers the other form as one direct row: no parent, no flyout.
+    let source = "$ α + x $";
+    let target = crate::math_conversion::Target::at(source, 3, DocumentKind::Typst).unwrap();
+    let expected = EditorMenuAction::ConvertMath(target.clone(), "Display math".into());
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(360.0, 650.0))
+        .build_ui_state(
+            move |ui, action| {
+                show_editor_context_menu_ui(
+                    ui,
+                    EditorContextMenuOptions {
+                        can_undo: false,
+                        can_redo: false,
+                        has_selection: false,
+                        can_format: true,
+                        can_sync_preview: false,
+                        link: None,
+                        table: None,
+                        math: Some(&target),
+                    },
+                    &ShortcutBindings::current_defaults(),
+                    action,
+                );
+            },
+            None::<EditorMenuAction>,
+        );
+    harness.run();
+    assert!(harness.query_by_label("Convert to… ›").is_none());
+    harness.get_by_label_contains("Convert to display math").click();
+    harness.run();
+    assert_eq!(harness.state(), &Some(expected));
+    // TeX keeps the choice flyout: choices stay hidden until the pointer
+    // reaches the parent row.
+    let source = "\\[α + x\\]";
+    let target =
+        crate::math_conversion::Target::at(source, 3, DocumentKind::Tex).unwrap();
+    let expected = EditorMenuAction::ConvertMath(target.clone(), "align*".into());
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(360.0, 650.0))
+        .build_ui_state(
+            move |ui, action| {
+                show_editor_context_menu_ui(
+                    ui,
+                    EditorContextMenuOptions {
+                        can_undo: false,
+                        can_redo: false,
+                        has_selection: false,
+                        can_format: true,
+                        can_sync_preview: false,
+                        link: None,
+                        table: None,
+                        math: Some(&target),
+                    },
+                    &ShortcutBindings::current_defaults(),
+                    action,
+                );
+            },
+            None::<EditorMenuAction>,
+        );
+    harness.run();
+    assert!(harness.query_by_label_contains("align*").is_none());
+    harness.get_by_label("Convert to… ›").hover();
+    harness.run();
+    harness.get_by_label_contains("align*").click();
+    harness.run();
+    assert_eq!(harness.state(), &Some(expected));
 }
 
 #[test]

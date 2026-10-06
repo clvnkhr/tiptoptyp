@@ -658,9 +658,7 @@ impl QaSession {
                 }
             }
             UiSnapshotScene::EditorContextMenu => {
-                // Math menu with an open Convert flyout: the submenu flag is
-                // seeded because deterministic captures have no pointer to
-                // hover with. The first captured frame still shows it open.
+                // Typst math menu: a single direct convert row, no flyout.
                 let path = app.workspace_root.join("menu-math.typ");
                 let disk_fingerprint = app.document().disk_fingerprint();
                 app.document_mut()
@@ -677,9 +675,6 @@ impl QaSession {
                     anchor: Pos2::new(430.0, 250.0),
                     link: None,
                     table: None,
-                });
-                context.data_mut(|data| {
-                    data.insert_temp(egui::Id::new("math-convert-submenu"), true);
                 });
             }
             UiSnapshotScene::DocumentFontSelector => {
