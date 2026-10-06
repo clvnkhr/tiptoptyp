@@ -29,6 +29,7 @@ mod explorer;
 mod folding;
 mod font_catalog;
 mod font_preview;
+mod frame_monitor;
 mod generic_highlight;
 mod git;
 mod handwriting;
