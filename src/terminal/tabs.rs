@@ -139,6 +139,11 @@ impl TerminalTabs {
             .is_some_and(TerminalPane::bell_pending)
     }
 
+    /// A Cmd+clicked link from the active pane, if any.
+    pub(crate) fn take_link_action(&mut self) -> Option<super::TerminalLinkAction> {
+        self.pane_mut()?.take_link_action()
+    }
+
     pub(crate) fn prepare_fixture(&mut self, output: &[u8], cwd: &Path) {
         if let Some(pane) = self.pane_mut() {
             pane.prepare_fixture(output, cwd);

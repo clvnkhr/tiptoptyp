@@ -6182,6 +6182,24 @@ impl EditorApp {
         }
     }
 
+    /// Follow a Cmd+clicked terminal link: URLs open in the browser, file
+    /// locations open with the caret placed at the line.
+    fn follow_terminal_link(&mut self, action: crate::terminal::TerminalLinkAction) {
+        match action {
+            crate::terminal::TerminalLinkAction::OpenUrl(url) => {
+                self.open_external_link(&url);
+            }
+            crate::terminal::TerminalLinkAction::OpenPath { path, line, column } => {
+                if !path.is_file() {
+                    self.show_file_error(format!("{} does not exist", path.display()));
+                    return;
+                }
+                let position = line.map(|line| (line, column.unwrap_or(1)));
+                self.navigate_file_location(path, None, position, "following a terminal link");
+            }
+        }
+    }
+
     fn open_external_link(&mut self, target: &str) {
         if self.browser_launch.is_some() {
             return;
@@ -9043,6 +9061,9 @@ impl EditorApp {
         self.terminal
             .set_visible(self.bottom_panel.selected() == Some(PanelTab::Terminal));
         self.terminal.poll_bells();
+        if let Some(action) = self.terminal.take_link_action() {
+            self.follow_terminal_link(action);
+        }
         let content_hidden = self.show_bottom_panel_container(ui);
         if content_hidden {
             if self.preview_controls.popout.is_none() {

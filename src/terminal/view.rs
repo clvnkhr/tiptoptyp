@@ -49,6 +49,8 @@ pub(crate) struct TerminalPane {
     last_bell: u64,
     bell_pending: bool,
     last_beep: Option<std::time::Instant>,
+    link_action: Option<super::TerminalLinkAction>,
+    suppress_select_until_release: bool,
 }
 
 /// Audible alert for terminal bells. macOS-only: other platforms keep the
@@ -135,6 +137,47 @@ impl TerminalPane {
 
     pub(crate) fn bell_pending(&self) -> bool {
         self.bell_pending
+    }
+
+    pub(crate) fn take_link_action(&mut self) -> Option<super::TerminalLinkAction> {
+        self.link_action.take()
+    }
+
+    /// The link under a pointer position on the grid, if any, with its row
+    /// and cell columns for underlining. Computed on demand for one row so
+    /// hovering costs a single scan, never a grid walk.
+    fn link_at(
+        grid: &Grid,
+        rect: Rect,
+        cell: Vec2,
+        pos: Pos2,
+    ) -> Option<(super::TerminalLinkAction, i32, std::ops::Range<usize>)> {
+        let (col, row) = pointer_cell(pos, rect, cell)?;
+        if col < 0 || row < 0 {
+            return None;
+        }
+        let cells = grid.rows.get(row as usize)?;
+        let (text, columns) = super::links::row_text_and_columns(cells);
+        let links = super::links::find_links(&text);
+        let link = super::links::link_at_column(&links, &columns, col as usize)?;
+        let start = link.range.start;
+        let end = link.range.end;
+        if start >= columns.len() || end == 0 {
+            return None;
+        }
+        let first = columns[start];
+        let last = columns[end.min(columns.len()) - 1] + 1;
+        let action = match link.target.clone() {
+            super::links::LinkTarget::Url(url) => super::TerminalLinkAction::OpenUrl(url),
+            super::links::LinkTarget::Path { path, line, column } => {
+                super::TerminalLinkAction::OpenPath {
+                    path: PathBuf::from(path),
+                    line,
+                    column,
+                }
+            }
+        };
+        Some((action, row, first..last))
     }
 
     /// Check for newly rung bells. Beeps at most once per second no matter
@@ -359,6 +402,41 @@ impl TerminalPane {
         let ppp = ui.ctx().pixels_per_point();
         let geometry = mouse_geometry(outer, rect, size, ppp);
         let (screen_w, screen_h) = (geometry.screen_width as f32, geometry.screen_height as f32);
+        // Cmd+click follows links under the pointer instead of selecting or
+        // reporting, even in mouse-tracking programs. Like the Shift bypass,
+        // this matches desktop terminal behavior.
+        let mut link_consumed = false;
+        let pointer_down = ui.input(|input| !input.pointer.any_down());
+        if pointer_down {
+            self.suppress_select_until_release = false;
+        }
+        if let Some(grid) = &self.grid
+            && let Some(pos) = response.interact_pointer_pos()
+            && ui.input(|input| input.pointer.primary_pressed() && input.modifiers.command)
+            && let Some((action, _, _)) = Self::link_at(grid, rect, cell, pos)
+        {
+            // A consumed Cmd+click must not start a selection that the
+            // following drag frames would then extend.
+            self.suppress_select_until_release = true;
+            self.selection = None;
+            self.link_action = Some(match action {
+                super::TerminalLinkAction::OpenPath { path, line, column } => {
+                    let base = self
+                        .session
+                        .as_ref()
+                        .map(|session| session.cwd.clone())
+                        .or_else(|| self.fixture_cwd.clone())
+                        .unwrap_or_else(|| cwd.to_owned());
+                    super::TerminalLinkAction::OpenPath {
+                        path: base.join(path),
+                        line,
+                        column,
+                    }
+                }
+                url => url,
+            });
+            link_consumed = true;
+        }
         if !app_mouse {
             // Leaving reporting with a held button (Shift bypass, tracking
             // disabled mid-drag) must still release it, or the program keeps
@@ -383,7 +461,7 @@ impl TerminalPane {
                 self.motion_cell = None;
             }
         }
-        if app_mouse {
+        if app_mouse && !link_consumed {
             let button_events = ui.input(|input| {
                 input
                     .events
@@ -496,7 +574,7 @@ impl TerminalPane {
             }
         }
         if let Some(grid) = &self.grid {
-            if !app_mouse {
+            if !app_mouse && !link_consumed && !self.suppress_select_until_release {
                 if (response.drag_started() || response.clicked())
                     && let Some(pos) = response.interact_pointer_pos()
                 {
@@ -523,6 +601,24 @@ impl TerminalPane {
                 &mut self.glyphs,
                 &mut self.emoji,
             );
+            // Cmd-hover over a link gets a pointer cursor and an underline,
+            // computed for the hovered row only.
+            if response.hovered()
+                && ui.input(|input| input.modifiers.command)
+                && let Some(pos) = response.hover_pos()
+                && let Some((_, row, columns)) = Self::link_at(grid, rect, cell, pos)
+            {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                let painter = ui.painter().with_clip_rect(rect);
+                let y = rect.min.y + (row as f32 + 1.0) * cell.y - 2.0;
+                painter.line_segment(
+                    [
+                        Pos2::new(rect.min.x + columns.start as f32 * cell.x, y),
+                        Pos2::new(rect.min.x + columns.end as f32 * cell.x, y),
+                    ],
+                    Stroke::new(1.0, colors.foreground),
+                );
+            }
             if focused
                 && !self.preedit.is_empty()
                 && let Some(cursor) = &grid.cursor
@@ -1655,6 +1751,94 @@ mod tests {
         pane.set_visible(false);
         assert!(pane.session.is_none());
         assert!(pane.grid.is_none());
+    }
+
+    #[test]
+    fn command_click_on_a_url_reports_an_open_action() {
+        let context = egui::Context::default();
+        crate::theme::configure_test_fonts(&context);
+        let mut pane = TerminalPane::default();
+        pane.prepare_fixture(b"see https://example.com/a", Path::new("/project"));
+        let frame = |pane: &mut TerminalPane, events: Vec<egui::Event>| {
+            context
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(500.0, 220.0))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| pane.show(ui, Path::new("/project")),
+                )
+                .drop_without_applying_deltas();
+        };
+        frame(&mut pane, Vec::new());
+        // Click the middle of the URL with Command held: the press must open
+        // the link, not start a selection.
+        let font = crate::theme::terminal_font();
+        let cell = context.fonts_mut(|fonts| {
+            Vec2::new(
+                fonts.glyph_width(&font, 'M'),
+                fonts.row_height(&font).ceil(),
+            )
+        });
+        let pos = Pos2::new(6.0 + 14.5 * cell.x, 6.0 + 0.5 * cell.y);
+        frame(
+            &mut pane,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::ModifiersChanged(egui::Modifiers {
+                    command: true,
+                    ..Default::default()
+                }),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers {
+                        command: true,
+                        ..Default::default()
+                    },
+                },
+            ],
+        );
+        assert_eq!(
+            pane.take_link_action(),
+            Some(super::super::TerminalLinkAction::OpenUrl(
+                "https://example.com/a".into()
+            ))
+        );
+        assert!(
+            pane.selection.is_none(),
+            "a consumed Cmd+click must not select"
+        );
+    }
+
+    #[test]
+    fn link_mapping_resolves_cells_to_targets() {
+        let mut pane = TerminalPane::default();
+        pane.prepare_fixture(b"see https://example.com/a", Path::new("/project"));
+        let grid = pane.fixture.as_mut().unwrap().snapshot().unwrap();
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 100.0));
+        let cell = Vec2::new(8.0, 16.0);
+        // Inside the URL (cols 4..23).
+        let (action, row, columns) =
+            TerminalPane::link_at(&grid, rect, cell, Pos2::new(14.5 * cell.x, 0.5 * cell.y))
+                .expect("URL cell must resolve");
+        assert_eq!(row, 0);
+        assert_eq!(
+            action,
+            super::super::TerminalLinkAction::OpenUrl("https://example.com/a".into())
+        );
+        assert!(columns.start <= 14 && 14 < columns.end);
+        // Outside it: prose and past the end.
+        assert!(
+            TerminalPane::link_at(&grid, rect, cell, Pos2::new(1.0 * cell.x, 0.5 * cell.y))
+                .is_none()
+        );
+        assert!(
+            TerminalPane::link_at(&grid, rect, cell, Pos2::new(40.0 * cell.x, 0.5 * cell.y))
+                .is_none()
+        );
     }
 
     #[test]

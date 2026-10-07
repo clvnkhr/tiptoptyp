@@ -2,12 +2,25 @@
 mod emoji;
 mod engine;
 mod input;
+mod links;
 mod session;
 mod tabs;
 mod view;
 
+use std::path::PathBuf;
 pub(crate) use tabs::{MAX_TERMINAL_PANES, TerminalTabs};
 pub(crate) use view::terminal_id;
+
+/// A link the user asked to follow with Cmd+click in terminal output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TerminalLinkAction {
+    OpenUrl(String),
+    OpenPath {
+        path: PathBuf,
+        line: Option<usize>,
+        column: Option<usize>,
+    },
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum PanelTab {
