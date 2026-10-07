@@ -312,6 +312,13 @@ fn run(
             break;
         };
         let mut batch = Some(first);
+        // Rendering the grid is the batch's expensive step, and nobody sees
+        // it while the pane is hidden. Program output must still be parsed
+        // (queries, state) and status must still publish, but a batch of pure
+        // program output skips the render walk. Anything else (resize,
+        // colors, input, wakeups) renders normally so a reshown idle shell
+        // never displays a stale grid.
+        let mut refresh = shared.visible.load(Ordering::Acquire);
         for _ in 0..BATCH_EVENTS {
             if shared.stopped.load(Ordering::Acquire) {
                 return Ok(());
@@ -319,6 +326,7 @@ fn run(
             let Some(command) = batch.take().or_else(|| receiver.try_recv().ok()) else {
                 break;
             };
+            refresh = refresh || !matches!(command, Command::Output(_));
             let mut bytes = Vec::new();
             match command {
                 Command::Output(output) => engine.terminal.vt_write(&output),
@@ -400,10 +408,14 @@ fn run(
                 return Err("Terminal reply queue is full or disconnected".into());
             }
         }
-        shared.publish(
-            Some(engine.snapshot().map_err(|error| error.to_string())?),
-            Status::Running,
-        );
+        // Hidden output-only batches keep parsing and status but skip the
+        // grid render walk; publish(None) retains the last grid.
+        let grid = if refresh {
+            Some(engine.snapshot().map_err(|error| error.to_string())?)
+        } else {
+            None
+        };
+        shared.publish(grid, Status::Running);
     }
     Ok(())
 }
@@ -570,6 +582,44 @@ mod tests {
         assert!(
             report.contains("1b 5b 3f 39 39 37 3b 32 6e"),
             "theme flip report missing: {report}"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn hidden_sessions_skip_grid_renders_but_keep_status() {
+        let root = tempfile::tempdir().unwrap();
+        let session = start_script(
+            root.path(),
+            "printf READY; while true; do sleep 1; printf TICK; done",
+        );
+        until(|| text(&session.snapshot()).contains("READY"));
+        let before = session.snapshot();
+        let grid_before = before.grid.clone().expect("initial grid");
+        // Program-output-only batches while hidden keep parsing and status
+        // but reuse the last grid instead of rendering a new one.
+        session.set_visible(false);
+        until(|| session.snapshot().revision > before.revision);
+        let hidden = session.snapshot();
+        assert_eq!(hidden.status, Status::Running);
+        assert!(
+            hidden
+                .grid
+                .as_ref()
+                .is_some_and(|grid| Arc::ptr_eq(&grid_before, grid)),
+            "hidden batch must reuse the grid"
+        );
+        // Reshown batches render fresh so an idle shell never looks stale.
+        session.set_visible(true);
+        session.send(Command::Wake).unwrap();
+        until(|| session.snapshot().revision > hidden.revision);
+        let shown = session.snapshot();
+        assert!(
+            shown
+                .grid
+                .as_ref()
+                .is_some_and(|grid| !Arc::ptr_eq(&grid_before, grid)),
+            "visible batch must render fresh"
         );
     }
 
