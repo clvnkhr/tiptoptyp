@@ -5,6 +5,7 @@ See docs/desktop-ui-audit.md for the lower-level tests these journeys promote.
 """
 
 from desktop_ui_tex_journeys import TexJourneys
+from desktop_ui_image_journeys import ImageJourneys
 
 PREVIEW_SOURCE = '#set page(width: 200pt, height: 200pt, margin: 20pt)\n= First\nBlack text on white paper.\n#pagebreak()\n= Second\nMiddle page.\n#pagebreak()\n= Third\n#v(95pt)\nFinal needle.\n'
 
@@ -16,7 +17,22 @@ def fingerprint(text):
     return f"{value:016x}"
 
 
-class EditorJourneys(TexJourneys):
+def assert_explorer_frame(state, independent, preview_edge):
+    document = state["document"]
+    frame = document["frame"]
+    explorer = state["targets"].get("divider.explorer")
+    if not document["explorer_visible"] and explorer and explorer["frame"] == frame:
+        raise AssertionError("closed Explorer still painted an empty panel frame")
+    editor = state["targets"].get("divider.editor")
+    if independent:
+        if not editor or editor["frame"] != frame:
+            raise AssertionError("missing fresh independent preview edge")
+        if abs(editor["x"] - preview_edge) > 1:
+            raise AssertionError("independent preview edge moved during Explorer toggle")
+    return frame
+
+
+class EditorJourneys(TexJourneys, ImageJourneys):
     def focus_document_window(self):
         if self.snapshot()["document"]["focused"]:
             return
@@ -435,6 +451,103 @@ class EditorJourneys(TexJourneys):
         self.source_is("#mi(`\\alp`)")
         self.close_scratch(count)
 
+    def explorer_toggle(self):
+        """Native Cmd+1 must close atomically, with a stable independent edge."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        def toggle(expected_visible, independent, preview_edge):
+            sampled = set()
+
+            def inspect(state):
+                sampled.add(assert_explorer_frame(state, independent, preview_edge))
+
+            # Observe while the native driver posts key-down/up, then inspect
+            # every returned frame until the requested transition has settled.
+            with ThreadPoolExecutor(max_workers=1) as worker:
+                command = worker.submit(self.native, "key", 18, "cmd")
+                while not command.done():
+                    inspect(self.snapshot())
+                command.result()
+            state = self.wait("Cmd+1 toggles Explorer without freezing", lambda d:
+                              d["explorer_visible"] == expected_visible and d["source_fingerprint"] == source)
+            inspect(state)
+            for _ in range(8):
+                state = self.snapshot()
+                inspect(state)
+                if state["document"]["explorer_visible"] != expected_visible:
+                    raise AssertionError("Explorer changed again after the requested toggle")
+            self.record("explorer_toggle.frames", visible=expected_visible,
+                        independent=independent, sampled=len(sampled))
+        self.ensure_typesetting_tab()
+        self.key(20)
+        initial = self.wait("split layout ready", lambda d: d["view_mode"] == "Split")["document"]
+        source = initial["source_fingerprint"]
+        for backend in ("Interactive", "Pdfium"):
+            self.choose_backend(backend)
+            for independent in (False, True):
+                self.settings()
+                self.setting_section("independent main dividers", "Independent main dividers")
+                if self.snapshot()["document"]["independent_main_dividers"] != independent:
+                    self.click("settings.dividers")
+                self.wait("divider policy applied", lambda d: d["independent_main_dividers"] == independent)
+                self.close_settings()
+                for after_resize in (False, True):
+                    if after_resize:
+                        self.wait_target("divider.explorer")
+                        before = self.snapshot()
+                        border = before["targets"]["divider.explorer"]
+                        preview_edge = before["targets"]["divider.editor"]["x"]
+                        code_width = before["document"]["editor_panel_width"]
+                        self.native("drag", border["x"], border["y"], border["x"] + 35, border["y"])
+                        self.wait("divider drag finishes without blocking UI", lambda d:
+                                  abs(d["explorer_panel_width"] - before["document"]["explorer_panel_width"] - 35) < 2)
+                        state = self.snapshot()
+                        if independent:
+                            if abs(state["targets"]["divider.editor"]["x"] - preview_edge) > 1:
+                                raise AssertionError("independent drag changed preview edge")
+                        elif abs(state["document"]["editor_panel_width"] - code_width) > 1:
+                            raise AssertionError("fixed-width drag changed editor width")
+                    for _ in range(3):
+                        preview_edge = self.snapshot()["targets"]["divider.editor"]["x"]
+                        toggle(False, independent, preview_edge)
+                        toggle(True, independent, preview_edge)
+                self.click("editor.source")
+                self.key(125, "cmd")
+                self.native("text", "x")
+                self.wait("editor typing still works after layout transitions", lambda d:
+                          d["editor_keyboard_focused"] and d["source_fingerprint"] != source)
+                self.key(6)
+                self.wait("undo preserves document after layout transitions", lambda d: d["source_fingerprint"] == source)
+
+        # A nearly full-height bottom panel leaves a shorter vertical divider.
+        # Its paint-only grip must fit that span instead of leaking into the toolbar.
+        self.key(23)
+        self.wait("bottom panel opens for short-divider coverage", lambda d: d["panel"] is not None)
+        self.click("panel.activity")
+        self.wait_target("divider.bottom")
+        state = self.snapshot()
+        bottom = state["targets"]["divider.bottom"]
+        editor = state["targets"]["divider.editor"]
+        # This is the real resize widget, intersected with the bottom panel;
+        # its center is clear of the source editor on the shared boundary.
+        self.native("move", bottom["x"], bottom["y"])
+        self.wait("real bottom resize handle is hovered", lambda _: self.snapshot()["targets"]["divider.bottom"]["hovered"])
+        self.native("drag", bottom["x"], bottom["y"], bottom["x"],
+                    editor["y"] - editor["height"] / 2 + 12)
+        self.wait("nearly maximized bottom panel leaves a short editor span", lambda d:
+                  d["panel"] == "Activity" and not d["panel_maximized"])
+        self.wait_target("divider.editor")
+        short = self.snapshot()["targets"]["divider.editor"]
+        # Child widgets may demand extra height, but the observed/painted
+        # grip must use the twelve-point visible main-panel allocation.
+        if not 0 < short["height"] < 24:
+            raise AssertionError(f"near-maximized panel did not shorten the divider: {short['height']}")
+        self.stable_state(lambda d: d["source_fingerprint"] == source)
+        if self.capture_review:
+            self.capture_viewport("main")
+        self.click("panel.close")
+        self.wait("short-divider fixture restores normal editor", lambda d: d["panel"] is None)
+
     def layout(self):
         # The dialog journey intentionally leaves an arbitrary-extension tab
         # active. View-mode and panel commands are document-scoped, so make
@@ -672,6 +785,51 @@ class EditorJourneys(TexJourneys):
         self.click("git.hunk.0")
         self.wait("full document diff opens at clicked change", lambda d: d["git_diff_open"] and d["git_diff_lines"] == [180, 180]
                   and d["cursor"][0] == sum(map(len, lines[:5])))
+        # The diff is the same editor: its context menu must preserve selected
+        # text for Copy and offer the direct Typst math conversion as well.
+        import subprocess
+        import time
+        self.wait_target("editor.caret")
+        caret = self.snapshot()["targets"]["editor.caret"]
+        start = sum(map(len, lines[:5]))
+        end = start + len(lines[5].rstrip("\n"))
+        self.key(124, "cmd+shift")
+        self.wait("docked editor selects the changed line", lambda d: sorted(d["cursor"]) == [start, end])
+        self.right_click_at(caret["x"], caret["y"])
+        self.wait_target("menu.Copy")
+        self.wait("docked context menu preserves selected text", lambda d: d["git_diff_open"]
+                  and sorted(d["cursor"]) == [start, end])
+        self.click("menu.Copy")
+        deadline = time.monotonic() + 6
+        while True:
+            copied = subprocess.run(["pbpaste"], capture_output=True, text=True).stdout
+            if copied == lines[5].rstrip("\n"):
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError(f"docked editor Copy lost selection: {copied!r}")
+            time.sleep(0.05)
+        self.wait("Copy keeps the docked editor focused", lambda d: d["git_diff_open"] and d["editor_keyboard_focused"])
+        self.key(126, "cmd")
+        prefixed = "$x$ " + original
+        self.paste_source("$x$ ", check=lambda: self.source_is(prefixed))
+        self.key(126, "cmd")
+        self.key(124, "none")
+        self.wait_target("editor.caret")
+        caret = self.snapshot()["targets"]["editor.caret"]
+        self.key(124, "shift")
+        self.wait("docked editor selects the formula", lambda d: sorted(d["cursor"]) == [1, 2])
+        self.right_click_at(caret["x"], caret["y"])
+        self.wait_target("menu.Convert to display math")
+        self.click("menu.Convert to display math")
+        self.source_is("$\nx\n$ " + original)
+        self.wait("conversion keeps the full diff open", lambda d: d["git_diff_open"])
+        self.key(6)
+        self.source_is(prefixed)
+        self.key(6)
+        self.source_is(original)
+        self.key(126, "cmd")
+        self.key(125, "cmd+alt")
+        self.wait("hunk navigation resumes after menu actions", lambda d: d["cursor"][0] == start and d["git_diff_open"])
         for button, line in (("Next",85), ("Next",165), ("Next",5), ("Previous",165)):
             self.click("git.hunk." + button)
             self.wait("navigation moves live editor cursor", lambda d: d["git_diff_open"] and d["cursor"][0] == sum(map(len, lines[:line])) and d["editor_keyboard_focused"])

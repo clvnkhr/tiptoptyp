@@ -50,10 +50,20 @@ impl EditorApp {
             }
         });
         if !maximized {
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            panel_handles::observe(
+                "divider.bottom",
+                &rendered.response,
+                id,
+                rendered.response.rect,
+                true,
+                true,
+            );
             panel_handles::paint(
                 ui,
                 panel_handles::panel_center(ui, rendered.response.rect, true),
                 true,
+                rendered.response.rect.x_range(),
                 panel_handles::panel_divider(ui, id),
             );
         }
@@ -327,8 +337,8 @@ impl EditorApp {
             self.toggle_panel(context);
             return true;
         }
-        let find_focused =
-            context.memory(|memory| memory.has_focus(crate::terminal::terminal_find_id(context)));
+        let find_id = crate::terminal::terminal_find_id(context);
+        let find_focused = context.memory(|memory| memory.has_focus(find_id));
         if find_focused {
             let owner_frame = context.cumulative_frame_nr();
             let allow_paste = self
@@ -428,7 +438,8 @@ impl EditorApp {
         }
         // Search is a normal text field: let the shared widget router
         // deliver editing commands to it rather than the terminal grid.
-        if context.memory(|memory| memory.has_focus(crate::terminal::terminal_find_id(context))) {
+        let find_id = crate::terminal::terminal_find_id(context);
+        if context.memory(|memory| memory.has_focus(find_id)) {
             return false;
         }
         match command {
@@ -979,11 +990,8 @@ mod tests {
         harness.run();
         assert_eq!(harness.state().terminal.active_index(), 1);
         // Switching hands keyboard focus to the newly shown surface.
-        assert!(
-            harness
-                .ctx
-                .memory(|memory| memory.has_focus(terminal_id(&harness.ctx)))
-        );
+        let grid_id = terminal_id(&harness.ctx);
+        assert!(harness.ctx.memory(|memory| memory.has_focus(grid_id)));
         // Closing the shown pane drops it from the column; the next pane
         // takes its place without disturbing the others.
         harness.get_by_label("Turn off terminal").click();
@@ -1113,11 +1121,8 @@ mod tests {
         harness.key_press_modifiers(find.modifiers, find.logical_key);
         harness.run();
         assert!(!harness.state().terminal.find_open());
-        assert!(
-            harness
-                .ctx
-                .memory(|memory| memory.has_focus(terminal_id(&harness.ctx)))
-        );
+        let grid_id = terminal_id(&harness.ctx);
+        assert!(harness.ctx.memory(|memory| memory.has_focus(grid_id)));
     }
 
     #[test]

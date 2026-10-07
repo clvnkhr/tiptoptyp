@@ -107,7 +107,7 @@ impl EditorApp {
         if settings.ascii_punctuation && ui.memory(|m| m.has_focus(source_id)) {
             ui.input_mut(|input| crate::auto_pairs::ascii_punctuation(&mut input.events));
         }
-        let output = self
+        let mut output = self
             .tabs
             .current_record_mut()
             .document
@@ -136,6 +136,12 @@ impl EditorApp {
                     },
                 )
             });
+        let context_click = super::editor_view::secondary_click_location(
+            ui,
+            &mut output.edit,
+            Some(snapshot.cursor),
+            &mut self.secondary_press_guard,
+        );
         let cursor = output
             .edit
             .state
@@ -158,18 +164,22 @@ impl EditorApp {
             char_index: cursor.primary.index.0,
             rect: caret,
         });
-        if output.edit.response.secondary_clicked() {
-            let anchor = output
-                .edit
-                .response
-                .interact_pointer_pos()
-                .unwrap_or(output.edit.response.rect.center());
-            self.open_app_popup(AppPopup::Editor {
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        if cursor.is_empty() {
+            let mut target = output.edit.response.clone();
+            target.interact_rect = Rect::from_center_size(caret.center(), Vec2::splat(1.0));
+            crate::desktop_test::observe("editor.caret", &target);
+        }
+        if let Some((anchor, character)) = context_click {
+            self.prepare_editor_data();
+            let popup = super::editor_view::editor_context_popup(
+                &mut self.editor_data,
+                self.tabs.current_record().document.source(),
+                kind,
                 anchor,
-                link: None,
-                table: None,
-                math: None,
-            });
+                character,
+            );
+            self.open_app_popup(popup);
         }
         match output.action {
             Some(full_view::Action::Close) => {

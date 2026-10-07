@@ -42,26 +42,66 @@ pub(super) fn panel_center(ui: &egui::Ui, rect: Rect, horizontal: bool) -> Pos2 
         egui::pos2(rect.right() - inset, rect.center().y)
     }
 }
-pub(super) fn paint(ui: &egui::Ui, center: Pos2, horizontal: bool, highlight: Option<Stroke>) {
-    let bounds = Rect::from_center_size(
+fn grip_bounds(center: Pos2, horizontal: bool, span: egui::emath::Rangef) -> Rect {
+    let length = (span.max - span.min).clamp(0.0, 24.0);
+    Rect::from_center_size(
         center,
         if horizontal {
-            egui::vec2(24.0, 8.0)
+            egui::vec2(length, 8.0)
         } else {
-            egui::vec2(8.0, 24.0)
+            egui::vec2(8.0, length)
         },
-    );
+    )
+}
+pub(super) fn paint(
+    ui: &egui::Ui,
+    center: Pos2,
+    horizontal: bool,
+    span: egui::emath::Rangef,
+    highlight: Option<Stroke>,
+) {
+    let bounds = grip_bounds(center, horizontal, span);
+    if !bounds.is_positive() {
+        return;
+    }
+    // Native/content panels may leave only a few pixels along this divider.
+    // Keep the transverse mask straddling the rule, but never paint past the
+    // allocated divider span or outside the containing panel's clip.
+    let mut clip = ui.clip_rect();
+    if horizontal {
+        clip.min.x = clip.min.x.max(bounds.left());
+        clip.max.x = clip.max.x.min(bounds.right());
+    } else {
+        clip.min.y = clip.min.y.max(bounds.top());
+        clip.max.y = clip.max.y.min(bounds.bottom());
+    }
+    if !clip.is_positive() {
+        return;
+    }
     let painter = ui
         .ctx()
         .layer_painter(egui::LayerId::new(
             egui::Order::Middle,
             egui::Id::new("divider-grips"),
         ))
-        .with_clip_rect(ui.ctx().content_rect());
+        .with_clip_rect(clip);
     painter.rect_filled(bounds, 0.0, ui.visuals().panel_fill);
     // The bars stay dim; only the outline carries the highlight.
     let bars = Stroke::new(1.5, ui.visuals().widgets.noninteractive.bg_stroke.color);
-    for (a, b) in segments(center, horizontal) {
+    let length = if horizontal {
+        bounds.width()
+    } else {
+        bounds.height()
+    };
+    let inset = 3.0_f32.min(length / 4.0);
+    for (mut a, mut b) in segments(center, horizontal) {
+        if horizontal {
+            a.x = bounds.left() + inset;
+            b.x = bounds.right() - inset;
+        } else {
+            a.y = bounds.top() + inset;
+            b.y = bounds.bottom() - inset;
+        }
         painter.line_segment([a, b], bars);
     }
     if let Some(stroke) = highlight {
@@ -75,15 +115,53 @@ pub(super) fn paint(ui: &egui::Ui, center: Pos2, horizontal: bool, highlight: Op
         );
     }
 }
+/// A panel's contents may demand more height than the remaining main region.
+pub(super) fn divider_rect(panel: Rect, allocated: Rect) -> Rect {
+    panel.intersect(allocated)
+}
+
+pub(super) fn editor_maximum(
+    available: Rect,
+    preferred: f32,
+    previous: Option<Rect>,
+    independent: bool,
+) -> f32 {
+    if independent
+        && let Some(previous) = previous
+        && previous.right() <= available.right()
+    {
+        // Keep an existing small preview instead of enlarging its preferred
+        // reserve when Explorer disappears. A real viewport shrink still
+        // falls back to the normal limits when the old edge no longer fits.
+        preferred
+            .max(previous.right() - available.left())
+            .min(available.width().max(0.0))
+    } else {
+        preferred
+    }
+}
+
 pub(super) fn editor_width(width: f32, explorer_delta: f32, minimum: f32, maximum: f32) -> f32 {
     (width - explorer_delta).clamp(minimum, maximum.max(minimum))
 }
 
 #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-pub(super) fn observe(name: &str, response: &egui::Response, horizontal: bool, top: bool) {
-    let mut target = response.clone();
-    let rect = target.rect;
-    target.rect = if horizontal {
+pub(super) fn observe(
+    name: &str,
+    response: &egui::Response,
+    panel_id: egui::Id,
+    rect: Rect,
+    horizontal: bool,
+    top: bool,
+) {
+    let Some(mut target) = response.ctx.read_response(panel_id.with("__resize")) else {
+        return;
+    };
+    target.rect = if horizontal && top {
+        // The source widget may own the inclusive shared boundary. Approach
+        // inside the real resize widget, clear of source and panel content.
+        target.interact_rect.intersect(rect)
+    } else if horizontal {
         Rect::from_center_size(
             egui::pos2(
                 rect.center().x,
@@ -97,13 +175,200 @@ pub(super) fn observe(name: &str, response: &egui::Response, horizontal: bool, t
             egui::vec2(6.0, rect.height()),
         )
     };
-    target.interact_rect = target.rect;
-    crate::desktop_test::observe(name, &target);
+    if target.rect.is_positive() {
+        target.interact_rect = target.rect;
+        crate::desktop_test::observe(name, &target);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn grips_fit_their_divider_span_even_when_panels_are_nearly_maximized() {
+        for horizontal in [false, true] {
+            for length in [0.0, 1.0, 5.0, 10.0, 24.0, 100.0] {
+                let span = egui::emath::Rangef::new(20.0, 20.0 + length);
+                let center = if horizontal {
+                    egui::pos2(20.0 + length / 2.0, 50.0)
+                } else {
+                    egui::pos2(50.0, 20.0 + length / 2.0)
+                };
+                let bounds = grip_bounds(center, horizontal, span);
+                let actual = if horizontal {
+                    bounds.x_range()
+                } else {
+                    bounds.y_range()
+                };
+                assert!(
+                    actual.min >= span.min && actual.max <= span.max,
+                    "grip {actual:?} protrudes beyond divider {span:?}"
+                );
+                assert_eq!(bounds.center(), center);
+            }
+        }
+    }
+
+    #[test]
+    fn short_grips_clip_bars_and_highlights_to_the_containing_panel() {
+        let context = egui::Context::default();
+        for horizontal in [false, true] {
+            let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                let enclosing = Rect::from_min_max(egui::pos2(40.0, 40.0), egui::pos2(60.0, 60.0));
+                ui.set_clip_rect(enclosing);
+                paint(
+                    ui,
+                    egui::pos2(50.0, 50.0),
+                    horizontal,
+                    egui::emath::Rangef::new(45.0, 55.0),
+                    Some(Stroke::new(1.0, egui::Color32::RED)),
+                );
+            });
+            output.textures_delta.clear();
+            assert_eq!(output.shapes.len(), 4);
+            for shape in output.shapes {
+                let span = if horizontal {
+                    shape.clip_rect.x_range()
+                } else {
+                    shape.clip_rect.y_range()
+                };
+                assert_eq!(span, egui::emath::Rangef::new(45.0, 55.0));
+                match shape.shape {
+                    egui::Shape::Rect(rect) => assert!(shape.clip_rect.contains_rect(rect.rect)),
+                    egui::Shape::LineSegment { points, .. } => {
+                        assert!(
+                            points
+                                .into_iter()
+                                .all(|point| shape.clip_rect.contains(point))
+                        );
+                    }
+                    _ => panic!("unexpected grip shape"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn divider_geometry_uses_visible_allocation_not_oversized_child_contents() {
+        let allocated = Rect::from_min_max(egui::pos2(0.0, 40.0), egui::pos2(1200.0, 52.0));
+        let oversized = Rect::from_min_max(egui::pos2(0.0, 40.0), egui::pos2(300.0, 104.0));
+        let divider = divider_rect(oversized, allocated);
+        assert!(allocated.contains_rect(divider));
+        assert_eq!(divider.center().y, 46.0);
+        assert_eq!(divider.height(), 12.0);
+    }
+
+    #[test]
+    fn independent_divider_retains_small_preview_space_until_actual_viewport_shrink() {
+        let previous = Rect::from_min_max(egui::pos2(300.0, 40.0), egui::pos2(1170.0, 400.0));
+        let closed = Rect::from_min_max(egui::pos2(0.0, 40.0), egui::pos2(1200.0, 400.0));
+        assert_eq!(editor_maximum(closed, 1104.0, Some(previous), true), 1170.0);
+        let reopened = Rect::from_min_max(egui::pos2(300.0, 40.0), egui::pos2(1200.0, 400.0));
+        assert_eq!(editor_maximum(reopened, 804.0, Some(previous), true), 870.0);
+        assert_eq!(
+            editor_maximum(reopened, 804.0, Some(previous), false),
+            804.0
+        );
+        assert_eq!(editor_maximum(reopened, 804.0, None, true), 804.0);
+        let shrunk = Rect::from_min_max(egui::pos2(300.0, 40.0), egui::pos2(1100.0, 400.0));
+        assert_eq!(editor_maximum(shrunk, 704.0, Some(previous), true), 704.0);
+        let before_parent = Rect::from_min_max(egui::pos2(0.0, 40.0), egui::pos2(200.0, 400.0));
+        assert_eq!(
+            editor_maximum(reopened, 804.0, Some(before_parent), true),
+            804.0
+        );
+    }
+
+    #[test]
+    fn independent_egui_panels_keep_a_forty_pixel_preview_through_close_reopen_and_idle() {
+        let context = egui::Context::default();
+        let explorer_id = egui::Id::new("narrow-preview-explorer");
+        let editor_id = egui::Id::new("narrow-preview-editor");
+        let screen = Rect::from_min_size(Pos2::ZERO, egui::vec2(1200.0, 300.0));
+        let mut previous_explorer = None;
+
+        // Reuse the same Context so Panel persists its actual size between
+        // frames. The last two frames exercise an idle closed layout too.
+        for explorer_width in [1120.0, 0.0, 1120.0, 1120.0, 0.0, 0.0] {
+            let mut observed = (Rect::NOTHING, Rect::NOTHING);
+            context
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(screen),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        if explorer_width > 0.0 {
+                            egui::Panel::left(explorer_id)
+                                .frame(egui::Frame::NONE)
+                                .show_separator_line(false)
+                                .exact_size(explorer_width)
+                                .show(ui, |ui| {
+                                    ui.label("E");
+                                });
+                        }
+
+                        let available = ui.available_rect_before_wrap();
+                        let layout = crate::theme::split_pane_layout(available.width());
+                        let previous = egui::PanelState::load(&context, editor_id);
+                        let maximum = editor_maximum(
+                            available,
+                            layout.editor_maximum,
+                            previous.map(|state| state.outer_rect),
+                            true,
+                        );
+                        let delta = explorer_width - previous_explorer.unwrap_or(explorer_width);
+                        if delta.abs() > 0.01
+                            && let Some(mut state) = previous
+                        {
+                            let width =
+                                editor_width(state.size().x, delta, layout.editor_minimum, maximum);
+                            state.outer_rect.min.x = available.left();
+                            state.outer_rect.max.x = available.left() + width;
+                            context.data_mut(|data| data.insert_persisted(editor_id, state));
+                        }
+                        previous_explorer = Some(explorer_width);
+
+                        observed.0 = egui::Panel::left(editor_id)
+                            .frame(egui::Frame::NONE)
+                            .show_separator_line(false)
+                            .resizable(true)
+                            .default_size(layout.editor_width)
+                            .min_size(layout.editor_minimum)
+                            .max_size(maximum)
+                            .show(ui, |ui| {
+                                // Fill the persisted slot without a large
+                                // child that can expand the panel itself.
+                                ui.set_min_size(ui.available_size());
+                                ui.label("x");
+                            })
+                            .response
+                            .rect;
+                        observed.1 = egui::CentralPanel::default()
+                            .frame(egui::Frame::NONE)
+                            .show(ui, |ui| {
+                                ui.label("P");
+                            })
+                            .response
+                            .rect;
+                    },
+                )
+                .drop_without_applying_deltas();
+
+            assert_eq!(observed.0.left(), explorer_width);
+            assert_eq!(
+                observed.0.right(),
+                1160.0,
+                "Explorer width {explorer_width}"
+            );
+            assert_eq!(observed.1.left(), observed.0.right());
+            assert_eq!(observed.1.right(), screen.right());
+            assert_eq!(observed.1.width(), 40.0, "Explorer width {explorer_width}");
+            let persisted = egui::PanelState::load(&context, editor_id).unwrap();
+            assert_eq!(persisted.outer_rect, observed.0);
+        }
+    }
+
     #[test]
     fn independent_divider_preserves_preview_edge_until_a_minimum_is_hit() {
         assert_eq!(
@@ -113,6 +378,18 @@ mod tests {
         assert_eq!(editor_width(120.0, 70.0, 100.0, 800.0), 100.0);
         assert_eq!(editor_width(600.0, -70.0, 100.0, 800.0), 670.0);
     }
+    #[test]
+    fn independent_divider_stays_fixed_through_resize_hide_and_reopen() {
+        let mut explorer = 300.0;
+        let mut editor = 600.0;
+        for next in [370.0, 0.0, 370.0, 300.0, 0.0, 300.0] {
+            let edge = explorer + editor;
+            editor = editor_width(editor, next - explorer, 100.0, 1300.0 - next);
+            explorer = next;
+            assert_eq!(explorer + editor, edge);
+        }
+    }
+
     #[test]
     fn grips_are_centered_rotated_versions_of_the_same_geometry() {
         let a = segments(Pos2::ZERO, true);
@@ -151,13 +428,16 @@ mod tests {
         let highlight = Stroke::new(2.0, egui::Color32::RED);
         for highlight in [None, Some(highlight)] {
             let mut output = context.run_ui(egui::RawInput::default(), move |ui| {
-                ui.ctx().data_mut(|data| {
-                    data.insert_temp(
-                        egui::Id::new("grip-test-dim"),
-                        ui.visuals().widgets.noninteractive.bg_stroke.color,
-                    )
-                });
-                paint(ui, Pos2::new(50.0, 50.0), true, highlight);
+                let dim = ui.visuals().widgets.noninteractive.bg_stroke.color;
+                ui.ctx()
+                    .data_mut(|data| data.insert_temp(egui::Id::new("grip-test-dim"), dim));
+                paint(
+                    ui,
+                    Pos2::new(50.0, 50.0),
+                    true,
+                    ui.max_rect().x_range(),
+                    highlight,
+                );
             });
             output.textures_delta.clear();
             let dim: egui::Color32 = context

@@ -1308,3 +1308,135 @@ were harness failures, not product regressions. The corrected context journey
 prepares its fixture itself for standalone and combined execution; diagnostics
 starts valid, verifies its effective renderer, then deliberately introduces
 the error. No failed/observation-only run is counted as an interaction pass.
+
+
+## October 7: Explorer deadlock and newest todos
+
+The installed app froze immediately after a real Cmd+1 press. Its main thread
+changed from an idle AppKit run loop to a render stack blocked in a condition
+wait. A separate failing `git_hunks` journey also stopped during an independent
+Explorer divider drag (`run-fh42y93z`). The divider compensation wrote panel
+memory inside `Context::data_mut`, then computed a viewport-scoped panel ID
+inside that callback. Computing the ID reads the same Context: the write lock
+cannot be acquired recursively. IDs now resolve before entering the callback.
+The audit also removed read-lock reentry in terminal Find, editor focus and
+desktop observations; those callbacks now inspect only their provided data.
+
+Before the Mac locked, the new `explorer_toggle` journey passed in
+`run-qwgh8ggt`: Tinymist and PDFium, both divider policies, before/after actual
+drags, 48 native Cmd+1 transitions, and subsequent typing/undo. This verifies
+interaction with the new build; the installed `/Applications` app was neither
+reinstalled nor replaced by the fixture.
+
+Divider grips now shorten to the allocated divider span and clip to their
+containing panel. Their centering, separator mask, interaction colors and hit
+areas are preserved. Failing geometry coverage preceded this change; normal
+and extremely short spans have deterministic clipping tests. This adds only
+constant-size paint work.
+
+PDF page appearance was already configurable. Images now have a separate,
+default-off dark preference, following the same page Light/Dark/Follow choice.
+An image toolbar contrast icon and Appearance checkbox edit that one preference.
+Original files and alpha remain unchanged. Decoding/inversion run in the image
+worker, never on the UI thread; an original-source cache is bounded to 16 MiB,
+keys include canonical target/file identity/change metadata, and a source is
+cached only when unchanged throughout decoding. Stale valid pixels stay visible
+while refreshes finish. Current errors without usable pixels show a failure
+message instead of an indefinite loading label.
+
+Terminal theme initialization was already correct. Two separate protocol bugs
+were reproduced: changing palette within the same dark/light mode did not
+notify opted-in clients, and a 258-answer palette query consumed one writer
+mailbox slot per answer. Replies now coalesce per PTY packet with a 64 KiB bound;
+unchanged palettes publish no new grid or notification. This corrects the host
+protocol; a named TUI theme can still choose its own colors. The native theme
+journey checks receipts from a private real PTY rather than assuming a particular
+OpenCode screen appearance. See the [color-update protocol](https://contour-terminal.org/vt-extensions/color-palette-update-notifications/)
+and [OpenCode v2 theme settings](https://opencode.ai/v2/docs/themes/).
+
+Selection preservation and direct Typst math-conversion actions now use the
+same context-menu path in ordinary and docked diff editors. A review also found
+Typst font/link actions leaking into TeX comments/verbatim text; language guards
+and regressions cover that case. Parsing occurs only on a context-menu event.
+The Intel compile script already existed; an actual x86_64 build and Rosetta
+version smoke test passed. That is executable compilation evidence, not an
+Intel distributable or PDFium runtime test. Runtime packaging must select Intel
+helpers and an Intel PDFium bundle.
+
+Follow-up inspection found two separate Explorer transitions beyond the lock:
+independent dividers compensated drags but not a closed Explorer's zero width,
+and closing first hid contents before removing the empty panel on the following
+frame. The latter matches the reported choppy disappearance; it does not establish
+the user's estimated half-second duration. Closing is now a single state/layout
+transition, and compensation runs before presenting the editor. A persisted
+narrow preview retains its physical edge when Explorer closes/reopens; an actual
+viewport shrink still respects available bounds. Tests reuse retained egui Panel
+state across open/closed/idle frames, including a forty-point preview.
+
+Near-maximized bottom panels exposed a second geometry issue: child widgets can
+inflate the side-panel response beyond its visible allocation. Grips now use the
+intersection with the original main-region allocation for centering and clipping.
+The geometry regression reproduces a twelve-point visible allocation with a
+sixty-four-point child response. This changes paint/observation bounds, not resize
+hit areas or native preview placement.
+
+The checked-in `explorer_toggle` journey samples observations concurrently with
+native key-down/up and across settled frames, rejects a fresh empty closed-panel
+frame, and rejects independent preview-edge movement. Its focused fixture adds
+1,800 long source rows; `--release` selects the optimized build and records the
+profile. The first debug large-source attempt (`run-gcvirjc3`) exceeded the initial
+inspection socket deadline before any interaction; it is not counted as a pass.
+Earlier short-divider setup attempts (`run-w47b72b9`, missing observation height;
+`run-s3krmkw9`, inflated response geometry) also do not count as passes.
+
+The terminal theme probe source is maintained in
+`scripts/desktop_ui_terminal_theme.py`; only its disposable executable instance
+and receipt files live in the private temporary fixture. Successful focused
+native runs before this final divider follow-up: `terminal_theme` in
+`run-d1zt413v`, `images` in `run-a35137in`, `context_menu` in `run-jmr113py`,
+and `git_hunks` in `run-ip5x70yl`. Fresh original/dark image framebuffers from
+`run-a35137in` were inspected. They verify the framebuffer appearance, not
+composed native child-view placement. The theme journey's earlier Settings-cleanup
+failure (`run-k0z0c4_r`) is not counted as an interaction pass.
+
+A final image-cache review also removed a redundant full-raster copy for uncached
+large images in original-color mode. A deterministic pointer/capacity regression
+checks that rasters above the sixteen-MiB cache bound move their pixel allocation.
+Cached/shared originals remain immutable. No unrelated latency benchmark or
+cross-platform performance guarantee is implied.
+
+The first optimized large-source follow-up (`run-nos3zpqa`) completed all forty-eight
+Explorer transitions and 708 sampled transition frames without either regression,
+but its separate short-grip setup did not resize the bottom panel; the whole run
+is therefore not counted as a pass. The native drag adapter now posts a pointer
+approach before mouse-down, so hit testing can retire the previous widget owner.
+This follows the same native input-edge separation as the existing click adapter.
+
+Final optimized native verification passed: `explorer_toggle` in `run-blildqe_` with
+forty-eight transitions, 712 sampled transition frames, both effective preview
+backends/divider policies, typing/undo, and a nearly full-height bottom panel.
+`git_hunks` passed in `run-hsc17gwb`. Native targets now read the actual resize
+widget response; the bottom hit point uses its intersection with the panel,
+clear of the source's inclusive boundary. The previous pointer-approach-only
+attempt (`run-x9bpeumf`) completed its transitions but failed short-grip setup;
+that full run is not counted as a pass.
+The intervening locked-desktop attempt is unavailable interaction coverage.
+
+Fresh `run-blildqe_` main framebuffers were inspected, including the short main
+strip above Activity. Grips fit the visible strip and remain centered across its
+rules. These are viewport pixels, not a composed native-preview screenshot.
+The retained app log includes `ui.preview.bounds` rectangles and scale metadata.
+Serial required verification passed: formatting, strict all-target Clippy,
+1,589 tests (44 ignored opt-in checks), and 17 xtask tests. An earlier concurrent
+native build overwrote the debug executable while build-identity tests ran;
+that tooling race failed the earlier suite and was resolved by serial builds.
+The final Intel build and Rosetta version check passed again.
+
+The maintained gallery was regenerated in one app session and all twenty-five
+PNG files passed decoding/contract validation. Fresh gallery inspection sheets
+and the regenerated icon contact sheet were inspected; the new contrast icon
+stays within its reference box at 1x/4x. The checked-in contact sheet is
+`docs/icons/contact-sheet.png`. The final native-test feature also passes strict
+all-target Clippy. Runner failure-detector tests pass (15), as do Intel script
+contracts (3). GPUI blur/translucency item 30 remains open; existing PDF page
+appearance and Intel compile-script work were audited rather than duplicated.

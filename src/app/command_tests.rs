@@ -356,7 +356,7 @@ fn command_toolbar_menu_and_shortcut_effects_agree_once_per_owner() {
                         command == AppCommand::Panel
                     );
                     assert_eq!(
-                        app.explorer.contents_visible(),
+                        app.explorer.panel_visible(),
                         command != AppCommand::Explorer,
                         "{owner:?} {route:?} {command:?}"
                     );

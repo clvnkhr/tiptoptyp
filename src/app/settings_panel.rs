@@ -530,7 +530,9 @@ impl SettingsPanel<'_> {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(SettingsTarget::PageTheme.label()).strong());
                     for theme in DocumentTheme::ALL {
-                        ui.selectable_value(&mut edited.document_theme, theme, theme.label());
+                        let _page = ui.selectable_value(&mut edited.document_theme, theme, theme.label());
+                        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                        if ui.is_rect_visible(_page.rect) { crate::desktop_test::observe(&format!("settings.page.{theme:?}"), &_page); }
                     }
                     ui.separator();
                     settings_inline_value(
@@ -539,6 +541,7 @@ impl SettingsPanel<'_> {
                         theme_label(Some(edited.document_theme.resolve(effective_theme))),
                     );
                 });
+                image_appearance_preference(ui, &mut edited);
 
                 ui.add_space(theme::SPACE.small);
                 ui.separator();
@@ -1464,6 +1467,15 @@ fn show_tex_preferences(
     );
 }
 
+fn image_appearance_preference(ui: &mut egui::Ui, settings: &mut AppSettings) {
+    let _images = ui.checkbox(&mut settings.dark_images, "Apply dark page appearance to images")
+        .on_hover_text("Invert image colors when pages are dark. Light pages keep the original colors; image files are unchanged.");
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    if ui.is_rect_visible(_images.rect) {
+        crate::desktop_test::observe("settings.dark_images", &_images);
+    }
+}
+
 fn ignored_codes_editor(ui: &mut egui::Ui, ignored_codes: &mut Vec<String>) {
     ui.horizontal(|ui| {
         ui.label("Ignored diagnostic codes:");
@@ -1590,6 +1602,25 @@ mod tests {
                 .as_deref(),
             Some("https://badness.dev/reference/cli.html#options")
         );
+    }
+
+    #[test]
+    fn image_appearance_is_opt_in_and_keeps_pdf_and_comfy_choices() {
+        let mut harness = Harness::builder().build_ui_state(
+            |ui, settings: &mut AppSettings| image_appearance_preference(ui, settings),
+            AppSettings::default(),
+        );
+        harness.run();
+        harness
+            .get_by_label("Apply dark page appearance to images")
+            .click();
+        harness.run();
+        assert!(harness.state().dark_images);
+        assert_eq!(
+            harness.state().document_theme,
+            DocumentTheme::FollowInterface
+        );
+        assert!(!harness.state().comfy_background && !harness.state().comfy_text);
     }
 
     #[test]

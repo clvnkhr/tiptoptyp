@@ -11,7 +11,11 @@ pub(super) fn request_zoom(preview: &mut PreviewController, action: PreviewZoomA
     preview.fit_width = false;
 }
 
-pub(super) fn show_controls(ui: &mut egui::Ui, preview: &mut PreviewController) {
+pub(super) fn show_controls(
+    ui: &mut egui::Ui,
+    preview: &mut PreviewController,
+    dark_images: bool,
+) -> Option<bool> {
     if icon_button(ui, UiIcon::ZoomOut, "Zoom out").clicked() {
         request_zoom(preview, PreviewZoomAction::Out);
     }
@@ -22,6 +26,23 @@ pub(super) fn show_controls(ui: &mut egui::Ui, preview: &mut PreviewController) 
     if icon_button(ui, UiIcon::FitWidth, "Fit image width").clicked() {
         preview.fit_width = !preview.fit_width;
     }
+    let dark = native_hover_text(
+        icons::toolbar_button(
+            ui,
+            true,
+            dark_images,
+            UiIcon::Contrast,
+            "Dark images",
+            crate::settings::ToolbarStyle::Icons,
+            false,
+        ),
+        "Dark images — follow the page appearance setting. Light pages keep the original colors.",
+    );
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    if ui.is_rect_visible(dark.rect) {
+        crate::desktop_test::observe("image.dark", &dark);
+    }
+    dark.clicked().then_some(!dark_images)
 }
 
 pub(super) fn show_pages(ui: &mut egui::Ui, preview: &mut PreviewController) {
@@ -139,7 +160,12 @@ pub(super) fn show_pages(ui: &mut egui::Ui, preview: &mut PreviewController) {
                             .alt_text("Image"),
                     );
                 } else {
-                    show_page_loading_indicator(ui, rect, geometry.index);
+                    show_page_status_indicator(
+                        ui,
+                        rect,
+                        geometry.index,
+                        preview.status == PreviewStatus::Error,
+                    );
                 }
                 if requested_page == Some(geometry.index) {
                     ui.scroll_to_rect(rect, Some(Align::Min));
@@ -166,15 +192,19 @@ fn page_loading_indicator_rect(page: Rect) -> Rect {
     )
 }
 
-fn show_page_loading_indicator(ui: &mut egui::Ui, page: Rect, page_index: usize) {
+fn show_page_status_indicator(ui: &mut egui::Ui, page: Rect, page_index: usize, failed: bool) {
     let indicator = page_loading_indicator_rect(page);
     ui.scope_builder(egui::UiBuilder::new().max_rect(indicator), |ui| {
         ui.with_layout(
             Layout::centered_and_justified(egui::Direction::TopDown),
             |ui| {
                 ui.vertical_centered(|ui| {
-                    ui.spinner();
-                    ui.label(RichText::new(format!("Loading page {}…", page_index + 1)).weak());
+                    if failed {
+                        ui.label(RichText::new("Image unavailable").weak());
+                    } else {
+                        ui.spinner();
+                        ui.label(RichText::new(format!("Loading page {}…", page_index + 1)).weak());
+                    }
                 });
             },
         );
@@ -188,6 +218,60 @@ fn page_canvas_width(viewport_width: f32, widest_page: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_retained_image_without_pixels_reports_unavailable_instead_of_loading() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        let mut preview = PreviewController::new(false, PreviewPreference::default());
+        preview.replace_asset(
+            ArtifactKey::unversioned(0),
+            None,
+            vec![crate::preview::PreviewTexture {
+                size: [640, 480],
+                resident: None,
+            }],
+        );
+        preview.status = PreviewStatus::Error;
+        preview.fit_width = false;
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(500.0, 400.0))
+            .build_ui_state(show_pages, preview);
+        harness.run();
+        assert!(harness.query_by_label("Image unavailable").is_some());
+        assert!(harness.query_by_label("Loading page 1…").is_none());
+    }
+
+    #[test]
+    fn dark_image_control_toggles_only_the_shared_preference() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(500.0, 80.0))
+            .build_ui_state(
+                |ui, state: &mut (PreviewController, bool)| {
+                    ui.horizontal(|ui| {
+                        if let Some(next) = show_controls(ui, &mut state.0, state.1) {
+                            state.1 = next;
+                        }
+                    });
+                },
+                (
+                    PreviewController::new(false, PreviewPreference::default()),
+                    false,
+                ),
+            );
+        harness.run();
+        harness.get_by_label("Dark images").click();
+        harness.run();
+        assert!(harness.state().1);
+        assert_eq!(harness.state().0.zoom, 1.0);
+        assert!(
+            !harness.state().0.render_dark(),
+            "runtime owns applying appearance"
+        );
+        harness.get_by_label("Dark images").click();
+        harness.run();
+        assert!(!harness.state().1);
+    }
 
     #[test]
     fn zoom_actions_clamp_and_leave_fit_mode_without_applying_early() {

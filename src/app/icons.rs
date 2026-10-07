@@ -28,6 +28,7 @@ ui_icons! {
     Code,
     Split,
     Preview,
+    Contrast,
     Stage,
     Unstage,
     Diff,
@@ -814,6 +815,18 @@ pub(crate) fn paint_ui_icon(painter: &egui::Painter, rect: Rect, icon: UiIcon, c
                 stroke,
             );
         }
+        UiIcon::Contrast => {
+            let radius = rect.width().min(rect.height()) * 0.34;
+            let half = (0..=24)
+                .map(|i| {
+                    let angle =
+                        -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::PI / 24.0;
+                    center + Vec2::angled(angle) * radius
+                })
+                .collect();
+            painter.add(egui::Shape::convex_polygon(half, color, Stroke::NONE));
+            painter.circle_stroke(center, radius, stroke);
+        }
         UiIcon::Waiting => {
             painter.circle_stroke(center, rect.width().min(rect.height()) * 0.36, stroke);
         }
@@ -996,6 +1009,27 @@ mod tests {
         });
         output.textures_delta.clear();
         output.shapes.into_iter().map(|shape| shape.shape).collect()
+    }
+
+    #[test]
+    fn contrast_icon_has_one_closed_half_and_a_centered_outline() {
+        let shapes = glyph_shapes(UiIcon::Contrast);
+        assert_eq!(shapes.len(), 2);
+        let egui::Shape::Path(half) = &shapes[0] else {
+            panic!("contrast half must be a contour")
+        };
+        let egui::Shape::Circle(outline) = &shapes[1] else {
+            panic!("contrast outline must be a circle")
+        };
+        assert!(half.closed);
+        assert_eq!(half.fill, Color32::BLACK);
+        assert!((half.points.first().unwrap().x - outline.center.x).abs() < 0.001);
+        assert!((half.points.last().unwrap().x - outline.center.x).abs() < 0.001);
+        assert!(
+            half.points
+                .iter()
+                .all(|point| point.x >= outline.center.x - 0.001)
+        );
     }
 
     #[test]

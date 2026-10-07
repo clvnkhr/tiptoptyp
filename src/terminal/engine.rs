@@ -110,6 +110,8 @@ pub(super) struct Engine {
     /// Live light/dark identity for `CSI ? 996 n` answers. Updated by every
     /// palette switch so queries track the theme without a restart.
     scheme_light: Arc<AtomicBool>,
+    /// Last host palette, independent of application OSC overrides.
+    colors: Option<Colors>,
 }
 
 impl Engine {
@@ -130,6 +132,7 @@ impl Engine {
             mouse_event: mouse::Event::new()?,
             cached_rows: Vec::new(),
             scheme_light: scheme_light.clone(),
+            colors: None,
         };
         // Answer `CSI ? 996 n` color-scheme queries with the live theme so
         // programs learn light/dark without a restart.
@@ -147,13 +150,16 @@ impl Engine {
         Ok(engine)
     }
 
-    /// Switches the palette, returning the new scheme when it flipped
-    /// light/dark. The worker turns a flip into an unsolicited
-    /// `CSI ? 997` report for programs that enabled mode 2031.
+    /// Switches the palette, returning its scheme only when host colors change.
+    /// Mode 2031 also reports switches between palettes with the same light/dark
+    /// identity, allowing an application to refresh its cached OSC colors.
     pub fn set_colors(
         &mut self,
         colors: Colors,
     ) -> Result<Option<ColorScheme>, libghostty_vt::Error> {
+        if self.colors == Some(colors) {
+            return Ok(None);
+        }
         self.terminal
             .set_default_fg_color(Some(rgb(colors.foreground)))?
             .set_default_bg_color(Some(rgb(colors.background)))?
@@ -185,21 +191,18 @@ impl Engine {
         self.terminal.set_default_color_palette(Some(palette))?;
         let scheme = colors.scheme();
         let light = scheme == ColorScheme::Light;
-        let was_light = self.scheme_light.swap(light, Ordering::AcqRel);
-        if light == was_light {
-            Ok(None)
-        } else {
-            Ok(Some(scheme))
-        }
+        self.scheme_light.store(light, Ordering::Release);
+        self.colors = Some(colors);
+        Ok(Some(scheme))
     }
 
     /// Unsolicited color-scheme bytes for the running program, or `None`
-    /// when it did not opt into mode 2031 reports or the scheme did not flip.
+    /// when it did not opt into mode 2031 reports or host colors did not change.
     pub(super) fn color_scheme_notification(
         &self,
-        flipped: Option<ColorScheme>,
+        changed: Option<ColorScheme>,
     ) -> Result<Option<Vec<u8>>, libghostty_vt::Error> {
-        let Some(scheme) = flipped else {
+        let Some(scheme) = changed else {
             return Ok(None);
         };
         if !self.terminal.mode(Mode::COLOR_SCHEME_REPORT)? {
@@ -597,6 +600,67 @@ mod tests {
         assert_eq!(
             engine.color_scheme_notification(flipped).unwrap(),
             Some(b"\x1b[?997;1n".to_vec())
+        );
+    }
+
+    #[test]
+    fn initial_light_color_queries_need_no_output_or_render_warmup() {
+        use std::{cell::RefCell, rc::Rc};
+        let mut engine = Engine::new(
+            GridSize {
+                cols: 20,
+                rows: 3,
+                cell_width: 8,
+                cell_height: 16,
+            },
+            Colors {
+                foreground: Color32::from_rgb(31, 41, 55),
+                background: Color32::from_rgb(243, 244, 246),
+            },
+        )
+        .unwrap();
+        let replies = Rc::new(RefCell::new(Vec::new()));
+        let sink = replies.clone();
+        engine
+            .terminal
+            .on_pty_write(move |_, bytes| sink.borrow_mut().extend_from_slice(bytes))
+            .unwrap();
+        engine
+            .terminal
+            .vt_write(b"\x1b]10;?\x07\x1b]11;?\x07\x1b[?996n");
+        let reply = String::from_utf8(replies.borrow().clone()).unwrap();
+        assert!(reply.contains("]10;rgb:1f1f/2929/3737"), "{reply:?}");
+        assert!(reply.contains("]11;rgb:f3f3/f4f4/f6f6"), "{reply:?}");
+        assert!(reply.contains("?997;2n"), "{reply:?}");
+    }
+
+    #[test]
+    fn same_mode_palette_change_notifies_once_but_identical_colors_do_not() {
+        let mut engine = engine(20, 3);
+        engine.terminal.vt_write(b"\x1b[?2031h");
+        let dark = Colors {
+            foreground: Color32::from_rgb(235, 219, 178),
+            background: Color32::from_rgb(40, 40, 40),
+        };
+        let changed = engine.set_colors(dark).unwrap();
+        assert_eq!(
+            engine.color_scheme_notification(changed).unwrap(),
+            Some(b"\x1b[?997;1n".to_vec()),
+            "mode 2031 also reports changes between two dark palettes"
+        );
+        let unchanged = engine.set_colors(dark).unwrap();
+        assert_eq!(engine.color_scheme_notification(unchanged).unwrap(), None);
+        engine.terminal.vt_write(b"\x1b[?2031l");
+        let changed = engine
+            .set_colors(Colors {
+                foreground: Color32::WHITE,
+                background: Color32::from_rgb(20, 20, 20),
+            })
+            .unwrap();
+        assert_eq!(
+            engine.color_scheme_notification(changed).unwrap(),
+            None,
+            "applications must opt in to unsolicited reports"
         );
     }
 

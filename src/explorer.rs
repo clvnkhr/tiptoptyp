@@ -214,29 +214,18 @@ pub(crate) const EXPLORER_MIN_WIDTH: f32 = 160.0;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExplorerPanelPhase {
     Open,
-    HideContents,
     Closed,
 }
 
 impl ExplorerPanelPhase {
     pub(crate) fn toggle(self) -> Self {
         match self {
-            Self::Open => Self::HideContents,
-            Self::HideContents | Self::Closed => Self::Open,
+            Self::Open => Self::Closed,
+            Self::Closed => Self::Open,
         }
     }
     pub(crate) fn panel_visible(self) -> bool {
         self != Self::Closed
-    }
-    pub(crate) fn contents_visible(self) -> bool {
-        self == Self::Open
-    }
-    pub(crate) fn finish_frame(self) -> Self {
-        if self == Self::HideContents {
-            Self::Closed
-        } else {
-            self
-        }
     }
 }
 
@@ -362,9 +351,6 @@ impl ExplorerPanelState {
     pub(crate) fn panel_visible(&self) -> bool {
         self.phase.panel_visible()
     }
-    pub(crate) fn contents_visible(&self) -> bool {
-        self.phase.contents_visible()
-    }
     pub(crate) fn query(&self, section: ExplorerSection) -> &str {
         &self.queries[section.index()]
     }
@@ -379,7 +365,7 @@ impl ExplorerPanelState {
         self.queries = queries;
     }
     pub(crate) fn remember_width(&mut self, width: f32) {
-        if self.contents_visible() && width.is_finite() && width >= EXPLORER_MIN_WIDTH {
+        if self.panel_visible() && width.is_finite() && width >= EXPLORER_MIN_WIDTH {
             self.width = Some(width);
         }
     }
@@ -387,12 +373,6 @@ impl ExplorerPanelState {
         std::mem::take(&mut self.restore_pending)
             .then_some(self.width)
             .flatten()
-    }
-    pub(crate) fn finish_frame(&mut self) -> bool {
-        let next = self.phase.finish_frame();
-        let changed = next != self.phase;
-        self.phase = next;
-        changed
     }
 }
 
@@ -452,21 +432,31 @@ mod panel_tests {
         assert_eq!(state.startup_width(310.0, 230.0), None);
     }
     #[test]
+    fn explorer_toggle_closes_immediately_without_an_empty_panel_frame() {
+        let mut state = ExplorerPanelState::default();
+        state.remember_width(260.0);
+        state.toggle();
+        assert!(
+            !state.panel_visible(),
+            "close must retire the panel in the same layout pass"
+        );
+        state.toggle();
+        assert!(state.panel_visible());
+        assert_eq!(state.take_restored_width(), Some(260.0));
+    }
+
+    #[test]
     fn closing_frames_cannot_replace_saved_width_and_every_open_path_restores_it() {
         let mut state = ExplorerPanelState::default();
         state.remember_width(260.0);
         state.toggle();
         state.remember_width(12.0);
-        assert!(state.panel_visible());
-        assert!(!state.contents_visible());
-        assert!(state.finish_frame());
         assert!(!state.panel_visible());
         state.toggle();
         assert_eq!(state.take_restored_width(), Some(260.0));
         assert_eq!(state.take_restored_width(), None);
         state.remember_width(330.0);
         state.toggle();
-        state.finish_frame();
         state.open();
         assert_eq!(state.take_restored_width(), Some(330.0));
         state.remember_width(EXPLORER_MIN_WIDTH - 1.0);

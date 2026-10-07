@@ -4,10 +4,9 @@
 # Usage: scripts/build-intel-mac.sh [--release]
 #
 # Verifies that the workspace compiles for Intel Macs and that the produced
-# binary is actually x86_64. This covers compilation only: the checked-in
-# toolchain binaries (toolchain/bin/*-aarch64-*) and the bundled
-# toolchain/pdfium-bundle/libpdfium.dylib are arm64, so a shippable Intel app
-# still needs x86_64 builds of those runtime dependencies.
+# binary is actually x86_64. This covers compilation only: packaging must select
+# Intel toolchain helpers and an x86_64 PDFium bundle, rather than reusing an
+# arm64 bundle fetched for this host.
 set -eu
 
 if [ "$(uname -s)" != "Darwin" ]; then
@@ -94,7 +93,7 @@ else
 fi
 
 cat >&2 <<'EOF'
-NOTE: compilation only. The checked-in toolchain helpers and the bundled
-PDFium library are arm64; a shippable Intel app needs x86_64 builds of
-toolchain/bin/* and toolchain/pdfium-bundle/libpdfium.dylib.
+NOTE: compilation only. A shippable Intel app must package the x86_64
+variants of the toolchain helpers and toolchain/pdfium-bundle/libpdfium.dylib.
+An arm64 PDFium bundle fetched for this host cannot be reused.
 EOF

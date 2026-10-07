@@ -350,9 +350,10 @@ impl EditorApp {
             )));
             state.store(ui.ctx(), id);
         }
+        let editor_id = source_editor_id(ui.ctx());
         if !read_only
             && self.settings.ascii_punctuation
-            && ui.memory(|memory| memory.has_focus(source_editor_id(ui.ctx())))
+            && ui.memory(|memory| memory.has_focus(editor_id))
         {
             ui.input_mut(|input| {
                 crate::auto_pairs::ascii_punctuation(&mut input.events);
@@ -971,75 +972,19 @@ impl EditorApp {
                 }
             }
 
-            if output.response.changed() {
-                self.secondary_press_guard = None;
-            }
-            // A right press inside the selection keeps it: TextEdit already
-            // collapsed the caret above, so stash the pre-frame range for the
-            // click and put it back right away. A press outside keeps egui's
-            // moved caret and the menu applies there. Press and release may
-            // share one frame, so stash before handling the click below.
-            if output.response.hovered()
-                && ui.input(|input| input.pointer.button_pressed(egui::PointerButton::Secondary))
-            {
-                let press = output.response.interact_pointer_pos().map(|pointer| {
-                    output
-                        .galley
-                        .cursor_from_pos(pointer - output.galley_pos)
-                        .index
-                        .0
-                });
-                self.secondary_press_guard = secondary_press_selection(pre_frame_selection, press);
-                if let Some(selection) = self.secondary_press_guard {
-                    output.state.cursor.set_char_range(Some(selection));
-                    output.state.clone().store(ui.ctx(), output.response.id);
-                }
-            }
-            if output.response.secondary_clicked() {
-                let anchor = ui
-                    .ctx()
-                    .pointer_latest_pos()
-                    .unwrap_or_else(|| output.response.rect.center());
-                let char_index = output.response.interact_pointer_pos().map(|pointer| {
-                    output
-                        .galley
-                        .cursor_from_pos(pointer - output.galley_pos)
-                        .index
-                        .0
-                });
-                // The press frame already restored the range; repeat it here
-                // for presses whose release lands in a later frame.
-                if let Some(selection) =
-                    secondary_press_selection(self.secondary_press_guard, char_index)
-                {
-                    output.state.cursor.set_char_range(Some(selection));
-                    output.state.clone().store(ui.ctx(), output.response.id);
-                }
-                let target =
-                    char_index.and_then(|char_index| self.editor_data.font_argument_at(char_index));
-                let link = char_index
-                    .and_then(|char_index| editor_web_link_at(&mut self.editor_data, char_index));
-                let table = (document_kind.is_typst())
-                    .then(|| {
-                        char_index
-                            .and_then(|char_index| editable_table_at(document.source(), char_index))
-                    })
-                    .flatten();
-                popup_request = Some(match target {
-                    Some(target) => AppPopup::FontSelector { anchor, target },
-                    None => AppPopup::Editor {
-                        anchor,
-                        link,
-                        table,
-                        math: char_index.and_then(|cursor| {
-                            crate::math_conversion::Target::at(
-                                document.source(),
-                                cursor,
-                                document_kind,
-                            )
-                        }),
-                    },
-                });
+            if let Some((anchor, char_index)) = secondary_click_location(
+                ui,
+                &mut output,
+                pre_frame_selection,
+                &mut self.secondary_press_guard,
+            ) {
+                popup_request = Some(editor_context_popup(
+                    &mut self.editor_data,
+                    document.source(),
+                    document_kind,
+                    anchor,
+                    char_index,
+                ));
             }
 
             let clicked_link = if document_kind.is_typst() {
@@ -1618,6 +1563,77 @@ pub(super) fn secondary_press_selection(
     let press = press?;
     let sorted = selection.as_sorted_char_range();
     (sorted.start.0 <= press && press <= sorted.end.0).then_some(selection)
+}
+
+/// Restore selected text before opening either presentation of the source
+/// editor's menu. egui moves the caret on a secondary press, before the release
+/// frame opens the menu; both frames must retain an inside-selection press.
+pub(super) fn secondary_click_location(
+    ui: &egui::Ui,
+    output: &mut egui::text_edit::TextEditOutput,
+    pre_press: Option<CCursorRange>,
+    guard: &mut Option<CCursorRange>,
+) -> Option<(Pos2, Option<usize>)> {
+    if output.response.changed() {
+        *guard = None;
+    }
+    let pressed = output.response.hovered()
+        && ui.input(|input| input.pointer.button_pressed(egui::PointerButton::Secondary));
+    let clicked = output.response.secondary_clicked();
+    if !pressed && !clicked {
+        return None;
+    }
+    let character = output.response.interact_pointer_pos().map(|pointer| {
+        output
+            .galley
+            .cursor_from_pos(pointer - output.galley_pos)
+            .index
+            .0
+    });
+    if pressed {
+        *guard = secondary_press_selection(pre_press, character);
+        if let Some(selection) = *guard {
+            output.state.cursor.set_char_range(Some(selection));
+            output.state.clone().store(ui.ctx(), output.response.id);
+        }
+    }
+    if !clicked {
+        return None;
+    }
+    // Taking the guard also retires it after the click, rather than letting a
+    // later menu invocation reuse a selection from a different pointer press.
+    if let Some(selection) = secondary_press_selection(guard.take(), character) {
+        output.state.cursor.set_char_range(Some(selection));
+        output.state.clone().store(ui.ctx(), output.response.id);
+    }
+    let anchor = ui
+        .ctx()
+        .pointer_latest_pos()
+        .unwrap_or_else(|| output.response.rect.center());
+    Some((anchor, character))
+}
+
+pub(super) fn editor_context_popup(
+    data: &mut EditorDerivedData,
+    source: &str,
+    kind: DocumentKind,
+    anchor: Pos2,
+    character: Option<usize>,
+) -> AppPopup {
+    // Typst-looking text in another language's comments or verbatim regions
+    // is still source text, not a Typst font, link, or table declaration.
+    let typst_character = character.filter(|_| kind.is_typst());
+    let target = typst_character.and_then(|character| data.font_argument_at(character));
+    if let Some(target) = target {
+        return AppPopup::FontSelector { anchor, target };
+    }
+    AppPopup::Editor {
+        anchor,
+        link: typst_character.and_then(|character| editor_web_link_at(data, character)),
+        table: typst_character.and_then(|character| editable_table_at(source, character)),
+        math: character
+            .and_then(|character| crate::math_conversion::Target::at(source, character, kind)),
+    }
 }
 
 /// Use glyph advances rather than a cursor rectangle spanning a soft wrap.

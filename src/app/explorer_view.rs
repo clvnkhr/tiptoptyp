@@ -1059,6 +1059,7 @@ pub(super) fn show_explorer_sections(
                 ui,
                 divider[0].lerp(divider[1], 0.5),
                 true,
+                egui::emath::Rangef::new(divider[0].x, divider[1].x),
                 highlight.then_some(stroke),
             );
         }

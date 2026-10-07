@@ -277,6 +277,12 @@ if command == "paste" {
           [x1, y1, x2, y2].allSatisfy(\.isFinite) else { fail("drag requires four finite coordinates") }
     let start = CGPoint(x: x1, y: y1)
     let end = CGPoint(x: x2, y: y2)
+    // A real drag first moves onto its handle. Posting down at a new location
+    // alone can leave the previous egui hit-test owner active for that event.
+    guard let approach = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: start, mouseButton: .left) else { fail("cannot approach drag start") }
+    approach.flags = []
+    approach.post(tap: .cghidEventTap)
+    Thread.sleep(forTimeInterval: 0.05)
     guard let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: start, mouseButton: .left) else { fail("cannot create drag start") }
     down.flags = []
     down.setIntegerValueField(.mouseEventClickState, value: 1)

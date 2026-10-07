@@ -327,6 +327,9 @@ pub(crate) struct AppSettings {
     #[serde(default)]
     pub(crate) theme_colors: crate::theme_transform::ThemeColorAdjustments,
     pub(crate) document_theme: DocumentTheme,
+    /// Opt in to applying the selected dark page appearance to opened images.
+    #[serde(default)]
+    pub(crate) dark_images: bool,
     #[serde(default)]
     pub(crate) comfy_background: bool,
     #[serde(default)]
@@ -436,6 +439,7 @@ impl Default for AppSettings {
             comfy_background: false,
             comfy_text: false,
             document_theme: DocumentTheme::FollowInterface,
+            dark_images: false,
             preview_preference: PreviewPreference::Interactive,
             git_diff_style: GitDiffStyle::Unified,
             line_wrap: true,
@@ -516,6 +520,7 @@ impl AppSettings {
             theme_hue_shift_degrees,
             theme_colors,
             document_theme,
+            dark_images,
             comfy_background,
             comfy_text,
             preview_preference,
@@ -789,6 +794,7 @@ mod tests {
         assert!(!settings.theme_invert);
         assert_eq!(settings.theme_hue_shift_degrees, 0);
         assert_eq!(settings.document_theme, DocumentTheme::FollowInterface);
+        assert!(!settings.dark_images);
         assert_eq!(settings.preview_preference, PreviewPreference::Interactive);
         assert_eq!(settings.indent_spaces, 2);
         assert!(!settings.ascii_punctuation);
@@ -892,6 +898,7 @@ mod tests {
             comfy_background: false,
             comfy_text: false,
             document_theme: DocumentTheme::Dark,
+            dark_images: true,
             preview_preference: PreviewPreference::Pdfium,
             git_diff_style: GitDiffStyle::Unified,
             line_wrap: false,

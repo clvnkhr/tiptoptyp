@@ -1135,7 +1135,7 @@ impl SettingsTarget {
                 "theme colors colours invert inversion hue shift luminosity lightness brightness contrast saturation reset"
             }
             Self::PageTheme => {
-                "document light dark follow interface effective comfy preview page text"
+                "document pdf image light dark follow interface effective comfy preview page text"
             }
             Self::WrapLines => "editor soft wrapping word wrap",
             Self::IndependentDividers => {
@@ -3001,7 +3001,7 @@ impl EditorApp {
         let source_focused = shortcut_viewport == context.viewport_id()
             && context.memory(|memory| memory.focused()) == Some(editor_id);
         if self.snippet_session.is_some()
-            && context.memory(|memory| memory.has_focus(source_editor_id(context)))
+            && context.memory(|memory| memory.has_focus(editor_id))
             && focused_input_viewport(context) == context.viewport_id()
         {
             if context.input_mut(|input| input.consume_key(Modifiers::NONE, egui::Key::Escape)) {
@@ -3860,9 +3860,19 @@ impl EditorApp {
         let preview_appearance_changed = next_preview_dark != self.preview.dark;
         if preview_appearance_changed {
             self.preview.bump_appearance(next_preview_dark);
-            self.asset_preview.bump_appearance(
-                next_preview_dark && self.document().kind() != DocumentKind::Image,
-            );
+        }
+        let next_asset_dark = next_preview_dark
+            && (self.document().kind() != DocumentKind::Image || self.settings.dark_images);
+        if next_asset_dark != self.asset_preview.dark {
+            self.asset_preview.bump_appearance(next_asset_dark);
+            if self.document().kind() == DocumentKind::Image
+                && let Some(path) = self.document().path().clone()
+            {
+                // Appearance is an image-worker request, never a source edit or build.
+                // Keep the resident image visible until the replacement is ready.
+                self.asset_token.advance();
+                self.request_asset(path);
+            }
         }
         let refresh_tools = std::mem::take(&mut self.tool_refresh_requested);
         if refresh_tools || changes.typst {
@@ -9090,8 +9100,12 @@ impl EditorApp {
                 self.hide_webview();
             }
         } else {
+            // Resolve viewport-scoped IDs outside Context memory callbacks.
+            let panel_id = explorer_panel_id(&context);
+            let editor_id = editor_panel_id(&context);
+            let content_rect = ui.available_rect_before_wrap().intersect(ui.clip_rect());
+            let mut explorer_width = 0.0;
             if self.explorer.panel_visible() {
-                let panel_id = explorer_panel_id(&context);
                 let persisted_width = egui::PanelState::load(&context, panel_id)
                     .map_or(METRICS.chrome.explorer_default_width, |state| {
                         state.size().x
@@ -9107,59 +9121,33 @@ impl EditorApp {
                         data.insert_persisted(panel_id, egui::PanelState { outer_rect });
                     });
                 }
-                let show_contents = self.explorer.contents_visible();
                 let explorer_panel = egui::Panel::left(panel_id)
                     .frame(theme::content_panel_frame(ui.style()))
                     .resizable(true)
                     .default_size(METRICS.chrome.explorer_default_width)
                     .min_size(METRICS.chrome.explorer_min_width)
-                    .show(ui, |ui| {
-                        if show_contents {
-                            self.show_workspace(ui);
-                        }
-                    });
+                    .show(ui, |ui| self.show_workspace(ui));
+                let divider =
+                    panel_handles::divider_rect(explorer_panel.response.rect, content_rect);
                 #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                panel_handles::observe("divider.explorer", &explorer_panel.response, false, false);
+                panel_handles::observe(
+                    "divider.explorer",
+                    &explorer_panel.response,
+                    panel_id,
+                    divider,
+                    false,
+                    false,
+                );
                 panel_handles::paint(
                     ui,
-                    panel_handles::panel_center(ui, explorer_panel.response.rect, false),
+                    panel_handles::panel_center(ui, divider, false),
                     false,
+                    divider.y_range(),
                     panel_handles::panel_divider(ui, panel_id),
                 );
-                if self.settings.independent_main_dividers
-                    && self.view_mode == ViewMode::Split
-                    && let Some(mut editor) =
-                        egui::PanelState::load(&context, editor_panel_id(&context))
-                {
-                    let previous_width = context
-                        .data(|data| data.get_temp::<f32>(panel_id.with("presented-width")))
-                        .unwrap_or(persisted_width);
-                    let delta = explorer_panel.response.rect.width() - previous_width;
-                    if delta.abs() > 0.01 {
-                        let layout = theme::split_pane_layout(ui.available_width());
-                        let width = panel_handles::editor_width(
-                            editor.size().x,
-                            delta,
-                            layout.editor_minimum,
-                            layout.editor_maximum,
-                        );
-                        editor.outer_rect.max.x = editor.outer_rect.min.x + width;
-                        context.data_mut(|data| {
-                            data.insert_persisted(editor_panel_id(&context), editor)
-                        });
-                    }
-                }
-                context.data_mut(|data| {
-                    data.insert_temp(
-                        panel_id.with("presented-width"),
-                        explorer_panel.response.rect.width(),
-                    )
-                });
-                if show_contents && let Some(state) = egui::PanelState::load(&context, panel_id) {
+                explorer_width = explorer_panel.response.rect.width();
+                if let Some(state) = egui::PanelState::load(&context, panel_id) {
                     self.explorer.remember_width(state.size().x);
-                }
-                if self.explorer.finish_frame() {
-                    context.request_repaint();
                 }
             }
             use workspace_view::ContentView;
@@ -9173,6 +9161,46 @@ impl EditorApp {
                     self.view_mode
                 },
             );
+            let previous_width = context
+                .data(|data| data.get_temp::<f32>(panel_id.with("presented-width")))
+                .unwrap_or(explorer_width);
+            let delta = explorer_width - previous_width;
+            let layout = theme::split_pane_layout(ui.available_width());
+            let independent = self.settings.independent_main_dividers
+                && matches!(
+                    content_view,
+                    ContentView::SplitSource | ContentView::SplitAsset
+                );
+            let previous_editor = independent
+                .then(|| egui::PanelState::load(&context, editor_id))
+                .flatten();
+            let editor_available = ui.available_rect_before_wrap();
+            let editor_maximum = panel_handles::editor_maximum(
+                editor_available,
+                layout.editor_maximum,
+                previous_editor.map(|state| state.outer_rect),
+                independent,
+            );
+            if independent
+                && delta.abs() > 0.01
+                && let Some(mut editor) = previous_editor
+            {
+                // Disappearing Explorer occupies zero width too: adjust before
+                // presenting the editor, so the preview edge stays fixed on
+                // drag, hide, and reopen without an intermediate moving frame.
+                let width = panel_handles::editor_width(
+                    editor.size().x,
+                    delta,
+                    layout.editor_minimum,
+                    editor_maximum,
+                );
+                editor.outer_rect.min.x = editor_available.left();
+                editor.outer_rect.max.x = editor.outer_rect.min.x + width;
+                context.data_mut(|data| data.insert_persisted(editor_id, editor));
+            }
+            context.data_mut(|data| {
+                data.insert_temp(panel_id.with("presented-width"), explorer_width)
+            });
             if !self.pdfium_preview_requested() {
                 self.pdfium_preview = Default::default();
             }
@@ -9196,13 +9224,12 @@ impl EditorApp {
                         });
                 }
                 ContentView::SplitSource | ContentView::SplitAsset => {
-                    let layout = theme::split_pane_layout(ui.available_width());
                     let editor_panel = egui::Panel::left(editor_panel_id(&context))
                         .frame(theme::content_panel_frame(ui.style()))
                         .resizable(true)
                         .default_size(layout.editor_width)
                         .min_size(layout.editor_minimum)
-                        .max_size(layout.editor_maximum)
+                        .max_size(editor_maximum)
                         .show(ui, |ui| {
                             if content_view == ContentView::SplitAsset {
                                 self.show_asset_view(ui);
@@ -9210,12 +9237,22 @@ impl EditorApp {
                                 self.show_editor(ui);
                             }
                         });
+                    let divider =
+                        panel_handles::divider_rect(editor_panel.response.rect, content_rect);
                     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                    panel_handles::observe("divider.editor", &editor_panel.response, false, false);
+                    panel_handles::observe(
+                        "divider.editor",
+                        &editor_panel.response,
+                        editor_id,
+                        divider,
+                        false,
+                        false,
+                    );
                     panel_handles::paint(
                         ui,
-                        panel_handles::panel_center(ui, editor_panel.response.rect, false),
+                        panel_handles::panel_center(ui, divider, false),
                         false,
+                        divider.y_range(),
                         panel_handles::panel_divider(ui, editor_panel_id(&context)),
                     );
                     egui::CentralPanel::default()

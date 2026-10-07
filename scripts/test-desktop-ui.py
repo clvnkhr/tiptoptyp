@@ -24,6 +24,8 @@ import time
 sys.dont_write_bytecode = True
 from desktop_ui_journeys import EditorJourneys, PREVIEW_SOURCE, fingerprint
 from desktop_ui_tex_journeys import TEX_JOURNEYS, TEX_SOURCE
+from desktop_ui_image_journeys import IMAGE_JOURNEYS
+from desktop_ui_terminal_theme import terminal_theme
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -63,6 +65,8 @@ def assert_tinymist_palette(renderer, palette):
 
 
 class Journey(EditorJourneys):
+    terminal_theme = terminal_theme
+
     def __init__(self, process, driver, directory, evidence):
         self.process, self.driver, self.directory, self.evidence = process, driver, directory, evidence
         self.sequence = 0
@@ -834,7 +838,8 @@ stop.write_text(json.dumps({"pid": os.getpid(), "rate": rate, "frames": frames, 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--journey", choices=["all", "tex", *TEX_JOURNEYS, "drawing", "snippets", "panels", "terminal_find", "terminal_load", "find", "rectangle", "empty", "focus", "preview", "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "controls", "settings_search", "editor_preferences", "background", "context_menu"], default="all")
+    parser.add_argument("--journey", choices=["all", "tex", *TEX_JOURNEYS, *IMAGE_JOURNEYS, "drawing", "snippets", "panels", "terminal_find", "terminal_load", "terminal_theme", "find", "rectangle", "empty", "focus", "preview", "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "controls", "settings_search", "editor_preferences", "background", "context_menu"], default="all")
+    parser.add_argument("--release", action="store_true", help="use the optimized production profile for large-document journeys")
     parser.add_argument("--review-preview", action="store_true", help="pause at each dark/comfy renderer for independent on-screen review; not an automated visual pass")
     parser.add_argument("--capture-review", action="store_true", help="capture affected settings/controls framebuffers for separate visual inspection")
     parser.add_argument("--trace-preview", action="store_true", help="retain native preview geometry traces")
@@ -858,7 +863,7 @@ def main():
         if not args.prepare_only and not args.observe_only:
             import pwd
             shell = os.environ.get("SHELL") or pwd.getpwuid(os.getuid()).pw_shell
-            if args.journey in ("all", "panels", "terminal_find", "terminal_load") and Path(shell).resolve() != Path("/bin/zsh"):
+            if args.journey in ("all", "panels", "terminal_find", "terminal_load", "terminal_theme") and Path(shell).resolve() != Path("/bin/zsh"):
                 raise RuntimeError("terminal journey currently requires /bin/zsh so startup files can be isolated with ZDOTDIR")
             preflight = subprocess.run([str(driver), "preflight"], capture_output=True, text=True, timeout=6)
             result["preflight"] = preflight.stdout.strip()
@@ -867,7 +872,11 @@ def main():
                 if state.get("locked") or not state.get("desktop"):
                     raise RuntimeError("desktop is locked or unavailable; unlock it before native interaction checks. " + preflight.stdout)
                 raise RuntimeError("desktop driver lacks Accessibility/input permission; enable it for the launching host in macOS Privacy & Security. " + preflight.stdout)
-        build = subprocess.run(["cargo", "build", "--locked", "--features", "desktop-ui-tests", "--bin", "tiptoptyp", "--message-format=json"],
+        result["build_profile"] = "release" if args.release else "debug"
+        build_command = ["cargo", "build", "--locked", "--features", "desktop-ui-tests", "--bin", "tiptoptyp", "--message-format=json"]
+        if args.release:
+            build_command.append("--release")
+        build = subprocess.run(build_command,
                                cwd=ROOT, check=True, stdout=subprocess.PIPE, text=True, timeout=900)
         artifacts = [json.loads(line) for line in build.stdout.splitlines()]
         executable = next(item["executable"] for item in reversed(artifacts)
@@ -890,7 +899,7 @@ def main():
                 "CFBundleExecutable": "tiptoptyp", "CFBundleIdentifier": "dev.tiptoptyp.journey." + directory.name,
                 "CFBundleName": "tiptoptyp UI Journey", "CFBundlePackageType": "APPL", "NSHighResolutionCapable": True,
             }))
-            fixture = directory / ("journey.tex" if args.journey == "tex" or args.journey in TEX_JOURNEYS else "journey.typ" if args.journey in ("all", "preview", "pdf_output", "preview_keyboard", "controls", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "layout", "explorer_scroll", "background") else "journey.txt")
+            fixture = directory / ("journey.tex" if args.journey == "tex" or args.journey in TEX_JOURNEYS else "journey.typ" if args.journey in ("all", "preview", "pdf_output", "preview_keyboard", "controls", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "layout", "explorer_toggle", "explorer_scroll", "background") else "journey.txt")
             fixture.write_text(
                 TEX_SOURCE
                 if fixture.suffix == ".tex"
@@ -898,6 +907,10 @@ def main():
                 if fixture.suffix == ".typ"
                 else "Desktop journey fixture.\n"
             )
+            if args.journey == "explorer_toggle":
+                # Large wrapped source, with the same small three-page preview.
+                with fixture.open("a") as stream:
+                    stream.write("".join(f"// Long source row {index:04}: " + "layout transition coverage " * 6 + "\n" for index in range(1800)))
             if args.journey in ("all", "explorer_scroll"):
                 for index in range(80):
                     (directory / f"file-{index:03}.typ").write_text(f"= File {index:03}\n")
@@ -1013,7 +1026,7 @@ def main():
                         return
                     if args.capture_review:
                         journey.capture_viewport("main")
-                    for name in (["panels", "terminal_find", "terminal_load", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "focus", "settings_search", "editor_preferences", "background", "context_menu", "pdf_output", "preview", "controls", "empty", "snippets", "drawing", *TEX_JOURNEYS] if args.journey == "all" else TEX_JOURNEYS if args.journey == "tex" else [args.journey]):
+                    for name in (["terminal_theme", "panels", "terminal_find", "terminal_load", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "focus", "settings_search", "editor_preferences", "background", "context_menu", "pdf_output", "preview", "controls", "empty", "snippets", "drawing", *IMAGE_JOURNEYS, *TEX_JOURNEYS] if args.journey == "all" else TEX_JOURNEYS if args.journey == "tex" else [args.journey]):
                         journey.record("journey.start", name=name)
                         getattr(journey, name)()
                         result["journeys"].append(name)

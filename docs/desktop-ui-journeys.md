@@ -19,6 +19,9 @@ python3 scripts/test-desktop-ui.py
 python3 scripts/test-desktop-ui.py --journey panels
 python3 scripts/test-desktop-ui.py --journey terminal_find
 python3 scripts/test-desktop-ui.py --journey terminal_load
+python3 scripts/test-desktop-ui.py --journey terminal_theme
+python3 scripts/test-desktop-ui.py --journey explorer_toggle --release --capture-review
+python3 scripts/test-desktop-ui.py --journey images
 python3 scripts/test-desktop-ui.py --journey find
 python3 scripts/test-desktop-ui.py --journey empty
 python3 scripts/test-desktop-ui.py --journey focus
@@ -32,8 +35,11 @@ python3 scripts/test-desktop-ui.py --journey tex_save
 
 The runner compiles a separate `desktop-ui-tests` feature build and copies it
 into a uniquely identified temporary app bundle. It launches one editor window
-with a disposable document, fresh settings and session storage. Preview/controls/tabs/layout/background/all runs
-use a three-page Typst document and require working Tinymist, Typst and PDFium tools. The `panels`, `terminal_find` and `terminal_load`
+with a disposable document, fresh settings and session storage. Use `--release`
+for the optimized production profile; the profile is recorded in `result.json`.
+The focused `explorer_toggle` fixture adds 1,800 long comment rows to exercise
+source reflow while preserving the three-page preview. Preview/controls/tabs/layout/background/all runs
+use a three-page Typst document and require working Tinymist, Typst and PDFium tools. The `panels`, `terminal_find`, `terminal_load` and `terminal_theme`
 journeys currently require the system `/bin/zsh`; it isolates zsh startup files
 and shell history with `ZDOTDIR`. No user document is opened. The fixture app
 and its process group are terminated on success or failure.
@@ -79,6 +85,9 @@ now exercised through the real app, and the lower-level coverage retained.
 | panels | Cmd+5, repeated Terminal/Problems selection and hide/reopen; stable panel height across 30 fresh frames per sample; native terminal typing runs an isolated shell, Off reaps it and remains off across panel transitions, Restart starts a different shell; the header button opens a second shell with its own PID, the numbered switcher moves between shells, a real vim click moves its cursor, exiting one shell leaves the other parked; document stays unchanged |
 | terminal_find | Focused terminal Cmd+F searches a real isolated shell, including three case-insensitive matches separated by hundreds of scrolled-off lines; Cmd+G/Shift+Cmd+G and Enter/Shift+Enter step exactly once and wrap, button navigation reveals the match; Cmd+A changes only the query; grid Escape leaves search open, grid Cmd+F refocuses it, focused Cmd+F/Escape and one close click hide it; queries and matches stay separate between two shell panes; source stays unchanged |
 | terminal_load | A bounded, isolated Python process redraws the real PTY at requested 30/60 Hz; native per-character typing must change only the focused scratch editor, with exact source/caret and worker output advancement; completed producer receipts record actual frames and terminal Off reaps the pane. This is interaction coverage, not a key-to-pixel latency measurement |
+| terminal_theme | First output from a private real PTY queries foreground/background, all 256 palette entries, and color scheme; Light→Dark and a different dark palette each report exactly once to the opted-in application; 30 fresh frames require no notification churn; Off reaps the child and source stays unchanged |
+| explorer_toggle | Cmd+1 repeatedly hides/restores Explorer before and after divider drags with Tinymist/PDFium and both divider policies; concurrent native-key observations reject empty closed-panel frames and independent preview-edge movement; large-document typing/undo still work afterward; a nearly full-height bottom panel leaves a short vertical divider for optional framebuffer inspection |
+| images | Opt-in image dark mode, repeated toggles and Dark/Light/Follow page choices; exact bounded RGBA/alpha observations, unchanged original file, original source restored on close; optional fresh framebuffers for separate visual inspection |
 | find | Cmd+F with Find focused, repeated Replace clicks, one close-button click; expected popup state and stable measured native height after every action |
 | empty | Cmd+W on the only tab, then Cmd+N; original window remains, new tab has no path and zero source bytes |
 | tex_editing | Named `.tex` file, Unicode caret and undo/redo, 320-line source, `%` comment round trips including active line endpoints, math/bracket selection wrapping, literal TeX command search/replace with undo/redo; disabled autosave leaves disk unchanged |
@@ -89,7 +98,7 @@ now exercised through the real app, and the lower-level coverage retained.
 | tabs | Previous/next with separate unsaved buffers and carets; original preview retained |
 | layout | Code/preview/split, explorer hide/maximize/restore, editor setting shortcuts, panel maximize/Activity/close |
 | explorer_scroll | Native wheel input over long Files and Contents lists, then Files with Cmd+F's sticky search open; measured offsets advance and remain advanced across fresh frames |
-| git_hunks | Three changes across a 180-line Typst Git document in a split editor/preview window; marker hover preserves focus, clicks open all lines at the selected change, navigation moves the live cursor, individual reversions and edits outside the original hunk refresh immediately and undo/redo, Find retains keyboard ownership, Escape preserves the pane width, independent/fixed-width divider settings are exercised by real drags, and a diff button tooltip opens in a native window with Tinymist active |
+| git_hunks | Three changes across a 180-line Typst Git document in a split editor/preview window; marker hover preserves focus, clicks open all lines at the selected change, navigation moves the live cursor, individual reversions and edits outside the original hunk refresh immediately and undo/redo, Find retains keyboard ownership, Escape preserves the pane width, independent/fixed-width divider settings are exercised by real drags, selected text survives right-click/Copy and direct math conversion in the docked editor, and a diff button tooltip opens in a native window with Tinymist active |
 | folding | Repeated shortcut and gutter collapse/expand without losing headers or source |
 | closing | Dirty-close Cancel/Escape preserve text; explicit Discard closes only the requested tab |
 | controls | Both engines: stable outline popup size, app-switch hide/restore, outline/history/pages/zoom/fit/search, minimize/reopen, detach/return |
@@ -133,7 +142,7 @@ The existing `scripts/test-native-windows.py` covers a separate native lifecycle
 fixture, not those complete editor journeys.
 
 Use `--capture-review` to retain the initial toolbar/root framebuffer and, with
-`settings_search`, `controls`, `terminal_find` or `all`, the affected settings/popup/search framebuffers for separate inspection. This is opt-in, never a visual
+`settings_search`, `controls`, `terminal_find`, `images`, `explorer_toggle` or `all`, the affected settings/popup/search framebuffers for separate inspection. This is opt-in, never a visual
 pass by itself. Use `--trace-preview` to retain native bounds/property traces.
 `--review-failure` retains a failed fixture for up to three minutes and prints its
 exact app path; writing the printed resume file allows cleanup, without changing

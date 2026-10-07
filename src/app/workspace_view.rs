@@ -142,12 +142,14 @@ impl EditorApp {
 
     pub(super) fn request_asset(&mut self, path: PathBuf) {
         self.asset_preview.status = PreviewStatus::Compiling;
-        self.asset_preview.dark =
-            self.preview.dark && self.document().kind() != DocumentKind::Image;
-        if let Err(error) =
-            self.asset_loader
-                .request(self.asset_token, path, self.document().kind())
-        {
+        self.asset_preview.dark = self.preview.dark
+            && (self.document().kind() != DocumentKind::Image || self.settings.dark_images);
+        if let Err(error) = self.asset_loader.request(
+            self.asset_token,
+            path,
+            self.document().kind(),
+            self.asset_preview.dark,
+        ) {
             self.asset_preview.status = PreviewStatus::Error;
             self.notice = Some(Notice {
                 message: error,
@@ -169,9 +171,24 @@ impl EditorApp {
                     .expect("asset view requires an active tab"),
             ),
             |ui| {
+                let dark_images = self
+                    .pending_settings
+                    .as_ref()
+                    .unwrap_or(&self.settings)
+                    .dark_images;
+                let mut appearance = None;
                 theme::panel_header(ui, "asset-header", |ui| {
-                    image_view::show_controls(ui, &mut self.asset_preview)
+                    appearance =
+                        image_view::show_controls(ui, &mut self.asset_preview, dark_images);
                 });
+                if let Some(dark_images) = appearance {
+                    let mut edited = self
+                        .pending_settings
+                        .clone()
+                        .unwrap_or_else(|| self.settings.clone());
+                    edited.dark_images = dark_images;
+                    self.queue_settings(edited, ui.ctx());
+                }
                 if self.asset_preview.content.pages().is_empty() {
                     let failed = self.asset_preview.status == PreviewStatus::Error;
                     show_centered_preview_message(
@@ -204,6 +221,139 @@ fn labeled_empty_action(ui: &mut egui::Ui, action: &str, caption: &str) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opted_in_image_assets_follow_dark_page_appearance() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        app.document_mut()
+            .replace_untitled_kind(DocumentKind::Image);
+        app.preview.dark = true;
+        app.settings.dark_images = true;
+        app.request_asset(directory.path().join("image.png"));
+        assert!(
+            app.asset_preview.dark,
+            "image appearance must follow the selected dark pages when opted in"
+        );
+    }
+
+    #[test]
+    fn image_appearance_refresh_is_once_per_effective_change_and_keeps_stale_image() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        app.document_mut().replace_loaded_unprojected(
+            String::new(),
+            directory.path().join("image.png"),
+            DocumentKind::Image,
+            None,
+        );
+        app.settings.document_theme = crate::settings::DocumentTheme::Dark;
+        app.sync_runtime_settings(&context);
+        let old_token = app.asset_token;
+        app.accept_asset_result(
+            &context,
+            crate::asset::AssetResult {
+                token: old_token,
+                output: Ok(crate::asset::LoadedAsset::Image(crate::pdf::PreviewPage {
+                    size: [1, 1],
+                    rgba: vec![10, 20, 30, 128],
+                })),
+            },
+        );
+        let source_key = app.document().key();
+        let deadline = app.compile_deadline;
+        app.asset_preview.zoom = 2.0;
+        app.settings.dark_images = true;
+        app.sync_runtime_settings(&context);
+        let dark_token = app.asset_token;
+        assert_ne!(dark_token, old_token);
+        assert!(app.asset_preview.dark && app.asset_preview.has_resident_pages());
+        assert_eq!(app.asset_preview.zoom, 2.0);
+        assert_eq!(app.asset_preview.status, PreviewStatus::Compiling);
+        app.accept_asset_result(
+            &context,
+            crate::asset::AssetResult {
+                token: old_token,
+                output: Ok(crate::asset::LoadedAsset::Image(crate::pdf::PreviewPage {
+                    size: [1, 1],
+                    rgba: vec![255; 4],
+                })),
+            },
+        );
+        assert_eq!(
+            app.asset_preview.content.pages()[0]
+                .resident
+                .as_ref()
+                .unwrap()
+                .rgba
+                .as_ref(),
+            [10, 20, 30, 128]
+        );
+        for _ in 0..20 {
+            app.sync_runtime_settings(&context);
+            assert_eq!(
+                app.asset_token, dark_token,
+                "idle frames must not schedule another image transform"
+            );
+        }
+        app.settings.document_theme = crate::settings::DocumentTheme::Light;
+        app.sync_runtime_settings(&context);
+        assert_ne!(app.asset_token, dark_token);
+        assert!(!app.asset_preview.dark);
+        assert_eq!(app.document().key(), source_key);
+        assert_eq!(app.compile_deadline, deadline);
+    }
+
+    #[test]
+    fn failed_image_appearance_refresh_keeps_pixels_and_ignores_stale_errors() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        app.document_mut()
+            .replace_untitled_kind(DocumentKind::Image);
+        let old = app.asset_token;
+        app.accept_asset_result(
+            &context,
+            crate::asset::AssetResult {
+                token: old,
+                output: Ok(crate::asset::LoadedAsset::Image(crate::pdf::PreviewPage {
+                    size: [1, 1],
+                    rgba: vec![10, 20, 30, 128],
+                })),
+            },
+        );
+        app.asset_token.advance();
+        app.asset_preview.status = PreviewStatus::Compiling;
+        app.accept_asset_result(
+            &context,
+            crate::asset::AssetResult {
+                token: old,
+                output: Err("stale failure".into()),
+            },
+        );
+        assert_eq!(app.asset_preview.status, PreviewStatus::Compiling);
+        app.accept_asset_result(
+            &context,
+            crate::asset::AssetResult {
+                token: app.asset_token,
+                output: Err("current failure".into()),
+            },
+        );
+        assert_eq!(app.asset_preview.status, PreviewStatus::Error);
+        assert!(app.asset_preview.has_resident_pages());
+        assert_eq!(
+            app.asset_preview.content.pages()[0]
+                .resident
+                .as_ref()
+                .unwrap()
+                .rgba
+                .as_ref(),
+            [10, 20, 30, 128]
+        );
+        assert_eq!(app.notice.as_ref().unwrap().message, "current failure");
+    }
 
     #[test]
     fn unavailable_workspaces_get_a_folder_picker_instead_of_new_document_copy() {

@@ -73,6 +73,34 @@ class SaveIsolationContract(unittest.TestCase):
         self.assertLess(filename, confirm)
 
 
+class ExplorerFrameContract(unittest.TestCase):
+    def state(self, visible=False, explorer_frame=9, editor_frame=10, edge=700):
+        return {"document": {"frame": 10, "explorer_visible": visible}, "targets": {
+            "divider.explorer": {"frame": explorer_frame},
+            "divider.editor": {"frame": editor_frame, "x": edge}}}
+
+    def test_closed_panel_accepts_stale_targets_only(self):
+        from desktop_ui_journeys import assert_explorer_frame
+        self.assertEqual(assert_explorer_frame(self.state(), True, 700), 10)
+        with self.assertRaisesRegex(AssertionError, "empty panel"):
+            assert_explorer_frame(self.state(explorer_frame=10), True, 700)
+
+    def test_open_panel_and_coupled_resize_are_allowed(self):
+        from desktop_ui_journeys import assert_explorer_frame
+        assert_explorer_frame(self.state(visible=True, explorer_frame=10), True, 700)
+        assert_explorer_frame(self.state(edge=740), False, 700)
+
+    def test_independent_movement_cannot_pass(self):
+        from desktop_ui_journeys import assert_explorer_frame
+        with self.assertRaisesRegex(AssertionError, "edge moved"):
+            assert_explorer_frame(self.state(edge=740), True, 700)
+
+    def test_stale_independent_edge_cannot_pass(self):
+        from desktop_ui_journeys import assert_explorer_frame
+        with self.assertRaisesRegex(AssertionError, "missing fresh"):
+            assert_explorer_frame(self.state(editor_frame=9), True, 700)
+
+
 class HeightContract(unittest.TestCase):
     def test_accepts_constant_height_when_window_moves(self):
         for top in [0, 100, -200]:

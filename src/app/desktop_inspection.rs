@@ -69,6 +69,10 @@ impl EditorApp {
             "dark": context.theme() == egui::Theme::Dark,
             "comfy": self.settings.comfy_background && self.settings.comfy_text,
             "page_dark": self.preview.dark,
+            "dark_images": self.settings.dark_images,
+            "asset_preview_dark": self.asset_preview.dark,
+            "asset_image_ready": self.document().kind() == DocumentKind::Image && matches!(self.asset_preview.status, PreviewStatus::Ready(_)) && self.asset_preview.has_resident_pages(),
+            "asset_image_pixels": self.asset_preview.content.pages().first().and_then(|page| page.resident.as_ref()).filter(|resident| resident.is_usable()).map(|resident| resident.rgba.iter().take(16).copied().collect::<Vec<_>>()),
             "expected_palette": [palette.0.to_array(), palette.1.to_array()],
             "webview_palette": self.webview_style.map(|style| [style.palette.0.to_array(), style.palette.1.to_array()]),
             "pdfium_palette": self.pdfium_preview.inspected_palette(),
@@ -171,8 +175,9 @@ impl EditorApp {
         let hover_viewport = scoped_child_viewport_id(context, "diagnostic-tooltip-overlay");
         interaction["native_hover_window"] =
             serde_json::json!(eframe::window_host::window(context, hover_viewport).is_some());
+        let hover_geometry_id = tooltip_geometry_id(context);
         interaction["hover_tooltip_rect"] = context
-            .data(|data| data.get_temp::<TooltipGeometry>(tooltip_geometry_id(context)))
+            .data(|data| data.get_temp::<TooltipGeometry>(hover_geometry_id))
             .map_or(serde_json::Value::Null, |geometry| {
                 serde_json::json!([
                     geometry.card.min.x,
@@ -241,8 +246,9 @@ impl EditorApp {
                 self.preview_controls.web.focused
                     && self.webview_applied.is_some_and(|state| state.visible)
             });
+        let editor_id = source_editor_id(context);
         interaction["editor_keyboard_focused"] =
-            serde_json::json!(context.memory(|m| m.has_focus(source_editor_id(context))));
+            serde_json::json!(context.memory(|m| m.has_focus(editor_id)));
         interaction["drawing"] = self.symbol_drawing.inspection(
             self.document().kind() == DocumentKind::Tex || self.document().config().is_some(),
             self.settings.handwriting,

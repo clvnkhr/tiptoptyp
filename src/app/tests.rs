@@ -416,7 +416,8 @@ fn source_navigation_takes_editor_focus_even_with_find_open() {
             app.show_editor(ui);
         })
         .drop_without_applying_deltas();
-    assert!(context.memory(|memory| memory.has_focus(source_editor_id(&context))));
+    let editor_id = source_editor_id(&context);
+    assert!(context.memory(|memory| memory.has_focus(editor_id)));
     assert!(
         app.find_bar.visible,
         "navigation should not close the Find bar"
@@ -635,7 +636,6 @@ use crate::asset::AssetThumbnailResult;
 use crate::completion_edit::{
     CompletionApplication, SnippetExpansion, expand_lsp_snippet, prepare_completion_application,
 };
-use crate::explorer::ExplorerPanelPhase;
 use crate::settings::InterfaceTheme;
 
 #[test]
@@ -4058,6 +4058,223 @@ fn right_click_inside_selection_preserves_it_for_copy() {
 }
 
 #[test]
+fn editor_context_popup_limits_typst_actions_to_typst_documents() {
+    for (source, clicked, font) in [
+        ("% #set text(font: \"Fira Sans\")\n", "Fira", true),
+        (
+            "\\begin{verbatim}\n#link(\"https://example.com/docs\")[Documentation]\n\\end{verbatim}\n",
+            "example",
+            false,
+        ),
+    ] {
+        let at = source[..source.find(clicked).unwrap()].chars().count();
+        let mut data = prepared_editor_data(source);
+        let popup = editor_view::editor_context_popup(
+            &mut data,
+            source,
+            DocumentKind::Typst,
+            Pos2::ZERO,
+            Some(at),
+        );
+        if font {
+            assert!(matches!(popup, AppPopup::FontSelector { .. }));
+        } else {
+            let AppPopup::Editor { link, .. } = popup else {
+                panic!("expected the Typst link context menu")
+            };
+            assert_eq!(link.as_deref(), Some("https://example.com/docs"));
+        }
+        for kind in [DocumentKind::Tex, DocumentKind::Text] {
+            let popup =
+                editor_view::editor_context_popup(&mut data, source, kind, Pos2::ZERO, Some(at));
+            let AppPopup::Editor {
+                link, table, math, ..
+            } = popup
+            else {
+                panic!("Typst font actions leaked into {kind:?}: {source:?}")
+            };
+            assert!(link.is_none(), "Typst link actions leaked into {kind:?}");
+            assert!(table.is_none());
+            assert!(math.is_none());
+        }
+    }
+}
+
+#[test]
+fn source_and_docked_tex_context_menus_ignore_typst_literals() {
+    use crate::git::editor::document_diff::DocumentDiff;
+    for docked in [false, true] {
+        for (source, clicked) in [
+            ("% #set text(font: \"Fira Sans\")\n", "Fira"),
+            (
+                "\\begin{verbatim}\n#link(\"https://example.com/docs\")[Documentation]\n\\end{verbatim}\n",
+                "example",
+            ),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let context = egui::Context::default();
+            crate::theme::configure_test_fonts(&context);
+            let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+            app.snapshot_scene = None;
+            app.document_mut().replace_loaded_unprojected(
+                source.into(),
+                directory.path().join("context.tex"),
+                DocumentKind::Tex,
+                None,
+            );
+            if docked {
+                app.document_diff = Some(DocumentDiff::new(source.into(), source));
+            }
+            let frame = |app: &mut EditorApp, events| {
+                context
+                    .run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                Pos2::ZERO,
+                                Vec2::new(1200.0, 480.0),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| app.show_editor(ui),
+                    )
+                    .drop_without_applying_deltas();
+            };
+            frame(&mut app, vec![]);
+            let at = source[..source.find(clicked).unwrap()].chars().count();
+            app.store_editor_cursor(&context, CCursorRange::one(CCursor::new(at)));
+            let editor = source_editor_id(&context);
+            context.memory_mut(|memory| memory.request_focus(editor));
+            frame(&mut app, vec![]);
+            let point = app.last_editor_caret.unwrap().rect.center();
+            for pressed in [true, false] {
+                frame(
+                    &mut app,
+                    vec![
+                        egui::Event::PointerMoved(point),
+                        egui::Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Secondary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+            let Some(AppPopup::Editor {
+                link, table, math, ..
+            }) = &app.app_popup
+            else {
+                panic!("TeX right-click exposed Typst font actions (docked={docked})")
+            };
+            assert!(
+                link.is_none(),
+                "TeX right-click exposed Typst links (docked={docked})"
+            );
+            assert!(table.is_none());
+            assert!(math.is_none());
+            assert_eq!(app.document_diff.is_some(), docked);
+            assert_eq!(app.document().source(), source);
+        }
+    }
+}
+
+#[test]
+fn docked_diff_right_click_preserves_selection_and_math_conversion_target() {
+    use crate::git::editor::document_diff::DocumentDiff;
+    for (kind, source, formula) in [
+        (DocumentKind::Typst, "Body α $x$.\n", "$x$"),
+        (DocumentKind::Tex, "Body α \\(x\\).\n", "\\(x\\)"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        crate::theme::configure_test_fonts(&context);
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        app.snapshot_scene = None;
+        app.document_mut().replace_loaded_unprojected(
+            source.into(),
+            directory.path().join(if kind.is_typst() {
+                "menu.typ"
+            } else {
+                "menu.tex"
+            }),
+            kind,
+            None,
+        );
+        app.document_diff = Some(DocumentDiff::new(source.into(), source));
+        let frame = |app: &mut EditorApp, events| {
+            context
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 480.0))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| app.show_editor(ui),
+                )
+                .drop_without_applying_deltas();
+        };
+        frame(&mut app, vec![]);
+        let x = source[..source.find('x').unwrap()].chars().count();
+        let selected = CCursorRange::two(CCursor::new(x), CCursor::new(x + 1));
+        app.store_editor_cursor(&context, selected);
+        let editor = source_editor_id(&context);
+        context.memory_mut(|memory| memory.request_focus(editor));
+        frame(&mut app, vec![]);
+        let point = app.last_editor_caret.unwrap().rect.center();
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Secondary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert_eq!(
+            app.editor_snapshot(&context).cursor,
+            selected,
+            "docked diff right-click discarded the selection for {kind:?}"
+        );
+        let Some(AppPopup::Editor {
+            math: Some(target), ..
+        }) = &app.app_popup
+        else {
+            panic!("docked diff right-click did not offer conversion for {kind:?}")
+        };
+        assert_eq!(target.original, formula);
+        assert_eq!(
+            target.single_alternative(),
+            kind.is_typst()
+                .then_some(("Convert to display math", "Display math"))
+        );
+        assert!(
+            app.document_diff.is_some(),
+            "opening a menu closed the diff"
+        );
+        assert_eq!(app.document().source(), source);
+        app.execute_app_command(AppCommand::Copy, &context, None);
+        let mut copied = false;
+        context
+            .run_ui(egui::RawInput::default(), |_| {})
+            .platform_output
+            .commands
+            .iter()
+            .for_each(|command| {
+                if let egui::OutputCommand::CopyText(text) = command {
+                    copied |= text == "x";
+                }
+            });
+        assert!(copied, "Copy lost the docked editor selection for {kind:?}");
+    }
+}
+
+#[test]
 fn table_editor_controls_keep_rows_and_columns_rectangular() {
     use egui_kittest::{
         Harness,
@@ -4949,20 +5166,6 @@ fn explorer_divider_collapses_only_after_deliberate_overshoot() {
     layout.end_drag(ExplorerSection::Files);
     let (_, collapsed) = layout.drag_after(open, 200.0, order, ExplorerSection::Files, 5.0);
     assert_eq!(collapsed, None);
-}
-
-#[test]
-fn explorer_close_hides_contents_one_frame_before_the_panel() {
-    let hiding = ExplorerPanelPhase::Open.toggle();
-    assert_eq!(hiding, ExplorerPanelPhase::HideContents);
-    assert!(hiding.panel_visible());
-    assert!(!hiding.contents_visible());
-
-    let closed = hiding.finish_frame();
-    assert_eq!(closed, ExplorerPanelPhase::Closed);
-    assert!(!closed.panel_visible());
-    assert_eq!(closed.toggle(), ExplorerPanelPhase::Open);
-    assert_eq!(hiding.toggle(), ExplorerPanelPhase::Open);
 }
 
 #[test]

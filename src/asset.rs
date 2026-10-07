@@ -34,6 +34,9 @@ request_token!(AssetToken);
 request_token!(ThumbnailToken);
 
 const THUMBNAIL_CACHE_CAPACITY: usize = 8;
+// One retained source avoids repeat image decoding on appearance switches.
+// Large photos remain loadable without retaining an additional full raster.
+const IMAGE_SOURCE_CACHE_MAX_BYTES: usize = 16 * 1024 * 1024;
 pub(crate) const ASSET_THUMBNAIL_MAX_DIMENSION: u32 = 720;
 
 #[derive(Debug)]
@@ -53,6 +56,7 @@ struct AssetRequest {
     token: AssetToken,
     path: PathBuf,
     kind: DocumentKind,
+    dark: bool,
 }
 
 /// Decodes images and reads opened PDFs away from egui's frame callback.
@@ -101,13 +105,19 @@ impl AssetLoader {
         token: AssetToken,
         path: PathBuf,
         kind: DocumentKind,
+        dark: bool,
     ) -> Result<(), String> {
         debug_assert!(kind.preview_only());
         self.latest_token.store(token.0, Ordering::Release);
         self.requests
             .as_ref()
             .ok_or_else(|| "The image/PDF loader has stopped".to_owned())?
-            .send(AssetRequest { token, path, kind })
+            .send(AssetRequest {
+                token,
+                path,
+                kind,
+                dark,
+            })
             .map_err(|_| "The image/PDF loader stopped unexpectedly".to_owned())
     }
 
@@ -444,6 +454,114 @@ fn thumbnail_dimensions(width: u32, height: u32, max_dimension: u32) -> (u32, u3
     )
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct ImageSourceKey {
+    fingerprint: AssetFingerprint,
+    target: PathBuf,
+    created: Option<SystemTime>,
+    #[cfg(unix)]
+    identity: (u64, u64, i64, i64),
+}
+
+impl ImageSourceKey {
+    fn read(path: &Path) -> Result<Self, String> {
+        let metadata = fs::metadata(path)
+            .map_err(|error| format!("Could not inspect image {}: {error}", path.display()))?;
+        Self::from_metadata(path, &metadata)
+    }
+
+    fn from_metadata(path: &Path, metadata: &fs::Metadata) -> Result<Self, String> {
+        let target = fs::canonicalize(path)
+            .map_err(|error| format!("Could not resolve image {}: {error}", path.display()))?;
+        #[cfg(unix)]
+        let identity = {
+            use std::os::unix::fs::MetadataExt;
+            (
+                metadata.dev(),
+                metadata.ino(),
+                metadata.ctime(),
+                metadata.ctime_nsec(),
+            )
+        };
+        Ok(Self {
+            fingerprint: AssetFingerprint {
+                path: path.to_path_buf(),
+                length: metadata.len(),
+                modified: metadata.modified().ok(),
+            },
+            target,
+            created: metadata.created().ok(),
+            #[cfg(unix)]
+            identity,
+        })
+    }
+}
+
+#[derive(Default)]
+struct ImageSourceCache {
+    entry: Option<(ImageSourceKey, Arc<PreviewPage>)>,
+}
+
+fn retain_image_source(rgba_bytes: usize) -> bool {
+    rgba_bytes <= IMAGE_SOURCE_CACHE_MAX_BYTES
+}
+
+impl ImageSourceCache {
+    fn source(
+        &mut self,
+        path: &Path,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Arc<PreviewPage>, String> {
+        if cancelled() {
+            return Err("Image loading was superseded by another file".into());
+        }
+        let key = ImageSourceKey::read(path)?;
+        if let Some((cached, source)) = &self.entry
+            && cached == &key
+        {
+            return Ok(source.clone());
+        }
+        self.entry = None;
+        let (decoded, decoded_key) = load_image(path, cancelled)?;
+        let source = Arc::new(decoded);
+        if cancelled() {
+            return Err("Image loading was superseded by another file".into());
+        }
+        // A file or symlink replaced during decoding cannot label the pixels
+        // with the earlier file's key. Display this completed result, but leave
+        // it uncached so the next request observes the current source.
+        if retain_image_source(source.rgba.len())
+            && decoded_key == key
+            && ImageSourceKey::read(path).ok().as_ref() == Some(&decoded_key)
+        {
+            self.entry = Some((key, source.clone()));
+        }
+        Ok(source)
+    }
+
+    fn load(
+        &mut self,
+        path: &Path,
+        dark: bool,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<LoadedAsset, String> {
+        let source = self.source(path, cancelled)?;
+        Ok(LoadedAsset::Image(image_appearance(source, dark)))
+    }
+}
+
+fn image_appearance(source: Arc<PreviewPage>, dark: bool) -> PreviewPage {
+    let size = source.size;
+    let rgba = if dark {
+        crate::preview::dark_preview_rgba(&source.rgba)
+    } else {
+        // Uncached large images have sole ownership: keep their original raster
+        // without a second full allocation. Retained sources remain immutable.
+        Arc::try_unwrap(source).map_or_else(|source| source.rgba.clone(), |source| source.rgba)
+    };
+    PreviewPage { size, rgba }
+}
+
 fn worker_loop(
     requests: LatestReceiver<AssetRequest>,
     results: Sender<AssetResult>,
@@ -451,6 +569,7 @@ fn worker_loop(
     shutdown: Arc<AtomicBool>,
     latest_token: Arc<AtomicU64>,
 ) {
+    let mut image_cache = ImageSourceCache::default();
     while let Ok(request) = requests.recv() {
         let request = take_latest_queued(request, &requests);
         if shutdown.load(Ordering::Acquire) {
@@ -461,8 +580,11 @@ fn worker_loop(
             shutdown.load(Ordering::Acquire)
                 || latest_token.load(Ordering::Acquire) != request.token.0
         };
+        if request.kind != DocumentKind::Image {
+            image_cache.entry = None;
+        }
         let output = match request.kind {
-            DocumentKind::Image => load_image(&request.path, &cancelled),
+            DocumentKind::Image => image_cache.load(&request.path, request.dark, &cancelled),
             DocumentKind::Pdf => load_pdf(&request.path, cancelled),
             DocumentKind::Typst | DocumentKind::Tex | DocumentKind::Text => {
                 Err("Only binary preview assets use the asset loader".to_owned())
@@ -491,8 +613,21 @@ fn take_latest_queued(
     request
 }
 
-fn load_image(path: &Path, cancelled: &impl Fn() -> bool) -> Result<LoadedAsset, String> {
-    let encoded = fs::read(path)
+fn load_image(
+    path: &Path,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(PreviewPage, ImageSourceKey), String> {
+    use std::io::Read;
+    // Read pixels and identity from the same open file, so changing a symlink
+    // between metadata lookup and reading cannot cache another target's pixels.
+    let mut file = fs::File::open(path)
+        .map_err(|error| format!("Could not read image {}: {error}", path.display()))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("Could not inspect image {}: {error}", path.display()))?;
+    let key = ImageSourceKey::from_metadata(path, &metadata)?;
+    let mut encoded = Vec::new();
+    file.read_to_end(&mut encoded)
         .map_err(|error| format!("Could not read image {}: {error}", path.display()))?;
     if cancelled() {
         return Err("Image loading was superseded by another file".to_owned());
@@ -501,10 +636,13 @@ fn load_image(path: &Path, cancelled: &impl Fn() -> bool) -> Result<LoadedAsset,
         .map_err(|error| format!("Could not decode image {}: {error}", path.display()))?
         .into_rgba8();
     let (width, height) = decoded.dimensions();
-    Ok(LoadedAsset::Image(PreviewPage {
-        size: [width as usize, height as usize],
-        rgba: decoded.into_raw(),
-    }))
+    Ok((
+        PreviewPage {
+            size: [width as usize, height as usize],
+            rgba: decoded.into_raw(),
+        },
+        key,
+    ))
 }
 
 fn load_pdf(path: &Path, cancelled: impl Fn() -> bool) -> Result<LoadedAsset, String> {
@@ -538,7 +676,190 @@ mod tests {
             token: AssetToken(token),
             path: PathBuf::from(format!("asset-{token}.pdf")),
             kind: DocumentKind::Pdf,
+            dark: false,
         }
+    }
+
+    #[test]
+    fn image_appearance_reuses_source_and_preserves_alpha_and_original_pixels() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("appearance.png");
+        let pixels = vec![0, 0, 0, 255, 255, 255, 255, 128, 32, 64, 96, 0];
+        image::RgbaImage::from_raw(3, 1, pixels.clone())
+            .unwrap()
+            .save(&path)
+            .unwrap();
+        let mut cache = ImageSourceCache::default();
+        let source = cache.source(&path, &|| false).unwrap();
+        for dark in [false, true, false, true, false] {
+            let LoadedAsset::Image(page) = cache.load(&path, dark, &|| false).unwrap() else {
+                panic!("image request returned a PDF")
+            };
+            assert_eq!(page.size, [3, 1]);
+            assert_eq!(
+                page.rgba,
+                if dark {
+                    crate::preview::dark_preview_rgba(&pixels)
+                } else {
+                    pixels.clone()
+                }
+            );
+            for (pixel, original) in page
+                .rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(pixels.as_chunks::<4>().0.iter())
+            {
+                assert_eq!(pixel[3], original[3]);
+            }
+            assert_eq!(source.rgba, pixels);
+            assert!(Arc::ptr_eq(
+                &source,
+                &cache.source(&path, &|| false).unwrap()
+            ));
+        }
+    }
+
+    #[test]
+    fn uncached_large_light_image_moves_pixels_without_copying() {
+        let size = [4097, 1024];
+        let rgba = vec![128; size[0] * size[1] * 4];
+        assert!(!retain_image_source(rgba.len()));
+        let original_pixels = rgba.as_ptr();
+        let original_capacity = rgba.capacity();
+        let page = image_appearance(Arc::new(PreviewPage { size, rgba }), false);
+        assert_eq!(page.size, size);
+        assert_eq!(page.rgba.as_ptr(), original_pixels);
+        assert_eq!(page.rgba.capacity(), original_capacity);
+        assert!(page.rgba.iter().all(|value| *value == 128));
+    }
+
+    #[test]
+    fn image_source_cache_invalidates_changed_files_and_stays_bounded() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first.png");
+        let second = directory.path().join("second.png");
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 255]))
+            .save(&first)
+            .unwrap();
+        image::RgbaImage::from_pixel(2, 1, image::Rgba([4, 5, 6, 128]))
+            .save(&second)
+            .unwrap();
+        let mut cache = ImageSourceCache::default();
+        let original = cache.source(&first, &|| false).unwrap();
+        let next = cache.source(&second, &|| false).unwrap();
+        assert!(!Arc::ptr_eq(&original, &next));
+        assert_eq!(cache.entry.as_ref().unwrap().0.fingerprint.path, second);
+        std::fs::copy(&second, &first).unwrap();
+        let replaced = cache.source(&first, &|| false).unwrap();
+        assert_eq!(replaced.size, [2, 1]);
+        assert_eq!(replaced.rgba, next.rgba);
+        assert!(retain_image_source(IMAGE_SOURCE_CACHE_MAX_BYTES));
+        assert!(!retain_image_source(IMAGE_SOURCE_CACHE_MAX_BYTES + 1));
+        assert!(cache.source(&first, &|| true).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn image_source_cache_observes_symlink_retargets_even_with_identical_metadata() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first.png");
+        let second = directory.path().join("second.png");
+        let link = directory.path().join("link.png");
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 255]))
+            .save(&first)
+            .unwrap();
+        std::fs::copy(&first, &second).unwrap();
+        let modified = fs::metadata(&first).unwrap().modified().unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&second)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        symlink(&first, &link).unwrap();
+        let mut cache = ImageSourceCache::default();
+        let original = cache.source(&link, &|| false).unwrap();
+        let before = AssetFingerprint::read(&link).unwrap();
+        fs::remove_file(&link).unwrap();
+        symlink(&second, &link).unwrap();
+        assert_eq!(AssetFingerprint::read(&link).unwrap(), before);
+        let retargeted = cache.source(&link, &|| false).unwrap();
+        assert!(
+            !Arc::ptr_eq(&original, &retargeted),
+            "retargeted symlinks must decode their new target"
+        );
+        assert_eq!(
+            cache.entry.as_ref().unwrap().0.target,
+            second.canonicalize().unwrap()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn image_source_cache_does_not_retain_a_symlink_target_changed_during_decode() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first.png");
+        let second = directory.path().join("second.png");
+        let link = directory.path().join("link.png");
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 255]))
+            .save(&first)
+            .unwrap();
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([4, 5, 6, 128]))
+            .save(&second)
+            .unwrap();
+        symlink(&first, &link).unwrap();
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let mut cache = ImageSourceCache::default();
+        let original = cache
+            .source(&link, &|| {
+                if calls.fetch_add(1, Ordering::Relaxed) == 1 {
+                    fs::remove_file(&link).unwrap();
+                    symlink(&second, &link).unwrap();
+                }
+                false
+            })
+            .unwrap();
+        assert_eq!(original.rgba, [1, 2, 3, 255]);
+        assert!(
+            cache.entry.is_none(),
+            "changed-during-decode source must not enter the cache"
+        );
+        assert_eq!(cache.source(&link, &|| false).unwrap().rgba, [4, 5, 6, 128]);
+        assert_eq!(
+            cache.entry.as_ref().unwrap().0.target,
+            second.canonicalize().unwrap()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn image_source_key_observes_atomic_replacement_with_preserved_mtime() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("image.png");
+        let replacement = directory.path().join("replacement.png");
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 255]))
+            .save(&path)
+            .unwrap();
+        let before = ImageSourceKey::read(&path).unwrap();
+        fs::copy(&path, &replacement).unwrap();
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&replacement)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        fs::rename(replacement, &path).unwrap();
+        let after = ImageSourceKey::read(&path).unwrap();
+        assert_eq!(before.fingerprint, after.fingerprint);
+        assert_ne!(
+            before, after,
+            "new file identity must invalidate retained pixels"
+        );
     }
 
     #[test]

@@ -251,11 +251,12 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 28. [ ] terminal panel needs a button to open more terminals
 29. [ ] when a draggable divider is highlighted, the handle needs to be outlined in the same color as well
 30. [ ] impl translucency and blur of windows with gpui. maybe pull in a dependency
-31. [ ] compile a version of our app that also works for intel macs, make a new script for this and put it in scripts/ and test the compilation
-32. [ ] improvement to right-click: when text is highlighted, right-click should not deselect the text. In particular we should be able to right-click and copy text
-33. [ ] right click on typst math should not have a convert to... option as there is only one choice - if it is inline math, then it should simply be convert to display math. if it is display math, it should simply be convert to inline math.
-35. [ ] system theme mode (dark/light) (+ theme colors if it makes sense) should be propogated to the termina panel. opencode does not currently detect the right theme.
-
+31. [X] compile a version of our app that also works for intel macs, make a new script for this and put it in scripts/ and test the compilation
+32. [X] improvement to right-click: when text is highlighted, right-click should not deselect the text. In particular we should be able to right-click and copy text
+33. [X] right click on typst math should not have a convert to... option as there is only one choice - if it is inline math, then it should simply be convert to display math. if it is display math, it should simply be convert to inline math.
+35. [X] system theme mode (dark/light) (+ theme colors if it makes sense) should be propogated to the termina panel. opencode does not currently detect the right theme.
+36. [X] optional dark mode for previewed pdfs and images
+37. [X] bug in the draggable divider - in extreme shapes the 
 // Implementation notes (2026-09-25):
 // NEW TODO 2: text commit actions and interaction coverage landed in e94766d.
 // NEW TODO 11: compact controls landed in e94766d; the toolbar placement and
@@ -400,3 +401,15 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 // tooltip. Both Typst and TeX use it. Preview caches do not count as saved PDFs.
 // Fixed queued output ownership when changing the preview tab; native
 // pdf_output and preview_keyboard journeys passed. See desktop-ui-audit.md.
+
+// 2026-10-07 newest-todo follow-up: checked Intel compilation/Rosetta (31),
+// shared source/docked selection-preserving menus and direct Typst math action
+// (32/33), terminal palette negotiation and bounded startup replies (35),
+// default-off image dark preference alongside existing PDF page appearance (36),
+// and grips constrained to the visible allocated divider span (37). Item 37's
+// reported symptom was handles sticking out when panels nearly fill the window.
+// Urgent Explorer fix: resolve Context IDs before memory callbacks, close in
+// one layout pass, and preserve the independent preview divider on hide/reopen.
+// Real large-source Explorer and docked-Git journeys passed; theme probe source
+// is checked in at scripts/desktop_ui_terminal_theme.py. See the October 7 audit
+// for native run metadata and the separate framebuffer/geometry evidence.

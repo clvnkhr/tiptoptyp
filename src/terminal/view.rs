@@ -236,9 +236,8 @@ impl TerminalPane {
     }
 
     pub(crate) fn toggle_find(&mut self, context: &egui::Context) {
-        if self.find.is_open()
-            && context.memory(|memory| memory.has_focus(terminal_find_id(context)))
-        {
+        let find_id = terminal_find_id(context);
+        if self.find.is_open() && context.memory(|memory| memory.has_focus(find_id)) {
             self.find.close();
             self.request_focus();
         } else {
@@ -252,6 +251,7 @@ impl TerminalPane {
 
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     pub(crate) fn inspect_find(&self, context: &egui::Context) -> serde_json::Value {
+        let find_id = terminal_find_id(context);
         let selected = self.find.selected_match();
         let (offset, rows) = self
             .grid
@@ -259,7 +259,7 @@ impl TerminalPane {
             .map_or((0, 0), |grid| (grid.scroll_offset, grid.rows.len()));
         serde_json::json!({
             "open": self.find.is_open(),
-            "focused": context.memory(|memory| memory.has_focus(terminal_find_id(context))),
+            "focused": context.memory(|memory| memory.has_focus(find_id)),
             "query": self.find.query,
             "selected": self.find.selected_index(),
             "matches": self.find.matches().len(),
@@ -2764,11 +2764,8 @@ mod tests {
         harness.get_by_label("Next terminal match").click();
         harness.run_steps(2);
         harness.get_by_label_contains("2/2");
-        assert!(
-            harness
-                .ctx
-                .memory(|memory| memory.has_focus(terminal_find_id(&harness.ctx)))
-        );
+        let find_id = terminal_find_id(&harness.ctx);
+        assert!(harness.ctx.memory(|memory| memory.has_focus(find_id)));
         harness.get_by_label("Close terminal find").click();
         harness.run_steps(2);
         assert!(harness.query_by_label_contains("Find").is_none());

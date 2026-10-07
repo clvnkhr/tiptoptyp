@@ -90,3 +90,13 @@ Detexify's full accepted sample set supplies additional LaTeX commands, includin
 calligraphic letters (`\mathcal{A}` / Typst `cal(A)`). Script letters (`\mathscr{A}` / `scr(A)`), phonetic letters and many other
 symbols also work in Typst. Unverified mappings are labelled as such and disabled
 only for Typst insertion. See [recognition coverage](../assets/handwriting/README.md).
+
+
+## PDF and image appearance
+
+Appearance → Page chooses Light, Dark, or Follow interface for PDF previews.
+Comfy background and Comfy text independently match paper and ink to the app.
+Images preserve their original colors by default. Enable **Dark images** to invert
+image colors when the Page choice is dark; Light pages show original colors.
+The image header's contrast icon toggles this same preference. This affects the
+preview only: source image files and transparency remain unchanged.
