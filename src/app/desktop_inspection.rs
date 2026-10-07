@@ -152,6 +152,9 @@ impl EditorApp {
         interaction["explorer_panel_width"] = serde_json::json!(
             egui::PanelState::load(context, explorer_panel_id(context)).map(|state| state.size().x)
         );
+        interaction["compilation_paused"] = serde_json::json!(self.compilation_paused);
+        interaction["compiler_diagnostic_count"] =
+            serde_json::json!(self.preview.diagnostics.len());
         interaction["terminal_off"] = serde_json::json!(self.terminal.is_off());
         interaction["terminal_status"] = serde_json::json!(self.terminal.status_text());
         interaction["terminal_count"] = serde_json::json!(self.terminal.len());

@@ -305,15 +305,22 @@ class EditorJourneys(TexJourneys):
             for _ in range(2):
                 self.key(48, "ctrl+shift")
             self.wait("diagnostic journey selects a typesetting tab", lambda d: (d["path"] or "").endswith(".typ"))
+        self.key(35, "cmd+alt")
+        self.wait("diagnostic source owns the preview", lambda d: d["preview_tab_id"] == d["active_tab_id"])
+        self.choose_backend("Pdfium", save_pdf=False)
         before = self.snapshot()["document"]
         self.click("editor.source")
         self.key(0)
         self.paste_source("#let broken = {\n")
         self.key(23)  # Problems
-        self.wait("Problems exposes compiler diagnostics", lambda d: d["panel"] == "Problems" and d["diagnostic_count"] > 0, timeout=30)
+        self.wait("Problems exposes compiler diagnostics", lambda d: d["panel"] == "Problems" and d["compiler_diagnostic_count"] > 0, timeout=30)
         self.wait_target("problem.0")
         self.double_click("problem.0")
-        self.wait("diagnostic navigation returns focus to the editor", lambda d: d["focused"] and d["panel"] == "Problems")
+        self.wait("Problems navigates to the original source, never a generated mirror",
+                  lambda d: d["focused"] and d["panel"] == "Problems"
+                  and d["path"] == before["path"] and d["active_tab_id"] == before["active_tab_id"]
+                  and d["tabs"] == before["tabs"])
+        self.stable_state(lambda d: d["path"] == before["path"] and d["active_tab_id"] == before["active_tab_id"] and d["tabs"] == before["tabs"])
         self.key(6, "cmd")
         self.wait("diagnostic fixture undo restores the prior source", lambda d: d["source_fingerprint"] == before["source_fingerprint"] and d["source_bytes"] == before["source_bytes"])
         self.key(23)
@@ -817,7 +824,9 @@ class EditorJourneys(TexJourneys):
         self.close_settings()
         if save_pdf:
             self.key(15)
-        else:
+        elif backend == "Interactive":
+            # Tinymist refresh is preview-only. The CLI gear saves a public PDF,
+            # so a PDFium backend-switch check must let the background build run.
             self.wait_target("build.preview")
             generation = self.snapshot()["document"]["preview_generation"]
             self.click("build.preview")
@@ -912,6 +921,45 @@ class EditorJourneys(TexJourneys):
         self.wait("PDFium cache build settles without exporting", lambda d: d["preview_backend"] == "PDFium" and d["preview_pdfium_ready"] and not d["compile_indicator_spinning"], timeout=60)
         self.stable_state(lambda d: not d["pdf_output_pending"] and destination.read_bytes() == recovered_pdf and destination.stat().st_mtime_ns == recovered_mtime)
         self.record("pdf.preview-only", bytes=len(recovered_pdf), unchanged_on_backend_switch=True)
+
+        # Only an explicit CLI build writes the public PDF. A stable existing
+        # output must not satisfy the check for the newly edited source.
+        cli_source = recovered.replace("Recovered after a deliberate syntax error.", "Saved through the Typst compiler gear.")
+        self.click("editor.source")
+        self.key(0)
+        self.paste_source(cli_source)
+        self.wait("CLI edit refreshes only its private preview", lambda d: d["pdf_output_state"] == "Stale" and d["preview_pdfium_ready"] and not d["compile_indicator_spinning"] and not d["pdf_output_pending"], timeout=60)
+        self.stable_state(lambda d: d["source_fingerprint"] == fingerprint(cli_source) and destination.read_bytes() == recovered_pdf and destination.stat().st_mtime_ns == recovered_mtime)
+        self.wait_target("build.preview")
+        self.click("build.preview")
+        self.wait("Typst gear saves the current PDF", lambda d: d["pdf_output_state"] == "Saved" and not d["pdf_output_pending"] and str(d["pdf_output_revision"]) == d["revision"], timeout=60)
+        cli_pdf = destination.read_bytes()
+        if not cli_pdf.startswith(b"%PDF-") or cli_pdf == recovered_pdf:
+            raise AssertionError("Typst gear did not save the edited PDF")
+        cli_mtime = destination.stat().st_mtime_ns
+        self.key(15, "cmd+shift")
+        self.wait("CLI automatic builds pause", lambda d: d["compilation_paused"] and not d["compile_indicator_spinning"])
+        paused_source = cli_source.replace("Saved through the Typst compiler gear.", "Saved once while automatic preview is paused.")
+        self.click("editor.source")
+        self.key(0)
+        self.paste_source(paused_source)
+        self.wait("paused edits retain the saved PDF", lambda d: d["compilation_paused"] and d["pdf_output_state"] == "Stale" and not d["pdf_output_pending"] and not d["compile_indicator_spinning"])
+        self.stable_state(lambda d: d["compilation_paused"] and d["source_fingerprint"] == fingerprint(paused_source) and destination.read_bytes() == cli_pdf and destination.stat().st_mtime_ns == cli_mtime)
+        self.click("build.preview")
+        self.wait("paused gear creates a fresh PDF without resuming", lambda d: d["compilation_paused"] and d["pdf_output_state"] == "Saved" and not d["pdf_output_pending"] and not d["compile_indicator_spinning"] and str(d["pdf_output_revision"]) == d["revision"], timeout=60)
+        paused_pdf = destination.read_bytes()
+        if not paused_pdf.startswith(b"%PDF-") or paused_pdf == cli_pdf:
+            raise AssertionError("paused compiler gear reused the previous source's PDF")
+        paused_mtime = destination.stat().st_mtime_ns
+        still_paused_source = paused_source.replace("Saved once while automatic preview is paused.", "This later edit must remain paused.")
+        self.click("editor.source")
+        self.key(0)
+        self.paste_source(still_paused_source)
+        self.wait("later edit remains paused after manual build", lambda d: d["compilation_paused"] and d["pdf_output_state"] == "Stale" and not d["pdf_output_pending"])
+        self.stable_state(lambda d: d["compilation_paused"] and not d["compile_indicator_spinning"] and d["source_fingerprint"] == fingerprint(still_paused_source) and destination.read_bytes() == paused_pdf and destination.stat().st_mtime_ns == paused_mtime, frames=30)
+        self.key(15, "cmd+shift")
+        self.wait("automatic preview resumes explicitly", lambda d: not d["compilation_paused"])
+        self.record("pdf.cli-gear", fresh_while_paused=True, remains_paused_after_build=True)
 
         # Restore aggregate-run ownership and settings without overwriting its files.
         self.tex_settings([('"auto_save": false', '"auto_save": true')])
@@ -1129,9 +1177,22 @@ class EditorJourneys(TexJourneys):
 
     def context_menu(self):
         import time
-        original = "$ x $\n\nBody text here.\n"
+        original = "$x$\n\nBody text here.\n"
         self.focus_document_window()
-        self.wait("menu fixture opened", lambda d: d["path"] == str(self.directory / "menu.typ"), timeout=15)
+        before = self.snapshot()["document"]
+        fixture = self.directory / "menu.typ"
+        opened = before["path"] != str(fixture)
+        if opened:
+            # Aggregate runs start on another journey's document. Prepare and
+            # open our own fixture rather than waiting for a file never loaded.
+            fixture.write_text(original)
+            self.key(31)
+            time.sleep(0.8)
+            self.native("ax-press-description", "search")
+            self.native("text", fixture.name)
+            time.sleep(0.8)
+            self.native("ax-press-title", "Open")
+        self.wait("menu fixture opened", lambda d: d["path"] == str(fixture), timeout=15)
         self.wait_target("editor.source")
         self.click("editor.source")
         self.wait_target("editor.caret")
@@ -1208,3 +1269,26 @@ class EditorJourneys(TexJourneys):
             if time.monotonic() >= deadline:
                 raise AssertionError(f"Copy did not reach the clipboard: {clip!r}")
             time.sleep(0.1)
+
+        # Whitespace on both sides makes same-line Typst math display math.
+        # The converse action must follow the syntax, not newline presence.
+        display = "$ x $\n\nBody text here.\n"
+        self.click("editor.source")
+        self.key(0)
+        self.paste_source(display)
+        self.wait("same-line display fixture replaces only the source",
+                  lambda d: d["source_fingerprint"] == fingerprint(display), timeout=15)
+        self.key(126, "cmd")
+        self.key(124, "none")
+        self.key(124, "none")
+        self.wait_target("editor.caret")
+        self.right_click_at(*caret_point())
+        self.wait_target("menu.Convert to inline math")
+        self.click("menu.Convert to inline math")
+        self.wait("same-line display math converts to inline math",
+                  lambda d: d["source_fingerprint"] == fingerprint(original), timeout=15)
+
+        if opened:
+            self.close_scratch(before["tabs"])
+            if before["active_tab_id"] is not None:
+                self.click("tab." + str(before["active_tab_id"]))

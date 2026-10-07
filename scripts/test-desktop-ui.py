@@ -787,9 +787,7 @@ def main():
                 TEX_SOURCE
                 if fixture.suffix == ".tex"
                 else PREVIEW_SOURCE
-                if fixture.suffix == ".typ" and args.journey != "diagnostics"
-                else '#let broken = {\n'
-                if args.journey == "diagnostics"
+                if fixture.suffix == ".typ"
                 else "Desktop journey fixture.\n"
             )
             if args.journey in ("all", "explorer_scroll"):
@@ -809,10 +807,6 @@ def main():
                     .replace("085 original", "085 changed").replace("165 original", "165 changed"))
                 if args.journey == "git_hunks":
                     fixture = hunk_fixture
-            if args.journey == "context_menu":
-                menu_fixture = directory / "menu.typ"
-                menu_fixture.write_text("$ x $\n\nBody text here.\n")
-                fixture = menu_fixture
             environment = {key: value for key, value in os.environ.items()
                            if not key.startswith(("TIPTOPTYP_UI_", "TIPTOPTYP_PROFILE", "TIPTOPTYP_DESKTOP_TEST"))}
             environment["TIPTOPTYP_DESKTOP_TEST_DIR"] = str(directory)

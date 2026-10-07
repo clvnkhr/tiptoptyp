@@ -8,6 +8,7 @@ pub(crate) struct Target {
     pub(crate) original: String,
     body: String,
     kind: DocumentKind,
+    typst_display: bool,
 }
 impl Target {
     pub(crate) fn at(source: &str, cursor: usize, kind: DocumentKind) -> Option<Self> {
@@ -44,6 +45,11 @@ impl Target {
             original: original.into(),
             body: body.into(),
             kind,
+            typst_display: kind == DocumentKind::Typst
+                && typst_syntax::parse(original)
+                    .children()
+                    .find_map(|node| node.cast::<typst_syntax::ast::Equation>())
+                    .is_some_and(|equation| equation.block()),
         })
     }
     pub(crate) fn choices(&self) -> &'static [&'static str] {
@@ -68,9 +74,9 @@ impl Target {
         if self.kind != DocumentKind::Typst {
             return None;
         }
-        // Display math is emitted (and recognized) across lines; anything
-        // single-line converts the other way.
-        Some(if self.original.contains('\n') {
+        // Typst uses whitespace on both sides of the equation body, rather
+        // than line breaks, to distinguish display math from inline math.
+        Some(if self.typst_display {
             ("Convert to inline math", "Inline math")
         } else {
             ("Convert to display math", "Display math")
@@ -102,7 +108,7 @@ mod tests {
     use super::*;
     #[test]
     fn single_alternative_offers_the_other_typst_form_directly() {
-        let inline = Target::at("$ x $", 2, DocumentKind::Typst).expect("inline Typst math");
+        let inline = Target::at("$x$", 1, DocumentKind::Typst).expect("inline Typst math");
         assert_eq!(
             inline.single_alternative(),
             Some(("Convert to display math", "Display math"))
@@ -115,6 +121,57 @@ mod tests {
         let tex = Target::at("\\[ x \\]", 2, DocumentKind::Tex).expect("TeX math");
         assert_eq!(tex.single_alternative(), None);
     }
+    #[test]
+    fn typst_conversion_matches_parsed_equation_mode() {
+        use typst_syntax::ast::Equation;
+        for (source, display) in [
+            ("$x$", false),
+            ("$ x $", true),
+            ("$\tx\t$", true),
+            ("$x\n+ y$", false),
+            ("$\nx + y\n$", true),
+            ("$ x$", false),
+            ("$x $", false),
+        ] {
+            let parsed = typst_syntax::parse(source);
+            let equation = parsed
+                .children()
+                .find_map(|node| node.cast::<Equation>())
+                .unwrap();
+            assert_eq!(equation.block(), display, "fixture {source:?}");
+            let target = Target::at(source, 1, DocumentKind::Typst).unwrap();
+            let (label, choice) = target.single_alternative().unwrap();
+            assert_eq!(
+                choice,
+                if display {
+                    "Inline math"
+                } else {
+                    "Display math"
+                },
+                "{source:?}"
+            );
+            assert_eq!(
+                label,
+                if display {
+                    "Convert to inline math"
+                } else {
+                    "Convert to display math"
+                }
+            );
+            let replacement = target.replacement(choice).unwrap();
+            let reparsed = typst_syntax::parse(&replacement);
+            let converted = reparsed
+                .children()
+                .find_map(|node| node.cast::<Equation>())
+                .unwrap();
+            assert_ne!(
+                converted.block(),
+                display,
+                "conversion did not change mode: {replacement:?}"
+            );
+        }
+    }
+
     #[test]
     fn tex_conversion_keeps_newlines_that_terminate_comments() {
         let source = "\\[\nx % explanation\n\\]";

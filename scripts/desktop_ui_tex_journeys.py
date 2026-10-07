@@ -229,5 +229,44 @@ class TexJourneys:
         self.native("ax-press-title", "Open")
         self.wait("saved TeX file reopens", lambda d: d["path"] == str(destination), timeout=15)
         self.source_is(edited)
+        # TeX uses its single engine gear for both building and saving a PDF.
+        # Pin this tab so an aggregate run cannot build a previous Typst entry.
+        self.key(35, "cmd+alt")
+        self.key(20)
+        self.wait("saved TeX owns the PDFium preview", lambda d: d["preview_path"] == str(destination) and d["preview_tab_id"] == d["active_tab_id"] and d["preview_backend"] == "PDFium" and d["preview_pdfium_ready"] and not d["compile_indicator_spinning"], timeout=60)
+        pdf_path = destination.with_suffix(".pdf")
+        if pdf_path.exists():
+            raise AssertionError("background TeX preview unexpectedly saved a public PDF")
+        self.wait_target("build.preview")
+        pdf_button = self.snapshot()["targets"].get("build.pdf")
+        if pdf_button and pdf_button["age_ms"] <= 500:
+            raise AssertionError("TeX exposed a separate PDF button")
+        self.click("build.preview")
+        self.wait("TeX gear commits an adjacent PDF", lambda d: d["pdf_output_state"] == "Saved" and not d["pdf_output_pending"] and str(d["pdf_output_revision"]) == d["revision"], timeout=60)
+        first_pdf = pdf_path.read_bytes()
+        if not first_pdf.startswith(b"%PDF-"):
+            raise AssertionError("TeX gear produced no public PDF")
+        first_mtime = pdf_path.stat().st_mtime_ns
+        self.key(15, "cmd+shift")
+        self.wait("TeX live compilation pauses", lambda d: d["compilation_paused"] and not d["compile_indicator_spinning"])
+        self.click("editor.source")
+        self.key(0)
+        paused_source = edited.replace("A sample with", "A fresh manually compiled sample with")
+        self.paste_source(paused_source)
+        self.wait("paused TeX edit marks PDF stale", lambda d: d["compilation_paused"] and d["pdf_output_state"] == "Stale" and not d["pdf_output_pending"])
+        self.stable_state(lambda d: d["compilation_paused"] and not d["compile_indicator_spinning"] and pdf_path.read_bytes() == first_pdf and pdf_path.stat().st_mtime_ns == first_mtime)
+        self.click("build.preview")
+        self.wait("TeX manual gear rebuilds while remaining paused", lambda d: d["compilation_paused"] and d["pdf_output_state"] == "Saved" and not d["pdf_output_pending"] and not d["compile_indicator_spinning"] and str(d["pdf_output_revision"]) == d["revision"], timeout=60)
+        fresh_pdf = pdf_path.read_bytes()
+        if not fresh_pdf.startswith(b"%PDF-") or fresh_pdf == first_pdf:
+            raise AssertionError("paused TeX gear did not save the changed document")
+        if destination.read_text() != edited:
+            raise AssertionError("TeX build unexpectedly saved unsaved source changes")
+        self.source_is(paused_source)
+        self.key(15, "cmd+shift")
+        self.wait("TeX live compilation resumes only on request", lambda d: not d["compilation_paused"])
+        self.click("editor.source")
+        self.key(0)
+        self.paste_source(edited)
         self.tex_settings([('"auto_save": false', '"auto_save": true'),
                            ('"formatter": "disabled"', '"formatter": "badness"')])

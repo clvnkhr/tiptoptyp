@@ -72,7 +72,7 @@ impl PdfOutput {
         }
     }
 
-    /// Preserve the previous successful destination while reporting a failed
+    /// Preserve the previous successful receipt while reporting a failed
     /// attempt. The source identity prevents errors leaking across replacements.
     pub(super) fn failed(&mut self, source: DocumentKey, error: String) {
         self.failure = Some(FailedWrite { source, error });

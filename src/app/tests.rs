@@ -2307,6 +2307,54 @@ fn pausing_blocks_automatic_builds_but_not_explicit_pdf_or_capture_work() {
 }
 
 #[test]
+fn pause_shortcut_does_not_fall_through_to_the_less_specific_build_shortcut() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    context.set_os(egui::os::OperatingSystem::Mac);
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+    app.snapshot_scene = None;
+    app.document_mut().replace_loaded_unprojected(
+        "A document".into(),
+        directory.path().join("paper.typ"),
+        DocumentKind::Typst,
+        None,
+    );
+    app.settings.preview_preference = PreviewPreference::Pdfium;
+    app.preview.set_requested_backend(PreviewPreference::Pdfium);
+    let modifiers = Modifiers {
+        command: true,
+        mac_cmd: true,
+        shift: true,
+        ..Modifiers::NONE
+    };
+    for expected in [true, false] {
+        context
+            .run_ui(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key: egui::Key::R,
+                        physical_key: Some(egui::Key::R),
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    }],
+                    ..Default::default()
+                },
+                |ui| app.handle_shortcuts(ui.ctx(), None),
+            )
+            .drop_without_applying_deltas();
+        assert_eq!(
+            app.compilation_paused, expected,
+            "Cmd+Shift+R must toggle preview updates"
+        );
+        assert!(
+            app.document_workflow.pending_export.is_none(),
+            "pause must not start a PDF export"
+        );
+    }
+}
+
+#[test]
 fn toolbar_build_buttons_follow_the_preview_backend() {
     use crate::language_support::BuildEngineKind;
     let tex = crate::tex::settings::BuildEngine::XeLatex;
@@ -2337,50 +2385,20 @@ fn toolbar_build_buttons_follow_the_preview_backend() {
         false
     ));
     assert!(!compilation_pause_button_visible(None, false));
-    // Tinymist refresh stays available regardless of pause state; CLI builds
-    // disable while paused and TeX additionally respects its build setting.
-    assert!(compile_button_enabled(
-        true,
-        true,
-        true,
-        DocumentKind::Typst,
-        true
-    ));
-    assert!(!compile_button_enabled(
-        false,
-        true,
-        false,
-        DocumentKind::Typst,
-        true
-    ));
-    assert!(!compile_button_enabled(
-        true,
-        false,
-        true,
-        DocumentKind::Typst,
-        true
-    ));
-    assert!(compile_button_enabled(
-        true,
-        false,
-        false,
-        DocumentKind::Typst,
-        true
-    ));
-    assert!(!compile_button_enabled(
-        true,
-        false,
-        false,
-        DocumentKind::Tex,
-        false
-    ));
-    assert!(compile_button_enabled(
-        true,
-        false,
-        false,
-        DocumentKind::Tex,
-        true
-    ));
+    // Manual builds stay available even while automatic updates are paused.
+    // TeX still respects the explicit build-enabled setting.
+    for (source, interactive, kind, tex_enabled, expected) in [
+        (true, true, DocumentKind::Typst, true, true),
+        (false, true, DocumentKind::Typst, true, false),
+        (true, false, DocumentKind::Typst, true, true),
+        (true, false, DocumentKind::Tex, false, false),
+        (true, false, DocumentKind::Tex, true, true),
+    ] {
+        assert_eq!(
+            compile_button_enabled(source, interactive, kind, tex_enabled),
+            expected
+        );
+    }
 }
 
 #[test]
@@ -3521,7 +3539,7 @@ fn editor_context_menu_reserves_a_tex_flyout_column_without_per_choice_height() 
     let plain = std::cell::Cell::new(Vec2::ZERO);
     let single = std::cell::Cell::new(Vec2::ZERO);
     let flyout = std::cell::Cell::new(Vec2::ZERO);
-    let typst = crate::math_conversion::Target::at("$ x $", 2, DocumentKind::Typst)
+    let typst = crate::math_conversion::Target::at("$x$", 1, DocumentKind::Typst)
         .expect("inline Typst math");
     let tex = crate::math_conversion::Target::at("\\[ x \\]", 2, DocumentKind::Tex)
         .expect("display TeX math");
@@ -3553,7 +3571,7 @@ fn editor_context_menu_reserves_a_tex_flyout_column_without_per_choice_height() 
 #[test]
 fn typst_math_menu_offers_the_other_form_directly_without_a_flyout() {
     use egui_kittest::{Harness, kittest::Queryable as _};
-    let source = "$ α + x $";
+    let source = "$α + x$";
     let target = crate::math_conversion::Target::at(source, 3, DocumentKind::Typst).unwrap();
     let expected = target.clone();
     let mut harness = Harness::builder()
@@ -3648,6 +3666,46 @@ fn convert_submenu_hides_until_hovered_and_places_choices_beside_the_parent() {
     harness.run();
     assert!(harness.query_by_label_contains("Inline math (").is_none());
     assert!(harness.state().is_none());
+}
+
+#[test]
+fn reopened_conversion_menu_does_not_inherit_the_previous_flyout() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let target = crate::math_conversion::Target::at("\\[x\\]", 2, DocumentKind::Tex).unwrap();
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 650.0))
+        .build_ui_state(
+            move |ui, generation| {
+                ui.push_id(*generation, |ui| {
+                    show_editor_context_menu_ui(
+                        ui,
+                        EditorContextMenuOptions {
+                            can_undo: true,
+                            can_redo: true,
+                            has_selection: true,
+                            can_format: true,
+                            can_sync_preview: true,
+                            link: None,
+                            table: None,
+                            math: Some(&target),
+                        },
+                        &ShortcutBindings::current_defaults(),
+                        &mut None,
+                    );
+                });
+            },
+            0_u64,
+        );
+    harness.run();
+    harness.get_by_label("Convert to… ›").hover();
+    harness.run();
+    assert!(harness.query_by_label_contains("equation*").is_some());
+    // A new popup generation opens away from the conversion row. Its first
+    // painted frame must not flash the previous popup's flyout.
+    *harness.state_mut() = 1;
+    harness.hover_at(Pos2::new(600.0, 620.0));
+    harness.run_steps(1);
+    assert!(harness.query_by_label_contains("equation*").is_none());
 }
 
 #[test]
@@ -8199,6 +8257,20 @@ fn projected_application_settings_toggle_local_completion_and_block_save() {
     app.apply_shared_settings(settings, &context);
     assert!(app.document().config().is_some());
     app.document_mut().edit(CCursorRange::default(), |source| {
+        *source = "$ x $".into();
+    });
+    app.request_editor_completion(3, Rect::ZERO, true);
+    let completion = app.editor_completion.as_ref().unwrap();
+    assert!(completion.provenance.is_local());
+    assert!(
+        completion.items.is_empty(),
+        "plain TeX math suppresses Typst completions"
+    );
+    assert!(
+        app.activity.completion.is_none(),
+        "no server request for a local-owned region"
+    );
+    app.document_mut().edit(CCursorRange::default(), |source| {
         *source = "$\\alp$\n$\n  \\beta\n$".into()
     });
     app.request_editor_completion(5, Rect::ZERO, true);
@@ -10080,7 +10152,7 @@ fn hunk_popup_waits_for_real_editor_scroll_in_a_long_document() {
 fn math_context_conversion_choices_follow_document_language() {
     use egui_kittest::{Harness, kittest::Queryable as _};
     // Typst offers the other form as one direct row: no parent, no flyout.
-    let source = "$ α + x $";
+    let source = "$α + x$";
     let target = crate::math_conversion::Target::at(source, 3, DocumentKind::Typst).unwrap();
     let expected = EditorMenuAction::ConvertMath(target.clone(), "Display math".into());
     let mut harness = Harness::builder()

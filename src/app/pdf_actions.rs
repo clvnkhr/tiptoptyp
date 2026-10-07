@@ -112,11 +112,14 @@ impl EditorApp {
         }
     }
 
-    pub(super) fn refresh_preview(&mut self) {
+    pub(super) fn refresh_preview(&mut self, frame: Option<&eframe::Frame>) {
         if self.interactive_preview_requested() {
             self.restart_tinymist_preserving_preview();
         } else {
-            self.schedule_compile_now();
+            // This is the only visible build action for compiler-fed previews.
+            // Use the same durable PDF transaction as the build shortcut;
+            // background preview refreshes still use private artifacts only.
+            self.compile_pdf(frame);
         }
     }
 }
@@ -192,6 +195,93 @@ mod tests {
             assert_eq!(
                 fs::read(source.with_extension("pdf")).unwrap(),
                 pdf.as_ref()
+            );
+        }
+    }
+
+    #[test]
+    fn cli_compile_gear_saves_current_pdf_instead_of_only_refreshing_cache() {
+        for kind in [DocumentKind::Typst, DocumentKind::Tex] {
+            let directory = tempfile::tempdir().unwrap();
+            let context = egui::Context::default();
+            let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+            let source = directory.path().join(if kind == DocumentKind::Tex {
+                "paper.tex"
+            } else {
+                "paper.typ"
+            });
+            app.document_mut().replace_loaded_unprojected(
+                "Source text".into(),
+                source.clone(),
+                kind,
+                None,
+            );
+            app.settings.preview_preference = PreviewPreference::Pdfium;
+            app.preview.set_requested_backend(PreviewPreference::Pdfium);
+            let pdf: Arc<[u8]> = crate::pdf::test_pdf().into();
+            app.preview.accept_artifact(
+                ArtifactKey::unversioned(app.preview_document_revision()),
+                pdf.clone(),
+            );
+            app.preview.status = PreviewStatus::Ready(Duration::ZERO);
+            app.compile_deadline = None;
+            let label = app.compile_button_label();
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(1600.0, 80.0))
+                .build_ui_state(|ui, app: &mut EditorApp| app.show_toolbar(ui, None), app);
+            harness.run_steps(3);
+            assert!(harness.query_by_label("PDF").is_none());
+            harness.get_by_label(label).click();
+            harness.run_steps(3);
+            assert_eq!(
+                fs::read(source.with_extension("pdf")).unwrap(),
+                pdf.as_ref(),
+                "the {label} gear is the only visible build action, so it must save a PDF",
+            );
+            assert_eq!(harness.state().pdf_output_status(), PdfOutputStatus::Saved);
+        }
+    }
+
+    #[test]
+    fn paused_cli_compile_gear_queues_a_fresh_pdf_without_resuming_live_updates() {
+        for kind in [DocumentKind::Typst, DocumentKind::Tex] {
+            let directory = tempfile::tempdir().unwrap();
+            let context = egui::Context::default();
+            let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+            let source = directory.path().join(if kind == DocumentKind::Tex {
+                "paper.tex"
+            } else {
+                "paper.typ"
+            });
+            app.document_mut().replace_loaded_unprojected(
+                "Unsaved source text".into(),
+                source.clone(),
+                kind,
+                None,
+            );
+            app.settings.preview_preference = PreviewPreference::Pdfium;
+            app.preview.set_requested_backend(PreviewPreference::Pdfium);
+            app.compilation_paused = true;
+            app.compile_deadline = None;
+            let label = app.compile_button_label();
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(1600.0, 80.0))
+                .build_ui_state(|ui, app: &mut EditorApp| app.show_toolbar(ui, None), app);
+            harness.run_steps(3);
+            harness.get_by_label(label).click();
+            harness.run_steps(3);
+            let app = harness.state();
+            let pending = app
+                .document_workflow
+                .pending_export
+                .as_ref()
+                .expect("a manual build remains available when live preview is paused");
+            assert_eq!(pending.path, source.with_extension("pdf"));
+            assert!(app.compilation_paused);
+            assert!(app.may_run_compilation());
+            assert!(
+                !source.exists(),
+                "the build must use the current unsaved buffer"
             );
         }
     }

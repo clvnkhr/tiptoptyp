@@ -425,14 +425,13 @@ fn compile_button_label(
 const fn compile_button_enabled(
     source_preview_available: bool,
     interactive_requested: bool,
-    compilation_paused: bool,
     preview_kind: DocumentKind,
     tex_build_enabled: bool,
 ) -> bool {
     source_preview_available
         && (interactive_requested
-            || (!compilation_paused
-                && (!matches!(preview_kind, DocumentKind::Tex) || tex_build_enabled)))
+            || !matches!(preview_kind, DocumentKind::Tex)
+            || tex_build_enabled)
 }
 
 const fn compilation_notice(paused: bool) -> (&'static str, NoticeKind) {
@@ -3097,24 +3096,27 @@ impl EditorApp {
                 self.execute_app_command(command, context, frame);
             }
         }
-        if shortcuts
-            .egui(ShortcutAction::Compile)
-            .is_some_and(|shortcut| {
-                context.input_mut_for(shortcut_viewport, |input| input.consume_shortcut(&shortcut))
+        // Build actions share keys by default. Let the common dispatcher
+        // choose the most specific binding before consuming an event.
+        let build_action = context.input_mut_for(shortcut_viewport, |input| {
+            consume_shortcut_action(input, &shortcuts, |action| {
+                matches!(
+                    action,
+                    ShortcutAction::Compile | ShortcutAction::ToggleCompilation
+                )
             })
-        {
-            self.compile_pdf(frame);
-        }
-        if compilation_pause_button_visible(
-            self.preview_language_support().build,
-            self.interactive_preview_requested(),
-        ) && shortcuts
-            .egui(ShortcutAction::ToggleCompilation)
-            .is_some_and(|shortcut| {
-                context.input_mut_for(shortcut_viewport, |input| input.consume_shortcut(&shortcut))
-            })
-        {
-            self.toggle_compilation_paused();
+        });
+        match build_action {
+            Some(ShortcutAction::Compile) => self.compile_pdf(frame),
+            Some(ShortcutAction::ToggleCompilation)
+                if compilation_pause_button_visible(
+                    self.preview_language_support().build,
+                    self.interactive_preview_requested(),
+                ) =>
+            {
+                self.toggle_compilation_paused()
+            }
+            _ => {}
         }
         let edit_command = context.input_mut_for(shortcut_viewport, |input| {
             consume_shortcut(input, &shortcuts, |command| {
@@ -6655,7 +6657,6 @@ impl EditorApp {
                     compile_button_enabled(
                         self.source_preview_available(),
                         interactive,
-                        self.compilation_paused,
                         self.preview_document_kind(),
                         self.settings.tex.build_enabled,
                     ),
@@ -6667,8 +6668,13 @@ impl EditorApp {
                 );
                 #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
                 crate::desktop_test::observe("build.preview", &refresh);
-                if native_hover_text(refresh, "Refresh live preview").clicked() {
-                    self.refresh_preview();
+                let build_hint = if interactive {
+                    "Refresh live preview"
+                } else {
+                    "Compile and save PDF"
+                };
+                if native_hover_text(refresh, build_hint).clicked() {
+                    self.refresh_preview(frame);
                 }
 
                 if compilation_pause_button_visible(
@@ -11794,7 +11800,7 @@ fn math_convert_submenu(
     if let Some((label, choice)) = math.single_alternative() {
         return menu_row(ui, label, "").clicked().then_some(choice);
     }
-    let id = egui::Id::new("math-convert-submenu");
+    let id = ui.id().with("math-convert-submenu");
     let mut open: bool = ui.data(|data| data.get_temp(id).unwrap_or(false));
     let row = menu_row(ui, "Convert to…", "›");
     if row.hovered() || row.clicked() {

@@ -265,10 +265,11 @@ impl EditorDerivedData {
     ) -> Option<Vec<crate::tinymist::CompletionItem>> {
         self.prepare_syntax();
         if self.tex_key != self.source_key {
-            // Index entries only come from embedded TeX calls (mi/mitex and
-            // friends) or raw tex/latex blocks. Without any of their markers
-            // a full tree walk can find nothing; skip it with a byte scan.
-            if !tex_index_triggers_present(&self.source_snapshot) {
+            // Projected dollar regions own completion even without a command:
+            // Some(empty) suppresses Typst suggestions in plain TeX math.
+            // Outside that mode the byte scan still skips trigger-free source.
+            let projected_dollars = self.mitex_dollars && self.source_snapshot.contains('$');
+            if !projected_dollars && !tex_index_triggers_present(&self.source_snapshot) {
                 self.tex_index = crate::tex_completion::Index::default();
             } else if self.mitex_dollars {
                 self.tex_index = crate::tex_completion::Index::projected(&self.parsed_source);
@@ -713,6 +714,43 @@ fn hover_leaf_range(leaf: &LinkedNode<'_>, cursor: usize) -> Option<Range<usize>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn projected_dollar_regions_keep_completion_ownership_without_commands() {
+        for source in [
+            "$ x $",
+            "$\nplain math\n$",
+            "before $x % comment\n y$ after",
+        ] {
+            let mut data = EditorDerivedData::default();
+            data.prepare_source(&DocumentSnapshot::fixture(revision(1), source));
+            let cursor = source.find('$').unwrap() + 2;
+            assert!(data.tex_completions(cursor).is_none());
+            data.set_mitex_dollars(true);
+            assert_eq!(
+                data.tex_completions(cursor),
+                Some(Vec::new()),
+                "TeX owns the projected dollar region even without commands: {source:?}"
+            );
+            for _ in 0..20 {
+                assert_eq!(data.tex_completions(cursor), Some(Vec::new()));
+            }
+            assert_eq!(data.tex_rebuilds, 2, "unchanged projected index is reused");
+            data.set_mitex_dollars(false);
+            assert!(data.tex_completions(cursor).is_none());
+            assert_eq!(data.tex_rebuilds, 3);
+            assert_eq!(data.syntax_rebuilds, 1);
+        }
+        for source in ["`$ x $`", "#let s = \"$ x $\"", "\\$ x \\$"] {
+            let mut data = EditorDerivedData::default();
+            data.set_mitex_dollars(true);
+            data.prepare_source(&DocumentSnapshot::fixture(revision(1), source));
+            assert!(
+                data.tex_completions(source.find('x').unwrap()).is_none(),
+                "raw, quoted and escaped dollars do not own completion: {source:?}"
+            );
+        }
+    }
 
     #[test]
     fn tex_index_guard_skips_trigger_free_sources() {
