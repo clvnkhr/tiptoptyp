@@ -54,7 +54,28 @@ fn is_url_char(byte: u8) -> bool {
 }
 
 fn trim_url_end(text: &str) -> &str {
-    text.trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '\'', '"'])
+    // A prose closer is extra; a balanced closer can belong to a path or
+    // an IPv6 host. Count once, then trim the suffix in linear time.
+    let (mut parens, mut brackets) =
+        text.bytes()
+            .fold((0_isize, 0_isize), |counts, byte| match byte {
+                b'(' => (counts.0 + 1, counts.1),
+                b')' => (counts.0 - 1, counts.1),
+                b'[' => (counts.0, counts.1 + 1),
+                b']' => (counts.0, counts.1 - 1),
+                _ => counts,
+            });
+    let mut end = text.len();
+    while end > 0 {
+        match text.as_bytes()[end - 1] {
+            b'.' | b',' | b';' | b':' | b'!' | b'?' | b'\'' | b'"' => {}
+            b')' if parens < 0 => parens += 1,
+            b']' if brackets < 0 => brackets += 1,
+            _ => break,
+        }
+        end -= 1;
+    }
+    &text[..end]
 }
 
 /// Split a `path:line:column` suffix. Returns the path part and 1-based
@@ -80,8 +101,7 @@ fn split_location(text: &str) -> (&str, Option<usize>, Option<usize>) {
     // A second trailing number is the line; the first was the column.
     if let Some(colon2) = path.rfind(':') {
         let second = &path[colon2 + 1..];
-        if second.len() != 1
-            && let Ok(second_number) = second.parse::<usize>()
+        if let Ok(second_number) = second.parse::<usize>()
             && second_number > 0
         {
             return (&path[..colon2], Some(second_number), Some(number));
@@ -118,10 +138,13 @@ pub(crate) fn find_links(row: &str) -> Vec<RowLink> {
     while index < bytes.len() {
         // URL scan.
         let rest = &row[index..];
-        let url_start = rest
-            .find("https://")
-            .map(|at| (at, 8))
-            .or_else(|| rest.find("http://").map(|at| (at, 7)));
+        let url_start = [
+            rest.find("https://").map(|at| (at, 8)),
+            rest.find("http://").map(|at| (at, 7)),
+        ]
+        .into_iter()
+        .flatten()
+        .min_by_key(|(at, _)| *at);
         // Path token scan: runs of path-ish bytes.
         let mut path_start = None;
         let mut scan = index;
@@ -240,6 +263,36 @@ mod tests {
     }
 
     #[test]
+    fn url_closers_preserve_balanced_paths_and_ipv6_hosts() {
+        for (row, expected) in [
+            ("visit (https://example.com/a).", "https://example.com/a"),
+            (
+                "https://en.wikipedia.org/wiki/Function_(mathematics)",
+                "https://en.wikipedia.org/wiki/Function_(mathematics)",
+            ),
+            (
+                "visit (https://en.wikipedia.org/wiki/Function_(mathematics)).",
+                "https://en.wikipedia.org/wiki/Function_(mathematics)",
+            ),
+            ("http://[::1]", "http://[::1]"),
+            ("see [http://[::1]].", "http://[::1]"),
+            (
+                "see (https://example.com/a_(b_(c))).",
+                "https://example.com/a_(b_(c))",
+            ),
+        ] {
+            let links = find_links(row);
+            assert_eq!(links.len(), 1, "{row}");
+            assert_eq!(
+                links[0].target,
+                LinkTarget::Url(expected.to_owned()),
+                "{row}"
+            );
+            assert_eq!(&row[links[0].range.clone()], expected, "{row}");
+        }
+    }
+
+    #[test]
     fn paths_split_line_and_column() {
         let links = find_links("error at src/main.rs:12:5: oops");
         assert_eq!(links.len(), 1);
@@ -260,6 +313,53 @@ mod tests {
                 column: None,
             }
         );
+    }
+
+    #[test]
+    fn single_digit_line_and_column_resolve_without_becoming_part_of_the_path() {
+        for (text, expected) in [
+            ("src/main.rs:3:8:", ("src/main.rs", Some(3), Some(8))),
+            ("src/main.rs:1:12", ("src/main.rs", Some(1), Some(12))),
+            ("src/main.rs:12:1", ("src/main.rs", Some(12), Some(1))),
+            ("src/main.rs:3", ("src/main.rs", Some(3), None)),
+            ("C:/src/main.rs:3:8", ("C:/src/main.rs", Some(3), Some(8))),
+        ] {
+            assert_eq!(split_location(text), expected, "{text}");
+        }
+        let links = find_links("error src/main.rs:3:8: check here");
+        assert_eq!(
+            links[0].target,
+            LinkTarget::Path {
+                path: "src/main.rs".into(),
+                line: Some(3),
+                column: Some(8),
+            }
+        );
+    }
+
+    #[test]
+    fn mixed_url_schemes_are_detected_in_their_output_order() {
+        for row in [
+            "http://example.com/first https://example.com/second",
+            "https://example.com/first http://example.com/second",
+        ] {
+            let links = find_links(row);
+            let expected = row.split_whitespace().collect::<Vec<_>>();
+            assert_eq!(links.len(), 2, "{row}");
+            for (link, expected) in links.iter().zip(expected) {
+                assert_eq!(link.target, LinkTarget::Url(expected.to_owned()));
+                assert_eq!(&row[link.range.clone()], expected);
+            }
+        }
+    }
+
+    #[test]
+    fn unicode_surrounding_tokens_keeps_link_ranges_on_utf8_boundaries() {
+        let row = "é🙂 http://example.com/a, 漢字 src/main.rs:3:8: 𝒜";
+        let links = find_links(row);
+        assert_eq!(links.len(), 2);
+        assert_eq!(&row[links[0].range.clone()], "http://example.com/a");
+        assert_eq!(&row[links[1].range.clone()], "src/main.rs:3:8");
     }
 
     #[test]

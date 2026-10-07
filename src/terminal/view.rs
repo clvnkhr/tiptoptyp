@@ -398,7 +398,6 @@ impl TerminalPane {
         // drag, hover and wheel input are encoded to it instead of driving the
         // local selection and scrollback. Shift bypasses reporting so text can
         // still be selected, as on desktop terminals.
-        let app_mouse = app_mouse_mode(self.grid.as_deref(), ui);
         let ppp = ui.ctx().pixels_per_point();
         let geometry = mouse_geometry(outer, rect, size, ppp);
         let (screen_w, screen_h) = (geometry.screen_width as f32, geometry.screen_height as f32);
@@ -406,6 +405,7 @@ impl TerminalPane {
         // reporting, even in mouse-tracking programs. Like the Shift bypass,
         // this matches desktop terminal behavior.
         let mut link_consumed = false;
+        let bypass_gesture = self.suppress_select_until_release;
         let pointer_down = ui.input(|input| !input.pointer.any_down());
         if pointer_down {
             self.suppress_select_until_release = false;
@@ -428,7 +428,11 @@ impl TerminalPane {
                         .or_else(|| self.fixture_cwd.clone())
                         .unwrap_or_else(|| cwd.to_owned());
                     super::TerminalLinkAction::OpenPath {
-                        path: base.join(path),
+                        path: resolve_link_path(
+                            &path,
+                            &base,
+                            std::env::var_os("HOME").as_deref().map(Path::new),
+                        ),
                         line,
                         column,
                     }
@@ -437,6 +441,9 @@ impl TerminalPane {
             });
             link_consumed = true;
         }
+        let app_mouse = app_mouse_mode(self.grid.as_deref(), ui)
+            && !bypass_gesture
+            && !self.suppress_select_until_release;
         if !app_mouse {
             // Leaving reporting with a held button (Shift bypass, tracking
             // disabled mid-drag) must still release it, or the program keeps
@@ -636,6 +643,15 @@ impl TerminalPane {
             ui.painter().rect_filled(outer, 0.0, colors.background);
         }
     }
+}
+
+fn resolve_link_path(path: &Path, cwd: &Path, home: Option<&Path>) -> PathBuf {
+    if let Ok(relative) = path.strip_prefix("~")
+        && let Some(home) = home
+    {
+        return home.join(relative);
+    }
+    cwd.join(path)
 }
 
 fn grid_size(available: Vec2, cell: Vec2, scale: f32) -> GridSize {
@@ -1754,11 +1770,31 @@ mod tests {
     }
 
     #[test]
+    fn terminal_paths_resolve_relative_absolute_and_home_locations() {
+        let cwd = Path::new("/project");
+        let home = Some(Path::new("/home/user"));
+        for (input, expected) in [
+            ("src/main.rs", "/project/src/main.rs"),
+            ("/tmp/a.tex", "/tmp/a.tex"),
+            ("~/a.tex", "/home/user/a.tex"),
+            ("~other/a.tex", "/project/~other/a.tex"),
+        ] {
+            assert_eq!(
+                resolve_link_path(Path::new(input), cwd, home),
+                Path::new(expected)
+            );
+        }
+    }
+
+    #[test]
     fn command_click_on_a_url_reports_an_open_action() {
         let context = egui::Context::default();
         crate::theme::configure_test_fonts(&context);
         let mut pane = TerminalPane::default();
-        pane.prepare_fixture(b"see https://example.com/a", Path::new("/project"));
+        pane.prepare_fixture(
+            b"\x1b[?1003h\x1b[?1006hsee https://example.com/a",
+            Path::new("/project"),
+        );
         let frame = |pane: &mut TerminalPane, events: Vec<egui::Event>| {
             context
                 .run_ui(
@@ -1810,6 +1846,29 @@ mod tests {
         assert!(
             pane.selection.is_none(),
             "a consumed Cmd+click must not select"
+        );
+        assert!(pane.suppress_select_until_release);
+        assert!(pane.mouse_held.is_none());
+        let moved = pos + Vec2::new(30.0, 0.0);
+        frame(&mut pane, vec![egui::Event::PointerMoved(moved)]);
+        assert!(pane.selection.is_none());
+        assert!(
+            pane.motion_cell.is_none(),
+            "Cmd+drag must not reach a mouse-tracking program"
+        );
+        frame(
+            &mut pane,
+            vec![egui::Event::PointerButton {
+                pos: moved,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            }],
+        );
+        assert!(!pane.suppress_select_until_release);
+        assert!(
+            pane.motion_cell.is_none(),
+            "Cmd+release must not reach a mouse-tracking program"
         );
     }
 
