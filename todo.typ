@@ -148,8 +148,54 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 27. [ ] Similarly to how the preview panel has an outline when focused, we need the same for the problems panel
 28. [ ] the outline for the code panel should show through the sticky rows, so that we can see it when hovered/focused. You can consider either adjusting the size by a few px on left,right,and top, or just make the borders of the left,right and top of the sticky rows mimic the outline of the code panel.
 29. [ ] The code panel has line highlights but it only goes to the length of the longest line. It should always go for the full length of the code panel.
-30. [ ] minor polish - converting to inline/display math should be automatically followed by a fmt
+30. [ ] minor polish - converting to inline/display math should by default be automatically followed by a fmt
+31. [ ] the table editor needs to allow for adding hlines and whatnot, the colors and border options etc should result in visible changes to the UI, e.g. the cells should have their border colored if the border color is set. Whole table settings and selected cells settings should not be selected at the same box. it should be possible for both to be visible at the same time, or both to be collapsed to allow more space for the editor. We should be able to select edges of the tables as well. We should be able to drag the borders of the table headers, with a checkbox to use it to set the columns: (x%,y%,z%,...,auto) ratio (default to auto). The cells should have code highlighting. The background/alignment/padding should be precise optional args that can be passed to `#table`. The UI should also be as compact as possible. And we need to detect and parse arbitrary tables. If there is a `#table` then we must do a correct reading into our editor. We need to also have an equivalent tex table editor, but the options will vary depending on the package used so this should be a similar but different UI. For this we will need a bunch of fixtures for testing tables in tex and typ in manual-tests/. Split this todo into individual shippable todo steps before working on it - write it below  this one.
 
+
+
+#table(
+  columns: (24%, 76%),
+  align: left,
+  inset: (x: 4pt, y: 5pt),
+  stroke: none,
+  table.hline(stroke: 0.8pt),
+  [#strong[Notation]], [#strong[Meaning and reference]],
+  table.hline(stroke: 0.5pt),
+  [$m(r)=r^(2alpha) ell(r)$],
+  [Admissible diffusion, $1/2<alpha<=5/4$; the additional condition
+    $ell in L^2 (dif r/r)$ is imposed only at $alpha=5/4$.
+    See def:admissible.],
+  [$H_sigma^s$, $cal(V)_m$, $cal(V)'_m$],
+  [Divergence-free Sobolev space, energy space, and its dual;
+    see the definitions preceding def:leray-hopf.],
+  [$PP$, $hat(v)$, $zeta$],
+  [Leray projection and the Fourier transform with frequency variable
+    $zeta$; convention after eq:main.],
+  [$R(t)$, $R_tau$, $tau$, $xi$],
+  [$m(R(t))=t^(-1)$, $R_tau=R(e^tau)$, $tau=log t$, and $xi=R(t)x$;
+    see eq:ansatz.],
+  [$M_tau$, $b(tau)$],
+  [Normalised diffusion $M_tau (rho)=m(R_tau rho)/m(R_tau)$ and
+    scale speed $b=-partial_tau log R_tau$; see eq:Mtau-b-def.],
+  [$overline(Omega)$, $overline(U)$, $beta$],
+  [Fixed unstable Euler vorticity, its Biot--Savart velocity, and the
+    large amplitude in prop:frozen-dichotomy.],
+  [$bold(K)$, $bold(T)_(alpha,beta)$],
+  [Linearised transport and frozen similarity generator in
+    eq:frozen-operators.],
+  [$bold(P)_(alpha,beta)$, $E_(alpha,beta)$, $F_(alpha,beta)$],
+  [Real finite-rank unstable spectral projection, its range, and its
+    kernel in prop:frozen-dichotomy.],
+  [$U^L$, $gamma$, $tau_*$],
+  [Ancient linear mode, decay rate $gamma>1/2$, and terminal logarithmic
+    time; all conclusions are in prop:ancient-unstable-mode.],
+  [$U^((plus.minus))$, $F_beta$],
+  [The two profiles $beta overline(U) plus.minus U^L$ and the background
+    profile force in eq:golovkin-profiles.],
+  [$u^((plus.minus))$, $f$, $t_*$],
+  [Physical fields in eq:physical-golovkin-pair, with $t_*=e^(tau_*)$.],
+  table.hline(stroke: 0.8pt),
+)
 24. [X] improve typst table editor: this isn't detected as a table for some reason
   ```typ
     #table(
