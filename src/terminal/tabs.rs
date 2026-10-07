@@ -118,6 +118,27 @@ impl TerminalTabs {
         }
     }
 
+    /// Check every pane for newly rung bells, even hidden ones. A pane that
+    /// is not currently shown keeps a badge until it is viewed.
+    pub(crate) fn poll_bells(&mut self) {
+        let active = self.active_index();
+        for (index, pane) in self.panes.iter_mut().enumerate() {
+            pane.poll_bell(self.visible && index == active);
+        }
+    }
+
+    /// Whether any pane rang while unseen.
+    pub(crate) fn bell_pending(&self) -> bool {
+        self.panes.iter().any(TerminalPane::bell_pending)
+    }
+
+    /// Whether one pane rang while unseen, for its switcher button.
+    pub(crate) fn bell_pending_at(&self, index: usize) -> bool {
+        self.panes
+            .get(index)
+            .is_some_and(TerminalPane::bell_pending)
+    }
+
     pub(crate) fn prepare_fixture(&mut self, output: &[u8], cwd: &Path) {
         if let Some(pane) = self.pane_mut() {
             pane.prepare_fixture(output, cwd);

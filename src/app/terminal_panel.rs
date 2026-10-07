@@ -111,8 +111,15 @@ impl EditorApp {
                     .response
                     .on_hover_text("Compiler diagnostics");
             });
+            let terminal_label = if self.terminal.bell_pending() {
+                "● Terminal"
+            } else {
+                "Terminal"
+            };
             let terminal = ui.selectable_label(
-                self.bottom_panel.selected() == Some(PanelTab::Terminal), "Terminal");
+                self.bottom_panel.selected() == Some(PanelTab::Terminal),
+                terminal_label,
+            );
             #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
             crate::desktop_test::observe("panel.terminal", &terminal);
             if terminal.clicked() {
@@ -221,8 +228,13 @@ impl EditorApp {
                 for index in 0..self.terminal.len() {
                     let selected = index == self.terminal.active_index();
                     let label = format!("Terminal {}", index + 1);
+                    let text = if self.terminal.bell_pending_at(index) {
+                        format!("●{}", index + 1)
+                    } else {
+                        (index + 1).to_string()
+                    };
                     let switch = ui.add(
-                        egui::Button::new((index + 1).to_string())
+                        egui::Button::new(text)
                             .selected(selected)
                             .min_size(Vec2::splat(PANEL_ACTION_SIZE)),
                     );

@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
     thread,
@@ -53,6 +53,8 @@ pub(super) struct Snapshot {
     pub grid: Option<Arc<Grid>>,
     pub status: Status,
     pub revision: u64,
+    /// Alert bells rung by the program since the session started.
+    pub bells: u64,
 }
 
 struct Shared {
@@ -60,6 +62,7 @@ struct Shared {
     stopped: AtomicBool,
     visible: AtomicBool,
     repaint_pending: AtomicBool,
+    bells: Arc<AtomicU64>,
     context: egui::Context,
     viewport: egui::ViewportId,
 }
@@ -74,6 +77,7 @@ impl Shared {
             std::mem::discriminant(&snapshot.status) != std::mem::discriminant(&status);
         snapshot.status = status;
         snapshot.revision += 1;
+        snapshot.bells = self.bells.load(Ordering::Acquire);
         drop(snapshot);
         if (status_changed || self.visible.load(Ordering::Acquire))
             && !self.repaint_pending.swap(true, Ordering::AcqRel)
@@ -112,8 +116,10 @@ impl Session {
                 grid: None,
                 status: Status::Starting,
                 revision: 0,
+                bells: 0,
             }),
             stopped: AtomicBool::new(false),
+            bells: Arc::new(AtomicU64::new(0)),
             visible: AtomicBool::new(true),
             repaint_pending: AtomicBool::new(false),
             context: context.clone(),
@@ -301,6 +307,13 @@ fn run(
             if replies.try_send(bytes.to_vec()).is_err() {
                 callback_failed.store(true, Ordering::Release);
             }
+        })
+        .map_err(|error| error.to_string())?;
+    let bells = shared.bells.clone();
+    engine
+        .terminal
+        .on_bell(move |_| {
+            bells.fetch_add(1, Ordering::Release);
         })
         .map_err(|error| error.to_string())?;
     shared.publish(
@@ -548,6 +561,16 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
+    fn real_pty_counts_alert_bells_for_hidden_panes() {
+        let root = tempfile::tempdir().unwrap();
+        let session = start_script(root.path(), "printf '\\aREADY'; sleep 10");
+        until(|| text(&session.snapshot()).contains("READY"));
+        until(|| session.snapshot().bells >= 1);
+        assert_eq!(session.snapshot().status, Status::Running);
+    }
+
+    #[test]
+    #[cfg(unix)]
     fn real_pty_reports_theme_flips_to_programs_with_mode_2031() {
         let root = tempfile::tempdir().unwrap();
         // Opt into color-scheme reports, then read the 9-byte flip report (`ESC[?997;2n`).
@@ -718,8 +741,10 @@ mod tests {
                     grid: None,
                     status: Status::Starting,
                     revision: 0,
+                    bells: 0,
                 }),
                 stopped: AtomicBool::new(false),
+                bells: Arc::new(AtomicU64::new(0)),
                 visible: AtomicBool::new(false),
                 repaint_pending: AtomicBool::new(false),
                 context: egui::Context::default(),
@@ -751,8 +776,10 @@ mod tests {
                 grid: None,
                 status: Status::Running,
                 revision: 0,
+                bells: 0,
             }),
             stopped: AtomicBool::new(false),
+            bells: Arc::new(AtomicU64::new(0)),
             visible: AtomicBool::new(false),
             repaint_pending: AtomicBool::new(false),
             context: egui::Context::default(),

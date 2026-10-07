@@ -9042,6 +9042,7 @@ impl EditorApp {
             .show(ui, |ui| self.show_status_bar(ui));
         self.terminal
             .set_visible(self.bottom_panel.selected() == Some(PanelTab::Terminal));
+        self.terminal.poll_bells();
         let content_hidden = self.show_bottom_panel_container(ui);
         if content_hidden {
             if self.preview_controls.popout.is_none() {

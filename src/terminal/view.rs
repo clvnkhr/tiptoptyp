@@ -46,7 +46,20 @@ pub(crate) struct TerminalPane {
     mouse_held: Option<egui::PointerButton>,
     motion_cell: Option<(i32, i32)>,
     last_mouse_pos: Option<Pos2>,
+    last_bell: u64,
+    bell_pending: bool,
+    last_beep: Option<std::time::Instant>,
 }
+
+/// Audible alert for terminal bells. macOS-only: other platforms keep the
+/// tab badge without sound.
+pub(super) fn alert_bell() {
+    #[cfg(target_os = "macos")]
+    objc2_app_kit::NSBeep();
+}
+
+/// Minimum gap between audible beeps; the badge still records every bell.
+const BELL_BEEP_GAP: std::time::Duration = std::time::Duration::from_secs(1);
 
 impl TerminalPane {
     pub(crate) fn request_focus(&mut self) {
@@ -117,6 +130,36 @@ impl TerminalPane {
             && let Err(error) = session.send(command)
         {
             self.error = Some(error);
+        }
+    }
+
+    pub(crate) fn bell_pending(&self) -> bool {
+        self.bell_pending
+    }
+
+    /// Check for newly rung bells. Beeps at most once per second no matter
+    /// how fast a program rings; marks the tab badge unless the pane is
+    /// currently shown, which clears a pending badge.
+    pub(crate) fn poll_bell(&mut self, shown: bool) {
+        let Some(bells) = self
+            .session
+            .as_ref()
+            .map(|session| session.snapshot().bells)
+        else {
+            return;
+        };
+        if bells > self.last_bell {
+            self.last_bell = bells;
+            let recent = self
+                .last_beep
+                .is_some_and(|last| last.elapsed() < BELL_BEEP_GAP);
+            if !recent {
+                self.last_beep = Some(std::time::Instant::now());
+                alert_bell();
+            }
+            self.bell_pending = !shown;
+        } else if shown {
+            self.bell_pending = false;
         }
     }
 
@@ -213,6 +256,9 @@ impl TerminalPane {
                     self.session = Some(session);
                     self.size = Some(size);
                     self.colors = Some(colors);
+                    // A fresh shell starts its bell count over.
+                    self.last_bell = 0;
+                    self.bell_pending = false;
                 }
                 Err(error) => self.error = Some(error),
             }
@@ -1609,6 +1655,54 @@ mod tests {
         pane.set_visible(false);
         assert!(pane.session.is_none());
         assert!(pane.grid.is_none());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn hidden_bell_marks_the_tab_badge_until_viewed() {
+        use portable_pty::CommandBuilder;
+        use std::time::{Duration, Instant};
+        let root = tempfile::tempdir().unwrap();
+        let mut command = CommandBuilder::new("/bin/sh");
+        command.args(["-c", "printf '\\aREADY'; sleep 10"]);
+        command.cwd(root.path());
+        let mut pane = TerminalPane {
+            session: Some(
+                Session::start_command(
+                    &egui::Context::default(),
+                    root.path(),
+                    GridSize {
+                        cols: 80,
+                        rows: 8,
+                        cell_width: 8,
+                        cell_height: 16,
+                    },
+                    Colors {
+                        foreground: egui::Color32::WHITE,
+                        background: egui::Color32::BLACK,
+                    },
+                    command,
+                )
+                .unwrap(),
+            ),
+            ..Default::default()
+        };
+        // A bell while hidden marks the badge (and beeps once); viewing the
+        // pane clears it.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            pane.poll_bell(false);
+            if pane.bell_pending() {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "hidden bell never marked the badge"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        pane.poll_bell(true);
+        assert!(!pane.bell_pending());
     }
 
     #[test]
