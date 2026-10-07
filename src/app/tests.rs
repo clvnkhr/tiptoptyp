@@ -10687,3 +10687,190 @@ fn editor_typing_frame_cost_probe() {
         });
     }
 }
+
+/// Matched CPU probe for editing beside an idle, sparsely updated or fully
+/// redrawn terminal. VT parsing and fixture publication occur before timing;
+/// UI construction and tessellation use the actual editor and terminal views.
+#[test]
+#[ignore = "opt-in editor and terminal frame cost probe"]
+fn editor_terminal_frame_cost_probe() {
+    use std::{fmt::Write as _, time::Instant};
+
+    #[derive(Default)]
+    struct Samples {
+        frame: Vec<f64>,
+        editor: Vec<f64>,
+        terminal: Vec<f64>,
+        tessellation: Vec<f64>,
+        shapes: Vec<usize>,
+        vertices: Vec<usize>,
+    }
+    fn percentile(values: &[f64], percent: usize) -> f64 {
+        let mut sorted = values.to_vec();
+        sorted.sort_by(f64::total_cmp);
+        sorted[(sorted.len() - 1) * percent / 100]
+    }
+    fn redraw(cols: usize, rows: usize, revision: usize, sparse: bool) -> Vec<u8> {
+        let mut output = String::from("\x1b[?25l");
+        let updated = if sparse {
+            rows / 2..rows / 2 + 1
+        } else {
+            0..rows
+        };
+        let letters = b" Thinking about the next response; checking sources and updating tasks. ";
+        for row in updated {
+            write!(
+                output,
+                "\x1b[{};1H\x1b[38;5;{}m\x1b[48;5;{}m",
+                row + 1,
+                33 + (row + revision) % 6,
+                234 + (row % 3),
+            )
+            .unwrap();
+            for col in 0..cols {
+                output.push(char::from(letters[(col + row + revision) % letters.len()]));
+            }
+        }
+        output.push_str("\x1b[0m");
+        output.into_bytes()
+    }
+
+    let lines: usize = std::env::var("TIPTOPTYP_PROBE_LINES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(200);
+    let frames: usize = std::env::var("TIPTOPTYP_PROBE_FRAMES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(120);
+    let body = (0..lines)
+        .map(|n| format!("= Section {n}\nProse with *strong* and $x_{n} + y$ inline math.\n- item one\n- item two\n\n"))
+        .collect::<String>();
+    for workload in [
+        "code-only",
+        "terminal-idle",
+        "terminal-sparse",
+        "terminal-full",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        crate::theme::configure_test_fonts(&context);
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        // Retain the dormant fixture's Main scene: external services,
+        // native previews and autosave are outside this CPU-only workload.
+        assert!(!app.lifecycle.allows_document_work());
+        app.document_mut().replace_unprojected_untitled(&body);
+        let shown = workload != "code-only";
+        if shown {
+            app.bottom_panel.select(PanelTab::Terminal);
+            app.terminal
+                .replace_with_fixture_panes(&[b"\x1b[?1049h"], directory.path());
+        }
+        let frame = |app: &mut EditorApp, events, logical_frame: usize| {
+            let mut editor_ms = 0.0;
+            let mut terminal_ms = 0.0;
+            let started = Instant::now();
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1280.0, 800.0))),
+                    time: Some(logical_frame as f64 / 60.0),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    // Preserve the same editor geometry for the reference case.
+                    egui::Panel::bottom("terminal-frame-probe")
+                        .resizable(false)
+                        .exact_size(300.0)
+                        .show(ui, |ui| {
+                            if shown {
+                                let started = Instant::now();
+                                app.show_bottom_panel(ui);
+                                terminal_ms += started.elapsed().as_secs_f64() * 1000.0;
+                            }
+                        });
+                    let started = Instant::now();
+                    app.show_editor(ui);
+                    editor_ms += started.elapsed().as_secs_f64() * 1000.0;
+                },
+            );
+            let frame_ms = started.elapsed().as_secs_f64() * 1000.0;
+            output.textures_delta.clear();
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            (frame_ms, editor_ms, terminal_ms, shapes)
+        };
+        frame(&mut app, Vec::new(), 0);
+        let (cols, rows) = if shown {
+            app.terminal.fixture_size_for_test()
+        } else {
+            (0, 0)
+        };
+        if shown {
+            app.terminal
+                .feed_fixture_for_test(&redraw(cols, rows, 0, false));
+        }
+        let middle = body.chars().count() / 2;
+        app.store_editor_cursor(&context, CCursorRange::one(CCursor::new(middle)));
+        // Resolve the viewport-scoped ID before acquiring egui memory:
+        // resolving it inside the closure re-enters the Context lock.
+        let editor_id = source_editor_id(&context);
+        context.memory_mut(|memory| memory.request_focus(editor_id));
+        let mut samples = Samples::default();
+        for n in 0..frames + 20 {
+            if workload == "terminal-sparse" || workload == "terminal-full" {
+                // Both grids are published before timing, so the comparison
+                // measures UI/render work rather than fixture VT parsing.
+                app.terminal.feed_fixture_for_test(&redraw(
+                    cols,
+                    rows,
+                    n + 1,
+                    workload == "terminal-sparse",
+                ));
+            }
+            let (frame_ms, editor_ms, terminal_ms, shapes) = frame(
+                &mut app,
+                vec![egui::Event::Text(if n % 2 == 0 { "x" } else { "y" }.into())],
+                n + 1,
+            );
+            let shape_count = shapes.len();
+            let started = Instant::now();
+            let primitives = context.tessellate(shapes, 1.0);
+            let tessellation_ms = started.elapsed().as_secs_f64() * 1000.0;
+            let vertices = primitives
+                .iter()
+                .map(|primitive| match &primitive.primitive {
+                    egui::epaint::Primitive::Mesh(mesh) => mesh.vertices.len(),
+                    egui::epaint::Primitive::Callback(_) => 0,
+                })
+                .sum();
+            if n >= 20 {
+                samples.frame.push(frame_ms);
+                samples.editor.push(editor_ms);
+                samples.terminal.push(terminal_ms);
+                samples.tessellation.push(tessellation_ms);
+                samples.shapes.push(shape_count);
+                samples.vertices.push(vertices);
+            }
+        }
+        assert_eq!(
+            app.document().source().chars().count(),
+            body.chars().count() + frames + 20
+        );
+        assert!(context.memory(|memory| memory.has_focus(editor_id)));
+        println!(
+            "editor_terminal workload={workload} fixture_bytes={} viewport=1280x800 terminal_height=300 terminal_cols={cols} terminal_rows={rows} theme=default-test-style scale=1 warmup=20 frames={frames} frame_p50_ms={:.3} frame_p95_ms={:.3} editor_p50_ms={:.3} terminal_p50_ms={:.3} terminal_p95_ms={:.3} tessellation_p50_ms={:.3} tessellation_p95_ms={:.3} shapes_mean={:.1} vertices_mean={:.1}",
+            body.len(),
+            percentile(&samples.frame, 50),
+            percentile(&samples.frame, 95),
+            percentile(&samples.editor, 50),
+            percentile(&samples.terminal, 50),
+            percentile(&samples.terminal, 95),
+            percentile(&samples.tessellation, 50),
+            percentile(&samples.tessellation, 95),
+            samples.shapes.iter().sum::<usize>() as f64 / frames as f64,
+            samples.vertices.iter().sum::<usize>() as f64 / frames as f64,
+        );
+    }
+}

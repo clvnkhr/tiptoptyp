@@ -631,6 +631,20 @@ pub(crate) fn configure_test_fonts(context: &egui::Context) {
     );
 }
 
+/// Recreate the font atlas for retained-layout tests while leaving every
+/// existing face and its metrics unchanged. Font installation remains owned by
+/// this rendering adapter, including deterministic test setup.
+#[cfg(test)]
+pub(crate) fn recreate_test_font_atlas(context: &egui::Context) {
+    let mut definitions = context.fonts(|fonts| fonts.definitions().clone());
+    let fallback = definitions.font_data.keys().next().unwrap().clone();
+    definitions.families.insert(
+        egui::FontFamily::Name("new-unrelated-family".into()),
+        vec![fallback],
+    );
+    context.set_fonts(definitions);
+}
+
 /// Register editor weight roles and normal/strong weighted UI families while
 /// retaining every bundled glyph fallback.
 pub fn configure_editor_fonts(

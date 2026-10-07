@@ -2,11 +2,12 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, TryLockError,
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
     thread,
+    time::{Duration, Instant},
 };
 
 use eframe::egui;
@@ -25,6 +26,9 @@ const QUEUE_CAPACITY: usize = 64;
 static NEXT_SESSION_GENERATION: AtomicU64 = AtomicU64::new(1);
 const READ_BYTES: usize = 4096;
 const BATCH_EVENTS: usize = 16;
+/// Parsing never waits for a frame, but output-only grid publication is capped
+/// so a fast TUI cannot make the entire editor repaint for every PTY read.
+const OUTPUT_FRAME_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 60);
 pub(super) const MAX_PASTE_BYTES: usize = 256 * 1024;
 
 pub(super) enum Command {
@@ -36,8 +40,11 @@ pub(super) enum Command {
     Scroll(isize),
     Focus(bool),
     Wake,
+    /// Coalesced reader notification. It wakes the worker without forcing a
+    /// grid render; bytes themselves live in a separate bounded output lane.
+    OutputReady,
+    #[cfg(test)]
     Output(Vec<u8>),
-    Eof,
     IoError(String),
     /// Dump scrollback text for find. The worker replies once; a stale
     /// receiver just drops it.
@@ -83,25 +90,48 @@ struct Shared {
     viewport: egui::ViewportId,
     generation: u64,
     content_revision: AtomicU64,
+    searchable: AtomicBool,
 }
 
 impl Shared {
     fn publish(&self, grid: Option<Grid>, status: Status) {
-        let mut snapshot = self.snapshot.lock().unwrap();
-        if let Some(grid) = grid {
-            snapshot.grid = Some(Arc::new(grid));
-        }
-        let status_changed =
-            std::mem::discriminant(&snapshot.status) != std::mem::discriminant(&status);
-        snapshot.status = status;
-        snapshot.revision += 1;
+        // Allocate before, and destroy after, taking the publication lock. A
+        // superseded grid can release many rows; the UI must never wait for it.
+        let grid = grid.map(Arc::new);
+        let mut status = Some(status);
         let bells = self.bells.load(Ordering::Acquire);
-        let alert_changed = bells > snapshot.bells;
+        let mut snapshot = self.snapshot.lock().unwrap();
+        let status_changed = snapshot.status != *status.as_ref().unwrap();
+        let alert_changed = bells != snapshot.bells;
+        if grid.is_none() && !status_changed && !alert_changed {
+            return;
+        }
+        let grid_changed = grid.is_some();
+        let old_grid = grid.and_then(|grid| snapshot.grid.replace(grid));
+        let old_status = if status_changed {
+            let status = status.take().unwrap();
+            self.searchable.store(
+                matches!(
+                    status,
+                    Status::Starting | Status::Running | Status::Exited(_)
+                ),
+                Ordering::Release,
+            );
+            Some(std::mem::replace(&mut snapshot.status, status))
+        } else {
+            None
+        };
         snapshot.bells = bells;
+        snapshot.revision += 1;
         drop(snapshot);
-        if (status_changed || alert_changed || self.visible.load(Ordering::Acquire))
-            && !self.repaint_pending.swap(true, Ordering::AcqRel)
+        drop(old_grid);
+        drop(old_status);
+        drop(status);
+        if (status_changed
+            || alert_changed
+            || (grid_changed && self.visible.load(Ordering::Acquire)))
             && !self.stopped.load(Ordering::Acquire)
+            && !self.repaint_pending.swap(true, Ordering::AcqRel)
         {
             self.context.request_repaint_of(self.viewport);
         }
@@ -146,6 +176,7 @@ impl Session {
             viewport: context.viewport_id(),
             generation: NEXT_SESSION_GENERATION.fetch_add(1, Ordering::Relaxed),
             content_revision: AtomicU64::new(0),
+            searchable: AtomicBool::new(true),
         });
         let (sender, receiver) = mpsc::sync_channel(QUEUE_CAPACITY);
         let worker_shared = shared.clone();
@@ -188,11 +219,37 @@ impl Session {
         })
     }
 
-    pub fn snapshot(&self) -> Snapshot {
-        // Clear before reading: a concurrent publish either lands in this
-        // snapshot or leaves a repaint queued for the next frame.
+    /// The editor never waits for the terminal worker's publication lock. On
+    /// contention it keeps its previous frame and retries at the output cadence.
+    /// egui coalesces this delayed request; successful reads end the retry chain.
+    pub fn try_snapshot(&self) -> Option<Snapshot> {
+        let snapshot = match self.shared.snapshot.try_lock() {
+            Ok(snapshot) => snapshot,
+            Err(TryLockError::WouldBlock) => {
+                self.shared
+                    .context
+                    .request_repaint_after_for(OUTPUT_FRAME_INTERVAL, self.shared.viewport);
+                return None;
+            }
+            Err(TryLockError::Poisoned(error)) => error.into_inner(),
+        };
+        // Acknowledge only while holding a successfully acquired lock. A later
+        // publication must take that lock and therefore schedules another frame.
         self.shared.repaint_pending.store(false, Ordering::Release);
-        self.shared.snapshot.lock().unwrap().clone()
+        Some(snapshot.clone())
+    }
+
+    #[cfg(test)]
+    pub fn snapshot(&self) -> Snapshot {
+        let snapshot = self.shared.snapshot.lock().unwrap();
+        self.shared.repaint_pending.store(false, Ordering::Release);
+        snapshot.clone()
+    }
+
+    /// Bell polling is independent of display publication and never consumes
+    /// the worker's pending grid repaint.
+    pub(super) fn bells(&self) -> u64 {
+        self.shared.bells.load(Ordering::Acquire)
     }
 
     pub(super) fn generation(&self) -> u64 {
@@ -248,6 +305,7 @@ impl Session {
                     viewport: egui::ViewportId::ROOT,
                     generation: NEXT_SESSION_GENERATION.fetch_add(1, Ordering::Relaxed),
                     content_revision: AtomicU64::new(0),
+                    searchable: AtomicBool::new(true),
                 }),
             },
             receiver,
@@ -256,16 +314,18 @@ impl Session {
 
     pub(super) fn can_search(&self) -> bool {
         !self.shared.stopped.load(Ordering::Acquire)
-            && matches!(
-                self.shared.snapshot.lock().unwrap().status,
-                Status::Starting | Status::Running | Status::Exited(_)
-            )
+            && self.shared.searchable.load(Ordering::Acquire)
     }
 
     pub fn set_visible(&self, visible: bool) {
-        self.shared.visible.store(visible, Ordering::Release);
+        let was_visible = self.shared.visible.swap(visible, Ordering::AcqRel);
         if !visible {
             self.shared.repaint_pending.store(false, Ordering::Release);
+        } else if !was_visible {
+            // Catch up even when the program finished its hidden burst and is
+            // now quiet. A full control lane already wakes the worker; pending
+            // output still has a deadline once this visibility flag is observed.
+            let _ = self.sender.try_send(Command::Wake);
         }
     }
 }
@@ -321,6 +381,129 @@ impl Drop for Process {
     }
 }
 
+#[derive(Debug)]
+enum OutputEvent {
+    Bytes(Vec<u8>),
+    Eof,
+    IoError(String),
+}
+
+struct OutputSender {
+    sender: SyncSender<OutputEvent>,
+    control: SyncSender<Command>,
+    notified: Arc<AtomicBool>,
+}
+
+impl OutputSender {
+    fn send(&self, event: OutputEvent) -> Result<(), mpsc::SendError<OutputEvent>> {
+        // Enqueue before waking. If controls fill their own lane, an existing
+        // control wakes the worker, which also polls output before blocking.
+        self.sender.send(event)?;
+        if !self.notified.swap(true, Ordering::AcqRel) {
+            let _ = self.control.try_send(Command::OutputReady);
+        }
+        Ok(())
+    }
+}
+
+enum WorkerEvent {
+    Control(Command),
+    Output(OutputEvent),
+}
+
+fn control_event(command: Command) -> WorkerEvent {
+    match command {
+        #[cfg(test)]
+        Command::Output(bytes) => WorkerEvent::Output(OutputEvent::Bytes(bytes)),
+        command => WorkerEvent::Control(command),
+    }
+}
+
+fn try_worker_event(
+    control: &Receiver<Command>,
+    output: &Receiver<OutputEvent>,
+    notified: &AtomicBool,
+) -> Option<WorkerEvent> {
+    if let Ok(command) = control.try_recv() {
+        return Some(control_event(command));
+    }
+    if let Ok(event) = output.try_recv() {
+        return Some(WorkerEvent::Output(event));
+    }
+    // Re-arm then recheck: a producer racing the empty observation either
+    // leaves bytes here or sends a new control notification. A final short
+    // burst cannot be stranded just because no subsequent PTY byte arrives.
+    notified.store(false, Ordering::Release);
+    output.try_recv().ok().map(WorkerEvent::Output)
+}
+
+/// Controls take priority, with one reserved output slot per bounded batch.
+/// A stream of resize/input controls therefore cannot starve pending PTY bytes.
+fn try_batch_event(
+    control: &Receiver<Command>,
+    output: &Receiver<OutputEvent>,
+    notified: &AtomicBool,
+    index: usize,
+    saw_output: bool,
+) -> Option<WorkerEvent> {
+    if index == BATCH_EVENTS - 1
+        && !saw_output
+        && let Ok(event) = output.try_recv()
+    {
+        return Some(WorkerEvent::Output(event));
+    }
+    try_worker_event(control, output, notified)
+}
+
+fn next_worker_event(
+    control: &Receiver<Command>,
+    output: &Receiver<OutputEvent>,
+    notified: &AtomicBool,
+    timeout: Option<Duration>,
+) -> Result<Option<WorkerEvent>, mpsc::RecvError> {
+    if let Some(event) = try_worker_event(control, output, notified) {
+        return Ok(Some(event));
+    }
+    match timeout {
+        Some(timeout) => match control.recv_timeout(timeout) {
+            Ok(command) => Ok(Some(control_event(command))),
+            Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(mpsc::RecvError),
+        },
+        None => control.recv().map(|command| Some(control_event(command))),
+    }
+}
+
+struct OutputFrames {
+    pending: bool,
+    last_publication: Instant,
+}
+
+impl OutputFrames {
+    fn new(now: Instant) -> Self {
+        Self {
+            pending: false,
+            last_publication: now,
+        }
+    }
+
+    fn wait_timeout(&self, now: Instant, visible: bool) -> Option<Duration> {
+        (self.pending && visible).then(|| {
+            OUTPUT_FRAME_INTERVAL.saturating_sub(now.duration_since(self.last_publication))
+        })
+    }
+
+    fn due(&self, now: Instant, visible: bool) -> bool {
+        self.wait_timeout(now, visible)
+            .is_some_and(|wait| wait.is_zero())
+    }
+
+    fn published(&mut self, now: Instant) {
+        self.pending = false;
+        self.last_publication = now;
+    }
+}
+
 fn run(
     shared: &Shared,
     sender: SyncSender<Command>,
@@ -360,28 +543,37 @@ fn run(
         .spawn(move || {
             while let Ok(bytes) = write_receiver.recv() {
                 if let Err(error) = writer.write_all(&bytes) {
-                    let _ = errors
-                        .try_send(Command::IoError(format!("Terminal write failed: {error}")));
+                    // The I/O thread may wait for space; unlike UI input, its
+                    // final failure must not disappear behind a full lane.
+                    let _ =
+                        errors.send(Command::IoError(format!("Terminal write failed: {error}")));
                     break;
                 }
             }
         })
         .map_err(|error| error.to_string())?;
+    let (output_sender, output_receiver) = mpsc::sync_channel(QUEUE_CAPACITY);
+    let output_notified = Arc::new(AtomicBool::new(false));
+    let output = OutputSender {
+        sender: output_sender,
+        control: sender,
+        notified: output_notified.clone(),
+    };
     thread::Builder::new()
         .name("terminal-reader".into())
         .spawn(move || {
             let mut buffer = [0; READ_BYTES];
             loop {
                 let event = match reader.read(&mut buffer) {
-                    Ok(0) => Command::Eof,
-                    Ok(len) => Command::Output(buffer[..len].to_vec()),
+                    Ok(0) => OutputEvent::Eof,
+                    Ok(len) => OutputEvent::Bytes(buffer[..len].to_vec()),
                     Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                     // Linux reports EIO when the slave side closes.
-                    Err(error) if error.raw_os_error() == Some(5) => Command::Eof,
-                    Err(error) => Command::IoError(format!("Terminal read failed: {error}")),
+                    Err(error) if error.raw_os_error() == Some(5) => OutputEvent::Eof,
+                    Err(error) => OutputEvent::IoError(format!("Terminal read failed: {error}")),
                 };
-                let finished = !matches!(event, Command::Output(_));
-                if sender.send(event).is_err() || finished {
+                let finished = !matches!(event, OutputEvent::Bytes(_));
+                if output.send(event).is_err() || finished {
                     break;
                 }
             }
@@ -409,116 +601,50 @@ fn run(
         Some(engine.snapshot().map_err(|error| error.to_string())?),
         Status::Running,
     );
-    // EOF ends PTY I/O, but the engine remains available for scrollback
-    // navigation, search and reflow. Its idle wait is a blocking mailbox read.
+    let mut frames = OutputFrames::new(Instant::now());
+    // EOF ends PTY I/O, but the engine remains available for scrollback,
+    // search and reflow. An idle/hidden pane waits on its control lane without
+    // a timer; only pending visible output gets a final-frame deadline.
     let mut process = Some(process);
     let mut write_sender = Some(write_sender);
     let mut status = Status::Running;
     while !shared.stopped.load(Ordering::Acquire) {
-        let Ok(first) = receiver.recv() else {
+        let timeout = frames.wait_timeout(Instant::now(), shared.visible.load(Ordering::Acquire));
+        let Ok(first) = next_worker_event(&receiver, &output_receiver, &output_notified, timeout)
+        else {
             break;
         };
-        let mut batch = Some(first);
-        // Rendering the grid is the batch's expensive step, and nobody sees
-        // it while the pane is hidden. Program output must still be parsed
-        // (queries, state) and status must still publish, but a batch of pure
-        // program output skips the render walk. Anything else (resize,
-        // colors, input, wakeups) renders normally so a reshown idle shell
-        // never displays a stale grid.
+        let mut batch = first;
         let mut refresh = false;
-        let mut publish = false;
-        for _ in 0..BATCH_EVENTS {
+        let mut saw_output = false;
+        for index in 0..BATCH_EVENTS {
             if shared.stopped.load(Ordering::Acquire) {
                 return Ok(());
             }
-            let Some(command) = batch.take().or_else(|| receiver.try_recv().ok()) else {
+            let Some(event) = batch.take().or_else(|| {
+                try_batch_event(
+                    &receiver,
+                    &output_receiver,
+                    &output_notified,
+                    index,
+                    saw_output,
+                )
+            }) else {
                 break;
             };
-            if !matches!(command, Command::SearchDump { .. }) {
-                publish = true;
-                refresh = refresh
-                    || shared.visible.load(Ordering::Acquire)
-                    || !matches!(command, Command::Output(_));
-            }
-            if matches!(command, Command::Resize(_))
-                || (process.is_some() && matches!(command, Command::Output(_)))
-            {
-                shared.content_revision.fetch_add(1, Ordering::Release);
-            }
+            saw_output |= matches!(event, WorkerEvent::Output(_));
             let mut bytes = Vec::new();
-            match command {
-                Command::Output(output) if process.is_some() => engine.terminal.vt_write(&output),
-                Command::Key(input) if process.is_some() => {
-                    bytes = engine.key(input).map_err(|error| error.to_string())?
+            match event {
+                WorkerEvent::Output(OutputEvent::Bytes(output)) if process.is_some() => {
+                    engine.terminal.vt_write(&output);
+                    shared.content_revision.fetch_add(1, Ordering::Release);
+                    // Retain dirtiness while hidden, but neither render nor wake
+                    // for it. A later visibility Wake catches up immediately.
+                    frames.pending = true;
                 }
-                Command::Mouse(input) if process.is_some() => {
-                    bytes = engine.mouse(input).map_err(|error| error.to_string())?
-                }
-                Command::Paste(text) if process.is_some() => {
-                    bytes = engine.paste(&text).map_err(|error| error.to_string())?
-                }
-                Command::Output(_) | Command::Key(_) | Command::Mouse(_) | Command::Paste(_) => {}
-                Command::Resize(size) => {
-                    engine.resize(size).map_err(|error| error.to_string())?;
-                    if let Some(process) = &mut process {
-                        process
-                            .master
-                            .resize(pty_size(size))
-                            .map_err(|error| error.to_string())?;
-                    }
-                }
-                Command::Colors(colors) => {
-                    let flipped = engine
-                        .set_colors(colors)
-                        .map_err(|error| error.to_string())?;
-                    // A light/dark flip reaches programs that enabled mode
-                    // 2031 as an unsolicited color-scheme report, matching
-                    // Ghostty: system theme switches propagate live.
-                    if process.is_some()
-                        && let Some(report) = engine
-                            .color_scheme_notification(flipped)
-                            .map_err(|error| error.to_string())?
-                    {
-                        bytes.extend_from_slice(&report);
-                    }
-                }
-                Command::Scroll(delta) => engine
-                    .terminal
-                    .scroll_viewport(ScrollViewport::Delta(delta)),
-                Command::SearchDump { reply } => {
-                    let dump = engine
-                        .search_dump(SEARCH_DUMP_CAP_BYTES)
-                        .map_err(|error| error.to_string())?;
-                    let revision = shared.content_revision.load(Ordering::Acquire);
-                    if reply.try_send(SearchReply { dump, revision }).is_ok() {
-                        // A search-only batch does not publish a grid, but its
-                        // reply still needs to wake the receiving pane.
-                        shared.context.request_repaint_of(shared.viewport);
-                    }
-                }
-                Command::Focus(focused) => {
-                    if process.is_some()
-                        && engine
-                            .terminal
-                            .mode(Mode::FOCUS_EVENT)
-                            .map_err(|error| error.to_string())?
-                    {
-                        let mut buffer = [0; 8];
-                        let event = if focused {
-                            focus::Event::Gained
-                        } else {
-                            focus::Event::Lost
-                        };
-                        let len = event
-                            .encode(&mut buffer)
-                            .map_err(|error| error.to_string())?;
-                        bytes.extend_from_slice(&buffer[..len]);
-                    }
-                }
-                Command::Eof => {
+                WorkerEvent::Output(OutputEvent::Bytes(_)) => {}
+                WorkerEvent::Output(OutputEvent::Eof) => {
                     if let Some(mut ended) = process.take() {
-                        // Reap even a child that deliberately closed its TTY.
-                        // The emulator remains, but no PTY commands can run.
                         let message = ended
                             .child
                             .try_wait()
@@ -534,13 +660,90 @@ fn run(
                             .map_err(|error| error.to_string())?;
                         write_sender = None;
                         drop(ended);
+                        refresh = true;
                     }
                 }
-                // A writer may have already queued its final error when the
-                // reader observed EOF. It cannot turn an ended shell Failed.
-                Command::IoError(error) if process.is_some() => return Err(error),
-                Command::IoError(_) => {}
-                Command::Wake => {}
+                WorkerEvent::Output(OutputEvent::IoError(error)) if process.is_some() => {
+                    return Err(error);
+                }
+                WorkerEvent::Output(OutputEvent::IoError(_)) => {}
+                WorkerEvent::Control(command) => {
+                    // Actual controls remain immediate. Reader notifications
+                    // and find replies never turn into grid publications.
+                    refresh |=
+                        !matches!(command, Command::OutputReady | Command::SearchDump { .. });
+                    match command {
+                        Command::Key(input) if process.is_some() => {
+                            bytes = engine.key(input).map_err(|error| error.to_string())?
+                        }
+                        Command::Mouse(input) if process.is_some() => {
+                            bytes = engine.mouse(input).map_err(|error| error.to_string())?
+                        }
+                        Command::Paste(text) if process.is_some() => {
+                            bytes = engine.paste(&text).map_err(|error| error.to_string())?
+                        }
+                        Command::Key(_) | Command::Mouse(_) | Command::Paste(_) => {}
+                        Command::Resize(size) => {
+                            engine.resize(size).map_err(|error| error.to_string())?;
+                            shared.content_revision.fetch_add(1, Ordering::Release);
+                            if let Some(process) = &mut process {
+                                process
+                                    .master
+                                    .resize(pty_size(size))
+                                    .map_err(|error| error.to_string())?;
+                            }
+                        }
+                        Command::Colors(colors) => {
+                            let flipped = engine
+                                .set_colors(colors)
+                                .map_err(|error| error.to_string())?;
+                            if process.is_some()
+                                && let Some(report) = engine
+                                    .color_scheme_notification(flipped)
+                                    .map_err(|error| error.to_string())?
+                            {
+                                bytes.extend_from_slice(&report);
+                            }
+                        }
+                        Command::Scroll(delta) => engine
+                            .terminal
+                            .scroll_viewport(ScrollViewport::Delta(delta)),
+                        Command::SearchDump { reply } => {
+                            let dump = engine
+                                .search_dump(SEARCH_DUMP_CAP_BYTES)
+                                .map_err(|error| error.to_string())?;
+                            let revision = shared.content_revision.load(Ordering::Acquire);
+                            if reply.try_send(SearchReply { dump, revision }).is_ok() {
+                                shared.context.request_repaint_of(shared.viewport);
+                            }
+                        }
+                        Command::Focus(focused) => {
+                            if process.is_some()
+                                && engine
+                                    .terminal
+                                    .mode(Mode::FOCUS_EVENT)
+                                    .map_err(|error| error.to_string())?
+                            {
+                                let mut buffer = [0; 8];
+                                let event = if focused {
+                                    focus::Event::Gained
+                                } else {
+                                    focus::Event::Lost
+                                };
+                                let len = event
+                                    .encode(&mut buffer)
+                                    .map_err(|error| error.to_string())?;
+                                bytes.extend_from_slice(&buffer[..len]);
+                            }
+                        }
+                        Command::IoError(error) if process.is_some() => return Err(error),
+                        Command::IoError(_) | Command::Wake | Command::OutputReady => {}
+                        #[cfg(test)]
+                        Command::Output(_) => {
+                            unreachable!("injected output is routed to the output handler")
+                        }
+                    }
+                }
             }
             if !bytes.is_empty()
                 && let Some(sender) = &write_sender
@@ -551,13 +754,11 @@ fn run(
                 return Err("Terminal reply queue is full or disconnected".into());
             }
         }
-        if !publish {
-            continue;
-        }
-        // Hidden output-only batches keep parsing and status but skip the
-        // grid render walk; publish(None) retains the last grid.
-        let grid = if refresh {
-            Some(engine.snapshot().map_err(|error| error.to_string())?)
+        let now = Instant::now();
+        let grid = if refresh || frames.due(now, shared.visible.load(Ordering::Acquire)) {
+            let grid = engine.snapshot().map_err(|error| error.to_string())?;
+            frames.published(Instant::now());
+            Some(grid)
         } else {
             None
         };
@@ -898,9 +1099,14 @@ mod tests {
         let grid_before = before.grid.clone().expect("initial grid");
         // Program-output-only batches while hidden keep parsing and status
         // but reuse the last grid instead of rendering a new one.
+        let before_content = session.content_revision();
         session.set_visible(false);
-        until(|| session.snapshot().revision > before.revision);
+        until(|| session.content_revision() > before_content);
         let hidden = session.snapshot();
+        assert_eq!(
+            hidden.revision, before.revision,
+            "hidden pure output is not a display publication"
+        );
         assert_eq!(hidden.status, Status::Running);
         assert!(
             hidden
@@ -911,7 +1117,6 @@ mod tests {
         );
         // Reshown batches render fresh so an idle shell never looks stale.
         session.set_visible(true);
-        session.send(Command::Wake).unwrap();
         until(|| session.snapshot().revision > hidden.revision);
         let shown = session.snapshot();
         assert!(
@@ -1028,6 +1233,7 @@ mod tests {
                 viewport: egui::ViewportId::ROOT,
                 generation: 1,
                 content_revision: AtomicU64::new(0),
+                searchable: AtomicBool::new(true),
             }),
         };
         assert!(
@@ -1046,6 +1252,224 @@ mod tests {
         drop(session);
         assert!(shared.stopped.load(Ordering::Acquire));
         assert!(receiver.try_recv().is_ok());
+    }
+
+    #[test]
+    fn display_and_bell_reads_never_wait_for_worker_publication() {
+        let (session, _receiver) = Session::search_test_session();
+        let session = Arc::new(session);
+        session.shared.bells.store(3, Ordering::Release);
+        session
+            .shared
+            .repaint_pending
+            .store(true, Ordering::Release);
+        assert_eq!(session.bells(), 3);
+        assert!(session.shared.repaint_pending.load(Ordering::Acquire));
+        let publication = session.shared.snapshot.lock().unwrap();
+        let display = session.clone();
+        let (result, received) = mpsc::channel();
+        let reader = thread::spawn(move || {
+            let snapshot = display.try_snapshot();
+            let searchable = display.can_search();
+            result.send((snapshot.is_none(), searchable)).unwrap();
+        });
+        let read = received.recv_timeout(Duration::from_secs(1));
+        // Release before asserting so a broken blocking implementation cannot
+        // leave a worker behind after the failed test.
+        drop(publication);
+        reader.join().unwrap();
+        assert_eq!(read.unwrap(), (true, true));
+        assert!(session.shared.repaint_pending.load(Ordering::Acquire));
+        assert!(session.try_snapshot().is_some());
+        assert!(!session.shared.repaint_pending.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn output_frames_are_bounded_and_flush_a_final_burst_without_more_input() {
+        let start = Instant::now();
+        let mut frames = OutputFrames::new(start);
+        assert_eq!(
+            frames.wait_timeout(start, true),
+            None,
+            "idle blocks without polling"
+        );
+        frames.pending = true;
+        assert_eq!(
+            frames.wait_timeout(start, true),
+            Some(OUTPUT_FRAME_INTERVAL)
+        );
+        let first = start + OUTPUT_FRAME_INTERVAL;
+        assert!(!frames.due(first - Duration::from_nanos(1), true));
+        assert!(
+            frames.due(first, true),
+            "the deadline flushes the final short burst"
+        );
+        frames.published(first);
+        assert_eq!(frames.wait_timeout(first, true), None);
+        frames.pending = true;
+        for offset in 0..100 {
+            assert!(!frames.due(first + Duration::from_micros(offset), true));
+        }
+        assert!(frames.due(first + OUTPUT_FRAME_INTERVAL, true));
+        assert_eq!(
+            frames.wait_timeout(first, false),
+            None,
+            "hidden output never polls"
+        );
+        assert!(!frames.due(first + OUTPUT_FRAME_INTERVAL, false));
+        assert!(
+            frames.due(first + OUTPUT_FRAME_INTERVAL, true),
+            "reshowing retains dirtiness"
+        );
+    }
+
+    #[test]
+    fn output_flood_cannot_fill_the_ui_control_lane() {
+        let (control, controls) = mpsc::sync_channel(QUEUE_CAPACITY);
+        let (output, outputs) = mpsc::sync_channel(QUEUE_CAPACITY);
+        let notified = Arc::new(AtomicBool::new(false));
+        let reader = OutputSender {
+            sender: output,
+            control: control.clone(),
+            notified: notified.clone(),
+        };
+        for _ in 0..QUEUE_CAPACITY {
+            reader
+                .send(OutputEvent::Bytes(vec![b'x'; READ_BYTES]))
+                .unwrap();
+        }
+        assert!(
+            control
+                .try_send(Command::Paste("responsive input".into()))
+                .is_ok()
+        );
+        assert!(matches!(
+            try_worker_event(&controls, &outputs, &notified),
+            Some(WorkerEvent::Control(Command::OutputReady))
+        ));
+        assert!(
+            matches!(
+                try_worker_event(&controls, &outputs, &notified),
+                Some(WorkerEvent::Control(Command::Paste(_)))
+            ),
+            "controls are processed before queued output"
+        );
+        assert!(matches!(
+            try_worker_event(&controls, &outputs, &notified),
+            Some(WorkerEvent::Output(OutputEvent::Bytes(_)))
+        ));
+        assert!(
+            controls.try_recv().is_err(),
+            "only one output wake was queued"
+        );
+    }
+
+    #[test]
+    fn continuous_controls_cannot_starve_output_beyond_one_batch() {
+        let (control, controls) = mpsc::sync_channel(QUEUE_CAPACITY);
+        let (output, outputs) = mpsc::sync_channel(1);
+        let notified = AtomicBool::new(true);
+        for _ in 0..QUEUE_CAPACITY {
+            assert!(control.try_send(Command::Wake).is_ok());
+        }
+        output
+            .send(OutputEvent::Bytes(b"pending".to_vec()))
+            .unwrap();
+        for index in 0..BATCH_EVENTS - 1 {
+            assert!(matches!(
+                try_batch_event(&controls, &outputs, &notified, index, false),
+                Some(WorkerEvent::Control(Command::Wake))
+            ));
+        }
+        assert!(matches!(
+            try_batch_event(&controls, &outputs, &notified, BATCH_EVENTS - 1, false),
+            Some(WorkerEvent::Output(OutputEvent::Bytes(_)))
+        ));
+        assert!(
+            controls.try_recv().is_ok(),
+            "output progressed with controls still queued"
+        );
+    }
+
+    #[test]
+    fn full_control_lane_does_not_lose_final_output_or_the_next_wake() {
+        let (control, controls) = mpsc::sync_channel(1);
+        let (output, outputs) = mpsc::sync_channel(2);
+        let notified = Arc::new(AtomicBool::new(false));
+        let reader = OutputSender {
+            sender: output,
+            control: control.clone(),
+            notified: notified.clone(),
+        };
+        assert!(control.send(Command::Wake).is_ok());
+        reader
+            .send(OutputEvent::Bytes(b"last burst".to_vec()))
+            .unwrap();
+        assert!(matches!(
+            next_worker_event(&controls, &outputs, &notified, None).unwrap(),
+            Some(WorkerEvent::Control(Command::Wake))
+        ));
+        assert!(matches!(
+            next_worker_event(&controls, &outputs, &notified, None).unwrap(),
+            Some(WorkerEvent::Output(OutputEvent::Bytes(bytes))) if bytes.as_slice() == b"last burst"
+        ));
+        assert!(try_worker_event(&controls, &outputs, &notified).is_none());
+        assert!(!notified.load(Ordering::Acquire));
+        reader
+            .send(OutputEvent::Bytes(b"next burst".to_vec()))
+            .unwrap();
+        assert!(matches!(
+            next_worker_event(&controls, &outputs, &notified, None).unwrap(),
+            Some(WorkerEvent::Control(Command::OutputReady))
+        ));
+        assert!(matches!(
+            next_worker_event(&controls, &outputs, &notified, None).unwrap(),
+            Some(WorkerEvent::Output(OutputEvent::Bytes(bytes))) if bytes.as_slice() == b"next burst"
+        ));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn final_output_burst_publishes_when_the_live_program_goes_quiet() {
+        let root = tempfile::tempdir().unwrap();
+        let session = start_script(root.path(), "stty -echo; printf READY; sleep 10");
+        until(|| text(&session.snapshot()).contains("READY"));
+        let revision = session.content_revision();
+        session
+            .send(Command::Output(b"FINAL-QUIET-BURST".to_vec()))
+            .unwrap();
+        until(|| session.content_revision() > revision);
+        until(|| text(&session.snapshot()).contains("FINAL-QUIET-BURST"));
+        assert_eq!(session.snapshot().status, Status::Running);
+    }
+
+    #[test]
+    fn unchanged_status_without_grid_does_not_wake_or_revise_visible_ui() {
+        let (session, _receiver) = Session::search_test_session();
+        let shared = &session.shared;
+        shared.visible.store(true, Ordering::Release);
+        let before = session.snapshot().revision;
+        for _ in 0..100 {
+            shared.publish(None, Status::Running);
+        }
+        assert_eq!(shared.snapshot.lock().unwrap().revision, before);
+        assert!(
+            !shared.repaint_pending.load(Ordering::Acquire),
+            "plain output must not wake the editor until a new grid is ready"
+        );
+    }
+
+    #[test]
+    fn changed_status_message_wakes_ui_even_when_variant_is_unchanged() {
+        let (session, _receiver) = Session::search_test_session();
+        let shared = &session.shared;
+        shared.publish(None, Status::Failed("first failure".into()));
+        session.snapshot();
+        shared.publish(None, Status::Failed("different failure".into()));
+        assert!(
+            shared.repaint_pending.load(Ordering::Acquire),
+            "a changed failure message is a real health update"
+        );
     }
 
     #[test]
@@ -1091,6 +1515,7 @@ mod tests {
             viewport: egui::ViewportId::ROOT,
             generation: 1,
             content_revision: AtomicU64::new(0),
+            searchable: AtomicBool::new(true),
         };
         for _ in 0..100 {
             shared.publish(None, Status::Running);

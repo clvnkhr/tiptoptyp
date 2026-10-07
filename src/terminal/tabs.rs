@@ -243,6 +243,26 @@ impl TerminalTabs {
         pane.show(ui, cwd);
     }
 
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    pub(crate) fn content_revision_for_test(&self) -> Option<u64> {
+        self.pane()
+            .and_then(TerminalPane::content_revision_for_test)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture_size_for_test(&self) -> (usize, usize) {
+        self.pane()
+            .expect("active terminal fixture")
+            .fixture_size_for_test()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn feed_fixture_for_test(&mut self, output: &[u8]) {
+        self.pane_mut()
+            .expect("active terminal fixture")
+            .feed_fixture_for_test(output);
+    }
+
     #[cfg(test)]
     pub(crate) fn replace_with_fixture_panes(&mut self, outputs: &[&[u8]], cwd: &Path) {
         self.panes = outputs

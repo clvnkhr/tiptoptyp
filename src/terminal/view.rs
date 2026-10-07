@@ -46,6 +46,7 @@ pub(crate) struct TerminalPane {
     wheel_remainder: f32,
     preedit: String,
     glyphs: GlyphCache,
+    display: RowDisplayCache,
     emoji: super::emoji::EmojiCache,
     mouse_held: Option<egui::PointerButton>,
     motion_cell: Option<(i32, i32)>,
@@ -158,6 +159,24 @@ impl TerminalPane {
             }
             Err(error) => self.error = Some(error.to_string()),
         }
+    }
+
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    pub(crate) fn content_revision_for_test(&self) -> Option<u64> {
+        self.session.as_ref().map(Session::content_revision)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture_size_for_test(&self) -> (usize, usize) {
+        let size = self.size.expect("laid out terminal fixture");
+        (usize::from(size.cols), usize::from(size.rows))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn feed_fixture_for_test(&mut self, output: &[u8]) {
+        let engine = self.fixture.as_mut().expect("started terminal fixture");
+        engine.terminal.vt_write(output);
+        self.grid = Some(Arc::new(engine.snapshot().expect("fixture snapshot")));
     }
 
     pub(crate) fn copy(&self, context: &egui::Context) {
@@ -297,6 +316,7 @@ impl TerminalPane {
             ui.label("Find");
             let response = ui.add(
                 egui::TextEdit::singleline(&mut self.find.query)
+                    .char_limit(super::find::MAX_QUERY_CHARS)
                     .id(field_id)
                     .hint_text("Search scrollback")
                     .desired_width(220.0),
@@ -471,11 +491,7 @@ impl TerminalPane {
     /// how fast a program rings; marks the tab badge unless the pane is
     /// currently shown, which clears a pending badge.
     pub(crate) fn poll_bell(&mut self, shown: bool) {
-        let Some(bells) = self
-            .session
-            .as_ref()
-            .map(|session| session.snapshot().bells)
-        else {
+        let Some(bells) = self.session.as_ref().map(Session::bells) else {
             return;
         };
         if bells > self.last_bell {
@@ -494,7 +510,7 @@ impl TerminalPane {
     }
 
     pub(crate) fn sync_snapshot(&mut self) {
-        if let Some(snapshot) = self.session.as_ref().map(Session::snapshot) {
+        if let Some(snapshot) = self.session.as_ref().and_then(Session::try_snapshot) {
             if self.revision != snapshot.revision
                 && !same_cells(self.grid.as_deref(), snapshot.grid.as_deref())
             {
@@ -875,6 +891,7 @@ impl TerminalPane {
                 self.selection,
                 focused,
                 &mut self.glyphs,
+                &mut self.display,
                 &mut self.emoji,
             );
             self.paint_find_matches(ui, rect, cell, grid, colors.foreground);
@@ -1157,6 +1174,355 @@ fn icon_columns(cell: &super::engine::Cell, next: Option<&super::engine::Cell>) 
     }
 }
 
+/// Retain text layouts for immutable Ghostty rows. The renderer continues to
+/// submit ordinary text shapes, so font-atlas growth later in the editor pass
+/// is handled by egui's tessellator rather than freezing normalized UV meshes.
+#[derive(Default)]
+struct RowDisplayCache {
+    rows: HashMap<usize, RowDisplay>,
+    metrics: Option<RowDisplayMetrics>,
+    font_epoch: Option<Arc<egui::Galley>>,
+    pass: u64,
+}
+
+#[derive(Clone, PartialEq)]
+struct RowDisplayMetrics {
+    cell: Vec2,
+    font: FontId,
+    pixels_per_point: f32,
+    background: Color32,
+}
+
+struct RowDisplay {
+    // Pin the row's allocation: an address may not be recycled as a cache key.
+    _source: Arc<Vec<super::engine::Cell>>,
+    backgrounds: Vec<egui::Shape>,
+    ink: Vec<(Rect, egui::Shape)>,
+    // Cached emoji shapes must outlive eviction from EmojiCache's bounded cache.
+    _textures: Vec<egui::TextureHandle>,
+    pass: u64,
+}
+
+impl RowDisplayCache {
+    #[allow(clippy::too_many_arguments)]
+    fn prepare(
+        &mut self,
+        ui: &egui::Ui,
+        rect: Rect,
+        cell: Vec2,
+        font: &FontId,
+        grid: &Grid,
+        glyphs: &mut GlyphCache,
+        emoji: &mut super::emoji::EmojiCache,
+    ) {
+        let metrics = RowDisplayMetrics {
+            cell,
+            font: font.clone(),
+            pixels_per_point: ui.ctx().pixels_per_point(),
+            background: grid.background,
+        };
+        // A cached lookup keeps this Galley alive. A rebuilt atlas or changed
+        // fonts produces a different Arc, including atlas-fullness resets that
+        // do not change the font definitions or the terminal cell dimensions.
+        let epoch =
+            ui.fonts_mut(|fonts| fonts.layout_no_wrap("M".into(), font.clone(), Color32::WHITE));
+        if self.metrics.as_ref() != Some(&metrics)
+            || self
+                .font_epoch
+                .as_ref()
+                .is_none_or(|last| !Arc::ptr_eq(last, &epoch))
+        {
+            self.rows.clear();
+            glyphs.entries.clear();
+            self.metrics = Some(metrics);
+            self.font_epoch = Some(epoch);
+        }
+        self.pass = self.pass.wrapping_add(1);
+        let pass = self.pass;
+        for (index, row) in grid.rows.iter().enumerate() {
+            if !row_display_rect(row.len(), index, rect.min, cell).intersects(rect) {
+                continue;
+            }
+            let key = Arc::as_ptr(row) as usize;
+            self.rows
+                .entry(key)
+                .or_insert_with(|| {
+                    build_row_display(ui, row.clone(), cell, font, grid.background, glyphs, emoji)
+                })
+                .pass = pass;
+        }
+        // A terminal holds only its current visible rows, never scroll history.
+        self.rows.retain(|_, row| row.pass == pass);
+    }
+
+    fn row(&self, row: &Arc<Vec<super::engine::Cell>>) -> Option<&RowDisplay> {
+        self.rows.get(&(Arc::as_ptr(row) as usize))
+    }
+}
+
+fn row_display_rect(columns: usize, row: usize, origin: Pos2, cell: Vec2) -> Rect {
+    Rect::from_min_size(
+        origin + Vec2::new(0.0, row as f32 * cell.y),
+        Vec2::new(columns as f32 * cell.x, cell.y),
+    )
+}
+
+fn local_terminal_cell(col: usize, columns: f32, cell: Vec2) -> Rect {
+    Rect::from_min_size(
+        Pos2::new(col as f32 * cell.x, 0.0),
+        Vec2::new(columns * cell.x, cell.y),
+    )
+}
+
+fn terminal_foreground(cell: &super::engine::Cell) -> Color32 {
+    if cell.style.faint {
+        cell.foreground.gamma_multiply(0.65)
+    } else {
+        cell.foreground
+    }
+}
+
+fn plain_ascii_cell(cell: &super::engine::Cell) -> bool {
+    cell.width == 1
+        && !cell.style.invisible
+        // Italic overhang stays individually fitted and clipped as before.
+        && !cell.style.italic
+        && matches!(cell.text.as_bytes(), [b' '..=b'~'])
+}
+
+fn layout_terminal_text(
+    ui: &egui::Ui,
+    text: String,
+    font: FontId,
+    foreground: Color32,
+) -> Arc<egui::Galley> {
+    #[cfg(test)]
+    ROW_LAYOUT_CALLS.with(|count| count.set(count.get() + 1));
+    ui.painter()
+        .layout_job(egui::text::LayoutJob::single_section(
+            text,
+            egui::TextFormat {
+                font_id: font,
+                color: foreground,
+                ..Default::default()
+            },
+        ))
+}
+
+fn row_decorations(
+    ink: &mut Vec<(Rect, egui::Shape)>,
+    cell: &super::engine::Cell,
+    rect: Rect,
+    color: Color32,
+) {
+    if cell.style.underline != Underline::None {
+        ink.push((
+            Rect::EVERYTHING,
+            egui::Shape::line_segment(
+                [
+                    rect.left_bottom() - Vec2::new(0.0, 1.0),
+                    rect.right_bottom() - Vec2::new(0.0, 1.0),
+                ],
+                Stroke::new(1.0, color),
+            ),
+        ));
+    }
+    if cell.style.strikethrough {
+        ink.push((
+            Rect::EVERYTHING,
+            egui::Shape::line_segment(
+                [rect.left_center(), rect.right_center()],
+                Stroke::new(1.0, color),
+            ),
+        ));
+    }
+}
+
+fn build_row_display(
+    ui: &egui::Ui,
+    source: Arc<Vec<super::engine::Cell>>,
+    cell_size: Vec2,
+    font: &FontId,
+    background: Color32,
+    glyphs: &mut GlyphCache,
+    emoji: &mut super::emoji::EmojiCache,
+) -> RowDisplay {
+    let mut backgrounds = Vec::new();
+    let mut background_run: Option<(Rect, Color32, usize)> = None;
+    for (col, cell) in source.iter().enumerate() {
+        if cell.width == 0 {
+            continue;
+        }
+        let rect = local_terminal_cell(col, f32::from(cell.width), cell_size);
+        if let Some((run, color, end)) = &mut background_run
+            && *color == cell.background
+            && *end == col
+        {
+            run.max.x = rect.right();
+            *end = col + usize::from(cell.width);
+            continue;
+        }
+        if let Some((run, color, _)) = background_run.take()
+            && color != background
+        {
+            backgrounds.push(egui::Shape::rect_filled(run, 0.0, color));
+        }
+        background_run = Some((rect, cell.background, col + usize::from(cell.width)));
+    }
+    if let Some((run, color, _)) = background_run
+        && color != background
+    {
+        backgrounds.push(egui::Shape::rect_filled(run, 0.0, color));
+    }
+
+    let mut ink = Vec::new();
+    let mut textures = Vec::new();
+    let mut col = 0;
+    while col < source.len() {
+        let cell = &source[col];
+        if cell.width == 0 || cell.style.invisible {
+            col += 1;
+            continue;
+        }
+        let foreground = terminal_foreground(cell);
+        if plain_ascii_cell(cell) {
+            let first = col;
+            let mut text = cell.text.clone();
+            col += 1;
+            while let Some(next) = source.get(col) {
+                if !plain_ascii_cell(next)
+                    || next.style != cell.style
+                    || next.foreground != cell.foreground
+                {
+                    break;
+                }
+                text.push_str(&next.text);
+                col += 1;
+            }
+            let rect = local_terminal_cell(first, (col - first) as f32, cell_size);
+            if !text.trim().is_empty() {
+                let galley = layout_terminal_text(
+                    ui,
+                    text,
+                    crate::theme::terminal_styled_font(cell.style.bold, false),
+                    foreground,
+                );
+                // Preserve Ghostty's fixed column advances. Fitting an entire
+                // run would shrink its spacing to compensate for one glyph's
+                // overhang; clipping the run preserves the monospace grid.
+                ink.push((rect, egui::Shape::galley(rect.min, galley, foreground)));
+            }
+            row_decorations(&mut ink, cell, rect, foreground);
+            continue;
+        }
+        let rect = local_terminal_cell(col, f32::from(cell.width.max(1)), cell_size);
+        if let Some(texture) = emoji.glyph(
+            ui.ctx(),
+            &cell.text,
+            cell.width,
+            font.size * ui.ctx().pixels_per_point(),
+        ) {
+            let size = texture.size_vec2();
+            let scale = (rect.width() / size.x).min(rect.height() / size.y);
+            let target = Rect::from_center_size(rect.center(), size * scale);
+            let tint = if cell.style.faint {
+                Color32::WHITE.gamma_multiply(0.65)
+            } else {
+                Color32::WHITE
+            };
+            ink.push((
+                rect,
+                egui::Shape::image(
+                    texture.id(),
+                    target,
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                    tint,
+                ),
+            ));
+            textures.push(texture.clone());
+        } else if !cell.text.is_empty() {
+            let icon = terminal_icon(&cell.text);
+            let ink_rect = if icon {
+                local_terminal_cell(col, icon_columns(cell, source.get(col + 1)), cell_size)
+            } else {
+                rect
+            };
+            let family = if icon {
+                crate::theme::terminal_icon_font(font.size * 1.5)
+            } else {
+                crate::theme::terminal_styled_font(cell.style.bold, cell.style.italic)
+            };
+            let galley = layout_terminal_text(ui, cell.text.clone(), family, foreground);
+            let (galley, offset) = if icon {
+                glyphs.fit_kind(galley, ink_rect.size(), true)
+            } else {
+                glyphs.fit(galley, ink_rect.size())
+            };
+            ink.push((
+                ink_rect,
+                egui::Shape::galley(ink_rect.min + offset, galley, foreground),
+            ));
+        }
+        row_decorations(&mut ink, cell, rect, foreground);
+        col += 1;
+    }
+    RowDisplay {
+        _source: source,
+        backgrounds,
+        ink,
+        _textures: textures,
+        pass: 0,
+    }
+}
+
+fn translated_cached_shape(source: &egui::Shape, delta: Vec2) -> egui::Shape {
+    let mut shape = source.clone();
+    if let egui::Shape::Text(text) = &mut shape {
+        // TextShape::transform calls Arc::make_mut on the full Galley even for
+        // a translation. Moving its origin alone preserves the retained layout.
+        text.pos += delta;
+    } else {
+        shape.translate(delta);
+    }
+    shape
+}
+
+fn paint_terminal_selection(
+    ui: &egui::Ui,
+    rect: Rect,
+    cell_size: Vec2,
+    grid: &Grid,
+    selection: Option<(usize, usize)>,
+) {
+    let Some((a, b)) = selection else {
+        return;
+    };
+    let range = a.min(b)..a.max(b);
+    let painter = ui.painter().with_clip_rect(rect);
+    for (row_index, row) in grid.rows.iter().enumerate() {
+        let start = row_index * usize::from(grid.cols);
+        let from = range.start.saturating_sub(start).min(row.len());
+        let to = range.end.saturating_sub(start).min(row.len());
+        let slice = &row[from..to.max(from)];
+        let Some(first) = slice.iter().position(|cell| cell.width != 0) else {
+            continue;
+        };
+        let Some(last) = slice.iter().rposition(|cell| cell.width != 0) else {
+            continue;
+        };
+        let left = from + first;
+        let right = from + last + usize::from(slice[last].width);
+        painter.rect_filled(
+            Rect::from_min_size(
+                rect.min + cell_size * Vec2::new(left as f32, row_index as f32),
+                Vec2::new((right - left) as f32 * cell_size.x, cell_size.y),
+            ),
+            0.0,
+            ui.visuals().selection.bg_fill,
+        );
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn paint(
     ui: &egui::Ui,
@@ -1168,131 +1534,33 @@ fn paint(
     selection: Option<(usize, usize)>,
     focused: bool,
     glyphs: &mut GlyphCache,
+    display: &mut RowDisplayCache,
     emoji: &mut super::emoji::EmojiCache,
 ) {
     ui.painter().rect_filled(outer, 0.0, grid.background);
     let painter = ui.painter().with_clip_rect(rect);
-    let selected = selection.map(|(a, b)| a.min(b)..a.max(b));
-    // Paint backgrounds before glyphs so a symbol may use the following blank
-    // cell without its ink being erased by selection/background painting.
-    for (row_index, row) in grid.rows.iter().enumerate() {
-        for (col, cell) in row.iter().enumerate() {
-            if cell.width == 0 {
-                continue;
-            }
-            let selected = selected
-                .as_ref()
-                .is_some_and(|range| range.contains(&(row_index * usize::from(grid.cols) + col)));
-            let color = if selected {
-                ui.visuals().selection.bg_fill
-            } else {
-                cell.background
-            };
-            if color != grid.background {
-                painter.rect_filled(
-                    Rect::from_min_size(
-                        rect.min + cell_size * Vec2::new(col as f32, row_index as f32),
-                        Vec2::new(cell_size.x * f32::from(cell.width), cell_size.y),
-                    ),
-                    0.0,
-                    color,
-                );
-            }
+    display.prepare(ui, rect, cell_size, font, grid, glyphs, emoji);
+    for (row_index, source) in grid.rows.iter().enumerate() {
+        let Some(row) = display.row(source) else {
+            continue;
+        };
+        let delta = rect.min.to_vec2() + Vec2::new(0.0, row_index as f32 * cell_size.y);
+        for shape in &row.backgrounds {
+            painter.add(translated_cached_shape(shape, delta));
         }
     }
-    for (row_index, row) in grid.rows.iter().enumerate() {
-        for (col, cell) in row.iter().enumerate() {
-            if cell.width == 0 {
-                continue;
-            }
-            let pos = rect.min + cell_size * Vec2::new(col as f32, row_index as f32);
-            let cell_rect = Rect::from_min_size(
-                pos,
-                Vec2::new(cell_size.x * f32::from(cell.width.max(1)), cell_size.y),
-            );
-            if !cell_rect.intersects(rect) {
-                continue;
-            }
-            if cell.style.invisible {
-                continue;
-            }
-            let foreground = if cell.style.faint {
-                cell.foreground.gamma_multiply(0.65)
-            } else {
-                cell.foreground
-            };
-            if let Some(texture) = emoji.glyph(
-                ui.ctx(),
-                &cell.text,
-                cell.width,
-                font.size * ui.ctx().pixels_per_point(),
-            ) {
-                let size = texture.size_vec2();
-                let scale = (cell_rect.width() / size.x).min(cell_rect.height() / size.y);
-                let target = Rect::from_center_size(cell_rect.center(), size * scale);
-                let tint = if cell.style.faint {
-                    Color32::WHITE.gamma_multiply(0.65)
-                } else {
-                    Color32::WHITE
-                };
-                painter.with_clip_rect(cell_rect.intersect(rect)).image(
-                    texture.id(),
-                    target,
-                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                    tint,
-                );
-            } else if !cell.text.is_empty() {
-                let icon = terminal_icon(&cell.text);
-                let ink_rect = if icon {
-                    Rect::from_min_size(
-                        pos,
-                        Vec2::new(
-                            cell_size.x * icon_columns(cell, row.get(col + 1)),
-                            cell_size.y,
-                        ),
-                    )
-                } else {
-                    cell_rect
-                };
-                let format = egui::TextFormat {
-                    font_id: if icon {
-                        crate::theme::terminal_icon_font(font.size * 1.5)
-                    } else {
-                        // Real bold/italic faces; never shear or double-draw.
-                        crate::theme::terminal_styled_font(cell.style.bold, cell.style.italic)
-                    },
-                    color: foreground,
-                    ..Default::default()
-                };
-                let galley = painter.layout_job(egui::text::LayoutJob::single_section(
-                    cell.text.clone(),
-                    format,
-                ));
-                let (galley, offset) = if icon {
-                    glyphs.fit_kind(galley, ink_rect.size(), true)
-                } else {
-                    glyphs.fit(galley, ink_rect.size())
-                };
-                painter.with_clip_rect(ink_rect.intersect(rect)).galley(
-                    pos + offset,
-                    galley.clone(),
-                    foreground,
-                );
-            }
-            if cell.style.underline != Underline::None {
-                painter.line_segment(
-                    [
-                        cell_rect.left_bottom() - Vec2::new(0.0, 1.0),
-                        cell_rect.right_bottom() - Vec2::new(0.0, 1.0),
-                    ],
-                    Stroke::new(1.0, foreground),
-                );
-            }
-            if cell.style.strikethrough {
-                painter.line_segment(
-                    [cell_rect.left_center(), cell_rect.right_center()],
-                    Stroke::new(1.0, foreground),
-                );
+    paint_terminal_selection(ui, rect, cell_size, grid, selection);
+    for (row_index, source) in grid.rows.iter().enumerate() {
+        let Some(row) = display.row(source) else {
+            continue;
+        };
+        let delta = rect.min.to_vec2() + Vec2::new(0.0, row_index as f32 * cell_size.y);
+        for (clip, shape) in &row.ink {
+            let clip = clip.translate(delta).intersect(rect);
+            if clip.is_positive() {
+                painter
+                    .with_clip_rect(clip)
+                    .add(translated_cached_shape(shape, delta));
             }
         }
     }
@@ -1351,8 +1619,316 @@ fn paint(
 }
 
 #[cfg(test)]
+thread_local! {
+    static ROW_LAYOUT_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    fn paint_fixture(pane: &mut TerminalPane, context: &egui::Context) -> egui::FullOutput {
+        context.run_ui(Default::default(), |ui| {
+            pane.show(ui, Path::new("/project"))
+        })
+    }
+
+    fn render_fixture(output: &[u8]) -> (TerminalPane, egui::Context) {
+        let context = egui::Context::default();
+        crate::theme::configure_test_fonts(&context);
+        let mut pane = TerminalPane::default();
+        pane.prepare_fixture(output, Path::new("/project"));
+        (pane, context)
+    }
+
+    #[test]
+    fn terminal_row_display_reuses_unchanged_text_on_editor_only_frames() {
+        let (mut pane, context) = render_fixture(b"\x1b[?25labcdefghijklmnop");
+        paint_fixture(&mut pane, &context).drop_without_applying_deltas();
+        ROW_LAYOUT_CALLS.with(|count| count.set(0));
+        for _ in 0..5 {
+            paint_fixture(&mut pane, &context).drop_without_applying_deltas();
+        }
+        assert_eq!(
+            ROW_LAYOUT_CALLS.with(std::cell::Cell::get),
+            0,
+            "unchanged terminal rows must not rebuild text when the editor repaints"
+        );
+    }
+
+    #[test]
+    fn terminal_row_display_merges_plain_ascii_runs() {
+        let (mut pane, context) = render_fixture(b"\x1b[?25labcdefghijklmnop");
+        let output = paint_fixture(&mut pane, &context);
+        let texts = output
+            .shapes
+            .iter()
+            .filter(|shape| matches!(shape.shape, egui::Shape::Text(_)))
+            .count();
+        output.drop_without_applying_deltas();
+        assert!(
+            texts <= 2,
+            "one plain ASCII row should use a bounded number of text shapes; got {texts}"
+        );
+    }
+
+    #[test]
+    fn terminal_row_display_refreshes_only_dirty_rows_and_keeps_selection_dynamic() {
+        let (mut pane, context) =
+            render_fixture(b"\x1b[?25lfirst row\r\nsecond row\r\nthird row\x1b[2;1H");
+        paint_fixture(&mut pane, &context).drop_without_applying_deltas();
+        ROW_LAYOUT_CALLS.with(|count| count.set(0));
+        pane.selection = Some((0, 5));
+        pane.focus_requested = true;
+        paint_fixture(&mut pane, &context).drop_without_applying_deltas();
+        assert_eq!(
+            ROW_LAYOUT_CALLS.with(std::cell::Cell::get),
+            0,
+            "selection and focus are overlays on retained terminal text"
+        );
+        // Keep the hidden cursor on the same row and overwrite the same
+        // ten cells: no second cursor row or old-style tail should be dirty.
+        pane.feed_fixture_for_test(b"\x1b[2;1Hchanged rw");
+        paint_fixture(&mut pane, &context).drop_without_applying_deltas();
+        assert_eq!(
+            ROW_LAYOUT_CALLS.with(std::cell::Cell::get),
+            1,
+            "only the dirty row needs a new layout"
+        );
+    }
+
+    #[test]
+    fn terminal_row_display_invalidates_when_font_atlas_is_recreated() {
+        let (mut pane, context) = render_fixture(b"\x1b[?25lretained row");
+        paint_fixture(&mut pane, &context).drop_without_applying_deltas();
+        let epoch = pane.display.font_epoch.clone().unwrap();
+        let cell = pane.display.metrics.as_ref().unwrap().cell;
+        crate::theme::recreate_test_font_atlas(&context);
+        ROW_LAYOUT_CALLS.with(|count| count.set(0));
+        paint_fixture(&mut pane, &context).drop_without_applying_deltas();
+        assert_eq!(
+            pane.display.metrics.as_ref().unwrap().cell,
+            cell,
+            "the cache must notice a rebuilt atlas even when cell metrics did not change"
+        );
+        assert!(!Arc::ptr_eq(
+            &epoch,
+            pane.display.font_epoch.as_ref().unwrap()
+        ));
+        assert!(ROW_LAYOUT_CALLS.with(std::cell::Cell::get) > 0);
+        ROW_LAYOUT_CALLS.with(|count| count.set(0));
+        paint_fixture(&mut pane, &context).drop_without_applying_deltas();
+        assert_eq!(ROW_LAYOUT_CALLS.with(std::cell::Cell::get), 0);
+    }
+
+    #[test]
+    fn terminal_row_display_invalidates_display_scale_and_colors() {
+        let (mut pane, context) = render_fixture(b"\x1b[?25lscaled row");
+        paint_fixture(&mut pane, &context).drop_without_applying_deltas();
+        let epoch = pane.display.font_epoch.clone().unwrap();
+        context.set_pixels_per_point(2.0);
+        ROW_LAYOUT_CALLS.with(|count| count.set(0));
+        paint_fixture(&mut pane, &context).drop_without_applying_deltas();
+        assert!(!Arc::ptr_eq(
+            &epoch,
+            pane.display.font_epoch.as_ref().unwrap()
+        ));
+        assert!(ROW_LAYOUT_CALLS.with(std::cell::Cell::get) > 0);
+        context.set_visuals(egui::Visuals::light());
+        ROW_LAYOUT_CALLS.with(|count| count.set(0));
+        paint_fixture(&mut pane, &context).drop_without_applying_deltas();
+        assert!(
+            ROW_LAYOUT_CALLS.with(std::cell::Cell::get) > 0,
+            "palette switches must rebuild cached foreground and backgrounds"
+        );
+        ROW_LAYOUT_CALLS.with(|count| count.set(0));
+        paint_fixture(&mut pane, &context).drop_without_applying_deltas();
+        assert_eq!(ROW_LAYOUT_CALLS.with(std::cell::Cell::get), 0);
+    }
+
+    #[test]
+    fn terminal_row_display_does_not_retain_old_output_history() {
+        let (mut pane, context) = render_fixture(b"\x1b[?25lfirst row");
+        paint_fixture(&mut pane, &context).drop_without_applying_deltas();
+        for index in 0..100 {
+            pane.feed_fixture_for_test(format!("\x1b[Hupdated row {index:03}").as_bytes());
+            paint_fixture(&mut pane, &context).drop_without_applying_deltas();
+            let grid = pane.grid.as_ref().unwrap();
+            assert!(pane.display.rows.len() <= grid.rows.len());
+            assert!(
+                pane.display
+                    .rows
+                    .values()
+                    .all(|entry| grid.rows.iter().any(|row| Arc::ptr_eq(row, &entry._source)))
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_row_display_merges_adjacent_cell_backgrounds() {
+        let (mut pane, context) = render_fixture(b"\x1b[?25l\x1b[41mabcdefgh\x1b[0m");
+        let output = paint_fixture(&mut pane, &context);
+        let background = pane.grid.as_ref().unwrap().rows[0][0].background;
+        let count = output
+            .shapes
+            .iter()
+            .filter(
+                |shape| matches!(&shape.shape, egui::Shape::Rect(rect) if rect.fill == background),
+            )
+            .count();
+        output.drop_without_applying_deltas();
+        assert_eq!(count, 1, "adjacent equal backgrounds share one rectangle");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn terminal_row_display_retains_emoji_until_the_row_is_replaced() {
+        let (mut pane, context) = render_fixture("\x1b[?25l😀".as_bytes());
+        paint_fixture(&mut pane, &context).drop_without_applying_deltas();
+        let texture = pane
+            .display
+            .rows
+            .values()
+            .flat_map(|row| &row._textures)
+            .next()
+            .expect("colored emoji row")
+            .id();
+        context
+            .run_ui(Default::default(), |ui| {
+                // More than the emoji cache's capacity of negative wide lookups
+                // evicts the original handle, while its display row stays current.
+                for character in '\u{4e00}'..'\u{5000}' {
+                    let _ = pane.emoji.glyph(ui.ctx(), &character.to_string(), 2, 13.0);
+                }
+            })
+            .drop_without_applying_deltas();
+        assert!(
+            context.tex_manager().read().meta(texture).is_some(),
+            "a retained row must own its image even after glyph-cache eviction"
+        );
+        pane.feed_fixture_for_test(b"\x1b[2J\x1b[Hplain replacement");
+        paint_fixture(&mut pane, &context).drop_without_applying_deltas();
+        assert!(
+            context.tex_manager().read().meta(texture).is_none(),
+            "retired display rows must release their emoji images"
+        );
+    }
+
+    #[test]
+    fn terminal_row_display_keeps_unicode_and_italic_cells_individually_clipped() {
+        let (mut pane, context) =
+            render_fixture("\x1b[?25l\x1b[3mitalic\x1b[0m界e\u{301}\u{f120} ".as_bytes());
+        paint_fixture(&mut pane, &context).drop_without_applying_deltas();
+        let grid = pane.grid.as_ref().unwrap();
+        let display = pane.display.row(&grid.rows[0]).unwrap();
+        let cell = pane.display.metrics.as_ref().unwrap().cell;
+        let text_clips: Vec<_> = display
+            .ink
+            .iter()
+            .filter_map(|(clip, shape)| matches!(shape, egui::Shape::Text(_)).then_some(*clip))
+            .collect();
+        assert_eq!(text_clips.len(), 9);
+        for clip in &text_clips[..6] {
+            assert!(
+                (clip.width() - cell.x).abs() < 0.001,
+                "italic letters retain their one-cell clipping"
+            );
+        }
+        assert!(
+            (text_clips[6].width() - cell.x * 2.0).abs() < 0.001,
+            "wide Unicode respects Ghostty's two-column allocation"
+        );
+        assert!(
+            (text_clips[7].width() - cell.x).abs() < 0.001,
+            "combining marks keep the original grapheme's one column"
+        );
+        assert!(
+            (text_clips[8].width() - cell.x * 2.0).abs() < 0.001,
+            "private-use icons may use the following blank as before"
+        );
+        ROW_LAYOUT_CALLS.with(|count| count.set(0));
+        paint_fixture(&mut pane, &context).drop_without_applying_deltas();
+        assert_eq!(ROW_LAYOUT_CALLS.with(std::cell::Cell::get), 0);
+    }
+
+    #[test]
+    fn terminal_ascii_runs_preserve_fixed_column_advances_at_every_scale() {
+        let text = "  AVMW{}()i|_,.  ";
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            for bold in [false, true] {
+                let output = format!("\x1b[?25l{}{}", if bold { "\x1b[1m" } else { "" }, text);
+                let (mut pane, context) = render_fixture(output.as_bytes());
+                context.set_pixels_per_point(scale);
+                paint_fixture(&mut pane, &context).drop_without_applying_deltas();
+                let grid = pane.grid.as_ref().unwrap();
+                let row = pane.display.row(&grid.rows[0]).unwrap();
+                let cell = pane.display.metrics.as_ref().unwrap().cell;
+                let text_shapes: Vec<_> = row
+                    .ink
+                    .iter()
+                    .filter_map(|(_, shape)| {
+                        if let egui::Shape::Text(text) = shape {
+                            Some(text)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                assert_eq!(text_shapes.len(), 1);
+                let shape = text_shapes[0];
+                assert_eq!(
+                    shape.pos.x, 0.0,
+                    "leading spaces are part of the fixed column run"
+                );
+                let glyphs: Vec<_> = shape
+                    .galley
+                    .rows
+                    .iter()
+                    .flat_map(|row| &row.glyphs)
+                    .collect();
+                assert_eq!(glyphs.len(), text.chars().count());
+                for (column, glyph) in glyphs.iter().enumerate() {
+                    assert!(
+                        (glyph.advance_width - cell.x).abs() < 0.001,
+                        "ASCII run must never scale its column advances: bold={bold} scale={scale} char={:?} advance={} column_width={}",
+                        glyph.chr,
+                        glyph.advance_width,
+                        cell.x
+                    );
+                    assert!(
+                        (glyph.pos.x - column as f32 * cell.x).abs() <= 1.0 / scale,
+                        "shaped glyph must stay at its Ghostty column: bold={bold} scale={scale} column={column} x={} cell={}",
+                        glyph.pos.x,
+                        cell.x
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_row_display_translation_preserves_shared_galley() {
+        let context = egui::Context::default();
+        context
+            .run_ui(Default::default(), |ui| {
+                let galley = ui.painter().layout_no_wrap(
+                    "retained".into(),
+                    FontId::monospace(13.0),
+                    Color32::WHITE,
+                );
+                let bounds = galley.mesh_bounds;
+                let source =
+                    egui::Shape::galley(Pos2::new(3.0, 4.0), galley.clone(), Color32::WHITE);
+                let translated = translated_cached_shape(&source, Vec2::new(10.0, 20.0));
+                let egui::Shape::Text(text) = translated else {
+                    panic!("text shape");
+                };
+                assert!(Arc::ptr_eq(&text.galley, &galley));
+                assert_eq!(text.pos, Pos2::new(13.0, 24.0));
+                assert_eq!(text.galley.mesh_bounds, bounds);
+            })
+            .drop_without_applying_deltas();
+    }
 
     #[test]
     fn mouse_geometry_and_surface_positions_map_pointer_pixels() {
@@ -2196,6 +2772,55 @@ mod tests {
         harness.get_by_label("Close terminal find").click();
         harness.run_steps(2);
         assert!(harness.query_by_label_contains("Find").is_none());
+    }
+
+    #[test]
+    fn terminal_find_bounds_large_unicode_pastes_without_losing_focus() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        let mut pane = TerminalPane::default();
+        pane.prepare_fixture(b"DO NOT MODIFY", Path::new("/project"));
+        let mut configured = false;
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(500.0, 220.0))
+            .build_ui_state(
+                move |ui, pane: &mut TerminalPane| {
+                    if !configured {
+                        crate::theme::configure_test_fonts(ui.ctx());
+                        configured = true;
+                        return;
+                    }
+                    pane.show(ui, Path::new("/project"));
+                },
+                pane,
+            );
+        harness.run_steps(2);
+        harness.state_mut().open_find();
+        harness.run_steps(2);
+        harness.get_by_label("Search terminal scrollback").click();
+        harness.run_steps(2);
+        harness.event(egui::Event::Paste(
+            "é".repeat(super::super::find::MAX_QUERY_CHARS * 8),
+        ));
+        harness.run_steps(2);
+        let expected = "é".repeat(super::super::find::MAX_QUERY_CHARS);
+        assert_eq!(
+            harness.state().find.query,
+            expected,
+            "limit counts characters, not UTF-8 bytes"
+        );
+        // A further insertion at the limit is ignored while the field keeps
+        // keyboard ownership; neither event reaches the terminal grid.
+        harness.event(egui::Event::Text("Z".into()));
+        harness.run_steps(2);
+        assert_eq!(harness.state().find.query, expected);
+        assert!(harness.state().find.is_open());
+        let field_id = terminal_find_id(&harness.ctx);
+        assert!(harness.ctx.memory(|memory| memory.has_focus(field_id)));
+        let first_row = harness.state().grid.as_ref().unwrap().rows[0]
+            .iter()
+            .map(|cell| cell.text.as_str())
+            .collect::<String>();
+        assert_eq!(first_row.trim_end(), "DO NOT MODIFY");
     }
 
     #[test]

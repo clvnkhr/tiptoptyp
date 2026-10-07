@@ -160,6 +160,8 @@ impl EditorApp {
         interaction["terminal_count"] = serde_json::json!(self.terminal.len());
         interaction["terminal_active"] = serde_json::json!(self.terminal.active_index());
         interaction["terminal_find"] = self.terminal.inspect_find(context);
+        interaction["terminal_content_revision"] =
+            serde_json::json!(self.terminal.content_revision_for_test());
         interaction["independent_main_dividers"] =
             serde_json::json!(self.settings.independent_main_dividers);
         interaction["indentation_guides"] = serde_json::json!(self.settings.indentation_guides);

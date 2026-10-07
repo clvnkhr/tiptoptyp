@@ -704,3 +704,114 @@ A native sampled smoke run (one warmup plus one measured launch) completed in
 sample files. Its timings are diagnostic only: sampling and concurrent checks
 make it unsuitable for comparison with the earlier optimized measurements.
 There is no production performance change in this audit.
+
+
+## Terminal/editor rendering isolation (7 October 2026)
+
+Ghostty VT parsing and PTY I/O already run outside the UI thread. The remaining
+shared cost was constructing terminal text on every document frame, including
+frames caused solely by typing in the code editor. The failing reproduction
+recorded 80 repeated text layouts for an unchanged small terminal and 16 text
+shapes for one plain ASCII row.
+
+The terminal now retains layouts for immutable visible Ghostty rows. Unchanged
+rows do not rebuild text. Plain ASCII cells with matching style/color become
+runs, adjacent backgrounds merge, and non-ASCII glyphs retain the existing cell
+fitting and clipping. Cursor, selection, link and find overlays remain dynamic.
+The cache pins row allocations, emoji textures and text galleys, retains only
+visible rows, and invalidates on font-atlas, scale, cell-size or palette changes.
+It submits ordinary text shapes rather than meshes with frozen atlas coordinates.
+
+Output publication is paced at 60 Hz with a timed final-burst flush; hidden output
+continues to parse without building visible grids. Keyboard/control traffic and
+PTY output use separate bounded queues. Visible snapshots use a nonblocking read
+and keep the last frame when contended; old grids are reclaimed outside the
+publication lock. Bell polling and search availability use atomics. Showing a
+pane requests a fresh snapshot. None of this adds an idle repaint loop.
+
+This reduces work charged to the editor frame; eframe still submits the terminal
+and editor through one GPU frame. It does not guarantee independent GPU rendering
+or a particular input latency for arbitrary programs or document sizes.
+
+Run the opt-in matched CPU probe with an optimized binary:
+
+```sh
+cargo test --release --bin tiptoptyp editor_terminal_frame_cost_probe -- --ignored --nocapture --test-threads=1
+TIPTOPTYP_PROBE_LINES=2000 cargo test --release --bin tiptoptyp editor_terminal_frame_cost_probe -- --ignored --nocapture --test-threads=1
+```
+
+The fixtures contain 200 or 2,000 sections, each five physical lines. Each case
+uses 1,280 × 800 points, a 300-point bottom region, scale 1, default test style,
+20 warmup frames and 120 measured single-character edits. Code-only keeps the
+same empty bottom region. The other cases use an idle terminal, one dirty row per
+frame or a full ANSI grid redraw per frame. The probe separately measures UI
+construction and CPU tessellation. Dirty VT parsing/publication happens before
+timing; one clean fixture snapshot remains within UI timing. External tools and
+native previews are disabled. GPU upload/presentation and worker contention are
+excluded; real concurrent output is covered separately by the native journey.
+
+The `terminal_load` desktop journey uses isolated, bounded Python producers at
+requested 30/60 Hz. It posts one character per native input call and verifies
+exact editor source, caret, keyboard ownership, terminal worker advancement,
+producer completion and pane/process cleanup. Its observations are interaction
+evidence, not sub-frame key-to-pixel latency measurements.
+
+
+On an Apple M2 Max, macOS 14.6.1 arm64 and Rust 1.98.1, three interleaved
+before/after rounds using preserved release test binaries produced the following
+medians of the runs' p50 samples. Rows below use the 16,980-byte fixture and a
+156 × 15 terminal. UI and tessellation are separate scopes; the terminal column
+is nested inside document UI and must not be added to it again.
+
+| Workload | Terminal UI ms, before → after | Document UI ms, before → after | Tessellation ms, before → after |
+| --- | --- | --- | --- |
+| Code only | 0 → 0 | 3.280 → 3.318 | 0.035 → 0.035 |
+| Idle terminal | 0.817 → 0.015 | 4.143 → 3.255 | 0.580 → 0.064 |
+| One dirty row | 0.821 → 0.043 | 4.138 → 3.383 | 0.578 → 0.065 |
+| Full terminal redraw | 0.822 → 0.160 | 4.170 → 3.537 | 0.568 → 0.069 |
+
+Frame shapes fell from 4,757 to 107, including the unchanged editor/control
+shapes; vertices fell from roughly 29,834 to 11,234 for full redraw. Full-redraw
+terminal UI construction fell about 81%. These are CPU frame preparation costs,
+not terminal parser throughput or key-to-pixel timings.
+
+The 173,780-byte fixture gave terminal UI costs of 0.850 → 0.189 ms for full
+redraw and 0.846 → 0.035 ms when idle. Its code-only UI remained about 33.6 ms in
+both binaries, so this work does not remove large-document editing costs. The
+initial baseline run was faster than the later matched rounds even for code-only;
+only the interleaved rounds above are used for the comparison. Local numbers do
+not establish a cross-platform guarantee.
+
+The source patches, compiler/hardware/workload metadata, failing reproductions,
+complete logs, comparison JSON and both binary hashes are retained in the ignored
+`.tiptoptyp/profiles/terminal-isolation-2026-10-07/` directory. Every round verifies
+that each typed character reaches the editor and that its keyboard focus stays
+there. No concurrent builds or other profiling workloads ran during these rounds.
+
+Find queries are capped at 4,096 Unicode characters. Find still performs a bounded
+512 KiB/4,096-row scan synchronously at at most five refreshes per second when its
+query is nonempty, and visible match geometry is computed on the UI thread.
+Moving that work into latest-wins worker results remains a separate optimization;
+the measurements above have Find closed.
+
+
+Real macOS input journeys `terminal_load`, `panels` and `terminal_find` passed on
+one verified desktop feature binary (`678f8b0eb81f…`), with Accessibility and
+input-posting permission available. Their evidence folders are respectively
+`.tiptoptyp/desktop-ui-tests/run-ec5fv2cx/`, `run-up1b51ax/` and `run-t8os8owj/`.
+The bounded producers completed 217 and 399 full redraws in about eight seconds
+at requested 30/60 Hz; actual rates were about 27/50 Hz. Both 24-character editing
+sequences kept exact source/caret/focus while worker output advanced, and both
+producer processes were reaped. Those debug-build observations validate input
+ownership/concurrent progress, not latency or optimized throughput.
+
+
+Required formatting/lint checks, 1,561 default-suite tests, 1,569 profiling-suite
+tests and all 17 xtask tests passed. Feature linting covered profiling and desktop
+inspection together. The atlas-reset test uses the shared font adapter; the
+architecture boundary guard remains intact. A fresh Catppuccin Latte terminal
+viewport (`.tiptoptyp/screenshots/agent-review/terminal-isolation/1791384844507-0001-main-terminal-panel.png`)
+was inspected for regular/bold/italic column spacing, Unicode/emoji visibility
+and clipping. This is viewport pixel evidence, not a native preview composition
+claim. The font-owner correction only moved test setup after the measurements;
+production rendering and the measured probe were unchanged.

@@ -22,7 +22,7 @@ import tempfile
 import time
 
 sys.dont_write_bytecode = True
-from desktop_ui_journeys import EditorJourneys, PREVIEW_SOURCE
+from desktop_ui_journeys import EditorJourneys, PREVIEW_SOURCE, fingerprint
 from desktop_ui_tex_journeys import TEX_JOURNEYS, TEX_SOURCE
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -534,6 +534,114 @@ class Journey(EditorJourneys):
         self.wait("terminal search journey leaves the bottom panel hidden", lambda d: unchanged(d)
                   and d["panel"] is None)
 
+    def terminal_load(self):
+        """Real editor typing while an isolated process redraws the terminal."""
+        import shlex
+
+        text = "Terminal load fixture.\n\n"
+        tab_count = self.scratch(text)
+        if self.snapshot()["document"]["panel"] is None:
+            self.key(23)
+            self.wait("bottom panel opens for terminal load", lambda d: d["panel"] is not None)
+        self.click("panel.terminal")
+        self.wait("Terminal selected for redraw workload", lambda d: d["panel"] == "Terminal")
+        initial_count = self.snapshot()["document"]["terminal_count"]
+        producer = self.directory / "terminal-load.py"
+        producer.write_text('''import json, os, shutil, sys, time
+from pathlib import Path
+rate = int(sys.argv[1])
+start, stop = map(Path, sys.argv[2:4])
+start.write_text(json.dumps({"pid": os.getpid(), "rate": rate}))
+started = time.monotonic()
+frames = 0
+sys.stdout.write("\\x1b[?1049h\\x1b[?25l")
+while time.monotonic() - started < 8:
+    cols, rows = shutil.get_terminal_size((100, 20))
+    cols, rows = min(cols, 240), min(rows, 80)
+    output = []
+    for row in range(rows):
+        message = f"task {row:02} frame {frames:05} Thinking about the next response; checking sources. "
+        line = (message * (cols // len(message) + 1))[:cols]
+        output.append(f"\\x1b[{row + 1};1H\\x1b[38;5;{33 + (row + frames) % 6}m\\x1b[48;5;{234 + row % 3}m" + line)
+    sys.stdout.write("".join(output))
+    sys.stdout.flush()
+    frames += 1
+    time.sleep(1 / rate)
+sys.stdout.write("\\x1b[0m\\x1b[?25h\\x1b[?1049l")
+sys.stdout.flush()
+stop.write_text(json.dumps({"pid": os.getpid(), "rate": rate, "frames": frames, "seconds": time.monotonic() - started}))
+''')
+        shutil.copy2(producer, self.evidence / producer.name)
+        for rate in (30, 60):
+            self.click("terminal.new")
+            self.wait("fresh redraw pane opens", lambda d: d["terminal_count"] == initial_count + 1,
+                      timeout=15)
+            start = self.directory / f"terminal-load-{rate}.start.json"
+            stop = self.directory / f"terminal-load-{rate}.stop.json"
+            command = "exec " + " ".join(map(shlex.quote, (sys.executable, "-u", str(producer), str(rate), str(start), str(stop))))
+            self.click("terminal.input")
+            self.native("text", command)
+            self.key(36, "none")
+            self.wait("bounded full-screen redraw producer starts", lambda d: start.exists()
+                      and start.stat().st_size > 0 and d["terminal_status"] is None,
+                      timeout=15)
+            started = json.loads(start.read_text())
+            if started["pid"] <= 1 or started["pid"] in (self.process.pid, os.getpid()):
+                raise AssertionError("invalid terminal redraw producer PID")
+            os.kill(started["pid"], 0)
+            self.record("terminal.load.start", **started)
+            self.click("editor.source")
+            self.key(125)  # Cmd+Down places the caret at the end of the scratch.
+            before = self.wait("editor owns keyboard during terminal output",
+                               lambda d: d["editor_keyboard_focused"] and not d["terminal_find"]["focused"])["document"]
+            revision = before["terminal_content_revision"]
+            if revision is None:
+                raise AssertionError("terminal redraw pane has no content revision")
+            for index, character in enumerate("Smooth typing under load"):
+                # One native text call per character: the adapter otherwise
+                # batches up to 16 UTF-16 units into each posted key event.
+                self.native("text", character)
+                text += character
+                if index % 8 == 7:
+                    self.wait("typed source and caret remain correct under terminal load",
+                              lambda d: d["source_fingerprint"] == fingerprint(text)
+                              and d["cursor"] == [len(text), len(text)]
+                              and d["editor_keyboard_focused"])
+            state = self.wait("worker output and editor typing both advance",
+                              lambda d: d["source_fingerprint"] == fingerprint(text)
+                              and d["cursor"] == [len(text), len(text)]
+                              and d["editor_keyboard_focused"]
+                              and d["terminal_content_revision"] > revision)["document"]
+            if stop.exists():
+                raise AssertionError("redraw producer finished before the typing workload")
+            self.record("terminal.load.typing", rate=rate,
+                        source_bytes=state["source_bytes"], cursor=state["cursor"],
+                        worker_revision_before=revision,
+                        worker_revision_after=state["terminal_content_revision"])
+            self.stable_state(lambda d: d["source_fingerprint"] == fingerprint(text)
+                              and d["cursor"] == [len(text), len(text)]
+                              and d["editor_keyboard_focused"])
+            self.wait("bounded redraw producer writes its stop receipt", lambda d: stop.exists()
+                      and stop.stat().st_size > 0, timeout=15)
+            stopped = json.loads(stop.read_text())
+            if stopped["pid"] != started["pid"] or stopped["frames"] < 2:
+                raise AssertionError("terminal redraw did not complete the recorded workload")
+            self.record("terminal.load.stop", **stopped)
+            def producer_gone():
+                try:
+                    os.kill(started["pid"], 0)
+                    return False
+                except ProcessLookupError:
+                    return True
+
+            self.click("terminal.off")
+            self.wait("redraw pane closes and reaps its process without altering source",
+                      lambda d: d["terminal_count"] == initial_count and producer_gone()
+                      and d["source_fingerprint"] == fingerprint(text))
+        self.key(23)
+        self.wait("terminal load leaves bottom panel hidden", lambda d: d["panel"] is None)
+        self.close_scratch(tab_count)
+
     def find(self):
         for _ in range(3):
             self.key(3)  # Cmd+F
@@ -726,7 +834,7 @@ class Journey(EditorJourneys):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--journey", choices=["all", "tex", *TEX_JOURNEYS, "drawing", "snippets", "panels", "terminal_find", "find", "rectangle", "empty", "focus", "preview", "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "controls", "settings_search", "editor_preferences", "background", "context_menu"], default="all")
+    parser.add_argument("--journey", choices=["all", "tex", *TEX_JOURNEYS, "drawing", "snippets", "panels", "terminal_find", "terminal_load", "find", "rectangle", "empty", "focus", "preview", "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "controls", "settings_search", "editor_preferences", "background", "context_menu"], default="all")
     parser.add_argument("--review-preview", action="store_true", help="pause at each dark/comfy renderer for independent on-screen review; not an automated visual pass")
     parser.add_argument("--capture-review", action="store_true", help="capture affected settings/controls framebuffers for separate visual inspection")
     parser.add_argument("--trace-preview", action="store_true", help="retain native preview geometry traces")
@@ -750,7 +858,7 @@ def main():
         if not args.prepare_only and not args.observe_only:
             import pwd
             shell = os.environ.get("SHELL") or pwd.getpwuid(os.getuid()).pw_shell
-            if args.journey in ("all", "panels", "terminal_find") and Path(shell).resolve() != Path("/bin/zsh"):
+            if args.journey in ("all", "panels", "terminal_find", "terminal_load") and Path(shell).resolve() != Path("/bin/zsh"):
                 raise RuntimeError("terminal journey currently requires /bin/zsh so startup files can be isolated with ZDOTDIR")
             preflight = subprocess.run([str(driver), "preflight"], capture_output=True, text=True, timeout=6)
             result["preflight"] = preflight.stdout.strip()
@@ -905,7 +1013,7 @@ def main():
                         return
                     if args.capture_review:
                         journey.capture_viewport("main")
-                    for name in (["panels", "terminal_find", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "focus", "settings_search", "editor_preferences", "background", "context_menu", "pdf_output", "preview", "controls", "empty", "snippets", "drawing", *TEX_JOURNEYS] if args.journey == "all" else TEX_JOURNEYS if args.journey == "tex" else [args.journey]):
+                    for name in (["panels", "terminal_find", "terminal_load", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "focus", "settings_search", "editor_preferences", "background", "context_menu", "pdf_output", "preview", "controls", "empty", "snippets", "drawing", *TEX_JOURNEYS] if args.journey == "all" else TEX_JOURNEYS if args.journey == "tex" else [args.journey]):
                         journey.record("journey.start", name=name)
                         getattr(journey, name)()
                         result["journeys"].append(name)

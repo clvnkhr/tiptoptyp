@@ -14,6 +14,8 @@ use super::{
 const DUMP_THROTTLE: Duration = Duration::from_millis(200);
 const REPLY_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const MAX_FIND_MATCHES: usize = 8192;
+/// Keep case folding and query layout bounded even for a large clipboard paste.
+pub(super) const MAX_QUERY_CHARS: usize = 4096;
 
 /// Absolute physical row and original character span, before lowercase can
 /// expand a character (for example U+0130 becomes `i` plus a combining dot).
