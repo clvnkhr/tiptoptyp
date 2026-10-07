@@ -916,6 +916,7 @@ enum SettingsTarget {
     HueShift,
     ThemeColors,
     PageTheme,
+    DarkImages,
     WrapLines,
     IndependentDividers,
     IndentationGuides,
@@ -961,7 +962,7 @@ enum SettingsTarget {
 }
 
 impl SettingsTarget {
-    const ALL: [Self; 50] = [
+    const ALL: [Self; 51] = [
         Self::Appearance,
         Self::TypstSyntax,
         Self::LightTheme,
@@ -970,6 +971,7 @@ impl SettingsTarget {
         Self::HueShift,
         Self::ThemeColors,
         Self::PageTheme,
+        Self::DarkImages,
         Self::WrapLines,
         Self::IndependentDividers,
         Self::IndentationGuides,
@@ -1024,6 +1026,7 @@ impl SettingsTarget {
             Self::HueShift => "Hue shift",
             Self::ThemeColors => "Color adjustments",
             Self::PageTheme => "Page",
+            Self::DarkImages => "Apply dark page appearance to images",
             Self::WrapLines => "Wrap lines",
             Self::IndependentDividers => "Independent main dividers",
             Self::IndentationGuides => "Indentation guides",
@@ -1078,7 +1081,8 @@ impl SettingsTarget {
             | Self::InvertColors
             | Self::HueShift
             | Self::ThemeColors
-            | Self::PageTheme => SettingsSection::Appearance,
+            | Self::PageTheme
+            | Self::DarkImages => SettingsSection::Appearance,
             Self::IndependentDividers
             | Self::WrapLines
             | Self::IndentationGuides
@@ -1136,6 +1140,9 @@ impl SettingsTarget {
             }
             Self::PageTheme => {
                 "document pdf image light dark follow interface effective comfy preview page text"
+            }
+            Self::DarkImages => {
+                "image images invert inversion colors colours dark light page appearance"
             }
             Self::WrapLines => "editor soft wrapping word wrap",
             Self::IndependentDividers => {
@@ -3438,7 +3445,7 @@ impl EditorApp {
                 } else if let Some(section) = self
                     .explorer
                     .focused_section()
-                    .filter(|section| section.searchable())
+                    .filter(|section| self.explorer.panel_visible() && section.searchable())
                 {
                     self.explorer.focus_section_search(section);
                     context.request_repaint();
@@ -6062,7 +6069,7 @@ impl EditorApp {
         if let Some(id) = focused {
             context.memory_mut(|memory| memory.surrender_focus(id));
         }
-        self.explorer.set_focused_section(None);
+        self.explorer.clear_keyboard_focus();
         self.editor_completion = None;
     }
 
@@ -8227,7 +8234,7 @@ impl EditorApp {
         }
     }
 
-    fn show_preview(&mut self, ui: &mut egui::Ui, frame: Option<&eframe::Frame>) {
+    fn show_preview(&mut self, ui: &mut egui::Ui, frame: Option<&eframe::Frame>, split_pane: bool) {
         self.preview_controls.available = Some(ui.available_rect_before_wrap());
         if self.document().kind().preview_only() && !self.source_preview_available() {
             self.hide_webview();
@@ -8255,12 +8262,13 @@ impl EditorApp {
         if status.should_attempt_native {
             let available = ui.available_rect_before_wrap();
             let clip = ui.clip_rect();
-            let rect = native_preview_content_rect(
-                available,
-                clip,
-                self.view_mode == ViewMode::Split,
+            let (left_grip, bottom_grip) = panel_handles::native_preview_grips(
+                split_pane,
+                self.explorer.panel_visible(),
                 self.bottom_panel.selected().is_some(),
+                self.preview_controls.popout.is_some(),
             );
+            let rect = native_preview_content_rect(available, clip, left_grip, bottom_grip);
             let Some(native_rect) = egui_rect_to_native(ui.ctx(), rect) else {
                 self.hide_webview();
                 return;
@@ -9104,7 +9112,6 @@ impl EditorApp {
             let panel_id = explorer_panel_id(&context);
             let editor_id = editor_panel_id(&context);
             let content_rect = ui.available_rect_before_wrap().intersect(ui.clip_rect());
-            let mut explorer_width = 0.0;
             if self.explorer.panel_visible() {
                 let persisted_width = egui::PanelState::load(&context, panel_id)
                     .map_or(METRICS.chrome.explorer_default_width, |state| {
@@ -9145,7 +9152,6 @@ impl EditorApp {
                     divider.y_range(),
                     panel_handles::panel_divider(ui, panel_id),
                 );
-                explorer_width = explorer_panel.response.rect.width();
                 if let Some(state) = egui::PanelState::load(&context, panel_id) {
                     self.explorer.remember_width(state.size().x);
                 }
@@ -9155,16 +9161,9 @@ impl EditorApp {
                 self.tabs.is_empty(),
                 self.document().kind(),
                 self.source_preview_available(),
-                if self.preview_controls.popout.is_some() {
-                    ViewMode::Code
-                } else {
-                    self.view_mode
-                },
+                self.view_mode,
+                self.preview_controls.popout.is_some(),
             );
-            let previous_width = context
-                .data(|data| data.get_temp::<f32>(panel_id.with("presented-width")))
-                .unwrap_or(explorer_width);
-            let delta = explorer_width - previous_width;
             let layout = theme::split_pane_layout(ui.available_width());
             let independent = self.settings.independent_main_dividers
                 && matches!(
@@ -9181,26 +9180,19 @@ impl EditorApp {
                 previous_editor.map(|state| state.outer_rect),
                 independent,
             );
-            if independent
-                && delta.abs() > 0.01
-                && let Some(mut editor) = previous_editor
-            {
-                // Disappearing Explorer occupies zero width too: adjust before
-                // presenting the editor, so the preview edge stays fixed on
-                // drag, hide, and reopen without an intermediate moving frame.
-                let width = panel_handles::editor_width(
-                    editor.size().x,
-                    delta,
+            if let Some(mut editor) = previous_editor
+                && let Some(rect) = panel_handles::compensated_editor_rect(
+                    editor.outer_rect,
+                    editor_available,
                     layout.editor_minimum,
                     editor_maximum,
-                );
-                editor.outer_rect.min.x = editor_available.left();
-                editor.outer_rect.max.x = editor.outer_rect.min.x + width;
+                )
+            {
+                // Compare with the last actual split pane, including when
+                // Explorer changed while Code/Preview-only views were shown.
+                editor.outer_rect = rect;
                 context.data_mut(|data| data.insert_persisted(editor_id, editor));
             }
-            context.data_mut(|data| {
-                data.insert_temp(panel_id.with("presented-width"), explorer_width)
-            });
             if !self.pdfium_preview_requested() {
                 self.pdfium_preview = Default::default();
             }
@@ -9216,7 +9208,10 @@ impl EditorApp {
                         .frame(theme::content_panel_frame(ui.style()))
                         .show(ui, |ui| match content_view {
                             ContentView::Empty => self.show_empty_workspace(ui, frame),
-                            ContentView::Asset if self.preview_controls.popout.is_some() => {
+                            ContentView::Asset
+                                if self.preview_controls.popout.is_some()
+                                    && !self.source_preview_available() =>
+                            {
                                 ui.weak("Preview is open in its own window");
                             }
                             ContentView::Asset => self.show_asset_view(ui),
@@ -9257,12 +9252,12 @@ impl EditorApp {
                     );
                     egui::CentralPanel::default()
                         .frame(theme::content_panel_frame(ui.style()).inner_margin(0.0))
-                        .show(ui, |ui| self.show_preview(ui, frame));
+                        .show(ui, |ui| self.show_preview(ui, frame, true));
                 }
                 ContentView::Preview => {
                     egui::CentralPanel::default()
                         .frame(theme::content_panel_frame(ui.style()).inner_margin(0.0))
-                        .show(ui, |ui| self.show_preview(ui, frame));
+                        .show(ui, |ui| self.show_preview(ui, frame, false));
                 }
             }
         }

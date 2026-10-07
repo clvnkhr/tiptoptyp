@@ -733,11 +733,17 @@ fn asset_panes_keep_the_preview_in_every_source_view_mode() {
     for kind in [DocumentKind::Image, DocumentKind::Pdf] {
         for mode in [ViewMode::Code, ViewMode::Split, ViewMode::Preview] {
             assert_eq!(
-                content_view(false, kind, true, mode),
+                content_view(false, kind, true, mode, false),
                 ContentView::SplitAsset
             );
-            assert_eq!(content_view(false, kind, false, mode), ContentView::Asset);
-            assert_eq!(content_view(true, kind, true, mode), ContentView::Empty);
+            assert_eq!(
+                content_view(false, kind, false, mode, false),
+                ContentView::Asset
+            );
+            assert_eq!(
+                content_view(true, kind, true, mode, false),
+                ContentView::Empty
+            );
         }
     }
 }

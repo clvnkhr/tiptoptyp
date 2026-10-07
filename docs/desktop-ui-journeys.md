@@ -38,7 +38,14 @@ into a uniquely identified temporary app bundle. It launches one editor window
 with a disposable document, fresh settings and session storage. Use `--release`
 for the optimized production profile; the profile is recorded in `result.json`.
 The focused `explorer_toggle` fixture adds 1,800 long comment rows to exercise
-source reflow while preserving the three-page preview. Preview/controls/tabs/layout/background/all runs
+source reflow while preserving the three-page preview. It also closes, reopens,
+and drags Explorer while Code/Preview-only views hide the split editor, then
+checks that returning to Split preserves the independent divider. Its focus
+checks cover explicit Code focus and Cmd+F after closing a focused Explorer.
+The `images` journey also starts from a typesetting document to check that an
+active image remains visible beside a popped-out designated source preview, with
+no duplicate main-window preview divider, and restores correctly on closing it.
+Preview/controls/tabs/layout/background/all runs
 use a three-page Typst document and require working Tinymist, Typst and PDFium tools. The `panels`, `terminal_find`, `terminal_load` and `terminal_theme`
 journeys currently require the system `/bin/zsh`; it isolates zsh startup files
 and shell history with `ZDOTDIR`. No user document is opened. The fixture app
@@ -47,7 +54,13 @@ and its process group are terminated on success or failure.
 Multiline fixture input uses an acknowledged native paste. The adapter holds the
 previous clipboard representations in memory, waits for the runner to observe
 the expected source fingerprint, then restores them unless another process has
-changed the clipboard meanwhile. Clipboard contents are never written to logs.
+changed the clipboard meanwhile. Native Copy checks likewise hold the prior
+representations, acknowledge only whether the selected fixture text was copied,
+and restore only that observed copy if no newer clipboard write occurred.
+An unmatched write is left alone because it could belong to another process.
+Copy/paste adapters are stopped and reaped on restoration timeouts; such a run
+fails and does not claim that restoration succeeded. Clipboard contents are
+never written to logs.
 
 Normal builds contain no inspection endpoint. A feature build only starts one
 when `TIPTOPTYP_DESKTOP_TEST_DIR` names a fresh private directory (mode 0700).

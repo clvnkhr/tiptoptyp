@@ -69,6 +69,7 @@ class ImageJourneys:
 
     def images(self):
         self.focus_document_window()
+        self.ensure_typesetting_tab()
         original_document = self.snapshot()["document"]
         self.image_page_choice("Dark")
         # Defaults preserve original image colors even when PDFs use dark pages.
@@ -115,7 +116,13 @@ class ImageJourneys:
             self.click("image.dark")
             self.wait("image dark preference disables", lambda d: not d["dark_images"])
             verify(False, "original toggle " + str(cycle))
-        self.click("image.dark")
+        self.settings()
+        self.setting_section("dark images", "Apply dark page appearance to images")
+        self.wait("image search highlights the exact preference", lambda d:
+                  d["settings_highlight"] == "Apply dark page appearance to images")
+        self.click("settings.dark_images")
+        self.wait("Settings enables image opt-in", lambda d: d["dark_images"])
+        self.close_settings()
         self.wait("opt in for page mode transitions", lambda d: d["dark_images"])
         verify(True, "dark pages opted in")
         self.image_page_choice("Light")
@@ -128,6 +135,28 @@ class ImageJourneys:
         verify(False, "restored default")
         self.image_page_choice("FollowInterface")
         verify(False, "follow interface with images opted out")
+        # With a source preview pinned, opening an image uses an asset split.
+        # A popout must render the source only in its own window; the active
+        # image stays visible in the main window with no second preview divider.
+        self.click("preview.open")
+        self.wait_target("preview.Pop out")
+        self.click("preview.Pop out")
+        self.wait("source preview opens separately beside the active image", lambda d:
+                  d["preview_popout"] and d["path"] == str(path) and d["asset_image_ready"])
+        self.native_wait("preview popout is registered", lambda windows:
+                         any(window["AXTitle"] == "tiptoptyp Preview" for window in windows))
+        for _ in range(8):
+            state = self.snapshot()
+            image = state["targets"].get("image.dark")
+            divider = state["targets"].get("divider.editor")
+            if not image or image["frame"] != state["document"]["frame"]:
+                raise AssertionError("popout hid the active image from the main window")
+            if divider and divider["frame"] == state["document"]["frame"]:
+                raise AssertionError("popout left a second preview split in the main window")
+        self.native("close", "tiptoptyp Preview")
+        self.wait("closing the popout restores the asset split", lambda d:
+                  not d["preview_popout"] and d["path"] == str(path) and d["focused"])
+        verify(False, "restored asset after popout")
         self.key(13)
         self.wait("image closes without changing the prior document",
                   lambda d: d["tabs"] == original_document["tabs"]

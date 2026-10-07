@@ -115,6 +115,22 @@ pub(super) fn paint(
         );
     }
 }
+/// Native child views must leave their document window's neighboring grips
+/// exposed. Detached previews have no such neighbors, even when those panels
+/// remain visible in the document window.
+pub(super) fn native_preview_grips(
+    split_pane: bool,
+    explorer_visible: bool,
+    bottom_visible: bool,
+    popout: bool,
+) -> (bool, bool) {
+    let main = !popout;
+    (
+        main && (split_pane || explorer_visible),
+        main && bottom_visible,
+    )
+}
+
 /// A panel's contents may demand more height than the remaining main region.
 pub(super) fn divider_rect(panel: Rect, allocated: Rect) -> Rect {
     panel.intersect(allocated)
@@ -128,11 +144,12 @@ pub(super) fn editor_maximum(
 ) -> f32 {
     if independent
         && let Some(previous) = previous
-        && previous.right() <= available.right()
+        && previous.right() < available.right()
     {
         // Keep an existing small preview instead of enlarging its preferred
         // reserve when Explorer disappears. A real viewport shrink still
-        // falls back to the normal limits when the old edge no longer fits.
+        // falls back to normal limits if retaining the edge consumes the
+        // entire preview, or if the old edge lies outside the viewport.
         preferred
             .max(previous.right() - available.left())
             .min(available.width().max(0.0))
@@ -143,6 +160,26 @@ pub(super) fn editor_maximum(
 
 pub(super) fn editor_width(width: f32, explorer_delta: f32, minimum: f32, maximum: f32) -> f32 {
     (width - explorer_delta).clamp(minimum, maximum.max(minimum))
+}
+
+/// Reanchor a retained split pane after its neighbors changed while it was
+/// visible or hidden. The pane's own last position is the reference, so a
+/// Code-only/Preview-only/popout frame cannot erase the required displacement.
+pub(super) fn compensated_editor_rect(
+    previous: Rect,
+    available: Rect,
+    minimum: f32,
+    maximum: f32,
+) -> Option<Rect> {
+    let displacement = available.left() - previous.left();
+    if displacement.abs() <= 0.01 {
+        return None;
+    }
+    let width = editor_width(previous.width(), displacement, minimum, maximum);
+    let mut adjusted = previous;
+    adjusted.min.x = available.left();
+    adjusted.max.x = available.left() + width;
+    Some(adjusted)
 }
 
 #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
@@ -280,12 +317,23 @@ mod tests {
     }
 
     #[test]
+    fn independent_divider_reserves_preview_at_exact_edge_viewport_shrink() {
+        let previous = Rect::from_min_max(egui::pos2(300.0, 40.0), egui::pos2(900.0, 400.0));
+        let available = Rect::from_min_max(egui::pos2(300.0, 40.0), egui::pos2(900.0, 400.0));
+        let layout = crate::theme::split_pane_layout(available.width());
+        assert_eq!(
+            editor_maximum(available, layout.editor_maximum, Some(previous), true),
+            layout.editor_maximum,
+            "retaining the edge at the new viewport edge hides the entire preview"
+        );
+    }
+
+    #[test]
     fn independent_egui_panels_keep_a_forty_pixel_preview_through_close_reopen_and_idle() {
         let context = egui::Context::default();
         let explorer_id = egui::Id::new("narrow-preview-explorer");
         let editor_id = egui::Id::new("narrow-preview-editor");
         let screen = Rect::from_min_size(Pos2::ZERO, egui::vec2(1200.0, 300.0));
-        let mut previous_explorer = None;
 
         // Reuse the same Context so Panel persists its actual size between
         // frames. The last two frames exercise an idle closed layout too.
@@ -317,17 +365,17 @@ mod tests {
                             previous.map(|state| state.outer_rect),
                             true,
                         );
-                        let delta = explorer_width - previous_explorer.unwrap_or(explorer_width);
-                        if delta.abs() > 0.01
-                            && let Some(mut state) = previous
+                        if let Some(mut state) = previous
+                            && let Some(adjusted) = compensated_editor_rect(
+                                state.outer_rect,
+                                available,
+                                layout.editor_minimum,
+                                maximum,
+                            )
                         {
-                            let width =
-                                editor_width(state.size().x, delta, layout.editor_minimum, maximum);
-                            state.outer_rect.min.x = available.left();
-                            state.outer_rect.max.x = available.left() + width;
+                            state.outer_rect = adjusted;
                             context.data_mut(|data| data.insert_persisted(editor_id, state));
                         }
-                        previous_explorer = Some(explorer_width);
 
                         observed.0 = egui::Panel::left(editor_id)
                             .frame(egui::Frame::NONE)
@@ -366,6 +414,100 @@ mod tests {
             assert_eq!(observed.1.width(), 40.0, "Explorer width {explorer_width}");
             let persisted = egui::PanelState::load(&context, editor_id).unwrap();
             assert_eq!(persisted.outer_rect, observed.0);
+        }
+    }
+
+    #[test]
+    fn independent_preview_edge_survives_explorer_changes_while_split_is_hidden() {
+        let context = egui::Context::default();
+        let explorer_id = egui::Id::new("hidden-split-explorer");
+        let editor_id = egui::Id::new("hidden-split-editor");
+        // A hidden split pane can correspond to Code, Preview, or a popout.
+        // Closing, reopening and resizing Explorer while hidden must preserve
+        // the edge when Split returns. A real viewport shrink may move it.
+        for (explorer_width, split, viewport_width, expected_edge) in [
+            (300.0, true, 1200.0, 900.0),
+            (0.0, false, 1200.0, 900.0),
+            (0.0, true, 1200.0, 900.0),
+            (400.0, false, 1200.0, 900.0),
+            (400.0, true, 1200.0, 900.0),
+            (470.0, false, 1200.0, 900.0),
+            (470.0, true, 1200.0, 900.0),
+            (470.0, false, 880.0, 900.0),
+            (470.0, true, 880.0, 784.0),
+            (470.0, true, 1200.0, 784.0),
+            (0.0, false, 1200.0, 784.0),
+            (0.0, true, 1200.0, 784.0),
+            (400.0, true, 1200.0, 784.0),
+        ] {
+            let screen = Rect::from_min_size(Pos2::ZERO, egui::vec2(viewport_width, 300.0));
+            let mut observed_edge = None;
+            context
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(screen),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        if explorer_width > 0.0 {
+                            egui::Panel::left(explorer_id)
+                                .frame(egui::Frame::NONE)
+                                .show_separator_line(false)
+                                .exact_size(explorer_width)
+                                .show(ui, |ui| {
+                                    ui.label("Explorer");
+                                });
+                        }
+                        let available = ui.available_rect_before_wrap();
+                        let layout = crate::theme::split_pane_layout(available.width());
+                        let previous = split
+                            .then(|| egui::PanelState::load(&context, editor_id))
+                            .flatten();
+                        let maximum = editor_maximum(
+                            available,
+                            layout.editor_maximum,
+                            previous.map(|state| state.outer_rect),
+                            split,
+                        );
+                        if let Some(mut state) = previous
+                            && let Some(adjusted) = compensated_editor_rect(
+                                state.outer_rect,
+                                available,
+                                layout.editor_minimum,
+                                maximum,
+                            )
+                        {
+                            state.outer_rect = adjusted;
+                            context.data_mut(|data| data.insert_persisted(editor_id, state));
+                        }
+                        if split {
+                            observed_edge = Some(
+                                egui::Panel::left(editor_id)
+                                    .frame(egui::Frame::NONE)
+                                    .show_separator_line(false)
+                                    .default_size(600.0)
+                                    .min_size(layout.editor_minimum)
+                                    .max_size(maximum)
+                                    .show(ui, |ui| {
+                                        ui.set_min_size(ui.available_size());
+                                    })
+                                    .response
+                                    .rect
+                                    .right(),
+                            );
+                        }
+                        egui::CentralPanel::default()
+                            .frame(egui::Frame::NONE)
+                            .show(ui, |ui| {
+                                ui.label("Document");
+                            });
+                    },
+                )
+                .drop_without_applying_deltas();
+            if let Some(edge) = observed_edge {
+                assert_eq!(edge, expected_edge, "Explorer width {explorer_width}");
+                assert!(edge < viewport_width, "preview has no remaining width");
+            }
         }
     }
 

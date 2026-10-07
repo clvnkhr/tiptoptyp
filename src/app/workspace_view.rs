@@ -33,18 +33,20 @@ pub(super) enum ContentView {
 pub(super) fn content_view(
     empty: bool,
     kind: DocumentKind,
-    typst: bool,
+    source_preview: bool,
     mode: ViewMode,
+    popped_out: bool,
 ) -> ContentView {
+    let source_preview = source_preview && !popped_out;
     if empty {
         ContentView::Empty
     } else if kind.preview_only() {
-        if typst {
+        if source_preview {
             ContentView::SplitAsset
         } else {
             ContentView::Asset
         }
-    } else if !typst {
+    } else if !source_preview {
         ContentView::Source
     } else {
         match mode {
@@ -378,5 +380,50 @@ mod tests {
         harness.run();
         assert!(harness.query_by_label("Create a blank document").is_some());
         assert!(harness.query_by_label("Open an existing file").is_some());
+    }
+
+    #[test]
+    fn popped_out_preview_has_no_second_renderer_in_main_content() {
+        for kind in [
+            DocumentKind::Typst,
+            DocumentKind::Tex,
+            DocumentKind::Text,
+            DocumentKind::Image,
+            DocumentKind::Pdf,
+        ] {
+            for mode in [ViewMode::Code, ViewMode::Split, ViewMode::Preview] {
+                for source_preview in [false, true] {
+                    let main = if kind.preview_only() {
+                        ContentView::Asset
+                    } else {
+                        ContentView::Source
+                    };
+                    assert_eq!(
+                        content_view(false, kind, source_preview, mode, true),
+                        main,
+                        "popped-out preview rendered a second time in main content ({kind:?}, {mode:?})"
+                    );
+                    let docked = if !source_preview {
+                        main
+                    } else if kind.preview_only() {
+                        ContentView::SplitAsset
+                    } else {
+                        match mode {
+                            ViewMode::Code => ContentView::Source,
+                            ViewMode::Split => ContentView::SplitSource,
+                            ViewMode::Preview => ContentView::Preview,
+                        }
+                    };
+                    assert_eq!(
+                        content_view(false, kind, source_preview, mode, false),
+                        docked
+                    );
+                    assert_eq!(
+                        content_view(true, kind, source_preview, mode, true),
+                        ContentView::Empty
+                    );
+                }
+            }
+        }
     }
 }

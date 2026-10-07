@@ -541,6 +541,7 @@ impl SettingsPanel<'_> {
                         theme_label(Some(edited.document_theme.resolve(effective_theme))),
                     );
                 });
+                settings_target_anchor(ui, SettingsTarget::DarkImages, &mut settings_scroll_target);
                 image_appearance_preference(ui, &mut edited);
 
                 ui.add_space(theme::SPACE.small);
@@ -1468,7 +1469,7 @@ fn show_tex_preferences(
 }
 
 fn image_appearance_preference(ui: &mut egui::Ui, settings: &mut AppSettings) {
-    let _images = ui.checkbox(&mut settings.dark_images, "Apply dark page appearance to images")
+    let _images = ui.checkbox(&mut settings.dark_images, SettingsTarget::DarkImages.label())
         .on_hover_text("Invert image colors when pages are dark. Light pages keep the original colors; image files are unchanged.");
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     if ui.is_rect_visible(_images.rect) {

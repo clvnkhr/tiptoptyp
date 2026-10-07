@@ -19,6 +19,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 sys.dont_write_bytecode = True
@@ -74,10 +75,14 @@ class Journey(EditorJourneys):
         self.multiple_windows = False
         self.review_preview = False
         self.log = (evidence / "events.jsonl").open("w")
+        self.record_lock = threading.Lock()
 
     def record(self, action, **detail):
-        self.log.write(json.dumps({"time": time.monotonic(), "action": action, **detail}) + "\n")
-        self.log.flush()
+        # Native input and frame observation can run concurrently. Keep each
+        # complete evidence line and its flush together in the shared stream.
+        with self.record_lock:
+            self.log.write(json.dumps({"time": time.monotonic(), "action": action, **detail}) + "\n")
+            self.log.flush()
 
     def native(self, command, *args):
         if command in {"click", "double-click", "drag", "key", "move", "wheel", "text", "paste", "right-click"}:
@@ -707,6 +712,11 @@ stop.write_text(json.dumps({"pid": os.getpid(), "rate": rate, "frames": frames, 
         self.wait("Settings closed and document focused", lambda d: not d["settings_visible"] and d["focused"])
 
     def setting_section(self, query, title):
+        # JSON edits preserve that mode when Settings closes. A form-section
+        # search must explicitly return to the form before using its field.
+        if self.snapshot()["document"]["settings_json"]["visible"]:
+            self.click("settings.json.mode")
+            self.wait("Settings form ready", lambda d: not d["settings_json"]["visible"])
         self.click("settings.search")
         self.key(0)
         self.native("text", query)
@@ -776,18 +786,8 @@ stop.write_text(json.dumps({"pid": os.getpid(), "rate": rate, "frames": frames, 
                                 raise
                             time.sleep(0.05)
                 self.record("preview.transition", backend=backend, dark=dark, comfy=comfy)
-                if self.review_preview and dark and comfy:
-                    resume = self.evidence / (backend + ".reviewed")
-                    print(f"Visual review: {backend}; app={self.directory / 'Journey.app'}; resume={resume}", flush=True)
-                    deadline = time.monotonic() + 180
-                    while not resume.exists():
-                        if self.process.poll() is not None or time.monotonic() >= deadline:
-                            raise RuntimeError("visual review not completed within three minutes")
-                        time.sleep(0.2)
-                    # Independent inspection tools may restore their previous app.
-                    # Explicitly return to the fixture at this manual boundary.
-                    self.native("activate")
-                    self.wait("document focused after manual review", lambda d: d["focused"])
+                if dark and comfy:
+                    self.review_native_preview(backend)
 
     def native_wait(self, description, predicate, timeout=6):
         deadline = time.monotonic() + timeout
@@ -840,7 +840,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--journey", choices=["all", "tex", *TEX_JOURNEYS, *IMAGE_JOURNEYS, "drawing", "snippets", "panels", "terminal_find", "terminal_load", "terminal_theme", "find", "rectangle", "empty", "focus", "preview", "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "controls", "settings_search", "editor_preferences", "background", "context_menu"], default="all")
     parser.add_argument("--release", action="store_true", help="use the optimized production profile for large-document journeys")
-    parser.add_argument("--review-preview", action="store_true", help="pause at each dark/comfy renderer for independent on-screen review; not an automated visual pass")
+    parser.add_argument("--review-preview", action="store_true", help="pause at affected native preview states for independent on-screen review; not an automated visual pass")
     parser.add_argument("--capture-review", action="store_true", help="capture affected settings/controls framebuffers for separate visual inspection")
     parser.add_argument("--trace-preview", action="store_true", help="retain native preview geometry traces")
     parser.add_argument("--review-failure", action="store_true", help="retain a failed fixture for up to three minutes of independent inspection")
@@ -899,7 +899,7 @@ def main():
                 "CFBundleExecutable": "tiptoptyp", "CFBundleIdentifier": "dev.tiptoptyp.journey." + directory.name,
                 "CFBundleName": "tiptoptyp UI Journey", "CFBundlePackageType": "APPL", "NSHighResolutionCapable": True,
             }))
-            fixture = directory / ("journey.tex" if args.journey == "tex" or args.journey in TEX_JOURNEYS else "journey.typ" if args.journey in ("all", "preview", "pdf_output", "preview_keyboard", "controls", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "layout", "explorer_toggle", "explorer_scroll", "background") else "journey.txt")
+            fixture = directory / ("journey.tex" if args.journey == "tex" or args.journey in TEX_JOURNEYS else "journey.typ" if args.journey in ("all", *IMAGE_JOURNEYS, "preview", "pdf_output", "preview_keyboard", "controls", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "layout", "explorer_toggle", "explorer_scroll", "background") else "journey.txt")
             fixture.write_text(
                 TEX_SOURCE
                 if fixture.suffix == ".tex"

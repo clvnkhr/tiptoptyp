@@ -59,10 +59,28 @@ struct AssetRequest {
     dark: bool,
 }
 
+#[derive(Debug)]
+enum AssetCommand {
+    Load(AssetRequest),
+    ReleaseCache,
+}
+
+impl AssetCommand {
+    fn into_request(self, image_cache: &mut ImageSourceCache) -> Option<AssetRequest> {
+        match self {
+            Self::Load(request) => Some(request),
+            Self::ReleaseCache => {
+                image_cache.entry = None;
+                None
+            }
+        }
+    }
+}
+
 /// Decodes images and reads opened PDFs away from egui's frame callback.
 /// Load images and immutable PDF bytes off the UI thread.
 pub struct AssetLoader {
-    requests: Option<LatestSender<AssetRequest>>,
+    requests: Option<LatestSender<AssetCommand>>,
     results: Receiver<AssetResult>,
     disconnected: AtomicBool,
     worker: Option<thread::JoinHandle<()>>,
@@ -112,17 +130,23 @@ impl AssetLoader {
         self.requests
             .as_ref()
             .ok_or_else(|| "The image/PDF loader has stopped".to_owned())?
-            .send(AssetRequest {
+            .send(AssetCommand::Load(AssetRequest {
                 token,
                 path,
                 kind,
                 dark,
-            })
+            }))
             .map_err(|_| "The image/PDF loader stopped unexpectedly".to_owned())
     }
 
     pub fn cancel_before(&self, token: AssetToken) {
         self.latest_token.store(token.0, Ordering::Release);
+        // Document changes release the old source even when no new asset is
+        // opened. Wake the idle worker once; appearance requests do not cancel
+        // and keep reusing the same source. A newer load may replace this command.
+        if let Some(requests) = &self.requests {
+            let _ = requests.send(AssetCommand::ReleaseCache);
+        }
     }
 
     pub fn try_recv(&self) -> Option<AssetResult> {
@@ -515,7 +539,15 @@ impl ImageSourceCache {
         if cancelled() {
             return Err("Image loading was superseded by another file".into());
         }
-        let key = ImageSourceKey::read(path)?;
+        let key = match ImageSourceKey::read(path) {
+            Ok(key) => key,
+            Err(error) => {
+                // A replacement may coalesce a cache-release command. Failed
+                // inspection must still release the previous file's pixels.
+                self.entry = None;
+                return Err(error);
+            }
+        };
         if let Some((cached, source)) = &self.entry
             && cached == &key
         {
@@ -563,18 +595,21 @@ fn image_appearance(source: Arc<PreviewPage>, dark: bool) -> PreviewPage {
 }
 
 fn worker_loop(
-    requests: LatestReceiver<AssetRequest>,
+    requests: LatestReceiver<AssetCommand>,
     results: Sender<AssetResult>,
     context: crate::worker::RepaintTarget,
     shutdown: Arc<AtomicBool>,
     latest_token: Arc<AtomicU64>,
 ) {
     let mut image_cache = ImageSourceCache::default();
-    while let Ok(request) = requests.recv() {
-        let request = take_latest_queued(request, &requests);
+    while let Ok(command) = requests.recv() {
+        let command = take_latest_queued(command, &requests);
         if shutdown.load(Ordering::Acquire) {
             break;
         }
+        let Some(request) = command.into_request(&mut image_cache) else {
+            continue;
+        };
 
         let cancelled = || {
             shutdown.load(Ordering::Acquire)
@@ -604,9 +639,9 @@ fn worker_loop(
 }
 
 fn take_latest_queued(
-    mut request: AssetRequest,
-    requests: &LatestReceiver<AssetRequest>,
-) -> AssetRequest {
+    mut request: AssetCommand,
+    requests: &LatestReceiver<AssetCommand>,
+) -> AssetCommand {
     while let Ok(newer) = requests.try_recv() {
         request = newer;
     }
@@ -678,6 +713,26 @@ mod tests {
             kind: DocumentKind::Pdf,
             dark: false,
         }
+    }
+
+    #[test]
+    fn asset_cancellation_wakes_worker_to_release_cached_source() {
+        let (requests, receiver) = latest_channel();
+        let (_results, result_rx) = mpsc::channel();
+        let loader = AssetLoader {
+            requests: Some(requests),
+            results: result_rx,
+            disconnected: AtomicBool::new(false),
+            worker: None,
+            shutdown: Arc::new(AtomicBool::new(false)),
+            latest_token: Arc::new(AtomicU64::new(0)),
+        };
+        loader.cancel_before(AssetToken(1));
+        assert_eq!(loader.latest_token.load(Ordering::Acquire), 1);
+        assert!(
+            matches!(receiver.try_recv(), Ok(AssetCommand::ReleaseCache)),
+            "cancellation must wake an idle worker to release the previous image"
+        );
     }
 
     #[test]
@@ -865,11 +920,108 @@ mod tests {
     #[test]
     fn queued_asset_requests_collapse_to_the_newest() {
         let (sender, receiver) = latest_channel();
-        sender.send(request(2)).unwrap();
-        sender.send(request(3)).unwrap();
+        sender.send(AssetCommand::Load(request(2))).unwrap();
+        sender.send(AssetCommand::Load(request(3))).unwrap();
 
-        let latest = take_latest_queued(request(1), &receiver);
+        let AssetCommand::Load(latest) =
+            take_latest_queued(AssetCommand::Load(request(1)), &receiver)
+        else {
+            panic!("newest asset load was discarded")
+        };
 
+        assert_eq!(latest.token.0, 3);
+        assert_eq!(latest.path, PathBuf::from("asset-3.pdf"));
+    }
+
+    #[test]
+    fn cache_release_drops_source_pixels_and_supersedes_pending_loads() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("image.png");
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 255]))
+            .save(&path)
+            .unwrap();
+        let mut cache = ImageSourceCache::default();
+        let source = cache.source(&path, &|| false).unwrap();
+        let pixels = Arc::downgrade(&source);
+        drop(source);
+        assert!(pixels.upgrade().is_some());
+        let (sender, receiver) = latest_channel();
+        sender.send(AssetCommand::Load(request(2))).unwrap();
+        sender.send(AssetCommand::ReleaseCache).unwrap();
+        let latest = take_latest_queued(AssetCommand::Load(request(1)), &receiver);
+        assert!(latest.into_request(&mut cache).is_none());
+        assert!(cache.entry.is_none());
+        assert!(
+            pixels.upgrade().is_none(),
+            "closed image must release its pixels"
+        );
+    }
+
+    #[test]
+    fn failed_new_image_lookup_releases_the_previous_cached_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("image.png");
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 255]))
+            .save(&path)
+            .unwrap();
+        let mut cache = ImageSourceCache::default();
+        let source = cache.source(&path, &|| false).unwrap();
+        let pixels = Arc::downgrade(&source);
+        drop(source);
+        let (sender, receiver) = latest_channel();
+        sender.send(AssetCommand::ReleaseCache).unwrap();
+        sender
+            .send(AssetCommand::Load(AssetRequest {
+                token: AssetToken(1),
+                path: directory.path().join("missing.png"),
+                kind: DocumentKind::Image,
+                dark: false,
+            }))
+            .unwrap();
+        let request = take_latest_queued(AssetCommand::ReleaseCache, &receiver)
+            .into_request(&mut cache)
+            .unwrap();
+        assert!(cache.load(&request.path, request.dark, &|| false).is_err());
+        assert!(
+            pixels.upgrade().is_none(),
+            "a failed replacement must not retain the previous image's pixels"
+        );
+    }
+
+    #[test]
+    fn cache_release_emits_no_asset_result_or_repaint() {
+        let (sender, receiver) = latest_channel();
+        sender.send(AssetCommand::ReleaseCache).unwrap();
+        drop(sender);
+        let (results, result_rx) = mpsc::channel();
+        let context = eframe::egui::Context::default();
+        let repaints = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed_repaints = repaints.clone();
+        context.set_request_repaint_callback(move |_| {
+            observed_repaints.fetch_add(1, Ordering::Relaxed);
+        });
+        worker_loop(
+            receiver,
+            results,
+            crate::worker::RepaintTarget::current(&context),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicU64::new(0)),
+        );
+        assert!(matches!(
+            result_rx.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+        assert_eq!(repaints.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn newer_asset_load_supersedes_a_pending_cache_release() {
+        let (sender, receiver) = latest_channel();
+        sender.send(AssetCommand::ReleaseCache).unwrap();
+        sender.send(AssetCommand::Load(request(3))).unwrap();
+        let mut cache = ImageSourceCache::default();
+        let latest = take_latest_queued(AssetCommand::Load(request(1)), &receiver);
+        let latest = latest.into_request(&mut cache).unwrap();
         assert_eq!(latest.token.0, 3);
         assert_eq!(latest.path, PathBuf::from("asset-3.pdf"));
     }

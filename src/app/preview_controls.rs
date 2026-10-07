@@ -428,7 +428,7 @@ impl EditorApp {
                 });
                 egui::CentralPanel::default()
                     .frame(theme::content_panel_frame(ui.style()).inner_margin(0.0))
-                    .show(ui, |ui| self.show_preview(ui, None));
+                    .show(ui, |ui| self.show_preview(ui, None, false));
                 self.show_preview_controls(ui.ctx());
             },
         );

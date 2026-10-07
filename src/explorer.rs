@@ -218,12 +218,6 @@ pub(crate) enum ExplorerPanelPhase {
 }
 
 impl ExplorerPanelPhase {
-    pub(crate) fn toggle(self) -> Self {
-        match self {
-            Self::Open => Self::Closed,
-            Self::Closed => Self::Open,
-        }
-    }
     pub(crate) fn panel_visible(self) -> bool {
         self != Self::Closed
     }
@@ -341,12 +335,20 @@ impl ExplorerPanelState {
         self.restore_pending |= !self.phase.panel_visible();
         self.phase = ExplorerPanelPhase::Open;
     }
+    pub(crate) fn clear_keyboard_focus(&mut self) {
+        self.focused_section = None;
+        self.focus_search = None;
+    }
     pub(crate) fn hide(&mut self) {
         self.phase = ExplorerPanelPhase::Closed;
+        self.clear_keyboard_focus();
     }
     pub(crate) fn toggle(&mut self) {
-        self.restore_pending |= !self.phase.panel_visible();
-        self.phase = self.phase.toggle();
+        if self.panel_visible() {
+            self.hide();
+        } else {
+            self.open();
+        }
     }
     pub(crate) fn panel_visible(&self) -> bool {
         self.phase.panel_visible()
@@ -419,6 +421,32 @@ mod panel_tests {
         );
         panel.update_section_focus(Some(ExplorerSection::Contents), true, true);
         assert_eq!(panel.focused_section(), Some(ExplorerSection::Contents));
+    }
+
+    #[test]
+    fn hiding_explorer_retires_keyboard_focus_without_discarding_search_queries() {
+        for toggle in [false, true] {
+            let mut panel = ExplorerPanelState::default();
+            let mut queries = panel.queries().clone();
+            queries[ExplorerSection::Tags.index()] = "lemma".into();
+            panel.set_queries(queries);
+            panel.set_focused_section(Some(ExplorerSection::Tags));
+            panel.focus_section_search(ExplorerSection::Tags);
+            if toggle {
+                panel.toggle();
+            } else {
+                panel.hide();
+            }
+            assert!(!panel.panel_visible());
+            assert!(panel.focused_section().is_none());
+            assert!(panel.take_search_focus().is_none());
+            assert_eq!(panel.query(ExplorerSection::Tags), "lemma");
+            assert_eq!(panel.active_search(), Some(ExplorerSection::Tags));
+            panel.open();
+            assert!(panel.focused_section().is_none());
+            assert!(panel.take_search_focus().is_none());
+            assert_eq!(panel.query(ExplorerSection::Tags), "lemma");
+        }
     }
 
     #[test]

@@ -1440,3 +1440,76 @@ stays within its reference box at 1x/4x. The checked-in contact sheet is
 all-target Clippy. Runner failure-detector tests pass (15), as do Intel script
 contracts (3). GPUI blur/translucency item 30 remains open; existing PDF page
 appearance and Intel compile-script work were audited rather than duplicated.
+
+
+## Follow-up audit of the latest Explorer and image changes
+
+Audited `8d4a28d` and the preceding terminal-rendering change `c8c93ba`.
+The terminal worker, bounded replies, wakeup/throttle races, palette propagation,
+and retained rows had no further concrete runtime bug identified.
+
+Reproduced and fixed the following gaps before handoff:
+
+- Closing Explorer while Split was hidden changed the independent divider from
+  900 to 600 on returning to Split. Compensation now uses the last actual split
+  editor rectangle, rather than an Explorer-width sample overwritten by hidden
+  views. Retained egui panel tests cover close/reopen, hidden resize, and viewport
+  shrink/grow. The obsolete per-frame temporary width read/write is removed.
+- A viewport shrinking exactly to the retained divider could leave zero preview
+  width. Retention now requires positive preview space; otherwise normal panel
+  limits reserve room for the preview.
+- Hidden Explorer sections could keep current or pending keyboard ownership and
+  swallow Cmd+F. Closing Explorer, explicitly focusing the source editor, and
+  claiming native preview focus now retire both forms of ownership while keeping
+  search queries. Normal and docked editor regressions cover Code followed by Find.
+- The source image cache retained up to its sixteen-MiB bound after closing or
+  leaving an image. Cancellation now queues a bounded worker cache-release event,
+  without a result, repaint, or timer. A coalesced replacement whose metadata
+  lookup fails also releases the old buffer. Weak-reference regressions check
+  actual pixel-buffer release; theme toggles continue to reuse the source cache.
+- The image appearance preference had no direct search target or highlight.
+  Settings now indexes and anchors the checkbox itself, including plural `images`.
+
+The native journey harness now serializes concurrent evidence records, rejects
+non-finite independent-divider observations, and returns to form mode before a
+Settings-section search. Copy checks no longer expose unexpected clipboard text
+in failures or retain successfully copied fixture data. Copy/paste adapter
+restoration is acknowledged and cleanup has bounded terminate/kill/reap paths.
+Deterministic contracts reproduce the evidence-log race, invalid-geometry false
+pass, JSON/form search gap, and adapter timeout leak. These changes add no default
+runtime profiling or idle repaints. No latency benchmark or cross-platform
+performance guarantee is implied by this audit.
+
+The expanded optimized native journey then exposed an additional real regression:
+Tinymist's Preview-only child view covered Explorer's resize edge. Its drag input
+was posted at a hovered resize target, but Explorer stayed at width 320; retained
+`ui.preview.bounds` lines showed the native child starting at that same x=320.
+`run-xh5qtj2k` failed and is not counted as a pass. Shared clearance selection now
+uses the actual rendered split placement and visible neighboring panels, including
+forced image/PDF split views. Popout previews inherit neither Explorer nor bottom
+panel clearance from the document window. Deterministic tests reproduced both the
+missing Preview-only clearance and the unintended popout bottom inset before fixes.
+
+The same ownership review found that a designated source preview alongside an
+active image/PDF tab could be rendered both in the main window and in its
+popout. Content classification now explicitly accounts for detached ownership:
+the main window retains the active source/asset while the detached window alone
+renders the designated preview. A regression covers every view mode and document
+kind; the image journey checks repeated frames during popout and restoration.
+
+The first final native attempt (`run-x_t4frfe`) stopped at preflight because the
+Mac was locked. It is unavailable interaction coverage, not a pass.
+
+Final deterministic verification passed serially: formatting, strict all-target
+Clippy (normal and desktop-ui-tests feature), 1,604 Rust tests (44 opt-in tests
+ignored), 17 xtask tests, and 20 Python harness contracts. The optimized native
+feature build also completed. The pending native command is:
+
+```sh
+caffeinate -di python3 scripts/test-desktop-ui.py --journey explorer_toggle --release --trace-preview --capture-review --review-preview
+```
+
+The desktop remains locked despite available Accessibility/input permissions.
+No native interaction pass or fresh visual verification is claimed for this
+follow-up until an unlocked session runs Explorer, images, git_hunks and
+context_menu. The user-owned todo.typ/todo.pdf edits remain untouched.

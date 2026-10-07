@@ -163,7 +163,34 @@ if command == "ax-press-description" {
 }
 guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { fail("refusing input: target app is not foreground (actual: \(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown") pid \(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1), target \(pid))") }
 let source = CGEventSource(stateID: .hidSystemState)
-if command == "paste" {
+if command == "watch-copy" {
+    guard args.count == 3 else { fail("watch-copy requires expected fixture text") }
+    let board = NSPasteboard.general
+    let initialCount = board.changeCount
+    let previous: [NSPasteboardItem] = (board.pasteboardItems ?? []).map { item in
+        let copy = NSPasteboardItem()
+        for type in item.types { if let data = item.data(forType: type) { copy.setData(data, forType: type) } }
+        return copy
+    }
+    var matchedCount: Int?
+    defer {
+        // Restore only an observed fixture Copy; an external/newer clipboard
+        // change remains untouched. Never send clipboard contents to stdout.
+        if let written = matchedCount, board.changeCount == written {
+            board.clearContents(); board.writeObjects(previous)
+        }
+    }
+    emit(["ready": "copy"])
+    fflush(stdout)
+    while let request = readLine(), request == "check" {
+        let observed = board.changeCount
+        let matches = observed != initialCount && board.string(forType: .string) == args[2]
+            && board.changeCount == observed
+        if matches { matchedCount = observed }
+        emit(["matches": matches])
+        fflush(stdout)
+    }
+} else if command == "paste" {
     guard args.count == 3 else { fail("paste requires fixture text") }
     let board = NSPasteboard.general
     let previous: [NSPasteboardItem] = (board.pasteboardItems ?? []).map { item in

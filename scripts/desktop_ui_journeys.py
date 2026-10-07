@@ -4,6 +4,8 @@ The inspection socket supplies assertions and actual hit rectangles, never actio
 See docs/desktop-ui-audit.md for the lower-level tests these journeys promote.
 """
 
+import math
+
 from desktop_ui_tex_journeys import TexJourneys
 from desktop_ui_image_journeys import ImageJourneys
 
@@ -27,9 +29,31 @@ def assert_explorer_frame(state, independent, preview_edge):
     if independent:
         if not editor or editor["frame"] != frame:
             raise AssertionError("missing fresh independent preview edge")
+        if not all(math.isfinite(edge) for edge in (editor["x"], preview_edge)):
+            raise AssertionError("invalid independent preview edge geometry")
         if abs(editor["x"] - preview_edge) > 1:
             raise AssertionError("independent preview edge moved during Explorer toggle")
     return frame
+
+
+def finish_clipboard_adapter(process):
+    """Bound restoration and stop/reap a timed-out adapter."""
+    import subprocess
+    try:
+        _, error = process.communicate("restore\n", timeout=6)
+    except subprocess.TimeoutExpired:
+        process.terminate()
+        try:
+            process.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            try:
+                process.communicate(timeout=2)
+            except subprocess.TimeoutExpired:
+                raise RuntimeError("clipboard adapter could not be reaped; restoration could not be verified") from None
+        raise RuntimeError("clipboard adapter timed out; restoration could not be verified") from None
+    if process.returncode:
+        raise RuntimeError(error or "clipboard adapter failed")
 
 
 class EditorJourneys(TexJourneys, ImageJourneys):
@@ -62,9 +86,60 @@ class EditorJourneys(TexJourneys, ImageJourneys):
             else:
                 check()
         finally:
-            _, error = process.communicate("restore\n", timeout=6)
-            if process.returncode:
-                raise RuntimeError(error)
+            finish_clipboard_adapter(process)
+
+    def copy_from_menu(self, expected):
+        """Check native Copy without logging clipboard contents."""
+        import json
+        import select
+        import subprocess
+        import time
+        process = subprocess.Popen(
+            [str(self.driver), "watch-copy", str(self.process.pid), expected],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, bufsize=1,
+        )
+
+        def receipt():
+            if not select.select([process.stdout], [], [], 6)[0]:
+                raise RuntimeError("clipboard adapter did not acknowledge Copy")
+            line = process.stdout.readline()
+            if not line:
+                raise RuntimeError("clipboard adapter exited before acknowledging Copy")
+            return json.loads(line)
+
+        try:
+            if receipt().get("ready") != "copy":
+                raise RuntimeError("clipboard adapter did not start")
+            self.click("menu.Copy")
+            deadline = time.monotonic() + 6
+            while True:
+                process.stdin.write("check\n")
+                process.stdin.flush()
+                if receipt().get("matches"):
+                    self.record("clipboard.copy", bytes=len(expected.encode("utf-8")),
+                                fingerprint=fingerprint(expected))
+                    return
+                if time.monotonic() >= deadline:
+                    raise AssertionError("Copy did not match the selected fixture text")
+                time.sleep(0.05)
+        finally:
+            finish_clipboard_adapter(process)
+
+    def review_native_preview(self, label):
+        """Optional observation boundary; a resumed pause is not a visual pass."""
+        if not self.review_preview:
+            return
+        import time
+        resume = self.evidence / (label + ".reviewed")
+        print(f"Visual review: {label}; app={self.directory / 'Journey.app'}; resume={resume}", flush=True)
+        deadline = time.monotonic() + 180
+        while not resume.exists():
+            if self.process.poll() is not None or time.monotonic() >= deadline:
+                raise RuntimeError("visual review not completed within three minutes")
+            time.sleep(0.2)
+        self.native("activate")
+        self.wait("document focused after visual review", lambda d: d["focused"])
 
     def capture_viewport(self, target):
         import shutil
@@ -511,6 +586,60 @@ class EditorJourneys(TexJourneys, ImageJourneys):
                         preview_edge = self.snapshot()["targets"]["divider.editor"]["x"]
                         toggle(False, independent, preview_edge)
                         toggle(True, independent, preview_edge)
+                if independent:
+                    # The split pane is retained while Code/Preview-only is
+                    # shown. Moving Explorer there must not reset its anchor.
+                    for key, mode in ((19, "Code"), (21, "Preview")):
+                        edge = self.snapshot()["targets"]["divider.editor"]["x"]
+                        files = self.snapshot()["scrolls"]["Files"]
+                        self.native("click", files["x"], files["y"])
+                        self.wait("Files is focused before view command", lambda d:
+                                  d["explorer_focused"] == "Files")
+                        self.key(key)
+                        self.wait("split editor is hidden in " + mode, lambda d:
+                                  d["view_mode"] == mode)
+                        if mode == "Code":
+                            self.wait("Code command retires Explorer keyboard focus", lambda d:
+                                      d["editor_keyboard_focused"] and d["explorer_focused"] is None)
+                            self.key(3)
+                            self.wait("Find follows explicit source focus", lambda d: d["find_visible"])
+                            self.click("find.close")
+                            files = self.snapshot()["scrolls"]["Files"]
+                            self.native("click", files["x"], files["y"])
+                            self.wait("Files owns focus before closing Explorer", lambda d:
+                                      d["explorer_focused"] == "Files")
+                        self.key(18)
+                        self.wait("Explorer closes while split is hidden", lambda d:
+                                  not d["explorer_visible"] and d["explorer_focused"] is None)
+                        if mode == "Code":
+                            self.key(3)
+                            self.wait("hidden Explorer cannot swallow Find", lambda d: d["find_visible"])
+                            self.click("find.close")
+                        self.key(20)
+                        self.wait("Split returns after Explorer closes", lambda d: d["view_mode"] == "Split")
+                        self.wait_target("divider.editor")
+                        assert_explorer_frame(self.snapshot(), True, edge)
+                        self.key(key)
+                        self.wait("split hides again in " + mode, lambda d: d["view_mode"] == mode)
+                        self.key(18)
+                        self.wait("Explorer reopens while split is hidden", lambda d: d["explorer_visible"])
+                        self.wait_target("divider.explorer")
+                        before = self.snapshot()
+                        border = before["targets"]["divider.explorer"]
+                        width = before["document"]["explorer_panel_width"]
+                        self.native("drag", border["x"], border["y"], border["x"] + 20, border["y"])
+                        self.wait("Explorer resizes while split is hidden", lambda d:
+                                  abs(d["explorer_panel_width"] - width - 20) < 2)
+                        if mode == "Preview" and backend == "Interactive":
+                            if self.capture_review:
+                                self.capture_viewport("main")
+                            self.review_native_preview("Explorer-preview")
+                        self.key(20)
+                        self.wait("Split returns after hidden Explorer resize", lambda d: d["view_mode"] == "Split")
+                        self.wait_target("divider.editor")
+                        for _ in range(8):
+                            assert_explorer_frame(self.snapshot(), True, edge)
+                        self.record("explorer_toggle.hidden_split", mode=mode, backend=backend)
                 self.click("editor.source")
                 self.key(125, "cmd")
                 self.native("text", "x")
@@ -799,15 +928,7 @@ class EditorJourneys(TexJourneys, ImageJourneys):
         self.wait_target("menu.Copy")
         self.wait("docked context menu preserves selected text", lambda d: d["git_diff_open"]
                   and sorted(d["cursor"]) == [start, end])
-        self.click("menu.Copy")
-        deadline = time.monotonic() + 6
-        while True:
-            copied = subprocess.run(["pbpaste"], capture_output=True, text=True).stdout
-            if copied == lines[5].rstrip("\n"):
-                break
-            if time.monotonic() >= deadline:
-                raise AssertionError(f"docked editor Copy lost selection: {copied!r}")
-            time.sleep(0.05)
+        self.copy_from_menu(lines[5].rstrip("\n"))
         self.wait("Copy keeps the docked editor focused", lambda d: d["git_diff_open"] and d["editor_keyboard_focused"])
         self.key(126, "cmd")
         prefixed = "$x$ " + original
@@ -1417,16 +1538,7 @@ class EditorJourneys(TexJourneys, ImageJourneys):
         copy = self.snapshot()["targets"].get("menu.Copy")
         if not copy or not copy["enabled"]:
             raise AssertionError("right-click deselected the word: Copy disabled")
-        self.click("menu.Copy")
-        import subprocess
-        deadline = time.monotonic() + 6
-        while True:
-            clip = subprocess.run(["pbpaste"], capture_output=True, text=True).stdout
-            if clip == "Body":
-                break
-            if time.monotonic() >= deadline:
-                raise AssertionError(f"Copy did not reach the clipboard: {clip!r}")
-            time.sleep(0.1)
+        self.copy_from_menu("Body")
 
         # Whitespace on both sides makes same-line Typst math display math.
         # The converse action must follow the syntax, not newline presence.

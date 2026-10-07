@@ -11,6 +11,7 @@ impl EditorApp {
         if self.view_mode == ViewMode::Preview {
             self.view_mode = ViewMode::Split;
         }
+        self.explorer.clear_keyboard_focus();
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Some(webview) = &self.webview {
             let _ = webview.focus_parent();

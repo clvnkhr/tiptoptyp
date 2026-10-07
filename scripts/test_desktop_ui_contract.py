@@ -1,6 +1,7 @@
 """Fast checks for the desktop runner's failure detectors; no desktop claimed."""
 import importlib.util
 import math
+import threading
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -95,6 +96,12 @@ class ExplorerFrameContract(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "edge moved"):
             assert_explorer_frame(self.state(edge=740), True, 700)
 
+    def test_nonfinite_independent_geometry_cannot_pass(self):
+        from desktop_ui_journeys import assert_explorer_frame
+        for edge, baseline in [(math.nan, 700), (math.inf, 700), (700, math.nan)]:
+            with self.assertRaisesRegex(AssertionError, "invalid independent"):
+                assert_explorer_frame(self.state(edge=edge), True, baseline)
+
     def test_stale_independent_edge_cannot_pass(self):
         from desktop_ui_journeys import assert_explorer_frame
         with self.assertRaisesRegex(AssertionError, "missing fresh"):
@@ -138,6 +145,194 @@ class PreviewContract(unittest.TestCase):
             runner.assert_tinymist_palette(state, [[0, 0, 0, 255], [255, 255, 255, 255]])
         with self.assertRaisesRegex(AssertionError, "paper"):
             runner.assert_tinymist_palette(self.observation(), [[255, 255, 255, 255], [0, 0, 0, 255]])
+
+
+class ConcurrentRecordingContract(unittest.TestCase):
+    def test_native_and_snapshot_records_are_complete_atomic_lines(self):
+        first_write = threading.Event()
+        release_first = threading.Event()
+        second_attempt = threading.Event()
+        operations = []
+        failures = []
+
+        class ContendedLock:
+            def __init__(self):
+                self.lock = threading.Lock()
+                self.guard = threading.Lock()
+                self.attempts = 0
+
+            def __enter__(self):
+                with self.guard:
+                    self.attempts += 1
+                    if self.attempts == 2:
+                        second_attempt.set()
+                self.lock.acquire()
+
+            def __exit__(self, *_):
+                self.lock.release()
+
+        class InterruptedWriter:
+            def write(self, line):
+                self.action = runner.json.loads(line)["action"]
+                operations.append(("write", self.action))
+                if self.action == "native":
+                    first_write.set()
+                    if not release_first.wait(2):
+                        raise AssertionError("first record was not released")
+
+            def flush(self):
+                operations.append(("flush", self.action))
+
+        journey = object.__new__(runner.Journey)
+        journey.log = InterruptedWriter()
+        journey.record_lock = ContendedLock()
+
+        def record(action):
+            try:
+                journey.record(action, value="x" * 16384)
+            except BaseException as error:
+                failures.append(error)
+
+        first = threading.Thread(target=record, args=("native",))
+        second = threading.Thread(target=record, args=("snapshot",))
+        first.start()
+        try:
+            self.assertTrue(first_write.wait(1), "first record did not start")
+            second.start()
+            self.assertTrue(second_attempt.wait(1), "concurrent record bypassed serialization")
+            self.assertEqual(operations, [("write", "native")])
+        finally:
+            release_first.set()
+            first.join(2)
+            if second.ident is not None:
+                second.join(2)
+        self.assertFalse(first.is_alive() or second.is_alive())
+        self.assertEqual(failures, [])
+        self.assertEqual(operations, [("write", "native"), ("flush", "native"),
+                                      ("write", "snapshot"), ("flush", "snapshot")])
+
+
+class SettingsSectionContract(unittest.TestCase):
+    def test_form_search_remains_available_after_json_settings_edits(self):
+        for initially_json in (False, True):
+            with self.subTest(json_mode=initially_json):
+                journey = object.__new__(runner.Journey)
+                state = {"settings_json": {"visible": initially_json}}
+                actions = []
+                journey.snapshot = lambda: {"document": state}
+
+                def click(name):
+                    actions.append(("click", name))
+                    if name == "settings.json.mode":
+                        state["settings_json"]["visible"] = False
+                    elif name == "settings.search" and state["settings_json"]["visible"]:
+                        raise AssertionError("form search is unavailable in JSON mode")
+
+                def wait(description, predicate):
+                    self.assertTrue(predicate(state), description)
+
+                journey.click = click
+                journey.wait = wait
+                journey.key = lambda *args: actions.append(("key", *args))
+                journey.native = lambda *args: actions.append(args)
+                journey.wait_target = lambda name: actions.append(("target", name))
+                journey.setting_section("backend", "Typst preview backend")
+                expected = [("click", "settings.json.mode")] if initially_json else []
+                expected += [("click", "settings.search"), ("key", 0), ("text", "backend"),
+                             ("target", "settings.result.Typst preview backend"),
+                             ("click", "settings.result.Typst preview backend")]
+                self.assertEqual(actions, expected)
+
+
+class CopyIsolationContract(unittest.TestCase):
+    def test_copy_acknowledges_fixture_match_and_releases_adapter_on_success_or_failure(self):
+        import io
+        from types import SimpleNamespace
+        for matches, click_fails in [(True, False), (False, False), (True, True)]:
+            with self.subTest(matches=matches, click_fails=click_fails):
+                journey = object.__new__(runner.Journey)
+                journey.driver = Path("private-driver")
+                journey.process = SimpleNamespace(pid=123)
+                events, restored = [], []
+                child = SimpleNamespace(
+                    stdin=io.StringIO(),
+                    stdout=io.StringIO(runner.json.dumps({"ready": "copy"}) + "\n"
+                                      + runner.json.dumps({"matches": matches}) + "\n"),
+                    returncode=0,
+                    communicate=lambda value, timeout: (restored.append(value) or "", ""),
+                )
+                def click(name):
+                    events.append(name)
+                    if click_fails:
+                        raise RuntimeError("click failed")
+                journey.click = click
+                journey.record = lambda *args, **details: events.append((args, details))
+                with patch("subprocess.Popen", return_value=child), \
+                     patch("select.select", return_value=([child.stdout], [], [])), \
+                     patch("time.monotonic", side_effect=[0, 7]):
+                    if click_fails:
+                        with self.assertRaisesRegex(RuntimeError, "click failed"):
+                            journey.copy_from_menu("private fixture text")
+                    elif matches:
+                        journey.copy_from_menu("private fixture text")
+                    else:
+                        with self.assertRaisesRegex(AssertionError, "selected fixture"):
+                            journey.copy_from_menu("private fixture text")
+                self.assertEqual(restored, ["restore\n"])
+                self.assertEqual(events[0], "menu.Copy")
+                self.assertNotIn("private fixture text", repr(events))
+                if matches and not click_fails:
+                    self.assertEqual(events[1][0], ("clipboard.copy",))
+
+
+class ClipboardAdapterLifetimeContract(unittest.TestCase):
+    def test_copy_and_paste_timeout_terminate_then_kill_and_reap_if_needed(self):
+        import io
+        from types import SimpleNamespace
+        for operation in ("copy", "paste"):
+            for needs_kill in (False, True):
+                with self.subTest(operation=operation, needs_kill=needs_kill):
+                    journey = object.__new__(runner.Journey)
+                    journey.driver = Path("private-driver")
+                    journey.process = SimpleNamespace(pid=123)
+                    journey.click = lambda name: None
+                    journey.source_is = lambda text: None
+                    journey.record = lambda *args, **details: None
+                    calls = []
+                    attempts = 0
+                    first = {"ready": "copy"} if operation == "copy" else {"posted": "paste"}
+                    child = SimpleNamespace(
+                        stdin=io.StringIO(),
+                        stdout=io.StringIO(runner.json.dumps(first) + "\n"
+                                          + runner.json.dumps({"matches": True}) + "\n"),
+                        returncode=None,
+                        terminate=lambda: calls.append(("terminate",)),
+                        kill=lambda: calls.append(("kill",)),
+                    )
+
+                    def communicate(value=None, timeout=None):
+                        nonlocal attempts
+                        attempts += 1
+                        calls.append(("communicate", value, timeout))
+                        if attempts == 1 or (attempts == 2 and needs_kill):
+                            raise runner.subprocess.TimeoutExpired("private-driver", timeout)
+                        child.returncode = -9 if needs_kill else -15
+                        return "", ""
+
+                    child.communicate = communicate
+                    with patch("subprocess.Popen", return_value=child), \
+                         patch("select.select", return_value=([child.stdout], [], [])):
+                        with self.assertRaisesRegex(RuntimeError, "restoration could not be verified"):
+                            if operation == "copy":
+                                journey.copy_from_menu("private fixture text")
+                            else:
+                                journey.paste_source("private fixture text")
+                    expected = [("communicate", "restore\n", 6), ("terminate",),
+                                ("communicate", None, 2)]
+                    if needs_kill:
+                        expected += [("kill",), ("communicate", None, 2)]
+                    self.assertEqual(calls, expected)
+                    self.assertIsNotNone(child.returncode, "adapter was not reaped")
 
 
 if __name__ == "__main__":

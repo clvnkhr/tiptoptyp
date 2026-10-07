@@ -5068,6 +5068,19 @@ fn find_command_targets_the_selected_explorer_section() {
 }
 
 #[test]
+fn find_ignores_stale_focus_in_a_hidden_explorer() {
+    let root = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+    app.explorer.hide();
+    app.explorer
+        .set_focused_section(Some(ExplorerSection::Tags));
+    app.execute_app_command(AppCommand::Find, &context, None);
+    assert!(app.find_bar.visible);
+    assert!(app.explorer.take_search_focus().is_none());
+}
+
+#[test]
 fn explorer_project_sections_preserve_empty_and_filtered_messages() {
     use egui_kittest::{Harness, kittest::Queryable as _};
     let index = ProjectIndex::default();
@@ -6677,6 +6690,18 @@ fn delimiter_highlights_use_character_advances_at_soft_wrap_boundaries() {
             );
         })
         .drop_without_applying_deltas();
+}
+
+#[test]
+fn settings_search_finds_image_appearance_directly() {
+    for query in ["images", "dark image", "invert image"] {
+        assert!(
+            settings_search_results(query)
+                .iter()
+                .any(|target| target.label() == "Apply dark page appearance to images"),
+            "image appearance control is missing for {query}"
+        );
+    }
 }
 
 #[test]
@@ -11075,5 +11100,103 @@ fn editor_terminal_frame_cost_probe() {
             samples.shapes.iter().sum::<usize>() as f64 / frames as f64,
             samples.vertices.iter().sum::<usize>() as f64 / frames as f64,
         );
+    }
+}
+
+#[test]
+fn focusing_source_retires_explorer_search_routing() {
+    use crate::git::editor::document_diff::DocumentDiff;
+    for docked in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        app.document_mut()
+            .replace_unprojected_untitled("Body $x$.\n");
+        if docked {
+            app.document_diff = Some(DocumentDiff::new("Body $y$.\n".into(), "Body $x$.\n"));
+        }
+        let mut queries = app.explorer.queries().clone();
+        queries[ExplorerSection::Tags.index()] = "lemma".into();
+        app.explorer.set_queries(queries);
+        app.explorer
+            .set_focused_section(Some(ExplorerSection::Tags));
+        app.explorer.focus_section_search(ExplorerSection::Tags);
+        app.execute_app_command(AppCommand::Code, &context, None);
+        assert!(app.explorer.panel_visible());
+        assert!(app.explorer.focused_section().is_none());
+        assert!(app.explorer.take_search_focus().is_none());
+        assert_eq!(app.explorer.query(ExplorerSection::Tags), "lemma");
+        assert_eq!(app.explorer.active_search(), Some(ExplorerSection::Tags));
+        let editor = source_editor_id(&context);
+        assert!(context.memory(|memory| memory.has_focus(editor)));
+        app.execute_app_command(AppCommand::Find, &context, None);
+        assert!(
+            app.find_bar.visible,
+            "source Find was stolen by Explorer (docked={docked})"
+        );
+        assert_eq!(app.document().source(), "Body $x$.\n");
+        assert_eq!(app.document_diff.is_some(), docked);
+    }
+}
+
+#[test]
+fn native_preview_only_reserves_explorer_resize_edge() {
+    let available = Rect::from_min_max(Pos2::new(320.0, 68.0), Pos2::new(1400.0, 884.0));
+    for split in [false, true] {
+        for explorer in [false, true] {
+            for bottom in [false, true] {
+                let (left_grip, bottom_grip) =
+                    panel_handles::native_preview_grips(split, explorer, bottom, false);
+                let content =
+                    native_preview_content_rect(available, available, left_grip, bottom_grip);
+                let clearance = if split || explorer { 4.0 } else { 0.0 };
+                assert_eq!(
+                    content.left(),
+                    available.left() + clearance,
+                    "native preview covers its neighboring resize edge (split={split})"
+                );
+                assert_eq!(
+                    content.bottom(),
+                    available.bottom() - if bottom { 4.0 } else { 0.0 }
+                );
+                assert!(available.contains_rect(content));
+            }
+        }
+    }
+}
+
+#[test]
+fn native_preview_popout_ignores_document_dividers() {
+    let available = Rect::from_min_max(Pos2::new(0.0, 40.0), Pos2::new(800.0, 700.0));
+    for split in [false, true] {
+        for explorer in [false, true] {
+            for bottom in [false, true] {
+                let (left_grip, bottom_grip) =
+                    panel_handles::native_preview_grips(split, explorer, bottom, true);
+                assert_eq!(
+                    native_preview_content_rect(available, available, left_grip, bottom_grip),
+                    available,
+                    "popout inherited the document window's divider clearances"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn native_preview_asset_split_reserves_resize_edge_in_every_view_mode() {
+    use workspace_view::ContentView;
+    let available = Rect::from_min_max(Pos2::new(600.0, 68.0), Pos2::new(1400.0, 884.0));
+    for kind in [DocumentKind::Image, DocumentKind::Pdf] {
+        for mode in [ViewMode::Code, ViewMode::Preview, ViewMode::Split] {
+            let view = workspace_view::content_view(false, kind, true, mode, false);
+            assert_eq!(view, ContentView::SplitAsset);
+            let split = matches!(view, ContentView::SplitSource | ContentView::SplitAsset);
+            let (left_grip, bottom_grip) =
+                panel_handles::native_preview_grips(split, false, false, false);
+            let content = native_preview_content_rect(available, available, left_grip, bottom_grip);
+            assert_eq!(content.left(), available.left() + 4.0);
+            assert_eq!(content.bottom(), available.bottom());
+        }
     }
 }
