@@ -1179,3 +1179,132 @@ retained at `.tiptoptyp/screenshots/agent-review/terminal-find-20261007.png`, co
 unchanged from `run-4x0yuu2n/1791372029582-0003-main.png`. This is viewport pixel
 evidence, not a claim about native-child desktop composition; this journey uses
 a plain-text document with no native preview surface.
+
+## 7 October: two-day change audit
+
+Reviewed all 29 commits from `e1e0280^` through `104af1c` (5–7 October),
+including terminal mouse reporting, panes, palettes, alerts, links and Find;
+math/context menus; backend-dependent build buttons and disk output; cached
+editor formatting and probes; document/viewport ownership and frame telemetry;
+Intel build tooling, font packaging, arXiv fixtures and screenshot contracts.
+The audit ran in `/Users/calvinkhor/Documents/GitHub/mytypst` on
+`codex/audit-october-5-7`; user TODO descriptions were left untouched.
+
+Confirmed defects and corrections:
+
+- The compiler gear for Typst CLI and TeX refreshed only a private preview even
+  though its separate PDF action was hidden. It now uses the existing durable
+  PDF transaction to save the adjacent file. Automatic previews remain private.
+  Manual builds work while automatic updates are paused and leave them paused.
+- Cmd+Shift+R was consumed by the less specific Cmd+R binding. Both build actions
+  now use the existing shortcut dispatcher, which selects the most specific
+  binding before consuming an event. The native PDF journey exposed this bug.
+- Typst display math was classified by newline presence. The conversion menu
+  now uses the parsed equation mode: `$ x $` is display math and `$x$` is inline.
+  Conversion flyout state belongs to its popup generation, preventing stale
+  choices from appearing on a reopened menu's first frame.
+- auto-miTeX completion returned `None` in projected dollar math without a
+  backslash, incorrectly permitting fallback Typst suggestions. Projection
+  ownership is checked before the completion shortcut, including empty results.
+- Hidden terminal bells did not wake the app. New alerts now request one
+  coalesced repaint without rendering hidden output. Held terminal mouse drags
+  release on pane hiding or native focus loss, retaining the last encoded
+  geometry. Palette notifications reach every started pane, including hidden
+  programs, with deduplication and bounded retry only for mailbox backpressure.
+- The redraw monitor treated extended typing/dragging as an idle redraw problem
+  and observed only the root while reporting through another active document.
+  Each document host now observes its own actual paints; input/held keys reset
+  the no-input interval. Notices describe sustained redraw rather than asserting
+  the app is stuck. Development statistics restart their cadence with a burst.
+- Typst sometimes reports `.tiptoptyp/source-*/project/...` paths relative to
+  its working directory. Problems now maps those generated mirrors to original
+  source paths by components, including included files with identical basenames
+  and working-directory aliases. Mapping survives mirror cleanup and retains
+  source coordinates. Diagnostic/preview navigation reuses an untitled backing's
+  document owner and rejects unowned generated copies; ordinary user config
+  files remain openable. Projected Unicode locations remap exactly once.
+- The Intel script verified a relative target directory against the caller
+  rather than the repository. Build and verification now share an absolute
+  explicit target directory; extra arguments are rejected. The opt-in arXiv
+  suite checks installed engines and refuses a vacuous pass with none installed.
+- Hack was incorrectly shipped with an OFL notice. Its exact upstream v3.003
+  MIT/Bitstream Vera/public-domain notice now matches all four fonts' embedded
+  metadata. A shared font registry feeds aggregate notice generation and package
+  verification; tests reject missing/changed Hack notices and incomplete
+  manifests. Regenerated aggregate notices also include formerly omitted
+  bundled terminal notices. Two tracked Python bytecode files were removed and
+  future bytecode caches are ignored.
+
+Architecture and performance review:
+
+The worker-per-terminal design, bounded Find dumps/caches, owner-local document
+windows, cached syntax formats, guide walk guards and revision/source-bound PDF
+receipts remain appropriate. The fixes reuse those structures, the common
+shortcut dispatcher and the private-workspace namespace rather than adding
+parallel ownership systems. Ordinary diagnostic paths bypass generated-source
+root scans; custom working directories canonicalize once per watch context.
+Terminal color notifications do no worker work for unchanged palettes; hidden
+plain output still causes no repaint/render. Frame telemetry keeps counters,
+requests no repaint and retains no document/input contents. Regression tests
+check these bounded-work rules. No before/after GUI performance benchmark was
+run and no speed or cross-platform performance claim is made.
+
+Failing reproductions were established before fixes. Local logs are retained at
+`/private/tmp/ttt-audit-{math,build,terminal,completion,monitor,menu,pause}-before.log`
+and `/private/tmp/ttt-audit-diagnostic-*-before.log`;
+`/private/tmp/ttt-audit-diagnostic-before.log` retains real Typst 0.15.1 output.
+Compiler/type errors during test preparation were not counted as behavioral
+reproductions. Native failures and successful reruns are listed below.
+
+Limitations: this audit does not establish an Intel/universal distributable.
+The Intel script still compiles the executable only; matching sidecars and
+PDFium are needed for an Intel package. No installer, fresh Intel cross-build
+or Rosetta runtime was run, and the installed app was not altered. Large opt-in
+arXiv multi-engine builds were reviewed/typechecked, not executed; the native
+TeX fixture uses Tectonic. This audit changes interaction/state contracts rather
+than pixel appearance, so no fresh framebuffer/gallery was requested and no
+composed desktop visual verification is claimed.
+
+Verification after the fixes:
+
+- `cargo fmt --all -- --check` and the xtask formatting check passed.
+- Strict Clippy passed for ordinary, `profiling` and `desktop-ui-tests` builds.
+- `cargo test --no-fail-fast`: 1,541 passed, 43 opt-in/ignored.
+  `cargo test --features profiling --no-fail-fast`: 1,549 passed, 43 ignored.
+- All 17 xtask tests and 22 Python runner/script contract tests passed. Font
+  package resource coverage is included in the Rust suite. Notices regenerated
+  successfully through `xtask generate-notices`; Intel script shell syntax
+  and three fake-compiler contract tests passed.
+- The debug linker still reports its pre-existing large unwind-table warning;
+  strict Clippy is clean. No release/installer validation is inferred from
+  passing debug tests.
+
+Native interaction reruns on macOS 14.6.1 ARM64, 2x scale, with Accessibility
+and input posting enabled:
+
+| Journey | Evidence directory | Relevant assertion |
+| --- | --- | --- |
+| `diagnostics` | `run-eaxqo2eh` | Real Typst compiler error navigates within original source tab; path/tab identity stays stable, no generated-copy tab; undo restores source. |
+| `pdf_output` | `run-_zke2qw_` | Tinymist preview-only refresh, explicit PDF output, failed-write retention, CLI gear saves fresh bytes, manual build while paused and later edits stay paused. |
+| `tex_save` | `run-fbfgedxc` | TeX gear saves adjacent PDF, no separate PDF button, paused gear builds unsaved source without saving that source or resuming automatic updates. |
+| `context_menu` | `run-73wstv3e` | Opens its own fixture, inline/display conversion including same-line display syntax, selection/Copy, menu closure and return to prior tab. |
+| `panels` | `run-mh4gz3da` | Real shells, Off/reaping/restart, independent panes, vim mouse reporting and repeated panel transitions. |
+| `terminal_find` | `run-16bwbivd` | Real scrollback, matching/stepping, field versus shell Escape, repeated toggle/close, query ownership across panes. |
+| `focus` | `run-epo_um3k` | Multiple document windows, Settings ownership and native minimize/app-switch/focus restoration. |
+| `tex_editing` | `run-2p9rt21a` | Real TeX editing, Unicode/undo, long-source edits, comments, bracket wrapping and Find/Replace; disabled autosave leaves source disk unchanged. |
+
+Directories are under `.tiptoptyp/desktop-ui-tests/`; their `result.json` and
+action logs retain build/source metadata, executable hashes and actual input
+evidence. All eight successful runs used the same binary SHA-256:
+`90c65372e76017a70c586a711bdf84d119c669cfb82d41ffd6d0ce8de1beb8a2`.
+These are separate focused runs, not a full aggregate `all` suite. Terminal
+bell/palette backpressure and generated included-file/Unicode edge cases are
+covered by deterministic tests, not claimed as native journey assertions.
+
+`run-v5wceiqw` retained the failing native pause-shortcut reproduction before
+its fix. `run-kab_s9d_` exposed an invalid multiline input adapter use, and
+`run-mdywooaz` exposed the diagnostic fixture's invalid readiness setup; these
+were harness failures, not product regressions. The corrected context journey
+prepares its fixture itself for standalone and combined execution; diagnostics
+starts valid, verifies its effective renderer, then deliberately introduces
+the error. No failed/observation-only run is counted as an interaction pass.
