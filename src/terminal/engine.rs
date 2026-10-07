@@ -208,6 +208,35 @@ impl Engine {
         )
     }
 
+    /// Full scrollback text for find, oldest line first. Capped so a huge
+    /// buffer cannot stall the worker; the tail (most recent output) wins.
+    /// Returns the text and whether older lines were dropped.
+    pub fn search_dump(&mut self, cap_bytes: usize) -> Result<(String, bool), libghostty_vt::Error> {
+        use libghostty_vt::{fmt::Format, selection::FormatOptions};
+        let Some(selection) = self.terminal.select_all()? else {
+            return Ok((String::new(), false));
+        };
+        let options = FormatOptions::new()
+            .with_emit_format(Format::Plain)
+            .with_unwrap(true)
+            .with_trim(true)
+            .with_selection(&selection);
+        let Some(bytes) = self.terminal.format_selection_alloc(None, options)? else {
+            return Ok((String::new(), false));
+        };
+        let mut text = String::from_utf8_lossy(&bytes).into_owned();
+        let mut truncated = false;
+        if text.len() > cap_bytes {
+            let skip = text.len() - cap_bytes;
+            let boundary = text[skip..]
+                .find('\n')
+                .map_or(0, |at| skip + at + 1);
+            text = text[boundary..].to_owned();
+            truncated = true;
+        }
+        Ok((text, truncated))
+    }
+
     pub fn key(&mut self, input: KeyInput) -> Result<Vec<u8>, libghostty_vt::Error> {
         self.key_event
             .set_key(input.key)
@@ -569,6 +598,26 @@ mod tests {
         let light = query(&mut engine);
         assert!(light.contains("]11;rgb:ffff/ffff/ffff"), "{light:?}");
         assert!(!light.contains("5050/fafa/7b7b"), "{light:?}");
+    }
+
+    #[test]
+    fn search_dump_covers_scrollback_and_caps_the_tail() {
+        let mut engine = engine(20, 4);
+        for n in 0..10 {
+            engine
+                .terminal
+                .vt_write(format!("line{n}\r\n").as_bytes());
+        }
+        let (text, truncated) = engine.search_dump(1 << 20).unwrap();
+        assert!(!truncated);
+        for n in 0..10 {
+            assert!(text.contains(&format!("line{n}")), "{text:?}");
+        }
+        let (tail, truncated) = engine.search_dump(12).unwrap();
+        assert!(truncated);
+        assert!(tail.len() <= 12);
+        // The most recent output always survives the cap.
+        assert!(tail.contains("line9"), "{tail:?}");
     }
 
     #[test]

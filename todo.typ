@@ -119,7 +119,7 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 
 = NEW TODOS
 
-1. [x] sometimes tinymist can redirect you to a source file outside the current workspace root (when it sends you to a package file). When this happens, the workspace root switches to the workspace of that file, and that file is opened in a new tab. I agree that it should open in a new tab but not that the workspace root changes. if we nav back to the old tab the workspace root changes back. It should instead, at the top of the code editor, have a small banner that says "You are currently editing a file outside the current workspace root. The workspace root is now [workspace root path]." and have a button that says "Switch to this workspace root" which when clicked, switches the workspace root to the new one. This way, the user is aware of the change and can choose to switch or not.
+1. [x] sometimes tinymist can redirect you to a source file outside the current workspace root (when it sends you to a package file). When this happens, the workspace root switches to the workspace of that file, and that file is opened in a new tab. I agree that it should open in a new tab but not that the workspace root changes. if we nav back to the old tab the workspace root changes back. It should instead, at the top of the code editor, have a small banner that says "You are currently editing a file outside the current workspace root. The workspace root is nx  ow [workspace root path]." and have a button that says "Switch to this workspace root" which when clicked, switches the workspace root to the new one. This way, the user is aware of the change and can choose to switch or not.
 2. [x] the stage all and commit button / commit all staged button in the git subpanel should be text
 3. [x] we need to implement comfy mode - if on, the bg and text of a pdf / tinymist preview should be adjusted to match the theme settings.
 4. [x] improve harper typst/tex integration - it needs to ignore string keys of functions and spellchecking on names somehow
@@ -142,6 +142,13 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 21. [x] multiple cursor snippeting: e.g. if we  tab autocomplete to `\begin` and then type e.g. `enumerate` the generated `\end` should also be populated with `enumerate`.
 22. [x] sometimes, when switching from tex to typ, i get that tinymist is stale, tectonic and harper stays around from the tex file, and i dont get new diagnostics until first keyboard press. after, harper refreshed (yay) but tectonic stuck around (boo)
 23. [x] dragging the pdf preview options popup around, it moves in a very janky jumpy way, and the end result is only 50% of the way between start and final mouse position. Also i can only drag from the title "Preview". And the "v" button to close the popup should be a "-" minimise button.
+24. [ ] cmd+F when the preview panel is focused should open the preview's extra options panel and focus the find box.
+25. [ ] box dragging polish: the preview options panel doesnt move perfectly when dragging and held: sometimes, it keeps the direction previously dragged in with a constant velocity and then stops when box's boundary touches the stationary mouse cursor.
+26. [ ] we should remove all top/down/right padding for the terminal windows.
+27. [ ] Similarly to how the preview panel has an outline when focused, we need the same for the problems panel
+28. [ ] the outline for the code panel should show through the sticky rows, so that we can see it when hovered/focused. You can consider either adjusting the size by a few px on left,right,and top, or just make the borders of the left,right and top of the sticky rows mimic the outline of the code panel.
+29. [ ] The code panel has line highlights but it only goes to the length of the longest line. It should always go for the full length of the code panel.
+30. [ ] minor polish - converting to inline/display math should be automatically followed by a fmt
 
 24. [X] improve typst table editor: this isn't detected as a table for some reason
   ```typ
@@ -201,7 +208,7 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 31. [ ] compile a version of our app that also works for intel macs, make a new script for this and put it in scripts/ and test the compilation
 32. [ ] improvement to right-click: when text is highlighted, right-click should not deselect the text. In particular we should be able to right-click and copy text
 33. [ ] right click on typst math should not have a convert to... option as there is only one choice - if it is inline math, then it should simply be convert to display math. if it is display math, it should simply be convert to inline math.
-35. [ ] system theme mode (dark/light) (+ theme colors if it makes sense) should be propogated to the termina panel. opencode does not currently detect the right theme. 
+35. [ ] system theme mode (dark/light) (+ theme colors if it makes sense) should be propogated to the termina panel. opencode does not currently detect the right theme.
 
 // Implementation notes (2026-09-25):
 // NEW TODO 2: text commit actions and interaction coverage landed in e94766d.
