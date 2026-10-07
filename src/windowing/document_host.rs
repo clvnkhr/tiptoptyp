@@ -27,6 +27,7 @@ pub(super) struct DocumentHost {
 
 struct DocumentState {
     editor: EditorApp,
+    frame_monitor: crate::frame_monitor::FrameMonitor,
     focused: bool,
     closed: bool,
     settings: Option<crate::settings::AppSettings>,
@@ -44,6 +45,7 @@ impl DocumentHost {
     pub(super) fn new(editor: EditorApp) -> Self {
         let editor = Rc::new(RefCell::new(DocumentState {
             editor,
+            frame_monitor: crate::frame_monitor::FrameMonitor::new(),
             focused: false,
             closed: false,
             settings: None,
@@ -66,6 +68,10 @@ impl DocumentHost {
 
     pub(super) fn borrow_mut(&self) -> RefMut<'_, EditorApp> {
         RefMut::map(self.editor.borrow_mut(), |state| &mut state.editor)
+    }
+
+    pub(super) fn paint_primary(&self, ui: &mut egui::Ui, frame: Option<&eframe::Frame>) {
+        self.editor.borrow_mut().paint_editor(ui, frame);
     }
 
     pub(super) fn token(&self) -> DocumentToken {
@@ -96,6 +102,15 @@ impl DocumentHost {
 }
 
 impl DocumentState {
+    fn paint_editor(&mut self, ui: &mut egui::Ui, frame: Option<&eframe::Frame>) {
+        let started = self.frame_monitor.begin_frame(ui.ctx());
+        self.editor.ui_in_window(ui, frame);
+        self.frame_monitor.end_frame(started);
+        if let Some(notice) = self.frame_monitor.take_redraw_notice() {
+            self.editor.show_window_notice(notice);
+        }
+    }
+
     fn apply_settings(&mut self, context: &egui::Context) {
         if let Some(settings) = self.settings.take() {
             self.editor.apply_shared_settings(settings, context);
@@ -137,11 +152,11 @@ impl DocumentToken {
             let focused = crate::app::owns_focused_input_viewport(ui.ctx());
             let focus_changed = state.focused != focused;
             state.focused = focused;
-            let editor = &mut state.editor;
-            let before = editor.shell_signal();
+            let before = state.editor.shell_signal();
             let close_requested = ui.ctx().input(|input| input.viewport().close_requested())
                 || crate::window_host::close_requested(ui.ctx(), ui.ctx().viewport_id());
-            editor.ui_in_window(ui, None);
+            state.paint_editor(ui, None);
+            let editor = &mut state.editor;
             state.closed = !editor.process_close_pending()
                 && (editor.close_accepted() || (close_requested && !editor.is_dirty_for_close()));
             if state.closed {
@@ -259,6 +274,7 @@ mod tests {
         output.drop_without_applying_deltas();
         for host in &hosts {
             assert_eq!(host.editor.borrow().paints, 0);
+            assert_eq!(host.editor.borrow().frame_monitor.observed_frames(), 0);
         }
         for (id, callback) in ids.iter().zip(&callbacks) {
             raw.viewport_id = *id;
@@ -267,6 +283,9 @@ mod tests {
                 .drop_without_applying_deltas();
         }
         let before = hosts.each_ref().map(|host| host.editor.borrow().paints);
+        let monitored = hosts
+            .each_ref()
+            .map(|host| host.editor.borrow().frame_monitor.observed_frames());
         let root_pass = context.cumulative_pass_nr_for(egui::ViewportId::ROOT);
         raw.viewport_id = ids[0];
         for _ in 0..10 {
@@ -282,11 +301,19 @@ mod tests {
         }
         assert!(hosts[0].editor.borrow().paints >= before[0] + 10);
         assert_eq!(hosts[1].editor.borrow().paints, before[1]);
+        assert!(hosts[0].editor.borrow().frame_monitor.observed_frames() >= monitored[0] + 10);
+        assert_eq!(
+            hosts[1].editor.borrow().frame_monitor.observed_frames(),
+            monitored[1]
+        );
         assert_eq!(
             context.cumulative_pass_nr_for(egui::ViewportId::ROOT),
             root_pass
         );
         let before = hosts.each_ref().map(|host| host.editor.borrow().paints);
+        let monitored = hosts
+            .each_ref()
+            .map(|host| host.editor.borrow().frame_monitor.observed_frames());
         raw.viewport_id = egui::ViewportId::ROOT;
         raw.events.clear();
         for _ in 0..10 {
@@ -297,6 +324,12 @@ mod tests {
         assert_eq!(
             hosts.each_ref().map(|host| host.editor.borrow().paints),
             before
+        );
+        assert_eq!(
+            hosts
+                .each_ref()
+                .map(|host| host.editor.borrow().frame_monitor.observed_frames()),
+            monitored
         );
 
         let mut settings = hosts[0].borrow().settings_snapshot();

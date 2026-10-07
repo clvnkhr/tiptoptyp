@@ -49,7 +49,7 @@ pub(crate) struct TerminalPane {
     emoji: super::emoji::EmojiCache,
     mouse_held: Option<egui::PointerButton>,
     motion_cell: Option<(i32, i32)>,
-    last_mouse_pos: Option<Pos2>,
+    last_mouse_input: Option<MouseInput>,
     last_bell: u64,
     bell_pending: bool,
     last_beep: Option<std::time::Instant>,
@@ -89,10 +89,49 @@ impl TerminalPane {
         if let Some(session) = &self.session {
             session.set_visible(visible);
         }
-        if !visible && self.focused {
-            self.send(Command::Focus(false));
-            self.focused = false;
-            self.preedit.clear();
+        if !visible {
+            self.release_mouse(None);
+            self.suppress_select_until_release = false;
+            self.wheel_remainder = 0.0;
+            if self.focused {
+                self.send(Command::Focus(false));
+                self.focused = false;
+                self.preedit.clear();
+            }
+        }
+    }
+
+    /// Theme changes reach every started pane, including background programs.
+    /// Retry mailbox backpressure on the next frame; unchanged colors do no work.
+    pub(super) fn update_colors(&mut self, colors: Colors) -> bool {
+        if self.colors == Some(colors) {
+            return true;
+        }
+        if let Some(engine) = &mut self.fixture
+            && let Err(error) = engine.set_colors(colors)
+        {
+            self.error = Some(error.to_string());
+            return true;
+        }
+        if let Some(session) = &self.session
+            && matches!(
+                session.queue_colors(colors),
+                Err(std::sync::mpsc::TrySendError::Full(_))
+            )
+        {
+            return false;
+        }
+        // A disconnected worker has already published failure and cannot be
+        // recolored. Stop retrying it rather than creating an idle repaint loop.
+        self.colors = Some(colors);
+        true
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_test_session(session: Session) -> Self {
+        Self {
+            session: Some(session),
+            ..Self::default()
         }
     }
 
@@ -115,6 +154,7 @@ impl TerminalPane {
                 engine.terminal.vt_write(output);
                 self.fixture_cwd = Some(cwd.to_owned());
                 self.fixture = Some(engine);
+                self.colors = Some(colors);
             }
             Err(error) => self.error = Some(error.to_string()),
         }
@@ -137,6 +177,28 @@ impl TerminalPane {
             && let Err(error) = session.send(command)
         {
             self.error = Some(error);
+        }
+    }
+
+    fn report_mouse(&mut self, input: MouseInput) {
+        self.last_mouse_input = input.any_button_pressed.then_some(input);
+        self.send(Command::Mouse(input));
+    }
+
+    /// A pane can disappear without another pointer-up event. Retain the last
+    /// encoded position/geometry so every exit path can finish the TUI drag.
+    fn release_mouse(&mut self, modifiers: Option<egui::Modifiers>) {
+        self.motion_cell = None;
+        if let (Some(button), Some(mut input)) =
+            (self.mouse_held.take(), self.last_mouse_input.take())
+        {
+            input.action = mouse::Action::Release;
+            input.button = input::mouse_button(button);
+            input.any_button_pressed = false;
+            if let Some(modifiers) = modifiers {
+                input.mods = input::mods(modifiers);
+            }
+            self.send(Command::Mouse(input));
         }
     }
 
@@ -551,17 +613,9 @@ impl TerminalPane {
                 self.size = Some(size);
             }
         }
-        if self.colors != Some(colors) {
-            if let Some(engine) = &mut self.fixture {
-                let _ = engine.set_colors(colors);
-            }
-            if self
-                .session
-                .as_ref()
-                .is_none_or(|session| session.send(Command::Colors(colors)).is_ok())
-            {
-                self.colors = Some(colors);
-            }
+        if !self.update_colors(colors) {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(50));
         }
         if let Some(engine) = &mut self.fixture {
             match engine.snapshot() {
@@ -678,28 +732,9 @@ impl TerminalPane {
             && !bypass_gesture
             && !self.suppress_select_until_release;
         if !app_mouse {
-            // Leaving reporting with a held button (Shift bypass, tracking
-            // disabled mid-drag) must still release it, or the program keeps
-            // a stuck drag-select.
-            if let (Some(button), Some(pos)) = (self.mouse_held.take(), self.last_mouse_pos.take())
-            {
-                self.motion_cell = None;
-                if let Some(mapped) = input::mouse_button(button) {
-                    let (x, y) = surface_position(pos, outer, ppp, screen_w, screen_h);
-                    self.send(Command::Mouse(MouseInput {
-                        action: mouse::Action::Release,
-                        button: Some(mapped),
-                        mods: input::mods(ui.input(|input| input.modifiers)),
-                        x,
-                        y,
-                        geometry,
-                        any_button_pressed: false,
-                    }));
-                }
-            } else {
-                self.mouse_held = None;
-                self.motion_cell = None;
-            }
+            // Shift bypass, a tracking-mode change, or native focus loss can
+            // happen without an egui pointer release; finish the program's drag.
+            self.release_mouse(Some(ui.input(|input| input.modifiers)));
         }
         if app_mouse && !link_consumed {
             let button_events = ui.input(|input| {
@@ -726,9 +761,8 @@ impl TerminalPane {
                     {
                         self.mouse_held = Some(button);
                         self.motion_cell = None;
-                        self.last_mouse_pos = Some(pos);
                         let (x, y) = surface_position(pos, outer, ppp, screen_w, screen_h);
-                        self.send(Command::Mouse(MouseInput {
+                        self.report_mouse(MouseInput {
                             action: mouse::Action::Press,
                             button: Some(mapped),
                             mods: input::mods(modifiers),
@@ -736,17 +770,16 @@ impl TerminalPane {
                             y,
                             geometry,
                             any_button_pressed: true,
-                        }));
+                        });
                     }
                 } else if self.mouse_held == Some(button) {
                     // Release a held button even outside the surface; a TUI
                     // drag-select otherwise never sees its ending event.
                     self.mouse_held = None;
                     self.motion_cell = None;
-                    self.last_mouse_pos = None;
                     if let Some(mapped) = mapped {
                         let (x, y) = surface_position(pos, outer, ppp, screen_w, screen_h);
-                        self.send(Command::Mouse(MouseInput {
+                        self.report_mouse(MouseInput {
                             action: mouse::Action::Release,
                             button: Some(mapped),
                             mods: input::mods(modifiers),
@@ -754,7 +787,7 @@ impl TerminalPane {
                             y,
                             geometry,
                             any_button_pressed: false,
-                        }));
+                        });
                     }
                 }
             }
@@ -764,9 +797,8 @@ impl TerminalPane {
                 && self.motion_cell != Some(cell_pos)
             {
                 self.motion_cell = Some(cell_pos);
-                self.last_mouse_pos = Some(pos);
                 let (x, y) = surface_position(pos, outer, ppp, screen_w, screen_h);
-                self.send(Command::Mouse(MouseInput {
+                self.report_mouse(MouseInput {
                     action: mouse::Action::Motion,
                     button: self.mouse_held.and_then(input::mouse_button),
                     mods: input::mods(ui.input(|input| input.modifiers)),
@@ -774,10 +806,10 @@ impl TerminalPane {
                     y,
                     geometry,
                     any_button_pressed: self.mouse_held.is_some(),
-                }));
+                });
             }
         }
-        if response.hovered() {
+        if response.hovered() && ui.input(|input| input.focused) {
             let delta = ui.input_mut(|input| {
                 let delta = input.smooth_scroll_delta.y;
                 input.smooth_scroll_delta = Vec2::ZERO;
@@ -797,7 +829,7 @@ impl TerminalPane {
                     for _ in 0..lines.unsigned_abs().min(MAX_WHEEL_EVENTS) {
                         let Some(pos) = pos else { break };
                         let (x, y) = surface_position(pos, outer, ppp, screen_w, screen_h);
-                        self.send(Command::Mouse(MouseInput {
+                        self.report_mouse(MouseInput {
                             action: mouse::Action::Press,
                             button: Some(button),
                             mods: input::mods(mods),
@@ -805,7 +837,7 @@ impl TerminalPane {
                             y,
                             geometry,
                             any_button_pressed: self.mouse_held.is_some(),
-                        }));
+                        });
                     }
                 } else {
                     self.send(Command::Scroll(lines));
@@ -814,7 +846,11 @@ impl TerminalPane {
             }
         }
         if let Some(grid) = &self.grid {
-            if !app_mouse && !link_consumed && !self.suppress_select_until_release {
+            if !app_mouse
+                && !link_consumed
+                && !self.suppress_select_until_release
+                && ui.input(|input| input.focused)
+            {
                 if (response.drag_started() || response.clicked())
                     && let Some(pos) = response.interact_pointer_pos()
                 {
@@ -902,7 +938,8 @@ fn grid_size(available: Vec2, cell: Vec2, scale: f32) -> GridSize {
 const MAX_WHEEL_EVENTS: usize = 8;
 
 fn app_mouse_mode(grid: Option<&Grid>, ui: &egui::Ui) -> bool {
-    grid.is_some_and(|grid| grid.mouse_tracking) && !ui.input(|input| input.modifiers.shift)
+    grid.is_some_and(|grid| grid.mouse_tracking)
+        && ui.input(|input| input.focused && !input.modifiers.shift)
 }
 
 /// The surface geometry Ghostty converts pointer positions with: the full
@@ -1423,6 +1460,117 @@ mod tests {
             harness.state().selection.is_none(),
             "a reporting program receives clicks; local selection must not start"
         );
+    }
+
+    #[test]
+    fn palette_queue_backpressure_retries_once_instead_of_marking_unsent_colors_current() {
+        let (session, commands) = Session::search_test_session();
+        for _ in 0..64 {
+            session.send(Command::Wake).unwrap();
+        }
+        let mut pane = TerminalPane::with_test_session(session);
+        let colors = Colors {
+            foreground: Color32::BLACK,
+            background: Color32::WHITE,
+        };
+        assert!(!pane.update_colors(colors));
+        assert_eq!(
+            pane.colors, None,
+            "a full mailbox did not accept the palette change"
+        );
+        assert_eq!(commands.try_iter().count(), 64);
+        assert!(pane.update_colors(colors));
+        assert!(matches!(commands.try_recv(), Ok(Command::Colors(sent)) if sent == colors));
+        assert_eq!(pane.colors, Some(colors));
+        pane.update_colors(colors);
+        assert!(
+            commands.try_recv().is_err(),
+            "unchanged frames must not enqueue palette work"
+        );
+    }
+
+    fn pressed_reporting_pane() -> (
+        TerminalPane,
+        egui::Context,
+        std::sync::mpsc::Receiver<Command>,
+    ) {
+        let context = egui::Context::default();
+        crate::theme::configure_test_fonts(&context);
+        let (session, receiver) = Session::search_test_session();
+        let mut pane = TerminalPane::default();
+        pane.prepare_fixture(b"\x1b[?1002;1006hreporting", Path::new("/project"));
+        pane.session = Some(session);
+        let mut frame = |events| {
+            context
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(500.0, 220.0))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| pane.show(ui, Path::new("/project")),
+                )
+                .drop_without_applying_deltas();
+        };
+        frame(Vec::new());
+        let pos = Pos2::new(80.0, 80.0);
+        frame(vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        assert_eq!(pane.mouse_held, Some(egui::PointerButton::Primary));
+        assert!(receiver.try_iter().any(|command| matches!(command, Command::Mouse(input) if input.action == mouse::Action::Press)));
+        (pane, context, receiver)
+    }
+
+    #[test]
+    fn hiding_a_reporting_pane_releases_the_drag_and_forgets_pointer_state() {
+        let (mut pane, _context, receiver) = pressed_reporting_pane();
+        let last = pane.last_mouse_input.unwrap();
+        pane.set_visible(false);
+        let events = receiver.try_iter().collect::<Vec<_>>();
+        let released = events
+            .iter()
+            .find_map(|command| match command {
+                Command::Mouse(input) if input.action == mouse::Action::Release => Some(input),
+                _ => None,
+            })
+            .expect("hiding a pressed pane must release the program's mouse button");
+        assert!(!released.any_button_pressed);
+        assert_eq!((released.x, released.y), (last.x, last.y));
+        assert_eq!(released.geometry.cell_width, last.geometry.cell_width);
+        assert_eq!(released.geometry.padding_top, last.geometry.padding_top);
+        assert!(pane.mouse_held.is_none());
+        assert!(pane.motion_cell.is_none());
+        pane.set_visible(false);
+        assert!(
+            !receiver
+                .try_iter()
+                .any(|command| matches!(command, Command::Mouse(_))),
+            "repeated hidden frames must not send duplicate releases"
+        );
+    }
+
+    #[test]
+    fn losing_native_focus_releases_a_reporting_drag_without_waiting_for_pointer_up() {
+        let (mut pane, context, receiver) = pressed_reporting_pane();
+        context
+            .run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(500.0, 220.0))),
+                    focused: false,
+                    ..Default::default()
+                },
+                |ui| pane.show(ui, Path::new("/project")),
+            )
+            .drop_without_applying_deltas();
+        assert!(receiver.try_iter().any(|command| matches!(command, Command::Mouse(input) if input.action == mouse::Action::Release)), "switching apps must not leave the program's mouse button pressed");
+        assert!(pane.mouse_held.is_none());
     }
 
     #[test]

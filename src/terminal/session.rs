@@ -95,9 +95,11 @@ impl Shared {
             std::mem::discriminant(&snapshot.status) != std::mem::discriminant(&status);
         snapshot.status = status;
         snapshot.revision += 1;
-        snapshot.bells = self.bells.load(Ordering::Acquire);
+        let bells = self.bells.load(Ordering::Acquire);
+        let alert_changed = bells > snapshot.bells;
+        snapshot.bells = bells;
         drop(snapshot);
-        if (status_changed || self.visible.load(Ordering::Acquire))
+        if (status_changed || alert_changed || self.visible.load(Ordering::Acquire))
             && !self.repaint_pending.swap(true, Ordering::AcqRel)
             && !self.stopped.load(Ordering::Acquire)
         {
@@ -201,6 +203,15 @@ impl Session {
     /// text. Keeping this separate avoids a search-request/repaint feedback loop.
     pub(super) fn content_revision(&self) -> u64 {
         self.shared.content_revision.load(Ordering::Acquire)
+    }
+
+    pub(super) fn queue_colors(&self, colors: Colors) -> Result<(), mpsc::TrySendError<()>> {
+        self.sender
+            .try_send(Command::Colors(colors))
+            .map_err(|error| match error {
+                mpsc::TrySendError::Full(_) => mpsc::TrySendError::Full(()),
+                mpsc::TrySendError::Disconnected(_) => mpsc::TrySendError::Disconnected(()),
+            })
     }
 
     pub(super) fn request_search_dump(
@@ -821,10 +832,18 @@ mod tests {
     #[cfg(unix)]
     fn real_pty_counts_alert_bells_for_hidden_panes() {
         let root = tempfile::tempdir().unwrap();
-        let session = start_script(root.path(), "printf '\\aREADY'; sleep 10");
+        let session = start_script(root.path(), "printf READY; sleep 10");
         until(|| text(&session.snapshot()).contains("READY"));
+        session.set_visible(false);
+        let before = session.snapshot().grid.unwrap();
+        session.send(Command::Output(b"\x07".to_vec())).unwrap();
         until(|| session.snapshot().bells >= 1);
-        assert_eq!(session.snapshot().status, Status::Running);
+        let alerted = session.snapshot();
+        assert_eq!(alerted.status, Status::Running);
+        assert!(
+            Arc::ptr_eq(&before, alerted.grid.as_ref().unwrap()),
+            "hidden alerts must not require grid rendering"
+        );
     }
 
     #[test]
@@ -1027,6 +1046,32 @@ mod tests {
         drop(session);
         assert!(shared.stopped.load(Ordering::Acquire));
         assert!(receiver.try_recv().is_ok());
+    }
+
+    #[test]
+    fn hidden_alert_wakes_once_without_rendering_or_repainting_plain_output() {
+        let (session, _receiver) = Session::search_test_session();
+        let shared = &session.shared;
+        shared.publish(None, Status::Running);
+        assert!(!shared.repaint_pending.load(Ordering::Acquire));
+        shared.bells.fetch_add(1, Ordering::Release);
+        shared.publish(None, Status::Running);
+        assert!(
+            shared.repaint_pending.load(Ordering::Acquire),
+            "a hidden bell must wake the app so its badge and sound are observed"
+        );
+        let alert = session.snapshot();
+        assert_eq!(alert.bells, 1);
+        assert!(
+            alert.grid.is_none(),
+            "alert publication does not need a grid render"
+        );
+        shared.publish(None, Status::Running);
+        assert!(!shared.repaint_pending.load(Ordering::Acquire));
+        shared.bells.fetch_add(1, Ordering::Release);
+        shared.publish(None, Status::Running);
+        assert!(shared.repaint_pending.load(Ordering::Acquire));
+        assert_eq!(session.snapshot().bells, 2);
     }
 
     #[test]

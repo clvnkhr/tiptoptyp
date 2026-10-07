@@ -1,33 +1,21 @@
-//! Always-on UI frame monitor: slow-frame logging in dev mode and a
-//! repaint-storm watchdog, inspired by Zed's frame-duration tracking.
+//! Bounded per-document frame telemetry, independent of the profiling recorder.
 //!
-//! egui only runs a UI pass when something requested a repaint, so a burst of
-//! back-to-back passes means the app never settles. That is normal while
-//! typing or scrolling, but a burst running for a minute means a stuck
-//! spinner, pending state, or animation loop is burning a core. The monitor
-//! costs a few counters per pass and logs nothing in the common case. Like
-//! the profiling recorder, it never logs document contents.
+//! Continuous redraws can be legitimate (terminal output or a long build), so
+//! the notice describes observed activity without diagnosing a stuck app. Human
+//! input resets the no-input interval. The monitor neither requests repaints nor
+//! retains input/document contents; ordinary passes only update a few counters.
 
 use std::time::{Duration, Instant};
 
-/// A burst becomes a storm after this many continuous seconds. Long enough
-/// that sustained scrolling or typing cannot trip it: frames stop within a
-/// second of the last input, which resets the burst.
-const STORM_BURST_SECS: f64 = 60.0;
-/// A gap this long ends the burst; the app settled.
+use eframe::egui;
+
+const REDRAW_NOTICE_AFTER: Duration = Duration::from_secs(60);
 const BURST_GAP: Duration = Duration::from_secs(1);
-/// Slow-frame log threshold (dev mode only).
 const SLOW_FRAME_MS: f64 = 50.0;
-/// Dev burst stats cadence.
 const DEV_STATS_SECS: u64 = 5;
 
 pub(crate) fn dev_mode() -> bool {
     std::env::var_os("TIPTOPTYP_DEV").is_some_and(|value| !value.is_empty() && value != "0")
-}
-
-/// Pure storm decision for tests: warn once per burst that outlasts the bound.
-fn storm_tripped(burst_secs: f64, warned: bool) -> bool {
-    burst_secs >= STORM_BURST_SECS && !warned
 }
 
 pub(crate) struct FrameMonitor {
@@ -35,9 +23,13 @@ pub(crate) struct FrameMonitor {
     burst_frames: u64,
     burst_start: Option<Instant>,
     last_frame: Option<Instant>,
+    idle_start: Option<Instant>,
+    idle_frames: u64,
     warned: bool,
-    storm_notice: Option<String>,
+    redraw_notice: Option<String>,
     dev_stats_second: u64,
+    #[cfg(test)]
+    observed_frames: u64,
 }
 
 impl FrameMonitor {
@@ -47,40 +39,63 @@ impl FrameMonitor {
             burst_frames: 0,
             burst_start: None,
             last_frame: None,
+            idle_start: None,
+            idle_frames: 0,
             warned: false,
-            storm_notice: None,
+            redraw_notice: None,
             dev_stats_second: 0,
+            #[cfg(test)]
+            observed_frames: 0,
         }
     }
 
-    /// Call at the start of each root UI pass. Returns the frame start for
-    /// [`Self::end_frame`]; split so neither borrows across the pass.
-    pub(crate) fn begin_frame(&mut self) -> Instant {
-        let now = Instant::now();
+    /// Observe input before widgets consume it, including a held drag/key even
+    /// when the platform did not send another event on this pass.
+    pub(crate) fn begin_frame(&mut self, context: &egui::Context) -> Instant {
+        let active_input = context.input(|input| {
+            !input.raw.events.is_empty() || input.pointer.any_down() || !input.keys_down.is_empty()
+        });
+        self.begin_frame_at(Instant::now(), active_input)
+    }
+
+    fn begin_frame_at(&mut self, now: Instant, active_input: bool) -> Instant {
         let settled = self
             .last_frame
-            .is_none_or(|previous| now.duration_since(previous) >= BURST_GAP);
+            .is_none_or(|previous| now.saturating_duration_since(previous) >= BURST_GAP);
         if settled {
             self.burst_frames = 0;
             self.burst_start = Some(now);
+            self.dev_stats_second = 0;
+        }
+        if settled || active_input {
+            self.idle_start = None;
+            self.idle_frames = 0;
             self.warned = false;
+            self.redraw_notice = None;
+        }
+        if !active_input {
+            self.idle_start.get_or_insert(now);
+            self.idle_frames += 1;
         }
         self.burst_frames += 1;
+        #[cfg(test)]
+        {
+            self.observed_frames += 1;
+        }
         self.last_frame = Some(now);
         now
     }
 
-    /// Call at the end of each root UI pass with the elapsed time.
     pub(crate) fn end_frame(&mut self, started: Instant) {
-        self.finish_frame(started.elapsed());
+        let now = Instant::now();
+        self.finish_frame_at(now, now.saturating_duration_since(started));
     }
 
-    /// A storm warning for the shell to surface in-app, if any.
-    pub(crate) fn take_storm_notice(&mut self) -> Option<String> {
-        self.storm_notice.take()
+    pub(crate) fn take_redraw_notice(&mut self) -> Option<String> {
+        self.redraw_notice.take()
     }
 
-    fn finish_frame(&mut self, elapsed: Duration) {
+    fn finish_frame_at(&mut self, now: Instant, elapsed: Duration) {
         let ms = elapsed.as_secs_f64() * 1_000.0;
         if self.dev {
             if ms >= SLOW_FRAME_MS {
@@ -88,7 +103,7 @@ impl FrameMonitor {
             }
             let second = self
                 .burst_start
-                .map(|start| start.elapsed().as_secs())
+                .map(|start| now.saturating_duration_since(start).as_secs())
                 .unwrap_or(0);
             if second / DEV_STATS_SECS != self.dev_stats_second / DEV_STATS_SECS {
                 self.dev_stats_second = second;
@@ -98,22 +113,27 @@ impl FrameMonitor {
                 );
             }
         }
-        let burst_secs = self
-            .burst_start
-            .map(|start| start.elapsed().as_secs_f64())
-            .unwrap_or(0.0);
-        if storm_tripped(burst_secs, self.warned) {
+        let idle = self
+            .idle_start
+            .map(|start| now.saturating_duration_since(start))
+            .unwrap_or_default();
+        if idle >= REDRAW_NOTICE_AFTER && !self.warned {
             self.warned = true;
-            let frames = self.burst_frames;
-            let secs = burst_secs as u64;
+            let frames = self.idle_frames;
+            let secs = idle.as_secs();
             eprintln!(
-                "tiptoptyp[warn] repaint storm: {frames} frames in {secs}s without settling; \
-                 run with TIPTOPTYP_DEV=1 and a profiling build for attribution"
+                "tiptoptyp[warn] sustained redraw: {frames} frames in {secs}s without input; \
+                 background output or animation may be expected; use a profiling build for attribution"
             );
-            self.storm_notice = Some(format!(
-                "Interface has repainted continuously for {secs}s; restarting the app clears a stuck spinner or pending state"
+            self.redraw_notice = Some(format!(
+                "This window has redrawn continuously for {secs}s without input. Background work or terminal output may explain it; check Activity for ongoing work."
             ));
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observed_frames(&self) -> u64 {
+        self.observed_frames
     }
 }
 
@@ -121,33 +141,157 @@ impl FrameMonitor {
 mod tests {
     use super::*;
 
+    fn quiet_monitor() -> FrameMonitor {
+        let mut monitor = FrameMonitor::new();
+        monitor.dev = false;
+        monitor
+    }
+
+    fn pass(monitor: &mut FrameMonitor, now: Instant, active_input: bool) {
+        monitor.begin_frame_at(now, active_input);
+        monitor.finish_frame_at(now, Duration::ZERO);
+    }
+
     #[test]
-    fn storm_trips_once_per_overlong_burst() {
-        assert!(!storm_tripped(0.0, false));
-        assert!(!storm_tripped(STORM_BURST_SECS - 0.1, false));
-        assert!(storm_tripped(STORM_BURST_SECS, false));
-        assert!(storm_tripped(STORM_BURST_SECS + 3600.0, false));
-        // Already warned for this burst: stay quiet.
-        assert!(!storm_tripped(STORM_BURST_SECS + 1.0, true));
+    fn new_burst_resets_development_stats_cadence() {
+        let mut monitor = quiet_monitor();
+        monitor.dev_stats_second = 60;
+        monitor.last_frame = Some(Instant::now() - BURST_GAP * 2);
+        monitor.begin_frame(&egui::Context::default());
+        assert_eq!(monitor.dev_stats_second, 0);
+    }
+
+    #[test]
+    fn active_typing_is_not_an_idle_repaint_storm() {
+        let mut monitor = quiet_monitor();
+        let context = egui::Context::default();
+        let start = Instant::now() - Duration::from_secs(61);
+        monitor.burst_start = Some(start);
+        monitor.idle_start = Some(start);
+        monitor.last_frame = Some(Instant::now());
+        context
+            .run_ui(
+                egui::RawInput {
+                    events: vec![egui::Event::Text("x".into())],
+                    ..Default::default()
+                },
+                |ui| {
+                    let started = monitor.begin_frame(ui.ctx());
+                    monitor.end_frame(started);
+                },
+            )
+            .drop_without_applying_deltas();
+        assert!(monitor.take_redraw_notice().is_none());
+        assert!(monitor.idle_start.is_none());
+    }
+
+    #[test]
+    fn held_keys_and_drag_keep_input_active_without_new_events() {
+        for event in [
+            egui::Event::Key {
+                key: egui::Key::ArrowDown,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos: egui::pos2(1.0, 1.0),
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ] {
+            let context = egui::Context::default();
+            let mut monitor = quiet_monitor();
+            context
+                .run_ui(
+                    egui::RawInput {
+                        events: vec![event],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        monitor.begin_frame(ui.ctx());
+                    },
+                )
+                .drop_without_applying_deltas();
+            monitor.idle_start = Some(Instant::now() - REDRAW_NOTICE_AFTER);
+            context
+                .run_ui(egui::RawInput::default(), |ui| {
+                    let started = monitor.begin_frame(ui.ctx());
+                    monitor.end_frame(started);
+                })
+                .drop_without_applying_deltas();
+            assert!(monitor.take_redraw_notice().is_none());
+            assert!(monitor.idle_start.is_none());
+        }
+    }
+
+    #[test]
+    fn no_input_redraw_notice_is_once_per_interval_and_rearms_after_input() {
+        let mut monitor = quiet_monitor();
+        let start = Instant::now();
+        for tick in 0..=240 {
+            pass(
+                &mut monitor,
+                start + Duration::from_millis(tick * 250),
+                false,
+            );
+            if tick < 240 {
+                assert!(monitor.take_redraw_notice().is_none());
+            }
+        }
+        let notice = monitor.take_redraw_notice().unwrap();
+        assert!(!notice.contains("stuck"));
+        assert!(!notice.contains("restart"));
+        assert!(notice.contains("Background work or terminal output"));
+        for tick in 241..=480 {
+            pass(
+                &mut monitor,
+                start + Duration::from_millis(tick * 250),
+                false,
+            );
+            assert!(monitor.take_redraw_notice().is_none());
+        }
+        pass(&mut monitor, start + Duration::from_secs(121), true);
+        for tick in 0..=240 {
+            pass(
+                &mut monitor,
+                start + Duration::from_secs(122) + Duration::from_millis(tick * 250),
+                false,
+            );
+        }
+        assert!(monitor.take_redraw_notice().is_some());
     }
 
     #[test]
     fn sparse_frames_never_trip_the_watchdog() {
-        let mut monitor = FrameMonitor::new();
-        // Rapid successive passes stay far below the duration bound, and no
-        // notice is produced without a storm.
-        for _ in 0..10 {
-            let started = monitor.begin_frame();
-            monitor.end_frame(started);
-            assert!(monitor.take_storm_notice().is_none());
+        let mut monitor = quiet_monitor();
+        let start = Instant::now();
+        for tick in 0..=120 {
+            pass(&mut monitor, start + Duration::from_secs(tick * 2), false);
+            assert!(monitor.take_redraw_notice().is_none());
+            assert_eq!(monitor.burst_frames, 1);
         }
-        assert_eq!(monitor.burst_frames, 10);
+    }
+
+    #[test]
+    fn continuous_input_for_minutes_never_trips_and_monitors_are_independent() {
+        let start = Instant::now();
+        let mut active = quiet_monitor();
+        let mut background = quiet_monitor();
+        for tick in 0..=480 {
+            let now = start + Duration::from_millis(tick * 250);
+            pass(&mut active, now, tick % 4 == 0);
+            assert!(active.take_redraw_notice().is_none());
+            pass(&mut background, now, false);
+        }
+        assert!(background.take_redraw_notice().is_some());
+        assert!(!active.warned);
     }
 
     #[test]
     fn dev_mode_follows_the_environment() {
-        // Cannot mutate the process environment portably here; at least the
-        // constructor agrees with the accessor.
         assert_eq!(FrameMonitor::new().dev, dev_mode());
     }
 }

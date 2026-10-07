@@ -79,7 +79,6 @@ pub(crate) struct AppShell {
     launch_mode: LaunchMode,
     primary_visible: bool,
     quit_requested: bool,
-    frame_monitor: crate::frame_monitor::FrameMonitor,
 }
 
 impl AppShell {
@@ -140,7 +139,6 @@ impl AppShell {
             launch_mode,
             primary_visible: true,
             quit_requested: false,
-            frame_monitor: crate::frame_monitor::FrameMonitor::new(),
         }
     }
 
@@ -792,7 +790,6 @@ impl eframe::App for AppShell {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let _span = crate::performance::span("ui.shell.pass");
-        let frame_started = self.frame_monitor.begin_frame();
         crate::performance::tick(ui.ctx(), || !self.captures.has_pending());
         let context = ui.ctx().clone();
         let profile_close_requested = crate::performance::take_no_window_request();
@@ -800,7 +797,7 @@ impl eframe::App for AppShell {
         let primary_close_requested = context.input(|input| input.viewport().close_requested())
             || crate::window_host::close_requested(&context, egui::ViewportId::ROOT);
         if self.primary_visible {
-            self.primary.borrow_mut().ui_in_window(ui, Some(frame));
+            self.primary.paint_primary(ui, Some(frame));
         } else {
             self.primary
                 .borrow_mut()
@@ -837,12 +834,6 @@ impl eframe::App for AppShell {
         self.show_secondary_windows(&context);
         self.poll_process_close(&context);
         self.update_native_menu(&context);
-        self.frame_monitor.end_frame(frame_started);
-        // Surface a repaint storm where the user can see it, at most once
-        // per burst. The monitor also logs to stderr for terminal runs.
-        if let Some(notice) = self.frame_monitor.take_storm_notice() {
-            self.active_editor_mut().show_window_notice(notice);
-        }
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
@@ -1071,7 +1062,6 @@ mod tests {
             launch_mode: LaunchMode::Interactive,
             primary_visible: true,
             quit_requested: false,
-            frame_monitor: crate::frame_monitor::FrameMonitor::new(),
         };
         let mut raw = egui::RawInput::default();
         raw.viewports
@@ -1201,7 +1191,6 @@ mod tests {
             launch_mode: LaunchMode::Interactive,
             primary_visible: true,
             quit_requested: false,
-            frame_monitor: crate::frame_monitor::FrameMonitor::new(),
         };
         let secondary = EditorApp::dormant_window_for_tests(
             &context,
@@ -1306,7 +1295,6 @@ mod tests {
             launch_mode: LaunchMode::Interactive,
             primary_visible: false,
             quit_requested: false,
-            frame_monitor: crate::frame_monitor::FrameMonitor::new(),
         };
         let mut frame = eframe::Frame::_new_kittest();
         let raw = egui::RawInput::default();

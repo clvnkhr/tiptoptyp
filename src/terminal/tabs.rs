@@ -118,6 +118,21 @@ impl TerminalTabs {
         }
     }
 
+    /// Palette notifications are independent of which terminal is drawn.
+    pub(crate) fn sync_theme(&mut self, ui: &egui::Ui) {
+        let colors = super::view::terminal_panel_colors(ui);
+        let mut queued = true;
+        for pane in &mut self.panes {
+            queued &= pane.update_colors(colors);
+        }
+        if !queued {
+            // Hidden output does not repaint. Explicitly wake only until this
+            // pending control message is accepted by the bounded mailbox.
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(50));
+        }
+    }
+
     /// Check every pane for newly rung bells, even hidden ones. A pane that
     /// is not currently shown keeps a badge until it is viewed.
     pub(crate) fn poll_bells(&mut self) {
@@ -252,6 +267,62 @@ impl TerminalTabs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn palette_changes_reach_every_pane_once_while_the_bottom_panel_is_hidden() {
+        use super::super::{
+            engine::Colors,
+            session::{Command, Session},
+        };
+        let context = egui::Context::default();
+        let (first, first_commands) = Session::search_test_session();
+        let (second, second_commands) = Session::search_test_session();
+        let mut tabs = TerminalTabs {
+            panes: vec![
+                TerminalPane::with_test_session(first),
+                TerminalPane::with_test_session(second),
+            ],
+            active: 0,
+            visible: false,
+        };
+        let mut frame = |light: bool| {
+            context.set_visuals(if light {
+                egui::Visuals::light()
+            } else {
+                egui::Visuals::dark()
+            });
+            let mut colors = None;
+            context
+                .run_ui(Default::default(), |ui| {
+                    colors = Some(super::super::view::terminal_panel_colors(ui));
+                    tabs.sync_theme(ui);
+                })
+                .drop_without_applying_deltas();
+            colors.unwrap()
+        };
+        let first_colors = frame(false);
+        let receive = |commands: &std::sync::mpsc::Receiver<Command>, expected: Colors| {
+            assert!(
+                matches!(commands.try_recv(), Ok(Command::Colors(colors)) if colors == expected)
+            );
+            assert!(
+                commands.try_recv().is_err(),
+                "each pane gets one palette command per change"
+            );
+        };
+        receive(&first_commands, first_colors);
+        receive(&second_commands, first_colors);
+        frame(false);
+        assert!(first_commands.try_recv().is_err());
+        assert!(second_commands.try_recv().is_err());
+        let second_colors = frame(true);
+        assert_ne!(second_colors, first_colors);
+        receive(&first_commands, second_colors);
+        receive(&second_commands, second_colors);
+        frame(true);
+        assert!(first_commands.try_recv().is_err());
+        assert!(second_commands.try_recv().is_err());
+    }
 
     #[test]
     fn adding_terminals_appends_and_switches_up_to_the_bound() {

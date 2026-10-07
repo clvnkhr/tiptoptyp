@@ -9071,6 +9071,7 @@ impl EditorApp {
         egui::Panel::bottom("status-bar")
             .exact_size(METRICS.chrome.status_height)
             .show(ui, |ui| self.show_status_bar(ui));
+        self.terminal.sync_theme(ui);
         self.terminal
             .set_visible(self.bottom_panel.selected() == Some(PanelTab::Terminal));
         self.terminal.poll_bells();
