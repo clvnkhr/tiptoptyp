@@ -1,6 +1,7 @@
 //! Window-owned terminal: libghostty runs on one worker, egui sees immutable grids.
 mod emoji;
 mod engine;
+mod find;
 mod input;
 mod links;
 mod session;
@@ -9,7 +10,7 @@ mod view;
 
 use std::path::PathBuf;
 pub(crate) use tabs::{MAX_TERMINAL_PANES, TerminalTabs};
-pub(crate) use view::terminal_id;
+pub(crate) use view::{terminal_find_id, terminal_id};
 
 /// A link the user asked to follow with Cmd+click in terminal output.
 #[derive(Debug, Clone, PartialEq, Eq)]

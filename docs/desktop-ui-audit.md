@@ -1107,3 +1107,75 @@ Required checks passed: fmt, strict all-target Clippy (default and
 `/private/tmp/ttt-terminal-off-native-rerun.log`. Off adds no background worker,
 idle repaint timer or per-frame disk access; cancellation/reaping never blocks
 the UI. No unrelated performance benchmark was needed.
+
+
+## 2026-10-07: finish terminal links and focus-routed Find
+
+Work was completed directly in `/Users/calvinkhor/Documents/GitHub/mytypst`,
+on `codex/finish-terminal-find`, from master `5539652`. The user's `todo.typ`
+edits were committed separately as `c3b9cd0`; their descriptions were preserved.
+This review covers the unfinished terminal feature, not the broader recent-PR audit.
+
+The existing Escape regression failed before the fix: egui's default text-field
+filter cleared focus before the bar could consume Escape. The bar now retains
+Escape, while the terminal grid keeps it whenever the search field is unfocused.
+Enter/Shift+Enter steps once, focused Cmd+F toggles Find, and terminal Cmd+G/
+Shift+Cmd+G does not reach source Find. Find/Replace, clipboard, Select All and
+rebound/disabled editing shortcuts stay owned by the terminal query. Switching
+bottom-panel tabs releases both terminal widget focus IDs.
+
+The first native run (`run-wium893_`) reproduced a focus loss after clicking the
+match arrows, despite a passing basic kittest. Arrow clicks now queue one field
+focus request for the next pass; a late-response-read regression exercises the
+click-away case. A subsequent run (`run-46ibcy5t`) caught an overly strict journey
+assertion: opening the bar resizes the terminal and legitimately queues another
+background snapshot. The journey now requires a completed result initially,
+then checks that displayed matches, query, source and focus remain stable even
+if another refresh becomes pending. It does not hide a changing result/focus.
+
+Search runs on the existing terminal worker and retains at most 4,096 physical
+rows / 512 KiB and 8,192 matches. Absolute rows survive truncation and soft wraps;
+Unicode lowercase expansion and Greek final sigma retain original character
+spans. Match painting visits only visible hits. Output/resize revisions are
+separate from scrolling, focus and search requests, so stable results request
+no further work or search repaints. Generation tests reject obsolete replies;
+throttle/disconnect tests bound requests and pending lifetimes. On EOF the shell
+is reaped, while its emulator waits without polling so retained output remains
+searchable, scrollable and resizable. These are deterministic performance
+invariants, not a measured GUI speed or cross-platform guarantee.
+
+Link fixes preserve single-digit line/column suffixes, both HTTP schemes in
+source order, balanced URL parentheses and IPv6 brackets. Home-relative paths
+resolve correctly. Command-click bypasses selection and TUI mouse reporting
+through the complete press/drag/release gesture. Links split across physical
+rows remain a documented limitation; relative paths use the pane's starting
+working directory.
+
+Verification:
+
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --all-targets -- -D warnings` passed; the same check with
+  `--features desktop-ui-tests` passed.
+- `cargo test --no-fail-fast` passed: 1,519 tests, 43 opt-in/ignored tests.
+- `cargo test --manifest-path xtask/Cargo.toml` passed: 15 tests.
+- The desktop runner's 11 Python contract tests passed.
+- Native `terminal_find` passed in `.tiptoptyp/desktop-ui-tests/run-4x0yuu2n`:
+  real shell scrollback, mixed-case matches, exact stepping/wrap, arrow focus,
+  Cmd+A query edits, grid versus field Escape, Cmd+F toggle/refocus, one-click
+  close and separate queries in two panes. The source fingerprint stayed fixed.
+- Native `panels` passed in `.tiptoptyp/desktop-ui-tests/run-d8c032gv`:
+  panel transitions, real shell typing, Off/reaping, restart, independent panes
+  and normal mouse tracking in vim.
+
+Both native runs checked the actual executable hash/build and passed desktop,
+Accessibility and input-posting preflight on macOS 14.6.1, Apple Silicon, 2x scale.
+Their result JSON and event logs retain the hashes, fixture and run metadata.
+The normal debug linker emitted a large-unwind-table warning; the
+strict Clippy checks remained clean.
+
+The fresh app-generated Find framebuffer (selected visible match, `3/3`) was
+inspected for field/button alignment, clipping and highlight placement. It is
+retained at `.tiptoptyp/screenshots/agent-review/terminal-find-20261007.png`, copied
+unchanged from `run-4x0yuu2n/1791372029582-0003-main.png`. This is viewport pixel
+evidence, not a claim about native-child desktop composition; this journey uses
+a plain-text document with no native preview surface.

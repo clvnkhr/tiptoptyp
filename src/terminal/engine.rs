@@ -18,6 +18,17 @@ use super::input::{KeyInput, MouseInput};
 // lines). Ghostty rounds it to whole pages and always retains the active grid.
 pub(super) const SCROLLBACK_BYTES: usize = 8 * 1024 * 1024;
 
+/// Search retains a bounded tail of physical rows. Its coordinates remain in
+/// the terminal's full screen space, even when older rows are omitted.
+#[derive(Debug, Default, Clone)]
+pub(super) struct SearchDump {
+    pub lines: Vec<String>,
+    pub first_line: usize,
+    pub truncated: bool,
+}
+
+const SEARCH_DUMP_MAX_LINES: usize = 4096;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct GridSize {
     pub cols: u16,
@@ -208,33 +219,78 @@ impl Engine {
         )
     }
 
-    /// Full scrollback text for find, oldest line first. Capped so a huge
-    /// buffer cannot stall the worker; the tail (most recent output) wins.
-    /// Returns the text and whether older lines were dropped.
-    pub fn search_dump(&mut self, cap_bytes: usize) -> Result<(String, bool), libghostty_vt::Error> {
-        use libghostty_vt::{fmt::Format, selection::FormatOptions};
-        let Some(selection) = self.terminal.select_all()? else {
-            return Ok((String::new(), false));
+    /// A bounded tail of physical scrollback rows, without changing the live
+    /// viewport or selection. Formatting into a fixed buffer bounds allocation;
+    /// a too-large selection is shortened by whole rows rather than UTF-8 bytes.
+    pub fn search_dump(&mut self, cap_bytes: usize) -> Result<SearchDump, libghostty_vt::Error> {
+        use libghostty_vt::{
+            fmt::Format,
+            selection::{FormatOptions, Selection},
+            terminal::{Point, PointCoordinate, PointSpace},
         };
-        let options = FormatOptions::new()
-            .with_emit_format(Format::Plain)
-            .with_unwrap(true)
-            .with_trim(true)
-            .with_selection(&selection);
-        let Some(bytes) = self.terminal.format_selection_alloc(None, options)? else {
-            return Ok((String::new(), false));
+        let Some(all) = self.terminal.select_all()? else {
+            return Ok(SearchDump::default());
         };
-        let mut text = String::from_utf8_lossy(&bytes).into_owned();
-        let mut truncated = false;
-        if text.len() > cap_bytes {
-            let skip = text.len() - cap_bytes;
-            let boundary = text[skip..]
-                .find('\n')
-                .map_or(0, |at| skip + at + 1);
-            text = text[boundary..].to_owned();
-            truncated = true;
+        let Some(start) = self
+            .terminal
+            .point_from_grid_ref(&all.start(), PointSpace::Screen)?
+        else {
+            return Ok(SearchDump::default());
+        };
+        let Some(end) = self
+            .terminal
+            .point_from_grid_ref(&all.end(), PointSpace::Screen)?
+        else {
+            return Ok(SearchDump::default());
+        };
+        let last_line = end.y as usize;
+        let original_first = start.y as usize;
+        let mut first_line =
+            original_first.max((last_line + 1).saturating_sub(SEARCH_DUMP_MAX_LINES));
+        let mut buffer = vec![0; cap_bytes];
+        loop {
+            let first = self.terminal.grid_ref(Point::Screen(PointCoordinate {
+                x: 0,
+                y: first_line as u32,
+            }))?;
+            let selection = Selection::new(first, all.end(), false);
+            let options = FormatOptions::new()
+                .with_emit_format(Format::Plain)
+                .with_unwrap(false)
+                .with_trim(true)
+                .with_selection(&selection);
+            match self.terminal.format_selection_buf(options, &mut buffer) {
+                Ok(written) => {
+                    let text = String::from_utf8_lossy(&buffer[..written.unwrap_or(0)]);
+                    let line_count = last_line + 1 - first_line;
+                    let mut lines: Vec<_> = text
+                        .split('\n')
+                        .map(|line| line.trim_end_matches(' ').to_owned())
+                        .collect();
+                    // Formatting may omit an empty final row or emit a final
+                    // newline. Neither may shift the physical-row coordinates.
+                    lines.resize_with(line_count, String::new);
+                    lines.truncate(line_count);
+                    return Ok(SearchDump {
+                        lines,
+                        first_line,
+                        truncated: first_line > original_first,
+                    });
+                }
+                Err(libghostty_vt::Error::OutOfSpace { .. }) => {
+                    let line_count = last_line + 1 - first_line;
+                    if line_count == 1 {
+                        return Ok(SearchDump {
+                            lines: Vec::new(),
+                            first_line: last_line + 1,
+                            truncated: true,
+                        });
+                    }
+                    first_line += line_count.div_ceil(2);
+                }
+                Err(error) => return Err(error),
+            }
         }
-        Ok((text, truncated))
     }
 
     pub fn key(&mut self, input: KeyInput) -> Result<Vec<u8>, libghostty_vt::Error> {
@@ -604,20 +660,76 @@ mod tests {
     fn search_dump_covers_scrollback_and_caps_the_tail() {
         let mut engine = engine(20, 4);
         for n in 0..10 {
+            engine.terminal.vt_write(format!("line{n}\r\n").as_bytes());
+        }
+        let dump = engine.search_dump(1 << 20).unwrap();
+        assert!(!dump.truncated);
+        assert_eq!(dump.first_line, 0);
+        for n in 0..10 {
+            assert!(dump.lines.contains(&format!("line{n}")), "{:?}", dump.lines);
+        }
+        let tail = engine.search_dump(12).unwrap();
+        assert!(tail.truncated);
+        assert!(tail.lines.iter().map(String::len).sum::<usize>() <= 12);
+        assert!(
+            tail.lines.iter().any(|line| line == "line9"),
+            "{:?}",
+            tail.lines
+        );
+        // The shortened dump still addresses the same physical terminal rows.
+        for (row, line) in tail.lines.iter().enumerate() {
+            assert_eq!(line, &dump.lines[tail.first_line + row]);
+        }
+    }
+
+    #[test]
+    fn search_dump_preserves_soft_wraps_blank_rows_and_live_viewport() {
+        let mut engine = engine(4, 3);
+        engine.terminal.vt_write("ab界cdef\r\n\r\nlast".as_bytes());
+        engine.terminal.scroll_viewport(ScrollViewport::Top);
+        let before = engine.snapshot().unwrap();
+        let dump = engine.search_dump(1024).unwrap();
+        assert_eq!(dump.first_line, 0);
+        assert_eq!(dump.lines, vec!["ab界", "cdef", "", "last"]);
+        let after = engine.snapshot().unwrap();
+        assert_eq!(after.scroll_offset, before.scroll_offset);
+        assert_eq!(after.scroll_total, before.scroll_total);
+        assert_eq!(
+            after.cursor.as_ref().map(|cursor| cursor.row),
+            before.cursor.as_ref().map(|cursor| cursor.row)
+        );
+    }
+
+    #[test]
+    fn search_dump_caps_by_whole_unicode_rows_and_never_slices_utf8() {
+        let mut engine = engine(20, 3);
+        engine.terminal.vt_write("old\r\nİ界é\r\nrecent".as_bytes());
+        let dump = engine.search_dump(8).unwrap();
+        assert!(dump.truncated);
+        assert_eq!(dump.lines, vec!["recent"]);
+        assert_eq!(dump.first_line, 2);
+        let empty = engine.search_dump(0).unwrap();
+        assert!(empty.truncated);
+        assert!(empty.lines.is_empty());
+    }
+
+    #[test]
+    fn search_dump_retains_a_bounded_number_of_recent_rows() {
+        let mut engine = engine(20, 4);
+        for line in 0..SEARCH_DUMP_MAX_LINES + 20 {
             engine
                 .terminal
-                .vt_write(format!("line{n}\r\n").as_bytes());
+                .vt_write(format!("row{line}\r\n").as_bytes());
         }
-        let (text, truncated) = engine.search_dump(1 << 20).unwrap();
-        assert!(!truncated);
-        for n in 0..10 {
-            assert!(text.contains(&format!("line{n}")), "{text:?}");
-        }
-        let (tail, truncated) = engine.search_dump(12).unwrap();
-        assert!(truncated);
-        assert!(tail.len() <= 12);
-        // The most recent output always survives the cap.
-        assert!(tail.contains("line9"), "{tail:?}");
+        let dump = engine.search_dump(1 << 20).unwrap();
+        assert!(dump.truncated);
+        assert!(dump.lines.len() <= SEARCH_DUMP_MAX_LINES);
+        assert!(
+            dump.lines
+                .iter()
+                .any(|line| line == &format!("row{}", SEARCH_DUMP_MAX_LINES + 19))
+        );
+        assert!(dump.first_line > 0);
     }
 
     #[test]

@@ -17,11 +17,12 @@ use libghostty_vt::{
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 use super::{
-    engine::{Colors, Engine, Grid, GridSize},
+    engine::{Colors, Engine, Grid, GridSize, SearchDump},
     input::{KeyInput, MouseInput},
 };
 
 const QUEUE_CAPACITY: usize = 64;
+static NEXT_SESSION_GENERATION: AtomicU64 = AtomicU64::new(1);
 const READ_BYTES: usize = 4096;
 const BATCH_EVENTS: usize = 16;
 pub(super) const MAX_PASTE_BYTES: usize = 256 * 1024;
@@ -38,7 +39,22 @@ pub(super) enum Command {
     Output(Vec<u8>),
     Eof,
     IoError(String),
+    /// Dump scrollback text for find. The worker replies once; a stale
+    /// receiver just drops it.
+    SearchDump {
+        reply: SyncSender<SearchReply>,
+    },
 }
+
+#[derive(Debug, Clone)]
+pub(super) struct SearchReply {
+    pub dump: SearchDump,
+    /// The content revision at the instant the worker made this dump.
+    pub revision: u64,
+}
+
+/// Cap for find dumps: recent output wins, older lines fall off.
+pub(super) const SEARCH_DUMP_CAP_BYTES: usize = 512 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Status {
@@ -65,6 +81,8 @@ struct Shared {
     bells: Arc<AtomicU64>,
     context: egui::Context,
     viewport: egui::ViewportId,
+    generation: u64,
+    content_revision: AtomicU64,
 }
 
 impl Shared {
@@ -124,6 +142,8 @@ impl Session {
             repaint_pending: AtomicBool::new(false),
             context: context.clone(),
             viewport: context.viewport_id(),
+            generation: NEXT_SESSION_GENERATION.fetch_add(1, Ordering::Relaxed),
+            content_revision: AtomicU64::new(0),
         });
         let (sender, receiver) = mpsc::sync_channel(QUEUE_CAPACITY);
         let worker_shared = shared.clone();
@@ -171,6 +191,64 @@ impl Session {
         // snapshot or leaves a repaint queued for the next frame.
         self.shared.repaint_pending.store(false, Ordering::Release);
         self.shared.snapshot.lock().unwrap().clone()
+    }
+
+    pub(super) fn generation(&self) -> u64 {
+        self.shared.generation
+    }
+
+    /// Viewport scrolling, colors, focus and search requests do not change the
+    /// text. Keeping this separate avoids a search-request/repaint feedback loop.
+    pub(super) fn content_revision(&self) -> u64 {
+        self.shared.content_revision.load(Ordering::Acquire)
+    }
+
+    pub(super) fn request_search_dump(
+        &self,
+        reply: SyncSender<SearchReply>,
+    ) -> Result<(), mpsc::TrySendError<()>> {
+        self.sender
+            .try_send(Command::SearchDump { reply })
+            .map_err(|error| match error {
+                mpsc::TrySendError::Full(_) => mpsc::TrySendError::Full(()),
+                mpsc::TrySendError::Disconnected(_) => mpsc::TrySendError::Disconnected(()),
+            })
+    }
+
+    #[cfg(test)]
+    pub(super) fn search_test_session() -> (Self, Receiver<Command>) {
+        let (sender, receiver) = mpsc::sync_channel(QUEUE_CAPACITY);
+        (
+            Self {
+                sender,
+                cwd: PathBuf::new(),
+                shared: Arc::new(Shared {
+                    snapshot: Mutex::new(Snapshot {
+                        grid: None,
+                        status: Status::Running,
+                        revision: 0,
+                        bells: 0,
+                    }),
+                    stopped: AtomicBool::new(false),
+                    bells: Arc::new(AtomicU64::new(0)),
+                    visible: AtomicBool::new(false),
+                    repaint_pending: AtomicBool::new(false),
+                    context: egui::Context::default(),
+                    viewport: egui::ViewportId::ROOT,
+                    generation: NEXT_SESSION_GENERATION.fetch_add(1, Ordering::Relaxed),
+                    content_revision: AtomicU64::new(0),
+                }),
+            },
+            receiver,
+        )
+    }
+
+    pub(super) fn can_search(&self) -> bool {
+        !self.shared.stopped.load(Ordering::Acquire)
+            && matches!(
+                self.shared.snapshot.lock().unwrap().status,
+                Status::Starting | Status::Running | Status::Exited(_)
+            )
     }
 
     pub fn set_visible(&self, visible: bool) {
@@ -252,7 +330,7 @@ fn run(
         .spawn_command(command)
         .map_err(|error| format!("Could not start shell: {error}"))?;
     drop(pair.slave);
-    let mut process = Process {
+    let process = Process {
         child,
         master: pair.master,
     };
@@ -320,6 +398,11 @@ fn run(
         Some(engine.snapshot().map_err(|error| error.to_string())?),
         Status::Running,
     );
+    // EOF ends PTY I/O, but the engine remains available for scrollback
+    // navigation, search and reflow. Its idle wait is a blocking mailbox read.
+    let mut process = Some(process);
+    let mut write_sender = Some(write_sender);
+    let mut status = Status::Running;
     while !shared.stopped.load(Ordering::Acquire) {
         let Ok(first) = receiver.recv() else {
             break;
@@ -331,7 +414,8 @@ fn run(
         // program output skips the render walk. Anything else (resize,
         // colors, input, wakeups) renders normally so a reshown idle shell
         // never displays a stale grid.
-        let mut refresh = shared.visible.load(Ordering::Acquire);
+        let mut refresh = false;
+        let mut publish = false;
         for _ in 0..BATCH_EVENTS {
             if shared.stopped.load(Ordering::Acquire) {
                 return Ok(());
@@ -339,25 +423,38 @@ fn run(
             let Some(command) = batch.take().or_else(|| receiver.try_recv().ok()) else {
                 break;
             };
-            refresh = refresh || !matches!(command, Command::Output(_));
+            if !matches!(command, Command::SearchDump { .. }) {
+                publish = true;
+                refresh = refresh
+                    || shared.visible.load(Ordering::Acquire)
+                    || !matches!(command, Command::Output(_));
+            }
+            if matches!(command, Command::Resize(_))
+                || (process.is_some() && matches!(command, Command::Output(_)))
+            {
+                shared.content_revision.fetch_add(1, Ordering::Release);
+            }
             let mut bytes = Vec::new();
             match command {
-                Command::Output(output) => engine.terminal.vt_write(&output),
-                Command::Key(input) => {
+                Command::Output(output) if process.is_some() => engine.terminal.vt_write(&output),
+                Command::Key(input) if process.is_some() => {
                     bytes = engine.key(input).map_err(|error| error.to_string())?
                 }
-                Command::Mouse(input) => {
+                Command::Mouse(input) if process.is_some() => {
                     bytes = engine.mouse(input).map_err(|error| error.to_string())?
                 }
-                Command::Paste(text) => {
+                Command::Paste(text) if process.is_some() => {
                     bytes = engine.paste(&text).map_err(|error| error.to_string())?
                 }
+                Command::Output(_) | Command::Key(_) | Command::Mouse(_) | Command::Paste(_) => {}
                 Command::Resize(size) => {
                     engine.resize(size).map_err(|error| error.to_string())?;
-                    process
-                        .master
-                        .resize(pty_size(size))
-                        .map_err(|error| error.to_string())?;
+                    if let Some(process) = &mut process {
+                        process
+                            .master
+                            .resize(pty_size(size))
+                            .map_err(|error| error.to_string())?;
+                    }
                 }
                 Command::Colors(colors) => {
                     let flipped = engine
@@ -366,9 +463,10 @@ fn run(
                     // A light/dark flip reaches programs that enabled mode
                     // 2031 as an unsolicited color-scheme report, matching
                     // Ghostty: system theme switches propagate live.
-                    if let Some(report) = engine
-                        .color_scheme_notification(flipped)
-                        .map_err(|error| error.to_string())?
+                    if process.is_some()
+                        && let Some(report) = engine
+                            .color_scheme_notification(flipped)
+                            .map_err(|error| error.to_string())?
                     {
                         bytes.extend_from_slice(&report);
                     }
@@ -376,11 +474,23 @@ fn run(
                 Command::Scroll(delta) => engine
                     .terminal
                     .scroll_viewport(ScrollViewport::Delta(delta)),
+                Command::SearchDump { reply } => {
+                    let dump = engine
+                        .search_dump(SEARCH_DUMP_CAP_BYTES)
+                        .map_err(|error| error.to_string())?;
+                    let revision = shared.content_revision.load(Ordering::Acquire);
+                    if reply.try_send(SearchReply { dump, revision }).is_ok() {
+                        // A search-only batch does not publish a grid, but its
+                        // reply still needs to wake the receiving pane.
+                        shared.context.request_repaint_of(shared.viewport);
+                    }
+                }
                 Command::Focus(focused) => {
-                    if engine
-                        .terminal
-                        .mode(Mode::FOCUS_EVENT)
-                        .map_err(|error| error.to_string())?
+                    if process.is_some()
+                        && engine
+                            .terminal
+                            .mode(Mode::FOCUS_EVENT)
+                            .map_err(|error| error.to_string())?
                     {
                         let mut buffer = [0; 8];
                         let event = if focused {
@@ -395,31 +505,43 @@ fn run(
                     }
                 }
                 Command::Eof => {
-                    // EOF normally means an exited shell. Do not wait on a
-                    // still-running child that deliberately closed its TTY.
-                    let status = process
-                        .child
-                        .try_wait()
-                        .map_err(|error| error.to_string())?
-                        .map_or_else(
-                            || "Terminal closed".into(),
-                            |status| format!("Shell exited ({status})"),
-                        );
-                    shared.publish(
-                        Some(engine.snapshot().map_err(|error| error.to_string())?),
-                        Status::Exited(status),
-                    );
-                    return Ok(());
+                    if let Some(mut ended) = process.take() {
+                        // Reap even a child that deliberately closed its TTY.
+                        // The emulator remains, but no PTY commands can run.
+                        let message = ended
+                            .child
+                            .try_wait()
+                            .map_err(|error| error.to_string())?
+                            .map_or_else(
+                                || "Terminal closed".into(),
+                                |exit| format!("Shell exited ({exit})"),
+                            );
+                        status = Status::Exited(message);
+                        engine
+                            .terminal
+                            .on_pty_write(|_, _| {})
+                            .map_err(|error| error.to_string())?;
+                        write_sender = None;
+                        drop(ended);
+                    }
                 }
-                Command::IoError(error) => return Err(error),
+                // A writer may have already queued its final error when the
+                // reader observed EOF. It cannot turn an ended shell Failed.
+                Command::IoError(error) if process.is_some() => return Err(error),
+                Command::IoError(_) => {}
                 Command::Wake => {}
             }
-            if !bytes.is_empty() {
-                write_sender.try_send(bytes).map_err(|_| "Shell input queue is full or disconnected; session stopped to avoid dropping input".to_owned())?;
+            if !bytes.is_empty()
+                && let Some(sender) = &write_sender
+            {
+                sender.try_send(bytes).map_err(|_| "Shell input queue is full or disconnected; session stopped to avoid dropping input".to_owned())?;
             }
-            if reply_failed.swap(false, Ordering::AcqRel) {
+            if reply_failed.swap(false, Ordering::AcqRel) && process.is_some() {
                 return Err("Terminal reply queue is full or disconnected".into());
             }
+        }
+        if !publish {
+            continue;
         }
         // Hidden output-only batches keep parsing and status but skip the
         // grid render walk; publish(None) retains the last grid.
@@ -428,7 +550,7 @@ fn run(
         } else {
             None
         };
-        shared.publish(grid, Status::Running);
+        shared.publish(grid, status.clone());
     }
     Ok(())
 }
@@ -488,6 +610,142 @@ mod tests {
             );
             thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn search_dump_and_navigation_do_not_invalidate_search_content() {
+        let root = tempfile::tempdir().unwrap();
+        let session = start_script(root.path(), "stty -echo; printf READY; sleep 10");
+        until(|| text(&session.snapshot()).contains("READY"));
+        let revision = session.content_revision();
+        let (sender, receiver) = mpsc::sync_channel(1);
+        session.send(Command::Scroll(-1)).unwrap();
+        session.send(Command::Focus(false)).unwrap();
+        session
+            .send(Command::Colors(Colors {
+                foreground: egui::Color32::WHITE,
+                background: egui::Color32::BLACK,
+            }))
+            .unwrap();
+        session.request_search_dump(sender).unwrap();
+        let reply = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(reply.revision, revision);
+        assert_eq!(session.content_revision(), revision);
+        assert!(reply.dump.lines.iter().any(|line| line.contains("READY")));
+        session.send(Command::Output(b"NEW".to_vec())).unwrap();
+        until(|| session.content_revision() > revision);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn search_reply_wakes_the_pane_without_publishing_or_dirtying_output() {
+        let root = tempfile::tempdir().unwrap();
+        let session = start_script(root.path(), "stty -echo; printf READY; sleep 10");
+        until(|| text(&session.snapshot()).contains("READY"));
+        let before = session.snapshot().revision;
+        // Drain startup's already queued repaint before installing a callback;
+        // an immediate pending repaint legitimately coalesces later requests.
+        for frame in 0..3 {
+            session
+                .shared
+                .context
+                .run_ui(
+                    egui::RawInput {
+                        time: Some(f64::from(frame)),
+                        ..Default::default()
+                    },
+                    |_| {},
+                )
+                .drop_without_applying_deltas();
+        }
+        let (repaint, repaints) = mpsc::channel();
+        session
+            .shared
+            .context
+            .set_request_repaint_callback(move |request| {
+                let _ = repaint.send(request.viewport_id);
+            });
+        let (sender, receiver) = mpsc::sync_channel(1);
+        session.request_search_dump(sender).unwrap();
+        receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            repaints.recv_timeout(Duration::from_secs(1)).unwrap(),
+            egui::ViewportId::ROOT
+        );
+        assert_eq!(session.snapshot().revision, before);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn completed_shell_searches_scrolls_and_reflows_without_reviving_pty_io() {
+        let root = tempfile::tempdir().unwrap();
+        let session = start_script(
+            root.path(),
+            "i=0; while [ $i -lt 30 ]; do printf 'finished%s\\r\\n' \"$i\"; i=$((i+1)); done",
+        );
+        until(|| matches!(session.snapshot().status, Status::Exited(_)));
+        assert!(session.can_search());
+        let before = session.content_revision();
+        let (sender, receiver) = mpsc::sync_channel(1);
+        session.request_search_dump(sender).unwrap();
+        let reply = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(reply.revision, before);
+        let first_hit = reply
+            .dump
+            .lines
+            .iter()
+            .position(|line| line == "finished0")
+            .unwrap()
+            + reply.dump.first_line;
+        assert!(reply.dump.lines.iter().any(|line| line == "finished29"));
+        let grid = session.snapshot().grid.unwrap();
+        assert!(grid.scroll_offset > first_hit);
+        session
+            .send(Command::Scroll(
+                first_hit as isize - grid.scroll_offset as isize,
+            ))
+            .unwrap();
+        until(|| {
+            session
+                .snapshot()
+                .grid
+                .is_some_and(|grid| grid.scroll_offset == first_hit)
+        });
+        assert!(text(&session.snapshot()).contains("finished0"));
+        assert_eq!(session.content_revision(), before);
+        assert!(matches!(session.snapshot().status, Status::Exited(_)));
+
+        // Ended input and focus events must not write to the closed PTY or
+        // force the viewport back to the bottom. Reflow still updates search.
+        session
+            .send(Command::Paste("MUST NOT RUN\n".into()))
+            .unwrap();
+        session.send(Command::Focus(true)).unwrap();
+        session
+            .send(Command::IoError("late writer error".into()))
+            .unwrap();
+        session
+            .send(Command::Resize(GridSize {
+                cols: 12,
+                rows: 6,
+                cell_width: 8,
+                cell_height: 16,
+            }))
+            .unwrap();
+        let (sender, receiver) = mpsc::sync_channel(1);
+        session.request_search_dump(sender).unwrap();
+        let reflowed = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(reflowed.revision > before);
+        until(|| session.snapshot().grid.is_some_and(|grid| grid.cols == 12));
+        assert!(matches!(session.snapshot().status, Status::Exited(_)));
+        assert!(
+            !reflowed
+                .dump
+                .lines
+                .iter()
+                .any(|line| line.contains("MUST NOT RUN"))
+        );
     }
 
     #[test]
@@ -749,6 +1007,8 @@ mod tests {
                 repaint_pending: AtomicBool::new(false),
                 context: egui::Context::default(),
                 viewport: egui::ViewportId::ROOT,
+                generation: 1,
+                content_revision: AtomicU64::new(0),
             }),
         };
         assert!(
@@ -784,6 +1044,8 @@ mod tests {
             repaint_pending: AtomicBool::new(false),
             context: egui::Context::default(),
             viewport: egui::ViewportId::ROOT,
+            generation: 1,
+            content_revision: AtomicU64::new(0),
         };
         for _ in 0..100 {
             shared.publish(None, Status::Running);

@@ -393,6 +393,147 @@ class Journey(EditorJourneys):
         self.key(23)
         self.wait("panel hidden with all terminals closed", lambda d: d["panel"] is None)
 
+    def terminal_find(self):
+        source = self.snapshot()["document"]["source_fingerprint"]
+        if self.snapshot()["document"]["panel"] is None:
+            self.key(23)  # Cmd+5
+            self.wait("bottom panel opens", lambda d: d["panel"] is not None)
+        self.click("panel.terminal")
+        self.wait("Terminal selected for scrollback search", lambda d: d["panel"] == "Terminal")
+        initial_count = self.snapshot()["document"]["terminal_count"]
+
+        def unchanged(document):
+            return document["source_fingerprint"] == source and not document["find_visible"]
+
+        def wait_find(description, query, matches, selected=None, focused=None, visible=False):
+            def expected(document, ready=True):
+                find = document["terminal_find"]
+                return unchanged(document) and find["open"] and find["query"] == query \
+                    and find["matches"] == matches and find["selected"] == selected \
+                    and (not ready or not find["pending"]) \
+                    and (focused is None or find["focused"] == focused) \
+                    and (not visible or find["selected_visible"])
+            self.wait(description, expected, timeout=15)
+            # Reflow/output can schedule another bounded worker refresh. The
+            # visible result and focus must remain stable while it is pending.
+            self.stable_state(lambda document: expected(document, ready=False))
+
+        def print_fixture(filename, lines):
+            # Run a private script: echoing a command containing the query would
+            # add a spurious match before the actual output under test.
+            script = self.directory / filename
+            receipt = script.with_suffix(".ready")
+            script.write_text("printf '%s\\n' " + " ".join("'" + line + "'" for line in lines)
+                              + "\n" + f"printf ready > '{receipt}'\n")
+            self.wait_target("terminal.input")
+            self.click("terminal.input")
+            self.native("text", f"/bin/zsh '{script}'")
+            self.key(36, "none")
+            self.wait("isolated shell finishes its search fixture", lambda d: receipt.exists()
+                      and receipt.read_text() == "ready" and unchanged(d), timeout=15)
+
+        self.wait_target("terminal.new")
+        self.click("terminal.new")
+        first = initial_count
+        self.wait("first search pane opens", lambda d: d["terminal_count"] == initial_count + 1
+                  and d["terminal_active"] == first, timeout=15)
+        filler = [f"scrollback filler {index:03}" for index in range(160)]
+        print_fixture("search-output.zsh", ["NATIVE-FIND-MARKER first", *filler,
+                      "Native-Find-Marker middle", *filler, "native-find-marker last"])
+        self.key(3)  # Cmd+F belongs to the focused terminal, not document Find.
+        self.wait("terminal Find opens with its field focused", lambda d: unchanged(d)
+                  and d["terminal_find"]["open"] and d["terminal_find"]["focused"])
+        query = "native-find-marker"
+        self.native("text", query)
+        wait_find("case-insensitive worker search includes all scrollback", query, 3, 0, True)
+        find = self.snapshot()["document"]["terminal_find"]
+        if find["selected_line"] >= find["scroll_offset"]:
+            raise AssertionError("first terminal match did not begin outside the visible scrollback")
+        if self.capture_review:
+            self.capture_viewport("main")
+
+        # Each key must step exactly once, including wraparound. Enter had a
+        # double-consumption risk when handled before and after drawing the bar.
+        for code, flags, selected in ((5, "cmd", 1), (5, "cmd", 2), (5, "cmd", 0),
+                                      (5, "cmd+shift", 2), (36, "none", 0),
+                                      (36, "shift", 2)):
+            self.key(code, flags)
+            wait_find("terminal match steps once and becomes visible", query, 3, selected,
+                      True, visible=True)
+        self.click("terminal.find.next")
+        wait_find("next button wraps to the first match", query, 3, 0, visible=True)
+        self.click("terminal.find.previous")
+        wait_find("previous button wraps to the last match", query, 3, 2, True, visible=True)
+        self.key(5)
+        wait_find("match button retains terminal shortcut ownership", query, 3, 0, True, visible=True)
+        self.key(5, "cmd+shift")
+        wait_find("backward shortcut still belongs to terminal search", query, 3, 2, True, visible=True)
+        if self.capture_review:
+            self.capture_viewport("main")
+
+        self.click("terminal.find.query")
+        self.wait("terminal query owns typing", lambda d: d["terminal_find"]["focused"])
+        self.key(0)  # Cmd+A selects only the query.
+        self.native("text", "absent-search-token")
+        wait_find("replacing the query leaves the source alone", "absent-search-token", 0,
+                  focused=True)
+        self.key(0)
+        self.native("text", query)
+        wait_find("query replacement restores the real matches", query, 3, 0, True)
+
+        self.click("terminal.input")
+        self.wait("grid takes focus away from search", lambda d: unchanged(d)
+                  and d["terminal_find"]["open"] and not d["terminal_find"]["focused"])
+        self.key(53, "none")  # Escape belongs to the idle shell in this state.
+        self.stable_state(lambda d: unchanged(d) and d["terminal_find"]["open"]
+                          and not d["terminal_find"]["focused"])
+        self.key(3)
+        wait_find("grid Cmd+F refocuses the existing terminal query", query, 3, 0, True)
+        self.key(3)
+        self.wait("focused Cmd+F closes terminal Find", lambda d: unchanged(d)
+                  and not d["terminal_find"]["open"])
+        self.stable_state(lambda d: unchanged(d) and not d["terminal_find"]["open"])
+        self.click("terminal.input")
+        self.key(3)
+        wait_find("terminal query survives closing and reopening", query, 3, 0, True)
+        self.key(53, "none")
+        self.wait("focused Escape closes terminal Find", lambda d: unchanged(d)
+                  and not d["terminal_find"]["open"])
+        self.stable_state(lambda d: unchanged(d) and not d["terminal_find"]["open"])
+        self.click("terminal.input")
+        self.key(3)
+        wait_find("terminal search is ready before switching panes", query, 3, 0, True)
+
+        self.click("terminal.new")
+        second = initial_count + 1
+        self.wait("second pane has independent empty search", lambda d: unchanged(d)
+                  and d["terminal_count"] == initial_count + 2 and d["terminal_active"] == second
+                  and not d["terminal_find"]["open"] and d["terminal_find"]["query"] == "",
+                  timeout=15)
+        print_fixture("second-output.zsh", ["independent search result"])
+        self.key(3)
+        self.wait("second query receives keyboard focus", lambda d: d["terminal_find"]["focused"])
+        self.native("text", "independent")
+        wait_find("second pane searches its own shell", "independent", 1, 0, True)
+        self.click(f"terminal.{first}")
+        wait_find("first pane restores its own query and matches", query, 3, 0)
+        self.click(f"terminal.{second}")
+        wait_find("second pane restores its own query and matches", "independent", 1, 0)
+        self.click("terminal.find.close")
+        self.wait("one close-button click hides second search", lambda d: unchanged(d)
+                  and not d["terminal_find"]["open"])
+        self.stable_state(lambda d: unchanged(d) and not d["terminal_find"]["open"])
+        self.click("terminal.off")
+        self.wait("closing second search pane returns to the first", lambda d: unchanged(d)
+                  and d["terminal_count"] == initial_count + 1 and d["terminal_active"] == first)
+        wait_find("first search survives closing the other shell", query, 3, 0)
+        self.click("terminal.off")
+        self.wait("search panes close without changing the document", lambda d: unchanged(d)
+                  and d["terminal_count"] == initial_count)
+        self.key(23)
+        self.wait("terminal search journey leaves the bottom panel hidden", lambda d: unchanged(d)
+                  and d["panel"] is None)
+
     def find(self):
         for _ in range(3):
             self.key(3)  # Cmd+F
@@ -585,7 +726,7 @@ class Journey(EditorJourneys):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--journey", choices=["all", "tex", *TEX_JOURNEYS, "drawing", "snippets", "panels", "find", "rectangle", "empty", "focus", "preview", "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "controls", "settings_search", "editor_preferences", "background", "context_menu"], default="all")
+    parser.add_argument("--journey", choices=["all", "tex", *TEX_JOURNEYS, "drawing", "snippets", "panels", "terminal_find", "find", "rectangle", "empty", "focus", "preview", "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "controls", "settings_search", "editor_preferences", "background", "context_menu"], default="all")
     parser.add_argument("--review-preview", action="store_true", help="pause at each dark/comfy renderer for independent on-screen review; not an automated visual pass")
     parser.add_argument("--capture-review", action="store_true", help="capture affected settings/controls framebuffers for separate visual inspection")
     parser.add_argument("--trace-preview", action="store_true", help="retain native preview geometry traces")
@@ -609,7 +750,7 @@ def main():
         if not args.prepare_only and not args.observe_only:
             import pwd
             shell = os.environ.get("SHELL") or pwd.getpwuid(os.getuid()).pw_shell
-            if args.journey in ("all", "panels") and Path(shell).resolve() != Path("/bin/zsh"):
+            if args.journey in ("all", "panels", "terminal_find") and Path(shell).resolve() != Path("/bin/zsh"):
                 raise RuntimeError("terminal journey currently requires /bin/zsh so startup files can be isolated with ZDOTDIR")
             preflight = subprocess.run([str(driver), "preflight"], capture_output=True, text=True, timeout=6)
             result["preflight"] = preflight.stdout.strip()
@@ -770,7 +911,7 @@ def main():
                         return
                     if args.capture_review:
                         journey.capture_viewport("main")
-                    for name in (["panels", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "focus", "settings_search", "editor_preferences", "background", "context_menu", "pdf_output", "preview", "controls", "empty", "snippets", "drawing", *TEX_JOURNEYS] if args.journey == "all" else TEX_JOURNEYS if args.journey == "tex" else [args.journey]):
+                    for name in (["panels", "terminal_find", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "focus", "settings_search", "editor_preferences", "background", "context_menu", "pdf_output", "preview", "controls", "empty", "snippets", "drawing", *TEX_JOURNEYS] if args.journey == "all" else TEX_JOURNEYS if args.journey == "tex" else [args.journey]):
                         journey.record("journey.start", name=name)
                         getattr(journey, name)()
                         result["journeys"].append(name)

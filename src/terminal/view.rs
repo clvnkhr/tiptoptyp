@@ -17,6 +17,10 @@ pub(crate) fn terminal_id(context: &egui::Context) -> egui::Id {
     crate::child_view::viewport_scoped_id(context, "terminal-grid")
 }
 
+pub(crate) fn terminal_find_id(context: &egui::Context) -> egui::Id {
+    terminal_id(context).with("find")
+}
+
 pub(crate) fn terminal_panel_colors(ui: &egui::Ui) -> Colors {
     Colors {
         foreground: ui.visuals().text_color(),
@@ -51,6 +55,7 @@ pub(crate) struct TerminalPane {
     last_beep: Option<std::time::Instant>,
     link_action: Option<super::TerminalLinkAction>,
     suppress_select_until_release: bool,
+    find: super::find::TerminalFind,
 }
 
 /// Audible alert for terminal bells. macOS-only: other platforms keep the
@@ -141,6 +146,226 @@ impl TerminalPane {
 
     pub(crate) fn take_link_action(&mut self) -> Option<super::TerminalLinkAction> {
         self.link_action.take()
+    }
+
+    /// Open terminal find and focus its field.
+    pub(crate) fn open_find(&mut self) {
+        self.focus_requested = false;
+        self.find.open();
+    }
+
+    pub(crate) fn toggle_find(&mut self, context: &egui::Context) {
+        if self.find.is_open()
+            && context.memory(|memory| memory.has_focus(terminal_find_id(context)))
+        {
+            self.find.close();
+            self.request_focus();
+        } else {
+            self.open_find();
+        }
+    }
+
+    pub(crate) fn find_open(&self) -> bool {
+        self.find.is_open()
+    }
+
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    pub(crate) fn inspect_find(&self, context: &egui::Context) -> serde_json::Value {
+        let selected = self.find.selected_match();
+        let (offset, rows) = self
+            .grid
+            .as_ref()
+            .map_or((0, 0), |grid| (grid.scroll_offset, grid.rows.len()));
+        serde_json::json!({
+            "open": self.find.is_open(),
+            "focused": context.memory(|memory| memory.has_focus(terminal_find_id(context))),
+            "query": self.find.query,
+            "selected": self.find.selected_index(),
+            "matches": self.find.matches().len(),
+            "pending": self.find.pending(),
+            "selected_line": selected.map(|hit| hit.line),
+            "selected_visible": selected.is_some_and(|hit| super::find::TerminalFind::visible_row(offset, rows, hit.line).is_some()),
+            "scroll_offset": offset,
+            "rows": rows,
+        })
+    }
+
+    /// Step the find selection, scrolling the match into view.
+    pub(crate) fn find_step(&mut self, previous: bool) {
+        let Some(line) = self.find.step(previous) else {
+            return;
+        };
+        let (total, rows, offset) = match &self.grid {
+            Some(grid) => (grid.scroll_total, grid.rows.len(), grid.scroll_offset),
+            None => return,
+        };
+        let delta = super::find::TerminalFind::reveal_delta(total, rows, offset, line);
+        if delta != 0 {
+            self.send(Command::Scroll(delta));
+        }
+    }
+
+    fn show_find_bar(&mut self, ui: &mut egui::Ui) {
+        // The field owns its own id so focus can be tested before consuming
+        // keys: Enter and Escape must still reach the shell when the field
+        // is not focused.
+        let field_id = terminal_find_id(ui.ctx());
+        let field_focused = ui.memory(|memory| memory.has_focus(field_id));
+        // Keys first so Enter/Escape never reach the field or the shell.
+        let mut step = None;
+        if field_focused {
+            if ui.input_mut(|input| input.consume_key(egui::Modifiers::SHIFT, egui::Key::Enter)) {
+                step = Some(true);
+            } else if ui
+                .input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+            {
+                step = Some(false);
+            }
+            if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                self.find.close();
+                self.request_focus();
+                return;
+            }
+        }
+        let mut close = false;
+        let focus_field = self.find.consume_focus_request();
+        let mut query_changed = false;
+        let mut refocus = false;
+        ui.horizontal(|ui| {
+            ui.label("Find");
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut self.find.query)
+                    .id(field_id)
+                    .hint_text("Search scrollback")
+                    .desired_width(220.0),
+            );
+            response.widget_info(|| {
+                let mut info = egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Search terminal scrollback");
+                info.current_text_value = Some(self.find.query.clone());
+                info
+            });
+            if focus_field {
+                response.request_focus();
+            }
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            crate::desktop_test::observe("terminal.find.query", &response);
+            query_changed = response.changed();
+            let (selected, total) = self.find.match_count();
+            let count = if self.find.query.is_empty() {
+                "–".to_owned()
+            } else if total == 0 {
+                if self.find.pending() { "…" } else { "0/0" }.to_owned()
+            } else {
+                format!("{}/{}", selected + 1, total)
+            };
+            let detail = if self.find.truncated() {
+                "Search is limited to recent output (4,096 rows / 512 KiB) and 8,192 matches."
+            } else if self.find.pending() {
+                "Searching terminal scrollback…"
+            } else {
+                "Case-insensitive search of terminal scrollback. Enter / Shift+Enter moves between matches."
+            };
+            ui.label(count).on_hover_text(detail);
+            let previous = crate::app::icons::square_icon_button(ui, crate::app::icons::UiIcon::Up, "Previous terminal match", 22.0);
+            let next = crate::app::icons::square_icon_button(ui, crate::app::icons::UiIcon::Down, "Next terminal match", 22.0);
+            let dismiss = crate::app::icons::square_icon_button(ui, crate::app::icons::UiIcon::Close, "Close terminal find", 22.0);
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))] {
+                crate::desktop_test::observe("terminal.find.previous", &previous);
+                crate::desktop_test::observe("terminal.find.next", &next);
+                crate::desktop_test::observe("terminal.find.close", &dismiss);
+            }
+            if previous.clicked() { step = Some(true); refocus = true; }
+            if next.clicked() { step = Some(false); refocus = true; }
+            close = dismiss.clicked();
+        });
+        // TextEdit installs its default filter while drawing. Keep Escape
+        // owned until our next pass, instead of egui clearing focus first.
+        if ui.memory(|memory| memory.has_focus(field_id)) {
+            ui.memory_mut(|memory| {
+                memory.set_focus_lock_filter(
+                    field_id,
+                    egui::EventFilter {
+                        horizontal_arrows: true,
+                        vertical_arrows: true,
+                        escape: true,
+                        ..Default::default()
+                    },
+                )
+            });
+        }
+        if refocus {
+            // Click-away processing can clear a same-pass request. Restore
+            // the field on the next pass, after this click has been consumed.
+            self.find.request_focus();
+            ui.ctx().request_repaint();
+        }
+        if query_changed {
+            self.find.mark_query_dirty();
+        }
+        if let Some(previous) = step {
+            self.find_step(previous);
+        }
+        if close {
+            self.find.close();
+            self.request_focus();
+        }
+    }
+
+    fn paint_find_matches(
+        &self,
+        ui: &egui::Ui,
+        rect: Rect,
+        cell: Vec2,
+        grid: &Grid,
+        foreground: egui::Color32,
+    ) {
+        if !self.find.is_open() || self.find.matches().is_empty() {
+            return;
+        }
+        let selected = self.find.selected_index();
+        let painter = ui.painter().with_clip_rect(rect);
+        let matches = self.find.matches();
+        let start = matches.partition_point(|hit| hit.line < grid.scroll_offset);
+        let end = matches.partition_point(|hit| hit.line < grid.scroll_offset + grid.rows.len());
+        for (index, hit) in matches[start..end].iter().enumerate() {
+            let index = start + index;
+            let Some(row) = super::find::TerminalFind::visible_row(
+                grid.scroll_offset,
+                grid.rows.len(),
+                hit.line,
+            ) else {
+                continue;
+            };
+            let Some(cells) = grid.rows.get(row) else {
+                continue;
+            };
+            let Some(columns) =
+                super::find::TerminalFind::match_columns(cells, hit.length, hit.column)
+            else {
+                continue;
+            };
+            let highlight = Rect::from_min_max(
+                Pos2::new(
+                    rect.min.x + columns.start as f32 * cell.x,
+                    rect.min.y + row as f32 * cell.y,
+                ),
+                Pos2::new(
+                    rect.min.x + columns.end as f32 * cell.x,
+                    rect.min.y + (row as f32 + 1.0) * cell.y,
+                ),
+            );
+            if Some(index) == selected {
+                painter.rect_filled(highlight, 0.0, foreground.gamma_multiply(0.45));
+                painter.rect_stroke(
+                    highlight,
+                    0.0,
+                    Stroke::new(1.0, foreground),
+                    egui::StrokeKind::Inside,
+                );
+            } else {
+                painter.rect_filled(highlight, 0.0, foreground.gamma_multiply(0.18));
+            }
+        }
     }
 
     /// The link under a pointer position on the grid, if any, with its row
@@ -260,6 +485,14 @@ impl TerminalPane {
                 }
             });
         }
+        if self.find.is_open() {
+            self.show_find_bar(ui);
+        }
+        self.find.poll(
+            ui.ctx(),
+            self.session.as_ref(),
+            self.session.as_ref().map_or(0, Session::content_revision),
+        );
         let font = crate::theme::terminal_font();
         let cell = ui.fonts_mut(|fonts| {
             Vec2::new(
@@ -608,6 +841,7 @@ impl TerminalPane {
                 &mut self.glyphs,
                 &mut self.emoji,
             );
+            self.paint_find_matches(ui, rect, cell, grid, colors.foreground);
             // Cmd-hover over a link gets a pointer cursor and an underline,
             // computed for the hovered row only.
             if response.hovered()
@@ -1767,6 +2001,159 @@ mod tests {
         pane.set_visible(false);
         assert!(pane.session.is_none());
         assert!(pane.grid.is_none());
+    }
+
+    #[test]
+    fn find_bar_counts_steps_and_closes() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        let mut pane = TerminalPane::default();
+        pane.prepare_fixture(b"error one\nok\nerror two\n", Path::new("/project"));
+        let mut configured = false;
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(500.0, 220.0))
+            .build_ui_state(
+                move |ui, pane: &mut TerminalPane| {
+                    if !configured {
+                        crate::theme::configure_test_fonts(ui.ctx());
+                        configured = true;
+                        return;
+                    }
+                    pane.show(ui, Path::new("/project"));
+                    let _ = ui.ctx().read_response(terminal_find_id(ui.ctx()));
+                },
+                pane,
+            );
+        harness.run_steps(2);
+        harness.state_mut().open_find();
+        harness.run_steps(1);
+        // The bar is visible with an empty query and no count yet.
+        assert!(harness.query_by_label_contains("Find").is_some());
+        // A query fills matches from the scrollback dump; stepping moves the
+        // count and Escape closes the bar.
+        harness.state_mut().find.dump = vec!["error one".into(), "ok".into(), "error two".into()];
+        harness.state_mut().find.query = "error".into();
+        harness.state_mut().find.mark_query_dirty();
+        harness.run_steps(2);
+        harness.get_by_label_contains("1/2");
+        harness.run_steps(1);
+        // Next steps the selection; the close button dismisses the bar.
+        harness.get_by_label("Next terminal match").click();
+        harness.run_steps(2);
+        harness.get_by_label_contains("2/2");
+        assert!(
+            harness
+                .ctx
+                .memory(|memory| memory.has_focus(terminal_find_id(&harness.ctx)))
+        );
+        harness.get_by_label("Close terminal find").click();
+        harness.run_steps(2);
+        assert!(harness.query_by_label_contains("Find").is_none());
+    }
+
+    #[test]
+    fn escape_closes_find_only_when_its_field_focused() {
+        let context = egui::Context::default();
+        crate::theme::configure_test_fonts(&context);
+        let mut pane = TerminalPane::default();
+        pane.prepare_fixture(b"error one\nok\nerror two\n", Path::new("/project"));
+        let frame = |pane: &mut TerminalPane, events: Vec<egui::Event>| {
+            context
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(500.0, 220.0))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| pane.show(ui, Path::new("/project")),
+                )
+                .drop_without_applying_deltas();
+        };
+        pane.open_find();
+        frame(&mut pane, Vec::new());
+        // Opening focuses the field, so Escape closes the bar.
+        let field_id = super::super::terminal_id(&context).with("find");
+        context.memory_mut(|memory| memory.request_focus(field_id));
+        frame(&mut pane, Vec::new());
+        frame(
+            &mut pane,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::default(),
+            }],
+        );
+        assert!(!pane.find_open());
+        // With focus elsewhere the shell keeps Escape and the bar stays.
+        pane.open_find();
+        frame(&mut pane, Vec::new());
+        context.memory_mut(|memory| memory.surrender_focus(field_id));
+        frame(
+            &mut pane,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::default(),
+            }],
+        );
+        assert!(pane.find_open());
+    }
+
+    #[test]
+    fn enter_steps_terminal_find_once_in_each_direction() {
+        let context = egui::Context::default();
+        crate::theme::configure_test_fonts(&context);
+        let mut pane = TerminalPane::default();
+        pane.prepare_fixture(b"one\r\ntwo\r\nthree", Path::new("/project"));
+        pane.open_find();
+        pane.find.dump = vec!["match one".into(), "match two".into(), "match three".into()];
+        pane.find.query = "match".into();
+        pane.find.mark_query_dirty();
+        let frame = |pane: &mut TerminalPane, events| {
+            context
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(500.0, 220.0))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| pane.show(ui, Path::new("/project")),
+                )
+                .drop_without_applying_deltas();
+        };
+        frame(&mut pane, Vec::new());
+        frame(&mut pane, Vec::new());
+        assert_eq!(pane.find.selected_index(), Some(0));
+        for (shift, selected) in [(false, 1), (true, 0), (true, 2)] {
+            let modifiers = egui::Modifiers {
+                shift,
+                ..Default::default()
+            };
+            frame(
+                &mut pane,
+                vec![egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                }],
+            );
+            assert_eq!(pane.find.selected_index(), Some(selected));
+            frame(
+                &mut pane,
+                vec![egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: false,
+                    repeat: false,
+                    modifiers,
+                }],
+            );
+        }
     }
 
     #[test]

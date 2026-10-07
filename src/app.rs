@@ -1849,7 +1849,10 @@ impl EditorApp {
 
     pub(crate) fn native_command_enabled(&self, command: AppCommand) -> bool {
         if self.tabs.is_empty() {
-            return workspace_view::empty_workspace_command(command);
+            let terminal_search = self.bottom_panel.selected() == Some(PanelTab::Terminal)
+                && !self.terminal.is_off()
+                && matches!(command, AppCommand::Find | AppCommand::FindReplace);
+            return terminal_search || workspace_view::empty_workspace_command(command);
         }
         match command_spec(command).requirement {
             CommandRequirement::Always => true,
@@ -3427,18 +3430,28 @@ impl EditorApp {
             AppCommand::SelectAll => self.select_all_editor(context),
             AppCommand::ToggleComment => self.toggle_comments(context),
             AppCommand::Find => {
-                if let Some(section) = self
+                if self.terminal_focused(context, context.viewport_id()) {
+                    self.terminal.toggle_find(context);
+                    context.request_repaint();
+                } else if let Some(section) = self
                     .explorer
                     .focused_section()
                     .filter(|section| section.searchable())
                 {
                     self.explorer.focus_section_search(section);
                     context.request_repaint();
-                } else {
+                } else if !self.tabs.is_empty() {
                     self.toggle_find(false, context);
                 }
             }
-            AppCommand::FindReplace => self.toggle_find(true, context),
+            AppCommand::FindReplace => {
+                if self.terminal_focused(context, context.viewport_id()) {
+                    self.terminal.open_find();
+                    context.request_repaint();
+                } else if !self.tabs.is_empty() {
+                    self.toggle_find(true, context);
+                }
+            }
             AppCommand::Format => self.request_format_document(),
             AppCommand::SyncPreview => {
                 let cursor = self.editor_snapshot(context).cursor.primary.index.0;

@@ -17,6 +17,7 @@ fixture process is not foreground.
 ```sh
 python3 scripts/test-desktop-ui.py
 python3 scripts/test-desktop-ui.py --journey panels
+python3 scripts/test-desktop-ui.py --journey terminal_find
 python3 scripts/test-desktop-ui.py --journey find
 python3 scripts/test-desktop-ui.py --journey empty
 python3 scripts/test-desktop-ui.py --journey focus
@@ -31,8 +32,8 @@ python3 scripts/test-desktop-ui.py --journey tex_save
 The runner compiles a separate `desktop-ui-tests` feature build and copies it
 into a uniquely identified temporary app bundle. It launches one editor window
 with a disposable document, fresh settings and session storage. Preview/controls/tabs/layout/background/all runs
-use a three-page Typst document and require working Tinymist, Typst and PDFium tools. The terminal
-journey currently requires the system `/bin/zsh`; it isolates zsh startup files
+use a three-page Typst document and require working Tinymist, Typst and PDFium tools. The `panels` and `terminal_find`
+journeys currently require the system `/bin/zsh`; it isolates zsh startup files
 and shell history with `ZDOTDIR`. No user document is opened. The fixture app
 and its process group are terminated on success or failure.
 
@@ -75,6 +76,7 @@ now exercised through the real app, and the lower-level coverage retained.
 | Journey | Input and assertions |
 | --- | --- |
 | panels | Cmd+5, repeated Terminal/Problems selection and hide/reopen; stable panel height across 30 fresh frames per sample; native terminal typing runs an isolated shell, Off reaps it and remains off across panel transitions, Restart starts a different shell; the header button opens a second shell with its own PID, the numbered switcher moves between shells, a real vim click moves its cursor, exiting one shell leaves the other parked; document stays unchanged |
+| terminal_find | Focused terminal Cmd+F searches a real isolated shell, including three case-insensitive matches separated by hundreds of scrolled-off lines; Cmd+G/Shift+Cmd+G and Enter/Shift+Enter step exactly once and wrap, button navigation reveals the match; Cmd+A changes only the query; grid Escape leaves search open, grid Cmd+F refocuses it, focused Cmd+F/Escape and one close click hide it; queries and matches stay separate between two shell panes; source stays unchanged |
 | find | Cmd+F with Find focused, repeated Replace clicks, one close-button click; expected popup state and stable measured native height after every action |
 | empty | Cmd+W on the only tab, then Cmd+N; original window remains, new tab has no path and zero source bytes |
 | tex_editing | Named `.tex` file, Unicode caret and undo/redo, 320-line source, `%` comment round trips including active line endpoints, math/bracket selection wrapping, literal TeX command search/replace with undo/redo; disabled autosave leaves disk unchanged |
@@ -129,7 +131,7 @@ The existing `scripts/test-native-windows.py` covers a separate native lifecycle
 fixture, not those complete editor journeys.
 
 Use `--capture-review` to retain the initial toolbar/root framebuffer and, with
-`settings_search`, `controls` or `all`, the affected settings/popup framebuffers for separate inspection. This is opt-in, never a visual
+`settings_search`, `controls`, `terminal_find` or `all`, the affected settings/popup/search framebuffers for separate inspection. This is opt-in, never a visual
 pass by itself. Use `--trace-preview` to retain native bounds/property traces.
 `--review-failure` retains a failed fixture for up to three minutes and prints its
 exact app path; writing the printed resume file allows cleanup, without changing

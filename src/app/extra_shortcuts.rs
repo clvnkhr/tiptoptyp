@@ -109,6 +109,16 @@ impl EditorApp {
                 self.explorer.focus_search();
             }
             A::RefreshWorkspace => self.refresh_workspace(),
+            A::FindNext | A::FindPrevious
+                if self.terminal_focused(context, context.viewport_id()) =>
+            {
+                if self.terminal.find_open() {
+                    self.terminal.find_step(matches!(action, A::FindPrevious));
+                } else {
+                    self.terminal.open_find();
+                }
+                return;
+            }
             _ if self.tabs.is_empty() => return,
             A::ToggleTexMode if self.tex_mode_available() => {
                 self.set_tex_mode(self.document().config().is_none(), context);

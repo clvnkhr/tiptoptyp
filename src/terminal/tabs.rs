@@ -144,6 +144,39 @@ impl TerminalTabs {
         self.pane_mut()?.take_link_action()
     }
 
+    /// Open terminal find on the active pane.
+    pub(crate) fn open_find(&mut self) {
+        if let Some(pane) = self.pane_mut() {
+            pane.open_find();
+        }
+    }
+
+    pub(crate) fn toggle_find(&mut self, context: &egui::Context) {
+        if let Some(pane) = self.pane_mut() {
+            pane.toggle_find(context);
+        }
+    }
+
+    /// Whether the active pane has find open.
+    pub(crate) fn find_open(&self) -> bool {
+        self.pane().is_some_and(|pane| pane.find_open())
+    }
+
+    /// Step the active pane's find selection.
+    pub(crate) fn find_step(&mut self, previous: bool) {
+        if let Some(pane) = self.pane_mut() {
+            pane.find_step(previous);
+        }
+    }
+
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    pub(crate) fn inspect_find(&self, context: &egui::Context) -> serde_json::Value {
+        self.pane().map_or_else(
+            || TerminalPane::default().inspect_find(context),
+            |pane| pane.inspect_find(context),
+        )
+    }
+
     pub(crate) fn prepare_fixture(&mut self, output: &[u8], cwd: &Path) {
         if let Some(pane) = self.pane_mut() {
             pane.prepare_fixture(output, cwd);

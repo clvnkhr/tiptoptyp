@@ -1,13 +1,15 @@
 # Embedded terminal (todo 170)
 
 Open **View → Terminal** or press **Control+`**. The bottom panel has mutually
-exclusive **Problems** and **Terminal** tabs. The **Panel** toolbar button or
+exclusive **Problems**, **Terminal** and **Activity** tabs. The **Panel** toolbar button or
 **View → Panel** (Primary+5) hides or reopens the last selected tab. Its height
 is shared and resizable. Terminal also works in an empty workspace, without an
 open document. See [bottom-panel controls](bottom-panel.md).
 
-A window creates one login shell on first opening Terminal, in that window's
-workspace directory. The refresh icon in the thin right-hand strip restarts the
+A window creates a login shell on first opening Terminal, in that window's
+workspace directory. The add button opens another independent pane (up to eight);
+numbered buttons switch between them. The power button closes the active pane.
+Closing the last pane clears Terminal until another is opened. The refresh icon in the thin right-hand strip restarts the
 shell in the current workspace. Its tooltip shows only `(start: <path>)`, the
 session's starting directory; `cd` may change the live directory. Switching tabs,
 hiding or maximizing the panel, opening files or changing the workspace does
@@ -34,10 +36,23 @@ alternate screen. It uses the app's light/dark foreground/background and a
 matching ANSI palette. Program-defined palette overrides are retained.
 Cursor painting is static: the terminal adds no idle blink timer.
 
-This first integration has one session per window. Mouse reporting to TUI
-programs, image protocols, hyperlinks, search and selection spanning multiple
-scrollback viewports are not implemented. Use the keyboard to operate TUI
-programs. macOS is the repository's supported native target; Linux and Windows
+Mouse reporting is supported for TUI programs; hold Shift to select or scroll
+locally instead. Command-click an HTTP(S) URL or a file location such as
+`src/main.rs:12:3` to open it. A link click bypasses selection and TUI mouse
+reporting for its entire gesture. Relative file paths use the pane's starting
+directory; `~/` uses the home directory. Links split across wrapped rows and
+image protocols are not supported. Selection remains limited to visible cells.
+
+With Terminal focused, **Find** (Command+F on macOS) opens its own compact search
+bar; the same shortcut closes it when the search field is focused. Searches are
+case-insensitive and include recent scrollback, including completed shells.
+Command+G / Shift+Command+G and Enter / Shift+Enter step and reveal matches, with
+wraparound. Escape closes Find only while its field is focused; the shell keeps
+Escape when the grid is focused. Each pane retains its own query and selection.
+Search snapshots run on the existing terminal worker and are bounded to the
+latest 4,096 physical rows / 512 KiB, with at most 8,192 retained matches. Query
+changes reuse that snapshot; output changes refresh it at most five times per
+second. Stable output schedules no search repaint loop. macOS is the repository's supported native target; Linux and Windows
 are not certified by the local macOS checks.
 
 

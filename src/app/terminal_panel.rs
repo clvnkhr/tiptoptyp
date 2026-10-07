@@ -78,9 +78,11 @@ impl EditorApp {
         if terminal_visible {
             self.terminal.request_focus();
         } else {
-            if context.memory(|memory| memory.has_focus(id)) {
-                context.memory_mut(|memory| memory.surrender_focus(id));
-            }
+            let find_id = crate::terminal::terminal_find_id(context);
+            context.memory_mut(|memory| {
+                memory.surrender_focus(id);
+                memory.surrender_focus(find_id);
+            });
         }
         self.terminal.set_visible(terminal_visible);
     }
@@ -286,9 +288,12 @@ impl EditorApp {
         viewport: egui::ViewportId,
     ) -> bool {
         let id = terminal_id(context);
+        let find_id = crate::terminal::terminal_find_id(context);
         self.bottom_panel.selected() == Some(PanelTab::Terminal)
             && viewport == context.viewport_id()
-            && context.memory(|memory| memory.has_focus(id))
+            && context.memory(|memory| {
+                memory.has_focus(id) || (self.terminal.find_open() && memory.has_focus(find_id))
+            })
     }
 
     pub(super) fn handle_terminal_shortcuts(
@@ -322,18 +327,55 @@ impl EditorApp {
             self.toggle_panel(context);
             return true;
         }
-        if cfg!(target_os = "macos") {
+        let find_focused =
+            context.memory(|memory| memory.has_focus(crate::terminal::terminal_find_id(context)));
+        if find_focused {
+            let owner_frame = context.cumulative_frame_nr();
+            let allow_paste = self
+                .pending_widget_paste
+                .is_some_and(|pending| pending.admits(viewport, owner_frame));
+            let admitted = context.input_mut(|input| {
+                normalize_text_edit_shortcut_events(input, shortcuts, allow_paste)
+            });
+            if admitted
+                || self
+                    .pending_widget_paste
+                    .is_some_and(|pending| pending.expired(owner_frame))
+            {
+                self.pending_widget_paste = None;
+            }
+        }
+        if let Some(action) = context.input_mut(|input| {
+            consume_shortcut_action(input, shortcuts, |action| {
+                matches!(
+                    action,
+                    ShortcutAction::FindNext | ShortcutAction::FindPrevious
+                )
+            })
+        }) {
+            if self.terminal.find_open() {
+                self.terminal
+                    .find_step(action == ShortcutAction::FindPrevious);
+            } else {
+                self.terminal.open_find();
+            }
+            return true;
+        }
+        if cfg!(target_os = "macos") || find_focused {
             if context.input_mut(|input| tabs::consume_window_close(input, shortcuts, false)) {
                 context.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             let command = context.input_mut(|input| {
-                if !input.modifiers.mac_cmd {
+                if !input.modifiers.command && !find_focused {
                     return None;
                 }
                 consume_shortcut(input, shortcuts, |_| true)
             });
+            if find_focused {
+                context.input_mut(remove_unhandled_text_edit_builtin_events);
+            }
             if let Some(command) = command
-                && !self.route_terminal_edit_command(command, context, viewport)
+                && !self.route_edit_command_to_focused_widget(command, context, viewport)
             {
                 self.execute_app_command(command, context, frame);
             }
@@ -382,6 +424,11 @@ impl EditorApp {
         viewport: egui::ViewportId,
     ) -> bool {
         if !self.terminal_focused(context, viewport) {
+            return false;
+        }
+        // Search is a normal text field: let the shared widget router
+        // deliver editing commands to it rather than the terminal grid.
+        if context.memory(|memory| memory.has_focus(crate::terminal::terminal_find_id(context))) {
             return false;
         }
         match command {
@@ -955,6 +1002,145 @@ mod tests {
         harness.run();
         assert!(harness.state().terminal.is_off());
         assert!(harness.query_by_label("Terminal input").is_none());
+    }
+
+    #[test]
+    fn terminal_find_owns_typing_and_edit_shortcuts_without_changing_source() {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_window_for_tests(
+            &context,
+            root.path().into(),
+            egui::ViewportId::ROOT,
+        );
+        app.document_mut()
+            .replace_unprojected_untitled("source must stay unchanged");
+        app.bottom_panel.select(PanelTab::Terminal);
+        app.terminal
+            .prepare_fixture(b"terminal fixture", Path::new("/project"));
+        let mut configured = false;
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(800.0, 260.0))
+            .build_ui_state(
+                move |ui, app: &mut EditorApp| {
+                    if !configured {
+                        theme::configure_test_fonts(ui.ctx());
+                        configured = true;
+                        return;
+                    }
+                    app.handle_shortcuts(ui.ctx(), None);
+                    if app.bottom_panel.is_visible() {
+                        app.show_bottom_panel(ui);
+                    }
+                },
+                app,
+            );
+        harness.run();
+        harness.get_by_label("Terminal input").click();
+        harness.run();
+        let bindings = harness.state().settings.effective_shortcuts();
+        let find = bindings.egui(ShortcutAction::Find).unwrap();
+        harness.key_press_modifiers(find.modifiers, find.logical_key);
+        harness.run();
+        let field = crate::terminal::terminal_find_id(&harness.ctx);
+        assert!(harness.ctx.memory(|memory| memory.has_focus(field)));
+        harness.event(egui::Event::Text("first query".into()));
+        harness.run();
+        assert_eq!(
+            harness
+                .get_by_label("Search terminal scrollback")
+                .value()
+                .as_deref(),
+            Some("first query")
+        );
+        let select_all = standard_text_edit_shortcut(AppCommand::SelectAll).unwrap();
+        harness.key_press_modifiers(select_all.modifiers, select_all.logical_key);
+        harness.run();
+        harness.event(egui::Event::Text("second query".into()));
+        harness.run();
+        assert_eq!(
+            harness
+                .get_by_label("Search terminal scrollback")
+                .value()
+                .as_deref(),
+            Some("second query")
+        );
+        let replace = bindings.egui(ShortcutAction::FindReplace).unwrap();
+        harness.key_press_modifiers(replace.modifiers, replace.logical_key);
+        harness.run();
+        assert!(harness.state().terminal.find_open());
+        assert!(!harness.state().find_bar.visible);
+        let comment = bindings.egui(ShortcutAction::ToggleComment).unwrap();
+        harness.key_press_modifiers(comment.modifiers, comment.logical_key);
+        harness.run();
+        assert_eq!(
+            harness.state().document().source(),
+            "source must stay unchanged"
+        );
+        harness
+            .state_mut()
+            .settings
+            .shortcut_overrides
+            .set(ShortcutAction::SelectAll, None);
+        harness.key_press_modifiers(select_all.modifiers, select_all.logical_key);
+        harness.run();
+        harness.event(egui::Event::Text("-tail".into()));
+        harness.run();
+        assert_eq!(
+            harness
+                .get_by_label("Search terminal scrollback")
+                .value()
+                .as_deref(),
+            Some("second query-tail")
+        );
+        let rebound = crate::shortcuts::ShortcutChord::parse("Primary+Shift+K").unwrap();
+        harness
+            .state_mut()
+            .settings
+            .shortcut_overrides
+            .set(ShortcutAction::SelectAll, Some(rebound));
+        harness.key_press_modifiers(rebound.egui().modifiers, rebound.egui().logical_key);
+        harness.run();
+        harness.event(egui::Event::Text("rebound query".into()));
+        harness.run();
+        assert_eq!(
+            harness
+                .get_by_label("Search terminal scrollback")
+                .value()
+                .as_deref(),
+            Some("rebound query")
+        );
+        harness.key_press_modifiers(find.modifiers, find.logical_key);
+        harness.run();
+        assert!(!harness.state().terminal.find_open());
+        assert!(
+            harness
+                .ctx
+                .memory(|memory| memory.has_focus(terminal_id(&harness.ctx)))
+        );
+    }
+
+    #[test]
+    fn terminal_find_can_open_without_a_document_and_releases_focus_on_panel_switch() {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_window_for_tests(
+            &context,
+            root.path().into(),
+            egui::ViewportId::ROOT,
+        );
+        app.tabs = tabs::Tabs::default();
+        app.bottom_panel.select(PanelTab::Terminal);
+        assert!(app.native_command_enabled(AppCommand::Find));
+        let grid = terminal_id(&context);
+        context.memory_mut(|memory| memory.request_focus(grid));
+        app.execute_app_command(AppCommand::Find, &context, None);
+        assert!(app.terminal.find_open());
+        let field = crate::terminal::terminal_find_id(&context);
+        context.memory_mut(|memory| memory.request_focus(field));
+        app.toggle_bottom_panel(PanelTab::Problems, &context);
+        assert!(!context.memory(|memory| memory.has_focus(field)));
+        assert!(!app.terminal_focused(&context, context.viewport_id()));
     }
 
     #[test]
