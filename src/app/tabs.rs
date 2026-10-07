@@ -685,10 +685,7 @@ impl EditorApp {
             self.empty_workspace(context);
             return false;
         }
-        let existing = self.tabs.ids().find(|&id| {
-            self.document_for_tab(id)
-                .is_some_and(|document| document.path().as_ref() == Some(&path))
-        });
+        let existing = self.source_tab_for_path(&path);
         if let Some(id) = existing {
             self.activate_tab(id, context);
             return true;

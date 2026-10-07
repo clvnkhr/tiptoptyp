@@ -203,9 +203,9 @@ fn path_matches_main(path: &str, main: &Path) -> bool {
         return true;
     }
 
-    // The watch worker replaces its private shadow path with the editor's
-    // display name. Permit that basename only when the diagnostic itself does
-    // not contain a directory, avoiding accidental matches for included files.
+    // Permit the displayed basename only when the diagnostic has no directory.
+    // Qualified generated paths are mapped by their owning watch session;
+    // included files with the same basename must remain distinct.
     let diagnostic_path = Path::new(path);
     diagnostic_path
         .parent()

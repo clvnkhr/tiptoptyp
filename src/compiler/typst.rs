@@ -40,6 +40,7 @@ struct WatchContext {
     command: std::sync::Arc<crate::tool_command::CommandCustomization>,
     source_dir: PathBuf,
     project_root: PathBuf,
+    working_directory: PathBuf,
     typst_executable: PathBuf,
     font_paths: Vec<PathBuf>,
     display_name: String,
@@ -66,6 +67,18 @@ impl WatchContext {
                 project_root.display()
             ));
         }
+        let working_directory = if options.command.directory.trim().is_empty() {
+            source_dir.clone()
+        } else {
+            Path::new(&options.command.directory)
+                .canonicalize()
+                .map_err(|error| {
+                    format!(
+                        "Could not use Typst working directory {}: {error}",
+                        options.command.directory
+                    )
+                })?
+        };
         let mut font_paths = options
             .font_paths
             .iter()
@@ -78,6 +91,7 @@ impl WatchContext {
             command: options.command.clone(),
             source_dir,
             project_root,
+            working_directory,
             typst_executable: options.executable.clone(),
             font_paths,
             display_name: request.display_name.clone(),
@@ -237,18 +251,36 @@ impl WatchSession {
             && self.shadow.path().file_name() == Some(OsStr::new(&context.display_name))
     }
 
-    fn clean_diagnostic(&self, line: &str) -> String {
-        let shadow = self.shadow.path();
-        let shadow_path = shadow.to_string_lossy();
-        let mirror_root = self.shadow.mirror_root().to_string_lossy();
-        let project_root = self.context.project_root.to_string_lossy();
-        let shadow_name = shadow
-            .file_name()
-            .map(|name| name.to_string_lossy())
-            .unwrap_or_default();
-        line.replace(shadow_path.as_ref(), &self.active_display_name)
-            .replace(shadow_name.as_ref(), &self.active_display_name)
-            .replace(mirror_root.as_ref(), project_root.as_ref())
+    fn diagnostic_report(&self, raw: String) -> DiagnosticReport {
+        use crate::diagnostics::{DiagnosticSource, normalize_diagnostics};
+        let mut report = report(raw, Some(Path::new(&self.active_display_name)));
+        let main = self.context.source_dir.join(&self.active_display_name);
+        let cwd = &self.context.working_directory;
+        for diagnostic in &mut report.diagnostics {
+            let DiagnosticSource::File(path) = &diagnostic.source else {
+                continue;
+            };
+            // Typst prints paths relative to its effective working directory,
+            // even though watch received an absolute shadow path. A wrapper
+            // may instead report root-relative or absolute paths.
+            let original = [cwd.join(path), self.context.project_root.join(path)]
+                .iter()
+                .find_map(|candidate| {
+                    crate::private_workspace::original_mirrored_source(
+                        &self.context.project_root,
+                        candidate,
+                    )
+                });
+            if let Some(original) = original {
+                diagnostic.source = if original == main {
+                    DiagnosticSource::Main
+                } else {
+                    DiagnosticSource::File(original)
+                };
+            }
+        }
+        normalize_diagnostics(&mut report.diagnostics);
+        report
     }
 }
 
@@ -408,9 +440,7 @@ fn drain_watch_logs(
             }
             WatchLine::Ignore => {}
             WatchLine::Diagnostic => {
-                current
-                    .diagnostics
-                    .push(current.clean_diagnostic(&log.line));
+                current.diagnostics.push(log.line);
             }
         }
     }
@@ -429,7 +459,7 @@ fn finish_settled_completion(session: &mut Option<WatchSession>, results: &mut V
     }
     let completion = current.pending_completion.take().unwrap();
     let raw = current.diagnostics.join("\n");
-    let diagnostics = report(raw, Some(Path::new(&current.active_display_name)));
+    let diagnostics = current.diagnostic_report(raw);
     let event = if completion.succeeded {
         // Snapshot while this session still owns its output. An update/drop may
         // remove the private workspace before publication or inspection finishes.
@@ -507,6 +537,93 @@ fn typst_command_error(program: &Path, error: std::io::Error) -> String {
 mod tests {
     use super::*;
     use tiptoptyp_core::document::TypesettingLanguage;
+
+    #[cfg(unix)]
+    #[test]
+    fn watch_diagnostics_map_relative_generated_main_and_included_same_basename() {
+        use crate::diagnostics::{DiagnosticLocation, DiagnosticSource};
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let source_dir = root.path().join("chapters");
+        fs::create_dir_all(source_dir.join("other")).unwrap();
+        fs::write(source_dir.join("other/main.typ"), "included source").unwrap();
+        let source_dir = source_dir.canonicalize().unwrap();
+        let script = root.path().join("fake-typst");
+        fs::write(&script, concat!(
+            "#!/bin/sh\n",
+            "root=''; last=''; previous=''; for arg do if [ \"$last\" = --root ]; then root=$arg; fi; previous=$last; last=$arg; done\n",
+            "source=$previous; relative=${source#\"$root/\"}\n",
+            "printf 'compiling ...\\n%s:4:7: error: main fixture\\n%s:2:5: warning: included fixture\\n' \"$relative\" \"${relative%/*}/other/main.typ\" >&2\n",
+            "printf '%s:4:7: error: main fixture\\n%s:2:5: warning: included fixture\\n' \"../$relative\" \"../${relative%/*}/other/main.typ\" >&2\n",
+            "printf '%s:4:7: error: main fixture\\n%s:2:5: warning: included fixture\\ncompiled with errors\\n' \"$source\" \"${source%/*}/other/main.typ\" >&2\n",
+            "exec sleep 60\n",
+        )).unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+        // The shell's actual cwd is the target, not the spelling of this
+        // symlink outside the project. Cwd-relative diagnostics must use it.
+        let other_root = tempfile::tempdir().unwrap();
+        let cwd_alias = other_root.path().join("cwd");
+        std::os::unix::fs::symlink(&source_dir, &cwd_alias).unwrap();
+        let options = TypstOptions {
+            command: std::sync::Arc::new(crate::tool_command::CommandCustomization {
+                directory: cwd_alias.display().to_string(),
+                ..Default::default()
+            }),
+            executable: script,
+            font_paths: Vec::new(),
+        };
+        let request = CompileRequest {
+            revision: 7,
+            input: CompileInput {
+                language: TypesettingLanguage::Typst,
+                source: "#unknown".into(),
+                source_dir: source_dir.clone(),
+                project_root: root.path().into(),
+                display_name: "main.typ".into(),
+            },
+            engine: super::super::EngineConfig::Typst(options.clone()),
+        };
+        let mut backend = Backend::new();
+        backend.submit(&request, &options).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let report = loop {
+            let ready = backend
+                .poll()
+                .into_iter()
+                .find_map(|result| match result.event {
+                    EngineEvent::Failed(report) => Some(report),
+                    EngineEvent::Pdf { .. } => panic!("fixture unexpectedly compiled"),
+                    EngineEvent::Started => None,
+                });
+            if let Some(report) = ready {
+                break report;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "fixture did not publish diagnostics"
+            );
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(
+            report.diagnostics.len(),
+            2,
+            "absolute, cwd-relative, and root-relative repetitions map to the same source identities"
+        );
+        assert_eq!(
+            report.diagnostics[0].source,
+            DiagnosticSource::Main,
+            "generated main must map to the editor document"
+        );
+        assert_eq!(
+            report.diagnostics[0].location,
+            Some(DiagnosticLocation { line: 4, column: 7 })
+        );
+        assert_eq!(
+            report.diagnostics[1].source,
+            DiagnosticSource::File(source_dir.join("other/main.typ")),
+            "included files with the same basename remain distinct"
+        );
+    }
 
     #[cfg(unix)]
     #[test]
@@ -664,6 +781,42 @@ mod tests {
         };
         let context = WatchContext::resolve(&request, &options).unwrap();
         assert_eq!(context.font_paths, vec![fonts.canonicalize().unwrap()]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn watch_context_resolves_custom_working_directory_aliases() {
+        let project = tempfile::tempdir().unwrap();
+        let source = project.path().join("source");
+        fs::create_dir(&source).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let alias = outside.path().join("cwd");
+        std::os::unix::fs::symlink(&source, &alias).unwrap();
+        let request = CompileInput {
+            language: TypesettingLanguage::Typst,
+            source: String::new(),
+            source_dir: source.clone(),
+            project_root: project.path().into(),
+            display_name: "main.typ".into(),
+        };
+        let mut options = TypstOptions {
+            command: std::sync::Arc::new(crate::tool_command::CommandCustomization {
+                directory: alias.display().to_string(),
+                ..Default::default()
+            }),
+            executable: "typst".into(),
+            font_paths: Vec::new(),
+        };
+        let context = WatchContext::resolve(&request, &options).unwrap();
+        assert_eq!(context.working_directory, source.canonicalize().unwrap());
+        assert_eq!(
+            context.command.directory,
+            alias.display().to_string(),
+            "keep the user's customization unchanged"
+        );
+        std::sync::Arc::make_mut(&mut options.command).directory =
+            outside.path().join("missing").display().to_string();
+        assert!(WatchContext::resolve(&request, &options).is_err());
     }
 
     #[cfg(unix)]

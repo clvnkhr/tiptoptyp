@@ -17,6 +17,63 @@ use std::{
 pub const PRIVATE_DIRECTORY_NAME: &str = ".tiptoptyp";
 use tiptoptyp::save_transaction::WriteDurability;
 
+/// Resolve a generated source mirror back to its project source using path
+/// components, never basename or substring replacement. The namespace is
+/// constrained to the owning project; a different project's cache cannot match.
+/// This is lexical so it still works after the mirror has been cleaned up.
+pub(crate) fn original_mirrored_source(project_root: &Path, path: &Path) -> Option<PathBuf> {
+    let candidate = if path.is_absolute() {
+        path.to_owned()
+    } else {
+        project_root.join(path)
+    };
+    let mut normalized = PathBuf::new();
+    for component in candidate.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return None;
+                }
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    let private = project_root.join(PRIVATE_DIRECTORY_NAME);
+    let mut relative = normalized.strip_prefix(private).ok()?.components();
+    let Component::Normal(session) = relative.next()? else {
+        return None;
+    };
+    let session = session.to_str()?;
+    if !session.starts_with("source-") || session.len() == "source-".len() {
+        return None;
+    }
+    if relative.next()? != Component::Normal(OsStr::new("project"))
+        || relative.as_path().as_os_str().is_empty()
+    {
+        return None;
+    }
+    Some(project_root.join(relative.as_path()))
+}
+
+/// Diagnostic/preview navigation must not turn private backing data into an
+/// editable user document. Ordinary .tiptoptyp config files remain openable.
+pub(crate) fn is_generated_source_path(path: &Path) -> bool {
+    let mut components = path.components();
+    while let Some(component) = components.next() {
+        if component == Component::Normal(OsStr::new(PRIVATE_DIRECTORY_NAME))
+            && let Some(Component::Normal(next)) = components.next()
+            && (next == OsStr::new("documents")
+                || next
+                    .to_str()
+                    .is_some_and(|name| name.starts_with("source-")))
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Validated access to one project's private artifact directory.
 #[derive(Debug, Clone)]
 pub struct PrivateWorkspace {
@@ -643,6 +700,52 @@ fn sync_parent(destination: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn generated_source_paths_map_by_owning_root_and_components() {
+        let root = std::path::Path::new("/project");
+        for (generated, original) in [
+            (
+                ".tiptoptyp/source-abc/project/main.typ",
+                "/project/main.typ",
+            ),
+            (
+                "/project/.tiptoptyp/source-abc/project/sub/main.typ",
+                "/project/sub/main.typ",
+            ),
+            (
+                "/project/sub/../.tiptoptyp/source-abc/project/sub/other/../main.typ",
+                "/project/sub/main.typ",
+            ),
+        ] {
+            assert_eq!(
+                super::original_mirrored_source(root, std::path::Path::new(generated)),
+                Some(original.into())
+            );
+        }
+        for generated in [
+            "/other/.tiptoptyp/source-abc/project/main.typ",
+            ".tiptoptyp/documents/main.typ",
+            ".tiptoptyp/config.typ",
+            ".tiptoptyp/source-/project/main.typ",
+            ".tiptoptyp-extra/source-abc/project/main.typ",
+            ".tiptoptyp/source-abc/project/../../outside.typ",
+        ] {
+            assert!(
+                super::original_mirrored_source(root, std::path::Path::new(generated)).is_none(),
+                "{generated}"
+            );
+        }
+        assert!(super::is_generated_source_path(std::path::Path::new(
+            "/project/.tiptoptyp/source-stale/project/main.typ"
+        )));
+        assert!(super::is_generated_source_path(std::path::Path::new(
+            "/project/.tiptoptyp/documents/untitled.typ"
+        )));
+        assert!(!super::is_generated_source_path(std::path::Path::new(
+            "/project/.tiptoptyp/config.typ"
+        )));
+    }
+
     use super::*;
     use std::sync::{Arc, Barrier};
 
