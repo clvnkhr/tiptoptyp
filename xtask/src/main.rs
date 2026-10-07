@@ -23,6 +23,33 @@ const TYPST_NOTICE_SHA256: &str =
 const PACKAGE_TARGET_ENV: &str = "TIPTOPTYP_PACKAGE_TARGET";
 const MACOS_APP_ICON: &str = "tiptoptyp.icns";
 const PRODUCTION_MACOS_APP_BUNDLE: &str = "tiptoptyp.app";
+// One registry feeds both aggregate notices and packaged-resource validation.
+const FONT_LICENSES: &[(&str, &str)] = &[
+    (
+        "assets/fonts/notoemoji/OFL.txt",
+        "licenses/NotoEmoji-OFL.txt",
+    ),
+    (
+        "assets/fonts/notosanssymbols/OFL.txt",
+        "licenses/NotoSansSymbols-OFL.txt",
+    ),
+    (
+        "assets/fonts/notosansmath/OFL.txt",
+        "licenses/NotoSansMath-OFL.txt",
+    ),
+    (
+        "assets/fonts/notosanssymbols2/OFL.txt",
+        "licenses/NotoSansSymbols2-OFL.txt",
+    ),
+    (
+        "assets/fonts/notosanshebrew/OFL.txt",
+        "licenses/NotoSansHebrew-OFL.txt",
+    ),
+    ("assets/fonts/notosans/OFL.txt", "licenses/NotoSans-OFL.txt"),
+    ("assets/fonts/hack/LICENSE.md", "licenses/Hack-LICENSE.md"),
+];
+const HACK_LICENSE_SHA256: &str =
+    "1f61bb7c790c59b4b0ecdf304628b94e42ae4c8020094a8c3da73381ab212623";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Artifact {
@@ -185,12 +212,6 @@ fn generate_third_party_notices() -> Result<(), String> {
         root.join("assets/handwriting/UNICODEIT-LICENSE"),
         root.join("assets/handwriting/HYPERREF-LICENSE"),
         root.join("assets/handwriting/DETEXIFY-LICENSE"),
-        root.join("assets/fonts/notoemoji/OFL.txt"),
-        root.join("assets/fonts/notosanssymbols/OFL.txt"),
-        root.join("assets/fonts/notosansmath/OFL.txt"),
-        root.join("assets/fonts/notosanssymbols2/OFL.txt"),
-        root.join("assets/fonts/notosanshebrew/OFL.txt"),
-        root.join("assets/fonts/notosans/OFL.txt"),
         root.join("docs/licenses/ghostty-MIT.txt"),
         root.join("docs/licenses/simdutf-MIT.txt"),
         root.join("docs/licenses/highway-BSD3.txt"),
@@ -199,7 +220,10 @@ fn generate_third_party_notices() -> Result<(), String> {
         root.join("docs/licenses/Unicode-3.0.txt"),
         root.join("docs/licenses/zig-MIT.txt"),
         root.join("docs/licenses/mathgloss-MIT.txt"),
-    ] {
+    ]
+    .into_iter()
+    .chain(FONT_LICENSES.iter().map(|(source, _)| root.join(source)))
+    {
         let name = path
             .strip_prefix(&root)
             .unwrap_or(&path)
@@ -315,19 +339,7 @@ fn verify_package(target: &str) -> Result<(), String> {
     for (file, _, hash) in tex_licenses()? {
         verify_hash(&resources.join("licenses").join(file), hash)?;
     }
-    for (directory, name) in [
-        ("notoemoji", "NotoEmoji"),
-        ("notosanssymbols", "NotoSansSymbols"),
-        ("notosansmath", "NotoSansMath"),
-        ("notosanssymbols2", "NotoSansSymbols2"),
-        ("notosanshebrew", "NotoSansHebrew"),
-        ("notosans", "NotoSans"),
-    ] {
-        verify_hash(
-            &resources.join(format!("licenses/{name}-OFL.txt")),
-            &sha256(&root.join("assets/fonts").join(directory).join("OFL.txt"))?,
-        )?;
-    }
+    verify_font_licenses(&root, &resources)?;
     verify_hash(
         &resources.join("font-provenance.md"),
         &sha256(&root.join("assets/fonts/README.md"))?,
@@ -350,6 +362,18 @@ fn verify_package(target: &str) -> Result<(), String> {
     )?;
 
     println!("verified {}", app.display());
+    Ok(())
+}
+
+fn verify_font_licenses(root: &Path, resources: &Path) -> Result<(), String> {
+    // Both source and package must carry the genuine pinned Hack notice.
+    verify_hash(
+        &root.join("assets/fonts/hack/LICENSE.md"),
+        HACK_LICENSE_SHA256,
+    )?;
+    for (source, destination) in FONT_LICENSES {
+        verify_hash(&resources.join(destination), &sha256(&root.join(source))?)?;
+    }
     Ok(())
 }
 
@@ -841,6 +865,77 @@ fn run_output(command: &mut Command, purpose: &str) -> Result<Output, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn font_notice_registry_covers_all_bundled_fonts_and_package_resources() {
+        use std::collections::BTreeSet;
+        let root = repository_root();
+        let actual = fs::read_dir(root.join("assets/fonts"))
+            .unwrap()
+            .flat_map(|entry| {
+                let directory = entry.unwrap().path();
+                ["OFL.txt", "LICENSE.md"].map(|name| directory.join(name))
+            })
+            .filter(|path| path.is_file())
+            .map(|path| path.strip_prefix(&root).unwrap().to_owned())
+            .collect::<BTreeSet<_>>();
+        let registered = FONT_LICENSES
+            .iter()
+            .map(|(source, _)| PathBuf::from(source))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            actual, registered,
+            "a bundled font is missing from notices or verification"
+        );
+        for manifest in [
+            include_str!("../../Cargo.toml"),
+            include_str!("../../packager-prod.toml"),
+        ] {
+            for (source, destination) in FONT_LICENSES {
+                assert!(
+                    manifest.contains(&format!(r#"src = "{source}", target = "{destination}""#))
+                );
+            }
+        }
+        verify_hash(
+            &root.join("assets/fonts/hack/LICENSE.md"),
+            HACK_LICENSE_SHA256,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn font_package_verification_rejects_missing_and_changed_hack_notice() {
+        struct Scratch(PathBuf);
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let root = repository_root();
+        let scratch =
+            env::temp_dir().join(format!("tiptoptyp-font-package-{}", std::process::id()));
+        fs::create_dir(&scratch).unwrap();
+        let scratch = Scratch(scratch);
+        fs::create_dir(scratch.0.join("licenses")).unwrap();
+        for (source, destination) in FONT_LICENSES {
+            fs::copy(root.join(source), scratch.0.join(destination)).unwrap();
+        }
+        verify_font_licenses(&root, &scratch.0).unwrap();
+        let hack = scratch.0.join("licenses/Hack-LICENSE.md");
+        fs::remove_file(&hack).unwrap();
+        assert!(
+            verify_font_licenses(&root, &scratch.0)
+                .unwrap_err()
+                .contains("Hack-LICENSE.md")
+        );
+        fs::write(&hack, "incorrect notice").unwrap();
+        assert!(
+            verify_font_licenses(&root, &scratch.0)
+                .unwrap_err()
+                .contains("SHA-256 mismatch")
+        );
+    }
 
     #[test]
     fn manifest_has_six_valid_artifacts_for_every_target() {

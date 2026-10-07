@@ -22,11 +22,16 @@ fn production_and_cargo_packages_include_all_font_licenses_and_the_same_resource
     let cargo = resources(&cargo["package"]["metadata"]["packager"]["resources"]);
     let production = resources(&production["resources"]);
     for entry in std::fs::read_dir(root.join("assets/fonts")).unwrap() {
-        let license = entry.unwrap().path().join("OFL.txt");
-        if license.is_file() {
-            let source = license.strip_prefix(root).unwrap().to_str().unwrap();
-            for (name, manifest) in [("Cargo.toml", &cargo), ("packager-prod.toml", &production)] {
-                assert!(manifest.contains_key(source), "{name} omits {source}");
+        let directory = entry.unwrap().path();
+        for name in ["OFL.txt", "LICENSE.md"] {
+            let license = directory.join(name);
+            if license.is_file() {
+                let source = license.strip_prefix(root).unwrap().to_str().unwrap();
+                for (name, manifest) in
+                    [("Cargo.toml", &cargo), ("packager-prod.toml", &production)]
+                {
+                    assert!(manifest.contains_key(source), "{name} omits {source}");
+                }
             }
         }
     }
@@ -38,6 +43,17 @@ fn production_and_cargo_packages_include_all_font_licenses_and_the_same_resource
         production
             .values()
             .any(|target| target == "licenses/NotoSans-OFL.txt")
+    );
+    assert_eq!(
+        production
+            .get("assets/fonts/hack/LICENSE.md")
+            .map(String::as_str),
+        Some("licenses/Hack-LICENSE.md"),
+    );
+    assert!(
+        production
+            .values()
+            .all(|target| target != "licenses/Hack-OFL.txt")
     );
     for source in production
         .keys()

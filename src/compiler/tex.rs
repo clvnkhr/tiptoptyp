@@ -601,33 +601,34 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
             assert_eq!(entries.len(), 1, "one document entry per fixture");
             entries.pop().unwrap()
         }
+        // An opt-in fixture run should exercise installed engines without
+        // requiring every distribution. Refuse a vacuous pass if none exist.
+        let engines = BuildEngine::ALL
+            .into_iter()
+            .filter_map(|engine| {
+                let executable = if engine == BuildEngine::Tectonic {
+                    let tool = crate::toolchain::resolve_tool(
+                        crate::toolchain::ToolKind::Tectonic,
+                        &crate::settings::ToolPreference::default(),
+                    );
+                    tool.is_available().then_some(tool.program)
+                } else {
+                    crate::tex::tools::distribution_tool(engine.executable())
+                };
+                executable.map(|path| (engine, path))
+            })
+            .collect::<Vec<_>>();
+        assert!(!engines.is_empty(), "install at least one TeX build engine");
         let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("manual-tests/arxiv");
         for name in ["editikz", "lax-frobenius"] {
             let project = tempfile::tempdir().unwrap();
             copy_dir(&fixtures.join(name), project.path());
             let entry = entry_point(project.path());
             let source = fs::read_to_string(&entry).unwrap();
-            for engine in [
-                BuildEngine::Tectonic,
-                BuildEngine::PdfLatex,
-                BuildEngine::XeLatex,
-                BuildEngine::LuaLatex,
-            ] {
-                let executable = match engine {
-                    BuildEngine::Tectonic => {
-                        crate::toolchain::resolve_tool(
-                            crate::toolchain::ToolKind::Tectonic,
-                            &crate::settings::ToolPreference::default(),
-                        )
-                        .program
-                    }
-                    _ => crate::tex::tools::distribution_tool(engine.executable()).unwrap_or_else(
-                        || panic!("install a TeX distribution for {}", engine.label()),
-                    ),
-                };
+            for (engine, executable) in &engines {
                 let options = TexOptions {
-                    engine,
-                    executable,
+                    engine: *engine,
+                    executable: executable.clone(),
                     command: Default::default(),
                     only_cached: false,
                     synctex: false,

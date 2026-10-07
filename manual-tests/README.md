@@ -36,5 +36,7 @@ Each fixture documents its provenance and any compatibility shims in its own
 README. Bibliographies intentionally have no committed `.bbl` and no backend
 BibTeX/Biber run, so citations stay unresolved while pages render; that also
 exercises the diagnostics panel. `cargo test arxiv_manual_fixtures -- --ignored`
-builds every fixture with Tectonic, pdfLaTeX, XeLaTeX and LuaLaTeX through the
-real compiler backend and requires toolchains, package downloads and minutes.
+builds every fixture through the real compiler backend using each installed
+engine among Tectonic, pdfLaTeX, XeLaTeX and LuaLaTeX. At least one engine must
+be available; package downloads and builds can take minutes. Sources and build
+outputs stay in a temporary project, leaving the checked-in fixtures untouched.

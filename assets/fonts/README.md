@@ -2,8 +2,10 @@
 
 These unmodified fonts are embedded in the application for missing-glyph
 coverage behind the selected UI and code fonts. No runtime download or system
-font installation is required. Each font directory includes its SIL Open Font
-License. The binaries come from the pinned upstream paths below.
+font installation is required. Each Noto font directory includes its SIL Open
+Font License. Hack includes its upstream MIT and Bitstream Vera notices, with
+DejaVu's public-domain attribution, in `hack/LICENSE.md`. The binaries come
+from the pinned upstream paths below.
 
 Source: https://github.com/google/fonts/tree/809e4d8b8d7e9364a914909bb777679606c178b8/ofl
 
@@ -18,6 +20,9 @@ Source: https://github.com/google/fonts/tree/809e4d8b8d7e9364a914909bb777679606c
 Pinned Google Fonts revision: `809e4d8b8d7e9364a914909bb777679606c178b8`.
 
 Hack release: `v3.003` from https://github.com/source-foundry/Hack/releases/tag/v3.003.
+License: https://raw.githubusercontent.com/source-foundry/Hack/v3.003/LICENSE.md
+(SHA-256 `1f61bb7c790c59b4b0ecdf304628b94e42ae4c8020094a8c3da73381ab212623`).
+The font files themselves embed these same MIT/Bitstream Vera notices.
 
 | Font | SHA-256 |
 | --- | --- |

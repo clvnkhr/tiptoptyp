@@ -15,6 +15,11 @@ if [ "$(uname -s)" != "Darwin" ]; then
     exit 1
 fi
 
+if [ "$#" -gt 1 ]; then
+    echo "usage: $0 [--release]" >&2
+    exit 2
+fi
+
 mode="debug"
 if [ "${1:-}" = "--release" ]; then
     mode="release"
@@ -26,6 +31,12 @@ fi
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 root_dir=$(CDPATH= cd -- "$script_dir/.." && pwd)
 target_dir="${CARGO_TARGET_DIR:-$root_dir/target}"
+# Cargo runs from the repository even when this script is invoked elsewhere.
+# Use that same absolute destination for compilation and verification.
+case "$target_dir" in
+    /*) ;;
+    *) target_dir="$root_dir/$target_dir" ;;
+esac
 
 # The repository pins its Rust toolchain; Homebrew Cargo cannot see
 # rust-toolchain.toml targets, so drive the build through rustup with the
@@ -52,10 +63,10 @@ RUSTC=$(rustup which --toolchain "$toolchain" rustc)
 
 echo "Compiling tiptoptyp for x86_64-apple-darwin ($mode)"
 if [ "$mode" = "release" ]; then
-    (cd "$root_dir" && rustup run "$toolchain" cargo build --locked --release --target x86_64-apple-darwin)
+    (cd "$root_dir" && rustup run "$toolchain" cargo build --locked --target-dir "$target_dir" --release --target x86_64-apple-darwin)
     binary="$target_dir/x86_64-apple-darwin/release/tiptoptyp"
 else
-    (cd "$root_dir" && rustup run "$toolchain" cargo build --locked --target x86_64-apple-darwin)
+    (cd "$root_dir" && rustup run "$toolchain" cargo build --locked --target-dir "$target_dir" --target x86_64-apple-darwin)
     binary="$target_dir/x86_64-apple-darwin/debug/tiptoptyp"
 fi
 

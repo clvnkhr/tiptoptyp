@@ -7,3 +7,7 @@
 /toolchain/provenance/
 /toolchain/pdfium-bundle/
 /xtask/target/
+
+# Python test runners generate interpreter-specific caches.
+__pycache__/
+*.py[cod]
