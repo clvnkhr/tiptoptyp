@@ -692,6 +692,11 @@ impl SettingsPanel<'_> {
                         ui.colored_label(ui.visuals().error_fg_color, error);
                     }
                 });
+                settings_target_anchor(ui, SettingsTarget::AutoFormatMath, &mut settings_scroll_target);
+                let _math_format = ui.checkbox(&mut edited.format_after_math_conversion, SettingsTarget::AutoFormatMath.label())
+                    .on_hover_text("Format the document after switching inline/display math. Uses the selected formatter and ordinary auto-save settings.");
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("settings.editor.math_format", &_math_format);
                 settings_target_anchor(ui, SettingsTarget::MitexDollars, &mut settings_scroll_target);
                 ui.checkbox(&mut edited.mitex_auto_enable, SettingsTarget::MitexDollars.label());
                 ui.horizontal_wrapped(|ui| {

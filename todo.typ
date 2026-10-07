@@ -142,14 +142,32 @@ a second controller. Depends on 246 and relevant native gates 234/237.
 21. [x] multiple cursor snippeting: e.g. if we  tab autocomplete to `\begin` and then type e.g. `enumerate` the generated `\end` should also be populated with `enumerate`.
 22. [x] sometimes, when switching from tex to typ, i get that tinymist is stale, tectonic and harper stays around from the tex file, and i dont get new diagnostics until first keyboard press. after, harper refreshed (yay) but tectonic stuck around (boo)
 23. [x] dragging the pdf preview options popup around, it moves in a very janky jumpy way, and the end result is only 50% of the way between start and final mouse position. Also i can only drag from the title "Preview". And the "v" button to close the popup should be a "-" minimise button.
-24. [ ] cmd+F when the preview panel is focused should open the preview's extra options panel and focus the find box.
-25. [ ] box dragging polish: the preview options panel doesnt move perfectly when dragging and held: sometimes, it keeps the direction previously dragged in with a constant velocity and then stops when box's boundary touches the stationary mouse cursor.
-26. [ ] we should remove all top/down/right padding for the terminal windows.
-27. [ ] Similarly to how the preview panel has an outline when focused, we need the same for the problems panel
-28. [ ] the outline for the code panel should show through the sticky rows, so that we can see it when hovered/focused. You can consider either adjusting the size by a few px on left,right,and top, or just make the borders of the left,right and top of the sticky rows mimic the outline of the code panel.
-29. [ ] The code panel has line highlights but it only goes to the length of the longest line. It should always go for the full length of the code panel.
-30. [ ] minor polish - converting to inline/display math should by default be automatically followed by a fmt
+24. [x] cmd+F when the preview panel is focused should open the preview's extra options panel and focus the find box.
+25. [x] box dragging polish: the preview options panel doesnt move perfectly when dragging and held: sometimes, it keeps the direction previously dragged in with a constant velocity and then stops when box's boundary touches the stationary mouse cursor.
+26. [x] we should remove all top/down/right padding for the terminal windows.
+27. [x] Similarly to how the preview panel has an outline when focused, we need the same for the problems panel
+28. [x] the outline for the code panel should show through the sticky rows, so that we can see it when hovered/focused. You can consider either adjusting the size by a few px on left,right,and top, or just make the borders of the left,right and top of the sticky rows mimic the outline of the code panel.
+29. [x] The code panel has line highlights but it only goes to the length of the longest line. It should always go for the full length of the code panel.
+30. [x] minor polish - converting to inline/display math should by default be automatically followed by a fmt
 31. [ ] the table editor needs to allow for adding hlines and whatnot, the colors and border options etc should result in visible changes to the UI, e.g. the cells should have their border colored if the border color is set. Whole table settings and selected cells settings should not be selected at the same box. it should be possible for both to be visible at the same time, or both to be collapsed to allow more space for the editor. We should be able to select edges of the tables as well. We should be able to drag the borders of the table headers, with a checkbox to use it to set the columns: (x%,y%,z%,...,auto) ratio (default to auto). The cells should have code highlighting. The background/alignment/padding should be precise optional args that can be passed to `#table`. The UI should also be as compact as possible. And we need to detect and parse arbitrary tables. If there is a `#table` then we must do a correct reading into our editor. We need to also have an equivalent tex table editor, but the options will vary depending on the package used so this should be a similar but different UI. For this we will need a bunch of fixtures for testing tables in tex and typ in manual-tests/. Split this todo into individual shippable todo steps before working on it - write it below  this one.
+// Table-editor 31: independently shippable steps, in implementation order:
+// 31a. [x] Preserve table/grid detection, arbitrary options and dynamic source;
+//          expose exact source editing when a grid cannot be inferred safely.
+// 31b. [x] Edit horizontal/vertical rules and preserve explicit column widths.
+// 31c. [x] Independent collapsible table/cell settings with precise optional
+//          Typst arguments and syntax-highlighted cell editors.
+// 31d. [x] Paint cell fill, border, alignment and inset; select table edges.
+// 31e. [x] Drag column headers; optionally write proportional columns, with
+//          automatic columns as the default.
+// 31f. [x] Package-aware TeX table detection and editing, with lossless source
+//          fallback for unsupported spans, computed or ambiguous structures.
+// 31g. [ ] Typst/TeX manual fixtures and Apply/Cancel/Undo/stale-source journeys.
+// Implementation 2026-10-08: 24-30 and 31a-f are implemented and covered by
+// deterministic tests. 31g's six fixtures and three native journeys are checked
+// in; the desktop is locked, so native interaction verification remains open.
+// Arbitrary computed/unsupported table structures retain an exact source editor.
+// See manual-tests/tables/README.md and docs/desktop-ui-audit.md for boundaries
+// and the verification receipt. The original todo descriptions are unchanged.
 
 
 

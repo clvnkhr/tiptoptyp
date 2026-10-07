@@ -98,7 +98,8 @@ pub(crate) fn highlight_job_with_mitex(
         .set_rainbow_brackets(settings.rainbow_brackets);
     cache.typst.set_rainbow_brackets(settings.rainbow_brackets);
     cache.typst.set_mitex_dollars(mitex_dollars);
-    let definitions = settings.highlight_definitions && matches!(extension, "typ" | "tex");
+    let definitions =
+        settings.highlight_definitions && matches!(extension, "typ" | "typ-code" | "tex");
     let accent = crate::theme::palette(ui.ctx()).accent;
     cache
         .generic
@@ -110,6 +111,8 @@ pub(crate) fn highlight_job_with_mitex(
     let Highlight { generic, typst, .. } = &mut *cache;
     if extension == "typ" {
         typst.highlight(source, ui.visuals().dark_mode, generic)
+    } else if extension == "typ-code" {
+        typst.highlight_code(source, ui.visuals().dark_mode, generic)
     } else {
         generic.highlight(source, Some(Path::new(&path)), ui.visuals().dark_mode)
     }
@@ -173,4 +176,54 @@ pub(crate) fn source_editor(
         output.response.response
     })
     .inner
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bare_typst_code_fields_highlight_code_without_changing_markup_fields() {
+        let source = "table(columns: 2, [A])";
+        let mut jobs = None;
+        let mut harness = egui_kittest::Harness::new_ui(|ui| {
+            let id = ui.make_persistent_id("bare-typst-code");
+            let settings = AppSettings::default();
+            let markup = highlight_job(ui, id, source, "typ", &settings);
+            let code = highlight_job(ui, id, source, "typ-code", &settings);
+            let markup_again = highlight_job(ui, id, source, "typ", &settings);
+            jobs = Some((markup, code, markup_again));
+        });
+        harness.run();
+        drop(harness);
+        let (markup, code, markup_again) = jobs.unwrap();
+        assert_eq!(
+            code.text, source,
+            "synthetic code-mode delimiters must not leak"
+        );
+        assert_eq!(
+            markup, markup_again,
+            "switching code mode must invalidate cached syntax"
+        );
+        let format_at = |job: &egui::text::LayoutJob, byte: usize| {
+            job.sections
+                .iter()
+                .find(|section| {
+                    section.byte_range.start.0 <= byte && byte < section.byte_range.end.0
+                })
+                .unwrap()
+                .format
+                .clone()
+        };
+        assert_ne!(
+            format_at(&code, source.find('2').unwrap()),
+            format_at(&markup, source.find('2').unwrap())
+        );
+        assert_ne!(format_at(&code, 0), format_at(&markup, 0));
+        assert!(
+            code.sections
+                .iter()
+                .all(|section| section.byte_range.end.0 <= source.len())
+        );
+    }
 }

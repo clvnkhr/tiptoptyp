@@ -618,7 +618,7 @@ pub(crate) enum TableKind {
 }
 
 impl TableKind {
-    fn callee(self) -> &'static str {
+    pub(crate) fn callee(self) -> &'static str {
         match self {
             Self::Table => "table",
             Self::Grid => "grid",
@@ -633,7 +633,11 @@ struct PreservedTableOption {
 }
 
 mod table;
-pub(crate) use table::{CellPosition, TableSelection};
+mod table_source;
+mod tex_table;
+pub(crate) use table::{CellPosition, TableAxis, TableSelection};
+pub(crate) use table_source::{TableSource, table_source_at, table_source_in_source};
+pub(crate) use tex_table::{TexTable, tex_table_at};
 
 /// A conservative, rectangular table/grid model suitable for direct editing.
 ///
@@ -649,8 +653,10 @@ pub(crate) struct EditableTable {
     cell_options: std::collections::BTreeMap<(usize, usize), table::CellOptions>,
     options: Vec<PreservedTableOption>,
     rules: Vec<(usize, String)>,
+    rules_revision: u64,
     original_columns: usize,
     columns_were_explicit: bool,
+    column_widths: Option<Vec<String>>,
     indentation: String,
 }
 
@@ -671,6 +677,7 @@ pub(crate) enum TableEditError {
         expected: usize,
         actual: usize,
     },
+    InvalidOption(String),
     DynamicCell {
         row: usize,
         column: usize,
@@ -697,6 +704,7 @@ impl fmt::Display for TableEditError {
                 "table row {} has {actual} cells; expected {expected}",
                 row + 1
             ),
+            Self::InvalidOption(message) => formatter.write_str(message),
             Self::DynamicCell { row, column } => write!(
                 formatter,
                 "table cell at row {}, column {} is not static Typst markup",
@@ -746,6 +754,9 @@ pub(crate) fn table_insertion_prefix(source: &str, char_cursor: usize) -> Option
 
 pub(crate) fn editable_table_in_source(parsed: &Source, cursor: usize) -> Option<EditableTable> {
     let source = parsed.text();
+    if cursor > source.len() || !source.is_char_boundary(cursor) {
+        return None;
+    }
     let root = LinkedNode::new(parsed.root());
     find_editable_table(&root, source, cursor).or_else(|| {
         // The expression node starts after markup's `#`, but the sigil is a
@@ -798,10 +809,12 @@ fn parse_editable_table(node: &LinkedNode<'_>, source: &str) -> Option<EditableT
 
     let mut columns = 1usize;
     let mut columns_were_explicit = false;
+    let mut column_widths = None;
     let mut options = Vec::new();
     let mut flat_cells = Vec::new();
     let mut saw_cell = false;
     let mut rules = Vec::new();
+    let mut implicit_rules = false;
 
     for argument in args.children().filter(|child| !child.kind().is_trivia()) {
         let Some(argument_ast) = argument.get().cast::<ast::Arg>() else {
@@ -825,6 +838,7 @@ fn parse_editable_table(node: &LinkedNode<'_>, source: &str) -> Option<EditableT
                         return None;
                     }
                     columns_were_explicit = true;
+                    column_widths = table::parse_column_widths(&argument, source);
                 }
                 options.push(PreservedTableOption {
                     name: name.to_owned(),
@@ -836,11 +850,19 @@ fn parse_editable_table(node: &LinkedNode<'_>, source: &str) -> Option<EditableT
                     return None;
                 }
                 saw_cell = true;
-                if let Some(rule) = table::horizontal_rule(&argument, source, kind) {
-                    if !flat_cells.len().is_multiple_of(columns) {
+                if let Some(axis) = table::rule_axis(&argument, kind) {
+                    let explicit = table::rule_has_explicit_position(&argument, axis);
+                    if !explicit
+                        && (axis == TableAxis::Vertical
+                            || !flat_cells.len().is_multiple_of(columns))
+                    {
                         return None;
                     }
-                    rules.push((flat_cells.len() / columns, rule));
+                    implicit_rules |= !explicit;
+                    rules.push((
+                        flat_cells.len() / columns,
+                        source.get(argument.range())?.to_owned(),
+                    ));
                 } else {
                     flat_cells.push(table::parse_cell(&argument, source, kind)?);
                 }
@@ -849,6 +871,15 @@ fn parse_editable_table(node: &LinkedNode<'_>, source: &str) -> Option<EditableT
         }
     }
 
+    // An implicit rule's placement depends on the runtime occupancy cursor.
+    // Do not guess it from positional argument count when spans are present.
+    if implicit_rules
+        && flat_cells
+            .iter()
+            .any(|(_, options)| options.colspan > 1 || options.rowspan > 1)
+    {
+        return None;
+    }
     let (cells, cell_options) = table::place_cells(columns, flat_cells)?;
     for (row, _) in &mut rules {
         if *row == cells.len() {
@@ -872,8 +903,10 @@ fn parse_editable_table(node: &LinkedNode<'_>, source: &str) -> Option<EditableT
         cell_options,
         options,
         rules,
+        rules_revision: 0,
         original_columns: columns,
         columns_were_explicit,
+        column_widths,
         indentation,
     })
 }
@@ -881,6 +914,7 @@ fn parse_editable_table(node: &LinkedNode<'_>, source: &str) -> Option<EditableT
 fn literal_column_count(expression: ast::Expr<'_>) -> Option<usize> {
     match expression {
         ast::Expr::Int(value) => usize::try_from(value.get()).ok().filter(|count| *count > 0),
+        ast::Expr::Auto(_) | ast::Expr::Numeric(_) => Some(1),
         ast::Expr::Array(array) => {
             let mut count = 0usize;
             for item in array.items() {
@@ -934,6 +968,7 @@ impl EditableTable {
             return false;
         }
         self.cells.remove(row);
+        self.rules_revision = self.rules_revision.wrapping_add(1);
         for (at, _) in &mut self.rules {
             if *at != usize::MAX {
                 *at -= usize::from(*at > row);
@@ -963,6 +998,10 @@ impl EditableTable {
         for row in &mut self.cells {
             row.push(String::new());
         }
+        if let Some(widths) = &mut self.column_widths {
+            widths.push("auto".into());
+            self.write_column_widths();
+        }
     }
 
     /// Remove the last column, refusing a zero-column table.
@@ -981,14 +1020,18 @@ impl EditableTable {
         for row in &mut self.cells {
             row.pop();
         }
+        if let Some(widths) = &mut self.column_widths {
+            widths.pop();
+            self.write_column_widths();
+        }
         true
     }
 
-    /// Render a canonical replacement call, preserving supported named options
-    /// verbatim. If the editor changes the width, a literal numeric `columns`
-    /// option replaces the original column specification.
-    pub(crate) fn render_replacement(&self) -> Result<String, TableEditError> {
-        self.validate()?;
+    /// Serialize a bounded draft for source-mode repair, preserving incomplete
+    /// option expressions and newly entered dynamic cell markup. Source Apply
+    /// validates the complete call before replacing the original document.
+    pub(crate) fn render_source_draft(&self) -> Result<String, TableEditError> {
+        self.validate_geometry()?;
         let child_indent = format!("{}  ", self.indentation);
         let mut arguments = Vec::new();
         let mut emitted_columns = false;
@@ -1064,6 +1107,19 @@ impl EditableTable {
         Ok(rendered)
     }
 
+    /// Render a validated grid replacement, preserving named options verbatim.
+    pub(crate) fn render_replacement(&self) -> Result<String, TableEditError> {
+        self.validate()?;
+        let rendered = self.render_source_draft()?;
+        let parsed = Source::detached(format!("#{rendered}"));
+        if has_descendant_kind(&LinkedNode::new(parsed.root()), SyntaxKind::Error) {
+            return Err(TableEditError::InvalidOption(
+                "Finish the table's option expressions before applying".into(),
+            ));
+        }
+        Ok(rendered)
+    }
+
     pub(crate) fn source_edit(&self) -> Result<SourceEdit, TableEditError> {
         Ok(SourceEdit {
             range: self.source_range.clone(),
@@ -1071,7 +1127,7 @@ impl EditableTable {
         })
     }
 
-    fn validate(&self) -> Result<(), TableEditError> {
+    fn validate_geometry(&self) -> Result<(), TableEditError> {
         if self.columns == 0 {
             return Err(TableEditError::ZeroColumns);
         }
@@ -1086,16 +1142,20 @@ impl EditableTable {
                     actual: row.len(),
                 });
             }
-            for (column_index, cell) in row.iter().enumerate() {
+        }
+        self.cell_owners()?;
+        Ok(())
+    }
+
+    fn validate(&self) -> Result<(), TableEditError> {
+        self.validate_geometry()?;
+        for (row, cells) in self.cells.iter().enumerate() {
+            for (column, cell) in cells.iter().enumerate() {
                 if !is_static_cell_source(cell) {
-                    return Err(TableEditError::DynamicCell {
-                        row: row_index,
-                        column: column_index,
-                    });
+                    return Err(TableEditError::DynamicCell { row, column });
                 }
             }
         }
-        self.cell_owners()?;
         Ok(())
     }
 }

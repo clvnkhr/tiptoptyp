@@ -27,6 +27,7 @@ from desktop_ui_journeys import EditorJourneys, PREVIEW_SOURCE, fingerprint
 from desktop_ui_tex_journeys import TEX_JOURNEYS, TEX_SOURCE
 from desktop_ui_image_journeys import IMAGE_JOURNEYS
 from desktop_ui_terminal_theme import terminal_theme
+from desktop_ui_newest_journeys import NEWEST_JOURNEYS
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -85,7 +86,7 @@ class Journey(EditorJourneys):
             self.log.flush()
 
     def native(self, command, *args):
-        if command in {"click", "double-click", "drag", "key", "move", "wheel", "text", "paste", "right-click"}:
+        if command in {"click", "double-click", "drag", "drag-start", "drag-move", "drag-end", "key", "move", "wheel", "text", "paste", "right-click"}:
             foreground = subprocess.run(
                 [str(self.driver), "foreground", str(self.process.pid)],
                 capture_output=True,
@@ -838,7 +839,7 @@ stop.write_text(json.dumps({"pid": os.getpid(), "rate": rate, "frames": frames, 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--journey", choices=["all", "tex", *TEX_JOURNEYS, *IMAGE_JOURNEYS, "drawing", "snippets", "panels", "terminal_find", "terminal_load", "terminal_theme", "find", "rectangle", "empty", "focus", "preview", "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "controls", "settings_search", "editor_preferences", "background", "context_menu"], default="all")
+    parser.add_argument("--journey", choices=["all", "tex", *TEX_JOURNEYS, *IMAGE_JOURNEYS, *NEWEST_JOURNEYS, "drawing", "snippets", "panels", "terminal_find", "terminal_load", "terminal_theme", "find", "rectangle", "empty", "focus", "preview", "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "controls", "settings_search", "editor_preferences", "background", "context_menu"], default="all")
     parser.add_argument("--release", action="store_true", help="use the optimized production profile for large-document journeys")
     parser.add_argument("--review-preview", action="store_true", help="pause at affected native preview states for independent on-screen review; not an automated visual pass")
     parser.add_argument("--capture-review", action="store_true", help="capture affected settings/controls framebuffers for separate visual inspection")
@@ -899,7 +900,7 @@ def main():
                 "CFBundleExecutable": "tiptoptyp", "CFBundleIdentifier": "dev.tiptoptyp.journey." + directory.name,
                 "CFBundleName": "tiptoptyp UI Journey", "CFBundlePackageType": "APPL", "NSHighResolutionCapable": True,
             }))
-            fixture = directory / ("journey.tex" if args.journey == "tex" or args.journey in TEX_JOURNEYS else "journey.typ" if args.journey in ("all", *IMAGE_JOURNEYS, "preview", "pdf_output", "preview_keyboard", "controls", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "layout", "explorer_toggle", "explorer_scroll", "background") else "journey.txt")
+            fixture = directory / ("journey.tex" if args.journey == "tex" or args.journey in TEX_JOURNEYS else "journey.typ" if args.journey in ("all", *IMAGE_JOURNEYS, *NEWEST_JOURNEYS, "preview", "pdf_output", "preview_keyboard", "controls", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "layout", "explorer_toggle", "explorer_scroll", "background") else "journey.txt")
             fixture.write_text(
                 TEX_SOURCE
                 if fixture.suffix == ".tex"
@@ -1026,7 +1027,7 @@ def main():
                         return
                     if args.capture_review:
                         journey.capture_viewport("main")
-                    for name in (["terminal_theme", "panels", "terminal_find", "terminal_load", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "focus", "settings_search", "editor_preferences", "background", "context_menu", "pdf_output", "preview", "controls", "empty", "snippets", "drawing", *IMAGE_JOURNEYS, *TEX_JOURNEYS] if args.journey == "all" else TEX_JOURNEYS if args.journey == "tex" else [args.journey]):
+                    for name in ([*NEWEST_JOURNEYS, "terminal_theme", "panels", "terminal_find", "terminal_load", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "focus", "settings_search", "editor_preferences", "background", "context_menu", "pdf_output", "preview", "controls", "empty", "snippets", "drawing", *IMAGE_JOURNEYS, *TEX_JOURNEYS] if args.journey == "all" else TEX_JOURNEYS if args.journey == "tex" else [args.journey]):
                         journey.record("journey.start", name=name)
                         getattr(journey, name)()
                         result["journeys"].append(name)

@@ -178,6 +178,7 @@ impl EditorApp {
                 kind,
                 anchor,
                 character,
+                self.tabs.current_record().document.key(),
             );
             self.open_app_popup(popup);
         }

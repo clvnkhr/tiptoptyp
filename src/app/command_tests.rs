@@ -311,9 +311,13 @@ fn command_toolbar_menu_and_shortcut_effects_agree_once_per_owner() {
                             app.handle_shortcuts(ui.ctx(), None);
                             app.process_native_menu_commands(ui.ctx(), None);
                             app.show_toolbar(ui, None);
-                            // Code now hands keyboard focus to the actual editor.
-                            // Include that target in the accessibility tree.
-                            app.show_editor(ui);
+                            // Commands hand focus to real panel/editor owners;
+                            // each must exist in this harness's accessibility tree.
+                            if app.bottom_panel.is_visible() {
+                                app.show_bottom_panel(ui);
+                            } else {
+                                app.show_editor(ui);
+                            }
                         },
                         app,
                     );
@@ -372,6 +376,149 @@ fn command_toolbar_menu_and_shortcut_effects_agree_once_per_owner() {
                 );
                 assert!(!harness.state_mut().take_settings_open_request());
             }
+        }
+    }
+}
+
+#[test]
+fn problems_keyboard_owner_blocks_source_editing_and_find_commands() {
+    for owner in [
+        egui::ViewportId::ROOT,
+        egui::ViewportId::from_hash_of("problems-second"),
+    ] {
+        for route in [Route::Shortcut, Route::NativeMenu] {
+            let root = tempfile::tempdir().unwrap();
+            let context = egui::Context::default();
+            let mut app = fixture(&context, root.path(), owner);
+            app.bottom_panel.select(PanelTab::Problems);
+            let mut configured = false;
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(900.0, 500.0))
+                .with_os(egui::os::OperatingSystem::from_target_os())
+                .build_ui_state(
+                    move |ui, app: &mut EditorApp| {
+                        if !configured {
+                            theme::configure_test_fonts(ui.ctx());
+                            configured = true;
+                            return;
+                        }
+                        app.handle_shortcuts(ui.ctx(), None);
+                        app.process_native_menu_commands(ui.ctx(), None);
+                        app.show_bottom_panel_container(ui);
+                        app.show_editor(ui);
+                    },
+                    app,
+                );
+            harness.input_mut().viewport_id = owner;
+            harness.set_size(Vec2::new(900.0, 500.0));
+            harness
+                .input_mut()
+                .viewports
+                .entry(owner)
+                .or_default()
+                .focused = Some(true);
+            harness.run();
+            let problems = egui::Id::new((owner, "problems-panel"));
+            let source = egui::Id::new((owner, "tiptoptyp-source-editor"));
+            // Context::read_response reads the current viewport (ROOT outside
+            // a pass). Resolve the secondary owner's cached widget explicitly.
+            let position = harness.ctx.viewport_for(owner, |viewport| {
+                viewport
+                    .prev_pass
+                    .widgets
+                    .get(problems)
+                    .unwrap()
+                    .interact_rect
+                    .center()
+            });
+            harness.hover_at(position);
+            harness.run();
+            for pressed in [true, false] {
+                harness.event(egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                });
+                harness.run();
+            }
+            assert!(harness.ctx.memory(|memory| memory.has_focus(problems)));
+            let key = harness.state().document().key();
+            let source_selection = egui::text_edit::TextEditState::load(&harness.ctx, source)
+                .and_then(|state| state.cursor.char_range());
+            for command in [
+                AppCommand::Find,
+                AppCommand::FindReplace,
+                AppCommand::SelectAll,
+                AppCommand::Undo,
+                AppCommand::Redo,
+                AppCommand::Cut,
+                AppCommand::Copy,
+                AppCommand::Paste,
+                AppCommand::ToggleComment,
+                AppCommand::Format,
+            ] {
+                match route {
+                    Route::Shortcut => {
+                        let action = command_spec(command).shortcut_action;
+                        let chord = harness
+                            .state()
+                            .settings
+                            .effective_shortcuts()
+                            .egui(action)
+                            .unwrap_or_else(|| {
+                                let chord = KeyboardShortcut::new(
+                                    Modifiers::COMMAND | Modifiers::SHIFT,
+                                    egui::Key::F11,
+                                );
+                                harness.state_mut().settings.shortcut_overrides.assign(
+                                    action,
+                                    ShortcutChord::from_egui(chord, ShortcutPlatform::current())
+                                        .unwrap(),
+                                    ShortcutPlatform::current(),
+                                );
+                                chord
+                            });
+                        harness.key_press_modifiers(chord.modifiers, chord.logical_key);
+                    }
+                    Route::NativeMenu => harness.state_mut().enqueue_native_menu_command(command),
+                    _ => unreachable!(),
+                }
+                harness.run();
+                assert!(
+                    !harness.state().find_bar.visible,
+                    "{owner:?} {route:?} {command:?}"
+                );
+                assert!(
+                    !harness.state().preview_controls.open,
+                    "{route:?} {command:?}"
+                );
+                assert_eq!(
+                    harness.state().document().key(),
+                    key,
+                    "{route:?} {command:?}"
+                );
+                assert_eq!(
+                    harness.state().document().source(),
+                    "alpha beta",
+                    "{route:?} {command:?}"
+                );
+                assert!(
+                    harness.ctx.memory(|memory| memory.has_focus(problems)),
+                    "{route:?} {command:?}"
+                );
+                assert_eq!(
+                    egui::text_edit::TextEditState::load(&harness.ctx, source)
+                        .and_then(|state| state.cursor.char_range()),
+                    source_selection,
+                    "{route:?} {command:?}"
+                );
+                assert!(harness.state().format_request_key.is_none());
+                assert!(harness.state().format_when_service_ready.is_none());
+            }
+            harness.event(egui::Event::Text("must not reach source".into()));
+            harness.run();
+            assert_eq!(harness.state().document().source(), "alpha beta");
         }
     }
 }

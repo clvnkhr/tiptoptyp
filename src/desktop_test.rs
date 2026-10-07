@@ -225,6 +225,7 @@ pub(crate) fn observe(name: &str, response: &egui::Response) {
     let point = screen_point(origin, response.interact_rect, zoom);
     let size = response.interact_rect.size() * zoom;
     let target = json!({"x": point.x, "y": point.y, "width": size.x, "height": size.y, "enabled": response.enabled(), "hovered": response.hovered(),
+        "focused": response.has_focus() && context.input(|input| input.focused),
         "viewport": format!("{:?}", context.viewport_id()), "frame": context.cumulative_frame_nr()});
     probe
         .state

@@ -23,7 +23,10 @@ impl EditorApp {
             },
         );
         let available = ui.available_height().max(0.0);
-        let panel = egui::Panel::bottom(id);
+        let panel = egui::Panel::bottom(id).frame(bottom_panel_frame(
+            ui.style(),
+            self.bottom_panel.selected() == Some(PanelTab::Terminal),
+        ));
         let panel = if maximized {
             panel.resizable(false).exact_size(available)
         } else if self.snapshot_scene == Some(UiSnapshotScene::ActivityPanel) {
@@ -95,10 +98,98 @@ impl EditorApp {
             });
         }
         self.terminal.set_visible(terminal_visible);
+        if self.bottom_panel.selected() == Some(PanelTab::Problems) {
+            if !self.problems_focused(context, context.viewport_id()) {
+                self.focus_problems(context);
+            }
+        } else {
+            let id = problems_id(context);
+            let focused = context.memory(|memory| memory.focused());
+            let focused_inside = context
+                .read_response(id)
+                .is_some_and(|response| theme::focus_is_inside(context, response.interact_rect));
+            context.memory_mut(|memory| {
+                memory.surrender_focus(id);
+                if focused_inside && let Some(focused) = focused {
+                    memory.surrender_focus(focused);
+                }
+            });
+        }
+    }
+
+    fn focus_problems(&mut self, context: &egui::Context) {
+        self.preview_controls.web.focused = false;
+        self.explorer.clear_keyboard_focus();
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(webview) = &self.webview {
+            let _ = webview.focus_parent();
+        }
+        crate::window_host::focus(
+            context,
+            context.viewport_id(),
+            crate::window_host::FocusCause::UserAction,
+        );
+        let id = problems_id(context);
+        context.memory_mut(|memory| memory.request_focus(id));
+    }
+
+    pub(super) fn problems_focused(
+        &self,
+        context: &egui::Context,
+        viewport: egui::ViewportId,
+    ) -> bool {
+        self.bottom_panel.selected() == Some(PanelTab::Problems)
+            && viewport == context.viewport_id()
+            && context.input(|input| input.focused)
+            && {
+                let id = problems_id(context);
+                context.memory(|memory| memory.has_focus(id))
+                    || context.read_response(id).is_some_and(|response| {
+                        theme::focus_is_inside(context, response.interact_rect)
+                    })
+            }
+    }
+
+    fn show_problems_panel(&mut self, ui: &mut egui::Ui, claim_focus: bool) {
+        let rect = ui.available_rect_before_wrap().intersect(ui.clip_rect());
+        let id = problems_id(ui.ctx());
+        let response = ui.interact(rect, id, Sense::focusable_noninteractive());
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Problems content")
+        });
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        crate::desktop_test::observe("problems.input", &response);
+        let hovered = ui.rect_contains_pointer(rect);
+        // Register the body before assigning it focus: egui surrenders a
+        // widget's focus during registration when a press is on its header.
+        if claim_focus
+            || (rect.is_positive()
+                && hovered
+                && ui.input(|input| input.pointer.any_pressed())
+                && !theme::focus_is_inside(ui.ctx(), rect))
+        {
+            // A selectable label keeps its own editing focus. Blank space and
+            // ordinary rows use a panel owner, so typing cannot reach source.
+            self.focus_problems(ui.ctx());
+        }
+        // Claim focus before navigation, allowing a diagnostic double-click
+        // to hand the keyboard back to the destination editor.
+        self.show_problems(ui);
+        if rect.is_positive()
+            && let Some(stroke) = theme::panel_interaction_stroke(
+                ui.visuals(),
+                hovered,
+                theme::focus_is_inside(ui.ctx(), rect),
+            )
+        {
+            ui.painter()
+                .rect_stroke(rect, 0.0, stroke, egui::StrokeKind::Inside);
+        }
     }
 
     pub(super) fn show_bottom_panel(&mut self, ui: &mut egui::Ui) {
         let before = self.bottom_panel;
+        let mut problems_clicked = false;
         if self.bottom_panel.selected() == Some(PanelTab::Terminal) {
             self.terminal.sync_snapshot();
         }
@@ -120,6 +211,7 @@ impl EditorApp {
                 crate::desktop_test::observe("panel.problems", &problems);
                 if problems.clicked() {
                     self.bottom_panel.select(PanelTab::Problems);
+                    problems_clicked = true;
                 }
                 if count > 0 {
                     problems.on_hover_text(format!("{count} compiler diagnostics"));
@@ -179,7 +271,7 @@ impl EditorApp {
         }
         ui.separator();
         match self.bottom_panel.selected() {
-            Some(PanelTab::Problems) => self.show_problems(ui),
+            Some(PanelTab::Problems) => self.show_problems_panel(ui, problems_clicked),
             Some(PanelTab::Terminal) => self.show_terminal_panel(ui),
             Some(PanelTab::Activity) => self.show_activity(ui),
             None => {}
@@ -468,6 +560,20 @@ fn panel_icon_button(ui: &mut egui::Ui, icon: UiIcon, label: &str) -> egui::Resp
     )
 }
 
+fn bottom_panel_frame(style: &egui::Style, terminal: bool) -> egui::Frame {
+    let mut frame = egui::Frame::side_top_panel(style);
+    if terminal {
+        frame.inner_margin.top = 0;
+        frame.inner_margin.bottom = 0;
+        frame.inner_margin.right = 0;
+    }
+    frame
+}
+
+pub(super) fn problems_id(context: &egui::Context) -> egui::Id {
+    crate::child_view::viewport_scoped_id(context, "problems-panel")
+}
+
 fn terminal_panel_rects(available: Rect) -> (Rect, Rect) {
     let actions_left = (available.right() - PANEL_ACTION_SIZE).max(available.left());
     let grid_right = (actions_left - PANEL_ACTION_GAP).max(available.left());
@@ -482,8 +588,146 @@ mod tests {
     use super::*;
     use egui_kittest::{
         Harness,
-        kittest::{NodeT as _, Queryable as _},
+        kittest::{NodeT as _, Queryable as _, by},
     };
+
+    #[test]
+    fn terminal_panel_frame_has_no_top_bottom_or_right_margin() {
+        let style = egui::Style::default();
+        let original = egui::Frame::side_top_panel(&style).inner_margin;
+        let terminal = bottom_panel_frame(&style, true).inner_margin;
+        assert_eq!(terminal.left, original.left);
+        assert_eq!(terminal.top, 0);
+        assert_eq!(terminal.bottom, 0);
+        assert_eq!(terminal.right, 0);
+        assert_eq!(bottom_panel_frame(&style, false).inner_margin, original);
+    }
+
+    #[test]
+    fn clicking_problems_content_retires_source_focus() {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_window_for_tests(
+            &context,
+            root.path().into(),
+            egui::ViewportId::ROOT,
+        );
+        app.bottom_panel.select(PanelTab::Problems);
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(800.0, 260.0))
+            .build_ui_state(
+                |ui, state: &mut (EditorApp, String)| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut state.1)
+                            .id(source_editor_id(ui.ctx()))
+                            .hint_text("Source fixture"),
+                    );
+                    state.0.show_bottom_panel(ui);
+                },
+                (app, "unchanged source".to_owned()),
+            );
+        harness
+            .get(
+                by().role(egui::accesskit::Role::TextInput)
+                    .value("unchanged source"),
+            )
+            .click();
+        harness.run();
+        let editor = source_editor_id(&harness.ctx);
+        let problems = problems_id(&harness.ctx);
+        assert!(harness.ctx.memory(|memory| memory.has_focus(editor)));
+        let position = Pos2::new(400.0, 200.0);
+        harness.hover_at(position);
+        harness.run();
+        let panel = harness
+            .ctx
+            .read_response(problems_id(&harness.ctx))
+            .unwrap()
+            .rect;
+        let has_outline = |harness: &Harness<'_, (EditorApp, String)>, stroke| {
+            harness.output().shapes.iter().any(|clipped| {
+                matches!(&clipped.shape, egui::Shape::Rect(shape)
+                    if shape.rect == panel && shape.stroke == stroke)
+            })
+        };
+        let hover_stroke = harness
+            .ctx
+            .style_of(harness.ctx.theme())
+            .visuals
+            .widgets
+            .hovered
+            .bg_stroke;
+        assert!(has_outline(&harness, hover_stroke));
+        for pressed in [true, false] {
+            harness.event(egui::Event::PointerButton {
+                pos: position,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            });
+            harness.run();
+        }
+        assert!(harness.ctx.memory(|memory| memory.has_focus(problems)));
+        assert!(!harness.ctx.memory(|memory| memory.has_focus(editor)));
+        assert!(
+            harness
+                .state()
+                .0
+                .problems_focused(&harness.ctx, egui::ViewportId::ROOT)
+        );
+        assert_eq!(
+            harness
+                .ctx
+                .read_response(problems_id(&harness.ctx))
+                .unwrap()
+                .rect,
+            panel
+        );
+        assert!(has_outline(
+            &harness,
+            harness
+                .ctx
+                .style_of(harness.ctx.theme())
+                .visuals
+                .selection
+                .stroke
+        ));
+        harness.event(egui::Event::Text("must not reach source".into()));
+        harness.run();
+        assert_eq!(harness.state().1, "unchanged source");
+        harness
+            .get(
+                by().role(egui::accesskit::Role::TextInput)
+                    .value("unchanged source"),
+            )
+            .click();
+        harness.run();
+        assert!(
+            !harness
+                .state()
+                .0
+                .problems_focused(&harness.ctx, egui::ViewportId::ROOT)
+        );
+        harness.get_by_label("Problems").click();
+        harness.run();
+        assert!(
+            harness
+                .state()
+                .0
+                .problems_focused(&harness.ctx, egui::ViewportId::ROOT),
+            "header handoff lost: focused={:?}, owner={problems:?}",
+            harness.ctx.memory(|memory| memory.focused())
+        );
+        harness.get_by_label("Activity").click();
+        harness.run();
+        assert!(!harness.ctx.memory(|memory| memory.has_focus(problems)));
+        assert!(
+            !harness
+                .state()
+                .0
+                .problems_focused(&harness.ctx, egui::ViewportId::ROOT)
+        );
+    }
 
     #[test]
     fn panel_maximize_restores_large_resized_height_and_terminal_shortcut_focus() {

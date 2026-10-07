@@ -84,6 +84,18 @@ impl Default for PdfiumView {
 }
 
 impl PdfiumView {
+    #[cfg(test)]
+    pub(super) fn page_focus_id_for_tests(marker: &str) -> egui::Id {
+        egui::Id::new(("focused-pdfium-test-page", marker))
+    }
+
+    #[cfg(test)]
+    pub(super) fn focus_for_tests(&mut self, context: &egui::Context, marker: &str) {
+        let id = Self::page_focus_id_for_tests(marker);
+        self.page_focus = Some(id);
+        context.memory_mut(|memory| memory.request_focus(id));
+    }
+
     pub(super) fn has_focus(&self, context: &egui::Context) -> bool {
         context.input(|i| i.focused)
             && self
@@ -754,7 +766,14 @@ impl EditorApp {
     }
     pub(super) fn show_pdfium_view(&mut self, ui: &mut egui::Ui, asset: bool) {
         let viewport = ui.available_rect_before_wrap();
-        self.preview_controls.available = Some(viewport);
+        let target = if asset {
+            let key = self.document().key();
+            self.preview_controls.asset_available = Some((key, viewport));
+            preview_controls::Target::Asset(key)
+        } else {
+            self.preview_controls.available = Some(viewport);
+            preview_controls::Target::Source
+        };
         let path = if asset {
             self.document().path().clone().unwrap_or_default()
         } else {
@@ -780,12 +799,14 @@ impl EditorApp {
             return;
         };
         let palette = self.preview_palette(ui.ctx(), preview.render_dark());
+        let source_popped_out = self.preview_source_popped_out();
         let view = if asset {
             &mut self.pdfium_asset
         } else {
             &mut self.pdfium_preview
         };
         if std::mem::take(&mut view.controls_open) {
+            self.preview_controls.select(target);
             self.preview_controls.open = true;
             self.preview_controls.focus_find = true;
         }
@@ -826,7 +847,7 @@ impl EditorApp {
             // Resolve the source editor in its document callback, including
             // when this viewer is hosted in the detached preview window.
             self.preview_controls.return_to_editor = true;
-            let owner = if self.preview_controls.popout.is_some() {
+            let owner = if source_popped_out {
                 ui.ctx().parent_viewport_id()
             } else {
                 ui.ctx().viewport_id()

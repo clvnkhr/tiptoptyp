@@ -213,6 +213,10 @@ impl EditorApp {
             "table-editor",
         );
         ChildViewHost::show(context, &captures, spec, theme, &style, |ui, input| {
+            let events = std::mem::take(&mut self.table_edit_events);
+            if !events.is_empty() {
+                ui.ctx().input_mut(|input| input.events.extend(events));
+            }
             if input.close_requested || input.escape_pressed {
                 requested_action = Some(TableEditorUiAction::Cancel);
             }
@@ -237,20 +241,19 @@ impl EditorApp {
                 .show(ui, |ui| {
                     let width = ui.available_width();
                     let height = ui.available_height();
-                    if let Some(action) = show_table_editor_ui(ui, dialog, width, height) {
+                    if let Some(action) =
+                        table_workbench::show(ui, dialog, width, height, &self.settings)
+                    {
                         requested_action = Some(action);
                     }
                 });
         });
 
         match requested_action {
-            Some(TableEditorUiAction::Cancel) => {
-                self.table_editor = None;
-                crate::window_host::return_focus(context);
-            }
+            Some(TableEditorUiAction::Cancel) => self.cancel_table_editor(context),
             Some(TableEditorUiAction::Apply) => {
                 let mut dialog = self.table_editor.take().expect("table editor exists");
-                match prepare_table_source_edit(
+                match table_workbench::prepare_source_edit(
                     self.document().source(),
                     self.document().key(),
                     &dialog,
@@ -268,10 +271,12 @@ impl EditorApp {
                             message: "Updated table".to_owned(),
                             kind: NoticeKind::Success,
                         });
+                        self.table_edit_events.clear();
+                        ChildViewHost::close(context, "tiptoptyp-table-editor");
                         crate::window_host::return_focus(context);
                     }
                     Err(error) => {
-                        dialog.error = Some(error);
+                        dialog.set_error(error);
                         self.table_editor = Some(dialog);
                     }
                 }

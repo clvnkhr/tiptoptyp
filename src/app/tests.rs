@@ -3876,7 +3876,16 @@ fn editor_context_menu_offers_the_static_table_under_the_pointer() {
 
     let source = "#table(columns: 2, [Name], [Value])";
     let cursor = source[..source.find("Name").unwrap()].chars().count();
-    let table = editable_table_at(source, cursor).expect("static table");
+    let table = BoundTableTarget {
+        key: DocumentKey {
+            owner: tiptoptyp_core::document::WindowSessionId::new(1),
+            epoch: 0,
+            revision: 0,
+        },
+        target: Box::new(TableTarget::Typst(
+            editable_table_at(source, cursor).expect("static table"),
+        )),
+    };
     let expected = table.clone();
     let mut harness = Harness::builder()
         .with_size(Vec2::new(320.0, 400.0))
@@ -4075,6 +4084,7 @@ fn editor_context_popup_limits_typst_actions_to_typst_documents() {
             DocumentKind::Typst,
             Pos2::ZERO,
             Some(at),
+            DocumentKey::new(tiptoptyp_core::document::WindowSessionId::new(1), 0, 0),
         );
         if font {
             assert!(matches!(popup, AppPopup::FontSelector { .. }));
@@ -4085,8 +4095,14 @@ fn editor_context_popup_limits_typst_actions_to_typst_documents() {
             assert_eq!(link.as_deref(), Some("https://example.com/docs"));
         }
         for kind in [DocumentKind::Tex, DocumentKind::Text] {
-            let popup =
-                editor_view::editor_context_popup(&mut data, source, kind, Pos2::ZERO, Some(at));
+            let popup = editor_view::editor_context_popup(
+                &mut data,
+                source,
+                kind,
+                Pos2::ZERO,
+                Some(at),
+                DocumentKey::new(tiptoptyp_core::document::WindowSessionId::new(1), 0, 0),
+            );
             let AppPopup::Editor {
                 link, table, math, ..
             } = popup
@@ -4287,7 +4303,7 @@ fn table_editor_controls_keep_rows_and_columns_rectangular() {
     let original_call = char_range_slice(source, table.source_range.clone())
         .unwrap()
         .to_owned();
-    let dialog = TableEditorDialog {
+    let dialog = TypstTableEditorDialog {
         table,
         original_call,
         insertion_prefix: None,
@@ -4300,11 +4316,19 @@ fn table_editor_controls_keep_rows_and_columns_rectangular() {
         ui: Default::default(),
         error: None,
     };
+    let mut fonts_ready = false;
     let mut harness = Harness::builder()
         .with_size(Vec2::new(760.0, 520.0))
         .build_ui_state(
-            |ui, state| {
-                if let Some(action) = show_table_editor_ui(ui, &mut state.0, 700.0, 330.0) {
+            move |ui, state| {
+                if !fonts_ready {
+                    theme::configure_test_fonts(ui.ctx());
+                    fonts_ready = true;
+                    return;
+                }
+                if let Some(action) =
+                    show_table_editor_ui(ui, &mut state.0, 700.0, 330.0, &AppSettings::default())
+                {
                     state.1 = Some(action);
                 }
             },
@@ -4361,7 +4385,7 @@ fn prepared_table_edit_is_one_unicode_safe_replacement_and_rejects_stale_source(
         epoch: 4,
         revision: 9,
     };
-    let dialog = TableEditorDialog {
+    let dialog = TypstTableEditorDialog {
         table,
         original_call,
         insertion_prefix: None,
@@ -4410,7 +4434,7 @@ fn prepared_table_edit_refuses_dynamic_cell_source() {
         epoch: 0,
         revision: 0,
     };
-    let dialog = TableEditorDialog {
+    let dialog = TypstTableEditorDialog {
         table,
         original_call,
         insertion_prefix: None,
@@ -10464,7 +10488,9 @@ fn math_conversion_is_undoable_and_rejects_a_changed_formula() {
     context
         .run_ui(egui::RawInput::default(), |ui| app.show_editor(ui))
         .drop_without_applying_deltas();
-    let target = crate::math_conversion::Target::at(source, 12, DocumentKind::Typst).unwrap();
+    let target = crate::math_conversion::Target::at(source, 12, DocumentKind::Typst)
+        .unwrap()
+        .bind_document(app.document().key());
     app.pending_app_popup_action = Some(AppPopupAction::Editor(EditorMenuAction::ConvertMath(
         target.clone(),
         "Inline math".into(),
@@ -11198,5 +11224,133 @@ fn native_preview_asset_split_reserves_resize_edge_in_every_view_mode() {
             assert_eq!(content.left(), available.left() + 4.0);
             assert_eq!(content.bottom(), available.bottom());
         }
+    }
+}
+
+#[test]
+fn focused_table_child_keeps_edit_commands_and_find_out_of_the_source() {
+    for native in [true, false] {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        let source = "#table(..cells)";
+        app.document_mut().replace_unprojected_untitled(source);
+        let target = TableTarget::at(source, 2, DocumentKind::Typst).unwrap();
+        app.begin_table_target(target);
+        let key = app.document().key();
+        let child = scoped_child_viewport_id(&context, "tiptoptyp-table-editor");
+        for command in [
+            AppCommand::SelectAll,
+            AppCommand::Undo,
+            AppCommand::Copy,
+            AppCommand::Find,
+            AppCommand::FindReplace,
+        ] {
+            let mut input = egui::RawInput::default();
+            input
+                .viewports
+                .entry(egui::ViewportId::ROOT)
+                .or_default()
+                .focused = Some(false);
+            input.viewports.entry(child).or_default().focused = Some(true);
+            if native {
+                app.queued_native_menu_commands.push(command);
+            } else {
+                let shortcut = app
+                    .settings
+                    .effective_shortcuts()
+                    .egui(command_spec(command).shortcut_action)
+                    .unwrap();
+                input.events.push(egui::Event::Key {
+                    key: shortcut.logical_key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: shortcut.modifiers,
+                });
+            }
+            context
+                .run_ui(input, |ui| {
+                    if !native {
+                        let events = ui
+                            .ctx()
+                            .input_mut(|input| std::mem::take(&mut input.events));
+                        ui.ctx()
+                            .input_mut_for(child, |input| input.events.extend(events));
+                    }
+                    let source_id = source_editor_id(ui.ctx());
+                    ui.ctx()
+                        .memory_mut(|memory| memory.request_focus(source_id));
+                    if native {
+                        app.process_native_menu_commands(ui.ctx(), None);
+                    } else {
+                        app.handle_shortcuts(ui.ctx(), None);
+                    }
+                })
+                .drop_without_applying_deltas();
+            assert_eq!(app.document().key(), key, "{native} {command:?}");
+            assert_eq!(app.document().source(), source);
+            assert!(!app.find_bar.visible, "{native} {command:?}");
+        }
+        assert_eq!(app.table_edit_events.len(), 3, "{native}");
+        assert!(app.table_editor.is_some());
+    }
+}
+
+#[test]
+fn cmd_w_in_table_child_cancels_its_draft_without_closing_a_document() {
+    for native in [true, false] {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        let source = "#table(..cells)";
+        app.document_mut().replace_unprojected_untitled(source);
+        app.begin_table_target(TableTarget::at(source, 2, DocumentKind::Typst).unwrap());
+        let key = app.document().key();
+        let tabs = app.tabs.len();
+        let child = scoped_child_viewport_id(&context, "tiptoptyp-table-editor");
+        let mut input = egui::RawInput::default();
+        input
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .focused = Some(false);
+        input.viewports.entry(child).or_default().focused = Some(true);
+        if native {
+            app.queued_native_menu_commands.push(AppCommand::CloseTab);
+        } else {
+            let shortcut = app
+                .settings
+                .effective_shortcuts()
+                .egui(ShortcutAction::CloseTab)
+                .unwrap();
+            input.events.push(egui::Event::Key {
+                key: shortcut.logical_key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: shortcut.modifiers,
+            });
+        }
+        context
+            .run_ui(input, |ui| {
+                if !native {
+                    let events = ui
+                        .ctx()
+                        .input_mut(|input| std::mem::take(&mut input.events));
+                    ui.ctx()
+                        .input_mut_for(child, |input| input.events.extend(events));
+                }
+                if native {
+                    app.process_native_menu_commands(ui.ctx(), None);
+                } else {
+                    app.handle_shortcuts(ui.ctx(), None);
+                }
+            })
+            .drop_without_applying_deltas();
+        assert!(app.table_editor.is_none(), "{native}");
+        assert!(app.table_edit_events.is_empty());
+        assert_eq!(app.document().key(), key);
+        assert_eq!(app.tabs.len(), tabs);
     }
 }

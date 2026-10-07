@@ -579,7 +579,7 @@ impl TerminalPane {
             )
         });
         let (_, outer) = ui.allocate_space(ui.available_size().max(Vec2::ZERO));
-        let rect = outer.shrink(6.0).intersect(ui.clip_rect());
+        let rect = terminal_content_rect(outer, ui.clip_rect());
         let size = grid_size(rect.size(), cell, ui.ctx().pixels_per_point());
         let id = terminal_id(ui.ctx());
         let response = ui.interact(outer, id, Sense::click_and_drag());
@@ -939,6 +939,14 @@ fn resolve_link_path(path: &Path, cwd: &Path, home: Option<&Path>) -> PathBuf {
         return home.join(relative);
     }
     cwd.join(path)
+}
+
+fn terminal_content_rect(outer: Rect, clip: Rect) -> Rect {
+    Rect::from_min_max(
+        Pos2::new((outer.left() + 6.0).min(outer.right()), outer.top()),
+        outer.max,
+    )
+    .intersect(clip)
 }
 
 fn grid_size(available: Vec2, cell: Vec2, scale: f32) -> GridSize {
@@ -1639,6 +1647,40 @@ mod tests {
         let mut pane = TerminalPane::default();
         pane.prepare_fixture(output, Path::new("/project"));
         (pane, context)
+    }
+
+    #[test]
+    fn terminal_grid_has_only_the_preserved_left_inset() {
+        for size in [Vec2::new(800.0, 220.0), Vec2::new(320.0, 80.0)] {
+            let outer = Rect::from_min_size(Pos2::new(12.0, 34.0), size);
+            let content = terminal_content_rect(outer, outer);
+            assert_eq!(content.left(), outer.left() + 6.0);
+            assert_eq!(content.top(), outer.top());
+            assert_eq!(content.bottom(), outer.bottom());
+            assert_eq!(content.right(), outer.right());
+            let geometry = mouse_geometry(
+                outer,
+                content,
+                grid_size(content.size(), Vec2::new(8.0, 16.0), 2.0),
+                2.0,
+            );
+            assert_eq!(geometry.padding_left, 12);
+            assert_eq!(geometry.padding_top, 0);
+            assert_eq!(geometry.padding_right, 0);
+            assert_eq!(geometry.padding_bottom, 0);
+        }
+    }
+
+    #[test]
+    fn terminal_inset_stays_inside_tiny_and_clipped_surfaces() {
+        let outer = Rect::from_min_size(Pos2::new(12.0, 34.0), Vec2::new(2.0, 1.0));
+        let content = terminal_content_rect(outer, outer);
+        assert!(outer.contains_rect(content));
+        assert_eq!(content.width(), 0.0);
+        assert_eq!(content.y_range(), outer.y_range());
+        let outer = Rect::from_min_size(Pos2::new(12.0, 34.0), Vec2::new(300.0, 100.0));
+        let clip = outer.shrink2(Vec2::new(10.0, 20.0));
+        assert_eq!(terminal_content_rect(outer, clip), clip);
     }
 
     #[test]

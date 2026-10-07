@@ -1513,3 +1513,66 @@ The desktop remains locked despite available Accessibility/input permissions.
 No native interaction pass or fresh visual verification is claimed for this
 follow-up until an unlocked session runs Explorer, images, git_hunks and
 context_menu. The user-owned todo.typ/todo.pdf edits remain untouched.
+
+
+## Newest table and panel todos, 2026-10-08
+
+Items 24-30 and the table workbench steps 31a-f are implemented. Table workbench
+31g has checked-in Typst/TeX fixtures and native journeys; its native verification
+is still open. Original todo descriptions were preserved, and pre-existing
+checkbox/PDF edits were excluded from this implementation commit.
+
+- Preview Find targets the focused source or asset viewer and opens/focuses its
+  controls, including a detached viewer. Controls, popouts and queued menu actions
+  carry document ownership; obsolete child input cannot mutate another viewer.
+  Held dragging uses actual pointer displacement and does not accumulate motion
+  while the pointer remains stationary.
+- Terminal padding is removed at its top, bottom and right. Problems has shared
+  hover/focus outlines and exclusive keyboard ownership. Sticky editor rows retain
+  the editor outline; current/error/warning backgrounds fill the viewport width.
+- Inline/display math conversion queues one formatting request by default, with
+  a Settings toggle. Changed documents and obsolete formatter replies are rejected.
+- Typst tables support independently collapsible inspectors, exact option
+  expressions, highlighted cells, literal fill/stroke/alignment/inset painting,
+  selectable rules and column-header dragging. Writing column ratios is opt-in.
+  Dynamic cells, computed options and unsupported partial structures retain a
+  highlighted exact-source editor rather than being guessed or discarded.
+- TeX tabular/tabularx/longtable grids preserve compatible column specifications,
+  packages, placement, row heights, rules and comments. Unsupported structures
+  use source mode. Invalid structural drafts disable Apply but remain repairable
+  in Source. Apply checks the document key and exact original range, then performs
+  one undoable edit; Cancel discards the draft. Repeated Apply cannot add newlines.
+
+Failing deterministic regressions were established for preview ownership,
+obsolete child commands, Problems commands, child-window commands and TeX Apply
+stability before their fixes. A final independent read-only review found no
+additional actionable defects.
+
+Verification on macOS 14.6.1, Apple Silicon:
+
+- Formatting and strict all-target Clippy pass for the normal build; strict
+  Clippy also passes with `desktop-ui-tests`.
+- Normal full suite: 1,674 passed, zero failed, 44 opt-in tests ignored.
+  Feature full suite: 1,679 passed, zero failed, 44 ignored.
+- 17 xtask tests, 29 Python harness contracts and two opt-in real PDF/compiler
+  integrations pass. Both Typst and all three TeX manual fixtures compile.
+- The optimized gallery captured and decoded all 25 expected PNGs in one session.
+  Fresh table workbench normal/narrow and sticky-context PNGs were also captured
+  under `.tiptoptyp/screenshots/agent-review` and inspected, together with the
+  fresh terminal/Problems gallery images. These are viewport framebuffers;
+  they do not prove native composed-window placement.
+- Table parsing/rule validation is cached, TeX grids render visible rows only,
+  stationary dragging adds no repaint loop, and math formatting issues one
+  request per conversion. Deterministic tests cover those bounded-work rules.
+  No comparative latency measurement or cross-platform speed claim is made.
+
+The required real-app input check remains unavailable. The command
+`python3 scripts/test-desktop-ui.py --journey tables --release` stopped before
+input at preflight: Accessibility and input permissions were available, but the
+Mac was locked and the desktop unavailable. Its explicit failed/unavailable
+receipt is `.tiptoptyp/desktop-ui-tests/run-xr0z30ma/result.json`. A subsequent
+privileged preflight reported the same condition. No native pass is claimed.
+Pending unlocked runs are `tables`, `preview_find` and `problems_focus` (use
+`--release`; add `--trace-preview` for the preview journeys). Keep this branch
+unmerged until those interaction checks and the previous audit's pending native
+checks are completed.

@@ -1729,10 +1729,20 @@ pub fn focus_is_inside(context: &egui::Context, rect: Rect) -> bool {
     context.input(|input| input.focused)
         && context
             .memory(|memory| memory.focused())
-            .and_then(|id| context.read_response(id))
-            .is_some_and(|response| {
-                response.interact_rect.is_positive() && rect.contains_rect(response.interact_rect)
+            .and_then(|id| {
+                // read_response() recomputes pointer interaction and can
+                // surrender focus after an outside click. A visual ownership
+                // query must only inspect the existing widget bounds.
+                context.viewport(|viewport| {
+                    viewport
+                        .this_pass
+                        .widgets
+                        .get(id)
+                        .or_else(|| viewport.prev_pass.widgets.get(id))
+                        .map(|widget| widget.interact_rect)
+                })
             })
+            .is_some_and(|focused| focused.is_positive() && rect.contains_rect(focused))
 }
 
 /// A flat surface for an independently scrolling Explorer section. The shared
@@ -1909,6 +1919,53 @@ mod tests {
             "startup components: fonts={fonts:?}, first_text_frame={frame:?}, generic_constructor={:?}",
             start.elapsed()
         );
+    }
+
+    #[test]
+    fn focus_containment_observation_does_not_surrender_focus_after_an_outside_click() {
+        let context = egui::Context::default();
+        let id = egui::Id::new("focus-owner");
+        let bounds = egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(100.0, 60.0));
+        context
+            .run_ui(Default::default(), |ui| {
+                ui.interact(bounds, id, egui::Sense::focusable_noninteractive());
+            })
+            .drop_without_applying_deltas();
+        let outside = egui::pos2(200.0, 200.0);
+        let input = egui::RawInput {
+            events: vec![
+                egui::Event::PointerMoved(outside),
+                egui::Event::PointerButton {
+                    pos: outside,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos: outside,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            ..Default::default()
+        };
+        context
+            .run_ui(input, |ui| {
+                ui.interact(bounds, id, egui::Sense::focusable_noninteractive());
+                ui.ctx().memory_mut(|memory| memory.request_focus(id));
+                assert!(focus_is_inside(ui.ctx(), bounds));
+                assert!(
+                    ui.ctx().memory(|memory| memory.has_focus(id)),
+                    "an outline query must not cancel an explicit focus handoff"
+                );
+                assert!(!focus_is_inside(
+                    ui.ctx(),
+                    egui::Rect::from_min_size(outside, egui::vec2(10.0, 10.0))
+                ));
+                assert!(ui.ctx().memory(|memory| memory.has_focus(id)));
+            })
+            .drop_without_applying_deltas();
     }
 
     #[test]

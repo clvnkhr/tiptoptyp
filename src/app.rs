@@ -46,15 +46,20 @@ use popup_layout::{
 mod package_browser;
 use package_browser::{PackageBrowserAction, PackageFilter, show_package_browser_ui};
 mod editor_scroll;
+mod editor_surface;
 mod editor_view;
 mod table_editor;
+mod table_workbench;
+use crate::editor_data::TableTarget;
 use table_editor::show_table_editor_ui;
+use table_workbench::TableEditorDialog;
 mod extra_shortcuts;
 mod find_bar;
 mod git_actions;
 mod git_diff;
 mod image_view;
 mod lifecycle;
+mod math_format;
 mod mitex_mode;
 mod panel_handles;
 pub(crate) use tooltips::native_hover_text;
@@ -758,12 +763,18 @@ enum WorkspaceCopyKind {
 enum EditorMenuAction {
     Command(AppCommand),
     OpenLink(String),
-    EditTable(EditableTable),
+    EditTable(BoundTableTarget),
     ConvertMath(crate::math_conversion::Target, String),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BoundTableTarget {
+    key: DocumentKey,
+    target: Box<TableTarget>,
+}
+
 #[derive(Debug, Clone)]
-struct TableEditorDialog {
+struct TypstTableEditorDialog {
     table: EditableTable,
     original_call: String,
     insertion_prefix: Option<&'static str>,
@@ -858,7 +869,7 @@ enum AppPopup {
     Editor {
         anchor: Pos2,
         link: Option<String>,
-        table: Option<EditableTable>,
+        table: Option<BoundTableTarget>,
         math: Option<crate::math_conversion::Target>,
     },
     FontSelector {
@@ -931,6 +942,7 @@ enum SettingsTarget {
     Handwriting,
     UnicodeWarnings,
     MitexDollars,
+    AutoFormatMath,
     Snippets,
     Templates,
     GitDiffStyle,
@@ -962,7 +974,7 @@ enum SettingsTarget {
 }
 
 impl SettingsTarget {
-    const ALL: [Self; 51] = [
+    const ALL: [Self; 52] = [
         Self::Appearance,
         Self::TypstSyntax,
         Self::LightTheme,
@@ -986,6 +998,7 @@ impl SettingsTarget {
         Self::Handwriting,
         Self::UnicodeWarnings,
         Self::MitexDollars,
+        Self::AutoFormatMath,
         Self::Snippets,
         Self::Templates,
         Self::GitDiffStyle,
@@ -1043,6 +1056,7 @@ impl SettingsTarget {
             Self::Snippets => "Custom snippets",
             Self::Templates => "Document templates",
             Self::MitexDollars => "Auto-enable miTeX in compatible Typst documents",
+            Self::AutoFormatMath => "Format after math conversion",
             Self::GitDiffStyle => "Git diff style",
             Self::RainbowBrackets => "Rainbow brackets",
             Self::AutoSave => "Auto-save",
@@ -1097,6 +1111,7 @@ impl SettingsTarget {
             | Self::Handwriting
             | Self::UnicodeWarnings
             | Self::MitexDollars
+            | Self::AutoFormatMath
             | Self::Snippets
             | Self::Templates
             | Self::GitDiffStyle
@@ -1175,6 +1190,9 @@ impl SettingsTarget {
             Self::Templates => "new from template article letter notes source starting document",
             Self::MitexDollars => {
                 "mitex latex tex dollar inline display block math package version translation"
+            }
+            Self::AutoFormatMath => {
+                "automatic formatting format fmt math inline display conversion formula typst tex"
             }
             Self::GitDiffStyle => {
                 "git diff changes hunk unified single column side by side double column"
@@ -1355,6 +1373,7 @@ pub struct EditorApp {
     manual_format_revision: Option<u64>,
     format_request_key: Option<DocumentKey>,
     format_when_service_ready: Option<DocumentKey>,
+    format_after_math_conversion: Option<DocumentKey>,
     diagnostic_tooltip: Option<DiagnosticTooltipOverlay>,
     app_popup: Option<AppPopup>,
     app_popup_generation: u64,
@@ -1371,6 +1390,7 @@ pub struct EditorApp {
     rename_overlay_had_focus: bool,
     rename_overlay_suspended: bool,
     table_editor: Option<TableEditorDialog>,
+    table_edit_events: Vec<egui::Event>,
 
     pending_tool_picker: Option<PendingDialog<ToolPickerTarget>>,
     notice: Option<Notice>,
@@ -1676,6 +1696,7 @@ impl EditorApp {
             manual_format_revision: None,
             format_request_key: None,
             format_when_service_ready: None,
+            format_after_math_conversion: None,
             diagnostic_tooltip: None,
             app_popup: None,
             app_popup_generation: 0,
@@ -1690,6 +1711,7 @@ impl EditorApp {
             rename_overlay_had_focus: false,
             rename_overlay_suspended: false,
             table_editor: None,
+            table_edit_events: Vec::new(),
             pending_tool_picker: None,
             notice: None,
             status_log: VecDeque::new(),
@@ -1866,8 +1888,7 @@ impl EditorApp {
                 self.document().kind().is_typst() && self.table_editor.is_none()
             }
             CommandRequirement::EditTable => {
-                self.document().kind().is_typst()
-                    && self.table_editor.is_none()
+                self.table_editor.is_none()
                     && self
                         .editor_data
                         .cached_table_at_cursor(self.document().key())
@@ -2503,6 +2524,7 @@ impl EditorApp {
         self.manual_format_revision = None;
         self.format_request_key = None;
         self.format_when_service_ready = None;
+        self.format_after_math_conversion = None;
         self.tooltip_request = None;
         self.notice = None;
         self.clear_editor_hover();
@@ -2906,6 +2928,7 @@ impl EditorApp {
         self.manual_format_revision = None;
         self.format_request_key = None;
         self.format_when_service_ready = None;
+        self.format_after_math_conversion = None;
         self.external_file_change_notice = None;
         self.external_file_stamp = self
             .document()
@@ -2956,6 +2979,12 @@ impl EditorApp {
         if context.input_mut_for(shortcut_viewport, |input| {
             tabs::consume_window_close(input, &shortcuts, child_focused)
         }) {
+            if self.table_editor.is_some()
+                && shortcut_viewport == scoped_child_viewport_id(context, "tiptoptyp-table-editor")
+            {
+                self.cancel_table_editor(context);
+                return;
+            }
             context.send_viewport_cmd_to(shortcut_viewport, egui::ViewportCommand::Close);
         }
         if shortcut_viewport == context.viewport_id()
@@ -3071,6 +3100,10 @@ impl EditorApp {
                     scoped_child_viewport_id(context, "preview-window"),
                     preview_controls::SALT,
                 )
+            || (self.table_editor.is_some()
+                && shortcut_viewport
+                    == scoped_child_viewport_id(context, "tiptoptyp-table-editor"))
+            || self.problems_focused(context, shortcut_viewport)
             || (!source_focused && context.egui_wants_keyboard_input());
         let can_sync_preview = (self.document().kind().is_typst()
             && self.interactive_preview_active())
@@ -3204,33 +3237,14 @@ impl EditorApp {
             && let Some(action) = context.input_mut_for(shortcut_viewport, |input| {
                 consume_preview_zoom_shortcut(input, &shortcuts)
             })
+            && !self.route_preview_zoom(context, action)
         {
-            if self.pdfium_asset_requested() {
-                self.pdfium_asset.zoom(action);
-            } else if self.pdfium_preview_requested() && !self.document().kind().preview_only() {
-                self.pdfium_preview.zoom(action);
-            } else if self.interactive_preview_active() && !self.document().kind().preview_only() {
-                #[cfg(any(target_os = "macos", target_os = "windows"))]
-                if let Some(webview) = &self.webview {
-                    let command = match action {
-                        PreviewZoomAction::In => "in",
-                        PreviewZoomAction::Out => "out",
-                        PreviewZoomAction::Reset => "reset",
-                    };
-                    if let Err(error) = webview.evaluate_script(&format!(
-                        "window.dispatchEvent(new CustomEvent('tiptoptyp-preview-zoom', {{detail: '{command}'}}))"
-                    )) {
-                        self.show_file_error(format!("Could not zoom the preview: {error}"));
-                    }
-                }
+            let preview = if self.document().kind().preview_only() {
+                &mut self.asset_preview
             } else {
-                let preview = if self.document().kind().preview_only() {
-                    &mut self.asset_preview
-                } else {
-                    &mut self.preview
-                };
-                image_view::request_zoom(preview, action);
-            }
+                &mut self.preview
+            };
+            image_view::request_zoom(preview, action);
         }
 
         if let Some(delta) = context.input_mut_for(shortcut_viewport, |input| {
@@ -3351,6 +3365,27 @@ impl EditorApp {
         context: &egui::Context,
         frame: Option<&eframe::Frame>,
     ) {
+        if self.table_editor.is_some()
+            && focused_input_viewport(context)
+                == scoped_child_viewport_id(context, "tiptoptyp-table-editor")
+        {
+            match command {
+                AppCommand::CloseTab => {
+                    self.cancel_table_editor(context);
+                    return;
+                }
+                AppCommand::Find | AppCommand::FindReplace => return,
+                _ => {}
+            }
+        }
+        if matches!(command, AppCommand::Find | AppCommand::FindReplace)
+            && self.problems_focused(context, focused_input_viewport(context))
+        {
+            return;
+        }
+        if command == AppCommand::Find && self.open_preview_find(context) {
+            return;
+        }
         if self.preview_visible()
             && ((self.pdfium_asset_requested()
                 && self
@@ -3379,8 +3414,10 @@ impl EditorApp {
             AppCommand::NewTable => self.begin_new_table(context),
             AppCommand::EditTable => {
                 let cursor = self.editor_snapshot(context).cursor.primary.index.0;
-                if let Some(table) = editable_table_at(self.document().source(), cursor) {
-                    self.begin_table_editor(table);
+                if let Some(table) =
+                    TableTarget::at(self.document().source(), cursor, self.document().kind())
+                {
+                    self.begin_table_target(table);
                 }
             }
             AppCommand::Settings => self.toggle_settings(),
@@ -3556,6 +3593,8 @@ impl EditorApp {
             return true;
         }
         let focused = context.memory(|memory| memory.focused());
+        let table_child = self.table_editor.is_some()
+            && viewport == scoped_child_viewport_id(context, "tiptoptyp-table-editor");
         let find_child = viewport == scoped_child_viewport_id(context, find_bar::VIEWPORT_SALT);
         let controls_child = viewport == scoped_child_viewport_id(context, preview_controls::SALT)
             || viewport
@@ -3565,11 +3604,13 @@ impl EditorApp {
                 );
         if !find_child
             && !controls_child
+            && !table_child
+            && !self.problems_focused(context, viewport)
             && (focused == Some(source_editor_id(context)) || !context.egui_wants_keyboard_input())
         {
             return false;
         }
-        if (find_child || controls_child) && viewport != context.viewport_id() {
+        if (find_child || controls_child || table_child) && viewport != context.viewport_id() {
             let event = match command {
                 AppCommand::Cut => Some(egui::Event::Cut),
                 AppCommand::Copy => Some(egui::Event::Copy),
@@ -3587,6 +3628,8 @@ impl EditorApp {
             if let Some(event) = event {
                 if find_child {
                     self.find_bar.edit_events.push(event);
+                } else if table_child {
+                    self.table_edit_events.push(event);
                 } else {
                     self.preview_controls.edit_events.push(event);
                 }
@@ -5488,6 +5531,7 @@ impl EditorApp {
                     self.manual_format_revision = None;
                     self.format_request_key = None;
                     self.format_when_service_ready = None;
+                    self.format_after_math_conversion = None;
                     self.editor_completion = None;
                 }
             }
@@ -6756,7 +6800,7 @@ impl EditorApp {
                 let response = icons::toolbar_button(
                     ui,
                     self.preview_controls_enabled(),
-                    self.preview_controls.open,
+                    self.main_preview_controls_open(),
                     UiIcon::Menu,
                     "Preview controls",
                     self.settings.toolbar_style,
@@ -6765,7 +6809,7 @@ impl EditorApp {
                 #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
                 crate::desktop_test::observe("preview.open", &response);
                 if native_hover_text(response, "Show preview controls").clicked() {
-                    self.preview_controls.open = !self.preview_controls.open;
+                    self.toggle_main_preview_controls();
                 }
                 // Lay out the title last so it gets precisely the space left
                 // between the menus and the right-aligned control group.
@@ -6990,6 +7034,7 @@ impl EditorApp {
     }
 
     fn request_format_document(&mut self) {
+        self.format_after_math_conversion = None;
         self.activity.format_error = None;
         if self.table_editor.is_some() {
             return;
@@ -7189,6 +7234,7 @@ impl EditorApp {
         if self.table_editor.is_some() {
             return;
         }
+        self.table_edit_events.clear();
         let Some(original_call) =
             char_range_slice(self.document().source(), table.source_range.clone())
         else {
@@ -7198,7 +7244,7 @@ impl EditorApp {
             });
             return;
         };
-        self.table_editor = Some(TableEditorDialog {
+        self.table_editor = Some(TableEditorDialog::Typst(Box::new(TypstTableEditorDialog {
             table,
             original_call: original_call.to_owned(),
             insertion_prefix: None,
@@ -7206,7 +7252,7 @@ impl EditorApp {
             focus_first_cell: true,
             ui: Default::default(),
             error: None,
-        });
+        })));
         self.editor_completion = None;
         self.format_request_key = None;
         self.manual_format_revision = None;
@@ -7230,7 +7276,9 @@ impl EditorApp {
         let mut table = editable_table_at("#table(columns: 2, [], [], [], [])", 2).unwrap();
         table.source_range = cursor..cursor;
         self.begin_table_editor(table);
-        self.table_editor.as_mut().unwrap().insertion_prefix = Some(prefix);
+        if let Some(TableEditorDialog::Typst(dialog)) = &mut self.table_editor {
+            dialog.insertion_prefix = Some(prefix);
+        }
     }
 
     fn begin_rename(&mut self, path: PathBuf) {
@@ -7368,8 +7416,9 @@ impl EditorApp {
                 self.follow_preview_link(&target)
             }
             AppPopupAction::Editor(EditorMenuAction::ConvertMath(target, choice)) => {
-                if self.document().source().get(target.range.clone())
-                    != Some(target.original.as_str())
+                if target.document_key != Some(self.document().key())
+                    || self.document().source().get(target.range.clone())
+                        != Some(target.original.as_str())
                 {
                     self.show_file_error(
                         "The formula changed; reopen its menu before converting".into(),
@@ -7381,10 +7430,17 @@ impl EditorApp {
                     });
                     self.find_bar.search.clear();
                     self.mark_edited();
+                    self.queue_math_conversion_format(context);
                 }
             }
             AppPopupAction::Editor(EditorMenuAction::EditTable(table)) => {
-                self.begin_table_editor(table)
+                if table.key != self.document().key() {
+                    self.show_file_error(
+                        "The table changed; reopen its menu before editing".into(),
+                    );
+                } else {
+                    self.begin_table_target(*table.target);
+                }
             }
             AppPopupAction::Workspace(action) => match action {
                 WorkspaceMenuAction::Open(path) => {
@@ -8266,7 +8322,7 @@ impl EditorApp {
                 split_pane,
                 self.explorer.panel_visible(),
                 self.bottom_panel.selected().is_some(),
-                self.preview_controls.popout.is_some(),
+                self.preview_source_popped_out(),
             );
             let rect = native_preview_content_rect(available, clip, left_grip, bottom_grip);
             let Some(native_rect) = egui_rect_to_native(ui.ctx(), rect) else {
@@ -9022,6 +9078,7 @@ impl EditorApp {
         self.poll_tool_picker(&context);
         self.poll_document_dialog(&context);
         self.receive_tinymist_events(&context);
+        self.tick_math_conversion_format();
         self.tick_tinymist_recovery(&context);
         self.receive_web_links(&context);
         if std::mem::take(&mut self.preview_controls.return_to_editor) {
@@ -9104,7 +9161,7 @@ impl EditorApp {
         }
         let content_hidden = self.show_bottom_panel_container(ui);
         if content_hidden {
-            if self.preview_controls.popout.is_none() {
+            if !self.preview_source_popped_out() {
                 self.hide_webview();
             }
         } else {
@@ -9162,7 +9219,7 @@ impl EditorApp {
                 self.document().kind(),
                 self.source_preview_available(),
                 self.view_mode,
-                self.preview_controls.popout.is_some(),
+                self.preview_source_popped_out(),
             );
             let layout = theme::split_pane_layout(ui.available_width());
             let independent = self.settings.independent_main_dividers
@@ -9201,17 +9258,14 @@ impl EditorApp {
             }
             match content_view {
                 ContentView::Empty | ContentView::Source | ContentView::Asset => {
-                    if self.preview_controls.popout.is_none() {
+                    if !self.preview_source_popped_out() {
                         self.hide_webview();
                     }
                     egui::CentralPanel::default()
                         .frame(theme::content_panel_frame(ui.style()))
                         .show(ui, |ui| match content_view {
                             ContentView::Empty => self.show_empty_workspace(ui, frame),
-                            ContentView::Asset
-                                if self.preview_controls.popout.is_some()
-                                    && !self.source_preview_available() =>
-                            {
+                            ContentView::Asset if self.preview_asset_popped_out() => {
                                 ui.weak("Preview is open in its own window");
                             }
                             ContentView::Asset => self.show_asset_view(ui),
@@ -9227,7 +9281,11 @@ impl EditorApp {
                         .max_size(editor_maximum)
                         .show(ui, |ui| {
                             if content_view == ContentView::SplitAsset {
-                                self.show_asset_view(ui);
+                                if self.preview_asset_popped_out() {
+                                    ui.weak("Preview is open in its own window");
+                                } else {
+                                    self.show_asset_view(ui);
+                                }
                             } else {
                                 self.show_editor(ui);
                             }
@@ -9271,9 +9329,7 @@ impl EditorApp {
         self.refresh_diagnostic_tooltip(&context);
         self.focus_requested_tooltip(&context);
         self.show_app_popup_window(&context);
-        if self.preview_controls.popout.is_none() {
-            self.show_preview_controls(&context);
-        }
+        self.show_preview_controls(&context, false);
         self.show_preview_window(&context);
         self.show_template_picker(&context);
         self.show_encoding_import(&context);
@@ -9393,9 +9449,11 @@ fn take_ready_export(
     if ready { pending.take() } else { None }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn paint_editor_line_backgrounds(
     ui: &egui::Ui,
     output: &egui::text_edit::TextEditOutput,
+    viewport: Rect,
     source: &str,
     current_char: Option<usize>,
     attention: Option<(usize, f32)>,
@@ -9407,7 +9465,7 @@ fn paint_editor_line_backgrounds(
     if let Some(char_index) = current_char {
         let line = line_index_at_char(source, char_index);
         let fill = theme::palette(ui.ctx()).active_row;
-        push_editor_line_fill(&mut shapes, output, line_rows, line, fill, None);
+        push_editor_line_fill(&mut shapes, output, viewport, line_rows, line, fill, None);
     }
 
     if let Some((char_index, progress)) = attention {
@@ -9452,13 +9510,14 @@ fn paint_editor_line_backgrounds(
     }
 
     ui.painter()
-        .with_clip_rect(output.text_clip_rect)
+        .with_clip_rect(viewport)
         .set(slot, egui::Shape::Vec(shapes));
 }
 
 fn push_editor_line_fill(
     shapes: &mut Vec<egui::Shape>,
     output: &egui::text_edit::TextEditOutput,
+    viewport: Rect,
     line_rows: &[Range<usize>],
     line: usize,
     fill: Color32,
@@ -9470,10 +9529,10 @@ fn push_editor_line_fill(
     let mut combined = Rect::NOTHING;
     for row in &output.galley.rows[rows.clone()] {
         let row_rect = row.rect().translate(output.galley_pos.to_vec2());
-        let rect = Rect::from_min_max(
-            Pos2::new(output.response.rect.left(), row_rect.top()),
-            Pos2::new(output.response.rect.right(), row_rect.bottom()),
-        );
+        let rect = editor_surface::line_background_rect(viewport, row_rect);
+        if !rect.is_positive() {
+            continue;
+        }
         combined = combined.union(rect);
         shapes.push(egui::Shape::rect_filled(rect, 0.0, fill));
     }
@@ -9862,6 +9921,7 @@ fn show_sticky_context_overlay(
     rows: &[StickyContextRow],
     snapshot: &StickyContextEditorSnapshot,
     line_numbers: bool,
+    border: Stroke,
 ) -> Option<usize> {
     let geometry = sticky_context_overlay_geometry(viewport, find_overlay)?;
     if rows.is_empty() {
@@ -9984,6 +10044,11 @@ fn show_sticky_context_overlay(
                 [overlay.left_bottom(), overlay.right_bottom()],
                 ui.visuals().widgets.noninteractive.bg_stroke,
             );
+            for segment in editor_surface::sticky_border_segments(overlay, viewport, border.width) {
+                ui.painter()
+                    .with_clip_rect(viewport)
+                    .line_segment(segment, border);
+            }
         });
     jump_target
 }
@@ -10021,6 +10086,7 @@ fn editor_range_rect(editor: Rect, start: Rect, end: Rect) -> Rect {
 fn paint_line_diagnostics(
     ui: &mut egui::Ui,
     output: &egui::text_edit::TextEditOutput,
+    viewport: Rect,
     diagnostics: &[LineDiagnostic],
     line_rows: &[Range<usize>],
     slots: Vec<egui::layers::ShapeIdx>,
@@ -10040,10 +10106,10 @@ fn paint_line_diagnostics(
         let mut hover_rect = Rect::NOTHING;
         for row in &output.galley.rows[rows.clone()] {
             let row_rect = row.rect().translate(output.galley_pos.to_vec2());
-            let line_rect = Rect::from_min_max(
-                Pos2::new(output.response.rect.left(), row_rect.top()),
-                Pos2::new(output.response.rect.right(), row_rect.bottom()),
-            );
+            let line_rect = editor_surface::line_background_rect(viewport, row_rect);
+            if !line_rect.is_positive() {
+                continue;
+            }
             hover_rect = hover_rect.union(line_rect);
             background.push(egui::Shape::rect_filled(
                 line_rect,
@@ -11814,7 +11880,7 @@ struct EditorContextMenuOptions<'a> {
     can_format: bool,
     can_sync_preview: bool,
     link: Option<&'a str>,
-    table: Option<&'a EditableTable>,
+    table: Option<&'a BoundTableTarget>,
     math: Option<&'a crate::math_conversion::Target>,
 }
 
@@ -12057,7 +12123,7 @@ fn editor_menu_rows(
 fn prepare_table_source_edit(
     source: &str,
     document_key: DocumentKey,
-    dialog: &TableEditorDialog,
+    dialog: &TypstTableEditorDialog,
 ) -> Result<PreparedTableSourceEdit, String> {
     if document_key != dialog.document_key {
         return Err("The document changed while the table editor was open. Reopen the table to edit the latest source.".to_owned());

@@ -9,6 +9,7 @@ pub(crate) struct Target {
     body: String,
     kind: DocumentKind,
     typst_display: bool,
+    pub(crate) document_key: Option<tiptoptyp_core::document::DocumentKey>,
 }
 impl Target {
     pub(crate) fn at(source: &str, cursor: usize, kind: DocumentKind) -> Option<Self> {
@@ -45,6 +46,7 @@ impl Target {
             original: original.into(),
             body: body.into(),
             kind,
+            document_key: None,
             typst_display: kind == DocumentKind::Typst
                 && typst_syntax::parse(original)
                     .children()
@@ -52,6 +54,11 @@ impl Target {
                     .is_some_and(|equation| equation.block()),
         })
     }
+    pub(crate) fn bind_document(mut self, key: tiptoptyp_core::document::DocumentKey) -> Self {
+        self.document_key = Some(key);
+        self
+    }
+
     pub(crate) fn choices(&self) -> &'static [&'static str] {
         if self.kind == DocumentKind::Typst {
             &["Inline math", "Display math"]

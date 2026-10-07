@@ -369,6 +369,8 @@ pub(crate) struct AppSettings {
     pub(crate) indent_spaces: u8,
     #[serde(default)]
     pub(crate) ascii_punctuation: bool,
+    #[serde(default = "default_true")]
+    pub(crate) format_after_math_conversion: bool,
     #[serde(default)]
     pub(crate) mitex_auto_enable: bool,
     #[serde(default = "default_mitex_version")]
@@ -459,6 +461,7 @@ impl Default for AppSettings {
             auto_pair_delimiters: true,
             indent_spaces: 2,
             ascii_punctuation: false,
+            format_after_math_conversion: true,
             mitex_auto_enable: false,
             mitex_version: default_mitex_version(),
             rainbow_brackets: crate::rainbow::RainbowBrackets::default(),
@@ -542,6 +545,7 @@ impl AppSettings {
             auto_pair_delimiters,
             indent_spaces,
             ascii_punctuation,
+            format_after_math_conversion,
             mitex_auto_enable,
             mitex_version,
             rainbow_brackets,
@@ -918,6 +922,7 @@ mod tests {
             auto_pair_delimiters: false,
             indent_spaces: 4,
             ascii_punctuation: true,
+            format_after_math_conversion: false,
             mitex_auto_enable: true,
             mitex_version: "0.2.7".into(),
             rainbow_brackets: crate::rainbow::RainbowBrackets {

@@ -43,8 +43,17 @@ pub(super) struct Location {
     pub x: f32,
     pub y: f32,
 }
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum Target {
+    #[default]
+    Source,
+    Asset(DocumentKey),
+}
+
 #[derive(Default)]
 pub(super) struct Controls {
+    pub target: Target,
+    pub popout_target: Target,
     pub open: bool,
     pub popout: Option<ViewMode>,
     pub outline: bool,
@@ -54,17 +63,72 @@ pub(super) struct Controls {
     pub return_to_editor: bool,
     pub position: Option<Pos2>,
     pub available: Option<Rect>,
+    pub asset_available: Option<(DocumentKey, Rect)>,
     pub web: Snapshot,
     pub native_outline: Vec<(String, Location)>,
     measured_size: Option<(bool, usize, egui::Vec2)>,
-    drag_anchor: Option<(Pos2, Pos2)>,
+    drag_anchor: Option<DragAnchor>,
 }
-// Screen coordinates stay stable while the native popup moves underneath the pointer.
+#[derive(Clone, Copy)]
+struct DragAnchor {
+    pointer_start: Pos2,
+    window_start: Pos2,
+    pointer_last: Pos2,
+}
+
+impl DragAnchor {
+    fn move_to(&mut self, pointer: Pos2) -> Option<Pos2> {
+        if self.pointer_last == pointer {
+            return None;
+        }
+        self.pointer_last = pointer;
+        Some(drag_position(
+            (self.pointer_start, self.window_start),
+            pointer,
+        ))
+    }
+}
+
 fn drag_position((pointer_start, window_start): (Pos2, Pos2), pointer: Pos2) -> Pos2 {
     window_start + (pointer - pointer_start)
 }
 
+/// Query the actual parent view during a native drag. A popup's cached local
+/// pointer cannot be added to its new origin: that invents movement each frame.
+fn current_parent_pointer(context: &egui::Context) -> Option<Pos2> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::native_window::for_viewport(context, context.parent_viewport_id())?
+            .file_drag_pointer(context.zoom_factor())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = context;
+        None
+    }
+}
+
 impl Controls {
+    pub(super) fn select(&mut self, target: Target) -> bool {
+        if self.target == target {
+            return false;
+        }
+        self.target = target;
+        self.position = None;
+        self.drag_anchor = None;
+        true
+    }
+
+    fn available_for(&self, target: Target) -> Option<Rect> {
+        match target {
+            Target::Source => self.available,
+            Target::Asset(key) => self
+                .asset_available
+                .filter(|(owner, _)| *owner == key)
+                .map(|(_, rect)| rect),
+        }
+    }
+
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     pub(super) fn inspected_size(&self) -> Option<egui::Vec2> {
         self.measured_size
@@ -137,7 +201,7 @@ impl Controls {
                 #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
                 crate::desktop_test::observe("preview.drag_handle", &handle);
                 let embedded = ui.ctx().embed_viewports();
-                let (origin, pointer, pressed) = ui.input(|input| {
+                let (origin, pointer, pressed, pointer_moved) = ui.input(|input| {
                     (
                         if embedded {
                             Pos2::ZERO
@@ -149,21 +213,45 @@ impl Controls {
                         },
                         input.pointer.interact_pos(),
                         input.pointer.press_origin(),
+                        input
+                            .events
+                            .iter()
+                            .any(|event| matches!(event, egui::Event::PointerMoved(_))),
                     )
                 });
+                let dragging = handle.drag_started() || handle.dragged() || handle.drag_stopped();
+                let native_pointer = if !embedded && dragging {
+                    current_parent_pointer(ui.ctx())
+                } else {
+                    None
+                };
                 if handle.drag_started()
-                    && let Some(pressed) = pressed
+                    && let (Some(pressed), Some(pointer)) = (pressed, pointer)
                 {
-                    self.drag_anchor = Some((
-                        origin + pressed.to_vec2(),
-                        self.position.unwrap_or_default(),
-                    ));
+                    // Preserve the press offset even if egui begins the drag
+                    // only after crossing its movement threshold.
+                    let pointer_start = native_pointer
+                        .map_or(origin + pressed.to_vec2(), |current| {
+                            current - (pointer - pressed)
+                        });
+                    self.drag_anchor = Some(DragAnchor {
+                        pointer_start,
+                        window_start: self.position.unwrap_or_default(),
+                        pointer_last: pointer_start,
+                    });
                 }
-                if (handle.dragged() || handle.drag_stopped())
-                    && let (Some(anchor), Some(pointer)) = (self.drag_anchor, pointer)
+                let fresh_pointer = native_pointer.or_else(|| {
+                    pointer
+                        .filter(|_| pointer_moved)
+                        .map(|pointer| origin + pointer.to_vec2())
+                });
+                if dragging
+                    && let (Some(anchor), Some(pointer)) = (&mut self.drag_anchor, fresh_pointer)
+                    && let Some(position) = anchor.move_to(pointer)
+                    && self.position != Some(position)
                 {
-                    self.position = Some(drag_position(anchor, origin + pointer.to_vec2()));
-                    ui.ctx().request_repaint();
+                    self.position = Some(position);
+                    ui.ctx().request_repaint_of(ui.ctx().parent_viewport_id());
                 }
                 if handle.drag_stopped() {
                     self.drag_anchor = None;
@@ -230,6 +318,11 @@ impl Controls {
             #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
             crate::desktop_test::observe("preview.query", &response);
             if self.focus_find {
+                crate::window_host::focus(
+                    ui.ctx(),
+                    ui.ctx().viewport_id(),
+                    crate::window_host::FocusCause::UserAction,
+                );
                 response.request_focus();
                 self.focus_find = false;
             }
@@ -267,36 +360,231 @@ impl Controls {
     }
 }
 impl EditorApp {
-    pub(super) fn preview_controls_enabled(&self) -> bool {
-        !self.tabs.is_empty()
-            && self.view_mode != ViewMode::Code
-            && (self.source_preview_available() || self.document().kind() == DocumentKind::Pdf)
+    pub(super) fn preview_source_popped_out(&self) -> bool {
+        self.preview_controls.popout.is_some()
+            && self.preview_controls.popout_target == Target::Source
     }
-    pub(super) fn show_preview_controls(&mut self, context: &egui::Context) {
-        // While detached, this method is called only inside the preview window.
-        let in_popout = self.preview_controls.popout.is_some();
-        if !self.preview_controls.open || (!self.preview_controls_enabled() && !in_popout) {
+
+    pub(super) fn preview_asset_popped_out(&self) -> bool {
+        self.preview_controls.popout.is_some()
+            && self.preview_controls.popout_target == Target::Asset(self.document().key())
+    }
+
+    pub(super) fn preview_controls_in_popout(&self) -> bool {
+        self.preview_controls.popout.is_some()
+            && self.preview_controls.target == self.preview_controls.popout_target
+    }
+
+    fn valid_preview_target(&self, target: Target) -> bool {
+        match target {
+            Target::Source => self.source_preview_available(),
+            Target::Asset(key) => self.pdfium_asset_requested() && key == self.document().key(),
+        }
+    }
+
+    fn main_preview_controls_target(&self) -> Option<Target> {
+        if self.tabs.is_empty() || self.bottom_panel.is_maximized() {
+            return None;
+        }
+        if self.source_preview_available()
+            && !self.preview_source_popped_out()
+            && preview_visible_for(
+                self.document().kind(),
+                self.view_mode,
+                self.designated_preview_path().is_some(),
+            )
+        {
+            Some(Target::Source)
+        } else if self.pdfium_asset_requested() && !self.preview_asset_popped_out() {
+            Some(Target::Asset(self.document().key()))
+        } else {
+            None
+        }
+    }
+
+    fn refresh_preview_controls_target(&mut self) -> bool {
+        if self.valid_preview_target(self.preview_controls.target) {
+            return true;
+        }
+        // An asset action must never cross an active-tab replacement. A source
+        // default can adopt a standalone PDF before its first controls open.
+        let obsolete_asset = matches!(self.preview_controls.target, Target::Asset(_));
+        let replacement = self.main_preview_controls_target();
+        self.preview_controls
+            .select(replacement.unwrap_or_default());
+        if obsolete_asset || replacement.is_none() {
+            self.preview_controls.open = false;
+            self.preview_controls.focus_find = false;
+            return false;
+        }
+        true
+    }
+
+    pub(super) fn focused_preview_target(&self, context: &egui::Context) -> Option<Target> {
+        if !self.preview_visible() {
+            return None;
+        }
+        let owner = context.viewport_id();
+        let focused = focused_input_viewport(context);
+        let preview_window = scoped_child_viewport_id(context, "preview-window");
+        let controls = scoped_child_viewport_id(context, SALT);
+        let popout_controls = crate::child_view::child_viewport_id(preview_window, SALT);
+        if self.preview_controls.popout.is_some()
+            && (focused == preview_window || focused == popout_controls)
+        {
+            return self
+                .valid_preview_target(self.preview_controls.popout_target)
+                .then_some(self.preview_controls.popout_target);
+        }
+        if focused == controls {
+            return self
+                .valid_preview_target(self.preview_controls.target)
+                .then_some(self.preview_controls.target);
+        }
+        if focused != owner {
+            return None;
+        }
+        if self.pdfium_asset_requested()
+            && !self.preview_asset_popped_out()
+            && self.pdfium_asset.has_focus(context)
+        {
+            return Some(Target::Asset(self.document().key()));
+        }
+        if self.main_preview_controls_target() == Some(Target::Source)
+            && ((self.pdfium_preview_requested() && self.pdfium_preview.has_focus(context))
+                || (self.interactive_preview_requested()
+                    && self.preview_controls.web.focused
+                    && context.memory(|memory| memory.focused().is_none())
+                    && self.explorer.focused_section().is_none()
+                    && !self.terminal_focused(context, owner)))
+        {
+            return Some(Target::Source);
+        }
+        None
+    }
+
+    /// Find belongs to the focused viewer or its controls, even when that
+    /// viewer lives in a separate window and the source remains visible.
+    pub(super) fn open_preview_find(&mut self, context: &egui::Context) -> bool {
+        let Some(target) = self.focused_preview_target(context) else {
+            return false;
+        };
+        self.preview_controls.select(target);
+        self.preview_controls.open = true;
+        self.preview_controls.focus_find = true;
+        context.request_repaint_of(if self.preview_controls_in_popout() {
+            scoped_child_viewport_id(context, "preview-window")
+        } else {
+            context.viewport_id()
+        });
+        true
+    }
+
+    pub(super) fn route_preview_zoom(
+        &mut self,
+        context: &egui::Context,
+        action: PreviewZoomAction,
+    ) -> bool {
+        let focused = self.focused_preview_target(context);
+        if focused.is_none() {
+            let viewport = focused_input_viewport(context);
+            let window = scoped_child_viewport_id(context, "preview-window");
+            let controls = scoped_child_viewport_id(context, SALT);
+            let detached_controls = crate::child_view::child_viewport_id(window, SALT);
+            let obsolete_controls =
+                viewport == controls && !self.valid_preview_target(self.preview_controls.target);
+            let obsolete_window = (viewport == window || viewport == detached_controls)
+                && (self.preview_controls.popout.is_none()
+                    || !self.valid_preview_target(self.preview_controls.popout_target));
+            if obsolete_controls || obsolete_window {
+                // The native child may still report focus during replacement.
+                // Its event belongs to the retired viewer, never a fallback.
+                return true;
+            }
+        }
+        // Images have their own controls and no page focus widget. Preserve
+        // their root-window fallback unless a source viewer owns this input.
+        if focused.is_none()
+            && self.document().kind() == DocumentKind::Image
+            && focused_input_viewport(context) == context.viewport_id()
+        {
+            return false;
+        }
+        let Some(target) = focused
+            .or_else(|| self.main_preview_controls_target())
+            .or_else(|| {
+                self.preview_controls
+                    .popout
+                    .filter(|_| self.valid_preview_target(self.preview_controls.popout_target))
+                    .map(|_| self.preview_controls.popout_target)
+            })
+        else {
+            return false;
+        };
+        self.preview_control_action_for(
+            target,
+            match action {
+                PreviewZoomAction::In => Action::ZoomIn,
+                PreviewZoomAction::Out => Action::ZoomOut,
+                PreviewZoomAction::Reset => Action::Fit,
+            },
+        );
+        true
+    }
+
+    pub(super) fn preview_controls_enabled(&self) -> bool {
+        self.main_preview_controls_target().is_some()
+    }
+
+    pub(super) fn main_preview_controls_open(&self) -> bool {
+        self.preview_controls.open
+            && self.main_preview_controls_target() == Some(self.preview_controls.target)
+    }
+
+    pub(super) fn toggle_main_preview_controls(&mut self) {
+        if let Some(target) = self.main_preview_controls_target() {
+            let changed = self.preview_controls.select(target);
+            self.preview_controls.open = changed || !self.preview_controls.open;
+        }
+    }
+
+    pub(super) fn preview_controls_snapshot(&self) -> Snapshot {
+        match self.preview_controls.target {
+            Target::Source if self.interactive_preview_active() => {
+                let mut snapshot = self.preview_controls.web.clone();
+                snapshot.outline = self
+                    .preview_controls
+                    .native_outline
+                    .iter()
+                    .map(|(title, location)| (title.clone(), location.page))
+                    .collect();
+                snapshot
+            }
+            Target::Source => self.pdfium_preview.controls_snapshot(),
+            Target::Asset(_) => self.pdfium_asset.controls_snapshot(),
+        }
+    }
+    pub(super) fn show_preview_controls(
+        &mut self,
+        context: &egui::Context,
+        in_preview_window: bool,
+    ) {
+        let target_valid = self.refresh_preview_controls_target();
+        let in_popout = self.preview_controls_in_popout();
+        // Each viewer keeps its own root/persistent-window owner. A detached
+        // asset can coexist with the pinned source in the main window.
+        if !target_valid
+            || !self.preview_controls.open
+            || in_popout != in_preview_window
+            || (!in_popout && !self.preview_controls_enabled())
+        {
             ChildViewHost::close(context, SALT);
             return;
         }
-        let native = self.interactive_preview_active();
-        let snapshot = if native {
-            let mut snapshot = self.preview_controls.web.clone();
-            snapshot.outline = self
-                .preview_controls
-                .native_outline
-                .iter()
-                .map(|(title, location)| (title.clone(), location.page))
-                .collect();
-            snapshot
-        } else if self.pdfium_asset_requested() {
-            self.pdfium_asset.controls_snapshot()
-        } else {
-            self.pdfium_preview.controls_snapshot()
-        };
+        let snapshot = self.preview_controls_snapshot();
         let available = self
             .preview_controls
-            .available
+            .available_for(self.preview_controls.target)
             .unwrap_or(context.content_rect());
         let shape = (self.preview_controls.outline, snapshot.outline.len());
         let size = self
@@ -376,11 +664,18 @@ impl EditorApp {
         }
     }
     pub(super) fn restore_preview_window(&mut self, context: &egui::Context) {
+        let controls_detached = self.preview_controls_in_popout();
         if let Some(mode) = self.preview_controls.popout.take() {
             self.view_mode = mode;
-            self.preview_controls.position = None;
-            self.preview_controls.open = false;
-            self.discard_webview();
+            if controls_detached {
+                self.preview_controls.position = None;
+                self.preview_controls.open = false;
+                self.preview_controls.focus_find = false;
+                self.preview_controls.drag_anchor = None;
+            }
+            if self.preview_controls.popout_target == Target::Source {
+                self.discard_webview();
+            }
             let owner = scoped_child_viewport_id(context, "preview-window");
             ChildViewHost::close_viewport(
                 context,
@@ -394,7 +689,7 @@ impl EditorApp {
         if self.preview_controls.popout.is_none() {
             return;
         }
-        if self.tabs.is_empty() {
+        if self.tabs.is_empty() || !self.valid_preview_target(self.preview_controls.popout_target) {
             self.restore_preview_window(context);
             return;
         }
@@ -422,14 +717,20 @@ impl EditorApp {
                         theme::reserve_window_controls(ui);
                         close |= ui.button("Return to document").clicked();
                         if icon_button(ui, UiIcon::Menu, "Preview controls").clicked() {
-                            self.preview_controls.open = !self.preview_controls.open;
+                            let changed = self
+                                .preview_controls
+                                .select(self.preview_controls.popout_target);
+                            self.preview_controls.open = changed || !self.preview_controls.open;
                         }
                     });
                 });
                 egui::CentralPanel::default()
                     .frame(theme::content_panel_frame(ui.style()).inner_margin(0.0))
-                    .show(ui, |ui| self.show_preview(ui, None, false));
-                self.show_preview_controls(ui.ctx());
+                    .show(ui, |ui| match self.preview_controls.popout_target {
+                        Target::Source => self.show_preview(ui, None, false),
+                        Target::Asset(_) => self.show_asset_view(ui),
+                    });
+                self.show_preview_controls(ui.ctx(), true);
             },
         );
         if close {
@@ -437,22 +738,40 @@ impl EditorApp {
         }
     }
     pub(super) fn preview_control_action(&mut self, action: Action) {
+        if !self.refresh_preview_controls_target() {
+            return;
+        }
         if matches!(action, Action::PopOut) {
+            if self.preview_controls.popout.is_some() {
+                return;
+            }
+            self.preview_controls.popout_target = self.preview_controls.target;
             self.preview_controls.popout = Some(self.view_mode);
             self.view_mode = ViewMode::Code;
             self.preview_controls.open = false;
             self.preview_controls.position = None;
-            self.discard_webview();
+            if self.preview_controls.popout_target == Target::Source {
+                self.discard_webview();
+            }
             return;
         }
-        if self.interactive_preview_active() {
+        self.preview_control_action_for(self.preview_controls.target, action);
+    }
+
+    fn preview_control_action_for(&mut self, target: Target, action: Action) {
+        if !self.valid_preview_target(target) {
+            return;
+        }
+        if matches!(target, Target::Asset(_)) {
+            self.pdfium_asset.controls_action(action);
+        } else if self.interactive_preview_active() {
             match &action {
                 Action::Find(query) => self.handle_web_action(
                     &serde_json::json!({"type":"find","query":query}).to_string(),
                 ),
                 Action::Outline(index) => {
                     if let Some((_, location)) = self.preview_controls.native_outline.get(*index) {
-                        self.preview_control_action(Action::Location(location.clone()));
+                        self.preview_control_action_for(target, Action::Location(location.clone()));
                     }
                     return;
                 }
@@ -465,8 +784,6 @@ impl EditorApp {
                     serde_json::to_string(&action).unwrap()
                 ));
             }
-        } else if self.pdfium_asset_requested() {
-            self.pdfium_asset.controls_action(action);
         } else {
             self.pdfium_preview.controls_action(action);
         }
@@ -480,6 +797,559 @@ mod e2e;
 mod tests {
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable as _};
+    #[test]
+    fn find_command_opens_controls_and_focuses_tinymist_query() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        app.view_mode = ViewMode::Split;
+        app.preview = PreviewController::new(false, PreviewPreference::Interactive);
+        app.preview_controls.web.focused = true;
+        let source = app.document().source().to_owned();
+        let mut harness = Harness::builder().build_ui_state(
+            |ui, app: &mut EditorApp| {
+                app.process_native_menu_commands(ui.ctx(), None);
+                if app.preview_controls.open {
+                    app.preview_controls.show(ui, &Snapshot::default());
+                }
+            },
+            app,
+        );
+        harness
+            .state_mut()
+            .enqueue_native_menu_command(AppCommand::Find);
+        harness.run_steps(3);
+        assert!(harness.state().preview_controls.open);
+        assert!(!harness.state().find_bar.visible);
+        harness.get_by_label("Find in preview").type_text("needle");
+        harness.run_steps(3);
+        assert_eq!(harness.state().preview_controls.query, "needle");
+        assert_eq!(harness.state().document().source(), &source);
+    }
+
+    #[test]
+    fn stale_native_focus_does_not_steal_find_from_the_code_editor() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        app.preview = PreviewController::new(false, PreviewPreference::Interactive);
+        app.preview_controls.web.focused = true;
+        let mut harness = Harness::builder().build_ui_state(
+            |ui, app: &mut EditorApp| app.process_native_menu_commands(ui.ctx(), None),
+            app,
+        );
+        let editor = source_editor_id(&harness.ctx);
+        harness
+            .ctx
+            .memory_mut(|memory| memory.request_focus(editor));
+        harness
+            .state_mut()
+            .enqueue_native_menu_command(AppCommand::Find);
+        harness.run_steps(2);
+        assert!(!harness.state().preview_controls.open);
+        assert!(harness.state().find_bar.visible);
+    }
+
+    #[test]
+    fn preview_window_and_its_controls_own_find_without_source_focus() {
+        for controls_focused in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let context = egui::Context::default();
+            let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+            app.preview_controls.popout = Some(ViewMode::Split);
+            app.view_mode = ViewMode::Code;
+            let preview = scoped_child_viewport_id(&context, "preview-window");
+            let focused = if controls_focused {
+                crate::child_view::child_viewport_id(preview, SALT)
+            } else {
+                preview
+            };
+            let mut harness = Harness::builder().build_ui_state(
+                |ui, app: &mut EditorApp| app.process_native_menu_commands(ui.ctx(), None),
+                app,
+            );
+            for (viewport, is_focused) in [(egui::ViewportId::ROOT, false), (focused, true)] {
+                harness
+                    .input_mut()
+                    .viewports
+                    .entry(viewport)
+                    .or_default()
+                    .focused = Some(is_focused);
+            }
+            harness
+                .state_mut()
+                .enqueue_native_menu_command(AppCommand::Find);
+            harness.run_steps(2);
+            assert!(
+                harness.state().preview_controls.open,
+                "controls focused: {controls_focused}"
+            );
+            assert!(harness.state().preview_controls.focus_find);
+            assert!(!harness.state().find_bar.visible);
+        }
+    }
+
+    fn pinned_source_with_asset(
+        context: &egui::Context,
+        root: &Path,
+        preference: PreviewPreference,
+    ) -> EditorApp {
+        let mut app = EditorApp::dormant_for_tests(context, root.into());
+        app.snapshot_scene = None;
+        app.document_mut().replace_loaded_unprojected(
+            "= Pinned source\n".into(),
+            root.join("source.typ"),
+            DocumentKind::Typst,
+            None,
+        );
+        app.prepare_asset_tab_fixture(context, root.join("asset.pdf"), DocumentKind::Pdf);
+        app.preview = PreviewController::new(false, preference);
+        if preference == PreviewPreference::Interactive {
+            let generation = crate::tinymist::Generation(1);
+            app.preview.connection.start(generation);
+            app.preview.connection.initialized(generation);
+            app.preview.connection.connect(
+                generation,
+                url::Url::parse("http://127.0.0.1:23625").unwrap(),
+            );
+            app.preview.webview_state = ServiceState::Ready("loaded".into());
+            app.preview_controls.web.zoom = 2.0;
+        }
+        app
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn focused_pdf_asset_find_targets_the_asset_beside_a_pinned_tinymist_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let app =
+            pinned_source_with_asset(&context, directory.path(), PreviewPreference::Interactive);
+        assert!(app.source_preview_available());
+        assert!(app.interactive_preview_active());
+        let mut harness = Harness::builder().build_ui_state(
+            |ui, app: &mut EditorApp| app.process_native_menu_commands(ui.ctx(), None),
+            app,
+        );
+        let ctx = harness.ctx.clone();
+        harness
+            .state_mut()
+            .pdfium_asset
+            .focus_for_tests(&ctx, "asset");
+        harness
+            .state_mut()
+            .enqueue_native_menu_command(AppCommand::Find);
+        harness.run_steps(2);
+        assert!(harness.state().preview_controls.open);
+        assert!(!harness.state().find_bar.visible);
+        let asset_before = harness.state().pdfium_asset.controls_snapshot().zoom;
+        let source_before = harness.state().pdfium_preview.controls_snapshot().zoom;
+        harness.state_mut().preview_control_action(Action::ZoomIn);
+        assert!(harness.state().pdfium_asset.controls_snapshot().zoom > asset_before);
+        assert_eq!(
+            harness.state().pdfium_preview.controls_snapshot().zoom,
+            source_before
+        );
+        assert_eq!(harness.state().preview_controls.web.zoom, 2.0);
+    }
+
+    #[test]
+    fn preview_zoom_shortcut_targets_the_focused_source_beside_a_pdf_asset() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let app = pinned_source_with_asset(&context, directory.path(), PreviewPreference::Pdfium);
+        assert!(app.source_preview_available());
+        let mut harness = Harness::builder().build_ui_state(
+            |ui, app: &mut EditorApp| app.handle_shortcuts(ui.ctx(), None),
+            app,
+        );
+        let ctx = harness.ctx.clone();
+        harness
+            .state_mut()
+            .pdfium_preview
+            .focus_for_tests(&ctx, "source");
+        let asset_before = harness.state().pdfium_asset.controls_snapshot().zoom;
+        let source_before = harness.state().pdfium_preview.controls_snapshot().zoom;
+        harness.key_press_modifiers(Modifiers::COMMAND | Modifiers::ALT, egui::Key::Plus);
+        harness.run_steps(2);
+        assert!(harness.state().pdfium_preview.controls_snapshot().zoom > source_before);
+        assert_eq!(
+            harness.state().pdfium_asset.controls_snapshot().zoom,
+            asset_before
+        );
+    }
+
+    #[test]
+    fn preview_zoom_with_code_focus_reaches_the_only_detached_viewer() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        app.preview = PreviewController::new(false, PreviewPreference::Pdfium);
+        app.view_mode = ViewMode::Split;
+        app.preview_control_action(Action::PopOut);
+        let mut harness = Harness::builder().build_ui_state(
+            |ui, app: &mut EditorApp| app.handle_shortcuts(ui.ctx(), None),
+            app,
+        );
+        let editor = source_editor_id(&harness.ctx);
+        harness
+            .ctx
+            .memory_mut(|memory| memory.request_focus(editor));
+        harness.key_press_modifiers(Modifiers::COMMAND | Modifiers::ALT, egui::Key::Plus);
+        harness.run_steps(2);
+        assert_eq!(harness.state().pdfium_preview.controls_snapshot().zoom, 1.2);
+        assert!(harness.state().preview_source_popped_out());
+    }
+
+    #[test]
+    fn focused_source_and_asset_controls_keep_their_own_snapshots_and_bounds() {
+        for preference in [PreviewPreference::Pdfium, PreviewPreference::Interactive] {
+            if preference == PreviewPreference::Interactive
+                && !cfg!(any(target_os = "macos", target_os = "windows"))
+            {
+                continue;
+            }
+            let directory = tempfile::tempdir().unwrap();
+            let context = egui::Context::default();
+            let mut app = pinned_source_with_asset(&context, directory.path(), preference);
+            app.pdfium_preview.controls_action(Action::ZoomIn);
+            let key = app.document().key();
+            let source_rect =
+                Rect::from_min_size(egui::pos2(600.0, 100.0), egui::vec2(600.0, 700.0));
+            let asset_rect = Rect::from_min_size(egui::pos2(0.0, 100.0), egui::vec2(600.0, 700.0));
+            app.preview_controls.available = Some(source_rect);
+            app.preview_controls.asset_available = Some((key, asset_rect));
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(1400.0, 900.0))
+                .build_ui_state(
+                    |ui, app: &mut EditorApp| {
+                        app.process_native_menu_commands(ui.ctx(), None);
+                        app.show_preview_controls(ui.ctx(), false);
+                    },
+                    app,
+                );
+            let ctx = harness.ctx.clone();
+            harness
+                .state_mut()
+                .pdfium_asset
+                .focus_for_tests(&ctx, "asset");
+            harness
+                .state_mut()
+                .enqueue_native_menu_command(AppCommand::Find);
+            harness.run_steps(3);
+            assert_eq!(harness.state().preview_controls.target, Target::Asset(key));
+            assert_eq!(harness.state().preview_controls_snapshot().zoom, 1.0);
+            assert_eq!(
+                harness.state().preview_controls.position,
+                Some(asset_rect.min + egui::vec2(8.0, 8.0))
+            );
+            if preference == PreviewPreference::Pdfium {
+                harness
+                    .state_mut()
+                    .pdfium_preview
+                    .focus_for_tests(&ctx, "source");
+            } else {
+                let focused = ctx.memory(|memory| memory.focused());
+                if let Some(id) = focused {
+                    ctx.memory_mut(|memory| memory.surrender_focus(id));
+                }
+                harness.state_mut().preview_controls.web.focused = true;
+            }
+            harness
+                .state_mut()
+                .enqueue_native_menu_command(AppCommand::Find);
+            harness.run_steps(3);
+            assert_eq!(harness.state().preview_controls.target, Target::Source);
+            assert_eq!(
+                harness.state().preview_controls_snapshot().zoom,
+                if preference == PreviewPreference::Interactive {
+                    2.0
+                } else {
+                    1.2
+                }
+            );
+            assert_eq!(
+                harness.state().preview_controls.position,
+                Some(source_rect.min + egui::vec2(8.0, 8.0))
+            );
+            assert_eq!(
+                harness
+                    .state()
+                    .preview_controls
+                    .available_for(Target::Asset(key)),
+                Some(asset_rect)
+            );
+        }
+    }
+
+    #[test]
+    fn detached_asset_preserves_the_pinned_source_and_their_separate_controls_owners() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app =
+            pinned_source_with_asset(&context, directory.path(), PreviewPreference::Pdfium);
+        app.view_mode = ViewMode::Split;
+        let key = app.document().key();
+        app.preview_controls.select(Target::Asset(key));
+        app.preview_control_action(Action::PopOut);
+        assert!(app.preview_asset_popped_out());
+        assert!(!app.preview_source_popped_out());
+        assert_eq!(
+            workspace_view::content_view(
+                false,
+                app.document().kind(),
+                app.source_preview_available(),
+                app.view_mode,
+                app.preview_source_popped_out()
+            ),
+            workspace_view::ContentView::SplitAsset
+        );
+        assert!(app.preview_controls_enabled());
+        app.toggle_main_preview_controls();
+        assert_eq!(app.preview_controls.target, Target::Source);
+        assert!(app.main_preview_controls_open());
+        assert!(!app.preview_controls_in_popout());
+        let mut harness = Harness::builder().build_ui_state(
+            |ui, app: &mut EditorApp| app.process_native_menu_commands(ui.ctx(), None),
+            app,
+        );
+        let preview = scoped_child_viewport_id(&harness.ctx, "preview-window");
+        for (viewport, focused) in [(egui::ViewportId::ROOT, false), (preview, true)] {
+            harness
+                .input_mut()
+                .viewports
+                .entry(viewport)
+                .or_default()
+                .focused = Some(focused);
+        }
+        harness
+            .state_mut()
+            .enqueue_native_menu_command(AppCommand::Find);
+        harness.run_steps(2);
+        assert_eq!(harness.state().preview_controls.target, Target::Asset(key));
+        assert!(harness.state().preview_controls_in_popout());
+        assert!(!harness.state().main_preview_controls_open());
+        harness.state_mut().preview_control_action(Action::ZoomIn);
+        assert_eq!(harness.state().pdfium_asset.controls_snapshot().zoom, 1.2);
+        assert_eq!(harness.state().pdfium_preview.controls_snapshot().zoom, 1.0);
+    }
+
+    #[test]
+    fn restoring_a_detached_viewer_preserves_the_other_viewers_controls_and_lifecycle() {
+        for detached_source in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let context = egui::Context::default();
+            let mut app =
+                pinned_source_with_asset(&context, directory.path(), PreviewPreference::Pdfium);
+            app.view_mode = ViewMode::Split;
+            let key = app.document().key();
+            app.preview_controls.select(if detached_source {
+                Target::Source
+            } else {
+                Target::Asset(key)
+            });
+            app.preview_control_action(Action::PopOut);
+            app.toggle_main_preview_controls();
+            let root_target = app.preview_controls.target;
+            app.preview_controls.query = "root-query".into();
+            app.preview_controls.position = Some(egui::pos2(700.0, 140.0));
+            let root = context.viewport_id();
+            let main_controls = scoped_child_viewport_id(&context, SALT);
+            let window = scoped_child_viewport_id(&context, "preview-window");
+            let detached_controls = crate::child_view::child_viewport_id(window, SALT);
+            let main_token =
+                crate::window_host::show(&context, main_controls, root, true, false).unwrap();
+            let window_token =
+                crate::window_host::show(&context, window, root, true, false).unwrap();
+            let detached_token =
+                crate::window_host::show(&context, detached_controls, window, true, false).unwrap();
+            app.restore_preview_window(&context);
+            assert_eq!(app.preview_controls.target, root_target);
+            assert!(
+                app.preview_controls.open,
+                "root controls for {root_target:?} must stay open"
+            );
+            assert_eq!(app.preview_controls.query, "root-query");
+            assert_eq!(
+                app.preview_controls.position,
+                Some(egui::pos2(700.0, 140.0))
+            );
+            assert_eq!(app.document().key(), key);
+            assert!(!crate::window_host::live(&context, window_token));
+            assert!(!crate::window_host::live(&context, detached_token));
+            context
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(1400.0, 900.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| app.show_preview_controls(ui.ctx(), false),
+                )
+                .drop_without_applying_deltas();
+            assert!(crate::window_host::live(&context, main_token));
+            assert!(app.preview_controls.open);
+            assert!(!app.preview_controls_in_popout());
+        }
+    }
+
+    #[test]
+    fn preview_zoom_without_source_focus_preserves_image_zoom_beside_a_pinned_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app =
+            pinned_source_with_asset(&context, directory.path(), PreviewPreference::Pdfium);
+        app.document_mut().replace_loaded_unprojected(
+            String::new(),
+            directory.path().join("image.png"),
+            DocumentKind::Image,
+            None,
+        );
+        assert!(app.source_preview_available());
+        let mut harness = Harness::builder().build_ui_state(
+            |ui, app: &mut EditorApp| {
+                // Keep the page owner registered through the modifier/key
+                // frames, as a rendered PDF page does in the real viewer.
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(180.0, 24.0), Sense::hover());
+                let response = ui.interact(
+                    rect,
+                    pdfium_view::PdfiumView::page_focus_id_for_tests("source"),
+                    Sense::click(),
+                );
+                response.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Source preview page")
+                });
+                if response.clicked() {
+                    response.request_focus();
+                }
+                app.handle_shortcuts(ui.ctx(), None);
+            },
+            app,
+        );
+        harness.key_press_modifiers(Modifiers::COMMAND | Modifiers::ALT, egui::Key::Plus);
+        harness.run_steps(2);
+        assert_eq!(
+            harness.state().asset_preview.requested_zoom,
+            Some(METRICS.preview.zoom_step)
+        );
+        assert_eq!(harness.state().pdfium_preview.controls_snapshot().zoom, 1.0);
+        let ctx = harness.ctx.clone();
+        harness
+            .state_mut()
+            .pdfium_preview
+            .focus_for_tests(&ctx, "source");
+        harness.key_press_modifiers(Modifiers::COMMAND | Modifiers::ALT, egui::Key::Plus);
+        harness.run_steps(2);
+        assert_eq!(harness.state().pdfium_preview.controls_snapshot().zoom, 1.2);
+        assert_eq!(
+            harness.state().asset_preview.requested_zoom,
+            Some(METRICS.preview.zoom_step)
+        );
+    }
+
+    #[test]
+    fn obsolete_controls_and_popout_zoom_events_are_consumed_without_retargeting() {
+        for replacement in [DocumentKind::Pdf, DocumentKind::Image] {
+            for child in ["controls", "preview-window", "preview-controls"] {
+                let directory = tempfile::tempdir().unwrap();
+                let context = egui::Context::default();
+                let mut app =
+                    pinned_source_with_asset(&context, directory.path(), PreviewPreference::Pdfium);
+                app.preview_controls
+                    .select(Target::Asset(app.document().key()));
+                if child != "controls" {
+                    app.preview_control_action(Action::PopOut);
+                }
+                app.preview_controls.open = true;
+                app.document_mut().replace_loaded_unprojected(
+                    String::new(),
+                    directory.path().join("replacement"),
+                    replacement,
+                    None,
+                );
+                assert!(app.source_preview_available());
+                let mut harness = Harness::builder().build_ui_state(
+                    |ui, state: &mut (EditorApp, bool, Option<bool>)| {
+                        if state.1 {
+                            state.1 = false;
+                            let handled =
+                                state.0.route_preview_zoom(ui.ctx(), PreviewZoomAction::In);
+                            if !handled {
+                                image_view::request_zoom(
+                                    &mut state.0.asset_preview,
+                                    PreviewZoomAction::In,
+                                );
+                            }
+                            state.2 = Some(handled);
+                        }
+                    },
+                    (app, false, None),
+                );
+                let preview = scoped_child_viewport_id(&harness.ctx, "preview-window");
+                let focused = match child {
+                    "controls" => scoped_child_viewport_id(&harness.ctx, SALT),
+                    "preview-window" => preview,
+                    _ => crate::child_view::child_viewport_id(preview, SALT),
+                };
+                for (viewport, focused) in [(egui::ViewportId::ROOT, false), (focused, true)] {
+                    harness
+                        .input_mut()
+                        .viewports
+                        .entry(viewport)
+                        .or_default()
+                        .focused = Some(focused);
+                }
+                harness.state_mut().1 = true;
+                harness.run_steps(2);
+                assert_eq!(harness.state().2, Some(true));
+                assert_eq!(
+                    harness.state().0.pdfium_preview.controls_snapshot().zoom,
+                    1.0,
+                    "{child} / {replacement:?}"
+                );
+                assert_eq!(harness.state().0.pdfium_asset.controls_snapshot().zoom, 1.0);
+                assert_eq!(harness.state().0.asset_preview.requested_zoom, None);
+            }
+        }
+    }
+
+    #[test]
+    fn obsolete_asset_control_actions_and_popouts_retire_on_document_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app =
+            pinned_source_with_asset(&context, directory.path(), PreviewPreference::Pdfium);
+        let key = app.document().key();
+        app.preview_controls.asset_available = Some((
+            key,
+            Rect::from_min_size(egui::pos2(40.0, 80.0), egui::vec2(500.0, 600.0)),
+        ));
+        app.preview_controls.select(Target::Asset(key));
+        app.preview_control_action(Action::PopOut);
+        app.preview_controls.open = true;
+        app.document_mut().replace_loaded_unprojected(
+            String::new(),
+            directory.path().join("other.pdf"),
+            DocumentKind::Pdf,
+            None,
+        );
+        let replaced = app.document().key();
+        assert_ne!(key, replaced);
+        app.preview_control_action(Action::ZoomIn);
+        assert!(!app.preview_controls.open);
+        assert_eq!(app.pdfium_asset.controls_snapshot().zoom, 1.0);
+        assert_eq!(app.pdfium_preview.controls_snapshot().zoom, 1.0);
+        app.show_preview_window(&context);
+        assert!(app.preview_controls.popout.is_none());
+        assert_eq!(app.document().key(), replaced);
+        assert_eq!(
+            app.preview_controls.available_for(Target::Asset(replaced)),
+            None
+        );
+    }
+
     #[test]
     fn outline_uses_compiled_page_positions_and_bounds_untrusted_trees() {
         let mut controls = Controls::default();
@@ -606,6 +1476,21 @@ mod tests {
         assert!(!harness.state().0.open);
     }
     #[test]
+    fn visible_pdf_controls_are_available_with_a_retained_code_mode() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        app.document_mut().replace_untitled_kind(DocumentKind::Pdf);
+        app.view_mode = ViewMode::Code;
+        assert!(app.preview_visible());
+        assert!(app.preview_controls_enabled());
+        app.preview_controls.target = Target::Asset(app.document().key());
+        app.preview_controls.popout_target = app.preview_controls.target;
+        app.preview_controls.popout = Some(ViewMode::Code);
+        assert!(!app.preview_controls_enabled());
+    }
+
+    #[test]
     fn toolbar_toggle_is_next_to_mitex_and_disabled_in_code_mode() {
         for kind in [DocumentKind::Typst, DocumentKind::Tex] {
             let directory = tempfile::tempdir().unwrap();
@@ -665,6 +1550,70 @@ mod tests {
 #[cfg(test)]
 mod drag_tests {
     use super::*;
+    #[test]
+    fn stationary_pointer_does_not_push_a_moving_popup() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(380.0, 300.0))
+            .build_ui_state(
+                |ui, controls: &mut Controls| {
+                    ui.ctx().set_embed_viewports(false);
+                    controls.show(ui, &Snapshot::default());
+                },
+                Controls {
+                    position: Some(egui::pos2(100.0, 200.0)),
+                    ..Default::default()
+                },
+            );
+        harness
+            .input_mut()
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .inner_rect = Some(Rect::from_min_size(
+            egui::pos2(100.0, 200.0),
+            egui::vec2(380.0, 300.0),
+        ));
+        harness.run_steps(3);
+        let start = harness.get_by_label("Preview").rect().center();
+        harness.hover_at(start);
+        harness.run_steps(1);
+        harness.drag_at(start);
+        harness.run_steps(1);
+        harness.hover_at(start + egui::vec2(30.0, 40.0));
+        harness.run_steps(2);
+        let moved = harness.state().position.unwrap();
+        assert_eq!(moved, egui::pos2(130.0, 240.0));
+        harness
+            .input_mut()
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .inner_rect = Some(Rect::from_min_size(moved, egui::vec2(380.0, 300.0)));
+        harness.run_steps(6);
+        assert_eq!(harness.state().position, Some(moved));
+    }
+
+    #[test]
+    fn clamped_popup_does_not_schedule_movement_for_an_unchanged_pointer() {
+        let mut anchor = DragAnchor {
+            pointer_start: egui::pos2(20.0, 30.0),
+            window_start: egui::pos2(10.0, 10.0),
+            pointer_last: egui::pos2(20.0, 30.0),
+        };
+        let outside = egui::pos2(500.0, 600.0);
+        assert_eq!(anchor.move_to(outside), Some(egui::pos2(490.0, 580.0)));
+        // Parent clamping can alter the actual window position. It does not
+        // turn a repeated pointer sample into another movement request.
+        for _ in 0..8 {
+            assert_eq!(anchor.move_to(outside), None);
+        }
+        assert_eq!(
+            anchor.move_to(egui::pos2(25.0, 35.0)),
+            Some(egui::pos2(15.0, 15.0))
+        );
+    }
+
     #[test]
     fn moving_viewport_does_not_reduce_pointer_travel() {
         let anchor = (egui::pos2(120.0, 220.0), egui::pos2(100.0, 200.0));

@@ -23,13 +23,18 @@ if command == "preflight" {
 }
 guard args.count >= 2, let pid = Int32(args[1]),
       let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else { fail("target process is not running") }
+if command == "pointer-state" {
+    let point = CGEvent(source: nil)?.location ?? .zero
+    emit(["left": CGEventSource.buttonState(.combinedSessionState, button: .left),
+          "x": point.x, "y": point.y]); exit(0)
+}
 if command == "activate" {
     app.activate(options: [.activateAllWindows])
     let deadline = Date().addingTimeInterval(3)
     while NSWorkspace.shared.frontmostApplication?.processIdentifier != pid && Date() < deadline {
         RunLoop.current.run(until: Date().addingTimeInterval(0.02))
     }
-    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { fail("target app did not activate") }
+guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { fail("target app did not activate") }
     emit(["active": true]); exit(0)
 }
 func nativeWindows() -> [AXUIElement] {
@@ -297,6 +302,23 @@ if command == "watch-copy" {
       // Preserve distinct down/up delivery across native event-loop turns.
       Thread.sleep(forTimeInterval: 0.05)
     }
+} else if ["drag-start", "drag-move", "drag-end"].contains(command) {
+    guard args.count == 4, let x = Double(args[2]), let y = Double(args[3]),
+          x.isFinite, y.isFinite else { fail("drag phase requires finite coordinates") }
+    let point = CGPoint(x: x, y: y)
+    if command == "drag-start" {
+        guard let approach = CGEvent(mouseEventSource: source, mouseType: .mouseMoved,
+                                    mouseCursorPosition: point, mouseButton: .left) else { fail("cannot approach drag start") }
+        approach.flags = []; approach.post(tap: .cghidEventTap)
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+    let type: CGEventType = command == "drag-start" ? .leftMouseDown
+        : command == "drag-move" ? .leftMouseDragged : .leftMouseUp
+    guard let event = CGEvent(mouseEventSource: source, mouseType: type,
+                             mouseCursorPosition: point, mouseButton: .left) else { fail("cannot create drag phase") }
+    event.flags = []; event.setIntegerValueField(.mouseEventClickState, value: 1)
+    event.post(tap: .cghidEventTap)
+    Thread.sleep(forTimeInterval: 0.05)
 } else if command == "drag" {
     guard args.count == 6,
           let x1 = Double(args[2]), let y1 = Double(args[3]),

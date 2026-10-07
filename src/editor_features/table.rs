@@ -290,6 +290,9 @@ impl EditableTable {
         candidate.columns = alignments.len();
         candidate.cells = cells;
         candidate.cell_options.clear();
+        candidate.rules.clear();
+        candidate.rules_revision = candidate.rules_revision.wrapping_add(1);
+        candidate.reset_column_widths();
         for r in 0..candidate.row_count() {
             for (c, alignment) in alignments.iter().enumerate() {
                 let value = match alignment {
@@ -369,12 +372,30 @@ impl TableSelection {
     }
 }
 
-/// Horizontal rules do not occupy cells. Keep them at their row boundary.
-pub(super) fn horizontal_rule(
-    node: &LinkedNode<'_>,
-    source: &str,
-    kind: TableKind,
-) -> Option<String> {
+/// Rules do not occupy cells. Preserve their source, ordering and explicit
+/// coordinates; only implicit horizontal rules depend on the placement cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TableAxis {
+    Horizontal,
+    Vertical,
+}
+
+impl TableAxis {
+    fn helper(self) -> &'static str {
+        match self {
+            Self::Horizontal => "hline",
+            Self::Vertical => "vline",
+        }
+    }
+    fn coordinate(self) -> &'static str {
+        match self {
+            Self::Horizontal => "y",
+            Self::Vertical => "x",
+        }
+    }
+}
+
+pub(super) fn rule_axis(node: &LinkedNode<'_>, kind: TableKind) -> Option<TableAxis> {
     let call = node.get().cast::<ast::FuncCall>()?;
     let ast::Expr::FieldAccess(access) = call.callee() else {
         return None;
@@ -382,10 +403,285 @@ pub(super) fn horizontal_rule(
     let ast::Expr::Ident(target) = access.target() else {
         return None;
     };
-    if target.as_str() != kind.callee() || access.field().as_str() != "hline" {
+    if target.as_str() != kind.callee() {
         return None;
     }
-    Some(source.get(node.range())?.to_owned())
+    match access.field().as_str() {
+        "hline" => Some(TableAxis::Horizontal),
+        "vline" => Some(TableAxis::Vertical),
+        _ => None,
+    }
+}
+
+pub(super) fn rule_has_explicit_position(node: &LinkedNode<'_>, axis: TableAxis) -> bool {
+    let Some(call) = node.get().cast::<ast::FuncCall>() else {
+        return false;
+    };
+    call.args().items().any(|arg| matches!(arg, ast::Arg::Named(named) if named.name().as_str() == axis.coordinate() && !matches!(named.expr(), ast::Expr::Auto(_))))
+}
+
+pub(super) fn parse_column_widths(argument: &LinkedNode<'_>, source: &str) -> Option<Vec<String>> {
+    let array = argument
+        .children()
+        .find(|node| node.kind() == SyntaxKind::Array)?;
+    array
+        .children()
+        .filter(|node| node.get().cast::<ast::ArrayItem>().is_some())
+        .map(|node| {
+            let ast::ArrayItem::Pos(_) = node.get().cast::<ast::ArrayItem>()? else {
+                return None;
+            };
+            Some(source.get(node.range())?.to_owned())
+        })
+        .collect()
+}
+
+impl EditableTable {
+    pub(crate) fn column_widths(&self) -> Vec<String> {
+        self.column_widths
+            .clone()
+            .unwrap_or_else(|| vec!["auto".into(); self.columns])
+    }
+
+    pub(crate) fn set_column_widths(&mut self, widths: &[String]) -> Result<(), String> {
+        if widths.len() != self.columns {
+            return Err(format!(
+                "Enter one width for each of the {} columns",
+                self.columns
+            ));
+        }
+        for width in widths {
+            let source = format!("#table(columns: ({width},))");
+            let parsed = Source::detached(source);
+            let root = LinkedNode::new(parsed.root());
+            let valid = !has_descendant_kind(&root, SyntaxKind::Error)
+                && find_first_kind(&root, SyntaxKind::FuncCall)
+                    .and_then(|call| {
+                        let args = call
+                            .children()
+                            .find(|node| node.kind() == SyntaxKind::Args)?;
+                        let named = args.children().find(|node| {
+                            matches!(node.get().cast::<ast::Arg>(), Some(ast::Arg::Named(_)))
+                        })?;
+                        let list = parse_column_widths(&named, parsed.text())?;
+                        (list.len() == 1 && list[0].trim() == width.trim()).then_some(())
+                    })
+                    .is_some();
+            if !valid {
+                return Err("Each column width must be one Typst expression, for example auto, 25%, 2cm or 1fr".into());
+            }
+        }
+        self.column_widths = Some(widths.to_vec());
+        self.write_column_widths();
+        Ok(())
+    }
+
+    pub(crate) fn reset_column_widths(&mut self) {
+        self.column_widths = None;
+        self.options.retain(|option| option.name != "columns");
+        self.original_columns = self.columns;
+        self.columns_were_explicit = self.columns > 1;
+        if self.columns > 1 {
+            self.options.push(PreservedTableOption {
+                name: "columns".into(),
+                source: format!("columns: {}", self.columns),
+            });
+        }
+    }
+
+    pub(super) fn write_column_widths(&mut self) {
+        let Some(widths) = &self.column_widths else {
+            return;
+        };
+        let values = widths.join(", ");
+        let source = format!(
+            "columns: ({values}{})",
+            if widths.len() == 1 { "," } else { "" }
+        );
+        if let Some(option) = self
+            .options
+            .iter_mut()
+            .find(|option| option.name == "columns")
+        {
+            option.source = source;
+        } else {
+            self.options.insert(
+                0,
+                PreservedTableOption {
+                    name: "columns".into(),
+                    source,
+                },
+            );
+        }
+        self.original_columns = self.columns;
+        self.columns_were_explicit = true;
+    }
+
+    /// Stroke source for a simple full edge. A partial/dynamic rule remains
+    /// available in source mode and is never silently converted to a full edge.
+    pub(crate) fn boundary_rule(&self, axis: TableAxis, boundary: usize) -> Option<String> {
+        self.rules.iter().rev().find_map(|(at, source)| {
+            let rule = rule_details(source, self.kind, *at, self.row_count())?;
+            (rule.axis == axis && rule.boundary == Some(boundary) && rule.simple)
+                .then(|| rule.stroke.unwrap_or_else(|| "1pt + black".into()))
+        })
+    }
+
+    pub(crate) fn boundary_rules_key(&self) -> (u64, usize, usize) {
+        (self.rules_revision, self.row_count(), self.columns)
+    }
+
+    pub(crate) fn boundary_rules(&self) -> Vec<(TableAxis, usize, String)> {
+        self.rules
+            .iter()
+            .filter_map(|(at, source)| {
+                let rule = rule_details(source, self.kind, *at, self.row_count())?;
+                if !rule.simple {
+                    return None;
+                }
+                Some((
+                    rule.axis,
+                    rule.boundary?,
+                    rule.stroke.unwrap_or_else(|| "1pt + black".into()),
+                ))
+            })
+            .collect()
+    }
+
+    pub(crate) fn set_boundary_rule(
+        &mut self,
+        axis: TableAxis,
+        boundary: usize,
+        stroke: Option<&str>,
+    ) -> Result<(), String> {
+        let limit = if axis == TableAxis::Horizontal {
+            self.row_count()
+        } else {
+            self.columns
+        };
+        if boundary > limit {
+            return Err("Select an edge inside the table".into());
+        }
+        let mut indexes = Vec::new();
+        for (index, (at, source)) in self.rules.iter().enumerate() {
+            let Some(rule) = rule_details(source, self.kind, *at, self.row_count()) else {
+                continue;
+            };
+            if rule.axis == axis && rule.boundary == Some(boundary) {
+                if !rule.simple {
+                    return Err("This edge has partial or positioned rules. Edit them in table source to retain their options".into());
+                }
+                indexes.push(index);
+            }
+        }
+        let replacement = stroke.map(|stroke| {
+            format!(
+                "{}.{}({}: {boundary}, stroke: {stroke})",
+                self.kind.callee(),
+                axis.helper(),
+                axis.coordinate()
+            )
+        });
+        if let Some(source) = &replacement {
+            let parsed = Source::detached(format!("#{source}"));
+            let root = LinkedNode::new(parsed.root());
+            let valid = find_first_kind(&root, SyntaxKind::FuncCall).is_some_and(|node| {
+                if node.range() != (1..source.len() + 1) {
+                    return false;
+                }
+                let Some(args) = node
+                    .children()
+                    .find(|child| child.kind() == SyntaxKind::Args)
+                else {
+                    return false;
+                };
+                let arguments: Vec<_> = args
+                    .children()
+                    .filter_map(|child| child.get().cast::<ast::Arg>().map(|arg| (child, arg)))
+                    .collect();
+                arguments.len() == 2
+                    && arguments.iter().any(|(child, arg)| {
+                        matches!(arg, ast::Arg::Named(named) if named.name().as_str() == "stroke")
+                            && parsed
+                                .text()
+                                .get(child.range())
+                                .and_then(|raw| raw.split_once(':'))
+                                .is_some_and(|(_, value)| {
+                                    Some(value.trim()) == stroke.map(str::trim)
+                                })
+                    })
+            });
+            if has_descendant_kind(&root, SyntaxKind::Error) || !valid {
+                return Err(
+                    "Enter one Typst stroke expression, for example none, red or 0.5pt + blue"
+                        .into(),
+                );
+            }
+        }
+        for index in indexes.into_iter().rev() {
+            self.rules.remove(index);
+        }
+        if let Some(source) = replacement {
+            self.rules.push((usize::MAX, source));
+        }
+        self.rules_revision = self.rules_revision.wrapping_add(1);
+        Ok(())
+    }
+}
+
+struct RuleDetails {
+    axis: TableAxis,
+    boundary: Option<usize>,
+    stroke: Option<String>,
+    simple: bool,
+}
+fn rule_details(source: &str, kind: TableKind, at: usize, rows: usize) -> Option<RuleDetails> {
+    let wrapper = format!("#{source}");
+    let parsed = Source::detached(&wrapper);
+    let root = LinkedNode::new(parsed.root());
+    let node = find_first_kind(&root, SyntaxKind::FuncCall)?;
+    let axis = rule_axis(&node, kind)?;
+    let call = node.get().cast::<ast::FuncCall>()?;
+    let mut result = RuleDetails {
+        axis,
+        boundary: (axis == TableAxis::Horizontal).then_some(if at == usize::MAX {
+            rows
+        } else {
+            at
+        }),
+        stroke: None,
+        simple: true,
+    };
+    for argument in node
+        .children()
+        .find(|child| child.kind() == SyntaxKind::Args)?
+        .children()
+    {
+        let Some(arg) = argument.get().cast::<ast::Arg>() else {
+            continue;
+        };
+        let ast::Arg::Named(named) = arg else {
+            result.simple = false;
+            continue;
+        };
+        let value = wrapper.get(argument.range())?.split_once(':')?.1.trim();
+        match named.name().as_str() {
+            name if name == axis.coordinate() => {
+                result.boundary = match named.expr() {
+                    ast::Expr::Int(value) => usize::try_from(value.get()).ok(),
+                    ast::Expr::Auto(_) => result.boundary,
+                    _ => None,
+                };
+            }
+            "stroke" => result.stroke = Some(value.to_owned()),
+            _ => result.simple = false,
+        }
+    }
+    // Keep malformed future helper signatures source-only.
+    if call.args().items().count() == 0 && axis == TableAxis::Vertical {
+        result.simple = false;
+    }
+    Some(result)
 }
 
 #[cfg(test)]
@@ -394,6 +690,172 @@ mod tests {
     fn parse(source: &str) -> EditableTable {
         editable_table_at(source, 2).unwrap()
     }
+    #[test]
+    fn source_drafts_preserve_dynamic_cells_and_incomplete_options_for_repair() {
+        let mut table = editable_table_at("#table(columns: 2, [A], [B])", 2).unwrap();
+        table.cells[0][0] = "#let value = 1; #value".into();
+        assert!(table.render_replacement().is_err());
+        let draft = table.render_source_draft().unwrap();
+        let target = table_source_at(&format!("#{draft}"), 2).unwrap();
+        assert!(target.source_edit(&draft).is_ok());
+        table.set_style(None, "fill", Some("rgb("));
+        let draft = table.render_source_draft().unwrap();
+        assert!(target.source_edit(&draft).is_err());
+        table.cells[0].push("Outside geometry".into());
+        assert!(table.render_source_draft().is_err());
+    }
+
+    #[test]
+    fn vertical_and_explicit_horizontal_rules_remain_editable() {
+        let source = "#table(columns: 2, table.vline(x: 1, stroke: red), table.hline(y: 1, stroke: blue), [A], [B], [C], [D])";
+        let table = editable_table_at(source, 2).expect("static rules must not hide a table");
+        let rendered = table.render_replacement().unwrap();
+        assert!(rendered.contains("table.vline(x: 1, stroke: red)"));
+        assert!(rendered.contains("table.hline(y: 1, stroke: blue)"));
+    }
+
+    #[test]
+    fn resizing_columns_preserves_explicit_width_expressions() {
+        let mut table = parse("#table(columns: (20%, 1fr, auto), [A], [B], [C])");
+        table.add_column();
+        assert!(
+            table
+                .render_replacement()
+                .unwrap()
+                .contains("columns: (20%, 1fr, auto, auto)")
+        );
+        table.remove_column();
+        assert!(
+            table
+                .render_replacement()
+                .unwrap()
+                .contains("columns: (20%, 1fr, auto)")
+        );
+    }
+
+    #[test]
+    fn edge_rules_are_addressed_by_actual_coordinates_without_losing_complex_rules() {
+        let mut table = parse(
+            "#table(columns: 2, table.hline(y: 1, stroke: blue), table.vline(x: 1, stroke: red), [A], [B], [C], [D])",
+        );
+        assert_eq!(
+            table.boundary_rule(TableAxis::Horizontal, 1).as_deref(),
+            Some("blue")
+        );
+        assert_eq!(table.boundary_rule(TableAxis::Horizontal, 0), None);
+        assert_eq!(
+            table.boundary_rule(TableAxis::Vertical, 1).as_deref(),
+            Some("red")
+        );
+        table
+            .set_boundary_rule(TableAxis::Horizontal, 0, Some("0.5pt + green"))
+            .unwrap();
+        table
+            .set_boundary_rule(TableAxis::Vertical, 1, None)
+            .unwrap();
+        let rendered = format!("#{}", table.render_replacement().unwrap());
+        let copy = parse(&rendered);
+        assert_eq!(
+            copy.boundary_rule(TableAxis::Horizontal, 0).as_deref(),
+            Some("0.5pt + green")
+        );
+        assert_eq!(copy.boundary_rule(TableAxis::Vertical, 1), None);
+        assert_eq!(copy.cells, table.cells);
+
+        let mut complex = parse(
+            "#table(columns: 2, table.hline(y: 1, start: 1, stroke: blue), [A], [B], [C], [D])",
+        );
+        let before = complex.clone();
+        assert!(
+            complex
+                .set_boundary_rule(TableAxis::Horizontal, 1, Some("red"))
+                .is_err()
+        );
+        assert_eq!(complex, before);
+        assert!(complex.render_replacement().unwrap().contains("start: 1"));
+        assert!(
+            table
+                .set_boundary_rule(TableAxis::Vertical, 3, Some("red"))
+                .is_err()
+        );
+        assert!(
+            table
+                .set_boundary_rule(TableAxis::Vertical, 0, Some("red, position: end"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn boundary_cache_key_changes_only_when_geometry_or_rules_change() {
+        let mut table =
+            parse("#table(columns: 2, table.hline(y: 1, stroke: blue), [A], [B], [C], [D])");
+        let before = table.boundary_rules_key();
+        table.cells[0][0] = "Edited".into();
+        assert_eq!(table.boundary_rules_key(), before);
+        table
+            .set_boundary_rule(TableAxis::Vertical, 1, Some("red"))
+            .unwrap();
+        assert_ne!(table.boundary_rules_key(), before);
+        assert!(
+            table
+                .boundary_rules()
+                .iter()
+                .any(|(axis, boundary, source)| *axis == TableAxis::Vertical
+                    && *boundary == 1
+                    && source == "red")
+        );
+        let with_rules = table.boundary_rules_key();
+        table
+            .import_markdown("| A | B |\n| --- | --- |\n| C | D |")
+            .unwrap();
+        assert_ne!(table.boundary_rules_key(), with_rules);
+        assert!(table.boundary_rules().is_empty());
+    }
+
+    #[test]
+    fn width_edits_are_validated_transactionally_and_can_return_to_auto() {
+        let mut table = parse("#table(columns: (20%, 1fr), [A], [B])");
+        assert_eq!(table.column_widths(), ["20%", "1fr"]);
+        let before = table.clone();
+        assert!(
+            table
+                .set_column_widths(&["1fr, 2fr".into(), "auto".into()])
+                .is_err()
+        );
+        assert!(table.set_column_widths(&["1fr".into()]).is_err());
+        assert_eq!(table, before);
+        table
+            .set_column_widths(&["30%".into(), "auto".into()])
+            .unwrap();
+        assert!(
+            table
+                .render_replacement()
+                .unwrap()
+                .contains("columns: (30%, auto)")
+        );
+        table.reset_column_widths();
+        assert!(table.render_replacement().unwrap().contains("columns: 2"));
+        assert_eq!(table.column_widths(), ["auto", "auto"]);
+        let mut one = parse("#table(columns: auto, [A])");
+        one.set_column_widths(&["2cm".into()]).unwrap();
+        assert!(
+            one.render_replacement()
+                .unwrap()
+                .contains("columns: (2cm,)")
+        );
+    }
+
+    #[test]
+    fn implicit_rules_with_spans_are_lossless_source_only_instead_of_guessed() {
+        let source = "#table(columns: 2, table.cell(colspan: 2)[Title], table.hline(), [A], [B])";
+        assert!(editable_table_at(source, 2).is_none());
+        assert_eq!(table_source_at(source, 2).unwrap().source, source[1..]);
+        // Explicit positions are safe even when occupancy has spans.
+        let explicit =
+            "#table(columns: 2, table.hline(y: 1), table.cell(colspan: 2)[Title], [A], [B])";
+        assert!(editable_table_at(explicit, 2).is_some());
+    }
+
     #[test]
     fn spans_round_trip_and_expansion_never_discards_content() {
         let mut table = parse("#table(columns: 3, [Title], [], [B], [], [], [C])");

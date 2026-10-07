@@ -47,7 +47,7 @@ fn fixture(root: &Path, bytes: Arc<[u8]>) -> Harness<'static, EditorApp> {
                     app.show_preview_window(ui.ctx());
                 } else {
                     app.show_pdfium_view(ui, false);
-                    app.show_preview_controls(ui.ctx());
+                    app.show_preview_controls(ui.ctx(), false);
                 }
             },
             app,

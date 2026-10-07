@@ -470,6 +470,9 @@ impl EditorApp {
             scroll_area
         };
         let scroll_output = scroll_area.show_viewport(ui, |ui, viewport| {
+            let visible_viewport =
+                Rect::from_min_size(ui.max_rect().min + viewport.min.to_vec2(), viewport.size())
+                    .intersect(ui.clip_rect());
             let editor_width = if line_wrap {
                 ui.available_width()
                     .max(METRICS.editor.wrapped_minimum_width)
@@ -714,6 +717,7 @@ impl EditorApp {
             paint_editor_line_backgrounds(
                 ui,
                 &output,
+                visible_viewport,
                 document.source(),
                 current_char,
                 attention,
@@ -755,6 +759,7 @@ impl EditorApp {
             if let Some(tooltip) = paint_line_diagnostics(
                 ui,
                 &output,
+                visible_viewport,
                 &line_diagnostics,
                 &line_rows,
                 background_slots,
@@ -985,6 +990,7 @@ impl EditorApp {
                     document_kind,
                     anchor,
                     char_index,
+                    document.key(),
                 ));
             }
 
@@ -1030,7 +1036,9 @@ impl EditorApp {
             let visuals = *ui.style().interact(&output.response);
             let border = theme::panel_interaction_stroke(
                 ui.visuals(),
-                output.response.hovered(),
+                ui.ctx()
+                    .pointer_hover_pos()
+                    .is_some_and(|point| visible_viewport.contains(point)),
                 output.response.has_focus(),
             )
             .unwrap_or(visuals.bg_stroke);
@@ -1214,10 +1222,11 @@ impl EditorApp {
             self.sync_tex(ui.ctx());
             self.refresh_diagnostic_tooltip(ui.ctx());
         }
-        if document_kind.is_typst()
+        if document_kind.typesetting_language().is_some()
             && let Some(cursor) = table_cursor
         {
-            self.editor_data.prepare_table_at_cursor(cursor);
+            self.editor_data
+                .prepare_table_at_cursor(cursor, document_kind);
         }
         if let (Some(cursor), Some(anchor)) = (completion_cursor, completion_anchor) {
             let key = self.document().key();
@@ -1301,6 +1310,7 @@ impl EditorApp {
                 &rows,
                 &sticky_context,
                 line_numbers,
+                border,
             )
         {
             self.pending_editor_selection = Some(EditorSelection::Focus(target..target));
@@ -1620,6 +1630,7 @@ pub(super) fn editor_context_popup(
     kind: DocumentKind,
     anchor: Pos2,
     character: Option<usize>,
+    key: DocumentKey,
 ) -> AppPopup {
     // Typst-looking text in another language's comments or verbatim regions
     // is still source text, not a Typst font, link, or table declaration.
@@ -1631,9 +1642,15 @@ pub(super) fn editor_context_popup(
     AppPopup::Editor {
         anchor,
         link: typst_character.and_then(|character| editor_web_link_at(data, character)),
-        table: typst_character.and_then(|character| editable_table_at(source, character)),
+        table: character
+            .and_then(|character| TableTarget::at(source, character, kind))
+            .map(|target| BoundTableTarget {
+                key,
+                target: Box::new(target),
+            }),
         math: character
-            .and_then(|character| crate::math_conversion::Target::at(source, character, kind)),
+            .and_then(|character| crate::math_conversion::Target::at(source, character, kind))
+            .map(|target| target.bind_document(key)),
     }
 }
 

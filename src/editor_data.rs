@@ -14,6 +14,33 @@ use crate::{
 
 use crate::document::{DocumentKey, DocumentSnapshot};
 
+/// One lossless editing target, cached per revision and caret rather than parsed per frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TableTarget {
+    Typst(crate::editor_features::EditableTable),
+    Source(crate::editor_features::TableSource),
+    Tex(crate::editor_features::TexTable),
+}
+impl TableTarget {
+    pub(crate) fn at(
+        source: &str,
+        cursor: usize,
+        kind: crate::document::DocumentKind,
+    ) -> Option<Self> {
+        if kind.is_typst() {
+            crate::editor_features::editable_table_at(source, cursor)
+                .map(Self::Typst)
+                .or_else(|| {
+                    crate::editor_features::table_source_at(source, cursor).map(Self::Source)
+                })
+        } else if kind == crate::document::DocumentKind::Tex {
+            crate::editor_features::tex_table_at(source, cursor).map(Self::Tex)
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SourceMetrics {
     pub(crate) line_count: usize,
@@ -87,8 +114,8 @@ pub(crate) struct EditorDerivedData {
     regions: Arc<[ContextRegion]>,
     delimiter_query: Option<(DocumentKey, usize)>,
     delimiter_pair: Option<[Range<usize>; 2]>,
-    table_query: Option<(DocumentKey, usize)>,
-    table_at_cursor: Option<crate::editor_features::EditableTable>,
+    table_query: Option<(DocumentKey, usize, crate::document::DocumentKind)>,
+    table_at_cursor: Option<TableTarget>,
     hover_query: Option<(DocumentKey, usize)>,
     hover_range: Option<Range<usize>>,
     diagnostics_key: Option<DiagnosticsKey>,
@@ -380,26 +407,37 @@ impl EditorDerivedData {
         Arc::clone(&self.regions)
     }
 
-    pub(crate) fn prepare_table_at_cursor(&mut self, cursor: usize) {
+    pub(crate) fn prepare_table_at_cursor(
+        &mut self,
+        cursor: usize,
+        kind: crate::document::DocumentKind,
+    ) {
         let Some(key) = self.source_key else {
             return;
         };
-        if self.table_query == Some((key, cursor)) {
+        if self.table_query == Some((key, cursor, kind)) {
             return;
         }
-        self.prepare_syntax();
-        self.table_at_cursor = crate::editor_features::editable_table_in_source(
-            &self.parsed_source,
-            self.char_to_byte(cursor),
-        );
-        self.table_query = Some((key, cursor));
+        self.table_at_cursor = if kind.is_typst() {
+            self.prepare_syntax();
+            let byte = self.char_to_byte(cursor);
+            crate::editor_features::editable_table_in_source(&self.parsed_source, byte)
+                .map(TableTarget::Typst)
+                .or_else(|| {
+                    crate::editor_features::table_source_in_source(&self.parsed_source, byte)
+                        .map(TableTarget::Source)
+                })
+        } else if kind == crate::document::DocumentKind::Tex {
+            crate::editor_features::tex_table_at(&self.source_snapshot, cursor)
+                .map(TableTarget::Tex)
+        } else {
+            None
+        };
+        self.table_query = Some((key, cursor, kind));
     }
 
-    pub(crate) fn cached_table_at_cursor(
-        &self,
-        key: DocumentKey,
-    ) -> Option<&crate::editor_features::EditableTable> {
-        self.table_query.filter(|(cached, _)| *cached == key)?;
+    pub(crate) fn cached_table_at_cursor(&self, key: DocumentKey) -> Option<&TableTarget> {
+        self.table_query.filter(|(cached, _, _)| *cached == key)?;
         self.table_at_cursor.as_ref()
     }
 
@@ -1117,22 +1155,55 @@ mod tests {
         let source = "#table(columns: 2, [A], [B])";
         data.prepare_source(&DocumentSnapshot::fixture(revision(1), source));
         for _ in 0..100 {
-            data.prepare_table_at_cursor(4);
+            data.prepare_table_at_cursor(4, crate::document::DocumentKind::Typst);
         }
         assert_eq!(data.syntax_rebuild_count(), 1);
         let table = data.cached_table_at_cursor(revision(1)).unwrap() as *const _;
-        data.prepare_table_at_cursor(4);
+        data.prepare_table_at_cursor(4, crate::document::DocumentKind::Typst);
         assert_eq!(
             table,
             data.cached_table_at_cursor(revision(1)).unwrap() as *const _
         );
-        data.prepare_table_at_cursor(5);
+        data.prepare_table_at_cursor(5, crate::document::DocumentKind::Typst);
         assert_eq!(data.syntax_rebuild_count(), 1);
         data.prepare_source(&DocumentSnapshot::fixture(revision(2), "not a table"));
         assert!(data.cached_table_at_cursor(revision(2)).is_none());
-        data.prepare_table_at_cursor(4);
+        data.prepare_table_at_cursor(4, crate::document::DocumentKind::Typst);
         assert!(data.cached_table_at_cursor(revision(2)).is_none());
         assert_eq!(data.syntax_rebuild_count(), 2);
+    }
+
+    #[test]
+    fn table_query_cache_keeps_language_and_source_fallback_separate() {
+        let mut data = EditorDerivedData::default();
+        let source = "#table(columns: sizes, ..cells)";
+        data.prepare_source(&DocumentSnapshot::fixture(revision(1), source));
+        data.prepare_table_at_cursor(4, crate::document::DocumentKind::Typst);
+        assert!(matches!(
+            data.cached_table_at_cursor(revision(1)),
+            Some(TableTarget::Source(_))
+        ));
+        for _ in 0..100 {
+            data.prepare_table_at_cursor(4, crate::document::DocumentKind::Typst);
+        }
+        assert_eq!(data.syntax_rebuild_count(), 1);
+        data.prepare_table_at_cursor(4, crate::document::DocumentKind::Tex);
+        assert!(data.cached_table_at_cursor(revision(1)).is_none());
+        let source = "\\begin{tabular}{cc} A & B \\\\ \\end{tabular}";
+        data.prepare_source(&DocumentSnapshot::fixture(revision(2), source));
+        data.prepare_table_at_cursor(4, crate::document::DocumentKind::Tex);
+        assert!(matches!(
+            data.cached_table_at_cursor(revision(2)),
+            Some(TableTarget::Tex(_))
+        ));
+        for _ in 0..100 {
+            data.prepare_table_at_cursor(4, crate::document::DocumentKind::Tex);
+        }
+        assert_eq!(
+            data.syntax_rebuild_count(),
+            1,
+            "TeX table queries must not parse Typst syntax"
+        );
     }
 
     #[test]

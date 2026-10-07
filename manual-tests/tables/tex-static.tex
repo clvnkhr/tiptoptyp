@@ -1,0 +1,36 @@
+\documentclass{article}
+\usepackage[table]{xcolor}
+\usepackage{array,booktabs,tabularx,longtable}
+\begin{document}
+\section*{Table workbench: supported rectangular rows}
+Right-click a cell. Edit a formula and confirm that column specifications,
+package options, rules, and row spacing survive Apply and Undo.
+
+\begin{tabular}[t]{|l|c|r|}
+\hline
+Name & Formula & Value \\[2pt]
+\hline
+Alpha & $x_1^2$ & 42 \\
+\cline{2-3}
+Escaped & \& and \% & {Grouped \textbf{text}} \\
+\hline
+\end{tabular}
+
+\medskip
+\begin{tabularx}{\linewidth}[t]{@{}l>{\raggedleft\arraybackslash}X@{}}
+\toprule
+Name & Explanation \\
+\midrule
+Alpha & Long wrapping text in a flexible column. \\
+Beta & Another row. \\
+\bottomrule
+\end{tabularx}
+
+\begin{longtable}[l]{p{3cm}r}
+\hline
+Name & Value \\
+Alpha & 42 \\
+Beta & 108 \\
+\hline
+\end{longtable}
+\end{document}

@@ -8,6 +8,7 @@ import math
 
 from desktop_ui_tex_journeys import TexJourneys
 from desktop_ui_image_journeys import ImageJourneys
+from desktop_ui_newest_journeys import NewestJourneys
 
 PREVIEW_SOURCE = '#set page(width: 200pt, height: 200pt, margin: 20pt)\n= First\nBlack text on white paper.\n#pagebreak()\n= Second\nMiddle page.\n#pagebreak()\n= Third\n#v(95pt)\nFinal needle.\n'
 
@@ -56,7 +57,7 @@ def finish_clipboard_adapter(process):
         raise RuntimeError(error or "clipboard adapter failed")
 
 
-class EditorJourneys(TexJourneys, ImageJourneys):
+class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys):
     def focus_document_window(self):
         if self.snapshot()["document"]["focused"]:
             return

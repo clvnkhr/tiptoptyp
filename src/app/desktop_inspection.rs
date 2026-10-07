@@ -32,11 +32,7 @@ impl EditorApp {
             .and_then(|state| state.cursor.char_range())
             .map(|range| [range.primary.index.0, range.secondary.index.0]);
         let folding = &self.tabs.current_record().folding;
-        let controls = if self.interactive_preview_active() {
-            self.preview_controls.web.clone()
-        } else {
-            self.pdfium_preview.controls_snapshot()
-        };
+        let controls = self.preview_controls_snapshot();
         let preview = self.preview_status_snapshot();
         let palette = self.preview_palette(context, self.preview.dark);
         let (settings_query_fingerprint, settings_text_input_focused, settings_json) = {
@@ -83,6 +79,7 @@ impl EditorApp {
             "find_focused": self.find_bar.child_focused,
             "replace_visible": self.find_bar.replace_visible,
             "settings_visible": self.settings_visible,
+            "table_editor_open": self.table_editor.is_some(),
             "settings_help_visible": self.settings_window.lock().unwrap().ui.help_mode,
             "settings_json": settings_json,
             "writing_language": self.settings.writing_language,
@@ -90,7 +87,13 @@ impl EditorApp {
             "settings_text_input_focused": settings_text_input_focused,
         });
         let find_viewport = scoped_child_viewport_id(context, find_bar::VIEWPORT_SALT);
-        let controls_viewport = scoped_child_viewport_id(context, "preview-controls");
+        let controls_owner = if self.preview_controls_in_popout() {
+            scoped_child_viewport_id(context, "preview-window")
+        } else {
+            context.viewport_id()
+        };
+        let controls_viewport =
+            crate::child_view::child_viewport_id(controls_owner, preview_controls::SALT);
         let hover_tooltip_id = native_hover_tooltip_id(context);
         let mut interaction = serde_json::json!({
             "source_fingerprint": crate::desktop_test::fingerprint(self.document().source()),
@@ -246,7 +249,23 @@ impl EditorApp {
                 self.preview_controls.web.focused
                     && self.webview_applied.is_some_and(|state| state.visible)
             });
+        interaction["preview_controls_target"] =
+            serde_json::json!(match self.preview_controls.target {
+                preview_controls::Target::Source => "source",
+                preview_controls::Target::Asset(_) => "asset",
+            });
+        interaction["preview_query_fingerprint"] = serde_json::json!(
+            crate::desktop_test::fingerprint(&self.preview_controls.query)
+        );
+        interaction["preview_controls_local_position"] = serde_json::json!(
+            self.preview_controls
+                .position
+                .map(|point| [point.x, point.y])
+        );
+        interaction["interface_scale"] = serde_json::json!(context.zoom_factor());
         let editor_id = source_editor_id(context);
+        interaction["problems_keyboard_focused"] =
+            serde_json::json!(self.problems_focused(context, context.viewport_id()));
         interaction["editor_keyboard_focused"] =
             serde_json::json!(context.memory(|m| m.has_focus(editor_id)));
         interaction["drawing"] = self.symbol_drawing.inspection(

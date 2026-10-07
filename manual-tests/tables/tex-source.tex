@@ -1,0 +1,34 @@
+\documentclass{article}
+\usepackage{array,booktabs,longtable,multirow,siunitx}
+\begin{document}
+\section*{Table workbench: structural source mode}
+These tables must open as complete source: no dropping spans, repeated heads,
+custom column types, or opaque table-generation commands.
+
+\begin{tabular}{ll}
+\multicolumn{2}{c}{Spanning heading} \\
+\multirow{2}{*}{Two rows} & One \\
+ & Two \\
+\end{tabular}
+
+\begin{tabular}{S[table-format=2.1]l}
+12.5 & Measured value \\
+3.1 & Another value \\
+\end{tabular}
+
+\begin{longtable}{ll}
+\toprule
+Name & Value \\
+\endfirsthead
+Name & Value \\
+\endhead
+\bottomrule
+\endfoot
+Alpha & 42 \\
+Beta & 108 \\
+\end{longtable}
+
+\begin{tabular}{l}
+{A nested \begin{tabular}{cc}a & b \\ c & d\end{tabular}} \\
+\end{tabular}
+\end{document}

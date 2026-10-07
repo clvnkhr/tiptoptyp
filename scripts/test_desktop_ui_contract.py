@@ -335,5 +335,113 @@ class ClipboardAdapterLifetimeContract(unittest.TestCase):
                     self.assertIsNotNone(child.returncode, "adapter was not reaped")
 
 
+class PreviewDragContract(unittest.TestCase):
+    def test_complete_displacement_passes(self):
+        from desktop_ui_newest_journeys import assert_preview_drag_position
+        assert_preview_drag_position({"preview_controls_position": [124, 112]}, [100, 100], [24, 12])
+
+    def test_half_distance_and_stationary_drift_fail(self):
+        from desktop_ui_newest_journeys import assert_preview_drag_position
+        for actual in ([112, 106], [132, 112], [124, 119]):
+            with self.assertRaisesRegex(AssertionError, "drifted"):
+                assert_preview_drag_position({"preview_controls_position": actual}, [100, 100], [24, 12])
+
+    def test_missing_or_nonfinite_geometry_fails(self):
+        from desktop_ui_newest_journeys import assert_preview_drag_position
+        for actual in (None, [1], [math.nan, 112], [124, math.inf]):
+            with self.assertRaisesRegex(AssertionError, "invalid"):
+                assert_preview_drag_position({"preview_controls_position": actual}, [100, 100], [24, 12])
+
+    def test_held_drag_always_releases_on_failure(self):
+        from desktop_ui_newest_journeys import NewestJourneys
+        journey = NewestJourneys()
+        journey.wait_target = lambda _: None
+        document = {"preview_controls_position": [100, 100], "preview_controls_local_position": [100, 100],
+                    "preview_controls_size": [360, 108], "native_size": [1200, 800], "interface_scale": 1}
+        journey.snapshot = lambda: {"document": document, "targets": {"preview.drag_handle": {"x": 110, "y": 110}}}
+        actions = []
+        journey.native = lambda *args: actions.append(args)
+        journey.wait = lambda *args: (_ for _ in ()).throw(AssertionError("deliberate failure"))
+        with self.assertRaisesRegex(AssertionError, "deliberate failure"):
+            journey.stationary_preview_drag()
+        self.assertEqual(actions[0], ("drag-start", 110, 110))
+        self.assertEqual(actions[-1], ("drag-end", 134, 122))
+
+
+    def test_missing_mouse_down_receipt_still_releases(self):
+        from desktop_ui_newest_journeys import NewestJourneys
+        journey = NewestJourneys()
+        journey.wait_target = lambda _: None
+        document = {"preview_controls_position": [100, 100], "preview_controls_local_position": [100, 100],
+                    "preview_controls_size": [360, 108], "native_size": [1200, 800], "interface_scale": 1}
+        journey.snapshot = lambda: {"document": document, "targets": {"preview.drag_handle": {"x": 110, "y": 110}}}
+        actions = []
+
+        def native(*args):
+            actions.append(args)
+            if args[0] == "drag-start":
+                raise RuntimeError("missing input receipt")
+
+        journey.native = native
+        with self.assertRaisesRegex(RuntimeError, "missing input receipt"):
+            journey.stationary_preview_drag()
+        self.assertEqual(actions, [("drag-start", 110, 110), ("drag-end", 134, 122)])
+
+    def test_query_focus_wait_observes_the_next_fresh_frame(self):
+        from desktop_ui_newest_journeys import NewestJourneys
+        journey = NewestJourneys()
+        states = iter([
+            {"targets": {"preview.query": {"enabled": True, "age_ms": 0, "focused": True, "frame": 7}},
+             "document": {"find_visible": False}},
+            {"targets": {"preview.query": {"enabled": True, "age_ms": 0, "focused": False, "frame": 8}},
+             "document": {"find_visible": False}},
+            {"targets": {"preview.query": {"enabled": True, "age_ms": 0, "focused": True, "frame": 9}},
+             "document": {"find_visible": False}},
+        ])
+        journey.snapshot = lambda: next(states)
+        with patch("desktop_ui_newest_journeys.time.sleep"):
+            journey.wait_preview_query_focus()
+        self.assertEqual(list(states), [])
+
+
+
+class TableDraftContract(unittest.TestCase):
+    def test_table_journey_is_registered_with_the_newest_native_group(self):
+        from desktop_ui_newest_journeys import NEWEST_JOURNEYS, NewestJourneys
+        self.assertIn("tables", NEWEST_JOURNEYS)
+        self.assertTrue(callable(NewestJourneys.tables))
+
+    def test_a_closed_or_previously_painted_table_widget_cannot_pass_readiness(self):
+        from desktop_ui_newest_journeys import NewestJourneys
+        journey = NewestJourneys()
+        def sample(opened, frame, enabled):
+            return {"document": {"table_editor_open": opened}, "targets": {"table.source": {
+                "enabled": enabled, "age_ms": 0, "frame": frame}}}
+        states = iter([sample(False, 10, True), sample(True, 10, True),
+                       sample(True, 11, False), sample(True, 12, True)])
+        journey.snapshot = lambda: next(states)
+        with patch("desktop_ui_newest_journeys.time.sleep"):
+            target = journey.table_target("table.source", previous_frame=10)
+        self.assertEqual(target["frame"], 12)
+        self.assertEqual(list(states), [])
+
+    def test_invalid_draft_waits_for_disabled_apply_in_a_fresh_open_dialog(self):
+        from desktop_ui_newest_journeys import NewestJourneys
+        journey = NewestJourneys()
+        states = iter([
+            {"document": {"table_editor_open": True}, "targets": {"table.apply": {
+                "enabled": True, "age_ms": 0, "frame": 10}}},
+            {"document": {"table_editor_open": True}, "targets": {"table.apply": {
+                "enabled": False, "age_ms": 800, "frame": 11}}},
+            {"document": {"table_editor_open": True}, "targets": {"table.apply": {
+                "enabled": False, "age_ms": 0, "frame": 12}}},
+        ])
+        journey.snapshot = lambda: next(states)
+        with patch("desktop_ui_newest_journeys.time.sleep"):
+            target = journey.table_target("table.apply", enabled=False)
+        self.assertEqual(target["frame"], 12)
+        self.assertEqual(list(states), [])
+
+
 if __name__ == "__main__":
     unittest.main()

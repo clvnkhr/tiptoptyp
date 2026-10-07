@@ -17,6 +17,9 @@ fixture process is not foreground.
 ```sh
 python3 scripts/test-desktop-ui.py
 python3 scripts/test-desktop-ui.py --journey panels
+python3 scripts/test-desktop-ui.py --journey problems_focus
+python3 scripts/test-desktop-ui.py --journey preview_find
+python3 scripts/test-desktop-ui.py --journey tables
 python3 scripts/test-desktop-ui.py --journey terminal_find
 python3 scripts/test-desktop-ui.py --journey terminal_load
 python3 scripts/test-desktop-ui.py --journey terminal_theme
@@ -87,6 +90,11 @@ prerequisite; every action must still produce its asserted result. Its observati
 cannot invoke application handlers. Startup waits for the native document window to register its title and window
 attributes, then activates it and waits for focus. Native event edges are separated by 50 ms so move/press/release
 are delivered across event-loop turns; outcome assertions still wait on state.
+The preview drag regression separates mouse-down, held moves and release, then
+checks the native button state to prove its stationary frames precede release.
+Its cleanup releases the button even if an input receipt or assertion fails.
+Query-focus checks wait for the focused widget's next fresh frame before typing;
+they do not click the field to compensate for an incorrect Cmd+F handoff.
 
 ## Current coverage
 
@@ -96,6 +104,9 @@ now exercised through the real app, and the lower-level coverage retained.
 | Journey | Input and assertions |
 | --- | --- |
 | panels | Cmd+5, repeated Terminal/Problems selection and hide/reopen; stable panel height across 30 fresh frames per sample; native terminal typing runs an isolated shell, Off reaps it and remains off across panel transitions, Restart starts a different shell; the header button opens a second shell with its own PID, the numbered switcher moves between shells, a real vim click moves its cursor, exiting one shell leaves the other parked; document stays unchanged |
+| problems_focus | Both effective preview backends hand keyboard ownership to Problems; blank-area/header clicks retain it, typing/paste/undo/comment shortcuts cannot change the source or invert preview pages, Cmd+F opens neither source nor preview Find, and closing/switching panels releases focus so source typing resumes |
+| preview_find | Both effective backends: preview Cmd+F opens and focuses the query without another click, subsequent Cmd+F and typing stay in that field, the source and preview palette stay unchanged; header dragging follows the full pointer displacement and holds a stationary pointer for at least 0.4 seconds and eight fresh frames without drift; a popped-out viewer also opens its hidden controls with Cmd+F |
+| tables | Real Typst and named TeX workbenches: cell Cmd+A/typing changes only the draft, Cancel preserves source, Apply updates once with original column widths/rules or TeX placement/row height, and Undo/Redo restores exact source; computed Typst tables open in source mode, invalid drafts disable Apply, and an invalid TeX grid cell can be repaired in Source; optional fresh table framebuffer for separate visual inspection |
 | terminal_find | Focused terminal Cmd+F searches a real isolated shell, including three case-insensitive matches separated by hundreds of scrolled-off lines; Cmd+G/Shift+Cmd+G and Enter/Shift+Enter step exactly once and wrap, button navigation reveals the match; Cmd+A changes only the query; grid Escape leaves search open, grid Cmd+F refocuses it, focused Cmd+F/Escape and one close click hide it; queries and matches stay separate between two shell panes; source stays unchanged |
 | terminal_load | A bounded, isolated Python process redraws the real PTY at requested 30/60 Hz; native per-character typing must change only the focused scratch editor, with exact source/caret and worker output advancement; completed producer receipts record actual frames and terminal Off reaps the pane. This is interaction coverage, not a key-to-pixel latency measurement |
 | terminal_theme | First output from a private real PTY queries foreground/background, all 256 palette entries, and color scheme; Light→Dark and a different dark palette each report exactly once to the opted-in application; 30 fresh frames require no notification churn; Off reaps the child and source stays unchanged |
@@ -155,7 +166,7 @@ The existing `scripts/test-native-windows.py` covers a separate native lifecycle
 fixture, not those complete editor journeys.
 
 Use `--capture-review` to retain the initial toolbar/root framebuffer and, with
-`settings_search`, `controls`, `terminal_find`, `images`, `explorer_toggle` or `all`, the affected settings/popup/search framebuffers for separate inspection. This is opt-in, never a visual
+`settings_search`, `controls`, `preview_find`, `tables`, `problems_focus`, `terminal_find`, `images`, `explorer_toggle` or `all`, the affected settings/popup/search framebuffers for separate inspection. This is opt-in, never a visual
 pass by itself. Use `--trace-preview` to retain native bounds/property traces.
 `--review-failure` retains a failed fixture for up to three minutes and prints its
 exact app path; writing the printed resume file allows cleanup, without changing

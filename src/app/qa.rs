@@ -669,7 +669,8 @@ impl QaSession {
                     app.document().source(),
                     2,
                     DocumentKind::Typst,
-                );
+                )
+                .map(|target| target.bind_document(app.document().key()));
                 app.app_popup = Some(AppPopup::Editor {
                     math,
                     anchor: Pos2::new(430.0, 250.0),
