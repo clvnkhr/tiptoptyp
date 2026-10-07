@@ -93,23 +93,25 @@ impl EditorApp {
         ui.horizontal(|ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 3.0;
+                let count =
+                    self.preview.diagnostics.len() + self.preview.editor_diagnostics.len();
+                let problems_label = if count == 0 {
+                    "Problems".to_owned()
+                } else {
+                    format!("Problems ({count})")
+                };
                 let problems = ui.selectable_label(
-                    self.bottom_panel.selected() == Some(PanelTab::Problems), "Problems");
+                    self.bottom_panel.selected() == Some(PanelTab::Problems),
+                    problems_label,
+                );
                 #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
                 crate::desktop_test::observe("panel.problems", &problems);
                 if problems.clicked() {
                     self.bottom_panel.select(PanelTab::Problems);
                 }
-                let count = self.preview.diagnostics.len() + self.preview.editor_diagnostics.len();
-                egui::Frame::new()
-                    .fill(ui.visuals().widgets.inactive.bg_fill)
-                    .corner_radius(6.0)
-                    .inner_margin(egui::Margin::symmetric(4, 0))
-                    .show(ui, |ui| {
-                        ui.label(RichText::new(count.to_string()).size(theme::TYPE.supporting));
-                    })
-                    .response
-                    .on_hover_text("Compiler diagnostics");
+                if count > 0 {
+                    problems.on_hover_text(format!("{count} compiler diagnostics"));
+                }
             });
             let terminal_label = if self.terminal.bell_pending() {
                 "● Terminal"
@@ -600,6 +602,8 @@ mod tests {
             });
             assert_eq!(height, initial_height);
         }
+        // The nonzero count rides inside the tab label.
+        assert!(harness.query_by_label("Problems (80)").is_some());
     }
 
     #[test]
@@ -732,10 +736,8 @@ mod tests {
             Some(PanelTab::Problems)
         );
         assert!(harness.query_by_label("No compiler diagnostics").is_some());
-        let problems = harness.get_by_label("Problems").rect();
-        let badge = harness.get_by_label("0").rect();
-        assert!(badge.left() > problems.right());
-        assert!((badge.center().y - problems.center().y).abs() < 1.0);
+        // The count lives inside the tab label now, not in a separate pill.
+        assert!(harness.query_by_label("0").is_none());
         assert!(harness.query_by_label("0 diagnostics").is_none());
         harness.get_by_label("Close panel").click();
         harness.run();
