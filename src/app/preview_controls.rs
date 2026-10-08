@@ -109,11 +109,28 @@ fn current_parent_pointer(context: &egui::Context) -> Option<Pos2> {
 }
 
 impl Controls {
+    fn close(&mut self) {
+        self.open = false;
+        self.focus_find = false;
+        self.edit_events.clear();
+        self.drag_anchor = None;
+    }
+
+    fn toggle(&mut self, target: Target) {
+        if self.select(target) || !self.open {
+            self.open = true;
+        } else {
+            self.close();
+        }
+    }
+
     pub(super) fn select(&mut self, target: Target) -> bool {
         if self.target == target {
             return false;
         }
         self.target = target;
+        self.edit_events.clear();
+        self.focus_find = false;
         self.position = None;
         self.drag_anchor = None;
         true
@@ -174,8 +191,8 @@ impl Controls {
         }
     }
     fn show(&mut self, ui: &mut egui::Ui, snapshot: &Snapshot) -> Option<Action> {
-        ui.ctx()
-            .input_mut(|input| input.events.append(&mut self.edit_events));
+        let _queued_edits =
+            crate::child_view::begin_queued_edit_events(ui.ctx(), &mut self.edit_events);
         // Content determines the popup height. Measuring against last frame's
         // shorter native viewport feeds its clipping limit back into sizing.
         ui.set_max_height(10_000.0);
@@ -183,7 +200,7 @@ impl Controls {
         ui.horizontal(|ui| {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if control(ui, UiIcon::ZoomOut, "Minimize controls").clicked() {
-                    self.open = false;
+                    self.close();
                 }
                 let popout = ui.add_enabled(self.popout.is_none(), egui::Button::new("Pop out"));
                 #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
@@ -412,8 +429,7 @@ impl EditorApp {
         let replacement = self.main_preview_controls_target();
         self.preview_controls
             .select(replacement.unwrap_or_default());
-        self.preview_controls.open = false;
-        self.preview_controls.focus_find = false;
+        self.preview_controls.close();
         false
     }
 
@@ -540,8 +556,7 @@ impl EditorApp {
 
     pub(super) fn toggle_main_preview_controls(&mut self) {
         if let Some(target) = self.main_preview_controls_target() {
-            let changed = self.preview_controls.select(target);
-            self.preview_controls.open = changed || !self.preview_controls.open;
+            self.preview_controls.toggle(target);
         }
     }
 
@@ -606,6 +621,13 @@ impl EditorApp {
         );
         let bounds = Rect::from_min_size(*position, size);
         let mut action = None;
+        let viewport = scoped_child_viewport_id(context, SALT);
+        let shortcuts = self.settings.effective_shortcuts();
+        let allow_requested_paste = self
+            .pending_widget_paste
+            .is_some_and(|request| request.admits(viewport, context.cumulative_frame_nr()));
+        let mut paste_requested = false;
+        let mut requested_paste_admitted = false;
         if context.embed_viewports() {
             egui::Area::new(viewport_scoped_id(context, SALT))
                 .order(egui::Order::Foreground)
@@ -639,8 +661,16 @@ impl EditorApp {
                 &style,
                 |ui, input| {
                     if input.close_requested || input.escape_pressed {
-                        self.preview_controls.open = false;
+                        self.preview_controls.close();
+                        return;
                     }
+                    let edits = prepare_child_widget_edit_events(
+                        ui.ctx(),
+                        &shortcuts,
+                        allow_requested_paste,
+                    );
+                    paste_requested |= edits.paste_requested;
+                    requested_paste_admitted |= edits.requested_paste_admitted;
                     let card = theme::popup_card_frame(ui.style()).show(ui, |ui| {
                         ui.set_width(344.0);
                         action = self.preview_controls.show(ui, &snapshot);
@@ -652,6 +682,12 @@ impl EditorApp {
                     }
                 },
             );
+        }
+        if requested_paste_admitted {
+            self.pending_widget_paste = None;
+        }
+        if paste_requested {
+            self.request_widget_paste(context, viewport);
         }
         if let Some(action) = action {
             self.preview_control_action(action);
@@ -666,9 +702,7 @@ impl EditorApp {
             self.view_mode = mode;
             if controls_detached {
                 self.preview_controls.position = None;
-                self.preview_controls.open = false;
-                self.preview_controls.focus_find = false;
-                self.preview_controls.drag_anchor = None;
+                self.preview_controls.close();
             }
             if self.preview_controls.popout_target == Target::Source {
                 self.discard_webview();
@@ -714,10 +748,8 @@ impl EditorApp {
                         theme::reserve_window_controls(ui);
                         close |= ui.button("Return to document").clicked();
                         if icon_button(ui, UiIcon::Menu, "Preview controls").clicked() {
-                            let changed = self
-                                .preview_controls
-                                .select(self.preview_controls.popout_target);
-                            self.preview_controls.open = changed || !self.preview_controls.open;
+                            self.preview_controls
+                                .toggle(self.preview_controls.popout_target);
                         }
                     });
                 });
@@ -745,7 +777,7 @@ impl EditorApp {
             self.preview_controls.popout_target = self.preview_controls.target;
             self.preview_controls.popout = Some(self.view_mode);
             self.view_mode = ViewMode::Code;
-            self.preview_controls.open = false;
+            self.preview_controls.close();
             self.preview_controls.position = None;
             if self.preview_controls.popout_target == Target::Source {
                 self.discard_webview();
@@ -1369,6 +1401,7 @@ mod tests {
         let source_tab = app.tabs.preview_id().unwrap();
         app.preview_controls.open = true;
         app.preview_controls.target = Target::Source;
+        app.preview_controls.edit_events.push(egui::Event::Copy);
         app.activate_tab(source_tab, &context);
         app.finish_close_tab(&context);
         assert!(!app.source_preview_available());
@@ -1381,6 +1414,30 @@ mod tests {
             "An action from retired source controls reached the unrelated PDF asset"
         );
         assert!(!app.preview_controls.open);
+        assert!(
+            app.preview_controls.edit_events.is_empty(),
+            "retired controls retained a field command"
+        );
+    }
+
+    #[test]
+    fn toolbar_closing_controls_discards_pending_field_input() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app =
+            pinned_source_with_asset(&context, directory.path(), PreviewPreference::Pdfium);
+        app.preview_controls
+            .select(app.main_preview_controls_target().unwrap());
+        app.preview_controls.open = true;
+        app.preview_controls.focus_find = true;
+        app.preview_controls.edit_events.push(egui::Event::Copy);
+        app.toggle_main_preview_controls();
+        assert!(!app.preview_controls.open);
+        assert!(!app.preview_controls.focus_find);
+        assert!(app.preview_controls.edit_events.is_empty());
+        app.toggle_main_preview_controls();
+        assert!(app.preview_controls.open);
+        assert!(app.preview_controls.edit_events.is_empty());
     }
 
     #[test]
@@ -1505,6 +1562,50 @@ mod tests {
                 harness.run_steps(2);
                 assert_eq!(harness.state().1, expected, "outline count {count}");
             }
+        }
+    }
+
+    #[test]
+    fn queued_select_all_precedes_first_native_text_chunk() {
+        let snapshot = Snapshot {
+            count: 3,
+            zoom: 1.0,
+            ..Default::default()
+        };
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(380.0, 400.0))
+            .build_ui_state(
+                move |ui, controls: &mut Controls| {
+                    controls.show(ui, &snapshot);
+                },
+                Controls {
+                    open: true,
+                    query: "old query".into(),
+                    focus_find: true,
+                    ..Default::default()
+                },
+            );
+        harness.run_steps(3);
+        for query in [
+            "preview typing t Pdfium",
+            "second preview query Interactive",
+        ] {
+            let shortcut = standard_text_edit_shortcut(AppCommand::SelectAll).unwrap();
+            harness.state_mut().edit_events.push(egui::Event::Key {
+                key: shortcut.logical_key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: shortcut.modifiers,
+            });
+            for chunk in query.as_bytes().chunks(16) {
+                harness.input_mut().events.push(egui::Event::Text(
+                    std::str::from_utf8(chunk).unwrap().into(),
+                ));
+                harness.run_steps(2);
+            }
+            assert_eq!(harness.state().query, query);
+            assert!(harness.state().edit_events.is_empty());
         }
     }
 

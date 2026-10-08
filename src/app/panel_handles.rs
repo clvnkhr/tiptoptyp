@@ -1,5 +1,54 @@
-//! Paint-only divider grips: no widgets, extra spacing, or changed hit areas.
+//! Divider grips and ownership: no extra widgets, spacing, or changed resize hit areas.
 use eframe::egui::{self, Pos2, Rect, Stroke, StrokeKind};
+
+/// Reserve the real panel resize handles for pointer interaction without
+/// shrinking painted preview pages, their fit-width geometry, or focus bounds.
+pub(super) fn preview_interaction_bounds(ui: &egui::Ui, rect: Rect) -> Rect {
+    let ids = [
+        super::explorer_panel_id(ui.ctx()),
+        super::editor_panel_id(ui.ctx()),
+        crate::child_view::viewport_scoped_id(ui.ctx(), "bottom-panel"),
+    ]
+    .map(|id| id.with("__resize"));
+    // Only this pass counts: hidden, maximized and detached panels must not
+    // reserve a handle retained in the previous pass's observation state.
+    let handles = ui.ctx().viewport(|viewport| {
+        ids.map(|id| {
+            viewport
+                .this_pass
+                .widgets
+                .get(id)
+                .filter(|handle| {
+                    handle.enabled
+                        && handle.sense.senses_drag()
+                        && handle.interact_rect.is_positive()
+                        && handle.layer_id == ui.layer_id()
+                })
+                .map(|handle| handle.interact_rect)
+        })
+    });
+    clip_resize_handles(rect, handles)
+}
+
+fn clip_resize_handles(mut rect: Rect, handles: [Option<Rect>; 3]) -> Rect {
+    for (index, handle) in handles.into_iter().enumerate() {
+        let Some(handle) = handle else { continue };
+        if !rect.intersects(handle) {
+            continue;
+        }
+        if index == 2 {
+            // Bottom panel's handle meets the lower edge of the preview.
+            if handle.top() <= rect.bottom() && rect.bottom() <= handle.bottom() {
+                rect.max.y = handle.top().next_down().max(rect.top());
+            }
+        } else if handle.left() <= rect.left() && rect.left() <= handle.right() {
+            // Rect hit tests include their edges: exclude the handle's full
+            // hit area, not just its visible center line.
+            rect.min.x = handle.right().next_up().min(rect.right());
+        }
+    }
+    rect
+}
 
 /// The stroke a resizable egui panel paints its separator with while the user
 /// hovers or drags it; `None` while idle. Panels register their resize handle
@@ -609,6 +658,266 @@ mod tests {
                 outlines,
                 usize::from(highlight.is_some()),
                 "only a highlighted divider outlines its handle"
+            );
+        }
+    }
+
+    #[test]
+    fn preview_content_cannot_steal_the_shared_resize_boundary() {
+        use egui_kittest::Harness;
+        for (salt, horizontal) in [
+            ("filesystem", false),
+            ("editor", false),
+            ("bottom-panel", true),
+        ] {
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(900.0, 500.0))
+                .build_ui_state(
+                    move |ui, state: &mut (bool, Rect, Rect, bool, usize)| {
+                        let id = crate::child_view::viewport_scoped_id(ui.ctx(), salt);
+                        if state.0 {
+                            let panel = if horizontal {
+                                egui::Panel::bottom(id)
+                            } else {
+                                egui::Panel::left(id)
+                            };
+                            state.1 = panel
+                                .resizable(true)
+                                .default_size(180.0)
+                                .min_size(50.0)
+                                .show(ui, |ui| {
+                                    ui.label("Neighboring panel");
+                                    ui.take_available_space();
+                                })
+                                .response
+                                .rect;
+                        }
+                        egui::CentralPanel::default()
+                            .frame(egui::Frame::NONE)
+                            .show(ui, |ui| {
+                                let rect = ui.available_rect_before_wrap();
+                                state.2 = rect;
+                                // Fit-width PDF pages fill the central pane and
+                                // deliberately retain their full paint rectangle.
+                                ui.painter().rect_filled(rect, 0.0, egui::Color32::WHITE);
+                                let clip = ui.clip_rect();
+                                ui.set_clip_rect(preview_interaction_bounds(ui, clip));
+                                let page = ui.interact(
+                                    rect,
+                                    egui::Id::new("preview-test-page"),
+                                    egui::Sense::click_and_drag(),
+                                );
+                                ui.set_clip_rect(clip);
+                                assert_eq!(page.rect, rect, "page focus/paint bounds stay intact");
+                                if page.clicked() || page.drag_started() {
+                                    page.request_focus();
+                                }
+                                if page.clicked() {
+                                    state.4 += 1;
+                                }
+                                state.3 = page.has_focus();
+                            });
+                        let before = ui.ctx().viewport(|viewport| {
+                            (
+                                viewport
+                                    .this_pass
+                                    .widgets
+                                    .layers()
+                                    .map(|(_, widgets)| widgets.len())
+                                    .sum::<usize>(),
+                                viewport.this_pass.widgets.get(id.with("__resize")).copied(),
+                            )
+                        });
+                        let _ = preview_interaction_bounds(ui, ui.clip_rect());
+                        let after = ui.ctx().viewport(|viewport| {
+                            (
+                                viewport
+                                    .this_pass
+                                    .widgets
+                                    .layers()
+                                    .map(|(_, widgets)| widgets.len())
+                                    .sum::<usize>(),
+                                viewport.this_pass.widgets.get(id.with("__resize")).copied(),
+                            )
+                        });
+                        assert_eq!(
+                            before, after,
+                            "reserving interaction bounds must retain every existing widget"
+                        );
+                    },
+                    (true, Rect::NOTHING, Rect::NOTHING, false, 0),
+                );
+            harness.run_steps(3);
+            let original = harness.state().1;
+            let page = harness.state().2;
+            let start = if horizontal {
+                egui::pos2(original.center().x, original.top())
+            } else {
+                egui::pos2(original.right(), original.center().y)
+            };
+            let delta = if horizontal {
+                egui::vec2(0.0, -20.0)
+            } else {
+                egui::vec2(20.0, 0.0)
+            };
+            harness.hover_at(start);
+            harness.run_steps(2);
+            harness.drag_at(start);
+            harness.run_steps(2);
+            harness.hover_at(start + delta);
+            harness.run_steps(3);
+            harness.drop_at(start + delta);
+            harness.run_steps(3);
+            let actual = harness.state().1;
+            let change = if horizontal {
+                actual.height() - original.height()
+            } else {
+                actual.width() - original.width()
+            };
+            assert!(
+                (change - 20.0).abs() < 0.1,
+                "{salt}: resize was stolen by preview: {original:?} -> {actual:?}"
+            );
+            assert!(!harness.state().3, "{salt}: divider drag focused preview");
+            let painted = harness.state().2;
+            if horizontal {
+                assert_eq!(painted.left(), page.left());
+                assert_eq!(painted.right(), page.right());
+                assert!((painted.height() - page.height() + 20.0).abs() < 0.1);
+            } else {
+                assert_eq!(painted.top(), page.top());
+                assert_eq!(painted.bottom(), page.bottom());
+                assert!((painted.width() - page.width() + 20.0).abs() < 0.1);
+            }
+            // The interior remains selectable, and old handles cannot block
+            // a page after the corresponding panel becomes hidden.
+            harness.hover_at(painted.center());
+            for pressed in [true, false] {
+                harness.event(egui::Event::PointerButton {
+                    pos: painted.center(),
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                });
+                harness.run_steps(1);
+            }
+            harness.run_steps(2);
+            assert!(harness.state().3);
+            assert_eq!(harness.state().4, 1, "page interior received its click");
+            harness.state_mut().0 = false;
+            harness.run_steps(3);
+            harness.hover_at(start);
+            for pressed in [true, false] {
+                harness.event(egui::Event::PointerButton {
+                    pos: start,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                });
+                harness.run_steps(1);
+            }
+            harness.run_steps(2);
+            assert!(harness.state().3);
+            assert_eq!(
+                harness.state().4,
+                2,
+                "hidden handle did not steal the page click"
+            );
+        }
+    }
+
+    #[test]
+    fn only_enabled_current_resize_handles_reserve_preview_interaction() {
+        for (enabled, resizable) in [(true, true), (false, true), (true, false)] {
+            let context = egui::Context::default();
+            let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                if !enabled {
+                    ui.disable();
+                }
+                let id = super::super::explorer_panel_id(ui.ctx());
+                egui::Panel::left(id)
+                    .resizable(resizable)
+                    .default_size(180.0)
+                    .show(ui, |ui| {
+                        ui.take_available_space();
+                    });
+                let rect = ui.available_rect_before_wrap();
+                let hit = preview_interaction_bounds(ui, rect);
+                if enabled && resizable {
+                    assert!(hit.left() > rect.left(), "actual handle must be excluded");
+                    let handle = ui.ctx().viewport(|viewport| {
+                        viewport
+                            .this_pass
+                            .widgets
+                            .get(id.with("__resize"))
+                            .copied()
+                            .unwrap()
+                    });
+                    assert!(!hit.contains(handle.interact_rect.right_center()));
+                } else {
+                    assert_eq!(hit, rect, "disabled/fixed panels cannot reserve a gutter");
+                }
+            });
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn reserving_resize_handles_preserves_tab_focus_order() {
+        use egui_kittest::Harness;
+        let sequence = |reserve: bool, shift: bool| {
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(900.0, 500.0))
+                .build_ui_state(
+                    move |ui, state: &mut (String, String, String, Option<egui::Id>)| {
+                        let id = super::super::explorer_panel_id(ui.ctx());
+                        egui::Panel::left(id)
+                            .resizable(true)
+                            .default_size(180.0)
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut state.0)
+                                        .id(egui::Id::new("side-field")),
+                                );
+                                ui.take_available_space();
+                            });
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut state.1)
+                                    .id(egui::Id::new("first-field")),
+                            );
+                            ui.add(
+                                egui::TextEdit::singleline(&mut state.2)
+                                    .id(egui::Id::new("last-field")),
+                            );
+                        });
+                        if reserve {
+                            let _ = preview_interaction_bounds(ui, ui.clip_rect());
+                        }
+                        state.3 = ui.memory(|memory| memory.focused());
+                    },
+                    (String::new(), String::new(), String::new(), None),
+                );
+            harness.run_steps(3);
+            let mut sequence = Vec::new();
+            for _ in 0..12 {
+                harness.key_press_modifiers(
+                    egui::Modifiers {
+                        shift,
+                        ..egui::Modifiers::NONE
+                    },
+                    egui::Key::Tab,
+                );
+                harness.run_steps(3);
+                sequence.push(harness.state().3);
+            }
+            sequence
+        };
+        for shift in [false, true] {
+            assert_eq!(
+                sequence(true, shift),
+                sequence(false, shift),
+                "shift={shift}"
             );
         }
     }

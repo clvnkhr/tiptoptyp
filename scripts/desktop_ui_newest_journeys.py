@@ -41,8 +41,17 @@ class NewestJourneys:
             self.choose_backend(backend)
             if self.snapshot()["document"]["preview_controls_open"]:
                 self.click("preview.Minimize controls")
-            if self.snapshot()["document"]["panel"] is not None:
-                self.click("panel.close")
+            # Cmd+5 reopens the remembered tab. Terminal handoff leaves that
+            # tab as Terminal, so prepare Problems before testing the shortcut
+            # from preview focus; a compensating click afterward would mask it.
+            if self.snapshot()["document"]["panel"] is None:
+                self.key(23)
+                self.wait("bottom panel opens for Problems preparation", lambda d: d["panel"] is not None)
+            if self.snapshot()["document"]["panel"] != "Problems":
+                self.click("panel.problems")
+                self.wait("Problems is the remembered panel tab", lambda d: d["panel"] == "Problems")
+            self.click("panel.close")
+            self.wait("prepared Problems closes before preview focus", lambda d: d["panel"] is None)
             self.click("preview.page")
             self.wait("preview owns keyboard before Problems", lambda d: d["preview_keyboard_focused"])
             original = self.snapshot()["document"]
@@ -74,7 +83,14 @@ class NewestJourneys:
             if getattr(self, "capture_review", False) and backend == "Pdfium":
                 self.capture_viewport("main")
             self.click("panel.activity")
-            self.wait("Activity releases Problems", lambda d: not d["problems_keyboard_focused"])
+            self.wait("Activity owns the bottom panel keyboard", lambda d:
+                      d["panel"] == "Activity" and d["bottom_panel_keyboard_focused"]
+                      and not d["problems_keyboard_focused"] and not d["editor_keyboard_focused"]
+                      and not d["preview_keyboard_focused"])
+            self.native("text", "t")
+            self.stable_state(source_selection_unchanged, frames=4)
+            if getattr(self, "capture_review", False) and backend == "Pdfium":
+                self.capture_viewport("main")
             self.click("panel.problems")
             self.wait("Problems header reclaims keyboard", lambda d: d["problems_keyboard_focused"])
             self.click("panel.close")
@@ -109,6 +125,8 @@ class NewestJourneys:
                   and not d["preview_keyboard_focused"] and not d["editor_keyboard_focused"]
                   and d["explorer_focused"] is None and unchanged(d))
         self.wait_target("terminal.input")
+        if getattr(self, "capture_review", False) and backend == "Pdfium":
+            self.capture_viewport("main")
         self.key(17, "none")  # A physical 't' must reach the shell, not invert the preview.
         self.stable_state(unchanged, frames=4)
         self.key(32, "ctrl")  # Clear the shell input before writing an isolated receipt.
@@ -249,6 +267,13 @@ class NewestJourneys:
             time.sleep(0.05)
         raise AssertionError("table widget did not expose the expected fresh state: " + name)
 
+    def wait_table_source_draft(self, source, valid):
+        from desktop_ui_journeys import fingerprint
+        self.wait("table source draft receives complete input", lambda d:
+                  d["table_editor_open"] and (d.get("table_draft") or {}).get("fingerprint") == fingerprint(source)
+                  and (d.get("table_draft") or {}).get("bytes") == len(source.encode("utf-8"))
+                  and (d.get("table_draft") or {}).get("valid") is valid)
+
     def open_table_workbench(self, line=0):
         self.click("editor.source")
         self.key(126, "cmd")
@@ -264,6 +289,19 @@ class NewestJourneys:
         self.click("menu.Edit Table…")
         self.wait("table workbench opens without replacing the source", lambda d: d["table_editor_open"])
         return old
+
+    def open_table_fixture(self, path):
+        # Go to the full file path so Open selects the TeX file, not its folder.
+        self.key(31)
+        time.sleep(0.8)
+        self.key(5, "cmd+shift")
+        time.sleep(0.3)
+        self.key(0)
+        self.native("text", str(path))
+        self.key(36, "none")
+        time.sleep(0.5)
+        self.native("ax-press-title", "Open")
+        self.wait("private TeX table opens", lambda d: d["path"] == str(path), timeout=15)
 
     def tables(self):
         from desktop_ui_journeys import fingerprint
@@ -318,12 +356,15 @@ class NewestJourneys:
         self.table_target("table.source", previous_frame=old.get("table.source"))
         self.click("table.source")
         self.key(0)
-        self.native("text", "table(columns: widths, ..rows")
+        incomplete = "table(columns: widths, ..rows"
+        self.native("text", incomplete)
+        self.wait_table_source_draft(incomplete, False)
         self.table_target("table.apply", enabled=False)
         unchanged(dynamic)
         self.key(0)
         draft = "table(columns: widths, fill: blue, ..rows)"
         self.native("text", draft)
+        self.wait_table_source_draft(draft, True)
         self.table_target("table.apply")
         changed = dynamic.replace("table(columns: widths, ..rows)", draft)
         close_draft("apply", changed)
@@ -332,25 +373,13 @@ class NewestJourneys:
         self.close_scratch(count)
 
         # TeX tables must use a named .tex tab, not Typst's default scratch kind.
-        # The native Open panel explicitly chooses the isolated test directory.
+        # Select the isolated fixture by its complete file path in native Open.
         environment = r"\begin{tabular}[t]{lc}Alpha & Beta \\[2pt]Gamma & Delta \\\end{tabular}"
         tex = "\\documentclass{article}\n\\begin{document}\n" + environment + "\n\\end{document}\n"
         path = self.directory / "table-workbench.tex"
         path.write_text(tex)
         count = self.snapshot()["document"]["tabs"]
-        self.key(31)
-        time.sleep(0.8)
-        self.key(5, "cmd+shift")
-        time.sleep(0.3)
-        self.key(0)
-        self.native("text", str(path.parent))
-        self.key(36, "none")
-        time.sleep(0.5)
-        self.native("ax-press-description", "search")
-        self.native("text", path.name)
-        time.sleep(0.8)
-        self.native("ax-press-title", "Open")
-        self.wait("private TeX table opens", lambda d: d["path"] == str(path), timeout=15)
+        self.open_table_fixture(path)
         self.source_is(tex)
         old = self.open_table_workbench(line=2)
         self.table_target("table.cell.0.0", previous_frame=old.get("table.cell.0.0"))
@@ -382,6 +411,7 @@ class NewestJourneys:
         self.key(0)
         repaired = environment.replace("Alpha", "Repaired")
         self.native("text", repaired)
+        self.wait_table_source_draft(repaired, True)
         self.table_target("table.apply")
         changed = tex.replace(environment, repaired)
         close_draft("apply", changed)

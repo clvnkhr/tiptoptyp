@@ -51,13 +51,19 @@ impl EditorApp {
     pub(super) fn show_find_bar(&mut self, ui: &mut egui::Ui) {
         let source = self.tabs.current_record().document.source();
         let document_key = self.document().key();
-        let actions = find_bar::show(
-            ui,
-            &mut self.find_bar,
-            source,
-            document_key,
-            self.table_editor.is_none(),
-        );
+        let actions = {
+            let _queued = crate::child_view::begin_queued_edit_events(
+                ui.ctx(),
+                &mut self.find_bar.edit_events,
+            );
+            find_bar::show(
+                ui,
+                &mut self.find_bar,
+                source,
+                document_key,
+                self.table_editor.is_none(),
+            )
+        };
         self.apply_find_actions(
             ui.ctx(),
             actions.previous,
@@ -1394,6 +1400,11 @@ impl EditorApp {
         let key = self.document().key();
         let editable = self.table_editor.is_none();
         let shortcuts = self.settings.effective_shortcuts();
+        let allow_requested_paste = self
+            .pending_widget_paste
+            .is_some_and(|pending| pending.admits(child, context.cumulative_frame_nr()));
+        let mut paste_requested = false;
+        let mut requested_paste_admitted = false;
         ChildViewHost::show(
             &context,
             &self.captures,
@@ -1465,6 +1476,14 @@ impl EditorApp {
                     actions.closed = true;
                     return;
                 }
+                let physical =
+                    prepare_child_widget_edit_events(ui.ctx(), &shortcuts, allow_requested_paste);
+                paste_requested |= physical.paste_requested;
+                requested_paste_admitted |= physical.requested_paste_admitted;
+                let _queued = crate::child_view::begin_queued_edit_events(
+                    ui.ctx(),
+                    &mut self.find_bar.edit_events,
+                );
                 let response = frame.show(ui, |ui| {
                     ui.set_width((bounds.width() - frame.total_margin().sum().x).max(1.0));
                     ui.set_max_height(owner.height());
@@ -1489,6 +1508,12 @@ impl EditorApp {
                 }
             },
         );
+        if requested_paste_admitted {
+            self.pending_widget_paste = None;
+        }
+        if paste_requested && !actions.closed {
+            self.request_widget_paste(&context, child);
+        }
         // Document edits and cursor history belong to the owner, not the child.
         self.apply_find_actions(
             &context,

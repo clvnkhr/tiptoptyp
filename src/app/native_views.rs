@@ -195,6 +195,13 @@ impl EditorApp {
         }
         let theme = context.theme();
         let style = context.style_of(theme);
+        let shortcuts = self.settings.effective_shortcuts();
+        let child = scoped_child_viewport_id(context, "tiptoptyp-table-editor");
+        let allow_requested_paste = self
+            .pending_widget_paste
+            .is_some_and(|pending| pending.admits(child, context.cumulative_frame_nr()));
+        let mut paste_requested = false;
+        let mut requested_paste_admitted = false;
         let Some(dialog) = &mut self.table_editor else {
             return;
         };
@@ -213,10 +220,16 @@ impl EditorApp {
             "table-editor",
         );
         ChildViewHost::show(context, &captures, spec, theme, &style, |ui, input| {
-            let events = std::mem::take(&mut self.table_edit_events);
-            if !events.is_empty() {
-                ui.ctx().input_mut(|input| input.events.extend(events));
-            }
+            let physical = table_workbench::prepare_child_keyboard(
+                ui,
+                dialog,
+                &shortcuts,
+                allow_requested_paste,
+            );
+            paste_requested |= physical.paste_requested;
+            requested_paste_admitted |= physical.requested_paste_admitted;
+            let _queued =
+                crate::child_view::begin_queued_edit_events(ui.ctx(), &mut self.table_edit_events);
             if input.close_requested || input.escape_pressed {
                 requested_action = Some(TableEditorUiAction::Cancel);
             }
@@ -249,6 +262,12 @@ impl EditorApp {
                 });
         });
 
+        if requested_paste_admitted {
+            self.pending_widget_paste = None;
+        }
+        if paste_requested && requested_action.is_none() {
+            self.request_widget_paste(context, child);
+        }
         match requested_action {
             Some(TableEditorUiAction::Cancel) => self.cancel_table_editor(context),
             Some(TableEditorUiAction::Apply) => {

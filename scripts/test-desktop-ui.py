@@ -66,6 +66,28 @@ def assert_tinymist_palette(renderer, palette):
             raise AssertionError("Tinymist transfer intercept differs from palette")
 
 
+def observe_failed_interaction(journey, result):
+    """Read bounded failure evidence without activating or retrying the app."""
+    for field, command, arguments in (
+        ("failure_foreground", "foreground", [str(journey.process.pid)]),
+        ("failure_preflight", "preflight", []),
+        ("failure_native_windows", "windows", [str(journey.process.pid)]),
+    ):
+        try:
+            probe = subprocess.run([str(journey.driver), command, *arguments],
+                                   capture_output=True, text=True, timeout=6)
+            result.setdefault("failure_observation_exits", {})[command] = probe.returncode
+            # Preflight emits useful lock/permission state even on exit 2.
+            observation = json.loads(probe.stdout)
+            if not isinstance(observation, dict):
+                raise RuntimeError("native observation did not return an object")
+            result[field] = observation
+            journey.record("failure.observation", command=command, exit=probe.returncode,
+                           stdout=probe.stdout, stderr=probe.stderr)
+        except Exception as error:
+            result.setdefault("failure_observation_errors", {})[command] = str(error)
+
+
 class Journey(EditorJourneys):
     terminal_theme = terminal_theme
 
@@ -719,19 +741,22 @@ stop.write_text(json.dumps({"pid": os.getpid(), "rate": rate, "frames": frames, 
             self.click("settings.json.mode")
             self.wait("Settings form ready", lambda d: not d["settings_json"]["visible"])
         self.click("settings.search")
+        self.wait_target("settings.search", focused=True)
         self.key(0)
         self.native("text", query)
         self.wait_target("settings.result." + title)
         self.click("settings.result." + title)
 
-    def wait_target(self, name):
+    def wait_target(self, name, focused=False):
         deadline = time.monotonic() + 6
         while time.monotonic() < deadline:
             target = self.snapshot()["targets"].get(name)
-            if target and target["enabled"] and target["age_ms"] <= 500:
+            if target and target["enabled"] and target["age_ms"] <= 500 \
+                    and (not focused or target.get("focused", False)):
                 return
             time.sleep(0.05)
-        raise AssertionError(f"target did not become visible: {name}")
+        readiness = "visible and focused" if focused else "visible"
+        raise AssertionError(f"target did not become {readiness}: {name}")
 
     def preview(self):
         fixture = self.directory / "journey.typ"
@@ -1026,7 +1051,7 @@ def main():
                         result["observation_passed"] = True
                         return
                     if args.capture_review:
-                        journey.capture_viewport("main")
+                        journey.capture_initial_review()
                     for name in ([*NEWEST_JOURNEYS, "terminal_theme", "panels", "terminal_find", "terminal_load", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "focus", "settings_search", "editor_preferences", "background", "context_menu", "pdf_output", "preview", "controls", "empty", "snippets", "drawing", *IMAGE_JOURNEYS, *TEX_JOURNEYS] if args.journey == "all" else TEX_JOURNEYS if args.journey == "tex" else [args.journey]):
                         journey.record("journey.start", name=name)
                         getattr(journey, name)()
@@ -1037,10 +1062,7 @@ def main():
                 except Exception as error:
                     print(f"Journey failed: {error}", flush=True)
                     if journey and process.poll() is None and not args.observe_only:
-                        try:
-                            result["failure_native_windows"] = journey.native("windows")
-                        except Exception as error:
-                            result["native_inspection_error"] = str(error)
+                        observe_failed_interaction(journey, result)
                     if args.review_failure and process.poll() is None:
                         resume = evidence / "failure.reviewed"
                         print(f"Failure review: app={directory / 'Journey.app'}; resume={resume}", flush=True)

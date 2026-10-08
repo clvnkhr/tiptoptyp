@@ -128,6 +128,81 @@ mod tests {
     }
 
     #[test]
+    fn settings_local_select_all_keeps_its_position_between_native_text_events() {
+        for key in [egui::Key::A, egui::Key::K] {
+            let context = egui::Context::default();
+            let mut snapshot = input(&context);
+            snapshot.settings.shortcut_overrides.set(
+                ShortcutAction::SelectAll,
+                Some(crate::shortcuts::ShortcutChord::primary(key)),
+            );
+            let mut window = SettingsWindow::default();
+            window.synchronize(snapshot, &FontCatalog::default());
+            window.ui.query = "old query".into();
+            let mut harness = settings_harness(window);
+            harness
+                .get(
+                    by().role(egui::accesskit::Role::TextInput)
+                        .value("old query"),
+                )
+                .focus();
+            harness.run();
+            assert!(harness.state().text_input_focused);
+            let shortcut = harness
+                .state()
+                .input
+                .as_ref()
+                .unwrap()
+                .settings
+                .effective_shortcuts()
+                .egui(ShortcutAction::SelectAll)
+                .unwrap();
+            harness.input_mut().events.extend([
+                egui::Event::Text("x".into()),
+                egui::Event::Key {
+                    key: shortcut.logical_key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: shortcut.modifiers,
+                },
+                egui::Event::Text("y".into()),
+            ]);
+            harness.run_steps(2);
+            assert_eq!(harness.state().ui.query, "y", "{key:?}");
+            assert!(harness.state().menu_commands.is_empty());
+            harness.run_steps(2);
+            assert_eq!(harness.state().ui.query, "y", "idle replay: {key:?}");
+        }
+    }
+
+    #[test]
+    fn settings_older_native_edit_commands_precede_text_in_fifo_order() {
+        let mut window = SettingsWindow::default();
+        window.ui.query = "old query".into();
+        let mut harness = settings_harness(window);
+        harness
+            .get(
+                by().role(egui::accesskit::Role::TextInput)
+                    .value("old query"),
+            )
+            .focus();
+        harness.run();
+        for command in [AppCommand::SelectAll, AppCommand::Cut] {
+            assert!(harness.state_mut().queue_edit_command(command));
+        }
+        harness
+            .input_mut()
+            .events
+            .push(egui::Event::Text("replacement".into()));
+        harness.run_steps(2);
+        assert_eq!(harness.state().ui.query, "replacement");
+        assert!(harness.state().menu_commands.is_empty());
+        harness.run_steps(2);
+        assert_eq!(harness.state().ui.query, "replacement");
+    }
+
+    #[test]
     fn settings_search_focus_request_targets_the_search_field() {
         let mut window = SettingsWindow::default();
         window.ui.query = "theme".into();
@@ -1081,38 +1156,61 @@ impl SettingsWindow {
             {
                 self.paste_deadline = None;
             }
-            if self.text_input_focused
-                && let Some(command) = context
-                    .input_mut(|input| consume_shortcut(input, &shortcuts, is_widget_edit_command))
-            {
-                self.menu_commands.push(command);
-            }
-        }
-        for command in std::mem::take(&mut self.menu_commands) {
-            let event = match command {
-                AppCommand::Cut => Some(egui::Event::Cut),
-                AppCommand::Copy => Some(egui::Event::Copy),
-                AppCommand::Paste => {
-                    self.paste_deadline = Some(context.input(|input| input.time) + 1.0);
+            if self.text_input_focused {
+                let mut request_paste = false;
+                // A child key belongs at its current position among native text
+                // chunks. Only older parent menu commands are prepended below.
+                context.input_mut(|input| {
+                    input.events.retain_mut(|event| {
+                        let command = match event {
+                            egui::Event::Key {
+                                key,
+                                modifiers,
+                                pressed: true,
+                                ..
+                            } => match shortcuts.action_for_key_event(*key, *modifiers) {
+                                Some(ShortcutAction::Cut) => Some(AppCommand::Cut),
+                                Some(ShortcutAction::Copy) => Some(AppCommand::Copy),
+                                Some(ShortcutAction::Paste) => Some(AppCommand::Paste),
+                                Some(ShortcutAction::Undo) => Some(AppCommand::Undo),
+                                Some(ShortcutAction::Redo) => Some(AppCommand::Redo),
+                                Some(ShortcutAction::SelectAll) => Some(AppCommand::SelectAll),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        let Some(command) = command else {
+                            return true;
+                        };
+                        if command == AppCommand::Paste {
+                            request_paste = true;
+                            return false;
+                        }
+                        if let Some(normalized) = settings_edit_event(command) {
+                            self.local_events.push(normalized.clone());
+                            *event = normalized;
+                        }
+                        true
+                    });
+                });
+                if request_paste {
+                    self.paste_deadline = Some(now + 1.0);
                     context.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
-                    None
                 }
-                AppCommand::Undo | AppCommand::Redo | AppCommand::SelectAll => {
-                    standard_text_edit_shortcut(command).map(|shortcut| egui::Event::Key {
-                        key: shortcut.logical_key,
-                        physical_key: None,
-                        pressed: true,
-                        repeat: false,
-                        modifiers: shortcut.modifiers,
-                    })
-                }
-                _ => None,
-            };
-            if let Some(event) = event {
-                self.local_events.push(event.clone());
-                context.input_mut(|input| input.events.push(event));
             }
         }
+        let mut events = Vec::new();
+        for command in std::mem::take(&mut self.menu_commands) {
+            if command == AppCommand::Paste {
+                self.paste_deadline = Some(context.input(|input| input.time) + 1.0);
+                context.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+            }
+            if let Some(event) = settings_edit_event(command) {
+                self.local_events.push(event.clone());
+                events.push(event);
+            }
+        }
+        crate::child_view::deliver_queued_edit_events(context, &mut events);
     }
 
     fn paint(
@@ -1244,6 +1342,23 @@ impl SettingsWindow {
             show_local_tooltip_card(ui.ctx(), tooltip.anchor, &tooltip.detail, tooltip.opacity);
         }
         actions
+    }
+}
+
+fn settings_edit_event(command: AppCommand) -> Option<egui::Event> {
+    match command {
+        AppCommand::Cut => Some(egui::Event::Cut),
+        AppCommand::Copy => Some(egui::Event::Copy),
+        AppCommand::Undo | AppCommand::Redo | AppCommand::SelectAll => {
+            standard_text_edit_shortcut(command).map(|shortcut| egui::Event::Key {
+                key: shortcut.logical_key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: shortcut.modifiers,
+            })
+        }
+        _ => None,
     }
 }
 

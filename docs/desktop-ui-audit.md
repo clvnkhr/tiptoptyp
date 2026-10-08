@@ -1635,3 +1635,150 @@ stopped before interaction at preflight because the Mac was locked. Its explicit
 unavailable result is `.tiptoptyp/desktop-ui-tests/run-u2kufq4l/result.json`;
 Accessibility/input permissions were available. Native interaction and composed
 window placement are still unverified, and the branch remains unmerged.
+
+
+## Unlocked native follow-up, 2026-10-08
+
+The first unlocked Problems run (`run-xv29mxpq`) passed PDFium ownership and
+physical terminal typing, but exposed a journey preparation error on Tinymist:
+Cmd+5 correctly reopened the remembered Terminal tab after the preceding handoff.
+The journey now prepares Problems and closes it before focusing the preview.
+A failing harness contract covers all three remembered tabs and both backend
+phases; no compensating click is permitted after the tested shortcut.
+
+Native table editing (`run-urj0r2ot`) passed Typst cell Cancel/Apply/Undo/Redo but
+failed source repair. Native preview Find (`run-bn9k4aku`, reproduced for diagnosis
+as `run-541oqqd3`) retained only the final seven-character chunk of a 23-character
+query. Same-pass semantic preview and table regressions reproduced those lost
+prefixes; prepending older parent commands corrected that ordering but was not a
+complete native fix. The next optimized run (`run-d0bka9j2`) still lost the prefix.
+An alternating child/parent regression exposed the second cause: TextEdit had
+already painted Cmd+A, but its retained child InputState let the parent consume
+and queue it again. A following parent pass repeated the synthetic command too.
+Popup edit input must be normalized on its owning child pass, and injected
+commands must retire after that field paints. Table draft observations expose
+only byte length, a fingerprint and cached validity, with no contents in logs.
+
+The focused review also reproduced reversed text/shortcut ordering in Settings,
+root Explorer search commands arriving after typing, and retired preview controls
+retaining queued field commands. Current physical shortcuts keep their positions
+among text events; older menu commands precede subsequent native input. Preview
+controls clear queued input when closed or retargeted. These changes introduce no
+workers, timers, idle repaints, or default-runtime diagnostic logging.
+
+The Explorer run `run-lfosy238` reached the affected native composition review
+boundary, then failed because the computer-use observation tool stalled beyond
+its three-minute acknowledgement window. It is not an interaction pass or visual
+verification. Composed-window visual review remains unavailable through that
+failed observation. Subsequent automatic native runs retain geometry traces and
+report interaction results separately from framebuffer captures.
+
+The Problems-only content outline was corrected to one layout-neutral outline
+around the entire bottom panel, including the tab row, shared by Problems,
+Terminal and Activity. A failing header-hover regression established the missing
+boundary before the fix. The all-tab regression checks outer bounds, repeated
+header focus, stable panel height, no source typing and no nested Problems
+outline. Activity and empty Terminal now have noninteractive keyboard owners;
+controls keep their own hit targets. This adds one visible-panel stroke query,
+no workers, timers, idle repaint loop or panel padding. The native Problems
+journey also checks Activity ownership and can capture all three focused tabs.
+
+Terminal's raw input consumer also intercepted the host screenshot shortcut. A
+failing regression established this for the grid and its Find field. The host
+capture binding now runs first, including rebound and disabled variants, without
+changing terminal input or source contents. Table-specific cell selection chords
+are handled before generic editing normalization, retaining their existing grid
+behavior; alternating child/parent regressions verify that editing commands retire
+after their field paints.
+
+The expanded native runs found two additional preparation errors. Native Open
+selected the TeX fixture's directory rather than its file; it now selects the full
+file path while retaining the original document owner and exact-path assertions.
+Git/context-menu math conversion expected raw output with the default formatting
+preference enabled. Those exact-source journeys now disable the preference through
+Settings, verify its effective value, and restore it in a `finally` block. The
+source fingerprints and single-Undo assertions remain strict. The 34 Python
+contracts cover both preference defaults and failure restoration.
+
+Native Explorer transitions (`run-b2rmjepc`) reproduced a real PDFium interaction
+conflict: in Preview-only mode, a full-width page took the exact shared Explorer
+resize boundary, leaving the width unchanged after a 20-point drag. PDFium now
+clips only its page interaction to exclude the actual current-pass resize widgets.
+The page's paint rectangle, focus bounds, coordinate mapping, scroll layout and
+fit-width calculation remain unchanged. Hidden, disabled, fixed and detached
+handles reserve nothing. The three handle IDs are queried once per visible PDF
+view, then reused for its resident pages; there is no widget re-registration,
+allocation proportional to document length, or new repaint loop. All 16 divider
+tests pass, including Explorer/editor/bottom exact-edge resizing, ordinary page
+clicks, stale-handle removal, widget/bounds preservation and Tab/Shift-Tab order.
+
+Optional startup review capture also had no established editing first responder
+(`run-5728lx4m`). Its preparation now explicitly claims and verifies source
+keyboard focus; per-state bottom-panel captures preserve their tested owner.
+A Settings preparation attempt (`run-nm6dhf7o`) produced no query after a posted
+click, but had no intervening observation to classify when focus was lost. The
+search geometry remained stable and the next native run passed. The harness now
+requires a fresh, enabled, focused search target after its single click before
+sending keyboard input. Negative contracts reject unowned, disabled and stale
+targets. There are no compensating clicks or relaxed source/backend assertions;
+this receipt does not establish a separate Settings architecture bug.
+
+Final deterministic validation: formatting, strict all-target Clippy for normal
+and desktop-ui-tests builds, 1,696 Rust test executions, 17 xtask tests and 40
+Python harness contracts pass. Forty-four opt-in Rust tests remain ignored.
+The optimized gallery captured all 25 expected PNGs in one app session, and its
+final validation decoded all 25. The updated terminal gallery image was inspected.
+Fresh focused Problems, Activity and Terminal framebuffers from `run-91cetuzr`
+were inspected and retained under `.tiptoptyp/screenshots/agent-review`; their
+outline encloses tabs and content, with stable height and no nested list outline.
+
+The final optimized native binary is
+`tiptoptyp Dev 0.1.0 (209ffcf22f9e-dirty.1791455266)`, SHA-256
+`5dcdfab016840adfce579cf8f804aeed33da169c1604e53a1c7c936b768219a5`.
+The runs verified the running build and effective backend and passed real input:
+
+| Journey | Successful receipt |
+| --- | --- |
+| Problems / Activity / Terminal focus | `run-91cetuzr` |
+| Preview Find | `run-8mgnla5p` |
+| Typst and TeX tables | `run-ltw8gvze` |
+| Explorer transitions / dividers | `run-zkwkg65e` |
+| Images | `run-jjeu2489` |
+| Git hunks and diff editing | `run-231r0ch3` |
+| Code context menu | `run-plhfulp2` |
+
+Problems/focus, Preview Find and Explorer verify both effective PDFium and
+Tinymist. The focus journey includes actual isolated shell typing after the
+preview-to-Terminal shortcut. Explorer retains 1,239 `ui.preview.bounds` traces,
+including `available=(873.6,30.0)-(1400.0,860.0)`, clipped/native
+`(877.6,30.0)-(1400.0,860.0)`, viewport `(0.0,0.0)-(1400.0,884.0)` and
+`egui_ppp=native_ppp=2.000` in its final restored state.
+
+These automatic native input results and viewport framebuffers are separate
+evidence. Tinymist's composed desktop placement was not visually certified:
+its native child is absent from the root framebuffer, and the earlier whole-window
+observation failed. Geometry traces and interaction receipts do not replace that
+visual check.
+
+The stricter final Explorer repeat `run-35chakzt` also passes all transitions,
+including focused Settings search readiness, effective PDFium and Tinymist,
+independent dividers, and closing the nearly maximized bottom panel. It used
+`tiptoptyp Dev 0.1.0 (209ffcf22f9e-dirty.1791456583)`, SHA-256
+`7b9347ae4859ed322fc3708aab4226d00bb1be9735530d7f25738b26442990d9`;
+the app source was unchanged from the seven successful runs above.
+
+The preceding repeat `run-io77tklx` passed the backend/divider transitions but
+failed its final bottom-panel close click. The root lost native focus after the
+posted click; the close target did not overlap a resize handle or preview, and
+no tooltip child viewport was created. The desktop remained unlocked, but that
+receipt did not identify the foreground application, so the cause remains
+unclassified. An AX-focused window alone does not establish that its process is
+frontmost. The passing repeat does not erase this failure or prove its cause.
+`run-48ecbpth` was unavailable at locked-desktop preflight and is not a pass.
+
+Failed native interactions now retain bounded, read-only foreground PID/bundle,
+lock/permission state, and native-window observations before cleanup. Collection
+never activates the application or retries input, and cannot replace the original
+failure. Two negative contracts establish these properties, bringing the Python
+contract suite to 40 passing tests. The final repeat compiled and exercised the
+updated Swift observer as well as the unchanged optimized app binary.

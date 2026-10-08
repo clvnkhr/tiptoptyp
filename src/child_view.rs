@@ -3,6 +3,76 @@ use std::time::{Duration, Instant};
 
 use crate::{screenshot::CaptureController, theme};
 
+/// Parent-routed edit commands precede native input already waiting in the child.
+/// Appending Select All after its first text chunk would select that chunk and
+/// let the next chunk replace it. Drain once before the owning field paints.
+pub(crate) fn deliver_queued_edit_events(context: &egui::Context, queued: &mut Vec<egui::Event>) {
+    deliver_queued_edit_events_to(context, context.viewport_id(), queued);
+}
+
+pub(crate) fn deliver_queued_edit_events_to(
+    context: &egui::Context,
+    viewport: egui::ViewportId,
+    queued: &mut Vec<egui::Event>,
+) {
+    if !queued.is_empty() {
+        context.input_mut_for(viewport, |input| {
+            input.events.splice(0..0, queued.drain(..));
+        });
+    }
+}
+
+/// Editing events belong to the field paint, not a later parent pass.
+/// TextEdit reads events without removing them; retire only the delivered
+/// commands, retaining unrelated input for the parent window's router.
+#[must_use]
+pub(crate) struct OwnedEditEvents {
+    context: egui::Context,
+    viewport: egui::ViewportId,
+    owned: Vec<egui::Event>,
+    deferred: Vec<egui::Event>,
+}
+
+impl OwnedEditEvents {
+    pub(crate) fn new(
+        context: &egui::Context,
+        owned: Vec<egui::Event>,
+        deferred: Vec<egui::Event>,
+    ) -> Self {
+        Self {
+            context: context.clone(),
+            viewport: context.viewport_id(),
+            owned,
+            deferred,
+        }
+    }
+}
+
+impl Drop for OwnedEditEvents {
+    fn drop(&mut self) {
+        if self.owned.is_empty() && self.deferred.is_empty() {
+            return;
+        }
+        self.context.input_mut_for(self.viewport, |input| {
+            for event in &self.owned {
+                if let Some(index) = input.events.iter().position(|candidate| candidate == event) {
+                    input.events.remove(index);
+                }
+            }
+            input.events.append(&mut self.deferred);
+        });
+    }
+}
+
+pub(crate) fn begin_queued_edit_events(
+    context: &egui::Context,
+    queued: &mut Vec<egui::Event>,
+) -> OwnedEditEvents {
+    let owned = queued.clone();
+    deliver_queued_edit_events(context, queued);
+    OwnedEditEvents::new(context, owned, Vec::new())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ChildViewRole {
     Persistent,

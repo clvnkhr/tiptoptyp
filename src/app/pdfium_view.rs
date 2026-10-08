@@ -402,6 +402,8 @@ impl PdfiumView {
                 );
                 self.restore_anchor = false;
             }
+            let interaction_bounds =
+                super::panel_handles::preview_interaction_bounds(ui, available);
             scroll.show_viewport(ui, |ui, viewport| {
                 ui.set_min_size(egui::vec2(width, self.height));
                 let range = visible_pages(
@@ -445,11 +447,14 @@ impl PdfiumView {
                         Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0)),
                         Color32::WHITE,
                     );
+                    let clip = ui.clip_rect();
+                    ui.set_clip_rect(clip.intersect(interaction_bounds));
                     let response = ui.interact(
                         rect,
                         ui.id().with(("pdfium-page", index)),
                         Sense::click_and_drag(),
                     );
+                    ui.set_clip_rect(clip);
                     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
                     if index == self.page {
                         crate::desktop_test::observe("preview.page", &response);

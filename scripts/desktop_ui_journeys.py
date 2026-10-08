@@ -5,6 +5,7 @@ See docs/desktop-ui-audit.md for the lower-level tests these journeys promote.
 """
 
 import math
+from contextlib import contextmanager
 
 from desktop_ui_tex_journeys import TexJourneys
 from desktop_ui_image_journeys import ImageJourneys
@@ -58,6 +59,29 @@ def finish_clipboard_adapter(process):
 
 
 class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys):
+    def set_math_conversion_formatting(self, enabled):
+        if self.snapshot()["document"]["format_after_math_conversion"] is enabled:
+            return
+        self.settings()
+        self.setting_section("format after math conversion", "Format after math conversion")
+        self.click("settings.editor.math_format")
+        self.wait("math conversion formatting " + ("enabled" if enabled else "disabled"),
+                  lambda d: d["format_after_math_conversion"] is enabled)
+        self.close_settings()
+
+    @contextmanager
+    def exact_math_conversion(self):
+        # Delimiter and undo checks exercise conversion independently of the
+        # optional formatter. Change the real setting and restore its value.
+        original = self.snapshot()["document"]["format_after_math_conversion"]
+        if not isinstance(original, bool):
+            raise AssertionError("missing effective math conversion formatting setting")
+        self.set_math_conversion_formatting(False)
+        try:
+            yield
+        finally:
+            self.set_math_conversion_formatting(original)
+
     def focus_document_window(self):
         if self.snapshot()["document"]["focused"]:
             return
@@ -141,6 +165,16 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys):
             time.sleep(0.2)
         self.native("activate")
         self.wait("document focused after visual review", lambda d: d["focused"])
+
+    def capture_initial_review(self):
+        # Native activation alone may leave the first responder unclaimed.
+        # Establish the initial source owner before the optional kickoff image.
+        self.focus_document_window()
+        self.wait_target("editor.source")
+        self.click("editor.source")
+        self.wait("source owns keyboard before initial review capture", lambda d:
+                  d["focused"] and d["editor_keyboard_focused"])
+        self.capture_viewport("main")
 
     def capture_viewport(self, target):
         import shutil
@@ -847,6 +881,10 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys):
         self.close_scratch(count)
 
     def git_hunks(self):
+        with self.exact_math_conversion():
+            self._git_hunks()
+
+    def _git_hunks(self):
         source = self.directory / "hunks.typ"
         if self.snapshot()["document"]["path"] != str(source):
             import time
@@ -1456,6 +1494,10 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys):
                 raise AssertionError("revealing the prepared preview reloaded it")
 
     def context_menu(self):
+        with self.exact_math_conversion():
+            self._context_menu()
+
+    def _context_menu(self):
         import time
         original = "$x$\n\nBody text here.\n"
         self.focus_document_window()

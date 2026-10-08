@@ -3024,9 +3024,11 @@ impl EditorApp {
         let allow_requested_paste = self
             .pending_widget_paste
             .is_some_and(|pending| pending.admits(shortcut_viewport, owner_frame));
-        let requested_paste_admitted = context.input_mut_for(shortcut_viewport, |input| {
-            normalize_text_edit_shortcut_events(input, &shortcuts, allow_requested_paste)
-        });
+        let child_widget_focused = is_child_widget_viewport(context, shortcut_viewport);
+        let requested_paste_admitted = !child_widget_focused
+            && context.input_mut_for(shortcut_viewport, |input| {
+                normalize_text_edit_shortcut_events(input, &shortcuts, allow_requested_paste)
+            });
         let pending_paste_expired = self
             .pending_widget_paste
             .is_some_and(|pending| pending.expired(owner_frame));
@@ -3158,7 +3160,12 @@ impl EditorApp {
             }
             _ => {}
         }
+        let root_widget_focused =
+            other_text_input_focused && shortcut_viewport == context.viewport_id();
         let edit_command = context.input_mut_for(shortcut_viewport, |input| {
+            if root_widget_focused || child_widget_focused {
+                return None;
+            }
             consume_shortcut(input, &shortcuts, |command| {
                 matches!(
                     command,
@@ -3288,10 +3295,26 @@ impl EditorApp {
         // Consume any effective binding which is intentionally unavailable in
         // the current focus/context so it cannot masquerade as a TextEdit
         // built-in. Then remove disabled platform editing chords as well.
-        context.input_mut_for(shortcut_viewport, |input| {
-            consume_shortcut_action(input, &shortcuts, |_| true);
-            remove_unhandled_text_edit_builtin_events(input);
+        let widget_paste = context.input_mut_for(shortcut_viewport, |input| {
+            if root_widget_focused {
+                // Keep physical edit chords where they occurred among Text
+                // events. Re-appending or prepending them would reorder typing.
+                normalize_focused_widget_edit_events(input, &shortcuts)
+            } else if child_widget_focused {
+                // The child has already painted its physical edits. It owns
+                // their normalization and retirement; reading/requeueing them
+                // here would replay a stale command on the next child pass.
+                consume_shortcut_action(input, &shortcuts, |action| !is_widget_edit_action(action));
+                false
+            } else {
+                consume_shortcut_action(input, &shortcuts, |_| true);
+                remove_unhandled_text_edit_builtin_events(input);
+                false
+            }
         });
+        if widget_paste {
+            self.request_widget_paste(context, shortcut_viewport);
+        }
 
         if let Some(command) = edit_command {
             if other_text_input_focused {
@@ -3531,6 +3554,7 @@ impl EditorApp {
         frame: Option<&eframe::Frame>,
     ) {
         let focused_viewport = focused_input_viewport(context);
+        let mut widget_edit_events = Vec::new();
         while let Some(command) = self.queued_native_menu_commands.pop() {
             if focused_viewport == scoped_child_viewport_id(context, "tiptoptyp-settings") {
                 match command {
@@ -3558,7 +3582,12 @@ impl EditorApp {
                     _ => continue,
                 }
             }
-            if self.route_edit_command_to_focused_widget(command, context, focused_viewport) {
+            if self.route_edit_command_to_focused_widget_into(
+                command,
+                context,
+                focused_viewport,
+                &mut widget_edit_events,
+            ) {
                 continue;
             }
             if command == AppCommand::CloseTab
@@ -3569,6 +3598,14 @@ impl EditorApp {
                 self.execute_app_command(command, context, frame);
             }
         }
+        // Native requests are FIFO and precede this pass's physical input.
+        // Deliver the complete batch once, rather than reversing it by
+        // prepending each command independently.
+        crate::child_view::deliver_queued_edit_events_to(
+            context,
+            focused_viewport,
+            &mut widget_edit_events,
+        );
     }
 
     fn route_edit_command_to_focused_widget(
@@ -3576,6 +3613,20 @@ impl EditorApp {
         command: AppCommand,
         context: &egui::Context,
         viewport: egui::ViewportId,
+    ) -> bool {
+        let mut events = Vec::new();
+        let handled =
+            self.route_edit_command_to_focused_widget_into(command, context, viewport, &mut events);
+        crate::child_view::deliver_queued_edit_events_to(context, viewport, &mut events);
+        handled
+    }
+
+    fn route_edit_command_to_focused_widget_into(
+        &mut self,
+        command: AppCommand,
+        context: &egui::Context,
+        viewport: egui::ViewportId,
+        events: &mut Vec<egui::Event>,
     ) -> bool {
         if self.route_terminal_edit_command(command, context, viewport) {
             return true;
@@ -3638,23 +3689,17 @@ impl EditorApp {
             }
         }
         match command {
-            AppCommand::Cut => context.input_mut_for(viewport, |input| {
-                input.events.push(egui::Event::Cut);
-            }),
-            AppCommand::Copy => context.input_mut_for(viewport, |input| {
-                input.events.push(egui::Event::Copy);
-            }),
+            AppCommand::Cut => events.push(egui::Event::Cut),
+            AppCommand::Copy => events.push(egui::Event::Copy),
             AppCommand::Paste => self.request_widget_paste(context, viewport),
             AppCommand::Undo | AppCommand::Redo | AppCommand::SelectAll => {
                 if let Some(shortcut) = standard_text_edit_shortcut(command) {
-                    context.input_mut_for(viewport, |input| {
-                        input.events.push(egui::Event::Key {
-                            key: shortcut.logical_key,
-                            physical_key: None,
-                            pressed: true,
-                            repeat: false,
-                            modifiers: shortcut.modifiers,
-                        });
+                    events.push(egui::Event::Key {
+                        key: shortcut.logical_key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: shortcut.modifiers,
                     });
                 }
             }
@@ -11298,6 +11343,134 @@ fn remove_unhandled_text_edit_builtin_events(input: &mut egui::InputState) {
             } if modifiers.command
         )
     });
+}
+
+/// Translate a focused root field's physical edit chords in place. The
+/// document dispatcher must not consume and re-inject these after later Text.
+fn is_widget_edit_action(action: ShortcutAction) -> bool {
+    matches!(
+        action,
+        ShortcutAction::Cut
+            | ShortcutAction::Copy
+            | ShortcutAction::Paste
+            | ShortcutAction::Undo
+            | ShortcutAction::Redo
+            | ShortcutAction::SelectAll
+    )
+}
+
+fn is_child_widget_viewport(context: &egui::Context, viewport: egui::ViewportId) -> bool {
+    viewport != context.viewport_id()
+        && (viewport == scoped_child_viewport_id(context, find_bar::VIEWPORT_SALT)
+            || viewport == scoped_child_viewport_id(context, preview_controls::SALT)
+            || viewport == scoped_child_viewport_id(context, "tiptoptyp-table-editor")
+            || viewport
+                == crate::child_view::child_viewport_id(
+                    scoped_child_viewport_id(context, "preview-window"),
+                    preview_controls::SALT,
+                ))
+}
+
+pub(super) struct ChildWidgetEdits {
+    pub(super) paste_requested: bool,
+    pub(super) requested_paste_admitted: bool,
+    _events: crate::child_view::OwnedEditEvents,
+}
+
+pub(super) fn prepare_child_widget_edit_events(
+    context: &egui::Context,
+    shortcuts: &ShortcutBindings,
+    allow_requested_paste: bool,
+) -> ChildWidgetEdits {
+    let mut owned = Vec::new();
+    let mut deferred = Vec::new();
+    let (requested_paste_admitted, paste_requested) = context.input_mut(|input| {
+        let admitted = normalize_text_edit_shortcut_events(input, shortcuts, allow_requested_paste);
+        let paste =
+            normalize_widget_edit_events(input, shortcuts, Some((&mut owned, &mut deferred)));
+        (admitted, paste)
+    });
+    ChildWidgetEdits {
+        paste_requested,
+        requested_paste_admitted,
+        _events: crate::child_view::OwnedEditEvents::new(context, owned, deferred),
+    }
+}
+
+fn normalize_focused_widget_edit_events(
+    input: &mut egui::InputState,
+    shortcuts: &ShortcutBindings,
+) -> bool {
+    normalize_widget_edit_events(input, shortcuts, None)
+}
+
+fn normalize_widget_edit_events(
+    input: &mut egui::InputState,
+    shortcuts: &ShortcutBindings,
+    mut ownership: Option<(&mut Vec<egui::Event>, &mut Vec<egui::Event>)>,
+) -> bool {
+    let mut paste = false;
+    input.events.retain_mut(|event| {
+        let egui::Event::Key {
+            key,
+            physical_key,
+            pressed: true,
+            modifiers,
+            ..
+        } = event
+        else {
+            if matches!(
+                event,
+                egui::Event::Copy | egui::Event::Cut | egui::Event::Paste(_)
+            ) && let Some((owned, _)) = &mut ownership
+            {
+                owned.push(event.clone());
+            }
+            return true;
+        };
+        let original_key = physical_key.unwrap_or(*key);
+        let command = match shortcuts.action_for_key_event(*key, *modifiers) {
+            Some(ShortcutAction::Cut) => AppCommand::Cut,
+            Some(ShortcutAction::Copy) => AppCommand::Copy,
+            Some(ShortcutAction::Paste) => AppCommand::Paste,
+            Some(ShortcutAction::Undo) => AppCommand::Undo,
+            Some(ShortcutAction::Redo) => AppCommand::Redo,
+            Some(ShortcutAction::SelectAll) => AppCommand::SelectAll,
+            Some(_) => {
+                if let Some((_, deferred)) = &mut ownership {
+                    deferred.push(event.clone());
+                }
+                return false;
+            }
+            None => {
+                return !(modifiers.command
+                    && matches!(key, egui::Key::A | egui::Key::Y | egui::Key::Z));
+            }
+        };
+        match command {
+            AppCommand::Cut => *event = egui::Event::Cut,
+            AppCommand::Copy => *event = egui::Event::Copy,
+            AppCommand::Paste => {
+                paste = true;
+                return false;
+            }
+            _ => {
+                let shortcut = standard_text_edit_shortcut(command).unwrap();
+                *event = egui::Event::Key {
+                    key: shortcut.logical_key,
+                    physical_key: Some(original_key),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: shortcut.modifiers,
+                };
+            }
+        }
+        if let Some((owned, _)) = &mut ownership {
+            owned.push(event.clone());
+        }
+        true
+    });
+    paste
 }
 
 fn standard_text_edit_shortcut(command: AppCommand) -> Option<KeyboardShortcut> {

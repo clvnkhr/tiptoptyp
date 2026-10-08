@@ -28,6 +28,19 @@ pub(super) struct TexDialog {
     validation: Option<String>,
 }
 impl TableEditorDialog {
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    pub(super) fn desktop_inspection(&self) -> serde_json::Value {
+        let (draft, valid) = match self {
+            Self::Source(dialog) => (&dialog.draft, dialog.validation.is_none()),
+            Self::Tex(dialog) if dialog.source_mode => (&dialog.draft, dialog.validation.is_none()),
+            _ => return serde_json::Value::Null,
+        };
+        serde_json::json!({
+            "fingerprint": crate::desktop_test::fingerprint(draft),
+            "bytes": draft.len(),
+            "valid": valid,
+        })
+    }
     pub(super) fn set_error(&mut self, error: String) {
         match self {
             Self::Typst(dialog) => dialog.error = Some(error),
@@ -78,6 +91,18 @@ impl EditorApp {
         self.format_request_key = None;
         self.manual_format_revision = None;
     }
+}
+
+pub(super) fn prepare_child_keyboard(
+    ui: &mut egui::Ui,
+    dialog: &mut TableEditorDialog,
+    shortcuts: &ShortcutBindings,
+    allow_requested_paste: bool,
+) -> ChildWidgetEdits {
+    if let TableEditorDialog::Typst(dialog) = dialog {
+        table_editor::prepare_grid_keyboard(ui, dialog);
+    }
+    prepare_child_widget_edit_events(ui.ctx(), shortcuts, allow_requested_paste)
 }
 
 pub(super) fn prepare_source_edit(
@@ -634,6 +659,110 @@ mod tests {
         );
         assert_eq!(rows[3][0], "row-3");
         assert_eq!(rows[5][0], "row-5");
+    }
+
+    #[test]
+    fn source_workbench_replaces_invalid_draft_with_chunked_native_text() {
+        let original = "#table(columns: widths, ..rows)";
+        let target = crate::editor_features::table_source_at(original, 2).unwrap();
+        let dialog = TableEditorDialog::Source(Box::new(SourceDialog {
+            draft: target.source.clone(),
+            target,
+            key: key(),
+            error: None,
+            validation: None,
+        }));
+        let mut fonts_ready = false;
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(620.0, 560.0))
+            .build_ui_state(
+                move |ui, state| {
+                    if !fonts_ready {
+                        theme::configure_test_fonts(ui.ctx());
+                        fonts_ready = true;
+                        return;
+                    }
+                    crate::child_view::deliver_queued_edit_events(ui.ctx(), &mut state.2);
+                    if let Some(action) =
+                        show(ui, &mut state.0, 590.0, 520.0, &AppSettings::default())
+                    {
+                        state.1 = Some(action);
+                    }
+                },
+                (
+                    dialog,
+                    None::<TableEditorUiAction>,
+                    Vec::<egui::Event>::new(),
+                ),
+            );
+        harness.run();
+        harness
+            .get(
+                by().role(egui::accesskit::Role::MultilineTextInput)
+                    .value(&original[1..]),
+            )
+            .click();
+        harness.run();
+
+        let select_all = || egui::Event::Key {
+            key: egui::Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::COMMAND,
+        };
+        let assert_draft = |harness: &Harness<
+            '_,
+            (
+                TableEditorDialog,
+                Option<TableEditorUiAction>,
+                Vec<egui::Event>,
+            ),
+        >,
+                            expected: &str,
+                            valid: bool| {
+            let TableEditorDialog::Source(dialog) = &harness.state().0 else {
+                unreachable!()
+            };
+            assert_eq!(dialog.draft, expected);
+            assert_eq!(dialog.validation.is_none(), valid);
+            assert_eq!(
+                !harness.get_by_label("Apply").accesskit_node().is_disabled(),
+                valid,
+            );
+            assert!(
+                harness.state().2.is_empty(),
+                "queued edit must be delivered once"
+            );
+        };
+
+        // Native menu commands may arrive in the same paint as the first
+        // Quartz text chunk. They must run before that text is inserted.
+        let incomplete = "table(columns: widths, ..rows";
+        harness.state_mut().2.push(select_all());
+        harness.event(egui::Event::Text(incomplete[..16].into()));
+        harness.run();
+        harness.event(egui::Event::Text(incomplete[16..].into()));
+        harness.run();
+        assert_draft(&harness, incomplete, false);
+
+        let complete = "table(columns: widths, fill: blue, ..rows)";
+        harness.state_mut().2.push(select_all());
+        harness.event(egui::Event::Text(complete[..16].into()));
+        harness.run();
+        harness.event(egui::Event::Text(complete[16..32].into()));
+        harness.run();
+        harness.event(egui::Event::Text(complete[32..].into()));
+        harness.run();
+        assert_draft(&harness, complete, true);
+        harness.get_by_label("Apply").click();
+        harness.run();
+        assert_eq!(harness.state().1, Some(TableEditorUiAction::Apply));
+        let edit = prepare_source_edit(original, key(), &harness.state().0).unwrap();
+        assert_eq!(edit.replacement, complete);
+        let mut result = original.to_owned();
+        result.replace_range(edit.byte_range, &edit.replacement);
+        assert_eq!(result, format!("#{complete}"));
     }
 
     #[test]

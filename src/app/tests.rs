@@ -11235,10 +11235,40 @@ fn focused_table_child_keeps_edit_commands_and_find_out_of_the_source() {
         let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
         let source = "#table(..cells)";
         app.document_mut().replace_unprojected_untitled(source);
-        let target = TableTarget::at(source, 2, DocumentKind::Typst).unwrap();
-        app.begin_table_target(target);
+        app.begin_table_target(TableTarget::at(source, 2, DocumentKind::Typst).unwrap());
         let key = app.document().key();
         let child = scoped_child_viewport_id(&context, "tiptoptyp-table-editor");
+        let field = egui::Id::new("focused-table-child-draft");
+        let mut draft = "draft table".to_owned();
+        let raw = |viewport_id, events| {
+            let mut input = egui::RawInput {
+                viewport_id,
+                events,
+                ..Default::default()
+            };
+            input
+                .viewports
+                .entry(egui::ViewportId::ROOT)
+                .or_default()
+                .focused = Some(false);
+            let info = input.viewports.entry(child).or_default();
+            info.parent = Some(egui::ViewportId::ROOT);
+            info.focused = Some(true);
+            input
+        };
+        let paint = |app: &mut EditorApp, draft: &mut String, events| {
+            context.run_ui(raw(child, events), |ui| {
+                let bindings = app.settings.effective_shortcuts();
+                let _physical = prepare_child_widget_edit_events(ui.ctx(), &bindings, false);
+                let _queued = crate::child_view::begin_queued_edit_events(
+                    ui.ctx(),
+                    &mut app.table_edit_events,
+                );
+                ui.ctx().memory_mut(|memory| memory.request_focus(field));
+                ui.add(egui::TextEdit::singleline(draft).id(field));
+            })
+        };
+        paint(&mut app, &mut draft, Vec::new()).drop_without_applying_deltas();
         for command in [
             AppCommand::SelectAll,
             AppCommand::Undo,
@@ -11246,13 +11276,26 @@ fn focused_table_child_keeps_edit_commands_and_find_out_of_the_source() {
             AppCommand::Find,
             AppCommand::FindReplace,
         ] {
-            let mut input = egui::RawInput::default();
-            input
-                .viewports
-                .entry(egui::ViewportId::ROOT)
-                .or_default()
-                .focused = Some(false);
-            input.viewports.entry(child).or_default().focused = Some(true);
+            if command == AppCommand::Copy {
+                // Undo restores text, not a promise of a selected range.
+                // Select the draft explicitly before testing clipboard output.
+                if native {
+                    app.queued_native_menu_commands.push(AppCommand::SelectAll);
+                } else {
+                    paint(
+                        &mut app,
+                        &mut draft,
+                        vec![egui::Event::Key {
+                            key: egui::Key::A,
+                            physical_key: Some(egui::Key::A),
+                            pressed: true,
+                            repeat: false,
+                            modifiers: Modifiers::COMMAND,
+                        }],
+                    )
+                    .drop_without_applying_deltas();
+                }
+            }
             if native {
                 app.queued_native_menu_commands.push(command);
             } else {
@@ -11261,38 +11304,52 @@ fn focused_table_child_keeps_edit_commands_and_find_out_of_the_source() {
                     .effective_shortcuts()
                     .egui(command_spec(command).shortcut_action)
                     .unwrap();
-                input.events.push(egui::Event::Key {
-                    key: shortcut.logical_key,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: shortcut.modifiers,
-                });
+                paint(
+                    &mut app,
+                    &mut draft,
+                    vec![egui::Event::Key {
+                        key: shortcut.logical_key,
+                        physical_key: Some(shortcut.logical_key),
+                        pressed: true,
+                        repeat: false,
+                        modifiers: shortcut.modifiers,
+                    }],
+                )
+                .drop_without_applying_deltas();
             }
             context
-                .run_ui(input, |ui| {
-                    if !native {
-                        let events = ui
-                            .ctx()
-                            .input_mut(|input| std::mem::take(&mut input.events));
-                        ui.ctx()
-                            .input_mut_for(child, |input| input.events.extend(events));
-                    }
+                .run_ui(raw(egui::ViewportId::ROOT, Vec::new()), |ui| {
                     let source_id = source_editor_id(ui.ctx());
                     ui.ctx()
                         .memory_mut(|memory| memory.request_focus(source_id));
-                    if native {
-                        app.process_native_menu_commands(ui.ctx(), None);
-                    } else {
-                        app.handle_shortcuts(ui.ctx(), None);
-                    }
+                    app.handle_shortcuts(ui.ctx(), None);
+                    app.process_native_menu_commands(ui.ctx(), None);
                 })
                 .drop_without_applying_deltas();
+            let output = paint(&mut app, &mut draft, Vec::new());
+            if command == AppCommand::Copy && native {
+                assert!(output.platform_output.commands.iter().any(|command| {
+                    matches!(command, egui::OutputCommand::CopyText(text) if text == "draft table")
+                }));
+            }
+            output.drop_without_applying_deltas();
+            if command == AppCommand::SelectAll {
+                paint(
+                    &mut app,
+                    &mut draft,
+                    vec![egui::Event::Text("edited draft".into())],
+                )
+                .drop_without_applying_deltas();
+                assert_eq!(draft, "edited draft", "{native}");
+            }
+            if command == AppCommand::Undo {
+                assert_eq!(draft, "draft table", "{native}");
+            }
             assert_eq!(app.document().key(), key, "{native} {command:?}");
             assert_eq!(app.document().source(), source);
             assert!(!app.find_bar.visible, "{native} {command:?}");
         }
-        assert_eq!(app.table_edit_events.len(), 3, "{native}");
+        assert!(app.table_edit_events.is_empty());
         assert!(app.table_editor.is_some());
     }
 }

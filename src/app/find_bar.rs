@@ -186,8 +186,7 @@ pub(super) fn show(
     document_key: DocumentKey,
     editable: bool,
 ) -> FindBarActions {
-    ui.ctx()
-        .input_mut(|input| input.events.append(&mut state.edit_events));
+    crate::child_view::deliver_queued_edit_events(ui.ctx(), &mut state.edit_events);
     let match_status = {
         let search_results = state.search.results(
             source,

@@ -999,6 +999,38 @@ fn style_example(name: &str) -> &'static str {
     }
 }
 
+pub(super) fn prepare_grid_keyboard(ui: &mut egui::Ui, dialog: &mut TypstTableEditorDialog) {
+    // Cell navigation owns its input before the generic field normalizer can
+    // turn Shift+Cmd+A into Select All or defer Ctrl+Space as completion.
+    // Avoid rebuilding the owner map during idle paints and ordinary typing.
+    let has_grid_key = ui.input(|input| {
+        input.events.iter().any(|event| {
+            let egui::Event::Key {
+                key,
+                modifiers,
+                pressed: true,
+                ..
+            } = event
+            else {
+                return false;
+            };
+            match key {
+                egui::Key::A => modifiers.command && modifiers.shift,
+                egui::Key::Space => modifiers.ctrl || modifiers.shift,
+                egui::Key::Tab => true,
+                egui::Key::ArrowUp
+                | egui::Key::ArrowDown
+                | egui::Key::ArrowLeft
+                | egui::Key::ArrowRight => modifiers.alt,
+                _ => false,
+            }
+        })
+    });
+    if has_grid_key && let Ok(owners) = dialog.table.cell_owners() {
+        keyboard_selection(ui, dialog, &owners);
+    }
+}
+
 fn keyboard_selection(
     ui: &mut egui::Ui,
     dialog: &mut TypstTableEditorDialog,
@@ -1287,6 +1319,66 @@ mod tests {
             .len(),
             5
         );
+    }
+
+    #[test]
+    fn native_table_wrapper_preserves_grid_keyboard_selection_and_navigation() {
+        use egui_kittest::Harness;
+        let cases = [
+            (
+                egui::Key::A,
+                Modifiers::COMMAND | Modifiers::SHIFT,
+                (0, 0),
+                (1, 1),
+            ),
+            (egui::Key::Space, Modifiers::CTRL, (0, 0), (1, 0)),
+            (egui::Key::Space, Modifiers::SHIFT, (0, 0), (0, 1)),
+            (egui::Key::Tab, Modifiers::NONE, (0, 1), (0, 1)),
+            (egui::Key::Tab, Modifiers::SHIFT, (1, 1), (1, 1)),
+            (egui::Key::ArrowDown, Modifiers::ALT, (1, 0), (1, 0)),
+            (
+                egui::Key::ArrowRight,
+                Modifiers::ALT | Modifiers::SHIFT,
+                (0, 0),
+                (0, 1),
+            ),
+        ];
+        for (key, modifiers, anchor, focus) in cases {
+            let original = dialog("#table(columns: 2, [A], [B], [C], [D])");
+            let original_cells = original.table.cells.clone();
+            let mut configured = false;
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(940.0, 740.0))
+                .build_ui_state(
+                    move |ui, dialog: &mut table_workbench::TableEditorDialog| {
+                        if !configured {
+                            theme::configure_test_fonts(ui.ctx());
+                            configured = true;
+                            return;
+                        }
+                        // Exercise the native wrapper's preparation, rather
+                        // than bypassing it by rendering the grid directly.
+                        let settings = AppSettings::default();
+                        let _physical = table_workbench::prepare_child_keyboard(
+                            ui,
+                            dialog,
+                            &settings.effective_shortcuts(),
+                            false,
+                        );
+                        table_workbench::show(ui, dialog, 920.0, 720.0, &settings);
+                    },
+                    table_workbench::TableEditorDialog::Typst(Box::new(original)),
+                );
+            harness.run();
+            harness.key_press_modifiers(modifiers, key);
+            harness.run();
+            let table_workbench::TableEditorDialog::Typst(dialog) = harness.state() else {
+                unreachable!()
+            };
+            assert_eq!(dialog.ui.selection.anchor, anchor, "{modifiers:?} {key:?}");
+            assert_eq!(dialog.ui.selection.focus, focus, "{modifiers:?} {key:?}");
+            assert_eq!(dialog.table.cells, original_cells);
+        }
     }
 
     #[test]

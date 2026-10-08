@@ -93,7 +93,9 @@ if ["raise", "close", "restore"].contains(command) {
     emit(["performed": command]); exit(0)
 }
 if command == "foreground" {
-    emit(["pid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1]); exit(0)
+    let foreground = NSWorkspace.shared.frontmostApplication
+    emit(["pid": foreground?.processIdentifier ?? -1,
+          "bundle": foreground?.bundleIdentifier ?? ""]); exit(0)
 }
 if command == "finder" {
     guard let finder = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first else { fail("Finder is unavailable") }

@@ -708,6 +708,216 @@ fn command_select_all_obeys_source_or_find_focus() {
 }
 
 #[test]
+fn explorer_search_edit_commands_keep_fifo_before_following_native_text() {
+    for (route, preceding_text) in [
+        (Route::NativeMenu, None),
+        (Route::Shortcut, None),
+        (Route::Shortcut, Some("typed before Cmd+A")),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = fixture(&context, root.path(), egui::ViewportId::ROOT);
+        let mut queries = std::array::from_fn(|_| String::new());
+        queries[ExplorerSection::Files.index()] = "old query".into();
+        app.explorer.set_queries(queries);
+        app.explorer.focus_search();
+        let document_key = app.document().key();
+        let mut fonts_ready = false;
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(700.0, 600.0))
+            .with_os(egui::os::OperatingSystem::from_target_os())
+            .build_ui_state(
+                move |ui, app: &mut EditorApp| {
+                    if !fonts_ready {
+                        theme::configure_test_fonts(ui.ctx());
+                        fonts_ready = true;
+                        return;
+                    }
+                    app.handle_shortcuts(ui.ctx(), None);
+                    app.process_native_menu_commands(ui.ctx(), None);
+                    app.show_workspace(ui);
+                },
+                app,
+            );
+        harness.run();
+        harness.get_by_label("Find in Files").click();
+        harness.run();
+        let command = harness
+            .state()
+            .settings
+            .effective_shortcuts()
+            .egui(ShortcutAction::SelectAll)
+            .unwrap();
+        if matches!(route, Route::NativeMenu) {
+            harness
+                .state_mut()
+                .enqueue_native_menu_command(AppCommand::SelectAll);
+            harness
+                .state_mut()
+                .enqueue_native_menu_command(AppCommand::Copy);
+        } else {
+            if let Some(text) = preceding_text {
+                harness.event(egui::Event::Text(text.into()));
+            }
+            harness.event(key_event(command));
+        }
+        harness.event(egui::Event::Text("replacement quer".into()));
+        // Native commands are older than this typing, but can be delivered in
+        // its paint. Copy must see the old selected query, then typing replaces it.
+        harness.step();
+        assert_eq!(
+            harness.state().explorer.query(ExplorerSection::Files),
+            "replacement quer",
+            "{route:?}",
+        );
+        if matches!(route, Route::NativeMenu) {
+            assert!(harness.output().platform_output.commands.iter().any(
+                |command| matches!(command, egui::OutputCommand::CopyText(text) if text == "old query")
+            ), "native menu edits must retain SelectAll → Copy ordering");
+        }
+        harness.event(egui::Event::Text("y".into()));
+        harness.run();
+        assert_eq!(
+            harness.state().explorer.query(ExplorerSection::Files),
+            "replacement query",
+            "{route:?}",
+        );
+        assert_eq!(harness.state().document().source(), "alpha beta");
+        assert_eq!(harness.state().document().key(), document_key);
+    }
+}
+
+#[test]
+fn parent_passes_do_not_replay_already_painted_child_edit_chords() {
+    let root = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&context, root.path(), egui::ViewportId::ROOT);
+    let child = scoped_child_viewport_id(&context, preview_controls::SALT);
+    app.preview_controls.query = "old query".into();
+    let field = egui::Id::new("cross-pass-preview-query");
+    let raw = |viewport_id, events| {
+        let mut input = egui::RawInput {
+            viewport_id,
+            events,
+            ..Default::default()
+        };
+        input
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .focused = Some(false);
+        let child_info = input.viewports.entry(child).or_default();
+        child_info.parent = Some(egui::ViewportId::ROOT);
+        child_info.focused = Some(true);
+        input
+    };
+    let paint_child = |app: &mut EditorApp, events| {
+        context
+            .run_ui(raw(child, events), |ui| {
+                let shortcuts = app.settings.effective_shortcuts();
+                let _physical = prepare_child_widget_edit_events(ui.ctx(), &shortcuts, false);
+                let _queued = crate::child_view::begin_queued_edit_events(
+                    ui.ctx(),
+                    &mut app.preview_controls.edit_events,
+                );
+                ui.ctx().memory_mut(|memory| memory.request_focus(field));
+                ui.add(egui::TextEdit::singleline(&mut app.preview_controls.query).id(field));
+            })
+            .drop_without_applying_deltas();
+    };
+    let parent_pass = |app: &mut EditorApp| {
+        context
+            .run_ui(raw(egui::ViewportId::ROOT, Vec::new()), |ui| {
+                app.handle_shortcuts(ui.ctx(), None);
+                app.process_native_menu_commands(ui.ctx(), None);
+            })
+            .drop_without_applying_deltas();
+    };
+    paint_child(&mut app, Vec::new());
+    paint_child(
+        &mut app,
+        vec![egui::Event::Key {
+            key: egui::Key::A,
+            physical_key: Some(egui::Key::A),
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::COMMAND,
+        }],
+    );
+    // Native child painting runs before its parent gets another pass. Its
+    // InputState still contains the key TextEdit just handled; it is not new
+    // parent input and must not be sent back to that child.
+    parent_pass(&mut app);
+    paint_child(&mut app, vec![egui::Event::Text("preview search f".into())]);
+    parent_pass(&mut app);
+    paint_child(&mut app, vec![egui::Event::Text("or Pdfium".into())]);
+    assert_eq!(app.preview_controls.query, "preview search for Pdfium");
+    for _ in 0..3 {
+        parent_pass(&mut app);
+        paint_child(&mut app, Vec::new());
+        assert!(app.preview_controls.edit_events.is_empty());
+        assert_eq!(app.preview_controls.query, "preview search for Pdfium");
+    }
+    // A custom physical chord must be translated locally without its
+    // generated canonical Cmd+A becoming the parent's rebound Explorer key.
+    for (action, key) in [
+        (ShortcutAction::SelectAll, egui::Key::L),
+        (ShortcutAction::Explorer, egui::Key::A),
+    ] {
+        app.settings.shortcut_overrides.assign(
+            action,
+            ShortcutChord::from_egui(
+                KeyboardShortcut::new(Modifiers::COMMAND, key),
+                ShortcutPlatform::current(),
+            )
+            .unwrap(),
+            ShortcutPlatform::current(),
+        );
+    }
+    let explorer_visible = app.explorer.panel_visible();
+    paint_child(
+        &mut app,
+        vec![key_event(KeyboardShortcut::new(
+            Modifiers::COMMAND,
+            egui::Key::L,
+        ))],
+    );
+    parent_pass(&mut app);
+    paint_child(&mut app, vec![egui::Event::Text("custom first".into())]);
+    parent_pass(&mut app);
+    paint_child(&mut app, vec![egui::Event::Text(" second".into())]);
+    assert_eq!(app.preview_controls.query, "custom first second");
+    assert_eq!(app.explorer.panel_visible(), explorer_visible);
+
+    // A genuine menu Select All retains its standard TextEdit semantics even
+    // when Cmd+A now names another action, and is retired after the child paint.
+    app.enqueue_native_menu_command(AppCommand::SelectAll);
+    parent_pass(&mut app);
+    paint_child(&mut app, vec![egui::Event::Text("native first".into())]);
+    parent_pass(&mut app);
+    paint_child(&mut app, vec![egui::Event::Text(" second".into())]);
+    assert_eq!(app.preview_controls.query, "native first second");
+    assert_eq!(app.explorer.panel_visible(), explorer_visible);
+
+    // Conversely, the real rebound global key must reach the parent once and
+    // must never accidentally select the child's text via TextEdit's builtin.
+    paint_child(
+        &mut app,
+        vec![key_event(KeyboardShortcut::new(
+            Modifiers::COMMAND,
+            egui::Key::A,
+        ))],
+    );
+    parent_pass(&mut app);
+    assert_eq!(app.explorer.panel_visible(), !explorer_visible);
+    paint_child(&mut app, vec![egui::Event::Text("!".into())]);
+    parent_pass(&mut app);
+    assert_eq!(app.preview_controls.query, "native first second!");
+    assert_eq!(app.explorer.panel_visible(), !explorer_visible);
+    assert_eq!(app.document().source(), "alpha beta");
+}
+
+#[test]
 fn command_completion_and_capture_consume_keys_before_global_actions() {
     let root = tempfile::tempdir().unwrap();
     let context = egui::Context::default();

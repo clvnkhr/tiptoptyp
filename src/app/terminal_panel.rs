@@ -52,6 +52,17 @@ impl EditorApp {
                 ui.allocate_space(ui.available_size().max(Vec2::ZERO));
             }
         });
+        let rect = rendered.response.rect.intersect(ui.clip_rect());
+        if rect.is_positive()
+            && let Some(stroke) = theme::panel_interaction_stroke(
+                ui.visuals(),
+                ui.rect_contains_pointer(rect),
+                theme::focus_is_inside(ui.ctx(), rect),
+            )
+        {
+            ui.painter()
+                .rect_stroke(rect, 0.0, stroke, egui::StrokeKind::Inside);
+        }
         if !maximized {
             #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
             panel_handles::observe(
@@ -116,6 +127,15 @@ impl EditorApp {
                 }
             });
         }
+        let activity = activity_id(context);
+        if self.bottom_panel.selected() == Some(PanelTab::Activity) {
+            self.focus_activity(context);
+        } else {
+            context.memory_mut(|memory| memory.surrender_focus(activity));
+        }
+        if terminal_visible && self.terminal.is_off() {
+            context.memory_mut(|memory| memory.request_focus(id));
+        }
     }
 
     fn claim_bottom_panel_native_keyboard(&mut self, context: &egui::Context) {
@@ -137,6 +157,12 @@ impl EditorApp {
     fn focus_problems(&mut self, context: &egui::Context) {
         self.claim_bottom_panel_native_keyboard(context);
         let id = problems_id(context);
+        context.memory_mut(|memory| memory.request_focus(id));
+    }
+
+    fn focus_activity(&mut self, context: &egui::Context) {
+        self.claim_bottom_panel_native_keyboard(context);
+        let id = activity_id(context);
         context.memory_mut(|memory| memory.request_focus(id));
     }
 
@@ -182,21 +208,34 @@ impl EditorApp {
         // Claim focus before navigation, allowing a diagnostic double-click
         // to hand the keyboard back to the destination editor.
         self.show_problems(ui);
-        if rect.is_positive()
-            && let Some(stroke) = theme::panel_interaction_stroke(
-                ui.visuals(),
-                hovered,
-                theme::focus_is_inside(ui.ctx(), rect),
-            )
+    }
+
+    fn show_activity_panel(&mut self, ui: &mut egui::Ui, claim_focus: bool) {
+        let rect = ui.available_rect_before_wrap().intersect(ui.clip_rect());
+        let response = ui.interact(
+            rect,
+            activity_id(ui.ctx()),
+            Sense::focusable_noninteractive(),
+        );
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Activity content")
+        });
+        if claim_focus
+            || (rect.is_positive()
+                && ui.rect_contains_pointer(rect)
+                && ui.input(|input| input.pointer.any_pressed())
+                && !theme::focus_is_inside(ui.ctx(), rect))
         {
-            ui.painter()
-                .rect_stroke(rect, 0.0, stroke, egui::StrokeKind::Inside);
+            self.focus_activity(ui.ctx());
         }
+        self.show_activity(ui);
     }
 
     pub(super) fn show_bottom_panel(&mut self, ui: &mut egui::Ui) {
         let before = self.bottom_panel;
         let mut problems_clicked = false;
+        let mut terminal_clicked = false;
+        let mut activity_clicked = false;
         if self.bottom_panel.selected() == Some(PanelTab::Terminal) {
             self.terminal.sync_snapshot();
         }
@@ -237,6 +276,7 @@ impl EditorApp {
             crate::desktop_test::observe("panel.terminal", &terminal);
             if terminal.clicked() {
                 self.bottom_panel.select(PanelTab::Terminal);
+                terminal_clicked = true;
             }
             let activity = native_hover_text(ui.selectable_label(
                     self.bottom_panel.selected() == Some(PanelTab::Activity), "Activity"),
@@ -245,6 +285,7 @@ impl EditorApp {
             crate::desktop_test::observe("panel.activity", &activity);
             if activity.clicked() {
                 self.bottom_panel.select(PanelTab::Activity);
+                activity_clicked = true;
             }
             // Reserve the square close control even for a long exit message.
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -273,23 +314,38 @@ impl EditorApp {
                 }
             });
         });
-        if before != self.bottom_panel {
+        if before != self.bottom_panel || terminal_clicked {
             self.sync_bottom_panel_focus(ui.ctx());
         }
         ui.separator();
         match self.bottom_panel.selected() {
             Some(PanelTab::Problems) => self.show_problems_panel(ui, problems_clicked),
-            Some(PanelTab::Terminal) => self.show_terminal_panel(ui),
-            Some(PanelTab::Activity) => self.show_activity(ui),
+            Some(PanelTab::Terminal) => self.show_terminal_panel(ui, terminal_clicked),
+            Some(PanelTab::Activity) => self.show_activity_panel(ui, activity_clicked),
             None => {}
         }
     }
 
-    fn show_terminal_panel(&mut self, ui: &mut egui::Ui) {
+    fn show_terminal_panel(&mut self, ui: &mut egui::Ui, claim_focus: bool) {
         let (_, available) = ui.allocate_space(ui.available_size().max(Vec2::ZERO));
         let (grid, actions) = terminal_panel_rects(available);
         ui.scope_builder(egui::UiBuilder::new().max_rect(grid), |ui| {
             ui.set_clip_rect(ui.clip_rect().intersect(grid));
+            if self.terminal.is_off() {
+                let response = ui.interact(
+                    grid,
+                    terminal_id(ui.ctx()),
+                    Sense::focusable_noninteractive(),
+                );
+                if claim_focus
+                    || (grid.is_positive()
+                        && ui.rect_contains_pointer(grid)
+                        && ui.input(|input| input.pointer.any_pressed()))
+                {
+                    self.claim_bottom_panel_native_keyboard(ui.ctx());
+                    response.request_focus();
+                }
+            }
             self.terminal.show(ui, &self.workspace_root);
         });
         ui.painter().vline(
@@ -440,6 +496,14 @@ impl EditorApp {
     ) -> bool {
         if !self.terminal_focused(context, viewport) {
             return false;
+        }
+        // Host capture must run before the focused grid drains key events.
+        // It is not an AppCommand and cannot reach the command router below.
+        if let Some(shortcut) = shortcuts.egui(ShortcutAction::CaptureUi)
+            && context.input_mut(|input| input.consume_shortcut(&shortcut))
+        {
+            self.captures.queue_for_viewport(viewport);
+            return true;
         }
         // The terminal owns raw control keys, including editor defaults such
         // as Ctrl+R and Ctrl+W. Keep the panel/terminal toggles available, plus
@@ -607,6 +671,10 @@ pub(super) fn problems_id(context: &egui::Context) -> egui::Id {
     crate::child_view::viewport_scoped_id(context, "problems-panel")
 }
 
+fn activity_id(context: &egui::Context) -> egui::Id {
+    crate::child_view::viewport_scoped_id(context, "activity-panel")
+}
+
 fn terminal_panel_rects(available: Rect) -> (Rect, Rect) {
     let actions_left = (available.right() - PANEL_ACTION_SIZE).max(available.left());
     let grid_right = (actions_left - PANEL_ACTION_GAP).max(available.left());
@@ -714,12 +782,12 @@ mod tests {
             .with_size(Vec2::new(800.0, 260.0))
             .build_ui_state(
                 |ui, state: &mut (EditorApp, String)| {
+                    state.0.show_bottom_panel_container(ui);
                     ui.add(
                         egui::TextEdit::singleline(&mut state.1)
                             .id(source_editor_id(ui.ctx()))
                             .hint_text("Source fixture"),
                     );
-                    state.0.show_bottom_panel(ui);
                 },
                 (app, "unchanged source".to_owned()),
             );
@@ -736,11 +804,12 @@ mod tests {
         let position = Pos2::new(400.0, 200.0);
         harness.hover_at(position);
         harness.run();
-        let panel = harness
-            .ctx
-            .read_response(problems_id(&harness.ctx))
-            .unwrap()
-            .rect;
+        let panel_id = crate::child_view::viewport_scoped_id(&harness.ctx, "bottom-panel");
+        let panel = harness.ctx.data_mut(|data| {
+            data.get_persisted::<egui::PanelState>(panel_id)
+                .unwrap()
+                .outer_rect
+        });
         let has_outline = |harness: &Harness<'_, (EditorApp, String)>, stroke| {
             harness.output().shapes.iter().any(|clipped| {
                 matches!(&clipped.shape, egui::Shape::Rect(shape)
@@ -773,11 +842,11 @@ mod tests {
                 .problems_focused(&harness.ctx, egui::ViewportId::ROOT)
         );
         assert_eq!(
-            harness
-                .ctx
-                .read_response(problems_id(&harness.ctx))
-                .unwrap()
-                .rect,
+            harness.ctx.data_mut(|data| {
+                data.get_persisted::<egui::PanelState>(panel_id)
+                    .unwrap()
+                    .outer_rect
+            }),
             panel
         );
         assert!(has_outline(
@@ -824,6 +893,105 @@ mod tests {
                 .0
                 .problems_focused(&harness.ctx, egui::ViewportId::ROOT)
         );
+    }
+
+    #[test]
+    fn all_bottom_panel_tabs_outline_the_whole_container_and_own_keyboard() {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        app.snapshot_scene = None;
+        app.bottom_panel.select(PanelTab::Problems);
+        app.terminal
+            .prepare_fixture(b"terminal fixture", Path::new("/project"));
+        let mut configured = false;
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(800.0, 400.0))
+            .build_ui_state(
+                move |ui, state: &mut (EditorApp, String)| {
+                    if !configured {
+                        theme::configure_test_fonts(ui.ctx());
+                        configured = true;
+                        return;
+                    }
+                    state.0.show_bottom_panel_container(ui);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut state.1)
+                            .id(source_editor_id(ui.ctx()))
+                            .hint_text("Source fixture"),
+                    );
+                },
+                (app, "unchanged source".to_owned()),
+            );
+        harness.run_steps(3);
+        let panel_rect = |harness: &Harness<'_, (EditorApp, String)>| {
+            let id = crate::child_view::viewport_scoped_id(&harness.ctx, "bottom-panel");
+            harness.ctx.data_mut(|data| {
+                data.get_persisted::<egui::PanelState>(id)
+                    .unwrap()
+                    .outer_rect
+            })
+        };
+        let has_outline = |harness: &Harness<'_, (EditorApp, String)>, rect, stroke| {
+            harness.output().shapes.iter().any(|clipped| {
+                matches!(&clipped.shape, egui::Shape::Rect(shape)
+                    if shape.rect == rect && shape.stroke == stroke)
+            })
+        };
+        let initial = panel_rect(&harness);
+        for (tab, label) in [
+            (PanelTab::Problems, "Problems"),
+            (PanelTab::Terminal, "Terminal"),
+            (PanelTab::Terminal, "Terminal"),
+            (PanelTab::Activity, "Activity"),
+            (PanelTab::Activity, "Activity"),
+        ] {
+            harness
+                .get(
+                    by().role(egui::accesskit::Role::TextInput)
+                        .value("unchanged source"),
+                )
+                .click();
+            harness.run();
+            let header = harness.get_by_label(label).rect();
+            assert!(panel_rect(&harness).contains_rect(header));
+            harness.hover_at(header.center());
+            harness.run();
+            let visuals = harness.ctx.style_of(harness.ctx.theme()).visuals.clone();
+            assert!(
+                has_outline(
+                    &harness,
+                    panel_rect(&harness),
+                    visuals.widgets.hovered.bg_stroke
+                ),
+                "hovering {label} must outline the panel including its tabs",
+            );
+            harness.get_by_label(label).click();
+            harness.run();
+            assert_eq!(harness.state().0.bottom_panel.selected(), Some(tab));
+            let rect = panel_rect(&harness);
+            assert_eq!(rect, initial, "{label} changed the panel geometry");
+            assert!(
+                theme::focus_is_inside(&harness.ctx, rect),
+                "{label} must own keyboard focus after its header is clicked",
+            );
+            assert!(
+                has_outline(&harness, rect, visuals.selection.stroke),
+                "{label}"
+            );
+            if tab == PanelTab::Problems {
+                let inner = harness
+                    .ctx
+                    .read_response(problems_id(&harness.ctx))
+                    .unwrap()
+                    .rect;
+                assert!(inner.top() > header.top());
+                assert!(!has_outline(&harness, inner, visuals.selection.stroke));
+            }
+            harness.event(egui::Event::Text("must not reach source".into()));
+            harness.run();
+            assert_eq!(harness.state().1, "unchanged source", "{label}");
+        }
     }
 
     #[test]
@@ -1441,6 +1609,103 @@ mod tests {
         harness.run();
         assert!(harness.state().terminal.is_off());
         assert!(harness.query_by_label("Terminal input").is_none());
+    }
+
+    #[test]
+    fn terminal_capture_shortcut_reaches_host_before_grid_or_find_input() {
+        let default = crate::shortcuts::ShortcutChord::parse("Primary+Shift+F12").unwrap();
+        let rebound = crate::shortcuts::ShortcutChord::parse("Primary+Shift+A").unwrap();
+        for find_focused in [false, true] {
+            for override_binding in [None, Some(Some(rebound)), Some(None)] {
+                let root = tempfile::tempdir().unwrap();
+                let context = egui::Context::default();
+                let mut app = EditorApp::dormant_window_for_tests(
+                    &context,
+                    root.path().into(),
+                    egui::ViewportId::ROOT,
+                );
+                app.document_mut()
+                    .replace_unprojected_untitled("source must stay unchanged");
+                app.bottom_panel.select(PanelTab::Terminal);
+                app.terminal
+                    .prepare_fixture(b"terminal fixture", Path::new("/project"));
+                app.captures = CaptureController::new(
+                    crate::screenshot::CaptureConfig::for_working_directory(root.path()),
+                );
+                if let Some(binding) = override_binding {
+                    app.settings
+                        .shortcut_overrides
+                        .set(ShortcutAction::CaptureUi, binding);
+                }
+                let mut configured = false;
+                let mut harness = Harness::builder()
+                    .with_size(Vec2::new(800.0, 260.0))
+                    .build_ui_state(
+                        move |ui, app: &mut EditorApp| {
+                            if !configured {
+                                theme::configure_test_fonts(ui.ctx());
+                                configured = true;
+                                return;
+                            }
+                            app.handle_shortcuts(ui.ctx(), None);
+                            app.show_bottom_panel(ui);
+                        },
+                        app,
+                    );
+                harness.run();
+                harness.get_by_label("Terminal input").click();
+                harness.run();
+                if find_focused {
+                    harness.state_mut().terminal.open_find();
+                    harness.run();
+                    harness.event(egui::Event::Text("needle".into()));
+                    harness.run();
+                    assert_eq!(
+                        harness
+                            .get_by_label("Search terminal scrollback")
+                            .value()
+                            .as_deref(),
+                        Some("needle"),
+                    );
+                }
+                // A disabled/rebound capture must not retain the old chord.
+                if override_binding.is_some() {
+                    harness
+                        .key_press_modifiers(default.egui().modifiers, default.egui().logical_key);
+                    harness.run();
+                    assert!(!harness.state().captures.has_pending());
+                }
+                let binding = harness
+                    .state()
+                    .settings
+                    .effective_shortcuts()
+                    .egui(ShortcutAction::CaptureUi);
+                if let Some(binding) = binding {
+                    harness.key_press_modifiers(binding.modifiers, binding.logical_key);
+                    harness.run();
+                    assert!(
+                        harness.state().captures.has_pending_for("main"),
+                        "capture was swallowed by terminal input (find: {find_focused}, override: {override_binding:?})",
+                    );
+                } else {
+                    assert_eq!(override_binding, Some(None));
+                    assert!(!harness.state().captures.has_pending());
+                }
+                assert_eq!(
+                    harness.state().document().source(),
+                    "source must stay unchanged"
+                );
+                if find_focused {
+                    assert_eq!(
+                        harness
+                            .get_by_label("Search terminal scrollback")
+                            .value()
+                            .as_deref(),
+                        Some("needle"),
+                    );
+                }
+            }
+        }
     }
 
     #[test]

@@ -156,8 +156,14 @@ impl EditorApp {
             "preview_generation": format!("{:?}", self.tinymist_sync.generation),
             }).as_object().unwrap().clone(),
         );
+        interaction["format_after_math_conversion"] =
+            serde_json::json!(self.settings.format_after_math_conversion);
         interaction["explorer_panel_width"] = serde_json::json!(
             egui::PanelState::load(context, explorer_panel_id(context)).map(|state| state.size().x)
+        );
+        interaction["table_draft"] = self.table_editor.as_ref().map_or(
+            serde_json::Value::Null,
+            table_workbench::TableEditorDialog::desktop_inspection,
         );
         interaction["compilation_paused"] = serde_json::json!(self.compilation_paused);
         interaction["compiler_diagnostic_count"] =
@@ -264,6 +270,12 @@ impl EditorApp {
         );
         interaction["interface_scale"] = serde_json::json!(context.zoom_factor());
         let editor_id = source_editor_id(context);
+        interaction["bottom_panel_keyboard_focused"] = serde_json::json!(
+            self.bottom_panel.is_visible()
+                && context.input(|input| input.focused)
+                && egui::PanelState::load(context, panel_id)
+                    .is_some_and(|state| { theme::focus_is_inside(context, state.outer_rect) })
+        );
         interaction["problems_keyboard_focused"] =
             serde_json::json!(self.problems_focused(context, context.viewport_id()));
         interaction["editor_keyboard_focused"] =
