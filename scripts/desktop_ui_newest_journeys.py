@@ -1,6 +1,7 @@
 """Real input regressions for focus, preview controls and table draft lifetimes."""
 
 import math
+import shlex
 import time
 
 NEWEST_JOURNEYS = ("problems_focus", "preview_find", "tables")
@@ -86,6 +87,42 @@ class NewestJourneys:
                       d["source_fingerprint"] != original["source_fingerprint"])
             self.key(6)
             self.wait("source fixture restored once", unchanged)
+            self.preview_terminal_handoff(backend, unchanged)
+
+    def preview_terminal_handoff(self, backend, unchanged):
+        # Off remains off when its panel reopens. Prepare a fresh isolated pane
+        # before focusing the preview, including on the second backend run.
+        if self.snapshot()["document"]["terminal_off"]:
+            self.key(50, "ctrl")
+            self.wait("off Terminal opens for preparation", lambda d: d["panel"] == "Terminal")
+            self.click("terminal.new")
+            self.wait("isolated terminal pane prepared", lambda d: not d["terminal_off"] and unchanged(d))
+            self.click("panel.close")
+            self.wait("prepared terminal panel closes", lambda d: d["panel"] is None)
+        # The shortcut itself must claim native keyboard input: do not click
+        # the terminal grid to compensate for a failed WebView handoff.
+        self.click("preview.page")
+        self.wait("preview owns keyboard before Terminal", lambda d: d["preview_keyboard_focused"])
+        self.key(50, "ctrl")
+        self.wait("Terminal shortcut claims keyboard from preview", lambda d:
+                  d["panel"] == "Terminal" and d["terminal_keyboard_focused"]
+                  and not d["preview_keyboard_focused"] and not d["editor_keyboard_focused"]
+                  and d["explorer_focused"] is None and unchanged(d))
+        self.wait_target("terminal.input")
+        self.key(17, "none")  # A physical 't' must reach the shell, not invert the preview.
+        self.stable_state(unchanged, frames=4)
+        self.key(32, "ctrl")  # Clear the shell input before writing an isolated receipt.
+        receipt = self.directory / f"preview-terminal-{backend}.receipt"
+        self.native("text", f"printf '%s' tiptoptyp > {shlex.quote(str(receipt))}")
+        self.key(36, "none")
+        self.wait("native typing reaches the terminal shell", lambda d:
+                  receipt.exists() and receipt.read_text() == "tiptoptyp" and unchanged(d))
+        self.click("terminal.off")
+        self.wait("terminal shell stops after focus check", lambda d: d["terminal_off"] and unchanged(d))
+        self.click("panel.close")
+        self.wait("terminal panel releases keyboard on close", lambda d:
+                  d["panel"] is None and not d["terminal_keyboard_focused"] and unchanged(d))
+        self.record("preview.terminal_handoff", backend=backend)
 
     def stationary_preview_drag(self):
         self.wait_target("preview.drag_handle")

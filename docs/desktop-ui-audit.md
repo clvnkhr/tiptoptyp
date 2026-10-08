@@ -1576,3 +1576,62 @@ Pending unlocked runs are `tables`, `preview_find` and `problems_focus` (use
 `--release`; add `--trace-preview` for the preview journeys). Keep this branch
 unmerged until those interaction checks and the previous audit's pending native
 checks are completed.
+
+
+## Audit of the newest table/panel implementation, 2026-10-08
+
+The follow-up audit reproduced and fixed these defects from 1025e4e:
+
+- Typst grid cell text could close its own content/table and introduce a second
+  table; style fields could inject unrelated options or cell spans. Apply now
+  validates the complete cell wrapper and exactly one named option. Incomplete
+  drafts remain available for repair; nested markup, lambdas and dictionaries
+  retain their valid expressions. Both negative regressions failed before fixes.
+- TeX `\tabularnewline` lost its terminating trivia, concatenating the command
+  with the next cell and preventing valid grid Apply. Row endings now retain
+  whitespace and comments, including optional heights; repeated Apply is stable.
+- An oversized TeX row allocated a String for every top-level alignment delimiter
+  before rejecting its width. It now stops at the first extra delimiter and
+  preserves the complete exact source fallback. The matched optimized allocation
+  measurement is checked in at
+  `docs/performance-results/tex-table-row-audit-2026-10-08.json`: 876,573 to 80,333
+  bytes for the same 40,033-byte fixture. This measures allocation, not latency.
+- The Terminal command requested egui focus while Tinymist retained native
+  keyboard ownership. Terminal and Problems now share the native parent/keyboard
+  handoff, clearing preview and Explorer ownership. Native-menu and physical-key
+  semantic regressions cover the change without modifying the source.
+- Closing a pinned source left its controls action able to zoom an unrelated PDF.
+  Invalid owners/actions are now retired before selecting the next closed default.
+  A real tab-switch/close regression covers this, alongside positive first-PDF
+  shortcut and toolbar checks.
+- Eight terminal pane buttons expanded a user's 120-point panel to 307 points.
+  The action strip now scrolls/clips inside its own column. Regressions retain the
+  height across twelve frames and reach the last pane/new action with real wheel
+  events. The normal-height terminal gallery fixture now contains eight panes.
+
+An independent review additionally caught two native-journey setup defects. The
+first backend closed the last terminal, leaving the second backend unable to
+claim input; preparation now creates an isolated pane before focusing the preview.
+A repeated-backend harness regression failed before the fix and also covers an
+initially-off terminal. The standalone Problems/focus journey is now subject to
+the same `/bin/zsh`/ZDOTDIR startup isolation guard as the other terminal journeys.
+Its preview-to-Terminal transition types a physical `t` and writes an isolated
+shell receipt without clicking the terminal grid after the shortcut.
+
+Formatting, strict all-target Clippy (normal and desktop-ui-tests builds),
+1,683 normal Rust tests, 17 xtask tests and 30 Python harness contracts pass;
+44 opt-in Rust tests remain ignored. Apply-only validation and the bounded
+terminal action strip introduce no workers or idle repaint loop.
+
+The optimized gallery freshly captured and decoded all 25 expected PNGs in one
+session. The eight-pane terminal gallery image and a separate fresh capture under
+`.tiptoptyp/screenshots/agent-review` were inspected: the action strip stays
+clipped inside the chosen panel height without overlapping the terminal grid.
+These are viewport framebuffers, not proof of native composed-window placement.
+
+The native command
+`python3 scripts/test-desktop-ui.py --journey problems_focus --release`
+stopped before interaction at preflight because the Mac was locked. Its explicit
+unavailable result is `.tiptoptyp/desktop-ui-tests/run-u2kufq4l/result.json`;
+Accessibility/input permissions were available. Native interaction and composed
+window placement are still unverified, and the branch remains unmerged.

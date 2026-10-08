@@ -817,6 +817,16 @@ impl QaSession {
                     "\x1b[?2027h\x1b[32m~/project\x1b[0m $ typst compile notes.typ\r\n\x1b[32mCompilation finished\x1b[0m in 42 ms\r\n\x1b[1;35mgit_branch master\x1b[0m  \x1b[1;33mpackage v0.1.0\x1b[0m  \x1b[1;31mrust v1.98.1\x1b[0m\r\nDigits: 0123456789 #*  \x1b[1mbold 0123456789\x1b[0m  \x1b[3mitalic 0123456789\x1b[0m\r\n\x1b[1mGhostty terminal\x1b[0m  \x1b[31mred\x1b[0m  \x1b[34mblue\x1b[0m  \x1b[38;2;180;90;200mtrue color\x1b[0m\r\nUnicode: α + β = γ   é   界   😀 🦀 📦 👩‍💻 🇬🇧\r\n\x1b[32m~/project\x1b[0m $ ".as_bytes(),
                     Path::new("~/project"),
                 );
+                // Exercise the bounded action strip with the maximum pane
+                // count in the normal-height gallery, without starting shells.
+                if scene == UiSnapshotScene::TerminalPanel && app.terminal.len() == 1 {
+                    for _ in 1..MAX_TERMINAL_PANES {
+                        app.terminal.add();
+                        app.terminal
+                            .prepare_fixture(b"~/project $ ", Path::new("~/project"));
+                    }
+                    app.terminal.select(0);
+                }
             }
             UiSnapshotScene::ProblemsPanel => {
                 app.bottom_panel.select(PanelTab::Problems);

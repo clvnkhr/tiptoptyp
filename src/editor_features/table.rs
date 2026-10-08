@@ -691,6 +691,49 @@ mod tests {
         editable_table_at(source, 2).unwrap()
     }
     #[test]
+    fn grid_apply_rejects_cells_that_escape_their_content_block() {
+        let mut table = parse("#table(columns: 2, [A], [B])");
+        table.cells[0][0] = "A])\n#table([injected".into();
+        assert!(table.render_replacement().is_err());
+    }
+
+    #[test]
+    fn grid_apply_rejects_style_arguments_that_inject_other_options() {
+        let mut table = parse("#table(columns: 2, [A], [B])");
+        table.set_style(None, "fill", Some("red, columns: 1"));
+        assert!(table.render_replacement().is_err());
+        table.set_style(None, "fill", Some("red)\n#table(columns: 2"));
+        assert!(table.render_replacement().is_err());
+        table.set_style(None, "fill", None);
+        table.set_style(Some((0, 0)), "stroke", Some("none, colspan: 2"));
+        assert!(table.render_replacement().is_err());
+    }
+
+    #[test]
+    fn grid_apply_preserves_nested_markup_and_compound_option_expressions() {
+        let mut table = parse("#table(columns: (20%, auto), [A], [B])");
+        table.cells[0][0] = "#strong[Hello] $x_1$ and \\[brackets\\]".into();
+        table.set_style(
+            None,
+            "fill",
+            Some("(x, y) => if y == 0 { red } else { none }"),
+        );
+        table.set_style(
+            Some((0, 0)),
+            "stroke",
+            Some("(top: 1pt + blue, rest: none)"),
+        );
+        let rendered = table.render_replacement().unwrap();
+        let reparsed = parse(&format!("#{rendered}"));
+        assert_eq!(reparsed.cells, table.cells);
+        assert_eq!(reparsed.style(None, "fill"), table.style(None, "fill"));
+        assert_eq!(
+            reparsed.style(Some((0, 0)), "stroke"),
+            table.style(Some((0, 0)), "stroke")
+        );
+    }
+
+    #[test]
     fn source_drafts_preserve_dynamic_cells_and_incomplete_options_for_repair() {
         let mut table = editable_table_at("#table(columns: 2, [A], [B])", 2).unwrap();
         table.cells[0][0] = "#let value = 1; #value".into();

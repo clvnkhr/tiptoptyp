@@ -268,6 +268,8 @@ impl EditorApp {
             serde_json::json!(self.problems_focused(context, context.viewport_id()));
         interaction["editor_keyboard_focused"] =
             serde_json::json!(context.memory(|m| m.has_focus(editor_id)));
+        interaction["terminal_keyboard_focused"] =
+            serde_json::json!(self.terminal_focused(context, context.viewport_id()));
         interaction["drawing"] = self.symbol_drawing.inspection(
             self.document().kind() == DocumentKind::Tex || self.document().config().is_some(),
             self.settings.handwriting,

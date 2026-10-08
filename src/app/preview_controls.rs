@@ -406,18 +406,15 @@ impl EditorApp {
         if self.valid_preview_target(self.preview_controls.target) {
             return true;
         }
-        // An asset action must never cross an active-tab replacement. A source
-        // default can adopt a standalone PDF before its first controls open.
-        let obsolete_asset = matches!(self.preview_controls.target, Target::Asset(_));
+        // Retire both source and asset owners before choosing the next default.
+        // A source closing beside a PDF must not redirect its queued control
+        // action to that PDF. Fresh controls are opened by an explicit toggle.
         let replacement = self.main_preview_controls_target();
         self.preview_controls
             .select(replacement.unwrap_or_default());
-        if obsolete_asset || replacement.is_none() {
-            self.preview_controls.open = false;
-            self.preview_controls.focus_find = false;
-            return false;
-        }
-        true
+        self.preview_controls.open = false;
+        self.preview_controls.focus_find = false;
+        false
     }
 
     pub(super) fn focused_preview_target(&self, context: &egui::Context) -> Option<Target> {
@@ -1313,6 +1310,77 @@ mod tests {
                 assert_eq!(harness.state().0.asset_preview.requested_zoom, None);
             }
         }
+    }
+
+    #[test]
+    fn standalone_pdf_first_zoom_shortcut_and_toolbar_controls_work_before_target_normalization() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        app.snapshot_scene = None;
+        app.document_mut().replace_loaded_unprojected(
+            String::new(),
+            directory.path().join("standalone.pdf"),
+            DocumentKind::Pdf,
+            None,
+        );
+        app.view_mode = ViewMode::Code;
+        let mut show_controls = false;
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1400.0, 800.0))
+            .build_ui_state(
+                move |ui, app: &mut EditorApp| {
+                    app.handle_shortcuts(ui.ctx(), None);
+                    egui::Panel::top("first-pdf-toolbar").show(ui, |ui| app.show_toolbar(ui, None));
+                    // Exercise the shortcut before the normal per-frame
+                    // controls callback has adopted the standalone asset.
+                    if show_controls || app.preview_controls.open {
+                        show_controls = true;
+                        app.show_preview_controls(ui.ctx(), false);
+                    }
+                },
+                app,
+            );
+        assert_eq!(harness.state().preview_controls.target, Target::Source);
+        assert!(!harness.state().source_preview_available());
+        harness.key_press_modifiers(Modifiers::COMMAND | Modifiers::ALT, egui::Key::Plus);
+        harness.run_steps(2);
+        assert_eq!(harness.state().pdfium_asset.controls_snapshot().zoom, 1.2);
+        assert_eq!(harness.state().preview_controls.target, Target::Source);
+        harness.get_by_label("Preview controls").click();
+        harness.run_steps(3);
+        assert!(harness.state().preview_controls.open);
+        assert_eq!(
+            harness.state().preview_controls.target,
+            Target::Asset(harness.state().document().key())
+        );
+        harness.get_by_label("Zoom in").click();
+        harness.run_steps(2);
+        assert_eq!(harness.state().pdfium_asset.controls_snapshot().zoom, 1.44);
+    }
+
+    #[test]
+    fn closing_an_open_source_control_owner_does_not_retarget_its_action_to_a_pdf_asset() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app =
+            pinned_source_with_asset(&context, directory.path(), PreviewPreference::Pdfium);
+        let asset_path = app.document().path().clone();
+        let source_tab = app.tabs.preview_id().unwrap();
+        app.preview_controls.open = true;
+        app.preview_controls.target = Target::Source;
+        app.activate_tab(source_tab, &context);
+        app.finish_close_tab(&context);
+        assert!(!app.source_preview_available());
+        assert_eq!(app.document().kind(), DocumentKind::Pdf);
+        assert_eq!(app.document().path(), &asset_path);
+        app.preview_control_action(Action::ZoomIn);
+        assert_eq!(
+            app.pdfium_asset.controls_snapshot().zoom,
+            1.0,
+            "An action from retired source controls reached the unrelated PDF asset"
+        );
+        assert!(!app.preview_controls.open);
     }
 
     #[test]

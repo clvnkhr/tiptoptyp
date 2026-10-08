@@ -405,6 +405,66 @@ class PreviewDragContract(unittest.TestCase):
 
 
 
+class TerminalHandoffContract(unittest.TestCase):
+    def test_repeated_backend_handoffs_prepare_a_pane_before_the_focus_shortcut(self):
+        from desktop_ui_newest_journeys import NewestJourneys
+        import shlex
+        import tempfile
+        for initially_off in (False, True):
+            with self.subTest(initially_off=initially_off), tempfile.TemporaryDirectory() as directory:
+                journey = NewestJourneys()
+                journey.directory = Path(directory)
+                state = {"panel": None, "terminal_off": initially_off,
+                         "terminal_keyboard_focused": False, "preview_keyboard_focused": False,
+                         "editor_keyboard_focused": False, "explorer_focused": None}
+                actions = []
+                journey.snapshot = lambda: {"document": state.copy()}
+
+                def click(target):
+                    actions.append(("click", target))
+                    if target == "preview.page":
+                        state["preview_keyboard_focused"] = True
+                        state["terminal_keyboard_focused"] = False
+                    elif target == "terminal.new":
+                        self.assertEqual(state["panel"], "Terminal")
+                        state["terminal_off"] = False
+                    elif target == "terminal.off":
+                        state["terminal_off"] = True
+                        state["terminal_keyboard_focused"] = False
+                    elif target == "panel.close":
+                        state["panel"] = None
+                        state["terminal_keyboard_focused"] = False
+                    else:
+                        self.fail(f"unexpected compensating click: {target}")
+
+                def key(code, modifiers):
+                    actions.append(("key", code, modifiers))
+                    if code == 50:
+                        state["panel"] = "Terminal"
+                        state["preview_keyboard_focused"] = False
+                        state["terminal_keyboard_focused"] = not state["terminal_off"]
+                    elif code == 17:
+                        self.assertTrue(state["terminal_keyboard_focused"])
+
+                def native(operation, command):
+                    self.assertEqual(operation, "text")
+                    self.assertTrue(state["terminal_keyboard_focused"])
+                    parts = shlex.split(command)
+                    Path(parts[-1]).write_text(parts[2])
+
+                journey.click = click
+                journey.key = key
+                journey.native = native
+                journey.wait = lambda description, predicate: self.assertTrue(predicate(state), description)
+                journey.wait_target = lambda _: self.assertTrue(state["terminal_keyboard_focused"])
+                journey.stable_state = lambda predicate, **_: self.assertTrue(predicate(state))
+                journey.record = lambda *_, **__: None
+                for backend in ("Pdfium", "Interactive"):
+                    journey.preview_terminal_handoff(backend, lambda _: True)
+                self.assertTrue(state["terminal_off"])
+                self.assertEqual(actions.count(("click", "terminal.new")), 2 if initially_off else 1)
+
+
 class TableDraftContract(unittest.TestCase):
     def test_table_journey_is_registered_with_the_newest_native_group(self):
         from desktop_ui_newest_journeys import NEWEST_JOURNEYS, NewestJourneys

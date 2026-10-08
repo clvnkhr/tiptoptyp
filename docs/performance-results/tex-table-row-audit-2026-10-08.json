@@ -1,0 +1,36 @@
+{
+  "scope": "TeX table parsing: oversized-row exact source fallback",
+  "environment": {
+    "os": "macOS 14.6.1",
+    "architecture": "aarch64-apple-darwin",
+    "rustc": "1.98.1 (48a229cea 2026-09-01)",
+    "optimization": "rustc -O standalone parser test harness"
+  },
+  "fixture": {
+    "source_bytes": 40033,
+    "expected_columns": 2,
+    "top_level_delimiters": 10000,
+    "construction": "begin tabular cc + 10000 repetitions of A & + Z + end tabular"
+  },
+  "workload": {
+    "operation": "one cold tex_table_at parse",
+    "allocation_counter": "existing thread-local test_allocations; fixture construction excluded",
+    "warmup": "none",
+    "theme": "not applicable: pure parser",
+    "viewport": "not applicable: pure parser"
+  },
+  "baseline": {
+    "commit": "1025e4e plus row-terminator preservation, before early row-width rejection",
+    "allocated_bytes": 876573
+  },
+  "after": {
+    "change": "reject extra alignment delimiter when the expected row width is already filled",
+    "allocated_bytes": 80333
+  },
+  "validation": [
+    "exact source fallback retained",
+    "bounded-allocation repository regression oversized_rows_keep_allocation_bounded_and_fall_back_to_exact_source"
+  ],
+  "reproduce_regression": "cargo test --release --bin tiptoptyp oversized_rows_keep_allocation_bounded_and_fall_back_to_exact_source -- --nocapture",
+  "limitations": "Allocation counts for this fixture; no elapsed-time, UI responsiveness, or cross-platform speed guarantee."
+}

@@ -288,6 +288,11 @@ fn split_rows(body: &str, columns: usize) -> Option<ParsedRows> {
             }
             b'&' if depth == 0 && !math => {
                 row.push(cell_source(body.get(start..i)?));
+                // This delimiter requires another cell. Reject an overwide
+                // row now instead of allocating every remaining source segment.
+                if row.len() >= columns {
+                    return None;
+                }
                 i += 1;
                 start = i;
             }
@@ -328,6 +333,11 @@ fn split_rows(body: &str, columns: usize) -> Option<ParsedRows> {
                     if row.len() != columns || (rows.len() + 1).saturating_mul(columns) > 4096 {
                         return None;
                     }
+                    // The terminating whitespace belongs to a control-word
+                    // delimiter such as \tabularnewline. Trimming it from the
+                    // next cell would concatenate that command with its text.
+                    // Keep comments here too, including their terminating newline.
+                    ending = skip_trivia(body, ending);
                     prefixes.push(prefix);
                     endings.push(body[i..ending].to_owned());
                     rows.push(std::mem::take(&mut row));
@@ -809,6 +819,50 @@ C & D \\
                 .unwrap();
             assert_eq!(second, first, "second Apply changed row endings: {source}");
             assert_eq!(third, first, "third Apply changed row endings: {source}");
+        }
+    }
+
+    #[test]
+    fn oversized_rows_keep_allocation_bounded_and_fall_back_to_exact_source() {
+        let source = format!(
+            "\\begin{{tabular}}{{cc}}{}Z\\end{{tabular}}",
+            "A & ".repeat(10_000)
+        );
+        let (table, allocated) =
+            crate::test_allocations::allocated(|| tex_table_at(&source, 1).unwrap());
+        assert!(table.cells.is_none());
+        assert_eq!(table.render_replacement().unwrap(), source);
+        // Retaining the source needs a few complete buffer copies; discovering
+        // an unsupported row must not allocate a separate String per delimiter.
+        assert!(
+            allocated < source.len() * 4 + 4096,
+            "oversized row allocated {allocated} bytes for {} source bytes",
+            source.len()
+        );
+    }
+
+    #[test]
+    fn named_row_delimiters_keep_their_terminating_trivia() {
+        for source in [
+            r"\begin{tabular}{cc}A & B\tabularnewline
+C & D\tabularnewline
+\end{tabular}",
+            r"\begin{tabular}{cc}A & B\tabularnewline C & D\end{tabular}",
+            r"\begin{tabular}{cc}A & B\tabularnewline % keep this row comment
+C & D\tabularnewline[2pt]
+\end{tabular}",
+        ] {
+            let mut table = tex_table_at(source, 1).unwrap();
+            assert_eq!(table.cells.as_ref().unwrap().len(), 2);
+            table.cells.as_mut().unwrap()[1][1] = "Edited".into();
+            let rendered = table.grid_source_edit().unwrap().replacement;
+            let parsed = tex_table_at(&rendered, 1).unwrap();
+            assert_eq!(parsed.cells, table.cells, "{rendered}");
+            assert!(!rendered.contains("\\tabularnewlineC"), "{rendered}");
+            if source.contains("% keep this row comment") {
+                assert!(rendered.contains("% keep this row comment\nC"));
+            }
+            assert_eq!(parsed.render_replacement().unwrap(), rendered);
         }
     }
 

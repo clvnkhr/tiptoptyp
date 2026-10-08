@@ -89,6 +89,7 @@ impl EditorApp {
         let id = terminal_id(context);
         let terminal_visible = self.bottom_panel.selected() == Some(PanelTab::Terminal);
         if terminal_visible {
+            self.claim_bottom_panel_native_keyboard(context);
             self.terminal.request_focus();
         } else {
             let find_id = crate::terminal::terminal_find_id(context);
@@ -117,7 +118,9 @@ impl EditorApp {
         }
     }
 
-    fn focus_problems(&mut self, context: &egui::Context) {
+    fn claim_bottom_panel_native_keyboard(&mut self, context: &egui::Context) {
+        // Requesting egui focus alone cannot release a WKWebView first
+        // responder when a shortcut or native menu opens the bottom panel.
         self.preview_controls.web.focused = false;
         self.explorer.clear_keyboard_focus();
         #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -129,6 +132,10 @@ impl EditorApp {
             context.viewport_id(),
             crate::window_host::FocusCause::UserAction,
         );
+    }
+
+    fn focus_problems(&mut self, context: &egui::Context) {
+        self.claim_bottom_panel_native_keyboard(context);
         let id = problems_id(context);
         context.memory_mut(|memory| memory.request_focus(id));
     }
@@ -291,36 +298,57 @@ impl EditorApp {
             ui.visuals().widgets.noninteractive.bg_stroke,
         );
         ui.scope_builder(egui::UiBuilder::new().max_rect(actions), |ui| {
-            ui.spacing_mut().item_spacing.y = 3.0;
-            let empty = self.terminal.is_off();
-            // Restart stays available on a cleared window, where it opens
-            // the first pane again; off needs a pane to close.
-            let restart =
-                square_icon_button(ui, UiIcon::Refresh, "Restart terminal", PANEL_ACTION_SIZE);
-            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-            crate::desktop_test::observe("terminal.restart", &restart);
-            let detail = if restart.hovered() {
-                format!(
-                    "(start: {})",
-                    self.terminal
-                        .starting_directory(&self.workspace_root)
-                        .display()
-                )
-            } else {
-                String::new()
-            };
-            native_hover_text(restart.clone(), detail);
-            if restart.clicked() {
-                self.terminal.restart();
-            }
-            let off = ui
-                .add_enabled_ui(!empty, |ui| {
-                    square_icon_button(ui, UiIcon::Power, "Turn off terminal", PANEL_ACTION_SIZE)
-                })
-                .inner;
-            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-            crate::desktop_test::observe("terminal.off", &off);
-            if native_hover_text(
+            ui.set_clip_rect(ui.clip_rect().intersect(actions));
+            // The action strip belongs to the user's chosen panel height.
+            // Extra pane buttons scroll here instead of enlarging the panel.
+            egui::ScrollArea::vertical()
+                .id_salt("terminal-actions")
+                .auto_shrink([false, false])
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 3.0;
+                    let empty = self.terminal.is_off();
+                    // Restart stays available on a cleared window, where it opens
+                    // the first pane again; off needs a pane to close.
+                    let restart = square_icon_button(
+                        ui,
+                        UiIcon::Refresh,
+                        "Restart terminal",
+                        PANEL_ACTION_SIZE,
+                    );
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    if restart.interact_rect.is_positive() {
+                        crate::desktop_test::observe("terminal.restart", &restart);
+                    }
+                    let detail = if restart.hovered() {
+                        format!(
+                            "(start: {})",
+                            self.terminal
+                                .starting_directory(&self.workspace_root)
+                                .display()
+                        )
+                    } else {
+                        String::new()
+                    };
+                    native_hover_text(restart.clone(), detail);
+                    if restart.clicked() {
+                        self.terminal.restart();
+                    }
+                    let off = ui
+                        .add_enabled_ui(!empty, |ui| {
+                            square_icon_button(
+                                ui,
+                                UiIcon::Power,
+                                "Turn off terminal",
+                                PANEL_ACTION_SIZE,
+                            )
+                        })
+                        .inner;
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    if off.interact_rect.is_positive() {
+                        crate::desktop_test::observe("terminal.off", &off);
+                    }
+                    if native_hover_text(
                 off,
                 "Close this terminal and stop its shell. Closing the last one clears the window.",
             )
@@ -330,57 +358,62 @@ impl EditorApp {
                 let id = terminal_id(ui.ctx());
                 ui.memory_mut(|memory| memory.surrender_focus(id));
             }
-            if self.terminal.len() > 1 {
-                for index in 0..self.terminal.len() {
-                    let selected = index == self.terminal.active_index();
-                    let label = format!("Terminal {}", index + 1);
-                    let text = if self.terminal.bell_pending_at(index) {
-                        format!("●{}", index + 1)
-                    } else {
-                        (index + 1).to_string()
-                    };
-                    let switch = ui.add(
-                        egui::Button::new(text)
-                            .selected(selected)
-                            .min_size(Vec2::splat(PANEL_ACTION_SIZE)),
-                    );
-                    switch.widget_info(|| {
-                        egui::WidgetInfo::labeled(
-                            egui::WidgetType::Button,
-                            switch.enabled(),
-                            label.clone(),
-                        )
-                    });
-                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                    crate::desktop_test::observe(&format!("terminal.{index}"), &switch);
-                    if native_hover_text(switch, label).clicked() {
-                        self.terminal.select(index);
+                    if self.terminal.len() > 1 {
+                        for index in 0..self.terminal.len() {
+                            let selected = index == self.terminal.active_index();
+                            let label = format!("Terminal {}", index + 1);
+                            let text = if self.terminal.bell_pending_at(index) {
+                                format!("●{}", index + 1)
+                            } else {
+                                (index + 1).to_string()
+                            };
+                            let switch = ui.add(
+                                egui::Button::new(text)
+                                    .selected(selected)
+                                    .min_size(Vec2::splat(PANEL_ACTION_SIZE)),
+                            );
+                            switch.widget_info(|| {
+                                egui::WidgetInfo::labeled(
+                                    egui::WidgetType::Button,
+                                    switch.enabled(),
+                                    label.clone(),
+                                )
+                            });
+                            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                            if switch.interact_rect.is_positive() {
+                                crate::desktop_test::observe(&format!("terminal.{index}"), &switch);
+                            }
+                            if native_hover_text(switch, label).clicked() {
+                                self.terminal.select(index);
+                            }
+                        }
                     }
-                }
-            }
-            let full = self.terminal.len() >= MAX_TERMINAL_PANES;
-            let add = ui
-                .add_enabled_ui(!full, |ui| {
-                    square_icon_button(ui, UiIcon::Plus, "New terminal", PANEL_ACTION_SIZE)
-                })
-                .inner;
-            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-            crate::desktop_test::observe("terminal.new", &add);
-            if native_hover_text(
-                add,
-                if full {
-                    format!("Up to {MAX_TERMINAL_PANES} terminals can be open at once")
-                } else if empty {
-                    "Open a terminal".to_owned()
-                } else {
-                    "Open another terminal".to_owned()
-                },
-            )
-            .clicked()
-            {
-                self.terminal.add();
-                ui.ctx().request_repaint();
-            }
+                    let full = self.terminal.len() >= MAX_TERMINAL_PANES;
+                    let add = ui
+                        .add_enabled_ui(!full, |ui| {
+                            square_icon_button(ui, UiIcon::Plus, "New terminal", PANEL_ACTION_SIZE)
+                        })
+                        .inner;
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    if add.interact_rect.is_positive() {
+                        crate::desktop_test::observe("terminal.new", &add);
+                    }
+                    if native_hover_text(
+                        add,
+                        if full {
+                            format!("Up to {MAX_TERMINAL_PANES} terminals can be open at once")
+                        } else if empty {
+                            "Open a terminal".to_owned()
+                        } else {
+                            "Open another terminal".to_owned()
+                        },
+                    )
+                    .clicked()
+                    {
+                        self.terminal.add();
+                        ui.ctx().request_repaint();
+                    }
+                });
         });
     }
 
@@ -590,6 +623,70 @@ mod tests {
         Harness,
         kittest::{NodeT as _, Queryable as _, by},
     };
+
+    #[test]
+    fn terminal_panel_commands_retire_native_preview_and_explorer_keyboard_owners() {
+        for native_menu in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let context = egui::Context::default();
+            let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+            app.terminal
+                .prepare_fixture(b"terminal fixture", Path::new("/project"));
+            let mut configured = false;
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(800.0, 260.0))
+                .build_ui_state(
+                    move |ui, app: &mut EditorApp| {
+                        if !configured {
+                            theme::configure_test_fonts(ui.ctx());
+                            configured = true;
+                            return;
+                        }
+                        app.handle_shortcuts(ui.ctx(), None);
+                        app.process_native_menu_commands(ui.ctx(), None);
+                        if app.bottom_panel.is_visible() {
+                            app.show_bottom_panel(ui);
+                        }
+                    },
+                    app,
+                );
+            harness.run_steps(2);
+            harness.state_mut().preview_controls.web.focused = true;
+            harness
+                .state_mut()
+                .explorer
+                .set_focused_section(Some(ExplorerSection::Tags));
+            if native_menu {
+                harness
+                    .state_mut()
+                    .enqueue_native_menu_command(AppCommand::Terminal);
+            } else {
+                let shortcut = harness
+                    .state()
+                    .settings
+                    .effective_shortcuts()
+                    .egui(ShortcutAction::Terminal)
+                    .unwrap();
+                harness.key_press_modifiers(shortcut.modifiers, shortcut.logical_key);
+            }
+            harness.run_steps(3);
+            assert_eq!(
+                harness.state().bottom_panel.selected(),
+                Some(PanelTab::Terminal)
+            );
+            assert!(
+                !harness.state().preview_controls.web.focused,
+                "Terminal command retained native preview keyboard ownership (native menu: {native_menu})"
+            );
+            assert_eq!(harness.state().explorer.focused_section(), None);
+            assert!(
+                harness
+                    .state()
+                    .terminal_focused(&harness.ctx, egui::ViewportId::ROOT)
+            );
+            assert_eq!(harness.state().document().source(), DEFAULT_SOURCE);
+        }
+    }
 
     #[test]
     fn terminal_panel_frame_has_no_top_bottom_or_right_margin() {
@@ -849,6 +946,96 @@ mod tests {
         harness.run();
         let small = harness.get_by_label("Terminal input").rect();
         assert!(small.bottom() <= 350.0 && small.top() >= 0.0);
+    }
+
+    #[test]
+    fn a_short_terminal_panel_keeps_its_height_with_eight_panes() {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        app.snapshot_scene = None;
+        app.bottom_panel.select(PanelTab::Terminal);
+        app.terminal.replace_with_fixture_panes(
+            &[b"pane".as_slice(); MAX_TERMINAL_PANES],
+            Path::new("/project"),
+        );
+        let mut configured = false;
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(800.0, 600.0))
+            .build_ui_state(
+                move |ui, app: &mut EditorApp| {
+                    if !configured {
+                        theme::configure_test_fonts(ui.ctx());
+                        let id = crate::child_view::viewport_scoped_id(ui.ctx(), "bottom-panel");
+                        ui.ctx().data_mut(|data| {
+                            data.insert_persisted(
+                                id,
+                                egui::PanelState {
+                                    outer_rect: Rect::from_min_size(
+                                        Pos2::ZERO,
+                                        Vec2::new(800.0, 120.0),
+                                    ),
+                                },
+                            )
+                        });
+                        configured = true;
+                        return;
+                    }
+                    if !app.show_bottom_panel_container(ui) {
+                        ui.label("Document content");
+                    }
+                },
+                app,
+            );
+        for _ in 0..6 {
+            harness.run_steps(2);
+            let id = crate::child_view::viewport_scoped_id(&harness.ctx, "bottom-panel");
+            let height = harness.ctx.data_mut(|data| {
+                data.get_persisted::<egui::PanelState>(id)
+                    .unwrap()
+                    .outer_rect
+                    .height()
+            });
+            assert!(
+                height <= 121.0,
+                "Eight panes expanded the user's 120-point panel to {height}"
+            );
+        }
+        let grid = harness.get_by_label("Terminal input").rect();
+        let restart = harness.get_by_label("Restart terminal").rect();
+        harness.input_mut().events.extend([
+            egui::Event::PointerMoved(Pos2::new(restart.center().x, grid.center().y)),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: Vec2::new(0.0, -400.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: Modifiers::NONE,
+            },
+        ]);
+        harness.run_steps(12);
+        let add = harness.get_by_label("New terminal").rect();
+        assert!(
+            add.top() >= grid.top() && add.bottom() <= grid.bottom() + 1.0,
+            "The last action must scroll into the fixed panel: {add:?} / {grid:?}"
+        );
+        assert!(harness.get_by_label("Terminal 8").rect().bottom() <= grid.bottom());
+        harness.input_mut().events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: Vec2::new(0.0, 400.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        });
+        harness.run_steps(12);
+        let restored = harness.get_by_label("Restart terminal").rect();
+        assert_eq!(restored, restart);
+        let id = crate::child_view::viewport_scoped_id(&harness.ctx, "bottom-panel");
+        let height = harness.ctx.data_mut(|data| {
+            data.get_persisted::<egui::PanelState>(id)
+                .unwrap()
+                .outer_rect
+                .height()
+        });
+        assert!(height <= 121.0);
     }
 
     #[test]

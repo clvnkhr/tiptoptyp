@@ -1149,6 +1149,18 @@ impl EditableTable {
 
     fn validate(&self) -> Result<(), TableEditError> {
         self.validate_geometry()?;
+        for option in self
+            .options
+            .iter()
+            .chain(self.cell_options.values().flat_map(|cell| &cell.options))
+        {
+            if !is_single_table_option(option) {
+                return Err(TableEditError::InvalidOption(format!(
+                    "Enter one Typst expression for {} before applying",
+                    option.name
+                )));
+            }
+        }
         for (row, cells) in self.cells.iter().enumerate() {
             for (column, cell) in cells.iter().enumerate() {
                 if !is_static_cell_source(cell) {
@@ -1160,6 +1172,26 @@ impl EditableTable {
     }
 }
 
+/// Draft fields may contain incomplete input, but Apply must not allow a
+/// field to escape its argument and change other table/cell options.
+fn is_single_table_option(option: &PreservedTableOption) -> bool {
+    let wrapper = format!("#table({})", option.source);
+    let parsed = Source::detached(&wrapper);
+    let root = LinkedNode::new(parsed.root());
+    let Some(node) = find_first_kind(&root, SyntaxKind::FuncCall) else {
+        return false;
+    };
+    if node.range() != (1..wrapper.len()) || has_descendant_kind(&root, SyntaxKind::Error) {
+        return false;
+    }
+    let Some(call) = node.get().cast::<ast::FuncCall>() else {
+        return false;
+    };
+    let mut arguments = call.args().items();
+    matches!(arguments.next(), Some(ast::Arg::Named(named)) if named.name().as_str() == option.name)
+        && arguments.next().is_none()
+}
+
 fn is_static_cell_source(cell: &str) -> bool {
     let wrapper = format!("#table([{cell}])");
     let parsed = Source::detached(&wrapper);
@@ -1167,12 +1199,22 @@ fn is_static_cell_source(cell: &str) -> bool {
     let Some(table) = find_first_kind(&root, SyntaxKind::FuncCall) else {
         return false;
     };
+    if table.range() != (1..wrapper.len()) {
+        return false;
+    }
     let Some(args) = table
         .children()
         .find(|child| child.kind() == SyntaxKind::Args)
     else {
         return false;
     };
+    if args
+        .get()
+        .cast::<ast::Args>()
+        .is_none_or(|args| args.items().count() != 1)
+    {
+        return false;
+    }
     let mut positional = args.children().filter_map(|child| {
         let ast::Arg::Pos(ast::Expr::ContentBlock(_)) = child.get().cast::<ast::Arg>()? else {
             return None;

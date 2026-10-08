@@ -864,7 +864,7 @@ def main():
         if not args.prepare_only and not args.observe_only:
             import pwd
             shell = os.environ.get("SHELL") or pwd.getpwuid(os.getuid()).pw_shell
-            if args.journey in ("all", "panels", "terminal_find", "terminal_load", "terminal_theme") and Path(shell).resolve() != Path("/bin/zsh"):
+            if args.journey in ("all", "panels", "terminal_find", "terminal_load", "terminal_theme", "problems_focus") and Path(shell).resolve() != Path("/bin/zsh"):
                 raise RuntimeError("terminal journey currently requires /bin/zsh so startup files can be isolated with ZDOTDIR")
             preflight = subprocess.run([str(driver), "preflight"], capture_output=True, text=True, timeout=6)
             result["preflight"] = preflight.stdout.strip()
