@@ -5,11 +5,14 @@ use crate::{
 };
 use eframe::egui::{self, RichText};
 
+mod tool_options;
+
 pub(super) fn show(ui: &mut egui::Ui, settings: &AppSettings) {
     let bindings = ShortcutBindings::current(&settings.shortcut_overrides);
-    egui::ScrollArea::vertical().id_salt("settings-help-scroll").show(ui, |ui| {
+    let scroll = egui::ScrollArea::vertical().id_salt("settings-help-scroll").show(ui, |ui| {
         ui.heading("Help & tips");
         ui.label("Shortcuts below reflect your custom bindings. Preview shortcuts require preview focus; its border shows focus. Escape returns to the editor.");
+        tool_options::show(ui, settings);
         ui.heading("10 useful shortcuts");
         shortcut_table(ui, "help-main-shortcuts", &bindings, &[A::Open, A::Save, A::Find, A::FindReplace, A::Undo, A::Redo, A::Compile, A::Format, A::ToggleComment, A::ToggleLineWrap]);
         ui.heading("Preview shortcuts");
@@ -17,6 +20,8 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &AppSettings) {
         shortcut_table(ui, "help-preview-shortcuts", &bindings, &[A::PreviewPreviousPage, A::PreviewNextPage, A::PreviewFitWidth, A::PreviewZoomIn, A::PreviewZoomOut, A::PreviewZoomReset, A::SyncPreview, A::ComfyPreview]);
         ui.monospace("t   Switch Tinymist preview appearance (preview focused)\nEscape   Return focus to source");
         ui.label("Tinymist also accepts Cmd/Ctrl with + / − / 0 for zoom while focused. Use the floating preview controls for Find, Outline and Back/Forward after internal links.");
+        ui.label("Typst defaults to Tinymist partial (experimental), keeping nearby pages ready and filling distant pages as you navigate. Select Tinymist (Typst only) for the complete renderer. This choice changes only the live viewer, not saved PDFs.");
+        ui.label("On macOS, Smooth Tinymist zoom keeps a higher-resolution viewport image over the preview while it redraws. Toggle it in Settings → Preview; it works with both Tinymist viewers.");
         ui.heading("Leave part of your code untouched");
         ui.label("Directives apply to the named tool, not every service. Select your TeX formatter in Settings → TeX. Compiler errors cannot be disabled with formatter comments.");
         ui.label(RichText::new("Typst formatter (Typstyle through Tinymist)").strong());
@@ -39,14 +44,28 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &AppSettings) {
         for tip in [
             "Select text, then type an opening bracket, quote or $ to surround it. Undo reverses it in one step.",
             "Focus an Explorer subpanel and use Find to search just that panel. Its empty search bar scrolls away.",
-            "Draw a symbol in Explorer; choose TeX or Typst insertion preferences in Settings.",
+            "Edit → LaTeXdiff compares two TeX files or the current editor against its saved version. Generate a marked-up .tex file, then Save and open to build its PDF. Options are also under TeX tools.",
+            "Edit → Edit Table opens an editable grid. Variable cells display locked compiler samples; generated Typst tables open as a read-only sampled grid. Use Source for deliberate expression changes. TeX tables, math conversion, snippets and document templates add missing package imports to the preamble automatically; Undo restores both imports and inserted code.",
+            "Draw a symbol in Explorer; choose TeX or Typst insertion preferences in Settings. TeX symbols automatically add their package imports.",
             "Use the Activity panel to see which services are stale, working or failing; hover an indicator for detail.",
             "Use the eye on a tab to choose the preview document independently of the tab you edit.",
-            "Customize templates and snippets in Settings. Tab advances snippet placeholders.",
-            "Indentation guides, definition highlighting and literal text highlights are under Editor. Their styling never changes saved source.",
+            "Search Settings for snippets, then edit Typst or TeX directly and Save snippets. Optional ${1:name} fields repeat with ${1}; ${0} sets the final cursor. Tab advances fields. Autocomplete symbols identify language-server, custom-snippet and built-in suggestions. Font names appear in their own font.",
+            "Indentation guides, highlighting uses of local definitions and literal text highlights are under Editor. Their styling never changes saved source.",
+            "Appearance includes a translucent background on macOS. Adjust Background opacity, or turn the effect off, without changing PDF pages.",
             "The {} title-bar button edits all settings as validated JSON. Changes apply only after Save.",
         ] { ui.label(format!("• {tip}")); }
     });
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    crate::desktop_test::observe_scroll(
+        "settings.help",
+        ui.ctx(),
+        scroll.inner_rect,
+        scroll.content_size.y,
+        scroll.state.offset.y,
+        false,
+    );
+    #[cfg(not(all(feature = "desktop-ui-tests", target_os = "macos")))]
+    let _ = scroll;
 }
 fn shortcut_table(ui: &mut egui::Ui, id: &str, bindings: &ShortcutBindings, actions: &[A]) {
     egui::Grid::new(id).striped(true).show(ui, |ui| {

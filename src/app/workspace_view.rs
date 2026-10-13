@@ -17,6 +17,7 @@ pub(super) fn empty_workspace_command(command: AppCommand) -> bool {
             | AppCommand::Explorer
             | AppCommand::Git
             | AppCommand::Packages
+            | AppCommand::LatexDiff
     )
 }
 

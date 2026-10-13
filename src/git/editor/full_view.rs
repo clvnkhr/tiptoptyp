@@ -231,7 +231,7 @@ fn layout(
                 && c.settings.line_wrap == settings.line_wrap
                 && c.settings.line_numbers == settings.line_numbers
                 && c.settings.rainbow_brackets == settings.rainbow_brackets
-                && c.settings.highlight_definitions == settings.highlight_definitions
+                && c.settings.highlight_local_uses == settings.highlight_local_uses
                 && c.settings.highlight_rules == settings.highlight_rules
                 && c.settings.typst_overrides == settings.typst_overrides
                 && c.settings.code_font_path == settings.code_font_path

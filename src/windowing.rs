@@ -1618,8 +1618,8 @@ mod tests {
         let existing = document_viewport_builder("existing".to_owned(), false);
         assert_eq!(first.active, Some(true));
         assert_eq!(existing.active, None);
-        assert_eq!(first.transparent, Some(false));
-        assert_eq!(existing.transparent, Some(false));
+        assert_eq!(first.transparent, Some(cfg!(target_os = "macos")));
+        assert_eq!(existing.transparent, Some(cfg!(target_os = "macos")));
         assert_eq!(first.has_shadow, Some(true));
         assert_eq!(existing.has_shadow, Some(true));
     }

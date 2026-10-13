@@ -515,7 +515,7 @@ mod tests {
         harness.run();
         for label in [
             "Indentation guides",
-            "Highlight definitions and redefinitions",
+            "Highlight uses of local definitions",
             "Wrap lines",
         ] {
             harness
@@ -529,7 +529,7 @@ mod tests {
         let mut live = AppSettings::default();
         harness.state_mut().take_actions(&mut live);
         assert!(!live.indentation_guides);
-        assert!(live.highlight_definitions);
+        assert!(live.highlight_local_uses);
         assert!(!live.line_wrap);
         harness.get(by().label("Custom text highlights")).click();
         harness.run();
@@ -695,6 +695,7 @@ mod tests {
             .last_opened_files
             .insert("project".into(), "new.typ".into());
         current.hover_delay_ms = 123;
+        current.tinymist_configuration["formatterPrintWidth"] = serde_json::json!(100);
         for value in [1000, 1100, 1200] {
             let mut settings = window.input.as_ref().unwrap().settings.clone();
             settings.auto_save_delay_ms = value;
@@ -705,6 +706,7 @@ mod tests {
         assert!(actions.is_empty() && !close && window.edit.is_none());
         assert_eq!(current.auto_save_delay_ms, 1200);
         assert_eq!(current.hover_delay_ms, 123);
+        assert_eq!(current.tinymist_configuration["formatterPrintWidth"], 100);
         assert_eq!(current.last_opened_files["project"], "new.typ");
         // A child can cancel an edit before the owner runs at all.
         let base = window.input.as_ref().unwrap().settings.clone();

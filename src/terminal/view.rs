@@ -927,7 +927,11 @@ impl TerminalPane {
                 );
             }
         } else {
-            ui.painter().rect_filled(outer, 0.0, colors.background);
+            ui.painter().rect_filled(
+                outer,
+                0.0,
+                crate::window_background::surface(ui, colors.background),
+            );
         }
     }
 }
@@ -1545,7 +1549,11 @@ fn paint(
     display: &mut RowDisplayCache,
     emoji: &mut super::emoji::EmojiCache,
 ) {
-    ui.painter().rect_filled(outer, 0.0, grid.background);
+    ui.painter().rect_filled(
+        outer,
+        0.0,
+        crate::window_background::surface(ui, grid.background),
+    );
     let painter = ui.painter().with_clip_rect(rect);
     display.prepare(ui, rect, cell_size, font, grid, glyphs, emoji);
     for (row_index, source) in grid.rows.iter().enumerate() {

@@ -353,6 +353,20 @@ class NewestJourneys:
         dynamic = '#let widths = (40%, auto)\n#let rows = ([Alpha], [Beta])\n#table(columns: widths, ..rows)'
         count = self.scratch(dynamic)
         old = self.open_table_workbench(line=2)
+        self.wait("generated table receives real compiler samples", lambda d:
+                  not d["table_samples"]["pending"] and not d["table_samples"]["failed"]
+                  and d["table_samples"]["grid"] is not None)
+        samples = self.snapshot()["document"]["table_samples"]["grid"]
+        assert (samples["columns"], samples["rows"]) == (2, 1)
+        assert [v["fingerprint"] for v in samples["values"]] == [fingerprint("Alpha"), fingerprint("Beta")]
+        self.table_target("table.sample.0.0")
+        self.click("table.sample.0.0")
+        self.native("text", "must stay locked")
+        self.wait_table_source_draft("table(columns: widths, ..rows)", True)
+        unchanged(dynamic)
+        if getattr(self, "capture_review", False):
+            self.capture_viewport("table-editor")
+        self.click("table.source-mode")
         self.table_target("table.source", previous_frame=old.get("table.source"))
         self.click("table.source")
         self.key(0)
@@ -370,6 +384,30 @@ class NewestJourneys:
         close_draft("apply", changed)
         self.key(6)
         self.source_is(dynamic)
+        self.close_scratch(count)
+
+        computed = '#let price = 60\n#table(columns: 2, [Revenue], [#price])'
+        count = self.scratch(computed)
+        self.open_table_workbench(line=1)
+        self.wait("Typst variable resolves to a locked compiler sample", lambda d:
+                  not d["table_samples"]["pending"] and not d["table_samples"]["failed"]
+                  and d["table_samples"]["grid"] is not None)
+        samples = self.snapshot()["document"]["table_samples"]
+        assert samples["locked"] == [[0, 1]]
+        assert samples["grid"]["values"][1]["fingerprint"] == fingerprint("60")
+        self.table_target("table.locked.0.1")
+        self.click("table.locked.0.1")
+        self.native("text", "must stay locked")
+        unchanged(computed)
+        self.click("table.cell.0.0")
+        self.key(0)
+        self.native("text", "Income")
+        if getattr(self, "capture_review", False):
+            self.capture_viewport("table-editor")
+        applied = '#let price = 60\n#table(\n  columns: 2,\n  [Income],\n  [#price],\n)'
+        close_draft("apply", applied)
+        self.key(6)
+        self.source_is(computed)
         self.close_scratch(count)
 
         # TeX tables must use a named .tex tab, not Typst's default scratch kind.
@@ -418,5 +456,100 @@ class NewestJourneys:
         self.key(6)
         self.source_is(tex)
         self.close_scratch(count)
+
+        # Missing column imports are added only on Apply, with one Undo/Redo.
+        environment = r"\begin{tabular}{lS[table-format=2.0]}Alpha & 60\end{tabular}"
+        tex = "\\documentclass{article}\n\\begin{document}\n" + environment + "\n\\end{document}\n"
+        path = self.directory / "table-auto-imports.tex"
+        path.write_text(tex)
+        count = self.snapshot()["document"]["tabs"]
+        self.open_table_fixture(path)
+        self.open_table_workbench(line=2)
+        self.table_target("table.cell.0.0")
+        self.click("table.cell.0.0")
+        self.key(0)
+        self.native("text", "Cancelled")
+        unchanged(tex)
+        close_draft("cancel", tex)
+        self.open_table_workbench(line=2)
+        self.table_target("table.cell.0.0")
+        self.click("table.cell.0.0")
+        self.key(0)
+        self.native("text", "Changed")
+        unchanged(tex)
+        applied = tex.replace("\\begin{document}", "\\usepackage{siunitx}\n\\begin{document}").replace("Alpha & 60", "Changed & 60")
+        close_draft("apply", applied)
+        self.key(6)
+        self.source_is(tex)
+        self.key(6, "cmd+shift")
+        self.source_is(applied)
+        # Applying again preserves the single import and existing source.
+        self.open_table_workbench(line=3)
+        self.table_target("table.apply")
+        close_draft("apply", applied)
+        self.key(6)
+        self.source_is(tex)
+        self.close_scratch(count)
+
+        environment = r"\begin{tabular}{ll}Revenue & \revenue\end{tabular}"
+        tex = "\\documentclass{article}\n\\newcommand{\\revenue}{60}\n\\begin{document}\n" + environment + "\n\\end{document}\n"
+        path = self.directory / "table-sampled.tex"
+        path.write_text(tex)
+        count = self.snapshot()["document"]["tabs"]
+        self.open_table_fixture(path)
+        self.source_is(tex)
+        self.open_table_workbench(line=3)
+        self.wait("TeX macro resolves to a locked compiler sample", lambda d:
+                  not d["table_samples"]["pending"] and not d["table_samples"]["failed"]
+                  and d["table_samples"]["grid"] is not None)
+        samples = self.snapshot()["document"]["table_samples"]
+        assert samples["locked"] == [[0, 1]]
+        assert samples["grid"]["values"][0]["fingerprint"] == fingerprint("60")
+        self.table_target("table.locked.0.1")
+        self.click("table.locked.0.1")
+        self.native("text", "must stay locked")
+        unchanged(tex)
+        self.click("table.cell.0.0")
+        self.key(0)
+        self.native("text", "Income")
+        if getattr(self, "capture_review", False):
+            self.capture_viewport("table-editor")
+        close_draft("apply", tex.replace("Revenue &", "Income &"))
+        self.key(6)
+        self.source_is(tex)
+        self.close_scratch(count)
+        # Exercise both newly supported column dialects with real clicks and
+        # compiler-backed locks. Header options must survive Apply and undo.
+        for name, package, environment in [
+            ("tabularray", "tabularray", r"\begin{tblr}[baseline=T]{colspec={Q[l]X[2,r]},hlines,vlines}Revenue & \revenue\\\end{tblr}"),
+            ("siunitx", "siunitx", r"\begin{tabular}{lS[table-format=2.0]}Revenue & \revenue\\\end{tabular}"),
+        ]:
+            tex = "\\documentclass{article}\n\\usepackage{" + package + "}\n\\newcommand{\\revenue}{60}\n\\begin{document}\n" + environment + "\n\\end{document}\n"
+            path = self.directory / ("table-package-" + name + ".tex")
+            path.write_text(tex)
+            count = self.snapshot()["document"]["tabs"]
+            self.open_table_fixture(path)
+            self.source_is(tex)
+            self.open_table_workbench(line=4)
+            self.wait(name + " macro resolves to a locked sample", lambda d:
+                      not d["table_samples"]["pending"] and not d["table_samples"]["failed"]
+                      and d["table_samples"]["grid"] is not None, timeout=20)
+            samples = self.snapshot()["document"]["table_samples"]
+            assert samples["locked"] == [[0, 1]]
+            assert samples["grid"]["values"][0]["fingerprint"] == fingerprint("60")
+            self.table_target("table.cell.0.0")
+            self.table_target("table.locked.0.1")
+            self.click("table.locked.0.1")
+            self.native("text", "must stay locked")
+            unchanged(tex)
+            self.click("table.cell.0.0")
+            self.key(0)
+            self.native("text", "Income")
+            if getattr(self, "capture_review", False):
+                self.capture_viewport("table-editor")
+            close_draft("apply", tex.replace("Revenue &", "Income &"))
+            self.key(6)
+            self.source_is(tex)
+            self.close_scratch(count)
         self.key(20)
         self.wait("table journey restores the split editor", lambda d: d["view_mode"] == "Split")

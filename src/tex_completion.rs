@@ -160,6 +160,7 @@ impl Index {
             names
                 .into_iter()
                 .map(|(name, (preferred, detail))| CompletionItem {
+                    origin: crate::lsp::protocol::CompletionOrigin::BuiltIn,
                     label: format!("\\{name}"),
                     detail: Some(detail.to_owned()),
                     documentation: None,

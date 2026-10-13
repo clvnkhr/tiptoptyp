@@ -407,6 +407,7 @@ impl QaSession {
                 let items = crate::unicode_fonts::SYMBOL_EXAMPLES
                     .into_iter()
                     .map(|(name, symbol)| CompletionItem {
+                        origin: crate::lsp::protocol::CompletionOrigin::LanguageServer,
                         label: name.into(),
                         detail: Some(format!("{symbol}, unicode: `\\u{{{:04x}}}`", symbol as u32)),
                         documentation: None,

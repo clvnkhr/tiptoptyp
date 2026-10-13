@@ -83,7 +83,7 @@ impl PreviewFollow {
 impl EditorApp {
     fn preview_follows_edits(&self) -> bool {
         self.settings.preview_follow_edits
-            && self.settings.preview_preference == PreviewPreference::Interactive
+            && self.settings.preview_preference.is_interactive()
             && self.snapshot_scene.is_none()
             && !self.compilation_paused
             && self.document().kind().is_typst()

@@ -20,7 +20,10 @@ pub(crate) fn parse(text: &str) -> Result<AppSettings, String> {
     let original: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
     let roundtrip = serde_json::to_value(&settings).map_err(|e| e.to_string())?;
     reject_unknown(&original, &roundtrip, "settings")?;
+    settings.window_background.validate()?;
     crate::snippets::validate(&settings.snippets)?;
+    crate::tinymist::validate_server_configuration(&settings.tinymist_configuration)
+        .map_err(|error| format!("tinymist_configuration: {error}"))?;
     if settings.indentation_guide_character.chars().count() != 1
         || settings
             .indentation_guide_character
@@ -97,21 +100,45 @@ pub(crate) fn parse(text: &str) -> Result<AppSettings, String> {
     if report.unknown_actions != 0 || report.invalid_bindings != 0 {
         return Err("shortcut_overrides contains an unknown action or invalid key binding".into());
     }
-    for (name, tool) in [
-        ("typst", &settings.typst),
-        ("tinymist", &settings.tinymist),
-        ("tex.tectonic", &settings.tex.tectonic),
-        ("tex.texlab", &settings.tex.texlab),
-        ("tex.badness", &settings.tex.badness),
-        ("tex.tex_fmt", &settings.tex.tex_fmt),
+    for (name, kind, tool) in [
+        ("typst", crate::toolchain::ToolKind::Typst, &settings.typst),
+        (
+            "tinymist",
+            crate::toolchain::ToolKind::Tinymist,
+            &settings.tinymist,
+        ),
+        (
+            "tex.tectonic",
+            crate::toolchain::ToolKind::Tectonic,
+            &settings.tex.tectonic,
+        ),
+        (
+            "tex.texlab",
+            crate::toolchain::ToolKind::Texlab,
+            &settings.tex.texlab,
+        ),
+        (
+            "tex.badness",
+            crate::toolchain::ToolKind::Badness,
+            &settings.tex.badness,
+        ),
+        (
+            "tex.tex_fmt",
+            crate::toolchain::ToolKind::TexFmt,
+            &settings.tex.tex_fmt,
+        ),
     ] {
         tool.command
-            .validate()
+            .validate_for_tool(kind)
             .map_err(|e| format!("{name}: {e}"))?;
         if tool.mode == ToolMode::Custom && tool.custom_path.trim().is_empty() {
             return Err(format!("{name}: custom path cannot be empty"));
         }
     }
+    settings
+        .latexdiff
+        .validate()
+        .map_err(|e| format!("latexdiff: {e}"))?;
     Ok(settings)
 }
 
@@ -170,6 +197,30 @@ impl Draft {
 mod tests {
     use super::*;
     #[test]
+    fn tinymist_configuration_uses_shared_validation_and_roundtrips() {
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        value["tinymist_configuration"]["formatterMode"] = serde_json::json!("invalid");
+        let error = parse(&value.to_string()).unwrap_err();
+        assert!(error.contains("tinymist_configuration") && error.contains("typstyle"));
+        value["tinymist_configuration"] = serde_json::json!({"formatterPrintWidth":100});
+        assert_eq!(
+            parse(&value.to_string()).unwrap().tinymist_configuration["formatterPrintWidth"],
+            100
+        );
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("tinymist_configuration");
+        value["hover_delay_ms"] = serde_json::json!(123);
+        let parsed = parse(&value.to_string()).unwrap();
+        assert_eq!(parsed.hover_delay_ms, 123);
+        assert_eq!(
+            parsed.tinymist_configuration,
+            crate::tinymist::default_server_configuration()
+        );
+    }
+
+    #[test]
     fn impossible_choices_identify_the_field_and_allowed_options() {
         for (path, field, valid) in [
             ("/handwriting/engine", "handwriting.engine", "detexify"),
@@ -193,6 +244,119 @@ mod tests {
     }
 
     #[test]
+    fn partial_preview_roundtrips_and_invalid_mode_reports_valid_choices() {
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        value["preview_preference"] = serde_json::json!("InteractivePartial");
+        assert_eq!(
+            parse(&value.to_string()).unwrap().preview_preference,
+            crate::settings::PreviewPreference::InteractivePartial
+        );
+        value["preview_preference"] = serde_json::json!("impossible");
+        let error = parse(&value.to_string()).unwrap_err();
+        assert!(
+            error.contains("preview_preference")
+                && error.contains("choose")
+                && error.contains("InteractivePartial"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn local_use_highlights_round_trip_and_old_declaration_setting_is_rejected() {
+        let settings = AppSettings {
+            highlight_local_uses: true,
+            ..Default::default()
+        };
+        let mut value = serde_json::to_value(&settings).unwrap();
+        assert_eq!(value["highlight_local_uses"], true);
+        assert_eq!(parse(&value.to_string()).unwrap(), settings);
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("highlight_local_uses");
+        value["highlight_definitions"] = serde_json::json!(true);
+        assert!(
+            parse(&value.to_string())
+                .unwrap_err()
+                .contains("highlight_definitions")
+        );
+    }
+
+    #[test]
+    fn retired_argument_template_is_not_a_literal_argv_or_a_compatibility_alias() {
+        let defaults = AppSettings::default();
+        let mut value = serde_json::to_value(&defaults).unwrap();
+        value["typst"]["command"]
+            .as_object_mut()
+            .unwrap()
+            .remove("argv");
+        value["typst"]["command"]["arguments"] = serde_json::json!("{args}");
+        // Persisted older settings discard the removed field; optional argv
+        // receives this tool's defaults. Explicit JSON edits reject obsolete keys.
+        let loaded: AppSettings = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(loaded, defaults);
+        assert!(parse(&value.to_string()).unwrap_err().contains("arguments"));
+        assert!(
+            !serde_json::to_value(loaded).unwrap()["typst"]["command"]
+                .as_object()
+                .unwrap()
+                .contains_key("arguments")
+        );
+    }
+
+    #[test]
+    fn tool_arguments_show_defaults_and_missing_nested_values_keep_them() {
+        let defaults = AppSettings::default();
+        let original = serde_json::to_value(&defaults).unwrap();
+        for (path, expected) in [
+            ("/typst", "watch --diagnostic-format short"),
+            ("/tinymist", "lsp"),
+            (
+                "/tex/tectonic",
+                "-X compile --untrusted --keep-logs --keep-intermediates",
+            ),
+            ("/tex/texlab", ""),
+            ("/tex/badness", "lsp"),
+            ("/tex/tex_fmt", "--stdin --quiet"),
+        ] {
+            assert_eq!(
+                original.pointer(&format!("{path}/command/argv")).unwrap(),
+                expected
+            );
+            for remove_command in [false, true] {
+                let mut value = original.clone();
+                let tool = value.pointer_mut(path).unwrap().as_object_mut().unwrap();
+                if remove_command {
+                    tool.remove("command");
+                } else {
+                    tool["command"].as_object_mut().unwrap().remove("argv");
+                }
+                assert_eq!(parse(&value.to_string()).unwrap(), defaults, "{path}");
+            }
+            let mut value = original.clone();
+            *value.pointer_mut(&format!("{path}/command/argv")).unwrap() = serde_json::json!("");
+            if expected.is_empty() {
+                assert!(parse(&value.to_string()).is_ok());
+            } else {
+                let error = parse(&value.to_string()).unwrap_err();
+                assert!(error.contains("must retain"), "{error}");
+            }
+        }
+        let mut value = original;
+        value["typst"]["command"]["environment"] = serde_json::json!(r#"{"MODE":"draft"}"#);
+        value["typst"]["command"]
+            .as_object_mut()
+            .unwrap()
+            .remove("argv");
+        let parsed = parse(&value.to_string()).unwrap();
+        assert_eq!(
+            parsed.typst.command.arguments,
+            "watch --diagnostic-format short"
+        );
+        assert_eq!(parsed.typst.command.environment, r#"{"MODE":"draft"}"#);
+    }
+
+    #[test]
     fn roundtrip_defaults_and_reject_invalid_edits() {
         let original = AppSettings::default();
         assert_eq!(Draft::new(&original).validation.unwrap(), original);
@@ -201,7 +365,7 @@ mod tests {
             ("/indent_spaces", serde_json::json!(99)),
             ("/tex/badness_configuration", serde_json::json!(false)),
             ("/typst/command/environment", serde_json::json!("{bad}")),
-            ("/typst/command/arguments", serde_json::json!("'unfinished")),
+            ("/typst/command/argv", serde_json::json!("'unfinished")),
         ] {
             let mut json = serde_json::to_value(&original).unwrap();
             *json.pointer_mut(path).unwrap() = value;

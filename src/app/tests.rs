@@ -1146,6 +1146,7 @@ fn preview_focus_wait_is_static_but_active_transition_animates() {
 
 fn completion_item(insert_text: &str) -> CompletionItem {
     CompletionItem {
+        origin: crate::lsp::protocol::CompletionOrigin::LanguageServer,
         label: insert_text.to_owned(),
         detail: None,
         documentation: None,
@@ -8838,6 +8839,7 @@ fn projected_application_remote_completion_uses_canonical_payload_and_one_undo_s
     app.tinymist_sync.generation = Some(Generation(92));
     app.tinymist_sync.current_uri = Some("file:///completion.typ".into());
     let item = CompletionItem {
+        origin: crate::lsp::protocol::CompletionOrigin::LanguageServer,
         label: "longer tail".into(),
         detail: None,
         documentation: None,
@@ -10153,7 +10155,7 @@ fn linked_snippet_text_edit_replaces_both_fields_in_one_undo() {
         prefix: "env".into(),
         description: "environment".into(),
         language: crate::snippets::Language::Both,
-        body: "begin{${1:name}}\nend{$1}$0".into(),
+        body: "begin{${1:name}}\nend{${1}}${0}".into(),
     }];
     app.pending_editor_selection = Some(EditorSelection::Focus(3..3));
     context

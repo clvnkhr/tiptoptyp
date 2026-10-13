@@ -141,7 +141,12 @@ if command == "ax-press-title" {
     let application = AXUIElementCreateApplication(pid)
     AXUIElementSetMessagingTimeout(application, 4)
     func press(_ element: AXUIElement) -> Bool {
-        if (attribute(element, kAXTitleAttribute) as? String) == args[2] {
+        // These are native Open/Save buttons. Walking an embedded preview's
+        // SVG accessibility tree can spend seconds on unrelated ink before
+        // reaching the file dialog, and can pick a same-named web element.
+        let role = attribute(element, kAXRoleAttribute) as? String
+        if role == "AXWebArea" { return false }
+        if role == kAXButtonRole && (attribute(element, kAXTitleAttribute) as? String) == args[2] {
             return AXUIElementPerformAction(element, kAXPressAction as CFString) == .success
         }
         var children: CFTypeRef?
@@ -244,8 +249,11 @@ if command == "watch-copy" {
             Thread.sleep(forTimeInterval: 0.05)
         }
     }
-} else if command == "key" {
-    guard args.count == 4, let code = UInt16(args[2]) else { fail("key requires keycode and flags") }
+} else if command == "key" || command == "key-burst" {
+    guard args.count == (command == "key" ? 4 : 6), let code = UInt16(args[2]) else { fail("key requires keycode and flags; key-burst also requires count and interval milliseconds") }
+    let count = command == "key" ? 1 : Int(args[4]) ?? 0
+    let interval = command == "key" ? 0.1 : (Double(args[5]) ?? 0) / 1000
+    guard (1...60).contains(count), interval.isFinite, (0.005...0.5).contains(interval), Double(count) * interval <= 3 else { fail("invalid bounded key burst") }
     var flags: CGEventFlags = []
     for flag in args[3].split(separator: "+") {
         switch flag {
@@ -257,11 +265,13 @@ if command == "watch-copy" {
         default: fail("unknown modifier")
         }
     }
-    for down in [true, false] {
-        guard let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down) else { fail("cannot create keyboard event") }
-        event.flags = flags
-        event.post(tap: .cghidEventTap)
-        Thread.sleep(forTimeInterval: 0.05)
+    for _ in 0..<count {
+        for down in [true, false] {
+            guard let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down) else { fail("cannot create keyboard event") }
+            event.flags = flags
+            event.post(tap: .cghidEventTap)
+            Thread.sleep(forTimeInterval: interval / 2)
+        }
     }
 } else if command == "wheel" {
     guard args.count == 5,

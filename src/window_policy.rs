@@ -1,9 +1,9 @@
-//! Native surface roles. Document windows never inherit popup alpha or controls.
+//! Native surface roles. macOS documents keep alpha capability for live blur toggles.
 use eframe::egui;
 
 pub(crate) fn document() -> egui::ViewportBuilder {
     egui::ViewportBuilder::default()
-        .with_transparent(false)
+        .with_transparent(cfg!(target_os = "macos"))
         .with_decorations(true)
         .with_has_shadow(true)
         .with_close_button(true)
@@ -37,7 +37,10 @@ mod tests {
         let document = document();
         let popup = popup("Popup");
         for (builder, opaque) in [(document, true), (popup, false)] {
-            assert_eq!(builder.transparent, Some(!opaque));
+            assert_eq!(
+                builder.transparent,
+                Some(!opaque || cfg!(target_os = "macos"))
+            );
             assert_eq!(builder.has_shadow, Some(opaque));
             assert_eq!(builder.decorations, Some(opaque));
             assert_eq!(builder.close_button, Some(opaque));

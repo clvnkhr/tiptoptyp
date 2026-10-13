@@ -50,6 +50,7 @@ fn allocated(operation: impl FnOnce()) -> usize {
 fn fixture() -> Vec<protocol::CompletionItem> {
     (0..256)
         .map(|index| protocol::CompletionItem {
+            origin: protocol::CompletionOrigin::LanguageServer,
             label: format!("completion_{index}"),
             detail: None,
             documentation: Some("documentation ".repeat(300)),

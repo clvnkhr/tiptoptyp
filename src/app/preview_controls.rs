@@ -585,7 +585,8 @@ impl EditorApp {
         let in_popout = self.preview_controls_in_popout();
         // Each viewer keeps its own root/persistent-window owner. A detached
         // asset can coexist with the pinned source in the main window.
-        if !target_valid
+        if self.latexdiff.is_some()
+            || !target_valid
             || !self.preview_controls.open
             || in_popout != in_preview_window
             || (!in_popout && !self.preview_controls_enabled())
@@ -808,6 +809,13 @@ impl EditorApp {
             }
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             if let Some(webview) = &self.webview {
+                #[cfg(target_os = "macos")]
+                if self
+                    .webview_snapshot
+                    .action(&serde_json::to_value(&action).unwrap())
+                {
+                    return;
+                }
                 let _ = webview.evaluate_script(&format!(
                     "window.tiptoptypPreviewAction?.({})",
                     serde_json::to_string(&action).unwrap()
@@ -933,7 +941,7 @@ mod tests {
         );
         app.prepare_asset_tab_fixture(context, root.join("asset.pdf"), DocumentKind::Pdf);
         app.preview = PreviewController::new(false, preference);
-        if preference == PreviewPreference::Interactive {
+        if preference.is_interactive() {
             let generation = crate::tinymist::Generation(1);
             app.preview.connection.start(generation);
             app.preview.connection.initialized(generation);
@@ -1032,9 +1040,8 @@ mod tests {
 
     #[test]
     fn focused_source_and_asset_controls_keep_their_own_snapshots_and_bounds() {
-        for preference in [PreviewPreference::Pdfium, PreviewPreference::Interactive] {
-            if preference == PreviewPreference::Interactive
-                && !cfg!(any(target_os = "macos", target_os = "windows"))
+        for preference in PreviewPreference::ALL {
+            if preference.is_interactive() && !cfg!(any(target_os = "macos", target_os = "windows"))
             {
                 continue;
             }
@@ -1091,7 +1098,7 @@ mod tests {
             assert_eq!(harness.state().preview_controls.target, Target::Source);
             assert_eq!(
                 harness.state().preview_controls_snapshot().zoom,
-                if preference == PreviewPreference::Interactive {
+                if preference.is_interactive() {
                     2.0
                 } else {
                     1.2

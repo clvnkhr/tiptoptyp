@@ -533,7 +533,7 @@ pub(super) fn tool_preference_editor(
             });
             command_help(ui.label("Arguments (quoted values supported; no shell expansion)"), resolution.kind, "Arguments");
             ui.add(egui::TextEdit::multiline(&mut draft.arguments).desired_rows(2).desired_width(f32::INFINITY));
-            ui.label(egui::RichText::new("{args} keeps generated arguments. {arg:N} inserts one generated argument (zero-based). Remove {args} to replace the command arguments entirely.").small());
+            ui.label(egui::RichText::new("These are the actual default options. The app adds input/output paths, workspace fonts and the flags controlled by SyncTeX/offline settings.").small());
             command_help(ui.label("Environment (JSON object of strings)"), resolution.kind, "Environment");
             super::code_editor::editor(ui, "command-environment", &mut draft.environment, "json", settings, 2);
             command_help(ui.label("Working directory (blank uses the document/project directory)"), resolution.kind, "Working directory");
@@ -541,14 +541,14 @@ pub(super) fn tool_preference_editor(
             let validation_id = id.with("validation");
             let validation = ui.ctx().data_mut(|data| {
                 let cached = data.get_temp::<(crate::tool_command::CommandCustomization, Result<(), String>)>(validation_id);
-                let result = cached.filter(|(previous, _)| previous == &draft).map(|(_, result)| result).unwrap_or_else(|| draft.validate());
+                let result = cached.filter(|(previous, _)| previous == &draft).map(|(_, result)| result).unwrap_or_else(|| draft.validate_for_tool(resolution.kind));
                 data.insert_temp(validation_id, (draft.clone(), result.clone()));
                 result
             });
             if let Err(error) = &validation { ui.colored_label(ui.visuals().error_fg_color, error); }
             ui.horizontal(|ui| {
                 if crate::app::icons::action_button_enabled(ui, validation.is_ok() && draft != preference.command, "Apply command").clicked() { preference.command = draft.clone(); }
-                if crate::app::icons::action_button(ui, "Reset command").clicked() { draft = Default::default(); preference.command = draft.clone(); }
+                if crate::app::icons::action_button(ui, "Reset command").clicked() { draft = crate::tool_command::CommandCustomization::for_tool(resolution.kind); preference.command = draft.clone(); }
             });
             ui.ctx().data_mut(|data| data.insert_temp(id,(preference.command.clone(),draft)));
         });
@@ -559,11 +559,11 @@ pub(super) fn tool_preference_editor(
 fn command_docs(kind: crate::toolchain::ToolKind) -> &'static str {
     use crate::toolchain::ToolKind::*;
     match kind {
-        Typst => "https://github.com/typst/typst/blob/main/crates/typst-cli/src/args.rs",
+        Typst => "https://github.com/typst/typst/blob/v0.15.1/crates/typst-cli/src/args.rs",
         Tinymist => "https://myriad-dreamin.github.io/tinymist/feature/cli.html#servers",
-        Tectonic => "https://tectonic-typesetting.github.io/book/latest/ref/v1cli.html",
-        Texlab => "https://github.com/latex-lsp/texlab/blob/master/crates/texlab/src/main.rs",
-        Badness => "https://badness.dev/reference/cli.html#options",
+        Tectonic => "https://tectonic-typesetting.github.io/book/latest/v2cli/compile.html",
+        Texlab => "https://github.com/latex-lsp/texlab/blob/v5.26.0/crates/texlab/src/main.rs",
+        Badness => "https://github.com/jolars/badness/blob/v0.24.0/docs/src/reference/cli.md",
         TexFmt => "https://github.com/WGUNDERWOOD/tex-fmt#command-line-options",
     }
 }
@@ -581,22 +581,22 @@ fn command_help(response: egui::Response, kind: crate::toolchain::ToolKind, fiel
         let docs = match field {
             "Arguments" => {
                 let (example, reason) = match kind {
-                    Typst => ("{args} --font-path /Users/me/fonts", "Search an additional font directory."),
-                    Tinymist => ("{args} --font-path /Users/me/fonts", "Give the language server extra fonts."),
-                    Tectonic => ("{args} --keep-logs", "Keep the TeX compilation log for troubleshooting."),
-                    Texlab => ("{args} -vv --log-file /tmp/texlab.log", "Write verbose server diagnostics to a log file."),
-                    Badness => ("{args} --no-config", "Use built-in defaults instead of a discovered badness.toml."),
-                    TexFmt => ("{args} --wraplen 100", "Wrap formatted lines at 100 columns."),
+                    Typst => ("watch --diagnostic-format short --font-path /Users/me/fonts", "Search an additional font directory."),
+                    Tinymist => ("lsp --font-path /Users/me/fonts", "Give the language server extra fonts."),
+                    Tectonic => ("-X compile --untrusted --keep-logs --keep-intermediates --print", "Include detailed TeX engine output for troubleshooting. Logs are already retained."),
+                    Texlab => ("-vv --log-file /tmp/texlab.log", "Write verbose server diagnostics to a log file."),
+                    Badness => ("lsp", "Keep the required lsp subcommand. Configure formatting/linting in JSON or badness.toml; optional CLI flags do not affect this version’s lsp mode."),
+                    TexFmt => ("--stdin --quiet --wraplen 100", "Wrap formatted lines at 100 columns."),
                 };
                 ui.label(reason); ui.monospace(example);
-                ui.label("{args} preserves generated arguments. Quoting groups values; no shell expansion. Flags must suit the subcommand.");
+                ui.label("Edit these literal options directly. Input/output paths are added by the app. Quoting groups values; no shell expansion. Flags must suit the subcommand.");
                 command_docs(kind)
             }
             "Environment" => {
                 let (example, reason, docs) = match kind {
-                    Typst | Tinymist => (r#"{"TYPST_FONT_PATHS":"/Users/me/fonts"}"#, "Search an extra font directory.", "https://github.com/typst/typst/blob/main/crates/typst-cli/src/args.rs"),
+                    Typst | Tinymist => (r#"{"TYPST_FONT_PATHS":"/Users/me/fonts"}"#, "Search an extra font directory.", "https://github.com/typst/typst/blob/v0.15.1/crates/typst-cli/src/args.rs"),
                     Tectonic => (r#"{"TECTONIC_CACHE_DIR":"/Users/me/tectonic-cache"}"#, "Store downloaded TeX resources in this directory.", "https://tectonic-typesetting.github.io/book/latest/getting-started/first-document.html#cache"),
-                    Badness => (r#"{"BADNESS_CONFIG":"/Users/me/paper/badness.toml"}"#, "Choose a project configuration file.", "https://badness.dev/reference/configuration.html"),
+                    Badness => (r#"{"BADNESS_CONFIG":"/Users/me/paper/badness.toml"}"#, "Use this configuration if no project badness.toml is found. Project configuration wins.", "https://github.com/jolars/badness/blob/v0.24.0/docs/src/reference/configuration.md"),
                     Texlab | TexFmt => (r#"{"RUST_BACKTRACE":"1"}"#, "Include a stack trace if the Rust tool crashes. Normal operation is unchanged.", "https://doc.rust-lang.org/std/backtrace/index.html#environment-variables"),
                 };
                 ui.label(reason); ui.monospace(example);
@@ -604,13 +604,13 @@ fn command_help(response: egui::Response, kind: crate::toolchain::ToolKind, fiel
             }
             _ => {
                 ui.monospace("/Users/me/paper");
-                ui.label("An existing project directory, without quotes. Relative paths and project-file discovery start here. Blank keeps the document/project default.");
+                ui.label("An existing working directory, without quotes. Blank keeps the app’s document/project default; it is usually best left blank. The app still supplies its workspace root and private output paths.");
                 match kind {
                     Badness => "https://badness.dev/reference/configuration.html",
                     TexFmt => "https://github.com/WGUNDERWOOD/tex-fmt#configuration",
                     Tinymist | Typst => "https://myriad-dreamin.github.io/tinymist/feature/compiler-settings.html#packages-roots-and-certificates",
-                    Texlab => "https://github.com/latex-lsp/texlab/wiki/Configuration#texlabrootdirectory",
-                    Tectonic => "https://tectonic-typesetting.github.io/book/latest/ref/tectonic-toml.html",
+                    Texlab => "https://github.com/latex-lsp/texlab/blob/v5.26.0/crates/texlab/src/server/options.rs",
+                    Tectonic => "https://tectonic-typesetting.github.io/book/latest/v2cli/compile.html",
                 }
             }
         };
@@ -815,4 +815,113 @@ pub(super) fn show_text_highlight_editor(
             *rules = crate::editor_decoration::default_rules();
         }
     });
+}
+
+#[cfg(test)]
+mod command_editor_tests {
+    use super::*;
+    use crate::{settings::AppSettings, tool_command::CommandCustomization, toolchain::ToolKind};
+    use egui_kittest::{Harness, kittest::Queryable as _};
+
+    #[test]
+    fn command_editor_shows_literal_defaults_and_reset_is_specific_to_each_tool() {
+        use egui_kittest::kittest::by;
+        for kind in [
+            ToolKind::Typst,
+            ToolKind::Tinymist,
+            ToolKind::Tectonic,
+            ToolKind::Texlab,
+            ToolKind::Badness,
+            ToolKind::TexFmt,
+        ] {
+            let preference = ToolPreference::for_tool(kind);
+            let resolution = crate::toolchain::resolve_tool(kind, &preference);
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(850.0, 650.0))
+                .build_ui_state(
+                    move |ui, preference: &mut ToolPreference| {
+                        tool_preference_editor(
+                            ui,
+                            kind.label(),
+                            preference,
+                            &resolution,
+                            true,
+                            &AppSettings::default(),
+                        );
+                    },
+                    preference,
+                );
+            theme::configure_test_fonts(&harness.ctx);
+            harness.run();
+            harness.get_by_label("Command customization").click();
+            harness.run();
+            assert!(
+                harness
+                    .query(
+                        by().role(egui::accesskit::Role::MultilineTextInput)
+                            .value(kind.default_arguments())
+                    )
+                    .is_some()
+            );
+            let draft = CommandCustomization {
+                arguments: "'broken".into(),
+                ..Default::default()
+            };
+            // Edit through the real input: an invalid draft cannot affect the live command.
+            let field = harness.get(
+                by().role(egui::accesskit::Role::MultilineTextInput)
+                    .value(kind.default_arguments()),
+            );
+            field.focus();
+            harness.run();
+            harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+            harness
+                .get(
+                    by().role(egui::accesskit::Role::MultilineTextInput)
+                        .value(kind.default_arguments()),
+                )
+                .type_text(&draft.arguments);
+            harness.run();
+            assert_eq!(harness.state().command.arguments, kind.default_arguments());
+            assert!(
+                harness
+                    .query_by_label("Arguments contain an unmatched quote")
+                    .is_some()
+            );
+            let edited = format!("{} --optional 'two words'", kind.default_arguments());
+            harness
+                .get(
+                    by().role(egui::accesskit::Role::MultilineTextInput)
+                        .value("'broken"),
+                )
+                .focus();
+            harness.run();
+            harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+            harness
+                .get(
+                    by().role(egui::accesskit::Role::MultilineTextInput)
+                        .value("'broken"),
+                )
+                .type_text(&edited);
+            harness.run();
+            assert_eq!(harness.state().command.arguments, kind.default_arguments());
+            harness.get_by_label("Apply command").click();
+            harness.run();
+            assert_eq!(harness.state().command.arguments, edited);
+            harness.get_by_label("Reset command").click();
+            harness.run();
+            assert_eq!(
+                harness.state().command,
+                CommandCustomization::for_tool(kind)
+            );
+            assert!(
+                harness
+                    .query(
+                        by().role(egui::accesskit::Role::MultilineTextInput)
+                            .value(kind.default_arguments())
+                    )
+                    .is_some()
+            );
+        }
+    }
 }

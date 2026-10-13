@@ -10,8 +10,16 @@ from contextlib import contextmanager
 from desktop_ui_tex_journeys import TexJourneys
 from desktop_ui_image_journeys import ImageJourneys
 from desktop_ui_newest_journeys import NewestJourneys
+from desktop_ui_partial_journeys import PartialPreviewJourneys
 
 PREVIEW_SOURCE = '#set page(width: 200pt, height: 200pt, margin: 20pt)\n= First\nBlack text on white paper.\n#pagebreak()\n= Second\nMiddle page.\n#pagebreak()\n= Third\n#v(95pt)\nFinal needle.\n'
+
+
+def help_target_visible(state, name):
+    target = state["targets"].get(name)
+    scroll = state["scrolls"].get("settings.help")
+    return (target is not None and scroll is not None and target["enabled"]
+            and target["age_ms"] <= 500 and target["frame"] == scroll["frame"])
 
 
 def fingerprint(text):
@@ -58,7 +66,7 @@ def finish_clipboard_adapter(process):
         raise RuntimeError(error or "clipboard adapter failed")
 
 
-class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys):
+class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJourneys):
     def set_math_conversion_formatting(self, enabled):
         if self.snapshot()["document"]["format_after_math_conversion"] is enabled:
             return
@@ -521,33 +529,51 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys):
         self.close_scratch(count)
 
     def snippets(self):
-        import json
         self.settings()
-        self.click("settings.json.mode")
-        self.wait("JSON settings ready", lambda d: d["settings_json"]["visible"])
-        self.key(3)
-        self.wait_target("settings.json.find")
-        self.native("text", '"snippets": []')
-        self.key(36, "none")
-        before = self.snapshot()["document"]["settings_json"]["fingerprint"]
-        settings = {"snippets": [{"prefix": "env", "description": "Linked environment", "language": "both", "body": "\\begin{${1:name}}\n\\end{$1}$0"}]}
-        encoded = json.dumps(settings)[1:-1]
-        self.paste_source(encoded, lambda: self.wait("snippet replacement validates", lambda d: d["settings_json"]["fingerprint"] != before and d["settings_json"]["valid"]))
-        self.click("settings.json.save")
-        self.wait("snippet settings saved", lambda d: d["settings_json"]["saved"])
+        self.setting_section("snippets", "Custom snippets")
+        self.click("settings.snippets.add.tex")
+        self.wait_target("settings.snippets.source")
+        self.click("settings.snippets.source")
+        self.key(0)
+        body = '\\begin{${1:enumerate}}\n  $x$ \\${2} \\\\\n\\end{${1}}${0}'
+        self.paste_source(body, lambda: self.wait_target("settings.snippets.save"))
+        self.click("settings.snippets.save")
+        self.wait("raw TeX source saved without JSON", lambda d: any(s["language"] == "tex" and s["body"] == fingerprint(body) for s in d["snippets"]))
+        self.click("settings.snippets.add.typst")
+        self.click("settings.snippets.save")
+        self.wait("Typst example saved", lambda d: any(s["prefix"] == "eq" and s["language"] == "typst" for s in d["snippets"]))
+        if self.capture_review:
+            self.capture_viewport("settings")
         self.close_settings()
-        count = self.scratch("env")
+        count = self.scratch("eq")
         self.key(49, "ctrl")
-        self.wait("custom snippet offered", lambda d: d["completion_count"] > 0)
+        self.wait("snippet symbol identifies custom provider", lambda d: d["completion_visible"] and d["completion_origins"] == ["Custom snippet"])
+        if self.capture_review:
+            self.capture_viewport("main")
         self.key(48, "none")
-        self.source_is("\\begin{name}\n\\end{name}")
-        self.native("text", "enumerate")
-        self.source_is("\\begin{enumerate}\n\\end{enumerate}")
-        self.key(6)
-        self.source_is("\\begin{name}\n\\end{name}")
-        self.key(6, "cmd+shift")
-        self.source_is("\\begin{enumerate}\n\\end{enumerate}")
+        self.source_is("$ x = y $\n")
+        self.native("text", "alpha")
+        self.source_is("$ alpha = y $\n")
         self.close_scratch(count)
+        count = self.snapshot()["document"]["tabs"]
+        self.tex_document()
+        original = "\\documentclass{article}\n\\begin{document}\nenv"
+        self.key(0)
+        self.paste_source(original)
+        self.key(49, "ctrl")
+        self.wait("TeX snippet uses its own language and provider", lambda d: d["completion_visible"] and d["completion_origins"] == ["Custom snippet"])
+        self.key(48, "none")
+        expanded = original[:-3] + '\\begin{enumerate}\n  $x$ \\${2} \\\\\n\\end{enumerate}'
+        self.source_is(expanded)
+        self.native("text", "itemize")
+        changed = expanded.replace("enumerate", "itemize")
+        self.source_is(changed)
+        self.key(6)
+        self.source_is(expanded)
+        self.key(6, "cmd+shift")
+        self.source_is(changed)
+        self.close_scratch(count)
+
 
     def completion(self):
         count = self.scratch("#mi(`\\alp`)")
@@ -555,10 +581,38 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys):
         self.key(123, "none")
         self.key(49, "ctrl")  # Explicit completion request.
         self.wait("completion popup receives a real response", lambda d: d["completion_visible"] and d["completion_count"] > 0, timeout=30)
+        self.wait("embedded TeX completion has a built-in provider symbol", lambda d: set(d["completion_origins"]) == {"Built-in completion"})
         self.wait_target("completion.item.0")
+        if self.capture_review:
+            self.capture_viewport("main")
         self.key(53, "none")  # Escape dismisses without editing the source.
         self.wait("completion dismisses without changing source", lambda d: not d["completion_visible"])
         self.source_is("#mi(`\\alp`)")
+        self.close_scratch(count)
+        count = self.scratch("#rect")
+        self.wait("real Tinymist editor session is ready", lambda d: d["editor_lsp_ready"], timeout=30)
+        self.key(49, "ctrl")
+        self.wait("Tinymist completion has a language-server provider symbol", lambda d: d["completion_visible"] and "Language server" in d["completion_origins"], timeout=30)
+        if self.capture_review:
+            self.capture_viewport("main")
+        self.key(53, "none")
+        self.source_is("#rect")
+        self.close_scratch(count)
+
+        count = self.scratch('#set text(font: "Times")')
+        self.key(123, "none")
+        self.key(123, "none")
+        self.key(49, "ctrl")
+        state = self.wait("installed-font names are rendered in their actual font", lambda d:
+                          d["completion_visible"] and set(d["completion_origins"]) == {"Installed font"}
+                          and d["completion_font_name_ready"], timeout=30)
+        name = state["document"]["completion_font_name"]
+        self.wait_target("completion.item.0")
+        if self.capture_review:
+            self.capture_viewport("main")
+        self.key(36, "none")
+        escaped = name.replace("\\", "\\\\").replace('"', '\\"')
+        self.source_is('#set text(font: "' + escaped + '")')
         self.close_scratch(count)
 
     def explorer_toggle(self):
@@ -1142,17 +1196,17 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys):
         self.close_settings()
         if save_pdf:
             self.key(15)
-        elif backend == "Interactive":
+        elif backend in ("Interactive", "InteractivePartial"):
             # Tinymist refresh is preview-only. The CLI gear saves a public PDF,
             # so a PDFium backend-switch check must let the background build run.
             self.wait_target("build.preview")
             generation = self.snapshot()["document"]["preview_generation"]
             self.click("build.preview")
         self.wait("selected renderer ready", lambda d: d["preview_requested_backend"] == backend
-                  and d["preview_backend"] == ("PDFium" if backend == "Pdfium" else "Tinymist")
+                  and d["preview_backend"] == ("PDFium" if backend == "Pdfium" else "Tinymist partial" if backend == "InteractivePartial" else "Tinymist")
                   and d["preview_pdfium_ready" if backend == "Pdfium" else "preview_native_ready"]
                   and (save_pdf or (not d["compile_indicator_spinning"] and
-                       (backend != "Interactive" or (d["preview_generation"] != "None" and d["preview_generation"] != generation)))), timeout=60)
+                       (backend not in ("Interactive", "InteractivePartial") or (d["preview_generation"] != "None" and d["preview_generation"] != generation)))), timeout=60)
 
     def pdf_output(self):
         """Preview activity must never imply an adjacent PDF was saved."""
@@ -1366,12 +1420,44 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys):
             self.native("close", "tiptoptyp Preview")
             self.wait("preview returns to document", lambda d: not d["preview_popout"] and d["view_mode"] == "Split")
 
+    def help_target(self, name, scroll_down=False):
+        import time
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            state = self.snapshot()
+            if help_target_visible(state, name):
+                return
+            scroll = state["scrolls"].get("settings.help")
+            if scroll:
+                self.native("move", scroll["x"], scroll["y"])
+                self.native("wheel", scroll["x"], scroll["y"], -4 if scroll_down else 100)
+            time.sleep(0.05)
+        raise AssertionError("Help target was not fully visible after native scrolling: " + name)
+
+    def help_tool_options(self, source_fingerprint):
+        self.help_target("settings.help.tools")
+        self.click("settings.help.tools")
+        for tool in ("typst", "tinymist", "tectonic", "texlab", "badness", "tex-fmt"):
+            header = "settings.help.tool." + tool
+            self.help_target(header)
+            self.click(header)
+            self.help_target("settings.help.option." + tool + ".0", scroll_down=True)
+            self.help_target("settings.help.option." + tool + ".9", scroll_down=True)
+            self.wait(tool + " reference stays in Settings without editing source",
+                      lambda d: d["settings_help_visible"] and d["settings_visible"]
+                      and d["source_fingerprint"] == source_fingerprint)
+            self.help_target(header)
+            self.click(header)
+        self.help_target("settings.help.tools")
+        self.click("settings.help.tools")
+
     def editor_preferences(self):
-        count = self.scratch("#let sample = {\n  // TODO: inspect\n  (1, 2, 3)\n}\n")
+        count = self.scratch("#let sample = {\n  // TODO: inspect\n  (1, 2, 3)\n}\n#sample\n")
         original = self.snapshot()["document"]["source_fingerprint"]
         self.settings()
         self.click("settings.help")
         self.wait("Help opens within Settings", lambda d: d["settings_help_visible"] and d["settings_visible"])
+        self.help_tool_options(original)
         if self.capture_review:
             self.capture_viewport("settings")
         self.key(3)
@@ -1379,7 +1465,7 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys):
         self.wait("Find returns to Settings search", lambda d: not d["settings_help_visible"] and d["settings_text_input_focused"])
         for query, title, target, field in [
             ("guides", "Indentation guides", "settings.editor.guides", "indentation_guides"),
-            ("definitions", "Highlight definitions and redefinitions", "settings.editor.definitions", "highlight_definitions"),
+            ("local definitions", "Highlight uses of local definitions", "settings.editor.local-uses", "highlight_local_uses"),
             ("wrap", "Wrap lines", "settings.editor.wrap", "line_wrap"),
         ]:
             self.setting_section(query, title)
@@ -1492,6 +1578,54 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys):
         for _ in range(8):
             if self.snapshot()["renderer_generation"] != generation:
                 raise AssertionError("revealing the prepared preview reloaded it")
+
+        # Exercise the real native material, both renderer paths, and shared
+        # Settings ownership. Geometry comes from AppKit, not requested settings.
+        def underlay(d, key="native_background"):
+            material = d.get(key)
+            return material and material.get("blur") and material["blur"]["below_renderer"]
+        self.wait("default blur is attached below the document renderer", underlay)
+        original = self.snapshot()["document"]["source_fingerprint"]
+        for backend in ("Interactive", "Pdfium"):
+            self.choose_backend(backend)
+            self.wait("effective preview backend is ready with blur", lambda d:
+                      d["preview_native_ready"] if backend == "Interactive" else d["preview_pdfium_ready"], timeout=40)
+            self.settings()
+            self.setting_section("appearance", "Appearance")
+            self.wait("Settings has its own native sibling underlay", lambda d: underlay(d, "settings_native_background"))
+            for _ in range(3):
+                self.click("settings.background.blur")
+                self.wait("blur off removes the document underlay", lambda d: d["native_background"]["blur"] is None)
+                self.wait("blur off removes the Settings underlay", lambda d: d["settings_native_background"]["blur"] is None)
+                self.click("settings.background.blur")
+                self.wait("blur on restores both native underlays", lambda d: underlay(d) and underlay(d, "settings_native_background"))
+            self.click("settings.theme.Light")
+            self.wait("light material follows the app appearance", lambda d:
+                      not d["native_background"]["dark"] and not d["settings_native_background"]["dark"])
+            self.click("settings.theme.Dark")
+            self.wait("dark material follows the app appearance", lambda d:
+                      d["native_background"]["dark"] and d["settings_native_background"]["dark"])
+            if self.capture_review:
+                self.capture_viewport("settings")
+            self.close_settings()
+            self.click("editor.source")
+            self.key(3)
+            self.wait("Find gets keyboard ownership with blur", lambda d: d["find_visible"] and d["find_focused"])
+            self.key(0)  # Find retains its query across both backend checks.
+            self.native("text", "Desktop")
+            self.wait("Find receives native typing with blur", lambda d: d["find_query_fingerprint"] == fingerprint("Desktop"))
+            self.key(53, "none")
+            self.wait("Find closes once", lambda d: not d["find_visible"])
+            before = self.snapshot()["document"]["native_background"]
+            self.native("zoom-focused")
+            self.wait("native zoom resizes underlay with the renderer", lambda d:
+                      underlay(d) and d["native_background"]["blur"]["frame"][2:] == d["native_size"])
+            self.native("zoom-focused")
+            self.wait("native zoom restore preserves underlay", underlay)
+            self.stable_state(lambda d: underlay(d) and d["native_background"]["blur"]["identity"] == before["blur"]["identity"])
+            if self.capture_review:
+                self.capture_viewport("main")
+        self.wait("blur transitions never edit the document", lambda d: d["source_fingerprint"] == original)
 
     def context_menu(self):
         with self.exact_math_conversion():

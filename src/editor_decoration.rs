@@ -4,6 +4,8 @@ use eframe::egui::{self, Color32, Stroke, text::LayoutJob};
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
 
+mod local_uses;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct HighlightRule {
     pub(crate) text: String,
@@ -33,30 +35,50 @@ pub(crate) fn enabled() -> bool {
 
 #[derive(Default)]
 pub(crate) struct Options {
-    definitions: bool,
+    local_uses: bool,
     rules: Vec<HighlightRule>,
     accent: Color32,
 }
 impl Options {
     pub(crate) fn set(
         &mut self,
-        definitions: bool,
+        local_uses: bool,
         rules: &[HighlightRule],
         accent: Color32,
     ) -> bool {
-        if self.definitions == definitions && self.rules == rules && self.accent == accent {
+        if self.local_uses == local_uses && self.rules == rules && self.accent == accent {
             return false;
         }
-        self.definitions = definitions;
+        self.local_uses = local_uses;
         self.rules = rules.to_vec();
         self.accent = accent;
         true
     }
-    pub(crate) fn decorate(&self, cache: &mut Decorations, job: &mut LayoutJob, typst: bool) {
-        if !self.definitions && !self.rules.iter().any(|r| r.enabled && !r.text.is_empty()) {
+    pub(crate) fn decorate_generic(&self, cache: &mut Decorations, job: &mut LayoutJob, tex: bool) {
+        let local_uses = self.local_uses && tex;
+        if !local_uses && !self.rules.iter().any(|r| r.enabled && !r.text.is_empty()) {
             return;
         }
-        cache.prepare(&job.text, typst, self.definitions, &self.rules);
+        cache.prepare(&job.text, false, local_uses, &self.rules);
+        cache.apply(job, self.accent);
+    }
+    pub(crate) fn decorate_typst(
+        &self,
+        cache: &mut Decorations,
+        job: &mut LayoutJob,
+        parsed: &typst_syntax::Source,
+        source_offset: usize,
+    ) {
+        if !self.local_uses && !self.rules.iter().any(|r| r.enabled && !r.text.is_empty()) {
+            return;
+        }
+        cache.prepare_with_parse(
+            &job.text,
+            true,
+            self.local_uses,
+            &self.rules,
+            Some((parsed, source_offset)),
+        );
         cache.apply(job, self.accent);
     }
 }
@@ -65,10 +87,11 @@ impl Options {
 pub(crate) struct Decorations {
     source: String,
     typst: bool,
-    definitions: bool,
+    local_uses: bool,
     rules: Vec<HighlightRule>,
     spans: Vec<(Range<usize>, TypstStyleOverride)>,
     valid: bool,
+    parse_offset: usize,
     #[cfg(test)]
     builds: usize,
 }
@@ -77,35 +100,52 @@ impl Decorations {
         &mut self,
         source: &str,
         typst: bool,
-        definitions: bool,
+        local_uses: bool,
         rules: &[HighlightRule],
     ) {
+        self.prepare_with_parse(source, typst, local_uses, rules, None);
+    }
+    fn prepare_with_parse(
+        &mut self,
+        source: &str,
+        typst: bool,
+        local_uses: bool,
+        rules: &[HighlightRule],
+        parsed: Option<(&typst_syntax::Source, usize)>,
+    ) {
+        let parse_offset = parsed.map_or(0, |(_, offset)| offset);
         if self.valid
             && self.source == source
             && self.typst == typst
-            && self.definitions == definitions
+            && self.local_uses == local_uses
             && self.rules == rules
+            && self.parse_offset == parse_offset
         {
             return;
         }
         self.source.clear();
         self.source.push_str(source);
         self.typst = typst;
-        self.definitions = definitions;
+        self.local_uses = local_uses;
         self.rules = rules.to_vec();
+        self.parse_offset = parse_offset;
         self.spans.clear();
         self.valid = true;
         #[cfg(test)]
         {
             self.builds += 1;
         }
-        if definitions {
+        if local_uses {
             let style = TypstStyleOverride {
                 weight: Some(700),
                 underline: Some(true),
                 ..Default::default()
             };
-            for range in definition_ranges(source, typst) {
+            let ranges = match parsed {
+                Some((parsed, offset)) => local_uses::typst(parsed, offset, source.len()),
+                None => local_use_ranges(source, typst),
+            };
+            for range in ranges {
                 self.spans.push((range, style.clone()));
             }
         }
@@ -159,123 +199,12 @@ impl Decorations {
     }
 }
 
-fn definition_ranges(source: &str, typst: bool) -> Vec<Range<usize>> {
+fn local_use_ranges(source: &str, typst: bool) -> Vec<Range<usize>> {
     if typst {
-        fn visit(
-            node: typst_syntax::LinkedNode<'_>,
-            parsed: &typst_syntax::Source,
-            result: &mut Vec<Range<usize>>,
-        ) {
-            use typst_syntax::SyntaxKind;
-            use typst_syntax::ast::{self, AstNode};
-            if let Some(binding) = node.get().cast::<ast::LetBinding>() {
-                for name in binding.kind().bindings() {
-                    if let Some(range) = parsed
-                        .find(name.to_untyped().span())
-                        .map(|node| node.range())
-                    {
-                        result.push(range);
-                    }
-                }
-            } else if let Some(binary) = node.get().cast::<ast::Binary>()
-                && matches!(
-                    binary.op(),
-                    ast::BinOp::Assign
-                        | ast::BinOp::AddAssign
-                        | ast::BinOp::SubAssign
-                        | ast::BinOp::MulAssign
-                        | ast::BinOp::DivAssign
-                )
-                && let Some(name) = parsed.find(binary.lhs().to_untyped().span())
-            {
-                result.push(name.range());
-            } else if node.kind() == SyntaxKind::SetRule
-                && let Some(name) = node
-                    .children()
-                    .find(|child| child.kind() == SyntaxKind::Ident)
-            {
-                result.push(name.range());
-            }
-            for child in node.children() {
-                visit(child, parsed, result);
-            }
-        }
-        let parsed = typst_syntax::Source::detached(source);
-        let mut result = Vec::new();
-        visit(
-            typst_syntax::LinkedNode::new(parsed.root()),
-            &parsed,
-            &mut result,
-        );
-        result
+        local_uses::typst(&typst_syntax::Source::detached(source), 0, source.len())
     } else {
-        // Commands in comments are not declarations. TeX's dynamic expansion is
-        // intentionally outside this local, lexical decoration.
-        let mut ranges = Vec::new();
-        let mut offset = 0;
-        for line in source.split_inclusive('\n') {
-            let comment = line
-                .char_indices()
-                .find(|(at, c)| *c == '%' && !escaped(line, *at))
-                .map_or(line.len(), |(at, _)| at);
-            let code = &line[..comment];
-            for command in [
-                "\\newcommand",
-                "\\renewcommand",
-                "\\providecommand",
-                "\\DeclareMathOperator",
-                "\\NewDocumentCommand",
-                "\\RenewDocumentCommand",
-                "\\ProvideDocumentCommand",
-                "\\newtheorem",
-                "\\let",
-                "\\DeclareRobustCommand",
-                "\\def",
-                "\\gdef",
-                "\\edef",
-                "\\xdef",
-                "\\newenvironment",
-                "\\renewenvironment",
-            ] {
-                for (at, _) in code.match_indices(command) {
-                    if escaped(code, at) {
-                        continue;
-                    }
-                    let mut start = at + command.len();
-                    if code[start..].starts_with(|c: char| c.is_ascii_alphabetic()) {
-                        continue;
-                    }
-                    while code[start..]
-                        .starts_with(|c: char| c.is_whitespace() || c == '*' || c == '{')
-                    {
-                        start += code[start..].chars().next().unwrap().len_utf8();
-                    }
-                    let mut end = start;
-                    if code[end..].starts_with('\\') {
-                        end += 1;
-                    }
-                    while code[end..].starts_with(|c: char| c.is_alphabetic() || c == '@') {
-                        end += code[end..].chars().next().unwrap().len_utf8();
-                    }
-                    if end > start {
-                        ranges.push(offset + start..offset + end);
-                    }
-                }
-            }
-            offset += line.len();
-        }
-        ranges
+        local_uses::tex(source)
     }
-}
-
-fn escaped(source: &str, at: usize) -> bool {
-    source[..at]
-        .bytes()
-        .rev()
-        .take_while(|&b| b == b'\\')
-        .count()
-        % 2
-        != 0
 }
 
 fn indentation_columns(chars: impl Iterator<Item = char>, step: usize, limit: usize) -> usize {
@@ -833,7 +762,7 @@ mod tests {
     fn decorations_share_syntax_cache_and_invalidate_on_options_theme_and_edits() {
         let generic = crate::generic_highlight::GenericSyntaxHighlighter::default();
         let mut syntax = crate::highlight::SyntaxHighlighter::default();
-        let source = "#let foo = 1\n#foo = 2 // TODO: λ";
+        let source = "#let foo = 1\n#foo = 2\n#foo // TODO: λ";
         let baseline = syntax.highlight(source, false, &generic);
         syntax.set_decorations(true, &default_rules(), Color32::RED);
         let decorated = syntax.highlight(source, false, &generic);
@@ -847,7 +776,7 @@ mod tests {
         assert_eq!(edited.text, "plain");
         let mut tex = crate::generic_highlight::GenericSyntaxHighlighter::default();
         let path = std::path::Path::new("sample.tex");
-        let source = "\\newcommand{\\foo}{x} % TODO: test";
+        let source = "\\newcommand{\\foo}{x}\n\\foo % TODO: test";
         let baseline = tex.highlight(source, Some(path), false);
         tex.set_decorations(true, &default_rules(), Color32::RED);
         let marked = tex.highlight(source, Some(path), false);
@@ -857,22 +786,33 @@ mod tests {
         assert_eq!(baseline, tex.highlight(source, Some(path), false));
     }
     #[test]
-    fn definitions_are_local_and_ignore_comments_strings_and_tex_command_prefixes() {
-        let typ = "// #let fake = 1\n#let foo(x) = x\n#let foo = 2\n`#let nope = 3`";
+    fn local_highlighting_marks_typst_uses_not_declarations() {
+        let source = "#let foo(x) = x\n#foo(1)\n#let foo = 2\n#foo\nfoo foobar `#foo` // #foo\n#let label = \"foo\"";
+        let ranges = local_use_ranges(source, true);
         assert_eq!(
-            definition_ranges(typ, true)
+            ranges
                 .iter()
-                .map(|r| &typ[r.clone()])
+                .map(|r| &source[r.clone()])
                 .collect::<Vec<_>>(),
-            ["foo", "foo"]
+            ["x", "foo", "foo"]
         );
-        let tex = "% \\newcommand{\\fake}{}\n\\newcommand{\\foo}[1]{#1}\n\\renewcommand*{\\foo}{x}\n\\def\\bar{x}\n\\newcommandfake{\\nope}";
+        assert!(ranges.iter().all(|r| !source[..r.start].ends_with("let ")));
+    }
+    #[test]
+    fn local_highlighting_marks_tex_uses_not_declarations() {
+        let source = "% \\newcommand{\\fake}{}\n\\newcommand{\\foo}[1]{#1}\n\\foo{ok}\n\\renewcommand*{\\foo}{x}\n\\foo \\foobar \\fake\n\\verb|\\foo|\n\\begin{verbatim}\\foo\\end{verbatim}";
         assert_eq!(
-            definition_ranges(tex, false)
+            local_use_ranges(source, false)
                 .iter()
-                .map(|r| &tex[r.clone()])
+                .map(|r| &source[r.clone()])
                 .collect::<Vec<_>>(),
-            ["\\foo", "\\foo", "\\bar"]
+            ["\\foo", "\\foo"]
+        );
+        let first = source.find("\\foo{ok}").unwrap();
+        let second = source.find("\\foo \\foobar").unwrap();
+        assert_eq!(
+            local_use_ranges(source, false),
+            [first..first + 4, second..second + 4]
         );
     }
     #[test]

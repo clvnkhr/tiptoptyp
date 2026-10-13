@@ -53,9 +53,14 @@ def assert_tinymist_palette(renderer, palette):
     value = renderer["value"]
     if not value or not value.get("ready"):
         raise AssertionError("Tinymist has no visible page")
-    if len(value["filters"]) != 1 or "tiptoptyp-palette" not in value["filters"][0]:
-        raise AssertionError("Tinymist page must receive exactly one palette filter")
     background, foreground = palette
+    identity_palette = (background[:3] == [255, 255, 255]
+                        and foreground[:3] == [0, 0, 0])
+    filters = value["filters"]
+    expected_filter = (filters == ["none"] if identity_palette else
+                       len(filters) == 1 and "tiptoptyp-palette" in filters[0])
+    if not expected_filter:
+        raise AssertionError("Tinymist page must receive exactly one appropriate palette filter")
     expected = "rgb(" + ", ".join(map(str, background[:3])) + ")"
     if value["background"] != expected:
         raise AssertionError("Tinymist paper differs from the effective palette")
@@ -108,7 +113,7 @@ class Journey(EditorJourneys):
             self.log.flush()
 
     def native(self, command, *args):
-        if command in {"click", "double-click", "drag", "drag-start", "drag-move", "drag-end", "key", "move", "wheel", "text", "paste", "right-click"}:
+        if command in {"click", "double-click", "drag", "drag-start", "drag-move", "drag-end", "key", "key-burst", "move", "wheel", "text", "paste", "right-click"}:
             foreground = subprocess.run(
                 [str(self.driver), "foreground", str(self.process.pid)],
                 capture_output=True,
@@ -864,8 +869,9 @@ stop.write_text(json.dumps({"pid": os.getpid(), "rate": rate, "frames": frames, 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--journey", choices=["all", "tex", *TEX_JOURNEYS, *IMAGE_JOURNEYS, *NEWEST_JOURNEYS, "drawing", "snippets", "panels", "terminal_find", "terminal_load", "terminal_theme", "find", "rectangle", "empty", "focus", "preview", "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "controls", "settings_search", "editor_preferences", "background", "context_menu"], default="all")
+    parser.add_argument("--journey", choices=["all", "tex", *TEX_JOURNEYS, *IMAGE_JOURNEYS, *NEWEST_JOURNEYS, "drawing", "snippets", "panels", "terminal_find", "terminal_load", "terminal_theme", "find", "rectangle", "empty", "focus", "preview", "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "partial_preview", "partial_zoom_stress", "controls", "settings_search", "editor_preferences", "background", "context_menu"], default="all")
     parser.add_argument("--release", action="store_true", help="use the optimized production profile for large-document journeys")
+    parser.add_argument("--executable", type=Path, help="reuse a preserved build for paired benchmarks; record its version and binary hash")
     parser.add_argument("--review-preview", action="store_true", help="pause at affected native preview states for independent on-screen review; not an automated visual pass")
     parser.add_argument("--capture-review", action="store_true", help="capture affected settings/controls framebuffers for separate visual inspection")
     parser.add_argument("--trace-preview", action="store_true", help="retain native preview geometry traces")
@@ -899,14 +905,21 @@ def main():
                     raise RuntimeError("desktop is locked or unavailable; unlock it before native interaction checks. " + preflight.stdout)
                 raise RuntimeError("desktop driver lacks Accessibility/input permission; enable it for the launching host in macOS Privacy & Security. " + preflight.stdout)
         result["build_profile"] = "release" if args.release else "debug"
-        build_command = ["cargo", "build", "--locked", "--features", "desktop-ui-tests", "--bin", "tiptoptyp", "--message-format=json"]
-        if args.release:
-            build_command.append("--release")
-        build = subprocess.run(build_command,
-                               cwd=ROOT, check=True, stdout=subprocess.PIPE, text=True, timeout=900)
-        artifacts = [json.loads(line) for line in build.stdout.splitlines()]
-        executable = next(item["executable"] for item in reversed(artifacts)
-                          if item.get("reason") == "compiler-artifact" and item.get("executable") and item["target"]["name"] == "tiptoptyp")
+        if args.executable:
+            executable = str(args.executable.resolve(strict=True))
+            if not os.access(executable, os.X_OK):
+                raise RuntimeError("preserved benchmark executable is not runnable")
+            result["reused_binary"] = executable
+            result["build_profile_note"] = "Declared profile of preserved binary; verify against its original build receipt. Current source does not establish this binary's provenance."
+        else:
+            build_command = ["cargo", "build", "--locked", "--features", "desktop-ui-tests", "--bin", "tiptoptyp", "--message-format=json"]
+            if args.release:
+                build_command.append("--release")
+            build = subprocess.run(build_command,
+                                   cwd=ROOT, check=True, stdout=subprocess.PIPE, text=True, timeout=900)
+            artifacts = [json.loads(line) for line in build.stdout.splitlines()]
+            executable = next(item["executable"] for item in reversed(artifacts)
+                              if item.get("reason") == "compiler-artifact" and item.get("executable") and item["target"]["name"] == "tiptoptyp")
         result["version"] = subprocess.check_output([executable, "--version"], text=True).strip()
         result["binary_sha256"] = hashlib.sha256(Path(executable).read_bytes()).hexdigest()
         result["git_head"] = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
@@ -925,7 +938,7 @@ def main():
                 "CFBundleExecutable": "tiptoptyp", "CFBundleIdentifier": "dev.tiptoptyp.journey." + directory.name,
                 "CFBundleName": "tiptoptyp UI Journey", "CFBundlePackageType": "APPL", "NSHighResolutionCapable": True,
             }))
-            fixture = directory / ("journey.tex" if args.journey == "tex" or args.journey in TEX_JOURNEYS else "journey.typ" if args.journey in ("all", *IMAGE_JOURNEYS, *NEWEST_JOURNEYS, "preview", "pdf_output", "preview_keyboard", "controls", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "layout", "explorer_toggle", "explorer_scroll", "background") else "journey.txt")
+            fixture = directory / ("journey.tex" if args.journey == "tex" or args.journey in TEX_JOURNEYS else "journey.typ" if args.journey in ("all", *IMAGE_JOURNEYS, *NEWEST_JOURNEYS, "partial_preview", "partial_zoom_stress", "preview", "pdf_output", "preview_keyboard", "controls", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "background") else "journey.txt")
             fixture.write_text(
                 TEX_SOURCE
                 if fixture.suffix == ".tex"
@@ -1035,6 +1048,8 @@ def main():
                     if state["build"] != result["version"]:
                         raise AssertionError("running build differs from tested binary")
                     result["initial_state"] = state
+                    if args.journey in ("partial_preview", "partial_zoom_stress") and not args.observe_only:
+                        journey.partial_preview_default()
                     if args.observe_only:
                         # A fresh reply must follow an actual UI pass, and the socket
                         # must reject commands other than its one read-only operation.
@@ -1052,7 +1067,7 @@ def main():
                         return
                     if args.capture_review:
                         journey.capture_initial_review()
-                    for name in ([*NEWEST_JOURNEYS, "terminal_theme", "panels", "terminal_find", "terminal_load", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "focus", "settings_search", "editor_preferences", "background", "context_menu", "pdf_output", "preview", "controls", "empty", "snippets", "drawing", *IMAGE_JOURNEYS, *TEX_JOURNEYS] if args.journey == "all" else TEX_JOURNEYS if args.journey == "tex" else [args.journey]):
+                    for name in ([*NEWEST_JOURNEYS, "terminal_theme", "panels", "terminal_find", "terminal_load", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "focus", "settings_search", "editor_preferences", "background", "context_menu", "pdf_output", "preview", "partial_preview", "controls", "empty", "snippets", "drawing", *IMAGE_JOURNEYS, *TEX_JOURNEYS] if args.journey == "all" else TEX_JOURNEYS if args.journey == "tex" else [args.journey]):
                         journey.record("journey.start", name=name)
                         getattr(journey, name)()
                         result["journeys"].append(name)

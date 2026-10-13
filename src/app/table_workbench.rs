@@ -10,7 +10,7 @@ pub(super) enum TableEditorDialog {
 }
 #[derive(Debug, Clone)]
 pub(super) struct SourceDialog {
-    target: TableSource,
+    pub(super) target: TableSource,
     draft: String,
     key: DocumentKey,
     error: Option<String>,
@@ -18,11 +18,11 @@ pub(super) struct SourceDialog {
 }
 #[derive(Debug, Clone)]
 pub(super) struct TexDialog {
-    table: TexTable,
+    pub(super) table: TexTable,
     original: String,
     draft: String,
     column_spec: String,
-    source_mode: bool,
+    pub(super) source_mode: bool,
     key: DocumentKey,
     error: Option<String>,
     validation: Option<String>,
@@ -52,13 +52,35 @@ impl TableEditorDialog {
 impl EditorApp {
     pub(super) fn cancel_table_editor(&mut self, context: &egui::Context) {
         self.table_editor = None;
+        self.table_samples.reset();
+        crate::table_sampling::clear(
+            context,
+            scoped_child_viewport_id(context, "tiptoptyp-table-editor"),
+        );
         self.table_edit_events.clear();
         ChildViewHost::close(context, "tiptoptyp-table-editor");
         crate::window_host::return_focus(context);
     }
-    pub(super) fn begin_table_target(&mut self, target: TableTarget) {
+    pub(super) fn begin_table_target(&mut self, mut target: TableTarget) {
         if self.table_editor.is_some() {
             return;
+        }
+        self.table_samples.reset();
+        if let TableTarget::Typst(table) = &target
+            && !table.has_explicit_columns()
+            && table
+                .cells
+                .iter()
+                .flatten()
+                .any(|cell| crate::table_sampling::computed_markup(cell))
+        {
+            target = TableTarget::Source(TableSource {
+                kind: table.kind,
+                source_range: table.source_range.clone(),
+                source: char_range_slice(self.document().source(), table.source_range.clone())
+                    .unwrap_or_default()
+                    .into(),
+            });
         }
         self.table_edit_events.clear();
         let key = self.document().key();
@@ -139,8 +161,26 @@ pub(super) fn prepare_source_edit(
                 .into(),
         );
     }
+    let cursor = edit.range.start + edit.replacement.chars().count();
+    if matches!(dialog, TableEditorDialog::Tex(_)) {
+        let table = crate::editor_features::tex_table_at(&edit.replacement, 1)
+            .ok_or("Finish the table source before applying it")?;
+        let required = crate::tex::imports::Requirements::table(&table, &edit.replacement);
+        let edit = crate::tex::imports::prepare_edit(
+            source,
+            byte_range,
+            &edit.replacement,
+            cursor,
+            &required,
+        )?;
+        return Ok(PreparedTableSourceEdit {
+            cursor: edit.cursor,
+            byte_range: edit.byte_range,
+            replacement: edit.replacement,
+        });
+    }
     Ok(PreparedTableSourceEdit {
-        cursor: edit.range.start + edit.replacement.chars().count(),
+        cursor,
         byte_range,
         replacement: edit.replacement,
     })
@@ -168,6 +208,7 @@ pub(super) fn show(
                     source_range: typst.table.source_range.clone(),
                     source: typst.original_call.clone(),
                 };
+                crate::table_sampling::set_source_mode(ui.ctx(), true);
                 *dialog = TableEditorDialog::Source(Box::new(SourceDialog {
                     validation: target.source_edit(&draft).err(),
                     target,
@@ -184,6 +225,26 @@ pub(super) fn show(
             show_table_editor_ui(ui, dialog, width, height, settings)
         }
         TableEditorDialog::Source(dialog) => {
+            let view = crate::table_sampling::view(ui);
+            let mode_id = crate::table_sampling::mode_key(ui.ctx().viewport_id());
+            let mut source_mode = ui
+                .ctx()
+                .data(|data| data.get_temp::<bool>(mode_id))
+                .unwrap_or(view.is_none());
+            let toggle = ui
+                .add_enabled_ui(view.is_some(), |ui| {
+                    ui.toggle_value(&mut source_mode, "Source")
+                })
+                .inner;
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            crate::desktop_test::observe("table.source-mode", &toggle);
+            let _ = toggle;
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(mode_id, source_mode));
+            if !source_mode {
+                table_samples::sampled_grid(ui, height);
+                return footer(ui, &dialog.error, dialog.validation.clone());
+            }
             ui.strong(format!("{} · source", dialog.target.kind.callee()));
             ui.label("Computed cells and options stay intact. Edit the complete call below.");
             if source_field(
@@ -254,7 +315,7 @@ fn show_tex(
     settings: &AppSettings,
 ) -> Option<TableEditorUiAction> {
     ui.horizontal_wrapped(|ui| {
-        ui.strong(format!("TeX · {}", dialog.table.environment.name()));
+        ui.strong(format!("TeX · {}", dialog.table.environment.name())).on_hover_text("Missing packages and tabularray libraries are added to the preamble on Apply, in the same undoable edit. Existing imports and options are kept.");
         if !dialog.table.packages.is_empty() { ui.weak(format!("Packages: {}", dialog.table.packages.join(", "))); }
         let mut source_mode = dialog.source_mode;
         let source_response = ui.toggle_value(&mut source_mode, "Source");
@@ -263,6 +324,10 @@ fn show_tex(
         if source_response.changed() {
             if source_mode {
                 match dialog.table.render_source_draft_with_spec(&dialog.column_spec) { Ok(draft) => { dialog.draft = draft; dialog.source_mode = true; dialog.error = None; dialog.validation = dialog.table.source_edit(&dialog.draft).err(); }, Err(error) => dialog.error = Some(error) }
+            } else if crate::table_sampling::view(ui).is_some_and(|view| !view.locked.is_empty())
+                && dialog.table.render_source_draft_with_spec(&dialog.column_spec).as_ref() != Ok(&dialog.draft)
+            {
+                dialog.error = Some("Apply your source changes and reopen the table to refresh its sampled values.".into());
             } else {
                 match dialog.table.source_edit(&dialog.draft).and_then(|_| crate::editor_features::tex_table_at(&dialog.draft, 1).ok_or("Finish the table source".into())) {
                     Ok(mut table) if table.cells.is_some() => {
@@ -291,17 +356,27 @@ fn show_tex(
         }
         return footer(ui, &dialog.error, dialog.validation.clone());
     }
+    if crate::table_sampling::view(ui).is_some_and(|view| !view.locked.is_empty()) {
+        ui.weak("Variable cells are sampled and locked");
+    }
     let mut column_spec_changed = false;
-    egui::CollapsingHeader::new("Table settings").default_open(true).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.label("Columns");
-            let spec = ui.add(egui::TextEdit::singleline(&mut dialog.column_spec).code_editor().desired_width(f32::INFINITY));
-            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-            crate::desktop_test::observe("table.columns", &spec);
-            column_spec_changed = spec.changed();
-            spec.on_hover_text("Example: |l|c|r|. Use p{2cm} for a fixed-width column; m and b require array, X requires tabularx. Vertical | rules and booktabs row rules are preserved.");
+    egui::CollapsingHeader::new("Table settings")
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Columns");
+                let spec = ui.add_enabled(
+                    !crate::table_sampling::view(ui).is_some_and(|view| !view.locked.is_empty()),
+                    egui::TextEdit::singleline(&mut dialog.column_spec)
+                        .code_editor()
+                        .desired_width(f32::INFINITY),
+                );
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("table.columns", &spec);
+                column_spec_changed = spec.changed();
+                spec.on_hover_text(dialog.table.environment.column_help());
+            });
         });
-    });
     let mut cells_changed = false;
     if let Some(rows) = &mut dialog.table.cells {
         let count = rows.first().map_or(1, Vec::len);
@@ -334,6 +409,14 @@ fn show_tex(
                         )
                         .shrink(2.0);
                         let id = cells_id.with((r, c));
+                        let visual = &ui.visuals().widgets.noninteractive;
+                        ui.painter().rect(
+                            rect,
+                            2.0,
+                            visual.weak_bg_fill,
+                            visual.bg_stroke,
+                            StrokeKind::Inside,
+                        );
                         ui.scope_builder(egui::UiBuilder::new().id_salt(id).max_rect(rect), |ui| {
                             ui.set_clip_rect(ui.clip_rect().intersect(rect));
                             let mut layouter =
@@ -352,10 +435,14 @@ fn show_tex(
                                 .id_salt(("tex-cell-scroll", r, c))
                                 .max_height(rect.height())
                                 .show(ui, |ui| {
+                                    if table_samples::locked_cell(ui, (r, c), cell).is_some() {
+                                        return;
+                                    }
                                     let response = ui.add(
                                         egui::TextEdit::multiline(cell)
                                             .id(id)
                                             .code_editor()
+                                            .frame(egui::Frame::NONE)
                                             .font(theme::editor_font())
                                             .desired_width(rect.width())
                                             .desired_rows(2)
@@ -366,6 +453,14 @@ fn show_tex(
                                         &format!("table.cell.{r}.{c}"),
                                         &response,
                                     );
+                                    if response.has_focus() {
+                                        ui.painter().rect_stroke(
+                                            rect,
+                                            2.0,
+                                            ui.style().interact(&response).bg_stroke,
+                                            StrokeKind::Inside,
+                                        );
+                                    }
                                     cells_changed |= response.changed();
                                 });
                         });
@@ -427,6 +522,75 @@ mod tests {
         assert!(prepare_source_edit(&source.replace("rows", "other"), key(), &dialog).is_err());
     }
     #[test]
+    fn table_samples_dynamic_grid_is_read_only_and_source_is_an_explicit_choice() {
+        let target = TableSource {
+            kind: crate::editor_features::TableKind::Table,
+            source_range: 0..14,
+            source: "table(..rows)".into(),
+        };
+        let dialog = TableEditorDialog::Source(Box::new(SourceDialog {
+            draft: target.source.clone(),
+            target,
+            key: key(),
+            error: None,
+            validation: None,
+        }));
+        let mut ready = false;
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(620.0, 560.0))
+            .build_ui_state(
+                move |ui, dialog| {
+                    if !ready {
+                        theme::configure_test_fonts(ui.ctx());
+                        ready = true;
+                    }
+                    crate::table_sampling::publish(
+                        ui.ctx(),
+                        ui.ctx().viewport_id(),
+                        Arc::new(crate::table_sampling::View {
+                            grid: Some(crate::table_sampling::Grid {
+                                columns: 1,
+                                rows: 1,
+                                instances: 1,
+                                cells: vec![crate::table_sampling::Cell {
+                                    position: (0, 0),
+                                    span: (1, 1),
+                                    value: "Revenue".into(),
+                                }],
+                            }),
+                            ..Default::default()
+                        }),
+                    );
+                    show(ui, dialog, 590.0, 520.0, &AppSettings::default());
+                },
+                dialog,
+            );
+        harness.run();
+        assert_eq!(
+            harness
+                .query_all(by().role(egui::accesskit::Role::MultilineTextInput))
+                .count(),
+            0
+        );
+        harness.get_by_label("Revenue").click();
+        harness.event(egui::Event::Text("overwrite".into()));
+        harness.run();
+        let TableEditorDialog::Source(dialog) = harness.state() else {
+            unreachable!()
+        };
+        assert_eq!(dialog.draft, "table(..rows)");
+        harness.get_by_label("Source").click();
+        harness.run();
+        assert_eq!(
+            harness
+                .query_all(by().role(egui::accesskit::Role::MultilineTextInput))
+                .count(),
+            1
+        );
+        assert!(harness.get_by_label("Apply").rect().bottom() <= 560.0);
+    }
+
+    #[test]
     fn tex_grid_and_source_modes_share_lossless_apply_and_reject_stale_source() {
         let source =
             "Préface \\begin{tabular}{|l|r|} A & B \\\\ \\hline C & D \\\\ \\end{tabular} fin";
@@ -487,6 +651,170 @@ mod tests {
             assert!(app.table_editor.is_none());
             assert_eq!(app.document().source(), source);
         }
+    }
+
+    #[test]
+    fn package_tex_workbenches_edit_cells_and_roundtrip_through_source() {
+        for (name, args) in [
+            ("tblr", "[baseline=T]{colspec={Q[l]X[2,r]},hlines,vlines}"),
+            ("tabular", "{lS[table-format=2.0]}"),
+            ("tabulary", r"{\linewidth}{LJ}"),
+            ("NiceTabular", "{lc}[hvlines]"),
+        ] {
+            let header = format!(r"\begin{{{name}}}{args}");
+            let body = format!(r"{header}Alpha & 60\\\end{{{name}}}");
+            let source = format!(
+                "\\documentclass{{article}}\n\\usepackage{{tabularray,siunitx,tabulary,nicematrix}}\n\\begin{{document}}\n{body}\n\\end{{document}}\n"
+            );
+            let cursor = source[..source.find(&header).unwrap()].chars().count() + 1;
+            let table = crate::editor_features::tex_table_at(&source, cursor).unwrap();
+            let dialog = TableEditorDialog::Tex(Box::new(TexDialog {
+                draft: table.source.clone(),
+                original: table.source.clone(),
+                column_spec: table.column_spec.clone(),
+                source_mode: false,
+                validation: None,
+                table,
+                key: key(),
+                error: None,
+            }));
+            let mut fonts_ready = false;
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(620.0, 560.0))
+                .build_ui_state(
+                    move |ui, dialog| {
+                        if !fonts_ready {
+                            theme::configure_test_fonts(ui.ctx());
+                            fonts_ready = true;
+                            return;
+                        }
+                        show(ui, dialog, 590.0, 520.0, &AppSettings::default());
+                    },
+                    dialog,
+                );
+            harness.run();
+            assert_eq!(
+                harness
+                    .query_all(by().role(egui::accesskit::Role::MultilineTextInput))
+                    .count(),
+                2,
+                "{name}"
+            );
+            harness
+                .get(
+                    by().role(egui::accesskit::Role::MultilineTextInput)
+                        .value("Alpha"),
+                )
+                .click();
+            harness.run();
+            harness.event(egui::Event::Text("!".into()));
+            harness.run();
+            harness.get_by_label("Source").click();
+            harness.run();
+            let TableEditorDialog::Tex(dialog) = harness.state() else {
+                unreachable!()
+            };
+            assert!(dialog.source_mode);
+            assert!(dialog.draft.starts_with(&header));
+            assert!(dialog.draft.contains('!'));
+            let draft = dialog.draft.clone();
+            harness.get_by_label("Source").click();
+            harness.run();
+            let TableEditorDialog::Tex(dialog) = harness.state() else {
+                unreachable!()
+            };
+            assert!(!dialog.source_mode, "{:?}", dialog.error);
+            assert_eq!(
+                prepare_source_edit(&source, key(), harness.state())
+                    .unwrap()
+                    .replacement,
+                draft
+            );
+        }
+    }
+
+    #[test]
+    fn tex_imports_table_apply_is_one_undo_and_cancel_does_not_touch_preamble() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        let source = "\\documentclass{article}\n\\begin{document}\nPréface α\n\\begin{tabular}{lS[table-format=2.0]}Alpha & 60\\end{tabular}\n\\end{document}\n";
+        app.document_mut().replace_loaded_unprojected(
+            source.into(),
+            directory.path().join("test.tex"),
+            DocumentKind::Tex,
+            None,
+        );
+        let cursor = source[..source.find("Alpha").unwrap()].chars().count();
+        let table = crate::editor_features::tex_table_at(source, cursor).unwrap();
+        app.begin_table_target(TableTarget::Tex(table.clone()));
+        app.cancel_table_editor(&context);
+        assert_eq!(app.document().source(), source);
+        app.begin_table_target(TableTarget::Tex(table));
+        let mut dialog = app.table_editor.take().unwrap();
+        let TableEditorDialog::Tex(draft) = &mut dialog else {
+            unreachable!()
+        };
+        draft.table.cells.as_mut().unwrap()[0][0] = "Changed".into();
+        let edit = prepare_source_edit(source, app.document().key(), &dialog).unwrap();
+        let mut stale = app.document().key();
+        stale.revision += 1;
+        assert!(prepare_source_edit(source, stale, &dialog).is_err());
+        app.document_mut().edit(CCursorRange::default(), |source| {
+            source.replace_range(edit.byte_range, &edit.replacement)
+        });
+        let applied = app.document().source().clone();
+        assert!(applied.contains("\\usepackage{siunitx}\n"));
+        assert!(applied.contains("Changed & 60"));
+        app.undo_editor(&context, false);
+        assert_eq!(app.document().source(), source);
+        app.undo_editor(&context, true);
+        assert_eq!(app.document().source(), &applied);
+    }
+
+    #[test]
+    fn tex_imports_drawn_symbols_are_atomic_and_leave_typst_untouched() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        let source = "\\documentclass{article}\n\\begin{document}α \\end{document}";
+        app.document_mut().replace_loaded_unprojected(
+            source.into(),
+            directory.path().join("test.tex"),
+            DocumentKind::Tex,
+            None,
+        );
+        let cursor = source[..source.find('α').unwrap()].chars().count() + 1;
+        app.store_editor_cursor(&context, CCursorRange::one(CCursor::new(cursor)));
+        app.insert_generated_symbol(
+            &context,
+            &crate::handwriting::Insertion {
+                text: "\\upalpha".into(),
+                package: Some("upgreek".into()),
+            },
+        );
+        let applied = app.document().source().clone();
+        assert!(applied.contains("\\usepackage{upgreek}\n"));
+        assert!(applied.contains("α\\upalpha \\end"));
+        app.undo_editor(&context, false);
+        assert_eq!(app.document().source(), source);
+        app.undo_editor(&context, true);
+        assert_eq!(app.document().source(), &applied);
+        app.document_mut().replace_loaded_unprojected(
+            "$α$".into(),
+            directory.path().join("test.typ"),
+            DocumentKind::Typst,
+            None,
+        );
+        app.store_editor_cursor(&context, CCursorRange::one(CCursor::new(2)));
+        app.insert_generated_symbol(
+            &context,
+            &crate::handwriting::Insertion {
+                text: "beta".into(),
+                package: None,
+            },
+        );
+        assert_eq!(app.document().source(), "$αbeta$");
     }
 
     #[test]

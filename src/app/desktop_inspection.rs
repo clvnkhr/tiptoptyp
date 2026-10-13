@@ -43,6 +43,7 @@ impl EditorApp {
                 serde_json::json!({"fingerprint": settings_window.ui.json_draft.as_ref().map(|draft| crate::desktop_test::fingerprint(&draft.text)), "visible": settings_window.ui.json_mode, "query": settings_window.ui.json_query, "valid": settings_window.ui.json_draft.as_ref().is_some_and(|draft| draft.validation.is_ok()), "saved": settings_window.ui.json_draft.as_ref().is_some_and(|draft| draft.saved)}),
             )
         };
+        let snippets = self.settings.snippets.iter().map(|s| serde_json::json!({"prefix": s.prefix, "language": s.language, "body": crate::desktop_test::fingerprint(&s.body)})).collect::<Vec<_>>();
         let mut observation = serde_json::json!({
             "viewport": format!("{:?}", context.viewport_id()),
             "native_size": eframe::window_host::window(context, context.viewport_id()).map(|w| { let s = w.inner_size().to_logical::<f64>(w.scale_factor()); [s.width, s.height] }),
@@ -86,6 +87,15 @@ impl EditorApp {
             "settings_query_fingerprint": settings_query_fingerprint,
             "settings_text_input_focused": settings_text_input_focused,
         });
+        observation["window_background"] =
+            serde_json::to_value(self.settings.window_background).unwrap();
+        observation["native_background"] =
+            crate::window_background::inspection(context, context.viewport_id());
+        observation["settings_native_background"] = crate::window_background::inspection(
+            context,
+            scoped_child_viewport_id(context, "tiptoptyp-settings"),
+        );
+        observation["snippets"] = snippets.into();
         let find_viewport = scoped_child_viewport_id(context, find_bar::VIEWPORT_SALT);
         let controls_owner = if self.preview_controls_in_popout() {
             scoped_child_viewport_id(context, "preview-window")
@@ -138,6 +148,27 @@ impl EditorApp {
             "completion_count": self.editor_completion.as_ref().map_or(0, |completion| completion.items.len()),
             "completion_selected": self.editor_completion.as_ref().map(|completion| completion.selected),
         });
+
+        let font_name = self.editor_completion.as_ref().and_then(|completion| {
+            let item = completion.items.get(completion.selected)?;
+            (item.origin == crate::lsp::protocol::CompletionOrigin::Font)
+                .then_some((completion.selected, item.label.as_str()))
+        });
+        interaction["completion_font_name"] = font_name.map(|(_, name)| name).into();
+        interaction["completion_font_name_ready"] = font_name
+            .is_some_and(|(index, name)| crate::font_preview::name_is_ready(context, index, name))
+            .into();
+        interaction["editor_lsp_ready"] = self.editor_lsp_ready().into();
+        interaction["completion_origins"] = serde_json::json!(
+            self.editor_completion
+                .as_ref()
+                .map(|completion| completion
+                    .items
+                    .iter()
+                    .map(|item| item.origin.label())
+                    .collect::<Vec<_>>())
+                .unwrap_or_default()
+        );
         interaction.as_object_mut().unwrap().extend(
             serde_json::json!({
             "texlab_ready": self.tex_service.texlab_ready,
@@ -193,6 +224,7 @@ impl EditorApp {
             serde_json::Value::Null,
             table_workbench::TableEditorDialog::desktop_inspection,
         );
+        interaction["table_samples"] = self.table_samples.inspect();
         interaction["compilation_paused"] = serde_json::json!(self.compilation_paused);
         interaction["compiler_diagnostic_count"] =
             serde_json::json!(self.preview.diagnostics.len());
@@ -206,8 +238,7 @@ impl EditorApp {
         interaction["independent_main_dividers"] =
             serde_json::json!(self.settings.independent_main_dividers);
         interaction["indentation_guides"] = serde_json::json!(self.settings.indentation_guides);
-        interaction["highlight_definitions"] =
-            serde_json::json!(self.settings.highlight_definitions);
+        interaction["highlight_local_uses"] = serde_json::json!(self.settings.highlight_local_uses);
         interaction["highlight_rules"] = serde_json::json!(self.settings.highlight_rules.len());
         let hover_viewport = scoped_child_viewport_id(context, "diagnostic-tooltip-overlay");
         interaction["native_hover_window"] =
@@ -276,6 +307,10 @@ impl EditorApp {
                 .focused_section()
                 .map(|section| section.title())
         );
+        #[cfg(target_os = "macos")]
+        {
+            interaction["preview_zoom_overlay"] = self.webview_snapshot.inspect();
+        }
         interaction["preview_keyboard_focused"] =
             serde_json::json!(if self.pdfium_preview_requested() {
                 self.pdfium_preview.has_focus(context)

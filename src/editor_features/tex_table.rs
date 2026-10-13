@@ -5,24 +5,75 @@ use super::{SourceEdit, byte_range_to_char, char_to_byte};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TexTableEnvironment {
     Tabular,
+    TabularStar,
     TabularX,
+    Tabulary,
     LongTable,
+    XlTabular,
+    NiceTabular,
+    NiceTabularStar,
+    Tblr,
+    LongTblr,
+    TallTblr,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ColumnDialect {
+    Array,
+    Tabulary,
+    Tabularray,
 }
 
 impl TexTableEnvironment {
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Tabular => "tabular",
+            Self::TabularStar => "tabular*",
             Self::TabularX => "tabularx",
+            Self::Tabulary => "tabulary",
             Self::LongTable => "longtable",
+            Self::XlTabular => "xltabular",
+            Self::NiceTabular => "NiceTabular",
+            Self::NiceTabularStar => "NiceTabular*",
+            Self::Tblr => "tblr",
+            Self::LongTblr => "longtblr",
+            Self::TallTblr => "talltblr",
         }
     }
     fn from_name(name: &str) -> Option<Self> {
         match name {
             "tabular" => Some(Self::Tabular),
+            "tabular*" => Some(Self::TabularStar),
             "tabularx" => Some(Self::TabularX),
+            "tabulary" => Some(Self::Tabulary),
             "longtable" => Some(Self::LongTable),
+            "xltabular" => Some(Self::XlTabular),
+            "NiceTabular" => Some(Self::NiceTabular),
+            "NiceTabular*" => Some(Self::NiceTabularStar),
+            "tblr" => Some(Self::Tblr),
+            "longtblr" => Some(Self::LongTblr),
+            "talltblr" => Some(Self::TallTblr),
             _ => None,
+        }
+    }
+    fn dialect(self) -> ColumnDialect {
+        match self {
+            Self::Tabulary => ColumnDialect::Tabulary,
+            Self::Tblr | Self::LongTblr | Self::TallTblr => ColumnDialect::Tabularray,
+            _ => ColumnDialect::Array,
+        }
+    }
+    pub(crate) fn column_help(self) -> &'static str {
+        match self.dialect() {
+            ColumnDialect::Tabulary => {
+                "Example: LJ. L, C, R and J are variable-width tabulary columns. Standard l, c, r and array columns also work. Width, rules and options are kept."
+            }
+            ColumnDialect::Tabularray => {
+                "Example: Q[l]X[2,r]. Edit only colspec here; width, row styling, hlines/vlines and outer options are kept. Merged cells and generated layouts use Source."
+            }
+            ColumnDialect::Array => {
+                "Example: |l|S[table-format=2.1]|. l/c/r, p/m/b{width}, array w/W{alignment}{width}, siunitx S[options], dcolumn D{input}{output}{digits} and X columns are supported. Missing packages are added to the preamble on Apply. Rules and options are kept."
+            }
         }
     }
 }
@@ -45,10 +96,10 @@ pub(crate) struct TexTable {
 
 impl TexTable {
     pub(crate) fn columns(&self) -> Option<usize> {
-        column_count(&self.column_spec, 0)
+        column_count(&self.column_spec, self.environment.dialect(), 0)
     }
     pub(crate) fn set_column_spec(&mut self, spec: &str) -> Result<(), String> {
-        let columns = column_count(spec, 0).ok_or("Use supported l, c, r, p{width}, m{width}, b{width} or X columns here; custom column types can be edited in source mode")?;
+        let columns = column_count(spec, self.environment.dialect(), 0).ok_or("Enter a supported column specification for this table; custom column types can be edited in Source")?;
         if self
             .cells
             .as_ref()
@@ -79,7 +130,7 @@ impl TexTable {
             return Err("Balance the table's braces before applying it".into());
         }
         let Some(parsed) = tex_table_at(draft, 1) else {
-            return Err("Enter one complete tabular, tabularx or longtable environment".into());
+            return Err("Enter one complete supported TeX table environment".into());
         };
         if parsed.environment != self.environment
             || parsed.source_range != (0..draft.chars().count())
@@ -229,18 +280,52 @@ fn parse_table(
     end: usize,
     environment: TexTableEnvironment,
 ) -> Option<TexTable> {
-    if environment == TexTableEnvironment::TabularX {
+    // xltabular's position is before its width. The other width-taking
+    // environments put position after width. NiceTabular additionally accepts
+    // package options after the column specification.
+    if environment == TexTableEnvironment::XlTabular
+        && let Some((_, next)) = group(source, args, b'[', b']')
+    {
+        args = next;
+    }
+    if matches!(
+        environment,
+        TexTableEnvironment::TabularStar
+            | TexTableEnvironment::TabularX
+            | TexTableEnvironment::Tabulary
+            | TexTableEnvironment::XlTabular
+            | TexTableEnvironment::NiceTabularStar
+    ) {
         let (_, next) = group(source, args, b'{', b'}')?;
         args = next;
     }
-    if let Some((_, next)) = group(source, args, b'[', b']') {
+    let mut outer_simple = true;
+    if let Some((options, next)) = group(source, args, b'[', b']') {
+        outer_simple = simple_package_options(options, environment);
         args = next;
     }
-    let (spec, body_start) = group(source, args, b'{', b'}')?;
+    let (inner, mut body_start) = group(source, args, b'{', b'}')?;
+    let dialect = environment.dialect();
+    let (spec, simple_layout) = if dialect == ColumnDialect::Tabularray {
+        tabularray_spec(inner)
+    } else {
+        (inner, true)
+    };
     let spec_start = spec.as_ptr() as usize - source.as_ptr() as usize;
-    let columns = column_count(spec, 0);
+    if matches!(
+        environment,
+        TexTableEnvironment::NiceTabular | TexTableEnvironment::NiceTabularStar
+    ) && let Some((options, next)) = group(source, body_start, b'[', b']')
+    {
+        outer_simple &= simple_package_options(options, environment);
+        body_start = next;
+    }
+    let columns = column_count(spec, dialect, 0);
     let body = source.get(body_start..close)?;
-    let parsed = columns.and_then(|columns| split_rows(body, columns));
+    let parsed = (simple_layout && outer_simple)
+        .then_some(columns)
+        .flatten()
+        .and_then(|columns| split_rows(body, columns));
     let (cells, row_prefixes, row_endings, trailing) = match parsed {
         Some((cells, prefixes, endings, trailing)) => (Some(cells), prefixes, endings, trailing),
         None => (None, Vec::new(), Vec::new(), body.to_owned()),
@@ -259,6 +344,112 @@ fn parse_table(
         row_endings,
         trailing,
     })
+}
+
+/// Key/value specifications can contain nested commas, comments and escaped
+/// punctuation. Return slices, so only the actual colspec value is rewritten.
+/// Missing/duplicate colspec or structural cell options stay in exact source.
+fn tabularray_spec(inner: &str) -> (&str, bool) {
+    if column_count(inner, ColumnDialect::Tabularray, 0).is_some() {
+        return (inner, true);
+    }
+    let Some(entries) = top_level_parts(inner, b',') else {
+        return (inner, false);
+    };
+    let mut spec = None;
+    let mut simple = true;
+    for entry in entries {
+        let Some(parts) = top_level_parts(entry, b'=') else {
+            return (inner, false);
+        };
+        let key = parts[0][skip_trivia(parts[0], 0)..].trim();
+        if key == "colspec" && parts.len() == 2 {
+            if spec.is_some() {
+                return (inner, false);
+            }
+            let value = parts[1][skip_trivia(parts[1], 0)..].trim();
+            spec = Some(if let Some((inside, end)) = group(value, 0, b'{', b'}') {
+                if skip_trivia(value, end) != value.len() {
+                    return (inner, false);
+                }
+                inside
+            } else {
+                value
+            });
+        }
+        // Cell keys may change row/column spans. Never pretend those covered
+        // positions are independently editable cells.
+        if key.starts_with("cell") || key == "expand" {
+            simple = false;
+        }
+    }
+    spec.map_or((inner, false), |spec| (spec, simple))
+}
+fn simple_package_options(options: &str, environment: TexTableEnvironment) -> bool {
+    if environment.dialect() != ColumnDialect::Tabularray
+        && !matches!(
+            environment,
+            TexTableEnvironment::NiceTabular | TexTableEnvironment::NiceTabularStar
+        )
+    {
+        return true;
+    }
+    let Some(entries) = top_level_parts(options, b',') else {
+        return false;
+    };
+    entries.into_iter().all(|entry| {
+        let Some(parts) = top_level_parts(entry, b'=') else {
+            return false;
+        };
+        let key = parts[0][skip_trivia(parts[0], 0)..].trim();
+        !matches!(
+            key,
+            "expand"
+                | "expand+"
+                | "create-blocks-in-col"
+                | "light-syntax"
+                | "light-syntax-expanded"
+        )
+    })
+}
+fn top_level_parts(source: &str, separator: u8) -> Option<Vec<&str>> {
+    let mut result = Vec::new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < source.len() {
+        match source.as_bytes()[i] {
+            b'%' => i = skip_comment(source, i),
+            b'\\' => {
+                let (name, end) = command(source, i)?;
+                i = if name == "verb" {
+                    skip_verb(source, end)
+                } else {
+                    end
+                };
+            }
+            open @ (b'{' | b'[' | b'(') => {
+                let close = match open {
+                    b'{' => b'}',
+                    b'[' => b']',
+                    _ => b')',
+                };
+                let (_, end) = group(source, i, open, close)?;
+                i = end;
+            }
+            b'}' | b']' | b')' => return None,
+            byte if byte == separator => {
+                if result.len() >= 4096 {
+                    return None;
+                }
+                result.push(&source[start..i]);
+                i += 1;
+                start = i;
+            }
+            _ => i = next_char(source, i),
+        }
+    }
+    result.push(&source[start..]);
+    Some(result)
 }
 
 type ParsedRows = (Vec<Vec<String>>, Vec<String>, Vec<String>, String);
@@ -304,10 +495,12 @@ fn split_rows(body: &str, columns: usize) -> Option<ParsedRows> {
                         | "multirow"
                         | "input"
                         | "include"
-                        | "endhead"
-                        | "endfirsthead"
-                        | "endfoot"
-                        | "endlastfoot"
+                        | "Block"
+                        | "SetCell"
+                        | "SetCells"
+                        | "CodeBefore"
+                        | "CodeAfter"
+                        | "caption"
                 ) {
                     return None;
                 }
@@ -412,7 +605,22 @@ fn row_prefix(cell: &str) -> Option<(&str, &str)> {
         let (name, end) = command(cell, i)?;
         if !matches!(
             name,
-            "hline" | "cline" | "toprule" | "midrule" | "bottomrule" | "cmidrule" | "addlinespace"
+            "hline"
+                | "cline"
+                | "toprule"
+                | "midrule"
+                | "bottomrule"
+                | "cmidrule"
+                | "addlinespace"
+                | "endhead"
+                | "endfirsthead"
+                | "endfoot"
+                | "endlastfoot"
+                | "rowcolor"
+                | "hdashline"
+                | "cdashline"
+                | "specialrule"
+                | "arrayrulecolor"
         ) {
             break;
         }
@@ -425,16 +633,33 @@ fn row_prefix(cell: &str) -> Option<(&str, &str)> {
         if let Some((_, next)) = group(cell, i, b'[', b']') {
             i = next;
         }
-        if matches!(name, "cline" | "cmidrule") {
+        if matches!(
+            name,
+            "cline" | "cmidrule" | "cdashline" | "rowcolor" | "arrayrulecolor"
+        ) {
             let (_, next) = group(cell, i, b'{', b'}')?;
             i = next;
+        }
+        if name == "specialrule" {
+            for _ in 0..3 {
+                let (_, next) = group(cell, i, b'{', b'}')?;
+                i = next;
+            }
+        }
+        // colortbl overhangs and arydshln dash patterns follow the mandatory group.
+        if matches!(name, "rowcolor" | "cdashline") {
+            for _ in 0..2 {
+                if let Some((_, next)) = group(cell, i, b'[', b']') {
+                    i = next;
+                }
+            }
         }
         i = skip_trivia(cell, i);
     }
     Some((cell.get(..i)?, cell.get(i..)?))
 }
 
-fn column_count(spec: &str, nesting: usize) -> Option<usize> {
+fn column_count(spec: &str, dialect: ColumnDialect, nesting: usize) -> Option<usize> {
     if nesting > 16 {
         return None;
     }
@@ -446,16 +671,47 @@ fn column_count(spec: &str, nesting: usize) -> Option<usize> {
             break;
         }
         match spec.as_bytes()[i] {
-            b'l' | b'c' | b'r' | b'X' => {
+            b'l' | b'c' | b'r' | b'X' | b'S' => {
                 count += 1;
                 i += 1;
+                if (matches!(spec.as_bytes()[i - 1], b'S') || dialect == ColumnDialect::Tabularray)
+                    && let Some((_, end)) = group(spec, i, b'[', b']')
+                {
+                    i = end;
+                }
+            }
+            b'Q' if dialect == ColumnDialect::Tabularray => {
+                count += 1;
+                i += 1;
+                if let Some((_, end)) = group(spec, i, b'[', b']') {
+                    i = end;
+                }
+            }
+            b'L' | b'C' | b'R' | b'J' if dialect == ColumnDialect::Tabulary => {
+                count += 1;
+                i += 1;
+            }
+            kind @ (b'D' | b'w' | b'W') => {
+                count += 1;
+                i += 1;
+                for _ in 0..if kind == b'D' { 3 } else { 2 } {
+                    let (_, end) = group(spec, i, b'{', b'}')?;
+                    i = end;
+                }
             }
             b'p' | b'm' | b'b' => {
                 count += 1;
                 let (_, end) = group(spec, i + 1, b'{', b'}')?;
                 i = end;
             }
-            b'|' => i += 1,
+            b'|' | b':' => {
+                i += 1;
+                if dialect == ColumnDialect::Tabularray
+                    && let Some((_, end)) = group(spec, i, b'[', b']')
+                {
+                    i = end;
+                }
+            }
             b'@' | b'!' | b'>' | b'<' => {
                 let (_, end) = group(spec, i + 1, b'{', b'}')?;
                 i = end;
@@ -464,8 +720,8 @@ fn column_count(spec: &str, nesting: usize) -> Option<usize> {
                 let (repeat, end) = group(spec, i + 1, b'{', b'}')?;
                 let repeat: usize = repeat.trim().parse().ok()?;
                 let (inner, end) = group(spec, end, b'{', b'}')?;
-                count =
-                    count.checked_add(column_count(inner, nesting + 1)?.checked_mul(repeat)?)?;
+                count = count
+                    .checked_add(column_count(inner, dialect, nesting + 1)?.checked_mul(repeat)?)?;
                 i = end;
             }
             _ => return None,
@@ -492,7 +748,7 @@ fn packages(source: &str) -> Vec<String> {
                     i = skip_verb(source, i);
                     continue;
                 }
-                if name != "usepackage" {
+                if !matches!(name, "usepackage" | "RequirePackage") {
                     continue;
                 }
                 if let Some((_, next)) = group(source, end, b'[', b']') {
@@ -580,7 +836,15 @@ fn group(source: &str, start: usize, open: u8, close: u8) -> Option<(&str, usize
         match source.as_bytes()[i] {
             b'%' => i = skip_comment(source, i),
             b'\\' => {
-                let (_, end) = command(source, i)?;
+                let (name, end) = command(source, i)?;
+                i = if name == "verb" {
+                    skip_verb(source, end)
+                } else {
+                    end
+                };
+            }
+            b'{' if open != b'{' => {
+                let (_, end) = group(source, i, b'{', b'}')?;
                 i = end;
             }
             byte if byte == open => {
@@ -641,6 +905,149 @@ fn next_char(source: &str, start: usize) -> usize {
 mod tests {
     use super::*;
     #[test]
+    fn package_environments_open_a_grid_and_preserve_their_headers() {
+        for (name, args) in [
+            ("tabular*", r"{\linewidth}[t]{lc}"),
+            ("tabulary", r"{\linewidth}{LJ}"),
+            ("xltabular", r"[l]{\linewidth}{lX}"),
+            ("NiceTabular", r"{lc}[hvlines]"),
+            ("NiceTabular*", r"{\linewidth}{lc}[hvlines]"),
+            ("tblr", r"[baseline=T]{colspec={Q[l]X[2,r]},hlines,vlines}"),
+            ("longtblr", r"[caption={A, B}]{colspec={lc},rowhead=1}"),
+            ("talltblr", r"{lc}"),
+        ] {
+            let header = format!(r"\begin{{{name}}}{args}");
+            let source = format!(r"{header}Alpha & Beta \\\end{{{name}}}");
+            let mut table = tex_table_at(&source, 2).expect(name);
+            assert_eq!(table.environment.name(), name);
+            assert_eq!(table.columns(), Some(2), "{source}");
+            assert_eq!(
+                table.cells.as_ref().unwrap()[0],
+                ["Alpha", "Beta"],
+                "{source}"
+            );
+            table.cells.as_mut().unwrap()[0][1] = "Edited".into();
+            let rendered = table.grid_source_edit().unwrap().replacement;
+            assert!(rendered.starts_with(&header), "{rendered}");
+            assert!(rendered.ends_with(&format!(r"\end{{{name}}}")));
+            assert_eq!(tex_table_at(&rendered, 2).unwrap().cells, table.cells);
+        }
+    }
+
+    #[test]
+    fn package_numeric_columns_are_not_mistaken_for_custom_column_types() {
+        for spec in [
+            r"lS[table-format=2.1,table-number-alignment=center]",
+            r"lD{.}{,}{2.1}",
+            r"lw{r}{2cm}",
+            r"lW{c}{2cm}",
+        ] {
+            let source = format!(r"\begin{{tabular}}{{{spec}}}Alpha & 1.2 \\\end{{tabular}}");
+            let table = tex_table_at(&source, 1).unwrap();
+            assert_eq!(table.columns(), Some(2), "{spec}");
+            assert!(table.cells.is_some(), "{spec}");
+            assert_eq!(table.column_spec, spec);
+            assert_eq!(
+                tex_table_at(&table.render_replacement().unwrap(), 1)
+                    .unwrap()
+                    .column_spec,
+                spec
+            );
+        }
+    }
+
+    #[test]
+    fn tabularray_column_edit_preserves_other_inner_and_outer_options() {
+        let source = r"\begin{tblr}[caption={One, two}]{width=\linewidth,colspec={lX[2,r]},row{1}={font=\bfseries},hlines}A & B\\\end{tblr}";
+        let mut table = tex_table_at(source, 1).unwrap();
+        table.set_column_spec("Q[c]X[l]").unwrap();
+        let rendered = table.grid_source_edit().unwrap().replacement;
+        assert!(rendered.contains("colspec={Q[c]X[l]}"));
+        for keep in [
+            "caption={One, two}",
+            r"width=\linewidth",
+            r"row{1}={font=\bfseries}",
+            "hlines",
+        ] {
+            assert!(rendered.contains(keep), "{rendered}");
+        }
+        let before = table.clone();
+        assert!(table.set_column_spec("l},evil={lc").is_err());
+        assert_eq!(table, before);
+    }
+
+    #[test]
+    fn package_row_directives_are_preserved_without_becoming_cell_values() {
+        let source = "\\begin{longtable}{lc}\n\\toprule\nHeader & Value \\\\\n\\endhead\n\\rowcolor[gray]{0.9}\nAlpha & Beta \\\\\n\\bottomrule\n\\end{longtable}";
+        let mut table = tex_table_at(source, 1).unwrap();
+        assert_eq!(
+            table.cells.as_ref().unwrap(),
+            &vec![
+                vec!["Header".to_owned(), "Value".to_owned()],
+                vec!["Alpha".to_owned(), "Beta".to_owned()]
+            ]
+        );
+        table.cells.as_mut().unwrap()[1][0] = "Edited".into();
+        let rendered = table.grid_source_edit().unwrap().replacement;
+        for keep in [r"\endhead", r"\rowcolor[gray]{0.9}", r"\bottomrule"] {
+            assert!(rendered.contains(keep), "{rendered}");
+        }
+    }
+
+    #[test]
+    fn package_structural_layouts_and_missing_specs_stay_in_source_mode() {
+        for (name, args, body) in [
+            ("tblr", "{colspec={lc},cell{1}{1}={c=2}}", r"Heading & \\"),
+            ("tblr", "{colspec={lc}}", r"\SetCell[c=2]{c}Heading & \\"),
+            ("tblr", "{hlines}", r"A & B \\"),
+            ("tblr", r"[expand=\expanded]{lc}", r"A & B \\"),
+            ("NiceTabular", "{lc}[create-blocks-in-col=1]", r"A & B \\"),
+            ("tblr", "{colspec=lc,colspec=cc}", r"A & B \\"),
+            ("NiceTabular", "{lc}[hvlines]", r"\Block{1-2}{Heading} & \\"),
+            (
+                "NiceTabular",
+                "{lc}",
+                r"A & B \\ \CodeAfter \line{1-1}{2-2}",
+            ),
+            ("longtable", "{lc}", r"\caption{Table} \\ A & B \\"),
+        ] {
+            let source = format!(r"\begin{{{name}}}{args}{body}\end{{{name}}}");
+            let table = tex_table_at(&source, 1).unwrap();
+            assert!(table.cells.is_none(), "{source}");
+            assert_eq!(table.render_replacement().unwrap(), source);
+            assert_eq!(table.source_edit(&source).unwrap().replacement, source);
+        }
+    }
+
+    #[test]
+    fn tabularray_nested_options_comments_and_rule_brackets_are_lossless() {
+        let source = "\\begin{tblr}[caption={A ] bracket, B}]{\n % keep options\ncolspec = {|[1pt,blue]Q[l]X[si={table-format=2.1},r]|},\nrow{1}={font=\\bfseries},hlines\n}A & 2.3\\\\\\end{tblr}";
+        let mut table = tex_table_at(source, 1).unwrap();
+        assert_eq!(table.columns(), Some(2));
+        assert!(table.cells.is_some());
+        table.set_column_spec("cc").unwrap();
+        let rendered = table.grid_source_edit().unwrap().replacement;
+        assert!(rendered.contains("caption={A ] bracket, B}"));
+        assert!(rendered.contains("% keep options\ncolspec = {cc}"));
+    }
+
+    #[test]
+    fn package_column_expansion_and_key_lists_are_bounded() {
+        let source = r"\begin{tblr}{colspec={*{129}{Q[l]}}}A\end{tblr}";
+        assert!(tex_table_at(source, 1).unwrap().cells.is_none());
+        let options = format!("{},colspec=lc", "hlines,".repeat(4097));
+        let source = format!(r"\begin{{tblr}}{{{options}}}A & B\end{{tblr}}");
+        assert!(tex_table_at(&source, 1).unwrap().cells.is_none());
+        assert!(
+            column_count(
+                "*{2}{S[table-format=2.1]D{.}{,}{2}}",
+                ColumnDialect::Array,
+                0
+            ) == Some(4)
+        );
+    }
+
+    #[test]
     fn basic_tex_rows_preserve_column_options_rules_and_packages() {
         let source = "\\usepackage[table]{xcolor}\n\\usepackage{array,booktabs,tabularx}\n\\begin{tabularx}{\\linewidth}[t]{@{}l>{\\raggedleft\\arraybackslash}X@{}}\n\\toprule\nName & Value \\\\[2pt]\n\\midrule\n\\textbf{Héllo} & $x_1$ \\\\\n\\bottomrule\n\\end{tabularx}";
         let cursor = source[..source.find("Name").unwrap()].chars().count();
@@ -675,7 +1082,7 @@ mod tests {
         assert!(rendered.starts_with("\\begin{tabularx}{\\linewidth}[t]{@{}r>"));
         assert_eq!(table.cells.as_ref().unwrap()[0], ["A", "B"]);
         let before = table.clone();
-        for spec in ["l", "lll", "lS", "l}injected{X"] {
+        for spec in ["l", "lll", "lY", "l}injected{X"] {
             assert!(table.set_column_spec(spec).is_err(), "{spec}");
             assert_eq!(table, before);
         }
@@ -686,7 +1093,7 @@ mod tests {
         for body in [
             "\\multicolumn{2}{c}{Heading} \\\\",
             "A & \\input{data} \\\\",
-            "\\endhead A & B \\\\",
+            "\\caption{Example}\\\\ A & B \\\\",
             "A & B & C \\\\",
         ] {
             let source = format!("\\begin{{longtable}}[l]{{lc}}{body}\\end{{longtable}}");
@@ -697,7 +1104,7 @@ mod tests {
                 source
             );
         }
-        let source = "\\begin{tabular}{S[table-format=2.1]l}1 & A \\\\ \\end{tabular}";
+        let source = "\\begin{tabular}{Yl}1 & A \\\\ \\end{tabular}";
         let table = tex_table_at(source, 1).unwrap();
         assert_eq!(table.columns(), None);
         assert!(table.cells.is_none());
@@ -882,9 +1289,15 @@ C & D\tabularnewline[2pt]
 
     #[test]
     fn repeated_column_specs_and_escaped_cells_are_bounded() {
-        assert_eq!(column_count("*{2}{l|p{2cm}}", 0), Some(4));
-        assert_eq!(column_count("*{999999999999}{l}", 0), None);
-        assert_eq!(column_count("Q", 0), None);
+        assert_eq!(
+            column_count("*{2}{l|p{2cm}}", ColumnDialect::Array, 0),
+            Some(4)
+        );
+        assert_eq!(
+            column_count("*{999999999999}{l}", ColumnDialect::Array, 0),
+            None
+        );
+        assert_eq!(column_count("Q", ColumnDialect::Array, 0), None);
         let source = "\\begin{tabular}{cc}\\& & {nested & text} \\\\ \\end{tabular}";
         let table = tex_table_at(source, 1).unwrap();
         assert_eq!(table.cells.as_ref().unwrap()[0], ["\\&", "{nested & text}"]);

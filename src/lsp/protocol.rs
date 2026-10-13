@@ -47,12 +47,32 @@ pub(crate) struct ContentChange<'a> {
     pub(crate) text: &'a str,
 }
 
-/// One completion candidate returned by Tinymist.
+/// Where a candidate was created, independent of its snippet/text edit format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompletionOrigin {
+    LanguageServer,
+    Snippet,
+    BuiltIn,
+    Font,
+}
+impl CompletionOrigin {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::LanguageServer => "Language server",
+            Self::Snippet => "Custom snippet",
+            Self::BuiltIn => "Built-in completion",
+            Self::Font => "Installed font",
+        }
+    }
+}
+
+/// One completion candidate returned by a server or local provider.
 ///
 /// The model intentionally keeps only the standard fields the editor can
 /// apply safely. Commands attached to completion items are not executed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompletionItem {
+    pub origin: CompletionOrigin,
     pub label: String,
     pub detail: Option<String>,
     pub documentation: Option<String>,
@@ -229,6 +249,7 @@ pub(crate) fn parse_completion_result(
             .transpose()?
             .unwrap_or_default();
         parsed.push(CompletionItem {
+            origin: CompletionOrigin::LanguageServer,
             label,
             detail: object
                 .get("detail")

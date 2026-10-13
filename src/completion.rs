@@ -131,8 +131,9 @@ pub(crate) fn font_items(
                     if suffix_quote { "" } else { "\"" }
                 );
                 CompletionItem {
+                    origin: crate::lsp::protocol::CompletionOrigin::Font,
                     label: name.to_owned(),
-                    detail: Some("Font".into()),
+                    detail: None,
                     documentation: None,
                     filter_text: Some(name.to_owned()),
                     sort_text: None,
@@ -381,6 +382,7 @@ mod tests {
 
     fn item(source: &str, range: Range<usize>, insert: &str) -> CompletionItem {
         CompletionItem {
+            origin: crate::lsp::protocol::CompletionOrigin::LanguageServer,
             label: "Human-readable title".into(),
             detail: Some("Section 1".into()),
             documentation: None,
@@ -490,6 +492,7 @@ mod tests {
         let source = "#set text(font: \"New Co\")";
         let cursor = source.find("Co").unwrap() + 2;
         let items = font_items(source, cursor, &FontCatalog::snapshot_fixture()).unwrap();
+        assert!(items.iter().all(|item| item.detail.is_none()));
         let selected = filtered(&items, "ncm");
         assert_eq!(selected.len(), 1);
         assert_eq!(

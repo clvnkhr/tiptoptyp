@@ -48,6 +48,48 @@ impl EditorApp {
         let editor = source_editor_id(context);
         context.memory_mut(|m| m.request_focus(editor));
     }
+    pub(super) fn insert_generated_symbol(
+        &mut self,
+        context: &egui::Context,
+        symbol: &crate::handwriting::Insertion,
+    ) {
+        if self.table_editor.is_some() || self.latexdiff.is_some() {
+            return;
+        }
+        if self.document().kind() != DocumentKind::Tex {
+            self.insert_editor_text(context, &symbol.text);
+            return;
+        }
+        let snapshot = self.editor_snapshot(context);
+        let range = snapshot.cursor.as_sorted_char_range();
+        let Some(bytes) = char_range_to_byte_range(&snapshot.source, range.start.0..range.end.0)
+        else {
+            return;
+        };
+        let required =
+            crate::tex::imports::Requirements::symbol(&symbol.text, symbol.package.as_deref());
+        let edit = match crate::tex::imports::prepare_edit(
+            &snapshot.source,
+            bytes,
+            &symbol.text,
+            range.start.0 + symbol.text.chars().count(),
+            &required,
+        ) {
+            Ok(edit) => edit,
+            Err(error) => {
+                self.show_file_error(error);
+                return;
+            }
+        };
+        self.document_mut().edit(snapshot.cursor, |source| {
+            source.replace_range(edit.byte_range, &edit.replacement)
+        });
+        self.store_editor_cursor(context, CCursorRange::one(CCursor::new(edit.cursor)));
+        self.mark_edited();
+        let editor = source_editor_id(context);
+        context.memory_mut(|m| m.request_focus(editor));
+    }
+
     pub(super) fn show_find_bar(&mut self, ui: &mut egui::Ui) {
         let source = self.tabs.current_record().document.source();
         let document_key = self.document().key();
@@ -61,7 +103,7 @@ impl EditorApp {
                 &mut self.find_bar,
                 source,
                 document_key,
-                self.table_editor.is_none(),
+                self.table_editor.is_none() && self.latexdiff.is_none(),
             )
         };
         self.apply_find_actions(
@@ -110,7 +152,7 @@ impl EditorApp {
                 )
                 .map(|matched| EditorSelection::Search(matched.char_range.clone()));
         }
-        if replace_one && self.table_editor.is_none() {
+        if replace_one && (self.table_editor.is_none() && self.latexdiff.is_none()) {
             let snapshot = self.editor_snapshot(context);
             let find_query = &self.find_bar.query;
             let replacement = &self.find_bar.replacement;
@@ -140,7 +182,7 @@ impl EditorApp {
                 }
             }
         }
-        if replace_all && self.table_editor.is_none() {
+        if replace_all && (self.table_editor.is_none() && self.latexdiff.is_none()) {
             let snapshot = self.editor_snapshot(context);
             let find_query = &self.find_bar.query;
             let replacement = &self.find_bar.replacement;
@@ -209,7 +251,7 @@ impl EditorApp {
             .ctx()
             .data_mut(|data| data.remove_temp::<(PathBuf, Pos2)>(drop_id))
             && ui.max_rect().contains(position)
-            && self.table_editor.is_none()
+            && (self.table_editor.is_none() && self.latexdiff.is_none())
         {
             let text = self
                 .document()
@@ -224,14 +266,17 @@ impl EditorApp {
         }
 
         let _span = crate::performance::span("ui.source");
-        let read_only = self.table_editor.is_some();
-        if read_only {
-            egui::Frame::new().fill(ui.visuals().selection.bg_fill.gamma_multiply(0.15)).inner_margin(8.0).show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.strong("Read-only · Table editor open");
-                    ui.label("Scroll, select and copy code. Apply or cancel the table draft to resume editing.");
+        let read_only = self.table_editor.is_some() || self.latexdiff.is_some();
+        if read_only && self.latexdiff.is_none() {
+            egui::Frame::new()
+                .fill(ui.visuals().selection.bg_fill.gamma_multiply(0.15))
+                .inner_margin(8.0)
+                .show(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.strong("Read-only · Table editor open");
+                        ui.label("Scroll, select and copy code. Apply or cancel the table draft to resume editing.");
+                    });
                 });
-            });
         }
         offer_file_drop_target(ui, ui.max_rect(), FileDropTarget::Editor);
         ui.set_min_width(ui.available_width());
@@ -397,16 +442,16 @@ impl EditorApp {
         let surround_enabled = self.settings.auto_pair_delimiters;
         let auto_pair_enabled = surround_enabled && document_kind.is_typst();
         let auto_pair_syntax = &mut self.auto_pair_syntax;
-        let highlight_definitions = self.settings.highlight_definitions
+        let highlight_local_uses = self.settings.highlight_local_uses
             && matches!(document_kind, DocumentKind::Typst | DocumentKind::Tex);
         let accent = theme::palette(ui.ctx()).accent;
         self.highlighter.set_decorations(
-            highlight_definitions,
+            highlight_local_uses,
             &self.settings.highlight_rules,
             accent,
         );
         self.generic_highlighter.set_decorations(
-            highlight_definitions,
+            highlight_local_uses,
             &self.settings.highlight_rules,
             accent,
         );
@@ -1152,7 +1197,7 @@ impl EditorApp {
             egui::Shape::rect_filled(
                 surface_rect,
                 corner_radius,
-                ui.visuals().text_edit_bg_color(),
+                crate::window_background::surface(ui, ui.visuals().text_edit_bg_color()),
             ),
         );
         ui.painter()
@@ -1398,7 +1443,7 @@ impl EditorApp {
         let mut actions = find_bar::FindBarActions::default();
         let source = self.tabs.current_record().document.source();
         let key = self.document().key();
-        let editable = self.table_editor.is_none();
+        let editable = self.table_editor.is_none() && self.latexdiff.is_none();
         let shortcuts = self.settings.effective_shortcuts();
         let allow_requested_paste = self
             .pending_widget_paste
@@ -1543,18 +1588,7 @@ impl EditorApp {
             return;
         }
         let selected = completion.selected.min(completion.items.len() - 1);
-        let preview_family = completion
-            .provenance
-            .is_local()
-            .then(|| {
-                self.font_catalog
-                    .families()
-                    .iter()
-                    .find(|family| family.name == completion.items[selected].label)
-            })
-            .flatten();
-        let mut pending_font_sample = false;
-        let action = completion_popup::show(
+        let output = completion_popup::show(
             context,
             viewport,
             CompletionPopupInput {
@@ -1563,18 +1597,14 @@ impl EditorApp {
                 source_cursor: completion.source_cursor,
                 selected,
                 anchor: completion.anchor,
-                has_footer: preview_family.is_some(),
-            },
-            |ui| {
-                if let Some(family) = preview_family {
-                    pending_font_sample = !crate::font_preview::show(ui, "completion", family);
-                }
+                fonts: &self.font_catalog,
             },
         );
-        if pending_font_sample && self.snapshot_scene == Some(UiSnapshotScene::FontCompletion) {
+        if output.font_names_pending && self.snapshot_scene == Some(UiSnapshotScene::FontCompletion)
+        {
             self.captures.defer_target("main");
         }
-        match action {
+        match output.action {
             Some(CompletionAction::Accept(index)) => self.apply_editor_completion(index, context),
             Some(CompletionAction::Dismiss) => self.editor_completion = None,
             None => {}

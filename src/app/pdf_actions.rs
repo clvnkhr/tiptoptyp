@@ -291,11 +291,7 @@ mod tests {
         // Compiler-fed previews (Typst CLI, TeX) pause their watch and compile
         // without a separate export button; Tinymist swaps pause for PDF.
         let interactive_platform = cfg!(any(target_os = "macos", target_os = "windows"));
-        let typst_default = if interactive_platform {
-            PreviewPreference::Interactive
-        } else {
-            PreviewPreference::Pdfium
-        };
+        let typst_default = PreviewPreference::default();
         for (kind, backend, expect_pause, expect_pdf, label) in [
             (
                 DocumentKind::Typst,
@@ -317,6 +313,24 @@ mod tests {
                 true,
                 false,
                 "Tectonic",
+            ),
+            (
+                DocumentKind::Tex,
+                PreviewPreference::InteractivePartial,
+                true,
+                false,
+                "Tectonic",
+            ),
+            (
+                DocumentKind::Typst,
+                PreviewPreference::Interactive,
+                !interactive_platform,
+                interactive_platform,
+                if interactive_platform {
+                    "Tinymist"
+                } else {
+                    "Typst"
+                },
             ),
             (
                 DocumentKind::Typst,

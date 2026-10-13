@@ -57,11 +57,11 @@ impl Default for SyntaxHighlighter {
 impl SyntaxHighlighter {
     pub(crate) fn set_decorations(
         &mut self,
-        definitions: bool,
+        local_uses: bool,
         rules: &[crate::editor_decoration::HighlightRule],
         accent: Color32,
     ) {
-        if self.decoration_options.set(definitions, rules, accent) {
+        if self.decoration_options.set(local_uses, rules, accent) {
             self.has_cache = false;
         }
     }
@@ -216,8 +216,12 @@ impl SyntaxHighlighter {
         // Typst's syntax-tree representation changes in the future.
         debug_assert_eq!(job.text, source);
 
-        self.decoration_options
-            .decorate(&mut self.decorations, &mut job, true);
+        self.decoration_options.decorate_typst(
+            &mut self.decorations,
+            &mut job,
+            &self.parsed_source,
+            usize::from(code_mode) * 2,
+        );
         self.cached_dark_mode = dark_mode;
         self.cached_syntect_revision = syntect_revision;
         self.cached_code_mode = code_mode;
@@ -1017,6 +1021,54 @@ mod tests {
         }
         assert_eq!(next_byte, source.len());
     }
+    #[test]
+    fn local_use_highlighting_preserves_source_offsets_and_code_mode_cache_context() {
+        let code = "let α = 1; α + 2";
+        let markup = "#let α = 1\n#α + 2";
+        let syntect = GenericSyntaxHighlighter::default();
+        let mut highlighter = SyntaxHighlighter::default();
+        let accent = Color32::from_rgb(1, 2, 3);
+        highlighter.set_decorations(true, &[], accent);
+        for source in [code, markup, code] {
+            let code_mode = source == code;
+            let job = if code_mode {
+                highlighter.highlight_code(source, false, &syntect)
+            } else {
+                highlighter.highlight(source, false, &syntect)
+            };
+            assert_exact_mapping(&job, source);
+            let declaration = source.find('α').unwrap();
+            let usage = source.rfind('α').unwrap();
+            assert_ne!(format_at(&job, declaration).color, accent);
+            assert_eq!(format_at(&job, usage).color, accent);
+            assert_ne!(format_at(&job, usage).underline, Stroke::NONE);
+            let builds = highlighter.cache_builds;
+            for _ in 0..10 {
+                let cached = if code_mode {
+                    highlighter.highlight_code(source, false, &syntect)
+                } else {
+                    highlighter.highlight(source, false, &syntect)
+                };
+                assert_eq!(cached, job);
+            }
+            assert_eq!(highlighter.cache_builds, builds);
+        }
+        // The same bytes interpreted as markup have no declarations or uses.
+        // Switching context must invalidate the decoration cache too.
+        let prose = highlighter.highlight(code, false, &syntect);
+        assert_exact_mapping(&prose, code);
+        assert_ne!(format_at(&prose, code.rfind('α').unwrap()).color, accent);
+        let code_again = highlighter.highlight_code(code, false, &syntect);
+        assert_eq!(
+            format_at(&code_again, code.rfind('α').unwrap()).color,
+            accent
+        );
+        highlighter.set_decorations(false, &[], accent);
+        let cleared = highlighter.highlight_code(code, false, &syntect);
+        assert_exact_mapping(&cleared, code);
+        assert_ne!(format_at(&cleared, code.rfind('α').unwrap()).color, accent);
+    }
+
     #[test]
     fn dollar_tex_highlighting_is_opt_in_mapped_and_cached() {
         let source = "文 $\\alpha + x_2$\n$\n  \\beta^2\n$\n`$not math$`";

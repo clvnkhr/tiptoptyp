@@ -70,9 +70,13 @@ pub(crate) struct TexSettings {
     pub(crate) lint: bool,
     pub(crate) embedded_diagnostics: bool,
     pub(crate) embedded_formatting: bool,
+    #[serde(deserialize_with = "crate::settings::deserialize_tectonic_preference")]
     pub(crate) tectonic: ToolPreference,
+    #[serde(deserialize_with = "crate::settings::deserialize_texlab_preference")]
     pub(crate) texlab: ToolPreference,
+    #[serde(deserialize_with = "crate::settings::deserialize_badness_preference")]
     pub(crate) badness: ToolPreference,
+    #[serde(deserialize_with = "crate::settings::deserialize_tex_fmt_preference")]
     pub(crate) tex_fmt: ToolPreference,
     /// Badness/TexLab diagnostic codes to hide, entered as a comma-separated
     /// list in Settings. Matching is case-insensitive and ignores quotes.
@@ -96,14 +100,14 @@ impl Default for TexSettings {
             lint: true,
             embedded_diagnostics: true,
             embedded_formatting: true,
-            tectonic: ToolPreference::default(),
-            texlab: ToolPreference::default(),
-            badness: ToolPreference::default(),
-            tex_fmt: ToolPreference::default(),
+            tectonic: ToolPreference::for_tool(crate::toolchain::ToolKind::Tectonic),
+            texlab: ToolPreference::for_tool(crate::toolchain::ToolKind::Texlab),
+            badness: ToolPreference::for_tool(crate::toolchain::ToolKind::Badness),
+            tex_fmt: ToolPreference::for_tool(crate::toolchain::ToolKind::TexFmt),
             texlab_ignored_codes: Vec::new(),
             badness_ignored_codes: Vec::new(),
-            texlab_configuration: serde_json::json!({"texlab": {"build":{"onSave":false,"forwardSearchAfter":false},"chktex":{"onOpenAndSave":false,"onEdit":false},"latexFormatter":"none","bibtexFormatter":"none","hover":{"symbols":"glyph"}}}),
-            badness_configuration: serde_json::json!({}),
+            texlab_configuration: serde_json::json!({"texlab": {"build":{"onSave":false,"forwardSearchAfter":false},"chktex":{"onOpenAndSave":false,"onEdit":false},"latexFormatter":"none","bibtexFormatter":"none","hover":{"symbols":"glyph"},"completion":{"matcher":"fuzzy-ignore-case"},"diagnosticsDelay":300}}),
+            badness_configuration: serde_json::json!({"lineWidth":80,"indentWidth":2}),
         }
     }
 }
@@ -137,6 +141,14 @@ mod tests {
         assert_eq!(settings, TexSettings::default());
         assert!(settings.build_enabled && settings.texlab_enabled && settings.lint);
         assert!(settings.synctex);
+        assert_eq!(
+            settings.texlab_configuration["texlab"]["diagnosticsDelay"],
+            300
+        );
+        assert_eq!(
+            settings.texlab_configuration["texlab"]["completion"]["matcher"],
+            "fuzzy-ignore-case"
+        );
         settings.texlab_enabled = false;
         settings.build_enabled = false;
         settings.formatter = Formatter::TexFmt;

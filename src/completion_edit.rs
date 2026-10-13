@@ -43,6 +43,30 @@ impl CompletionTransaction {
         })
     }
 
+    pub(crate) fn add_tex_imports(
+        &mut self,
+        required: &crate::tex::imports::Requirements,
+    ) -> Result<(), String> {
+        let mut offsets: Vec<_> = self
+            .applied
+            .mapped_offsets
+            .iter()
+            .map(|o| o.get())
+            .collect();
+        offsets.extend(
+            self.fields
+                .iter()
+                .flat_map(|(_, range)| [range.start, range.end]),
+        );
+        crate::tex::imports::ensure(&mut self.applied.text, &mut offsets, required)?;
+        self.applied.mapped_offsets =
+            [ScalarOffset::new(offsets[0]), ScalarOffset::new(offsets[1])];
+        for ((_, range), offsets) in self.fields.iter_mut().zip(offsets[2..].as_chunks::<2>().0) {
+            *range = offsets[0]..offsets[1];
+        }
+        Ok(())
+    }
+
     /// The transaction itself is the single undo intent: never apply edits piecemeal.
     pub(crate) fn commit<C>(
         self,
@@ -284,7 +308,10 @@ fn snippet_closing_brace(characters: &[char], start: usize) -> Option<usize> {
         }
         if character == '\\' {
             escaped = true;
-        } else if character == '{' {
+        } else if character == '$' && characters.get(index + 1) == Some(&'{') {
+            // A literal opening brace is allowed in an LSP default. Only a
+            // nested placeholder opens another snippet delimiter; its literal
+            // closing braces are escaped by the source snippet adapter.
             depth += 1;
         } else if character == '}' {
             if depth == 0 {
@@ -369,4 +396,64 @@ fn first_snippet_choice(characters: &[char]) -> Vec<char> {
         choice.push('\\');
     }
     choice
+}
+
+#[cfg(test)]
+mod tex_import_tests {
+    use super::*;
+    #[test]
+    fn tex_imports_completion_keeps_linked_fields_and_has_one_undo() {
+        let source = "\\documentclass{article}\n\\begin{document}é eq\\end{document}";
+        let mut document = crate::document::DocumentSession::new(
+            tiptoptyp_core::document::WindowSessionId::new(1),
+            source,
+            crate::document::DocumentKind::Tex,
+        );
+        let cursor = source[..source.find("eq").unwrap()].chars().count() + 2;
+        let body = "\\begin{align}${1:α} &= $1$0\\end{align}";
+        let item = CompletionItem {
+            origin: crate::lsp::protocol::CompletionOrigin::LanguageServer,
+            label: "equation".into(),
+            detail: None,
+            documentation: None,
+            filter_text: None,
+            sort_text: None,
+            insert_text: body.into(),
+            insert_text_is_snippet: true,
+            text_edit: None,
+            additional_text_edits: vec![],
+        };
+        let mut transaction = CompletionTransaction::prepare(
+            document.key(),
+            source,
+            cursor,
+            &item,
+            CompletionCoordinates::Display,
+        )
+        .unwrap();
+        let expansion = expand_lsp_snippet(body).unwrap();
+        transaction
+            .add_tex_imports(&crate::tex::imports::Requirements::fragment(
+                &expansion.text,
+            ))
+            .unwrap();
+        let fields = transaction.fields.clone();
+        let before = eframe::egui::text::CCursorRange::default();
+        transaction.commit(&mut document, before).unwrap();
+        let applied = document.source().clone();
+        assert!(applied.contains("\\usepackage{amsmath}\n"));
+        for (_, range) in fields.iter().filter(|(id, _)| *id == 1) {
+            assert_eq!(
+                applied
+                    .chars()
+                    .skip(range.start)
+                    .take(range.len())
+                    .collect::<String>(),
+                "α"
+            );
+        }
+        assert_eq!(fields.iter().filter(|(id, _)| *id == 1).count(), 2);
+        document.history_step(false, before);
+        assert_eq!(document.source(), source);
+    }
 }

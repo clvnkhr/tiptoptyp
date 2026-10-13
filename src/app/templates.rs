@@ -69,14 +69,23 @@ impl EditorApp {
         );
         if create {
             let template = self.settings.templates[self.template_picker.take().unwrap()].clone();
+            let mut source = template.source.clone();
+            if template.language == crate::document_templates::Language::Tex {
+                let required = crate::tex::imports::Requirements::fragment(&source);
+                if let Err(error) = crate::tex::imports::ensure(&mut source, &mut [], &required) {
+                    self.show_file_error(error);
+                    return;
+                }
+            }
             self.new_tab(context);
             self.document_mut()
                 .replace_untitled_kind(match template.language {
                     crate::document_templates::Language::Typst => DocumentKind::Typst,
                     crate::document_templates::Language::Tex => DocumentKind::Tex,
                 });
+            let source_text = source;
             self.document_mut().edit(CCursorRange::default(), |source| {
-                *source = template.source.clone()
+                *source = source_text.clone()
             });
             self.reset_document_services();
             self.mark_edited();

@@ -43,6 +43,7 @@ impl EditorApp {
             is_incomplete: false,
             selected: 0,
             items: vec![CompletionItem {
+                origin: crate::lsp::protocol::CompletionOrigin::LanguageServer,
                 label: "stale completion".to_owned(),
                 detail: None,
                 documentation: None,
@@ -89,6 +90,7 @@ impl EditorApp {
                 request_token,
                 is_incomplete: false,
                 items: vec![CompletionItem {
+                    origin: crate::lsp::protocol::CompletionOrigin::LanguageServer,
                     label: "late completion".to_owned(),
                     detail: None,
                     documentation: None,

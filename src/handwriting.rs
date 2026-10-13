@@ -209,6 +209,12 @@ fn prediction_insertion(
     Some(glyph)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Insertion {
+    pub(crate) text: String,
+    pub(crate) package: Option<String>,
+}
+
 struct Prediction {
     index: usize,
     insertion: String,
@@ -453,7 +459,7 @@ impl Drawing {
         ui: &mut egui::Ui,
         tex: bool,
         settings: HandwritingSettings,
-    ) -> Option<String> {
+    ) -> Option<Insertion> {
         self.configure(settings.engine);
         self.poll();
         let mut selected = None;
@@ -659,7 +665,12 @@ impl Drawing {
                         &prediction,
                     );
                     if prediction.clicked() {
-                        selected = Some(row.insertion);
+                        selected = Some(Insertion {
+                            text: row.insertion,
+                            package: tex
+                                .then(|| self.results[row.index].package.clone())
+                                .flatten(),
+                        });
                     }
                 }
             });
@@ -789,7 +800,7 @@ mod tests {
             let mut drawing = Drawing::fixture();
             drawing.results = vec![symbol("α", "\\alpha", None), symbol("$", "\\$", None)];
             let mut harness = Harness::builder().build_ui_state(
-                move |ui, state: &mut (Drawing, Option<String>)| {
+                move |ui, state: &mut (Drawing, Option<Insertion>)| {
                     state.1 = state
                         .0
                         .show(ui, tex, HandwritingSettings::default())
@@ -815,7 +826,7 @@ mod tests {
             harness.get_by_label(alpha).click();
             harness.run_steps(2);
             assert_eq!(
-                harness.state().1.as_deref(),
+                harness.state().1.as_ref().map(|s| s.text.as_str()),
                 Some(if tex { "\\alpha" } else { "alpha" })
             );
             assert_eq!(harness.state().0.strokes, ink);

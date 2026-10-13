@@ -329,6 +329,9 @@ impl ChildPaint {
         self.captures
             .begin_viewport(ui.ctx(), self.spec.capture_target);
         ui.set_style(self.style.clone());
+        if matches!(self.spec.bounds, ChildViewBounds::Persistent { .. }) {
+            crate::window_background::prepare_tool(ui);
+        }
         if class != egui::ViewportClass::EmbeddedWindow {
             sync_native_theme(ui.ctx(), self.appearance);
             crate::popup_window::attach(ui.ctx());

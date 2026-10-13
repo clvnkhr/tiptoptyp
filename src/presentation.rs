@@ -52,6 +52,7 @@ pub(crate) struct ResolvedPresentationRequest {
     pub(crate) preview_preference: PreviewPreference,
     pub(crate) typst: ToolPreference,
     pub(crate) tinymist: ToolPreference,
+    pub(crate) tinymist_configuration: serde_json::Value,
     pub(crate) tex: crate::tex::settings::TexSettings,
     pub(crate) ui_scale_percent: u16,
     pub(crate) ui_font: FontSelection,
@@ -72,6 +73,7 @@ impl ResolvedPresentationRequest {
             preview_preference: settings.preview_preference,
             typst: settings.typst.clone(),
             tinymist: settings.tinymist.clone(),
+            tinymist_configuration: settings.tinymist_configuration.clone(),
             tex: settings.tex.clone(),
             ui_scale_percent: settings.ui_scale_percent,
             ui_font: FontSelection {
@@ -125,7 +127,8 @@ impl AppliedPresentation {
             document_theme: self.request.document_theme != next.document_theme,
             preview_preference: self.request.preview_preference != next.preview_preference,
             typst: self.request.typst != next.typst,
-            tinymist: self.request.tinymist != next.tinymist,
+            tinymist: self.request.tinymist != next.tinymist
+                || self.request.tinymist_configuration != next.tinymist_configuration,
             tex: self.request.tex != next.tex,
             ui_scale: self.request.ui_scale_percent != next.ui_scale_percent,
             fonts: self.request.ui_font != next.ui_font
@@ -326,6 +329,25 @@ mod tests {
         assert!(changes.ui_scale);
         assert!(!changes.fonts);
         assert!(!changes.theme);
+    }
+
+    #[test]
+    fn tinymist_configuration_changes_restart_only_that_service() {
+        let mut settings = AppSettings::default();
+        let theme = active_theme_request(&settings, Some(egui::Theme::Dark), None);
+        let first = ResolvedPresentationRequest::resolve(&settings, theme.clone(), 1);
+        let applied = AppliedPresentation::new(first);
+        settings.tinymist_configuration["formatterPrintWidth"] = serde_json::json!(100);
+        let next = ResolvedPresentationRequest::resolve(&settings, theme.clone(), 1);
+        let changes = applied.changes(&next);
+        assert!(changes.tinymist);
+        assert!(!changes.typst && !changes.tex && !changes.theme && !changes.fonts);
+        let applied = AppliedPresentation::new(next);
+        assert!(
+            !applied
+                .changes(&ResolvedPresentationRequest::resolve(&settings, theme, 1))
+                .tinymist
+        );
     }
 
     #[test]

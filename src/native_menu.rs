@@ -86,6 +86,7 @@ commands! {
     SyncPreview => ("Sync Preview", Edit, 3, InteractivePreview, 209),
     NewTable => ("New Table…", Edit, 4, NewTable, 211),
     EditTable => ("Edit Table…", Edit, 4, EditTable, 212),
+    LatexDiff => ("LaTeXdiff…", Edit, 5, Always, 213),
     Panel => ("Panel", View, 0, Always, 300),
     MaximizePanel => ("Maximize/Restore Panel", View, 0, Always, 308),
     Terminal => ("Terminal", View, 0, Always, 307),

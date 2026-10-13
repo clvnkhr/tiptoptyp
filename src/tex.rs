@@ -1,5 +1,7 @@
 //! Native TeX tools. One coordinator per window, started lazily for TeX.
+pub(crate) mod diff;
 mod formatter;
+pub(crate) mod imports;
 mod session;
 pub(crate) mod settings;
 pub(crate) mod tools;

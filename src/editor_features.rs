@@ -950,6 +950,9 @@ fn has_descendant_kind(node: &LinkedNode<'_>, kind: SyntaxKind) -> bool {
 }
 
 impl EditableTable {
+    pub(crate) fn has_explicit_columns(&self) -> bool {
+        self.columns_were_explicit
+    }
     pub(crate) fn row_count(&self) -> usize {
         self.cells.len()
     }

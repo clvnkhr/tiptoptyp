@@ -86,11 +86,11 @@ impl GenericSyntaxHighlighter {
 impl GenericSyntaxHighlighter {
     pub(crate) fn set_decorations(
         &mut self,
-        definitions: bool,
+        local_uses: bool,
         rules: &[crate::editor_decoration::HighlightRule],
         accent: Color32,
     ) {
-        if self.decoration_options.set(definitions, rules, accent) {
+        if self.decoration_options.set(local_uses, rules, accent) {
             self.has_cache = false;
         }
     }
@@ -140,8 +140,11 @@ impl GenericSyntaxHighlighter {
             crate::rainbow::apply_json(&mut job, self.rainbow, dark_mode);
         }
 
-        self.decoration_options
-            .decorate(&mut self.decorations, &mut job, false);
+        self.decoration_options.decorate_generic(
+            &mut self.decorations,
+            &mut job,
+            matches!(syntax.name.as_str(), "TeX" | "LaTeX"),
+        );
         self.cached_source.clear();
         self.cached_source.push_str(source);
         self.cached_extension = normalized_extension;
@@ -391,6 +394,43 @@ mod tests {
             started.elapsed().as_secs_f64() * 1_000.0,
             started.elapsed().as_secs_f64() * 1_000.0 / 25.0
         );
+    }
+
+    #[test]
+    fn local_uses_apply_only_to_tex_while_literal_rules_remain_language_independent() {
+        let source = "\\newcommand{\\foo}{x}\\foo % TODO:";
+        let mut highlighter = GenericSyntaxHighlighter::default();
+        let accent = Color32::from_rgb(1, 2, 3);
+        highlighter.set_decorations(true, &crate::editor_decoration::default_rules(), accent);
+        let usage = source.rfind("\\foo").unwrap();
+        let declaration = source.find("\\foo").unwrap();
+        let format = |job: &LayoutJob, offset| {
+            job.sections
+                .iter()
+                .find(|section| {
+                    section.byte_range.start.0 <= offset && offset < section.byte_range.end.0
+                })
+                .unwrap()
+                .format
+                .clone()
+        };
+        let tex = highlighter.highlight(source, Some(Path::new("source.TEX")), false);
+        assert_eq!(format(&tex, usage).color, accent);
+        assert_ne!(format(&tex, declaration).color, accent);
+        for extension in ["txt", "json", "rs", "tex"] {
+            let job = highlighter.highlight(
+                source,
+                Some(Path::new(&format!("source.{extension}"))),
+                false,
+            );
+            assert_eq!(job.text, source);
+            assert_eq!(format(&job, source.find("TODO:").unwrap()).color, accent);
+            if extension == "tex" {
+                assert_eq!(format(&job, usage).color, accent);
+            } else {
+                assert_ne!(format(&job, usage).color, accent);
+            }
+        }
     }
 
     #[test]

@@ -132,8 +132,9 @@ impl DocumentTheme {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum PreviewPreference {
     Pdfium,
-    #[default]
     Interactive,
+    #[default]
+    InteractivePartial,
 }
 
 /// Mouse gesture used for an explicit source-to-preview jump.
@@ -202,12 +203,67 @@ impl Default for ToolPreference {
     }
 }
 
+impl ToolPreference {
+    pub(crate) fn for_tool(kind: crate::toolchain::ToolKind) -> Self {
+        Self {
+            command: crate::tool_command::CommandCustomization::for_tool(kind),
+            ..Default::default()
+        }
+    }
+
+    fn deserialize_for<'de, D: serde::Deserializer<'de>>(
+        kind: crate::toolchain::ToolKind,
+        deserializer: D,
+    ) -> Result<Self, D::Error> {
+        let mut value = serde_json::Value::deserialize(deserializer)?;
+        if let Some(object) = value.as_object_mut() {
+            let command = object
+                .entry("command")
+                .or_insert_with(|| serde_json::json!({}));
+            if let Some(command) = command.as_object_mut() {
+                command
+                    .entry("argv")
+                    .or_insert_with(|| serde_json::json!(kind.default_arguments()));
+            }
+        }
+        serde_path_to_error::deserialize(value).map_err(|error| {
+            serde::de::Error::custom(format!(
+                "{}.{}: {}",
+                kind.binary_name(),
+                error.path(),
+                error.inner()
+            ))
+        })
+    }
+}
+
+macro_rules! tool_preference_deserializer {
+    ($name:ident, $kind:ident) => {
+        pub(crate) fn $name<'de, D: serde::Deserializer<'de>>(
+            deserializer: D,
+        ) -> Result<ToolPreference, D::Error> {
+            ToolPreference::deserialize_for(crate::toolchain::ToolKind::$kind, deserializer)
+        }
+    };
+}
+tool_preference_deserializer!(deserialize_typst_preference, Typst);
+tool_preference_deserializer!(deserialize_tinymist_preference, Tinymist);
+tool_preference_deserializer!(deserialize_tectonic_preference, Tectonic);
+tool_preference_deserializer!(deserialize_texlab_preference, Texlab);
+tool_preference_deserializer!(deserialize_badness_preference, Badness);
+tool_preference_deserializer!(deserialize_tex_fmt_preference, TexFmt);
+
 impl PreviewPreference {
-    pub(crate) const ALL: [Self; 2] = [Self::Interactive, Self::Pdfium];
+    pub(crate) const fn is_interactive(self) -> bool {
+        matches!(self, Self::Interactive | Self::InteractivePartial)
+    }
+
+    pub(crate) const ALL: [Self; 3] = [Self::Interactive, Self::InteractivePartial, Self::Pdfium];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Interactive => "Tinymist (Typst only)",
+            Self::InteractivePartial => "Tinymist partial (experimental)",
             Self::Pdfium => "PDFium",
         }
     }
@@ -316,6 +372,8 @@ impl ToolbarStyle {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct AppSettings {
     pub(crate) interface_theme: InterfaceTheme,
+    #[serde(default)]
+    pub(crate) window_background: crate::window_background::Settings,
     /// Color scheme used whenever the effective interface appearance is light.
     pub(crate) light_theme: ColorThemeChoice,
     /// Color scheme used whenever the effective interface appearance is dark.
@@ -334,7 +392,10 @@ pub(crate) struct AppSettings {
     pub(crate) comfy_background: bool,
     #[serde(default)]
     pub(crate) comfy_text: bool,
+    #[serde(default)]
     pub(crate) preview_preference: PreviewPreference,
+    #[serde(default = "default_true")]
+    pub(crate) preview_zoom_snapshot: bool,
     #[serde(default)]
     pub(crate) git_diff_style: GitDiffStyle,
     pub(crate) line_wrap: bool,
@@ -345,7 +406,7 @@ pub(crate) struct AppSettings {
     #[serde(default = "crate::editor_decoration::default_guide")]
     pub(crate) indentation_guide_character: String,
     #[serde(default)]
-    pub(crate) highlight_definitions: bool,
+    pub(crate) highlight_local_uses: bool,
     #[serde(default = "crate::editor_decoration::default_rules")]
     pub(crate) highlight_rules: Vec<crate::editor_decoration::HighlightRule>,
     pub(crate) line_numbers: bool,
@@ -423,16 +484,24 @@ pub(crate) struct AppSettings {
     pub(crate) recent_workspaces: Vec<String>,
     /// Last successfully opened source document, keyed by canonical project root.
     pub(crate) last_opened_files: BTreeMap<String, String>,
+    #[serde(deserialize_with = "deserialize_typst_preference")]
     pub(crate) typst: ToolPreference,
+    #[serde(deserialize_with = "deserialize_tinymist_preference")]
     pub(crate) tinymist: ToolPreference,
+    #[serde(default = "crate::tinymist::default_server_configuration")]
+    pub(crate) tinymist_configuration: serde_json::Value,
     #[serde(default)]
     pub(crate) tex: crate::tex::settings::TexSettings,
+    /// Independent comparison tool: changing these options must not restart TeX services.
+    #[serde(default)]
+    pub(crate) latexdiff: crate::tex::diff::Settings,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
             interface_theme: InterfaceTheme::System,
+            window_background: crate::window_background::Settings::default(),
             light_theme: ColorThemeChoice::builtin("tiptop-light"),
             dark_theme: ColorThemeChoice::builtin("tiptop-dark"),
             theme_invert: false,
@@ -442,13 +511,14 @@ impl Default for AppSettings {
             comfy_text: false,
             document_theme: DocumentTheme::FollowInterface,
             dark_images: false,
-            preview_preference: PreviewPreference::Interactive,
+            preview_preference: PreviewPreference::default(),
+            preview_zoom_snapshot: true,
             git_diff_style: GitDiffStyle::Unified,
             line_wrap: true,
             independent_main_dividers: false,
             indentation_guides: true,
             indentation_guide_character: crate::editor_decoration::default_guide(),
-            highlight_definitions: false,
+            highlight_local_uses: false,
             highlight_rules: crate::editor_decoration::default_rules(),
             line_numbers: true,
             english_grammar: false,
@@ -488,9 +558,11 @@ impl Default for AppSettings {
             typst_overrides: TypstOverrideThemes::default(),
             recent_workspaces: Vec::new(),
             last_opened_files: BTreeMap::new(),
-            typst: ToolPreference::default(),
-            tinymist: ToolPreference::default(),
+            typst: ToolPreference::for_tool(crate::toolchain::ToolKind::Typst),
+            tinymist: ToolPreference::for_tool(crate::toolchain::ToolKind::Tinymist),
+            tinymist_configuration: crate::tinymist::default_server_configuration(),
             tex: crate::tex::settings::TexSettings::default(),
+            latexdiff: crate::tex::diff::Settings::default(),
         }
     }
 }
@@ -517,6 +589,7 @@ impl AppSettings {
         }
         merge!(
             interface_theme,
+            window_background,
             light_theme,
             dark_theme,
             theme_invert,
@@ -527,12 +600,13 @@ impl AppSettings {
             comfy_background,
             comfy_text,
             preview_preference,
+            preview_zoom_snapshot,
             git_diff_style,
             line_wrap,
             independent_main_dividers,
             indentation_guides,
             indentation_guide_character,
-            highlight_definitions,
+            highlight_local_uses,
             highlight_rules,
             line_numbers,
             english_grammar,
@@ -574,7 +648,9 @@ impl AppSettings {
             last_opened_files,
             typst,
             tinymist,
+            tinymist_configuration,
             tex,
+            latexdiff,
         );
     }
 
@@ -773,14 +849,108 @@ mod tests {
     }
 
     #[test]
+    fn viewport_zoom_cache_defaults_on_and_can_be_overridden_in_json() {
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        assert_eq!(value["preview_zoom_snapshot"], true);
+        value["preview_zoom_snapshot"] = false.into();
+        let disabled = serde_json::from_value::<AppSettings>(value.clone()).unwrap();
+        assert!(!disabled.preview_zoom_snapshot);
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("preview_zoom_snapshot");
+        assert!(
+            serde_json::from_value::<AppSettings>(value)
+                .unwrap()
+                .preview_zoom_snapshot
+        );
+    }
+
+    #[test]
     fn preview_backends_have_no_retired_compatibility_aliases() {
-        assert_eq!(PreviewPreference::default(), PreviewPreference::Interactive);
+        assert_eq!(
+            PreviewPreference::default(),
+            PreviewPreference::InteractivePartial
+        );
         for retired in ["PdfJs", "Native"] {
             assert!(
                 serde_json::from_value::<PreviewPreference>(serde_json::json!(retired)).is_err()
             );
         }
-        assert_eq!(PreviewPreference::ALL.len(), 2);
+        assert_eq!(PreviewPreference::ALL.len(), 3);
+    }
+
+    #[test]
+    fn partial_tinymist_is_a_separate_persisted_preview_choice() {
+        assert_eq!(
+            PreviewPreference::default(),
+            PreviewPreference::InteractivePartial
+        );
+        assert!(PreviewPreference::Interactive.is_interactive());
+        assert!(PreviewPreference::InteractivePartial.is_interactive());
+        assert!(!PreviewPreference::Pdfium.is_interactive());
+        assert_ne!(
+            PreviewPreference::Interactive.label(),
+            PreviewPreference::InteractivePartial.label()
+        );
+        assert!(
+            PreviewPreference::InteractivePartial
+                .label()
+                .contains("experimental")
+        );
+        for preference in PreviewPreference::ALL {
+            let json = serde_json::to_value(preference).unwrap();
+            assert_eq!(
+                serde_json::from_value::<PreviewPreference>(json).unwrap(),
+                preference
+            );
+        }
+    }
+
+    #[test]
+    fn preview_default_applies_only_when_no_choice_is_stored() {
+        assert_eq!(
+            AppSettings::load(None).unwrap().preview_preference,
+            PreviewPreference::InteractivePartial
+        );
+        let mut storage = MemoryStorage::default();
+        assert_eq!(
+            AppSettings::load(Some(&storage))
+                .unwrap()
+                .preview_preference,
+            PreviewPreference::InteractivePartial
+        );
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        value.as_object_mut().unwrap().remove("preview_preference");
+        storage.set_string(STORAGE_KEY, value.to_string());
+        assert_eq!(
+            AppSettings::load(Some(&storage))
+                .unwrap()
+                .preview_preference,
+            PreviewPreference::InteractivePartial
+        );
+        assert_eq!(
+            crate::settings_json::parse(&value.to_string())
+                .unwrap()
+                .preview_preference,
+            PreviewPreference::InteractivePartial
+        );
+        for preference in PreviewPreference::ALL {
+            value["preview_preference"] = serde_json::to_value(preference).unwrap();
+            storage.set_string(STORAGE_KEY, value.to_string());
+            assert_eq!(
+                AppSettings::load(Some(&storage))
+                    .unwrap()
+                    .preview_preference,
+                preference
+            );
+            assert_eq!(
+                crate::settings_json::parse(&value.to_string())
+                    .unwrap()
+                    .preview_preference,
+                preference
+            );
+        }
     }
 
     #[test]
@@ -799,7 +969,10 @@ mod tests {
         assert_eq!(settings.theme_hue_shift_degrees, 0);
         assert_eq!(settings.document_theme, DocumentTheme::FollowInterface);
         assert!(!settings.dark_images);
-        assert_eq!(settings.preview_preference, PreviewPreference::Interactive);
+        assert_eq!(
+            settings.preview_preference,
+            PreviewPreference::InteractivePartial
+        );
         assert_eq!(settings.indent_spaces, 2);
         assert!(!settings.ascii_punctuation);
         assert!(settings.line_wrap);
@@ -887,7 +1060,9 @@ mod tests {
         dark_comment.background = Some(Rgba::from_rgba(12, 18, 28, 180));
         dark_comment.italic = Some(false);
         let expected = AppSettings {
+            window_background: crate::window_background::Settings::default(),
             tex: Default::default(),
+            latexdiff: Default::default(),
             interface_theme: InterfaceTheme::Light,
             light_theme: ColorThemeChoice::builtin("catppuccin-latte"),
             dark_theme: ColorThemeChoice::sublime("/themes/Example.sublime-color-scheme"),
@@ -904,12 +1079,13 @@ mod tests {
             document_theme: DocumentTheme::Dark,
             dark_images: true,
             preview_preference: PreviewPreference::Pdfium,
+            preview_zoom_snapshot: false,
             git_diff_style: GitDiffStyle::Unified,
             line_wrap: false,
             independent_main_dividers: true,
             indentation_guides: false,
             indentation_guide_character: "┆".into(),
-            highlight_definitions: true,
+            highlight_local_uses: true,
             highlight_rules: crate::editor_decoration::default_rules(),
             line_numbers: false,
             english_grammar: false,
@@ -969,6 +1145,7 @@ mod tests {
                 mode: ToolMode::Custom,
                 custom_path: "/opt/tinymist".to_owned(),
             },
+            tinymist_configuration: serde_json::json!({"formatterPrintWidth":100}),
         };
         let mut storage = MemoryStorage::default();
         expected.save(&mut storage);

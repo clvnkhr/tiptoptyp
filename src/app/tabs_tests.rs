@@ -1333,9 +1333,9 @@ fn opened_pdfs_default_to_pdfium_without_poppler_even_beside_a_typst_preview() {
     app.snapshot_scene = None;
     assert_eq!(
         app.settings.preview_preference,
-        PreviewPreference::Interactive
+        PreviewPreference::InteractivePartial
     );
-    app.preview = PreviewController::new(false, PreviewPreference::Interactive);
+    app.preview = PreviewController::new(false, app.settings.preview_preference);
     app.preview.accept_artifact(
         ArtifactKey::unversioned(app.document().revision()),
         Arc::from(b"retained Typst PDF".as_slice()),

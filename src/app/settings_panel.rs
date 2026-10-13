@@ -29,6 +29,7 @@ use std::path::Path;
 #[derive(Default)]
 pub(super) struct SettingsUiState {
     pub(super) json_mode: bool,
+    pub(super) snippets: Option<super::settings_snippets::Draft>,
     pub(super) help_mode: bool,
     pub(super) json_search: bool,
     pub(super) json_query: String,
@@ -387,6 +388,7 @@ impl SettingsPanel<'_> {
                     ui.separator();
                     settings_inline_value(ui, "Active", theme_label(Some(effective_theme)));
                 });
+                crate::window_background::settings_ui(ui, &mut edited.window_background);
                 settings_target_anchor(
                     ui,
                     SettingsTarget::TypstSyntax,
@@ -593,11 +595,11 @@ impl SettingsPanel<'_> {
                         edited.indentation_guide_character = before;
                     }
                 }).response.on_hover_text("Display-only lines at each indent level. Choose one visible character, e.g. │ or ┆. Saved whitespace is unchanged.");
-                settings_target_anchor(ui, SettingsTarget::DefinitionHighlights, &mut settings_scroll_target);
-                let _definitions = ui.checkbox(&mut edited.highlight_definitions, "Highlight definitions and redefinitions")
-                    .on_hover_text("Underline and emphasize local Typst declarations and TeX macro/environment definitions. This is source highlighting, not a compiler's symbol resolution.");
+                settings_target_anchor(ui, SettingsTarget::LocalUseHighlights, &mut settings_scroll_target);
+                let _local_uses = ui.checkbox(&mut edited.highlight_local_uses, SettingsTarget::LocalUseHighlights.label())
+                    .on_hover_text("Emphasize uses of names defined or changed in this document, including Typst bindings and TeX macros or environments. Declaration sites stay unchanged.");
                 #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                crate::desktop_test::observe("settings.editor.definitions", &_definitions);
+                crate::desktop_test::observe("settings.editor.local-uses", &_local_uses);
                 settings_target_anchor(ui, SettingsTarget::TextHighlights, &mut settings_scroll_target);
                 egui::CollapsingHeader::new("Custom text highlights").open(self.state.query.to_lowercase().contains("highlight").then_some(true)).show(ui, |ui| {
                     ui.weak("Literal, case-sensitive matches in source. Later rows win on overlap. Unset colors follow the theme accent.");
@@ -656,41 +658,14 @@ impl SettingsPanel<'_> {
                     if ui.button("Add template").clicked() { edited.templates.push(crate::document_templates::Template {name:"New template".into(), language:crate::document_templates::Language::Typst, source:String::new()}); }
                     if ui.button("Restore default templates").clicked() { edited.templates = crate::document_templates::defaults(); }
                 });
+                let reveal_snippets = settings_scroll_target == Some(SettingsTarget::Snippets)
+                    || self.state.query.to_lowercase().contains("snippet")
+                    || self.state.query.to_lowercase().contains("completion");
                 settings_target_anchor(ui, SettingsTarget::Snippets, &mut settings_scroll_target);
-                ui.collapsing("Custom snippets", |ui| {
-                    ui.label("Example: type eq and accept completion; Tab moves through fields, and $0 is the final cursor. Repeated $1 mirrors the first field.");
-                    ui.monospace("Prefix: eq · Language: Typst · Description: Display equation");
-                    let mut example = "$ ${1:x} = ${2:y} $\n$0";
-                    super::code_editor::editor(ui, "snippet-example", &mut example, "typ", self.settings, 2);
-                    let mut remove = None;
-                    for (index, snippet) in edited.snippets.iter_mut().enumerate() {
-                        ui.push_id(index, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label("Prefix");
-                                ui.text_edit_singleline(&mut snippet.prefix);
-                                if ui.small_button("Remove").clicked() { remove = Some(index); }
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label("Language");
-                                for (value, label) in [(crate::snippets::Language::Typst, "Typst"), (crate::snippets::Language::Tex, "TeX"), (crate::snippets::Language::Both, "Both")] {
-                                    ui.selectable_value(&mut snippet.language, value, label);
-                                }
-                            });
-                            ui.text_edit_singleline(&mut snippet.description).on_hover_text("Description shown in completion suggestions");
-                            super::code_editor::editor(ui, "snippet-body", &mut snippet.body, if snippet.language == crate::snippets::Language::Tex { "tex" } else { "typ" }, self.settings, 5);
-                            ui.separator();
-                        });
-                    }
-                    if let Some(index) = remove { edited.snippets.remove(index); }
-                    if ui.button("Add snippet").clicked() {
-                        edited.snippets.push(crate::snippets::Snippet {
-                            prefix: "example".into(), description: "Custom snippet".into(),
-                            language: crate::snippets::Language::Both, body: "${1:text}$0".into(),
-                        });
-                    }
-                    if let Err(error) = crate::snippets::validate(&edited.snippets) {
-                        ui.colored_label(ui.visuals().error_fg_color, error);
-                    }
+                let mut header = egui::CollapsingHeader::new("Custom snippets");
+                if reveal_snippets { header = header.open(Some(true)); }
+                header.show(ui, |ui| {
+                    super::settings_snippets::show(ui, &mut self.state.snippets, &mut edited, self.settings);
                 });
                 settings_target_anchor(ui, SettingsTarget::AutoFormatMath, &mut settings_scroll_target);
                 let _math_format = ui.checkbox(&mut edited.format_after_math_conversion, SettingsTarget::AutoFormatMath.label())
@@ -1000,6 +975,7 @@ impl SettingsPanel<'_> {
                 {
                     fallback_notice(ui, "Binary fallback active", reason);
                 }
+                configuration_editor(ui, crate::toolchain::ToolKind::Tinymist, &mut edited.tinymist_configuration, self.settings, None);
                 settings_target_anchor(ui, SettingsTarget::TexServices, &mut settings_scroll_target);
                 ui.add_space(theme::SPACE.small);
                 ui.scope(|ui| {
@@ -1016,8 +992,10 @@ impl SettingsPanel<'_> {
                         }
                         if !deterministic_settings && let Some(reason) = &resolution.fallback_reason { fallback_notice(ui, kind.label(), reason); }
                     }
-                    configuration_editor(ui, "TexLab configuration (JSON)", &mut edited.tex.texlab_configuration, || crate::tex::settings::TexSettings::default().texlab_configuration, self.settings, &mut edited.tex.texlab_ignored_codes);
-                    configuration_editor(ui, "Badness configuration (JSON)", &mut edited.tex.badness_configuration, || crate::tex::settings::TexSettings::default().badness_configuration, self.settings, &mut edited.tex.badness_ignored_codes);
+                    ui.strong("LaTeXdiff");
+                    super::latexdiff::preferences(ui, &mut edited.latexdiff);
+                    configuration_editor(ui, crate::toolchain::ToolKind::Texlab, &mut edited.tex.texlab_configuration, self.settings, Some(&mut edited.tex.texlab_ignored_codes));
+                    configuration_editor(ui, crate::toolchain::ToolKind::Badness, &mut edited.tex.badness_configuration, self.settings, Some(&mut edited.tex.badness_ignored_codes));
 
                 });
                 settings_target_anchor(
@@ -1061,6 +1039,7 @@ impl SettingsPanel<'_> {
                         )
                         .on_hover_text(match preference {
                             PreviewPreference::Interactive => "Tinymist provides interactive Typst preview and source navigation. TeX and opened PDFs always use PDFium. Errors do not switch renderers.",
+                            PreviewPreference::InteractivePartial => "Default Typst viewer: render the visible area and a nearby buffer, refilling as you scroll. The complete Tinymist renderer remains a separate option. TeX and opened PDFs always use PDFium.",
                             PreviewPreference::Pdfium => "PDFium displays compiled Typst and TeX output and opened PDFs, retaining the previous page while an update renders.",
                         });
                         #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
@@ -1085,6 +1064,14 @@ impl SettingsPanel<'_> {
                 {
                     ui.colored_label(ui.visuals().error_fg_color, reason);
                 }
+                settings_target_anchor(ui, SettingsTarget::PreviewZoomSnapshot, &mut settings_scroll_target);
+                let _snapshot_response = ui.add_enabled(cfg!(target_os = "macos"), egui::Checkbox::new(
+                    &mut edited.preview_zoom_snapshot, SettingsTarget::PreviewZoomSnapshot.label(),
+                )).on_hover_text("Scale a cached, higher-resolution viewport image while Tinymist redraws, then reveal the sharp preview. Works with both Tinymist modes on macOS. Keeps one image in memory, capped at four million pixels.");
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                if ui.is_rect_visible(_snapshot_response.rect) {
+                    crate::desktop_test::observe("settings.preview.zoom_snapshot", &_snapshot_response);
+                }
                 settings_target_anchor(
                     ui,
                     SettingsTarget::PreviewFollowEdits,
@@ -1098,7 +1085,7 @@ impl SettingsPanel<'_> {
                     "Automatically scroll the Tinymist preview to your edit after compilation. Does not move the editor cursor. PDFium previews do not support source jumps.",
                 );
                 if !deterministic_settings
-                    && self.status.requested_backend == PreviewPreference::Interactive
+                    && self.status.requested_backend.is_interactive()
                     && !self.status.interactive_active
                     && crate::app::icons::action_button(ui, "Retry Tinymist").clicked()
                 {
@@ -1511,28 +1498,38 @@ fn ignored_codes_editor(ui: &mut egui::Ui, ignored_codes: &mut Vec<String>) {
 
 fn configuration_editor(
     ui: &mut egui::Ui,
-    label: &str,
+    kind: crate::toolchain::ToolKind,
     value: &mut serde_json::Value,
-    default: impl FnOnce() -> serde_json::Value,
     app_settings: &AppSettings,
-    ignored_codes: &mut Vec<String>,
+    ignored_codes: Option<&mut Vec<String>>,
 ) {
-    let (example, docs) = if label.starts_with("TexLab") {
-        (
+    use crate::toolchain::ToolKind;
+    let (example, docs) = match kind {
+        ToolKind::Tinymist => (
+            r#"{"formatterPrintWidth":100,"typstExtraArgs":["--input=mode=draft"]}"#,
+            "https://github.com/Myriad-Dreamin/tinymist/blob/v0.15.2/crates/tinymist/src/config.rs",
+        ),
+        ToolKind::Texlab => (
             r#"{"texlab":{"diagnosticsDelay":500}}"#,
             "https://github.com/latex-lsp/texlab/wiki/Configuration#texlabdiagnosticsdelay",
-        )
-    } else {
-        (
-            r#"{"lineWidth":100,"indentWidth":2}"#,
-            "https://badness.dev/guide/editor-setup.html",
-        )
+        ),
+        ToolKind::Badness => (
+            r#"{"lineWidth":100,"indentWidth":4}"#,
+            "https://github.com/jolars/badness/blob/v0.24.0/docs/src/guide/editor-setup.md",
+        ),
+        _ => unreachable!("only language servers have JSON configuration"),
     };
+    let label = format!("{} configuration (JSON)", kind.label());
     let header = egui::CollapsingHeader::new(label).show(ui, |ui| {
         super::settings_controls::documentation_link(ui, "Configuration options", docs);
         ui.weak("Example override:");
         ui.monospace(example);
-        ignored_codes_editor(ui, ignored_codes);
+        if kind == ToolKind::Tinymist {
+            ui.weak("Use flat keys. typstExtraArgs accepts --input=KEY=VALUE options; the app controls the entry and preview connection.");
+        }
+        if let Some(codes) = ignored_codes {
+            ignored_codes_editor(ui, codes);
+        }
         ui.weak(
             "These are the settings sent to the language server. Edit and apply to override them.",
         );
@@ -1544,10 +1541,16 @@ fn configuration_editor(
             .map(|(_, draft)| draft)
             .unwrap_or_else(|| serde_json::to_string_pretty(value).unwrap());
         super::code_editor::editor(ui, "configuration-code", &mut text, "json", app_settings, 6);
-        let parsed = serde_json::from_str::<serde_json::Value>(&text)
-            .map_err(|e| e.to_string())
+        let parsed = if text.len() > 2_000_000 {
+            Err("Configuration JSON exceeds 2 MB".to_owned())
+        } else {
+            serde_json::from_str::<serde_json::Value>(&text).map_err(|e| e.to_string())
+        }
             .and_then(|v| {
                 if v.is_object() {
+                    if kind == ToolKind::Tinymist {
+                        crate::tinymist::validate_server_configuration(&v)?;
+                    }
                     Ok(v)
                 } else {
                     Err("Configuration must be a JSON object".into())
@@ -1563,7 +1566,16 @@ fn configuration_editor(
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
         if ui.button("Reset configuration").clicked() {
-            *value = default();
+            *value = match kind {
+                ToolKind::Tinymist => crate::tinymist::default_server_configuration(),
+                ToolKind::Texlab => {
+                    crate::tex::settings::TexSettings::default().texlab_configuration
+                }
+                ToolKind::Badness => {
+                    crate::tex::settings::TexSettings::default().badness_configuration
+                }
+                _ => unreachable!(),
+            };
             text = serde_json::to_string_pretty(value).unwrap();
         }
         ui.ctx()
@@ -1627,6 +1639,66 @@ mod tests {
             DocumentTheme::FollowInterface
         );
         assert!(!harness.state().comfy_background && !harness.state().comfy_text);
+    }
+
+    #[test]
+    fn tinymist_configuration_editor_applies_valid_json_and_resets_visible_defaults() {
+        use egui_kittest::kittest::by;
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(1000.0, 900.0))
+            .build_ui_state(
+                |ui, settings: &mut AppSettings| {
+                    let original = settings.clone();
+                    configuration_editor(
+                        ui,
+                        crate::toolchain::ToolKind::Tinymist,
+                        &mut settings.tinymist_configuration,
+                        &original,
+                        None,
+                    );
+                },
+                AppSettings::default(),
+            );
+        theme::configure_test_fonts(&harness.ctx);
+        harness.run();
+        harness
+            .get_by_label("Tinymist configuration (JSON)")
+            .click();
+        harness.run();
+        harness
+            .get(by().role(egui::accesskit::Role::MultilineTextInput))
+            .focus();
+        harness.run();
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        harness
+            .get(by().role(egui::accesskit::Role::MultilineTextInput))
+            .type_text(r#"{"formatterMode":"invalid"}"#);
+        harness.run();
+        let defaults = crate::tinymist::default_server_configuration();
+        assert_eq!(harness.state().tinymist_configuration, defaults);
+        assert!(
+            harness
+                .query_by_label("formatterMode: choose typstyle, typstfmt, disable")
+                .is_some()
+        );
+        harness
+            .get(by().role(egui::accesskit::Role::MultilineTextInput))
+            .focus();
+        harness.run();
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        harness
+            .get(by().role(egui::accesskit::Role::MultilineTextInput))
+            .type_text(r#"{"formatterPrintWidth":100}"#);
+        harness.run();
+        harness.get_by_label("Apply configuration").click();
+        harness.run();
+        assert_eq!(
+            harness.state().tinymist_configuration["formatterPrintWidth"],
+            100
+        );
+        harness.get_by_label("Reset configuration").click();
+        harness.run();
+        assert_eq!(harness.state().tinymist_configuration, defaults);
     }
 
     #[test]
@@ -1772,7 +1844,10 @@ mod tests {
                 },
                 (
                     SettingsUiState::default(),
-                    AppSettings::default(),
+                    AppSettings {
+                        preview_preference: PreviewPreference::Interactive,
+                        ..AppSettings::default()
+                    },
                     Vec::new(),
                     None,
                 ),
@@ -1785,6 +1860,28 @@ mod tests {
             harness.state().2.is_empty(),
             "idle Settings must not emit updates"
         );
+        harness
+            .get_by_label("Tinymist partial (experimental)")
+            .click();
+        harness.run();
+        assert_eq!(
+            harness.state().1.preview_preference,
+            PreviewPreference::Interactive
+        );
+        assert!(harness.state().2.iter().any(|action| matches!(action,
+            SettingsAction::Update(settings) if settings.preview_preference == PreviewPreference::InteractivePartial)));
+        harness.state_mut().2.clear();
+        if cfg!(target_os = "macos") {
+            harness.get_by_label("Smooth Tinymist zoom").click();
+            harness.run();
+            assert!(harness.state().2.iter().any(|action| matches!(action,
+                SettingsAction::Update(settings) if !settings.preview_zoom_snapshot)));
+        } else {
+            // Native snapshot support is disabled on other platforms.
+            harness.get_by_label("Smooth Tinymist zoom");
+            assert!(harness.state().2.is_empty());
+        }
+        harness.state_mut().2.clear();
         harness
             .get_by_label("Follow Typst edits in preview")
             .click();

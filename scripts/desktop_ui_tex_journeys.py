@@ -1,7 +1,33 @@
 """Native TeX journeys; fixtures are real files and tools are never mocked."""
 
-TEX_JOURNEYS = ("tex_editing", "tex_intelligence", "tex_save")
+TEX_JOURNEYS = ("tex_editing", "tex_intelligence", "tex_save", "harper_math_prose")
 TEX_SOURCE = "\\documentclass{article}\n\\begin{document}\nA sample with $\\alpha + \\alpha$.\n\\end{document}\n"
+
+
+HARPER_TYPOS = "This sentence contains a misspelld word.\nThis is the the simple result.\n"
+
+
+def harper_fresh(document, source, path, locations):
+    """Require the completed writing result, not merely an idle old result."""
+    from desktop_ui_journeys import fingerprint
+    return document["path"] == str(path) \
+        and document["source_fingerprint"] == fingerprint(source) \
+        and document["source_bytes"] == len(source.encode("utf-8")) \
+        and document["writing_current"] and not document["writing_pending"] \
+        and document["writing_count"] == len(locations) \
+        and document["writing_locations"] == locations \
+        and document["writing_lines"] == [location[0] for location in locations] \
+        and document["writing_paths"] == [str(path)] * len(locations)
+
+
+def assert_harper_stale(document, previous):
+    """An edit must retain its last published result until the new one arrives."""
+    if document["writing_current"] or not document["writing_pending"]:
+        raise AssertionError("did not observe Harper's stale result during the edit debounce")
+    for field in ("writing_count", "writing_fingerprint", "writing_lines",
+                  "writing_locations", "writing_paths"):
+        if document[field] != previous[field]:
+            raise AssertionError("Harper discarded or changed stale diagnostics before refreshing")
 
 
 class TexJourneys:
@@ -41,6 +67,83 @@ class TexJourneys:
         self.wait("TeX settings saved", lambda d: d["settings_json"]["saved"])
         self.close_settings()
         self.click("editor.source")
+
+    def open_harper_fixture(self, path):
+        """Select the complete real file path in macOS's native Open panel."""
+        import time
+        self.focus_document_window()
+        self.key(31)
+        time.sleep(0.8)
+        self.key(5, "cmd+shift")
+        time.sleep(0.3)
+        self.key(0)
+        self.native("text", str(path))
+        self.key(36, "none")
+        time.sleep(0.5)
+        self.native("ax-press-title", "Open")
+        self.wait("named Harper fixture opened", lambda d: d["path"] == str(path), timeout=15)
+        self.click("editor.source")
+        self.wait("Harper fixture owns keyboard", lambda d: d["editor_keyboard_focused"])
+
+    def harper_math_prose(self):
+        from pathlib import Path
+        count = self.snapshot()["document"]["tabs"]
+        self.tex_settings([('"english_grammar": false', '"english_grammar": true'),
+                           ('"auto_save": true', '"auto_save": false'),
+                           ('"build_enabled": true', '"build_enabled": false')])
+        for suffix in ("typ", "tex"):
+            source = (Path(__file__).resolve().parent.parent / "manual-tests" /
+                      ("harper-math-prose." + suffix)).read_text()
+            path = self.directory / ("harper-math-prose." + suffix)
+            path.write_text(source)
+            self.open_harper_fixture(path)
+            self.wait("correct " + suffix + " sentences survive display math and compounds",
+                      lambda d: harper_fresh(d, source, path, []), timeout=30)
+            self.stable_state(lambda d: harper_fresh(d, source, path, []))
+            self.key(125, "cmd")
+            if suffix == "tex":
+                # The final newline leaves the caret below \end{document}.
+                # Move to that line's beginning before typing ordinary prose.
+                self.key(126, "none")
+                self.key(123, "cmd")
+                prefix = source.removesuffix("\\end{document}\n")
+                expected = prefix + HARPER_TYPOS + "\\end{document}\n"
+            else:
+                prefix = source
+                expected = source + HARPER_TYPOS
+            self.wait("Harper typo insertion caret is exact",
+                      lambda d: d["cursor"] == [len(prefix), len(prefix)])
+            for line in HARPER_TYPOS.splitlines():
+                self.native("text", line)
+                self.key(36, "none")  # Return is a real editor key, not pasted text.
+            self.source_is(expected)
+            first_line = prefix.count("\n") + 1
+            locations = [[first_line, 26], [first_line + 1, 9]]
+            errors = self.wait("Harper reports only the intentional " + suffix + " typo and repetition",
+                               lambda d: harper_fresh(d, expected, path, locations), timeout=30)["document"]
+            self.stable_state(lambda d: harper_fresh(d, expected, path, locations))
+            self.record("harper.math-prose", language=suffix, source_fingerprint=errors["source_fingerprint"],
+                        writing_fingerprint=errors["writing_fingerprint"], locations=locations,
+                        original_paths=errors["writing_paths"])
+            self.key(0)
+
+            def corrected_with_stale_diagnostics():
+                stale = self.source_is(source)["document"]
+                assert_harper_stale(stale, errors)
+                self.record("harper.stale-preserved", language=suffix,
+                            source_fingerprint=stale["source_fingerprint"],
+                            writing_fingerprint=stale["writing_fingerprint"])
+
+            self.paste_source(source, corrected_with_stale_diagnostics)
+            self.wait("fresh corrected " + suffix + " prose replaces stale diagnostics",
+                      lambda d: harper_fresh(d, source, path, []), timeout=30)
+            self.stable_state(lambda d: harper_fresh(d, source, path, []))
+            if path.read_text() != source:
+                raise AssertionError("Harper journey wrote edits to disk despite disabled autosave")
+            self.close_scratch(count)
+        self.tex_settings([('"english_grammar": true', '"english_grammar": false'),
+                           ('"auto_save": false', '"auto_save": true'),
+                           ('"build_enabled": false', '"build_enabled": true')])
 
     def tex_editing(self):
         from desktop_ui_journeys import fingerprint

@@ -27,8 +27,81 @@ pub(crate) struct Snippet {
     pub language: Language,
     pub body: String,
 }
+/// Convert source to the wire snippet format without interpreting ordinary
+/// math dollars or TeX backslashes. Only explicit numbered ${...} fields are
+/// reserved in custom source; bare $1 and $0 remain ordinary source text.
+pub(crate) fn source_to_lsp(source: &str) -> Result<String, String> {
+    fn encode(chars: &[char], output: &mut String) -> Result<(), String> {
+        let mut index = 0;
+        while index < chars.len() {
+            if chars[index] == '$'
+                && chars.get(index + 1) == Some(&'{')
+                && chars.get(index + 2).is_some_and(char::is_ascii_digit)
+                && chars[..index]
+                    .iter()
+                    .rev()
+                    .take_while(|c| **c == '\\')
+                    .count()
+                    .is_multiple_of(2)
+            {
+                let number_end = index
+                    + 2
+                    + chars[index + 2..]
+                        .iter()
+                        .take_while(|c| c.is_ascii_digit())
+                        .count();
+                let number: String = chars[index + 2..number_end].iter().collect();
+                number.parse::<u32>().map_err(|_| {
+                    "Field numbers must fit in a 32-bit unsigned integer".to_owned()
+                })?;
+                output.push_str("${");
+                output.push_str(&number);
+                match chars.get(number_end) {
+                    Some('}') => { index = number_end + 1; }
+                    Some(':') => {
+                        let start = number_end + 1;
+                        let mut depth = 0;
+                        let mut close = start;
+                        while close < chars.len() {
+                            match chars[close] {
+                                '\\' if chars.get(close + 1).is_some_and(|c| matches!(c, '{' | '}' | '\\')) => { close += 2; continue; }
+                                '{' => depth += 1,
+                                '}' if depth == 0 => break,
+                                '}' => depth -= 1,
+                                _ => {}
+                            }
+                            close += 1;
+                        }
+                        if close == chars.len() { return Err("Close the snippet field with }: ${1:text}".into()); }
+                        output.push(':');
+                        encode(&chars[start..close], output)?;
+                        index = close + 1;
+                    }
+                    _ => return Err("Use ${1:text} for a field, ${1} to repeat it, or ${0} for the final cursor".into()),
+                }
+                output.push('}');
+            } else {
+                if matches!(chars[index], '$' | '}' | '\\') {
+                    output.push('\\');
+                }
+                output.push(chars[index]);
+                index += 1;
+            }
+        }
+        Ok(())
+    }
+    let mut output = String::with_capacity(source.len());
+    encode(&source.chars().collect::<Vec<_>>(), &mut output)?;
+    Ok(output)
+}
+
 pub(crate) fn validate(snippets: &[Snippet]) -> Result<(), String> {
     for (index, snippet) in snippets.iter().enumerate() {
+        let label = if snippet.prefix.is_empty() {
+            format!("Snippet {}", index + 1)
+        } else {
+            format!("Snippet “{}”", snippet.prefix)
+        };
         if snippet.prefix.is_empty()
             || !snippet
                 .prefix
@@ -36,11 +109,12 @@ pub(crate) fn validate(snippets: &[Snippet]) -> Result<(), String> {
                 .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-'))
         {
             return Err(format!(
-                "snippets[{index}].prefix: use letters, numbers, hyphens or underscores"
+                "{label}: enter a prefix using letters, numbers, hyphens or underscores"
             ));
         }
-        crate::completion_edit::expand_lsp_snippet(&snippet.body)
-            .map_err(|error| format!("snippets[{index}].body: {error}"))?;
+        let encoded = source_to_lsp(&snippet.body).map_err(|error| format!("{label}: {error}"))?;
+        crate::completion_edit::expand_lsp_snippet(&encoded)
+            .map_err(|error| format!("{label}: {error}"))?;
     }
     Ok(())
 }
@@ -67,16 +141,19 @@ pub(crate) fn items(
     let items: Vec<_> = snippets
         .iter()
         .filter(|s| s.language.accepts(kind) && s.prefix.starts_with(query))
-        .map(|s| CompletionItem {
-            label: s.prefix.clone(),
-            detail: Some(s.description.clone()),
-            documentation: Some(s.body.clone()),
-            filter_text: Some(s.prefix.clone()),
-            sort_text: None,
-            insert_text: s.body.clone(),
-            insert_text_is_snippet: true,
-            text_edit: None,
-            additional_text_edits: Vec::new(),
+        .filter_map(|s| {
+            Some(CompletionItem {
+                origin: crate::lsp::protocol::CompletionOrigin::Snippet,
+                label: s.prefix.clone(),
+                detail: Some(s.description.clone()),
+                documentation: Some(s.body.clone()),
+                filter_text: Some(s.prefix.clone()),
+                sort_text: None,
+                insert_text: source_to_lsp(&s.body).ok()?,
+                insert_text_is_snippet: true,
+                text_edit: None,
+                additional_text_edits: Vec::new(),
+            })
         })
         .collect();
     (!items.is_empty()).then_some(items)
@@ -85,12 +162,42 @@ pub(crate) fn items(
 mod tests {
     use super::*;
     #[test]
+    fn ordinary_source_dollars_backslashes_quotes_and_newlines_are_literal() {
+        for source in [
+            r"$x$ and $1$ and $0$",
+            r"$alpha$",
+            r"\begin{align} x & y \\ \end{align}",
+            r"\$ and \{x\}",
+            r"\${1} and \${1:literal}",
+            "#let name = \"α\"\n$ x $",
+            "${USER} ${word:default}",
+        ] {
+            let encoded = source_to_lsp(source).unwrap();
+            let result = crate::completion_edit::expand_lsp_snippet(&encoded).unwrap();
+            assert_eq!(result.text, source);
+            assert!(result.fields.is_empty());
+        }
+    }
+
+    #[test]
+    fn explicit_fields_preserve_tex_defaults_and_mirrors() {
+        let source = r"${1:\frac{α}{β}} + ${1}; ${2:$x$ \\} ${0}";
+        let result =
+            crate::completion_edit::expand_lsp_snippet(&source_to_lsp(source).unwrap()).unwrap();
+        assert_eq!(result.text, r"\frac{α}{β} + \frac{α}{β}; $x$ \\ ");
+        assert_eq!(result.fields.iter().filter(|(id, _)| *id == 1).count(), 2);
+        assert_eq!(result.cursor, 0);
+        assert!(source_to_lsp("${1:unfinished").is_err());
+        assert!(source_to_lsp("${999999999999999999999999}").is_err());
+    }
+
+    #[test]
     fn snippets_are_scoped_and_expand_through_the_completion_transaction() {
         let snippets = vec![Snippet {
             prefix: "greet".into(),
             description: "Greeting".into(),
             language: Language::Typst,
-            body: "Hello ${1:world}!$0".into(),
+            body: "Hello ${1:world}!${0}".into(),
         }];
         validate(&snippets).unwrap();
         assert!(items(&snippets, DocumentKind::Tex, "gre", 3).is_none());

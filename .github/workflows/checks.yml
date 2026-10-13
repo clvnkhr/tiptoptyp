@@ -68,7 +68,10 @@ jobs:
         if: runner.os == 'macOS'
         run: cargo +1.98.1 test --locked --features desktop-ui-tests --bin tiptoptyp desktop_test::tests
       - name: Embedded preview interaction tests
-        run: node --test scripts/test-preview-navigation.mjs
+        run: |
+          node --test scripts/test-preview-navigation.mjs scripts/test-preview-snapshot-buffer.mjs scripts/test-preview-zoom-snapshot.mjs scripts/test-desktop-preview-probe.mjs scripts/test-preview-native-probe.mjs
+          node scripts/test-preview-e2e.cjs --large --self-test
+          python3 scripts/test-preview-partial-native.py --self-test
       - name: Packaging tests
         run: cargo +1.98.1 test --locked --manifest-path xtask/Cargo.toml
       - name: Profiling infrastructure checks
@@ -130,6 +133,19 @@ jobs:
           export TIPTOPTYP_TEST_TINYMIST="$PWD/toolchain/bin/tinymist-$target"
           export TIPTOPTYP_PLAYWRIGHT="$RUNNER_TEMP/preview-browser/node_modules/playwright"
           node scripts/test-preview-e2e.cjs
+          node scripts/test-preview-e2e.cjs --large --mode partial --palette-checks --geometry-checks --output .tiptoptyp/profiles/partial-render/ci-partial.json
+      - name: Retain partial preview evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: partial-preview
+          path: |
+            .tiptoptyp/profiles/partial-render
+            .tiptoptyp/screenshots/agent-review/partial-render
+            .tiptoptyp/screenshots/agent-review/partial-optimize
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
       - name: Retain coverage evidence
         if: always()
         uses: actions/upload-artifact@v4

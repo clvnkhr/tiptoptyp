@@ -53,9 +53,6 @@ impl Session {
             .map_err(|e| e.to_string())?;
         let log = directory.path().join("stderr.log");
         let mut command = Command::new(&resolution.program);
-        if provider == Provider::Badness {
-            command.arg("lsp");
-        }
         command.current_dir(&snapshot.root);
         resolution
             .command
@@ -195,7 +192,7 @@ impl Session {
         let (method, params) = match request.kind {
             RequestKind::Format => (
                 "textDocument/formatting",
-                protocol::format_document_params(&self.snapshot.uri),
+                formatting_params(self.provider, &self.snapshot.uri, &self.snapshot.settings),
             ),
             RequestKind::Completion { position, .. } => (
                 "textDocument/completion",
@@ -374,6 +371,26 @@ impl Drop for Session {
         }
     }
 }
+fn formatting_params(
+    provider: Provider,
+    uri: &str,
+    settings: &crate::tex::settings::TexSettings,
+) -> Value {
+    let mut params = protocol::format_document_params(uri);
+    if provider == Provider::Badness
+        && let Some(indent) = settings
+            .badness_configuration
+            .get("indentWidth")
+            .and_then(Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
+    {
+        // Badness uses the request's indentation over its JSON fallback. Keep
+        // them in agreement; discovered TOML remains authoritative upstream.
+        params["options"]["tabSize"] = json!(indent);
+    }
+    params
+}
+
 fn configuration(provider: Provider, settings: &crate::tex::settings::TexSettings) -> Value {
     match provider {
         Provider::Texlab => settings.texlab_configuration.clone(),
@@ -410,10 +427,27 @@ fn configuration_response(
 mod tests {
     use super::*;
     #[test]
+    fn badness_format_request_honors_configured_indentation() {
+        let mut settings = crate::tex::settings::TexSettings::default();
+        let uri = "file:///workspace/main.tex";
+        for indent in [0, 2, 4, 8] {
+            settings.badness_configuration["indentWidth"] = json!(indent);
+            let params = formatting_params(Provider::Badness, uri, &settings);
+            assert_eq!(params["options"]["tabSize"], indent);
+            assert_eq!(params["textDocument"]["uri"], uri);
+            assert_eq!(params["options"]["insertSpaces"], true);
+            assert_eq!(
+                formatting_params(Provider::Texlab, uri, &settings)["options"]["tabSize"],
+                2
+            );
+        }
+    }
+
+    #[test]
     fn user_configuration_overrides_reach_whole_and_section_requests() {
         let settings = crate::tex::settings::TexSettings {
             texlab_configuration: json!({"texlab":{"build":{"onSave":true}}}),
-            badness_configuration: json!({"lint":{"enabled":false}}),
+            badness_configuration: json!({"lineWidth":100,"indentWidth":4}),
             ..Default::default()
         };
         assert_eq!(

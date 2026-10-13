@@ -107,6 +107,11 @@ pub(crate) struct PreviewStatusSnapshot<'a> {
 impl PreviewStatusSnapshot<'_> {
     pub(crate) fn backend_label(&self) -> &'static str {
         match self.effective_backend {
+            PreviewBackend::Interactive
+                if self.requested_backend == PreviewPreference::InteractivePartial =>
+            {
+                "Tinymist partial"
+            }
             PreviewBackend::Interactive => "Tinymist",
             PreviewBackend::Pdfium => "PDFium",
         }
@@ -512,7 +517,7 @@ impl PreviewController {
         platform_supported: bool,
     ) -> bool {
         interactive_source_supported
-            && self.requested_backend == PreviewPreference::Interactive
+            && self.requested_backend.is_interactive()
             && platform_supported
     }
 
@@ -582,7 +587,7 @@ impl PreviewController {
                 .interactive_transitioning(interactive_source_supported, platform_supported),
             failure_state: if interactive_source_supported
                 && preview_visible
-                && self.requested_backend == PreviewPreference::Interactive
+                && self.requested_backend.is_interactive()
                 && self.effective_backend(interactive_source_supported)
                     == PreviewBackend::Interactive
                 && self.interactive_unavailable()
@@ -604,8 +609,7 @@ impl PreviewController {
     }
 
     fn effective_backend(&self, interactive_source_supported: bool) -> PreviewBackend {
-        if interactive_source_supported && self.requested_backend == PreviewPreference::Interactive
-        {
+        if interactive_source_supported && self.requested_backend.is_interactive() {
             PreviewBackend::Interactive
         } else {
             PreviewBackend::Pdfium
@@ -1225,8 +1229,38 @@ mod tests {
     }
 
     #[test]
+    fn partial_preview_uses_interactive_ownership_and_reports_its_mode() {
+        let mut preview = PreviewController::new(false, PreviewPreference::default());
+        assert_eq!(
+            preview.requested_backend,
+            PreviewPreference::InteractivePartial
+        );
+        assert!(preview.interactive_requested(true, true));
+        assert!(!preview.interactive_requested(false, true));
+        assert!(!preview.interactive_requested(true, false));
+        assert_eq!(
+            preview.status_snapshot(true, true, true, 0).backend_label(),
+            "Tinymist partial"
+        );
+        assert_eq!(
+            preview
+                .status_snapshot(false, true, true, 0)
+                .backend_label(),
+            "PDFium"
+        );
+        preview.set_requested_backend(PreviewPreference::Interactive);
+        assert_eq!(
+            preview.status_snapshot(true, true, true, 0).backend_label(),
+            "Tinymist"
+        );
+    }
+
+    #[test]
     fn selected_backend_never_changes_on_failure_or_platform_capability() {
-        assert_eq!(PreviewPreference::default(), PreviewPreference::Interactive);
+        assert_eq!(
+            PreviewPreference::default(),
+            PreviewPreference::InteractivePartial
+        );
         for supported in [false, true] {
             for preference in PreviewPreference::ALL {
                 let mut preview = PreviewController::new(false, preference);
@@ -1234,7 +1268,7 @@ mod tests {
                 let status = preview.status_snapshot(true, true, supported, 0);
                 assert_eq!(
                     status.effective_backend,
-                    if preference == PreviewPreference::Interactive {
+                    if preference.is_interactive() {
                         PreviewBackend::Interactive
                     } else {
                         PreviewBackend::Pdfium
@@ -1242,7 +1276,7 @@ mod tests {
                 );
                 assert_eq!(
                     status.failure_reason().is_some(),
-                    preference == PreviewPreference::Interactive
+                    preference.is_interactive()
                 );
                 assert_eq!(
                     preview

@@ -41,6 +41,7 @@ pub(crate) enum ShortcutAction {
     ToggleComment,
     NewTable,
     EditTable,
+    LatexDiff,
     Find,
     FindReplace,
     Format,
@@ -98,7 +99,7 @@ pub(crate) enum ShortcutAction {
 }
 
 impl ShortcutAction {
-    pub(crate) const ALL: [Self; 82] = [
+    pub(crate) const ALL: [Self; 83] = [
         Self::Settings,
         Self::New,
         Self::NewWindow,
@@ -127,6 +128,7 @@ impl ShortcutAction {
         Self::ToggleComment,
         Self::NewTable,
         Self::EditTable,
+        Self::LatexDiff,
         Self::Find,
         Self::FindReplace,
         Self::Format,
@@ -213,6 +215,7 @@ impl ShortcutAction {
             Self::ToggleComment => "edit.toggle_comment",
             Self::NewTable => "edit.new_table",
             Self::EditTable => "edit.edit_table",
+            Self::LatexDiff => "edit.latexdiff",
             Self::Find => "edit.find",
             Self::FindReplace => "edit.find_replace",
             Self::Format => "edit.format",
@@ -304,6 +307,7 @@ impl ShortcutAction {
             Self::ToggleComment => "Toggle comment",
             Self::NewTable => "New table",
             Self::EditTable => "Edit table at cursor",
+            Self::LatexDiff => "LaTeXdiff",
             Self::Find => "Find",
             Self::FindReplace => "Find and replace",
             Self::Format => "Format document",
@@ -390,6 +394,7 @@ impl ShortcutAction {
             | Self::NewTable
             | Self::ComfyPreview
             | Self::EditTable
+            | Self::LatexDiff
             | Self::Find
             | Self::FindReplace
             | Self::Format
@@ -1197,7 +1202,11 @@ fn default_binding(action: ShortcutAction, platform: ShortcutPlatform) -> Option
         Action::Paste => ShortcutChord::primary(Key::V),
         Action::SelectAll => ShortcutChord::primary(Key::A),
         Action::ToggleComment => ShortcutChord::primary(Key::Slash),
-        Action::NewTable | Action::EditTable | Action::NewFromTemplate | Action::ComfyPreview => {
+        Action::NewTable
+        | Action::EditTable
+        | Action::LatexDiff
+        | Action::NewFromTemplate
+        | Action::ComfyPreview => {
             return None;
         }
         Action::Find => ShortcutChord::primary(Key::F),
@@ -1303,6 +1312,7 @@ mod tests {
                     || matches!(
                         action,
                         ShortcutAction::NewTable
+                            | ShortcutAction::LatexDiff
                             | ShortcutAction::EditTable
                             | ShortcutAction::NewFromTemplate
                             | ShortcutAction::ComfyPreview

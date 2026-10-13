@@ -493,7 +493,10 @@ mod tests {
                     display_name: "paper.tex".to_owned(),
                 },
                 engine: EngineConfig::Typst(TypstOptions {
-                    command: Default::default(),
+                    command: crate::tool_command::CommandCustomization::for_tool(
+                        crate::toolchain::ToolKind::Typst,
+                    )
+                    .into(),
                     executable: "must-not-run".into(),
                     font_paths: Vec::new(),
                 }),
@@ -605,7 +608,10 @@ mod tests {
                             },
 
                             engine: EngineConfig::Typst(TypstOptions {
-                                command: Default::default(),
+                                command: crate::tool_command::CommandCustomization::for_tool(
+                                    crate::toolchain::ToolKind::Typst,
+                                )
+                                .into(),
                                 executable: PathBuf::from("unused-typst"),
                                 font_paths: Vec::new(),
                             }),
@@ -650,7 +656,10 @@ mod tests {
             },
 
             engine: EngineConfig::Typst(TypstOptions {
-                command: Default::default(),
+                command: crate::tool_command::CommandCustomization::for_tool(
+                    crate::toolchain::ToolKind::Typst,
+                )
+                .into(),
                 executable: typst_executable.clone(),
                 font_paths: Vec::new(),
             }),

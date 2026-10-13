@@ -44,7 +44,7 @@ pub(super) struct Output {
     pub change_root: bool,
     pub refresh: bool,
     pub repaint: bool,
-    pub insert_symbol: Option<String>,
+    pub insert_symbol: Option<crate::handwriting::Insertion>,
     pub packages: bool,
     pub open: Option<PathBuf>,
     pub index_target: Option<(PathBuf, usize)>,

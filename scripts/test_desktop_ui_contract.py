@@ -22,6 +22,196 @@ class FixtureFingerprintContract(unittest.TestCase):
         self.assertEqual(fingerprint("é🙂z"), "3a046d85bff8a56f")
 
 
+class PartialFixtureCleanupContract(unittest.TestCase):
+    def test_mru_selection_never_closes_an_original_tab(self):
+        from desktop_ui_partial_journeys import PartialPreviewJourneys
+        class Session(PartialPreviewJourneys):
+            def __init__(self):
+                self.tabs = [10, 20, 30, 40]
+                self.active = 30
+                self.preview = 30
+                self.backend = "InteractivePartial"
+                self.closed = []
+            def focus_document_window(self):
+                pass
+            def snapshot(self):
+                return {"document": {"tabs": len(self.tabs), "preview_requested_backend": self.backend}}
+            def click(self, name):
+                if name.startswith("tab."):
+                    self.active = int(name.split(".")[1])
+                    assert self.active in self.tabs
+            def key(self, code, flags):
+                self.preview = self.active
+            def close_scratch(self, count):
+                self.closed.append(self.active)
+                self.tabs.remove(self.active)
+                # Deliberately return to the original MRU, not the next fixture.
+                self.active = 10
+                assert len(self.tabs) == count
+            def choose_backend(self, backend, save_pdf):
+                assert self.preview == 20
+                self.backend = backend
+        session = Session()
+        before = {"active_tab_id": 10, "preview_tab_id": 20, "preview_requested_backend": "Interactive"}
+        session.restore_partial_fixture_tabs(before, [30, 40])
+        self.assertEqual(session.closed, [40, 30])
+        self.assertEqual(session.tabs, [10, 20])
+        self.assertEqual((session.active, session.preview, session.backend), (10, 20, "Interactive"))
+
+
+class PartialPreviewCoverageContract(unittest.TestCase):
+    def observation(self):
+        return {"age_ms": 0, "value": {"ready": True, "partial": True,
+            "pages": 48, "populated": 3, "canvases": 0,
+            "visible": [{"index": 0, "dummy": False, "ink": True}]}}
+
+    def test_accepts_actual_bounded_svg_coverage(self):
+        from desktop_ui_partial_journeys import assert_partial_coverage
+        self.assertEqual(assert_partial_coverage(self.observation())["populated"], 3)
+
+    def test_rejects_missing_stale_wrong_mode_and_skeleton_only_coverage(self):
+        from desktop_ui_partial_journeys import assert_partial_coverage
+        cases = [None, {**self.observation(), "age_ms": 501}]
+        for changed in ({"partial": False}, {"pages": 3}, {"visible": []},
+                        {"visible": [{"index": 0, "dummy": True, "ink": False}]}):
+            cases.append({"age_ms": 0, "value": {**self.observation()["value"], **changed}})
+        for case in cases:
+            with self.subTest(case=case), self.assertRaises(AssertionError):
+                assert_partial_coverage(case)
+
+    def test_rejects_full_document_or_offscreen_canvas_work(self):
+        from desktop_ui_partial_journeys import assert_partial_coverage
+        for changed in ({"populated": 48}, {"canvases": 47}):
+            with self.subTest(changed=changed), self.assertRaises(AssertionError):
+                assert_partial_coverage({"age_ms": 0,
+                    "value": {**self.observation()["value"], **changed}})
+
+    def test_fresh_default_requires_selected_and_actual_partial_renderer(self):
+        from desktop_ui_partial_journeys import assert_partial_default
+        document = {"preview_requested_backend": "InteractivePartial",
+                    "preview_backend": "Tinymist partial"}
+        renderer = self.observation()
+        assert_partial_default(document, renderer)
+        for changed in ({"preview_requested_backend": "Interactive"},
+                        {"preview_requested_backend": "Pdfium"},
+                        {"preview_backend": "PDFium"}):
+            with self.subTest(changed=changed), self.assertRaises(AssertionError):
+                assert_partial_default({**document, **changed}, renderer)
+        for wrong in (None, {**renderer, "age_ms": 501},
+                      {"age_ms": 0, "value": {"ready": True, "partial": False}},
+                      {"age_ms": 0, "value": {"ready": False, "partial": True}}):
+            with self.subTest(renderer=wrong), self.assertRaises(AssertionError):
+                assert_partial_default(document, wrong)
+
+    def test_zoom_checks_rendered_scale_and_accumulation_not_just_percentage(self):
+        from desktop_ui_partial_journeys import assert_zoom_geometry
+        baseline = {"zoom": 1, "paper_scale": 1.5}
+        renderer = self.observation()
+        renderer["value"].update(zoom=1.1, paper_scale=1.65)
+        assert_zoom_geometry(renderer, baseline, 1.1)
+        for changed in ({"paper_scale": 1.501}, {"zoom": 1.001},
+                        {"paper_scale": None}, {"paper_scale": float("nan")},
+                        {"paper_scale": True}, {"ready": False}):
+            with self.subTest(changed=changed), self.assertRaises(AssertionError):
+                assert_zoom_geometry({"age_ms": 0, "value": {**renderer["value"], **changed}}, baseline, 1.1)
+        with self.assertRaises(AssertionError):
+            assert_zoom_geometry({**renderer, "age_ms": 501}, baseline, 1.1)
+
+
+class HarperMathProseContract(unittest.TestCase):
+    def observation(self, locations=None):
+        from desktop_ui_journeys import fingerprint
+        locations = [] if locations is None else locations
+        source = "Correct mathematical prose.\n"
+        path = Path("/private/tmp/harper-fixture/prose.typ")
+        return source, path, {
+            "path": str(path), "source_fingerprint": fingerprint(source),
+            "source_bytes": len(source.encode("utf-8")), "writing_current": True,
+            "writing_pending": False, "writing_count": len(locations),
+            "writing_locations": locations, "writing_lines": [value[0] for value in locations],
+            "writing_paths": [str(path)] * len(locations), "writing_fingerprint": "published",
+        }
+
+    def test_journey_is_registered_and_uses_both_checked_in_grammatical_fixtures(self):
+        from desktop_ui_tex_journeys import TEX_JOURNEYS, TexJourneys
+        self.assertIn("harper_math_prose", TEX_JOURNEYS)
+        self.assertTrue(callable(TexJourneys.harper_math_prose))
+        for suffix in ("typ", "tex"):
+            source = (Path(__file__).resolve().parent.parent / "manual-tests" /
+                      ("harper-math-prose." + suffix)).read_text()
+            self.assertIn("well-posedness", source)
+            self.assertIn("ill-posedness", source)
+            self.assertIn("nonautonomous", source)
+            self.assertIn("x = y,", source)
+            self.assertIn("z = x;", source)
+            self.assertNotIn("misspelld", source)
+            self.assertNotIn("This is the the", source)
+
+    def test_an_idle_old_writing_result_cannot_pass_freshness(self):
+        from desktop_ui_tex_journeys import harper_fresh
+        source, path, document = self.observation()
+        self.assertTrue(harper_fresh(document, source, path, []))
+        for field, wrong in (("writing_current", False), ("writing_pending", True),
+                             ("source_fingerprint", "old-source"), ("source_bytes", 0),
+                             ("path", str(path.parent))):
+            with self.subTest(field=field):
+                self.assertFalse(harper_fresh({**document, field: wrong}, source, path, []))
+
+    def test_false_positive_wrong_column_or_generated_source_cannot_pass(self):
+        from desktop_ui_tex_journeys import harper_fresh
+        locations = [[34, 26], [35, 9]]
+        source, path, document = self.observation(locations)
+        self.assertTrue(harper_fresh(document, source, path, locations))
+        for field, wrong in (("writing_count", 3), ("writing_lines", [34, 34]),
+                             ("writing_locations", [[34, 25], [35, 9]]),
+                             ("writing_paths", [str(path), "/private/tmp/.tiptoptyp/generated.typ"])):
+            with self.subTest(field=field):
+                self.assertFalse(harper_fresh({**document, field: wrong}, source, path, locations))
+
+    def test_clearing_or_changing_any_stale_diagnostic_field_is_rejected(self):
+        from desktop_ui_tex_journeys import assert_harper_stale
+        _, _, previous = self.observation([[34, 26], [35, 9]])
+        stale = {**previous, "writing_pending": True, "writing_current": False}
+        assert_harper_stale(stale, previous)
+        for field, wrong in (("writing_count", 0), ("writing_fingerprint", "empty"),
+                             ("writing_lines", []), ("writing_locations", []),
+                             ("writing_paths", []), ("writing_current", True),
+                             ("writing_pending", False)):
+            with self.subTest(field=field):
+                with self.assertRaises(AssertionError):
+                    assert_harper_stale({**stale, field: wrong}, previous)
+
+    def test_open_uses_the_real_file_path_and_requires_source_keyboard_ownership(self):
+        from desktop_ui_tex_journeys import TexJourneys
+        journey = TexJourneys()
+        path = Path("/private/tmp/harper-fixture/prose.tex")
+        actions = []
+        journey.focus_document_window = lambda: actions.append(("focus",))
+        journey.key = lambda *args: actions.append(("key", *args))
+        journey.native = lambda *args: actions.append(args)
+        journey.click = lambda *args: actions.append(("click", *args))
+
+        def wait(description, predicate, **kwargs):
+            if description == "named Harper fixture opened":
+                self.assertFalse(predicate({"path": str(path.parent)}))
+                self.assertTrue(predicate({"path": str(path)}))
+            else:
+                self.assertEqual(description, "Harper fixture owns keyboard")
+                self.assertFalse(predicate({"editor_keyboard_focused": False}))
+                self.assertTrue(predicate({"editor_keyboard_focused": True}))
+            actions.append(("verified", description))
+
+        journey.wait = wait
+        with patch("time.sleep"):
+            journey.open_harper_fixture(path)
+        self.assertEqual(actions, [
+            ("focus",), ("key", 31), ("key", 5, "cmd+shift"), ("key", 0),
+            ("text", str(path)), ("key", 36, "none"), ("ax-press-title", "Open"),
+            ("verified", "named Harper fixture opened"), ("click", "editor.source"),
+            ("verified", "Harper fixture owns keyboard"),
+        ])
+
+
 class ClickReadinessContract(unittest.TestCase):
     def test_settles_moving_geometry_before_one_click(self):
         journey = object.__new__(runner.Journey)
@@ -132,6 +322,20 @@ class PreviewContract(unittest.TestCase):
     def test_single_dark_transform(self):
         runner.assert_tinymist_palette(self.observation(), [[0, 0, 0, 255], [255, 255, 255, 255]])
 
+    def test_both_svg_modes_bypass_only_the_exact_identity_palette(self):
+        for partial in (False, True):
+            with self.subTest(partial=partial):
+                state = {"age_ms": 0, "value": {"ready": True, "partial": partial,
+                    "filters": ["none"], "background": "rgb(255, 255, 255)",
+                    "slopes": [1, 1, 1], "intercepts": [0, 0, 0]}}
+                runner.assert_tinymist_palette(state,
+                    [[255, 255, 255, 255], [0, 0, 0, 255]])
+                for palette in ([[254, 255, 255, 255], [0, 0, 0, 255]],
+                                [[255, 255, 255, 255], [0, 0, 1, 255]],
+                                [[0, 0, 0, 255], [255, 255, 255, 255]]):
+                    with self.assertRaisesRegex(AssertionError, "appropriate"):
+                        runner.assert_tinymist_palette(state, palette)
+
     def test_double_inversion_cannot_pass(self):
         state = self.observation()
         state["value"]["filters"].append("invert(1)")
@@ -143,8 +347,10 @@ class PreviewContract(unittest.TestCase):
         state["age_ms"] = 501
         with self.assertRaisesRegex(AssertionError, "stale"):
             runner.assert_tinymist_palette(state, [[0, 0, 0, 255], [255, 255, 255, 255]])
+        wrong_paper = self.observation()
+        wrong_paper["value"]["filters"] = ["none"]
         with self.assertRaisesRegex(AssertionError, "paper"):
-            runner.assert_tinymist_palette(self.observation(), [[255, 255, 255, 255], [0, 0, 0, 255]])
+            runner.assert_tinymist_palette(wrong_paper, [[255, 255, 255, 255], [0, 0, 0, 255]])
 
 
 class ConcurrentRecordingContract(unittest.TestCase):
@@ -270,6 +476,69 @@ class FailureObservationContract(unittest.TestCase):
         })
         self.assertEqual(result["failure"], str(original))
         self.assertFalse(result["passed"])
+
+
+class SettingsHelpToolOptionsContract(unittest.TestCase):
+    def journey(self, source="unchanged"):
+        from desktop_ui_journeys import EditorJourneys
+        journey = EditorJourneys()
+        actions = []
+        journey.click = lambda target: actions.append(("click", target))
+        journey.help_target = lambda target, scroll_down=False: actions.append(("visible", target))
+        state = {"settings_help_visible": True, "settings_visible": True,
+                 "source_fingerprint": source}
+        journey.wait = lambda description, predicate: self.assertTrue(predicate(state), description)
+        return journey, actions
+
+    def test_each_reference_is_opened_by_a_real_click_and_requires_its_option_label(self):
+        journey, actions = self.journey()
+        journey.help_tool_options("unchanged")
+        for tool in ("typst", "tinymist", "tectonic", "texlab", "badness", "tex-fmt"):
+            header = "settings.help.tool." + tool
+            self.assertEqual(actions.count(("click", header)), 2)
+            self.assertIn(("visible", "settings.help.option." + tool + ".0"), actions)
+            self.assertIn(("visible", "settings.help.option." + tool + ".9"), actions)
+        self.assertEqual(actions[0], ("visible", "settings.help.tools"))
+        self.assertEqual(actions[1], ("click", "settings.help.tools"))
+        self.assertEqual(actions[-1], ("click", "settings.help.tools"))
+
+    def test_help_visibility_rejects_old_clipped_and_disabled_observations(self):
+        from desktop_ui_journeys import help_target_visible
+        name = "settings.help.option.tex-fmt.0"
+        state = {"scrolls": {"settings.help": {"frame": 10}},
+                 "targets": {name: {"frame": 10, "age_ms": 0, "enabled": True}}}
+        self.assertTrue(help_target_visible(state, name))
+        for field, value in (("frame", 9), ("age_ms", 501), ("enabled", False)):
+            with self.subTest(field=field):
+                changed = {**state, "targets": {name: {**state["targets"][name], field: value}}}
+                self.assertFalse(help_target_visible(changed, name))
+        self.assertFalse(help_target_visible({**state, "targets": {}}, name))
+        self.assertFalse(help_target_visible({**state, "scrolls": {}}, name))
+
+    def test_an_offscreen_option_requires_a_real_wheel_before_it_can_pass(self):
+        from desktop_ui_journeys import EditorJourneys
+        journey = EditorJourneys()
+        name = "settings.help.option.tex-fmt.0"
+        state = {"scrolls": {"settings.help": {"frame": 10, "x": 250, "y": 280}},
+                 "targets": {name: {"frame": 9, "age_ms": 0, "enabled": True}}}
+        actions = []
+        journey.snapshot = lambda: state
+
+        def native(*args):
+            actions.append(args)
+            if args[0] == "wheel":
+                state["scrolls"]["settings.help"]["frame"] = 11
+                state["targets"][name]["frame"] = 11
+
+        journey.native = native
+        with patch("time.sleep"):
+            journey.help_target(name, scroll_down=True)
+        self.assertEqual(actions, [("move", 250, 280), ("wheel", 250, 280, -4)])
+
+    def test_opening_a_reference_cannot_pass_if_it_changes_source(self):
+        journey, _ = self.journey("edited")
+        with self.assertRaises(AssertionError):
+            journey.help_tool_options("unchanged")
 
 
 class SettingsSectionContract(unittest.TestCase):

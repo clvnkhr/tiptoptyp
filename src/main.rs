@@ -56,6 +56,9 @@ mod performance;
 mod popup_window;
 mod presentation;
 mod preview;
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+mod preview_zoom_snapshot;
 mod private_workspace;
 mod process;
 mod project_index;
@@ -70,6 +73,7 @@ mod shortcuts;
 mod snippets;
 mod synctex;
 mod syntax_theme;
+mod table_sampling;
 mod terminal;
 #[cfg(test)]
 #[allow(unsafe_code)]
@@ -84,6 +88,7 @@ mod tool_command;
 mod toolchain;
 mod unicode_fonts;
 mod viewport_fonts;
+mod window_background;
 mod window_host;
 mod window_logo;
 mod window_policy;

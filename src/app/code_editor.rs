@@ -98,15 +98,15 @@ pub(crate) fn highlight_job_with_mitex(
         .set_rainbow_brackets(settings.rainbow_brackets);
     cache.typst.set_rainbow_brackets(settings.rainbow_brackets);
     cache.typst.set_mitex_dollars(mitex_dollars);
-    let definitions =
-        settings.highlight_definitions && matches!(extension, "typ" | "typ-code" | "tex");
+    let local_uses =
+        settings.highlight_local_uses && matches!(extension, "typ" | "typ-code" | "tex");
     let accent = crate::theme::palette(ui.ctx()).accent;
     cache
         .generic
-        .set_decorations(definitions, &settings.highlight_rules, accent);
+        .set_decorations(local_uses, &settings.highlight_rules, accent);
     cache
         .typst
-        .set_decorations(definitions, &settings.highlight_rules, accent);
+        .set_decorations(local_uses, &settings.highlight_rules, accent);
     let path = format!("source.{extension}");
     let Highlight { generic, typst, .. } = &mut *cache;
     if extension == "typ" {

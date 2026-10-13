@@ -7334,6 +7334,8 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 name = "tiptoptyp"
 version = "0.1.0"
 dependencies = [
+ "block2 0.6.2",
+ "dispatch2",
  "eframe",
  "egui_kittest",
  "egui_ltreeview",
@@ -7350,6 +7352,7 @@ dependencies = [
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
+ "objc2-web-kit",
  "pdfium-render",
  "portable-pty",
  "pulldown-cmark",

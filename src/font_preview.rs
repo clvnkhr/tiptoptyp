@@ -23,6 +23,8 @@ const MAX_FONT_BYTES: u64 = 32 * 1024 * 1024;
 struct Request {
     path: PathBuf,
     index: u32,
+    text: String,
+    font_size: f32,
     pixels_per_point: f32,
     options: TextOptions,
 }
@@ -109,8 +111,8 @@ fn rasterize(request: &Request) -> Result<RasterizedSample, String> {
     let galley = fonts
         .with_pixels_per_point(request.pixels_per_point)
         .layout_no_wrap(
-            SAMPLE_TEXT.into(),
-            egui::FontId::proportional(SAMPLE_SIZE),
+            request.text.clone(),
+            egui::FontId::proportional(request.font_size),
             egui::Color32::WHITE,
         );
     let bounds = galley.rect.union(galley.mesh_bounds);
@@ -187,6 +189,8 @@ pub(crate) fn show(ui: &mut egui::Ui, slot_name: &str, family: &FontFamily) -> b
     let request = Request {
         path: face.path.clone(),
         index: face.index,
+        text: SAMPLE_TEXT.into(),
+        font_size: SAMPLE_SIZE,
         pixels_per_point: ui.ctx().pixels_per_point().clamp(0.5, 8.0),
         options,
     };
@@ -227,6 +231,88 @@ pub(crate) fn show(ui: &mut egui::Ui, slot_name: &str, family: &FontFamily) -> b
     }
 }
 
+// At most ten consecutive rows fit in the popup, including partially visible
+// rows. Reusing sixteen slots bounds worker and texture ownership as it scrolls.
+const COMPLETION_NAME_SLOTS: usize = 16;
+
+pub(crate) fn paint_name(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    row: usize,
+    family: &FontFamily,
+    font_size: f32,
+) -> bool {
+    let mut ready = true;
+    let mut painted = false;
+    if let Some(face) = family.primary_face() {
+        let mut options = ui.visuals().text_options;
+        options.max_texture_side = 1024;
+        let request = Request {
+            path: face.path.clone(),
+            index: face.index,
+            text: family.name.clone(),
+            font_size,
+            pixels_per_point: ui.ctx().pixels_per_point().clamp(0.5, 8.0),
+            options,
+        };
+        let previews = state(ui.ctx());
+        let mut previews = previews.lock().unwrap();
+        let slot = previews
+            .slots
+            .entry((
+                ui.ctx().viewport_id(),
+                format!("completion-name-{}", row % COMPLETION_NAME_SLOTS),
+            ))
+            .or_default();
+        slot.update(ui.ctx(), &request);
+        if let Some((_, sample)) = slot.samples.front().filter(|(key, _)| key == &request) {
+            let mut mesh = sample.mesh.clone();
+            let origin = egui::vec2(rect.left(), rect.center().y - sample.size.y / 2.0);
+            mesh.translate((origin * request.pixels_per_point).round() / request.pixels_per_point);
+            for vertex in &mut mesh.vertices {
+                vertex.color = ui.visuals().text_color();
+            }
+            ui.painter()
+                .with_clip_rect(rect.intersect(ui.clip_rect()))
+                .add(mesh);
+            painted = true;
+        } else {
+            // An unreadable font still displays its name and must not hold a
+            // framebuffer capture or schedule another failed request forever.
+            ready = slot.error.is_some();
+        }
+    }
+    if !painted {
+        ui.painter()
+            .with_clip_rect(rect.intersect(ui.clip_rect()))
+            .text(
+                rect.left_center(),
+                egui::Align2::LEFT_CENTER,
+                &family.name,
+                egui::FontId::proportional(font_size),
+                ui.visuals().text_color(),
+            );
+    }
+    ready
+}
+
+#[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+pub(crate) fn name_is_ready(context: &egui::Context, row: usize, name: &str) -> bool {
+    let previews = state(context);
+    let previews = previews.lock().unwrap();
+    previews
+        .slots
+        .get(&(
+            context.viewport_id(),
+            format!("completion-name-{}", row % COMPLETION_NAME_SLOTS),
+        ))
+        .is_some_and(|slot| {
+            slot.samples.front().is_some_and(|(request, _)| {
+                slot.requested.as_ref() == Some(request) && request.text == name
+            })
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,6 +338,8 @@ mod tests {
                 let sample = rasterize(&Request {
                     path: face.path.clone(),
                     index: face.index,
+                    text: SAMPLE_TEXT.into(),
+                    font_size: SAMPLE_SIZE,
                     pixels_per_point,
                     options: TextOptions {
                         max_texture_side: 1024,
@@ -365,5 +453,66 @@ mod tests {
         assert_eq!(live_slot_count(&context), 1);
         assert_eq!(dispose_viewport(&context, egui::ViewportId::ROOT), 1);
         assert_eq!(live_slot_count(&context), 0);
+    }
+    #[test]
+    fn completion_names_reuse_bounded_private_atlases_without_idle_work() {
+        let context = egui::Context::default();
+        let directory = tempfile::tempdir().unwrap();
+        let family = fixture(directory.path(), egui::FontFamily::Monospace);
+        let definitions = egui::FontDefinitions::default();
+        context.set_fonts(definitions.clone());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut ready = false;
+        while !ready && Instant::now() < deadline {
+            ready = true;
+            context
+                .run_ui(Default::default(), |ui| {
+                    for index in 0..64 {
+                        ready &= paint_name(
+                            ui,
+                            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(290.0, 20.0)),
+                            index,
+                            &family,
+                            14.0,
+                        );
+                    }
+                    ui.ctx()
+                        .fonts(|fonts| assert_eq!(fonts.definitions(), &definitions));
+                })
+                .drop_without_applying_deltas();
+            if !ready {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+        assert!(ready, "font names did not finish rendering");
+        let previews = state(&context);
+        let previews = previews.lock().unwrap();
+        assert_eq!(previews.slots.len(), COMPLETION_NAME_SLOTS);
+        for slot in previews.slots.values() {
+            assert!(!slot.job.is_running());
+            assert_eq!(slot.samples.len(), 1);
+            let request = &slot.samples.front().unwrap().0;
+            assert_eq!(request.text, family.name);
+            assert_eq!(request.font_size, 14.0);
+        }
+        drop(previews);
+        let output = context.run_ui(Default::default(), |ui| {
+            assert!(paint_name(
+                ui,
+                egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(290.0, 20.0)),
+                0,
+                &family,
+                14.0
+            ));
+        });
+        assert!(
+            output.textures_delta.set.is_empty(),
+            "cached names must not upload textures again"
+        );
+        output.drop_without_applying_deltas();
+        assert_eq!(
+            dispose_viewport(&context, egui::ViewportId::ROOT),
+            COMPLETION_NAME_SLOTS
+        );
     }
 }

@@ -141,6 +141,9 @@ impl PreviewRefresh {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PreviewOptions {
+    /// Low-level service option defaults to full SVG rendering. The app
+    /// explicitly requests buffered partial rendering for its Typst default.
+    pub partial_rendering: bool,
     pub invert_colors: InvertColors,
     pub refresh: PreviewRefresh,
 }
@@ -160,9 +163,7 @@ impl PreviewOptions {
             "--preview-mode=document".to_owned(),
             format!("--invert-colors={}", self.invert_colors.as_arg()),
         ]);
-        // Keep complete document rendering until viewport refill and native
-        // interaction have been verified for partial rendering.
-        arguments.push("--partial-rendering=false".to_owned());
+        arguments.push(format!("--partial-rendering={}", self.partial_rendering));
         // This is a native application: opening the system browser would be a
         // surprising side effect and could expose a stale preview tab.
         arguments.push("--no-open".to_owned());
@@ -185,10 +186,113 @@ impl PreviewOptions {
     }
 }
 
+/// Editable defaults for bundled Tinymist 0.15.2. Formatting and export retain
+/// the server defaults. Lint stays off, with an on-type trigger ready for opt-in;
+/// this client does not currently send explicit save notifications.
+pub(crate) fn default_server_configuration() -> Value {
+    json!({
+        "formatterMode": "typstyle",
+        "formatterPrintWidth": 120,
+        "formatterIndentSize": 2,
+        "formatterProseWrap": false,
+        "exportPdf": "never",
+        "lint": { "enabled": false, "when": "onType" },
+    })
+}
+
+/// Catch invalid known choices before restarting the server. Other server
+/// keys are left available to custom binaries with additional capabilities.
+pub(crate) fn validate_server_configuration(value: &Value) -> std::result::Result<(), String> {
+    let object = value
+        .as_object()
+        .ok_or("Configuration must be a JSON object")?;
+    if object.contains_key("tinymist") {
+        return Err("Use flat Tinymist configuration keys, e.g. {\"formatterPrintWidth\":100}, without a tinymist wrapper".into());
+    }
+    for key in ["preview", "compileStatus", "customizedShowDocument"] {
+        if object.contains_key(key) {
+            return Err(format!(
+                "{key} is managed by the app; use the preview controls instead"
+            ));
+        }
+    }
+    for (key, allowed) in [
+        ("formatterMode", &["typstyle", "typstfmt", "disable"][..]),
+        ("exportPdf", &["never", "onSave", "onType"][..]),
+    ] {
+        if let Some(v) = object.get(key)
+            && !v.as_str().is_some_and(|s| allowed.contains(&s))
+        {
+            return Err(format!("{key}: choose {}", allowed.join(", ")));
+        }
+    }
+    for key in ["formatterProseWrap", "systemFonts"] {
+        if object.get(key).is_some_and(|v| !v.is_boolean()) {
+            return Err(format!("{key}: choose true or false"));
+        }
+    }
+    for key in ["formatterPrintWidth", "formatterIndentSize"] {
+        if object
+            .get(key)
+            .is_some_and(|v| !v.as_u64().is_some_and(|n| n <= u32::MAX as u64))
+        {
+            return Err(format!("{key}: use a non-negative whole number"));
+        }
+    }
+    if let Some(args) = object.get("typstExtraArgs") {
+        compiler_input_arguments(args)?;
+    }
+    if let Some(lint) = object.get("lint") {
+        let lint = lint
+            .as_object()
+            .ok_or("lint: use an object, e.g. {\"enabled\":true}")?;
+        if lint.get("enabled").is_some_and(|v| !v.is_boolean()) {
+            return Err("lint.enabled: choose true or false".into());
+        }
+        if lint
+            .get("when")
+            .is_some_and(|v| !matches!(v.as_str(), Some("never" | "onSave" | "onType")))
+        {
+            return Err("lint.when: choose never, onSave or onType".into());
+        }
+    }
+    Ok(())
+}
+
+/// Accept only template inputs here: a positional path or missing argument can
+/// otherwise consume the app's appended entry as Typst's output filename.
+fn compiler_input_arguments(value: &Value) -> std::result::Result<Vec<Value>, String> {
+    let error =
+        "typstExtraArgs: use --input=KEY=VALUE options only; the app supplies the entry document";
+    let arguments = value.as_array().ok_or(error)?;
+    let mut arguments = arguments.iter();
+    let mut inputs = Vec::new();
+    while let Some(argument) = arguments.next() {
+        let argument = argument.as_str().ok_or(error)?;
+        let input = if argument == "--input" {
+            arguments.next().and_then(Value::as_str).ok_or(error)?
+        } else {
+            argument.strip_prefix("--input=").ok_or(error)?
+        };
+        if input.contains('\0')
+            || !input
+                .split_once('=')
+                .is_some_and(|(key, _)| !key.is_empty())
+        {
+            return Err(error.into());
+        }
+        // Normalize two-token forms so a dash-leading key cannot be mistaken
+        // for another compiler flag by the upstream argument parser.
+        inputs.push(json!(format!("--input={input}")));
+    }
+    Ok(inputs)
+}
+
 /// Configuration for one Tinymist process.
 #[derive(Debug, Clone)]
 pub struct TinymistConfig {
     pub(crate) command: crate::tool_command::CommandCustomization,
+    pub(crate) configuration: Value,
     pub workspace_root: PathBuf,
     pub preview: PreviewOptions,
     /// Whether this LSP session should also launch Tinymist's interactive
@@ -207,13 +311,16 @@ pub struct TinymistConfig {
 impl TinymistConfig {
     pub fn new(workspace_root: impl Into<PathBuf>) -> Self {
         Self {
-            command: Default::default(),
+            command: crate::tool_command::CommandCustomization::for_tool(
+                crate::toolchain::ToolKind::Tinymist,
+            ),
+            configuration: default_server_configuration(),
             workspace_root: workspace_root.into(),
             preview: PreviewOptions::default(),
             start_preview: true,
             entry_path: None,
             program: PathBuf::from("tinymist"),
-            arguments: vec![OsString::from("lsp")],
+            arguments: Vec::new(),
             request_timeout_override: None,
         }
     }
@@ -252,6 +359,7 @@ impl TinymistConfig {
         arguments: impl IntoIterator<Item = OsString>,
     ) -> Self {
         self.program = program.into();
+        self.command.arguments.clear();
         self.arguments = arguments.into_iter().collect();
         self
     }
@@ -263,9 +371,28 @@ impl TinymistConfig {
     }
 
     fn server_settings(&self) -> Value {
-        let mut settings = self.preview.settings(self.entry_path.as_deref());
-        if let Some(entry_path) = &self.entry_path {
-            settings["typstExtraArgs"] = json!([entry_path.to_string_lossy()]);
+        let mut settings = self.configuration.clone();
+        // Transport, status reporting and entry ownership belong to the app.
+        // Never let an editor override detach the native preview or redirect it.
+        for (key, value) in self
+            .preview
+            .settings(self.entry_path.as_deref())
+            .as_object()
+            .unwrap()
+        {
+            settings[key] = value.clone();
+        }
+        if self.entry_path.is_some() || settings.get("typstExtraArgs").is_some() {
+            let mut args = settings
+                .get("typstExtraArgs")
+                .map(compiler_input_arguments)
+                .transpose()
+                .expect("configuration validated before starting the server")
+                .unwrap_or_default();
+            if let Some(entry_path) = &self.entry_path {
+                args.push(json!(entry_path.to_string_lossy()));
+            }
+            settings["typstExtraArgs"] = Value::Array(args);
         }
         settings
     }
@@ -1030,6 +1157,7 @@ impl Session {
             .unwrap_or("workspace")
             .to_owned();
 
+        validate_server_configuration(&config.configuration)?;
         let mut command = Command::new(&config.program);
         command.args(&config.arguments).current_dir(&root);
         config
@@ -2689,9 +2817,9 @@ mod tests {
             PathBuf::from("/workspace/assets/type"),
         ];
         let config = TinymistConfig::new("/workspace").with_font_paths(&paths);
-        assert_eq!(config.arguments[0], OsString::from("lsp"));
-        assert_eq!(config.arguments[1], OsString::from("--font-path"));
-        assert_eq!(config.arguments[2], std::env::join_paths(paths).unwrap());
+        assert_eq!(config.command.arguments, "lsp");
+        assert_eq!(config.arguments[0], OsString::from("--font-path"));
+        assert_eq!(config.arguments[1], std::env::join_paths(paths).unwrap());
     }
 
     #[test]
@@ -2704,6 +2832,85 @@ mod tests {
         assert_eq!(
             settings["preview"]["browsing"]["args"][0],
             json!("/workspace/main.typ")
+        );
+    }
+
+    #[test]
+    fn editable_configuration_preserves_preview_transport_and_designated_entry() {
+        let entry = PathBuf::from("/workspace/main.typ");
+        let mut config = TinymistConfig::new("/workspace").with_entry_path(&entry);
+        config.configuration = json!({
+            "formatterPrintWidth": 100,
+            "formatterIndentSize": 4,
+            "typstExtraArgs": ["--input=mode=draft"],
+        });
+        validate_server_configuration(&config.configuration).unwrap();
+        let settings = config.server_settings();
+        assert_eq!(settings["formatterPrintWidth"], 100);
+        assert_eq!(settings["formatterIndentSize"], 4);
+        assert_eq!(
+            settings["typstExtraArgs"],
+            json!(["--input=mode=draft", entry])
+        );
+        assert_eq!(settings["preview"]["browsing"]["args"][0], json!(entry));
+        assert_eq!(settings["compileStatus"], "enable");
+        assert_eq!(settings["customizedShowDocument"], false);
+        let args = settings["preview"]["browsing"]["args"].as_array().unwrap();
+        assert!(args.iter().any(|arg| arg == "--no-open"));
+        assert!(
+            args.iter()
+                .any(|arg| arg == "--data-plane-host=127.0.0.1:0")
+        );
+    }
+
+    #[test]
+    fn server_configuration_rejects_invalid_choices_and_managed_keys() {
+        validate_server_configuration(&default_server_configuration()).unwrap();
+        for (value, field) in [
+            (json!([]), "JSON object"),
+            (json!({"formatterMode":"unknown"}), "formatterMode"),
+            (json!({"exportPdf":"invalid"}), "exportPdf"),
+            (json!({"formatterProseWrap":"sentence"}), "true or false"),
+            (json!({"systemFonts":0}), "systemFonts"),
+            (json!({"formatterPrintWidth":-1}), "formatterPrintWidth"),
+            (json!({"formatterIndentSize":1.5}), "formatterIndentSize"),
+            (json!({"typstExtraArgs":[1]}), "KEY=VALUE"),
+            (json!({"lint":{"enabled":"yes"}}), "lint.enabled"),
+            (json!({"lint":{"when":"invalid"}}), "lint.when"),
+            (json!({"typstExtraArgs":["other.typ"]}), "entry document"),
+            (json!({"typstExtraArgs":["--input"]}), "KEY=VALUE"),
+            (json!({"typstExtraArgs":["--input=invalid"]}), "KEY=VALUE"),
+            (json!({"typstExtraArgs":["--input==value"]}), "KEY=VALUE"),
+            (json!({"tinymist":{"preview":{}}}), "flat Tinymist"),
+            (
+                json!({"tinymist":{"formatterPrintWidth":100}}),
+                "flat Tinymist",
+            ),
+            (json!({"preview":{}}), "managed by the app"),
+            (json!({"compileStatus":"disable"}), "managed by the app"),
+            (json!({"customizedShowDocument":true}), "managed by the app"),
+        ] {
+            assert!(
+                validate_server_configuration(&value)
+                    .unwrap_err()
+                    .contains(field)
+            );
+        }
+        validate_server_configuration(&json!({"futureCustomSetting":true})).unwrap();
+        validate_server_configuration(&json!({"lint":{"when":"never"}})).unwrap();
+        assert_eq!(
+            compiler_input_arguments(&json!([
+                "--input",
+                "mode=draft",
+                "--input=empty=",
+                "--input",
+                "-key=x=y"
+            ]))
+            .unwrap(),
+            json!(["--input=mode=draft", "--input=empty=", "--input=-key=x=y"])
+                .as_array()
+                .unwrap()
+                .clone()
         );
     }
 
@@ -2753,6 +2960,27 @@ mod tests {
         assert_eq!(settings["preview"]["refresh"], "onType");
         assert_eq!(settings["customizedShowDocument"], false);
         assert_eq!(settings["compileStatus"], "enable");
+    }
+
+    #[test]
+    fn partial_preview_is_explicit_and_does_not_change_complete_defaults() {
+        for partial_rendering in [false, true] {
+            let options = PreviewOptions {
+                partial_rendering,
+                ..Default::default()
+            };
+            let args = options.command_line(Some(Path::new("/workspace/main.typ")));
+            assert_eq!(args.first().unwrap(), "/workspace/main.typ");
+            assert_eq!(
+                args.iter()
+                    .filter(|arg| arg.starts_with("--partial-rendering="))
+                    .count(),
+                1
+            );
+            assert!(args.contains(&format!("--partial-rendering={partial_rendering}")));
+            assert_eq!(options.settings(None)["preview"]["refresh"], "onType");
+        }
+        assert!(!PreviewOptions::default().partial_rendering);
     }
 
     #[test]
@@ -3024,7 +3252,7 @@ mod tests {
             .expect("real Tinymist test requires an executable; set TIPTOPTYP_TEST_TINYMIST");
 
         let project = tempfile::tempdir().unwrap();
-        let source = "#let answer=40+2\n#answer\n";
+        let source = "#let answer=40+2\n#let block={\n let value=answer\n value\n}\n#answer\n";
         let unsaved =
             UnsavedTextDocument::create(project.path(), project.path(), "Untitled.typ", source)
                 .unwrap();
@@ -3034,6 +3262,7 @@ mod tests {
         let sidecar = TinymistSidecar::new(crate::worker::RepaintTarget::test());
         let mut config = TinymistConfig::new(project.path()).with_executable(program.clone());
         config.start_preview = false;
+        config.configuration["formatterIndentSize"] = json!(4);
         let generation = sidecar.start_workspace(config).unwrap();
         let version = 1;
         let document = unsaved.text_document(version, source);
@@ -3112,9 +3341,21 @@ mod tests {
             );
             thread::sleep(Duration::from_millis(10));
         };
+        let edits = edits.expect("formatting response must contain edits");
         assert!(
-            edits.is_some_and(|edits| !edits.is_empty()),
+            !edits.is_empty(),
             "real Tinymist returned no edits for deliberately unformatted source"
+        );
+        let formatted = tiptoptyp_core::text::apply_text_edits(
+            source,
+            &edits,
+            [tiptoptyp_core::text::ScalarOffset::new(0); 2],
+        )
+        .unwrap();
+        assert!(
+            formatted.text.contains("\n    let value = answer\n"),
+            "the editable Tinymist indentation must affect real formatting: {}",
+            formatted.text
         );
 
         sidecar.did_close(generation, uri).unwrap();

@@ -7,6 +7,7 @@ pub(super) struct WebviewStyle {
     pub(super) palette: (Color32, Color32),
     hover: Stroke,
     focus: Stroke,
+    zoom_snapshot: bool,
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -23,11 +24,12 @@ impl WebviewStyle {
             )
         };
         format!(
-            "window.tiptoptypSetPalette?.({}, {}, {}, {});",
+            "window.tiptoptypSetPalette?.({}, {}, {}, {}); window.tiptoptypZoomSnapshot?.configure({});",
             serde_json::json!([self.palette.0.r(), self.palette.0.g(), self.palette.0.b()]),
             serde_json::json!([self.palette.1.r(), self.palette.1.g(), self.palette.1.b()]),
             serde_json::json!(css(self.hover)),
             serde_json::json!(css(self.focus)),
+            self.zoom_snapshot,
         )
     }
 }
@@ -41,6 +43,7 @@ impl EditorApp {
             palette: self.preview_palette(context, self.preview.dark),
             hover: visuals.widgets.hovered.bg_stroke,
             focus: visuals.selection.stroke,
+            zoom_snapshot: self.settings.preview_zoom_snapshot && cfg!(target_os = "macos"),
         }
     }
 }
@@ -76,6 +79,8 @@ impl EditorApp {
     pub(super) fn discard_webview(&mut self) {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         self.release_webview_focus();
+        #[cfg(target_os = "macos")]
+        self.webview_snapshot.invalidate();
         #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
         crate::desktop_test::reset_renderer();
         #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -193,6 +198,7 @@ impl EditorApp {
         if self.table_editor.is_none() || self.document_workflow.modal().is_some() {
             return;
         }
+        self.prepare_table_samples(context);
         let theme = context.theme();
         let style = context.style_of(theme);
         let shortcuts = self.settings.effective_shortcuts();
@@ -271,6 +277,10 @@ impl EditorApp {
         match requested_action {
             Some(TableEditorUiAction::Cancel) => self.cancel_table_editor(context),
             Some(TableEditorUiAction::Apply) => {
+                if let Err(error) = self.validate_table_sample_locks() {
+                    self.table_editor.as_mut().unwrap().set_error(error);
+                    return;
+                }
                 let mut dialog = self.table_editor.take().expect("table editor exists");
                 match table_workbench::prepare_source_edit(
                     self.document().source(),
@@ -291,6 +301,8 @@ impl EditorApp {
                             kind: NoticeKind::Success,
                         });
                         self.table_edit_events.clear();
+                        self.table_samples.reset();
+                        crate::table_sampling::clear(context, child);
                         ChildViewHost::close(context, "tiptoptyp-table-editor");
                         crate::window_host::return_focus(context);
                     }
@@ -827,6 +839,7 @@ impl EditorApp {
             || self.packages_visible
             || self.rename_dialog.is_some()
             || self.table_editor.is_some()
+            || self.latexdiff.is_some()
             || matches!(self.app_popup, Some(ref popup) if !matches!(popup, AppPopup::GitChunk { .. }))
             || self.document_workflow.modal().is_some();
         if blocked_by_overlay {
@@ -1489,6 +1502,9 @@ impl EditorApp {
             let builder = wry::WebViewBuilder::new()
                 .with_focused(false)
                 .with_url(&url)
+                .with_initialization_script("window.tiptoptypCaptureZoomSnapshot = request => window.ipc?.postMessage(JSON.stringify({type:'preview-zoom-snapshot', ...request}));")
+                .with_initialization_script(include_str!("../preview_zoom_snapshot.js"))
+                .with_initialization_script(include_str!("../preview_snapshot_buffer.js"))
                 .with_initialization_script(include_str!("../preview_navigation.js"))
                 .with_initialization_script(palette_script)
                 .with_on_page_load_handler(move |event, _url| {
@@ -1555,7 +1571,10 @@ impl EditorApp {
                     // leave the parent as the keyboard owner after construction.
                     let _ = webview.focus_parent();
                     #[cfg(target_os = "macos")]
-                    crate::native_window::enable_native_webview_magnification(&webview);
+                    {
+                        crate::native_window::enable_native_webview_magnification(&webview);
+                        self.webview_snapshot.bind(&webview);
+                    }
                     self.webview = Some(webview);
                     self.webview_parent = Some(context.viewport_id());
                     self.webview_url = Some(url.clone());
@@ -1578,6 +1597,8 @@ impl EditorApp {
             &url,
             self.webview_reload_pending,
         ) {
+            #[cfg(target_os = "macos")]
+            self.webview_snapshot.allowed(false);
             if let Some(webview) = &self.webview
                 && let Err(error) = webview.load_url(&url)
             {
@@ -1589,8 +1610,18 @@ impl EditorApp {
             self.webview_style = None;
         }
         let style = self.preview_webview_style(context);
+        #[cfg(target_os = "macos")]
+        self.webview_snapshot
+            .allowed(visible && style.zoom_snapshot);
         if let Some(webview) = &self.webview {
             if self.webview_style != Some(style) {
+                #[cfg(target_os = "macos")]
+                if self
+                    .webview_style
+                    .is_some_and(|previous| previous.palette != style.palette)
+                {
+                    self.webview_snapshot.retire_image();
+                }
                 let script = style.script();
                 if webview.evaluate_script(&script).is_ok() {
                     self.webview_style = Some(style);
@@ -1610,6 +1641,10 @@ impl EditorApp {
             {
                 self.fail_local_webview(format!("Could not position the vector preview: {error}"));
                 return false;
+            }
+            #[cfg(target_os = "macos")]
+            if diff.bounds {
+                self.webview_snapshot.layout(webview);
             }
             if diff.visible
                 && let Err(error) = webview.set_visible(visible)
@@ -1658,6 +1693,8 @@ impl EditorApp {
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     pub(super) fn hide_webview(&mut self) {
+        #[cfg(target_os = "macos")]
+        self.webview_snapshot.allowed(false);
         if self.webview_applied.is_some_and(|applied| !applied.visible) {
             return;
         }

@@ -38,6 +38,18 @@ impl ToolKind {
         }
     }
 
+    /// Stable process options shown verbatim in Settings. Paths and operation
+    /// toggles are added separately at launch.
+    pub(crate) fn default_arguments(self) -> &'static str {
+        match self {
+            Self::Typst => "watch --diagnostic-format short",
+            Self::Tinymist | Self::Badness => "lsp",
+            Self::Tectonic => "-X compile --untrusted --keep-logs --keep-intermediates",
+            Self::Texlab => "",
+            Self::TexFmt => "--stdin --quiet",
+        }
+    }
+
     pub(crate) fn binary_name(self) -> &'static str {
         match self {
             Self::Typst => "typst",
@@ -118,7 +130,7 @@ impl ToolResolution {
     ) -> Self {
         Self {
             bundled_program: None,
-            command: Default::default(),
+            command: crate::tool_command::CommandCustomization::for_tool(kind),
             kind,
             program,
             origin,

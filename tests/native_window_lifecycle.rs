@@ -24,6 +24,8 @@ fn child(n: u64) -> egui::ViewportId {
 #[derive(Default)]
 struct State {
     identities: HashMap<egui::ViewportId, u64>,
+    #[cfg(target_os = "macos")]
+    blurs: HashMap<egui::ViewportId, native_window::NativeBlur>,
     canceled: usize,
     popup_presented: bool,
     allow_close: bool,
@@ -75,15 +77,68 @@ fn inspect(context: &egui::Context, id: egui::ViewportId, popup: bool, state: &m
     #[cfg(target_os = "macos")]
     {
         use winit::platform::macos::WindowExtMacOS;
-        assert_eq!(window.has_shadow(), !popup);
+        // AppKit intentionally removes shadows in fullscreen, including while
+        // the transition is in flight. Verify the window policy at creation;
+        // the fullscreen journey checks restoration after returning to desktop.
+        if popup || previous_identity.is_none() {
+            assert_eq!(window.has_shadow(), !popup);
+        }
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
         let RawWindowHandle::AppKit(handle) = window.window_handle().unwrap().as_raw() else {
             panic!("expected AppKit window");
         };
         // SAFETY: this callback runs on the main thread and holds the live window.
         let view = unsafe { handle.ns_view.cast::<objc2_app_kit::NSView>().as_ref() };
-        if view.window().unwrap().isOpaque() == popup {
-            state.failure = Some("native opacity does not follow the viewport role".to_owned());
+        assert!(
+            !view.window().unwrap().isOpaque(),
+            "all macOS surfaces retain alpha capability"
+        );
+        if !popup && previous_identity.is_none() {
+            let parent = native_window::NativeWindowHandle::from_owner(window.as_ref()).unwrap();
+            let content = view.window().unwrap().contentView().unwrap();
+            let children = view.subviews();
+            assert!(parent.set_translucent_background());
+            assert!(parent.set_translucent_background());
+            assert_eq!(
+                view.subviews(),
+                children,
+                "native backgrounds must not cover CGL output with decoration children"
+            );
+            assert_eq!(
+                objc2::rc::Retained::as_ptr(&content),
+                objc2::rc::Retained::as_ptr(&view.window().unwrap().contentView().unwrap()),
+                "background configuration cannot replace the rendering view"
+            );
+            let blur = parent
+                .blur_background(false, 8)
+                .expect("native sibling blur");
+            assert!(blur.inspection(&parent).unwrap().1);
+            assert_eq!(view.subviews(), children, "blur cannot be a renderer child");
+            assert!(
+                window.has_shadow(),
+                "attaching blur preserves window shadow"
+            );
+            state.blurs.insert(id, blur);
+            assert_eq!(eframe::window_host::identity(context, id), Some(identity));
+        }
+        if let Some(blur) = state.blurs.get(&id) {
+            let parent = native_window::NativeWindowHandle::from_owner(window.as_ref()).unwrap();
+            assert!(blur.synchronize(&parent, None));
+            let (frame, below, _) = blur.inspection(&parent).unwrap();
+            assert!(
+                below,
+                "lifecycle transitions must keep blur below the renderer"
+            );
+            let renderer_frame = view.frame();
+            assert_eq!(
+                frame,
+                [
+                    renderer_frame.origin.x,
+                    renderer_frame.origin.y,
+                    renderer_frame.size.width,
+                    renderer_frame.size.height
+                ]
+            );
         }
     }
 }
@@ -94,7 +149,7 @@ impl eframe::App for Fixture {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
         }
-        if self.started.elapsed() > Duration::from_secs(20) {
+        if self.started.elapsed() > Duration::from_secs(30) {
             state.failure = Some(format!(
                 "native lifecycle timed out in phase {}; native state {:?}; app active {:?}",
                 self.phase,
@@ -120,6 +175,7 @@ impl eframe::App for Fixture {
             0 if state.identities.len() == 4 && state.popup_presented => {
                 let unique: std::collections::HashSet<_> = state.identities.values().collect();
                 assert_eq!(unique.len(), 4, "native windows must not share ownership");
+                let _ = root.request_inner_size(winit::dpi::LogicalSize::new(640.0, 380.0));
                 root.set_minimized(true);
                 self.phase_started = Instant::now();
                 self.phase = 1;
@@ -139,6 +195,25 @@ impl eframe::App for Fixture {
                 self.phase = 20;
             }
             20 if root.has_focus() => {
+                root.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+                self.phase_started = Instant::now();
+                self.phase = 21;
+            }
+            21 if root.fullscreen().is_some()
+                && self.phase_started.elapsed() > Duration::from_secs(2) =>
+            {
+                root.set_fullscreen(None);
+                self.phase_started = Instant::now();
+                self.phase = 22;
+            }
+            22 if root.fullscreen().is_none()
+                && self.phase_started.elapsed() > Duration::from_secs(2) =>
+            {
+                #[cfg(target_os = "macos")]
+                {
+                    use winit::platform::macos::WindowExtMacOS;
+                    assert!(root.has_shadow(), "window shadow returns after fullscreen");
+                }
                 document.unwrap().focus_window();
                 self.phase = 3;
             }
@@ -170,6 +245,8 @@ impl eframe::App for Fixture {
                 self.phase = 6;
             }
             6 if state.document_closed && document.is_none() => {
+                #[cfg(target_os = "macos")]
+                state.blurs.remove(&child(1));
                 state.settings_visible = false;
                 self.phase = 7;
             }
@@ -314,6 +391,7 @@ fn main() {
             {
                 shared.lock().unwrap().failure = alpha_context_error();
             }
+            native_window::activate_application();
             Ok(Box::new(Fixture {
                 state: shared,
                 started: Instant::now(),
@@ -339,6 +417,6 @@ fn main() {
     assert_eq!(state.canceled, 1);
     assert!(state.document_closed);
     println!(
-        "Native contract passed: distinct owners, stable identities, minimize/restore, focus handoff, minimized close/cancel/commit, Settings hide/reopen, native decorations/buttons/shadow"
+        "Native contract passed: distinct owners, stable identities, sibling blur, fullscreen, minimize/restore, focus handoff, minimized close/cancel/commit, Settings hide/reopen, native decorations/buttons/shadow"
     );
 }

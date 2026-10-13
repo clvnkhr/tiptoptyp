@@ -109,6 +109,7 @@ pub(super) fn show_table_editor_ui(
 ) -> Option<TableEditorUiAction> {
     let rows = dialog.table.row_count();
     let columns = dialog.table.columns;
+    let has_locked = crate::table_sampling::view(ui).is_some_and(|view| !view.locked.is_empty());
     dialog.ui.selection.clamp(rows, columns);
     ui.horizontal(|ui| {
         ui.label(RichText::new("Table editor").size(20.0).strong());
@@ -119,18 +120,18 @@ pub(super) fn show_table_editor_ui(
     );
     ui.add_space(4.0);
     ui.horizontal_wrapped(|ui| {
-        if crate::app::icons::action_button_enabled(ui, dialog.table.can_add_row(), "Add row").clicked() { dialog.table.add_row(); }
-        if crate::app::icons::action_button_enabled(ui, dialog.table.can_add_column(), "Add column").clicked() { dialog.table.add_column(); }
+        if crate::app::icons::action_button_enabled(ui, !has_locked && dialog.table.can_add_row(), "Add row").clicked() { dialog.table.add_row(); }
+        if crate::app::icons::action_button_enabled(ui, !has_locked && dialog.table.can_add_column(), "Add column").clicked() { dialog.table.add_column(); }
         ui.menu_button("Remove…", |ui| {
-            if crate::app::icons::action_button_enabled(ui, rows > 0, "Selected row").clicked() {
+            if crate::app::icons::action_button_enabled(ui, !has_locked && rows > 0, "Selected row").clicked() {
                 dialog.table.remove_row(dialog.ui.selection.focus.0); ui.close();
             }
-            if crate::app::icons::action_button_enabled(ui, columns > 1, "Last column").clicked() {
+            if crate::app::icons::action_button_enabled(ui, !has_locked && columns > 1, "Last column").clicked() {
                 dialog.table.remove_column(); ui.close();
             }
         });
         ui.separator();
-        ui.toggle_value(&mut dialog.ui.importing, "Import Markdown");
+        ui.add_enabled_ui(!has_locked, |ui| ui.toggle_value(&mut dialog.ui.importing, "Import Markdown"));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.label("Keyboard help").on_hover_text("Tab / Shift+Tab: next / previous cell\nAlt+arrows: move between cells\nAlt+Shift+arrows: extend selection\nShift+Space: select row\nCtrl+Space: select column\nCmd/Ctrl+Shift+A: select all cells\nClick row/column headers to select; Shift-click cells to extend.");
         });
@@ -139,6 +140,10 @@ pub(super) fn show_table_editor_ui(
         .ui
         .selection
         .clamp(dialog.table.row_count(), dialog.table.columns);
+    if has_locked {
+        dialog.ui.importing = false;
+        ui.weak("Variable cells are sampled and locked");
+    }
     if dialog.ui.importing {
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.label("Paste one Markdown table, including its header separator. Import replaces this draft, not the source.");
@@ -208,7 +213,7 @@ pub(super) fn show_table_editor_ui(
         } else {
             format!("{} cells selected", selected.len())
         });
-        ui.add_enabled_ui(selected.len() == 1, |ui| {
+        ui.add_enabled_ui(!has_locked && selected.len() == 1, |ui| {
             let cell = focus.unwrap_or((0, 0));
             let (mut rows, mut columns) = dialog.table.span(cell);
             ui.label("Row span");
@@ -395,6 +400,13 @@ pub(super) fn show_table_editor_ui(
                                 .max_height(inner.height())
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
+                                    if let Some(response) = table_samples::locked_cell(
+                                        ui,
+                                        (r, c),
+                                        &dialog.table.cells[r][c],
+                                    ) {
+                                        return response;
+                                    }
                                     ui.add(
                                         egui::TextEdit::multiline(&mut dialog.table.cells[r][c])
                                             .id(id)
@@ -422,8 +434,12 @@ pub(super) fn show_table_editor_ui(
                             .select((r, c), ui.input(|input| input.modifiers.shift));
                     }
                     if wants_focus {
-                        response.request_focus();
-                        ui.scroll_to_rect(rect, Some(Align::Center));
+                        if !crate::table_sampling::view(ui)
+                            .is_some_and(|view| view.locked.contains_key(&(r, c)))
+                        {
+                            response.request_focus();
+                            ui.scroll_to_rect(rect, Some(Align::Center));
+                        }
                         dialog.ui.focus_cell = None;
                     }
                     if response.changed() {
@@ -1036,6 +1052,7 @@ fn keyboard_selection(
     dialog: &mut TypstTableEditorDialog,
     owners: &[Vec<CellPosition>],
 ) {
+    let samples = crate::table_sampling::view(ui);
     let anchors: Vec<_> = owners
         .iter()
         .enumerate()
@@ -1043,6 +1060,11 @@ fn keyboard_selection(
             row.iter()
                 .enumerate()
                 .filter_map(move |(c, &owner)| (owner == (r, c)).then_some(owner))
+        })
+        .filter(|position| {
+            !samples
+                .as_ref()
+                .is_some_and(|view| view.locked.contains_key(position))
         })
         .collect();
     let focused = ui.memory(|memory| memory.focused());
@@ -1093,7 +1115,12 @@ fn keyboard_selection(
             .ui
             .selection
             .select(cell, modifiers.alt && modifiers.shift);
-        dialog.ui.focus_cell = Some(cell);
+        if !samples
+            .as_ref()
+            .is_some_and(|view| view.locked.contains_key(&cell))
+        {
+            dialog.ui.focus_cell = Some(cell);
+        }
     }
 }
 
@@ -1124,6 +1151,89 @@ mod tests {
             repeat: false,
             modifiers,
         }
+    }
+
+    #[test]
+    fn table_samples_lock_values_skip_keyboard_focus_and_preserve_expressions() {
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT as _, Queryable as _, by},
+        };
+        let original = dialog("#table(columns: 3, [A], [#price], [C])");
+        let mut ready = false;
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(940.0, 800.0))
+            .build_ui_state(
+                move |ui, dialog: &mut TypstTableEditorDialog| {
+                    if !ready {
+                        theme::configure_test_fonts(ui.ctx());
+                        ready = true;
+                        return;
+                    }
+                    crate::table_sampling::publish(
+                        ui.ctx(),
+                        ui.ctx().viewport_id(),
+                        Arc::new(crate::table_sampling::View {
+                            locked: std::collections::BTreeMap::from([((0, 1), "#price".into())]),
+                            grid: Some(crate::table_sampling::Grid {
+                                columns: 3,
+                                rows: 1,
+                                instances: 1,
+                                cells: vec![crate::table_sampling::Cell {
+                                    position: (0, 1),
+                                    span: (1, 1),
+                                    value: "60".into(),
+                                }],
+                            }),
+                            ..Default::default()
+                        }),
+                    );
+                    show_table_editor_ui(ui, dialog, 920.0, 780.0, &AppSettings::default());
+                },
+                original,
+            );
+        harness.run();
+        assert_eq!(
+            harness
+                .query_all(by().role(egui::accesskit::Role::MultilineTextInput))
+                .count(),
+            2
+        );
+        assert!(
+            harness
+                .get_by_label("Add row")
+                .accesskit_node()
+                .is_disabled()
+        );
+        assert!(
+            harness
+                .get_by_label("Add column")
+                .accesskit_node()
+                .is_disabled()
+        );
+        harness.get_by_label("60").click();
+        harness.event(egui::Event::Text("overwrite".into()));
+        harness.run();
+        assert_eq!(harness.state().table.cells[0], ["A", "#price", "C"]);
+        harness
+            .get(
+                by().role(egui::accesskit::Role::MultilineTextInput)
+                    .value("A"),
+            )
+            .click();
+        harness.key_press(egui::Key::Tab);
+        harness.run();
+        assert_eq!(harness.state().ui.selection.focus, (0, 2));
+        harness
+            .get(
+                by().role(egui::accesskit::Role::MultilineTextInput)
+                    .value("C"),
+            )
+            .type_text("literal");
+        harness.run();
+        let rendered = harness.state().table.render_source_draft().unwrap();
+        assert!(rendered.contains("[#price]"));
+        assert!(rendered.contains("literal"));
     }
 
     #[test]

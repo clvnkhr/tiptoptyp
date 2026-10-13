@@ -160,7 +160,6 @@ impl WatchSession {
         let pdf_path = output_dir.join("preview.pdf");
 
         let mut command = Command::new(&context.typst_executable);
-        command.arg("watch").arg("--diagnostic-format").arg("short");
         for font_path in &context.font_paths {
             command.arg("--font-path").arg(font_path);
         }
@@ -567,7 +566,9 @@ mod tests {
         let options = TypstOptions {
             command: std::sync::Arc::new(crate::tool_command::CommandCustomization {
                 directory: cwd_alias.display().to_string(),
-                ..Default::default()
+                ..crate::tool_command::CommandCustomization::for_tool(
+                    crate::toolchain::ToolKind::Typst,
+                )
             }),
             executable: script,
             font_paths: Vec::new(),
@@ -802,7 +803,9 @@ mod tests {
         let mut options = TypstOptions {
             command: std::sync::Arc::new(crate::tool_command::CommandCustomization {
                 directory: alias.display().to_string(),
-                ..Default::default()
+                ..crate::tool_command::CommandCustomization::for_tool(
+                    crate::toolchain::ToolKind::Typst,
+                )
             }),
             executable: "typst".into(),
             font_paths: Vec::new(),

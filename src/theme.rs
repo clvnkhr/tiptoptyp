@@ -1749,7 +1749,10 @@ pub fn focus_is_inside(context: &egui::Context, rect: Rect) -> bool {
 /// edges are drawn once by the Explorer view, outside these frames.
 pub fn explorer_section_frame(style: &egui::Style) -> egui::Frame {
     egui::Frame::new()
-        .fill(style.visuals.widgets.noninteractive.bg_fill)
+        .fill(crate::window_background::surface_for_style(
+            style,
+            style.visuals.widgets.noninteractive.bg_fill,
+        ))
         .stroke(egui::Stroke::NONE)
         .corner_radius(0)
 }

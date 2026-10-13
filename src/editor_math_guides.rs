@@ -126,6 +126,11 @@ fn tex_blocks(source: &str) -> Vec<MathBlock> {
                 i += 1;
             }
             if let Some(delimiter) = source[i..].chars().next() {
+                // An incomplete \verb ends at the source line break. Treating
+                // that break as its delimiter hides real math on the next line.
+                if matches!(delimiter, '\n' | '\r') {
+                    continue;
+                }
                 i += delimiter.len_utf8();
                 i += source[i..]
                     .find([delimiter, '\n'])
@@ -205,6 +210,19 @@ mod tests {
         assert_eq!(regions.len(), 1);
         assert_eq!(regions[0].markers.len(), 2);
     }
+    #[test]
+    fn incomplete_verb_cannot_hide_math_on_the_next_line() {
+        for newline in ["\n", "\r\n"] {
+            let source = format!("\\verb{newline}\\[ x & y \\]{newline}Actual prose.");
+            let regions = blocks(&source, DocumentKind::Tex);
+            assert_eq!(regions.len(), 1, "{source:?}: {regions:?}");
+            let start = source.find("\\[").unwrap();
+            let end = source.find("\\]").unwrap() + 2;
+            assert_eq!(regions[0].range, start..end);
+            assert_eq!(regions[0].markers, vec![source.find('&').unwrap()]);
+        }
+    }
+
     #[test]
     fn tex_math_delimiters_environments_and_escaped_markers() {
         let source = "% $ &\n\\verb|$ &|\n\\begin{verbatim}\n\\begin{align}x&y\\end{align}\n\\end{verbatim}\n\\begin{align*}\na \\& b & = c \\\\\n\\begin{pmatrix}a&b\\end{pmatrix}\n\\end{align*}\n\\[ x & y \\]\n$$x&y$$\n\\(x&y\\)";

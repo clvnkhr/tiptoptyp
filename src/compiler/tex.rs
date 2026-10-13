@@ -232,9 +232,8 @@ impl Session {
             }
         } else {
             command
-                .args(["-X", "compile", "--untrusted"])
                 .args(options.synctex.then_some("--synctex"))
-                .args(["--keep-logs", "--keep-intermediates", "--outdir"])
+                .arg("--outdir")
                 .arg(&output);
             if options.only_cached {
                 command.arg("--only-cached");
@@ -417,7 +416,10 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
         let options = TexOptions {
             engine: crate::tex::settings::BuildEngine::Tectonic,
-            command: Default::default(),
+            command: crate::tool_command::CommandCustomization::for_tool(
+                crate::toolchain::ToolKind::Tectonic,
+            )
+            .into(),
             executable,
             only_cached: true,
             synctex: true,
@@ -629,7 +631,14 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
                 let options = TexOptions {
                     engine: *engine,
                     executable: executable.clone(),
-                    command: Default::default(),
+                    command: if *engine == crate::tex::settings::BuildEngine::Tectonic {
+                        crate::tool_command::CommandCustomization::for_tool(
+                            crate::toolchain::ToolKind::Tectonic,
+                        )
+                        .into()
+                    } else {
+                        Default::default()
+                    },
                     only_cached: false,
                     synctex: false,
                 };
@@ -696,7 +705,10 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
             },
             engine: super::super::EngineConfig::Tex(TexOptions {
                 engine: crate::tex::settings::BuildEngine::Tectonic,
-                command: Default::default(),
+                command: crate::tool_command::CommandCustomization::for_tool(
+                    crate::toolchain::ToolKind::Tectonic,
+                )
+                .into(),
                 executable: crate::toolchain::resolve_tool(
                     crate::toolchain::ToolKind::Tectonic,
                     &crate::settings::ToolPreference::default(),
