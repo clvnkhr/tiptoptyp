@@ -1,0 +1,39 @@
+{
+  "date": "2026-10-09",
+  "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+  "architecture": "arm64",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)",
+  "profile": "optimized standalone scanner comparison: -O -C lto=thin -C codegen-units=1; both versions in the same executable, linked to the same production typst_syntax library",
+  "baseline_git_ref": "1de1cf7896a47c6edc266444032722ab4831084f",
+  "baseline_source": "definition_ranges and escaped from src/editor_decoration.rs at baseline_git_ref",
+  "after_source": "src/editor_decoration/local_uses.rs",
+  "after_sha256": "0dfdb92acb462b35cb226a1e54c197c5baad892d293620ea3a79c248e5eb75b7",
+  "probe_sha256": "f84dbfceabf8497f9b19d05cc2331620c027ed2be5a90791aedf190d201bdad5",
+  "fixture": "500 unique ASCII local definitions, each followed by one use; edit one value digit between 0 and 1. Fixed generated source, no user documents.",
+  "sample_order": "interleaved baseline/after, alternating order per sample",
+  "measurement": "median of five measured samples after three warmup samples; 50 edits per sample",
+  "scope": "source-change scanner only. Typst includes identical incremental Source::replace in both cases; baseline also reparses in the old declaration scanner, after reuses the existing syntax tree. TeX compares lexical scans. Syntax layout, font shaping, GUI, idle repaint, startup and preview compilation are not measured; no cross-platform performance claim.",
+  "evidence": ".tiptoptyp/profiles/local-use-highlights-2026-10-09",
+  "results": [
+    {
+      "language": "typst",
+      "bytes": 14000,
+      "rows": 1000,
+      "edits_per_sample": 50,
+      "warmup_samples": 3,
+      "samples": 5,
+      "baseline_us": 194759,
+      "after_us": 16813
+    },
+    {
+      "language": "tex",
+      "bytes": 17500,
+      "rows": 500,
+      "edits_per_sample": 50,
+      "warmup_samples": 3,
+      "samples": 5,
+      "baseline_us": 30996,
+      "after_us": 7226
+    }
+  ]
+}

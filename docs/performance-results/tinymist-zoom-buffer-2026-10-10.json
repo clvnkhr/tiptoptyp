@@ -1,0 +1,447 @@
+{
+  "date": "2026-10-10",
+  "change": "Defer vector zoom/resize until gesture completion; buffered idle SVG raster, opaque sRGB backdrop, matched centering/scroll anchors and passive capture view.",
+  "workspace": "/Users/calvinkhor/Documents/GitHub/mytypst",
+  "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+  "capture": {
+    "idle_ms": 150,
+    "relative_window": {
+      "x": -0.5,
+      "y": -1,
+      "width": 2,
+      "height": 3
+    },
+    "max_pixels": 4000000,
+    "rounding_budget_pixels": 3900000,
+    "target_display_density_multiplier": 2,
+    "in_flight_captures": 1,
+    "scripts": false,
+    "external_resources": false,
+    "activates_app": false,
+    "data_store": "ephemeral",
+    "buffer_can_reduce_density": true
+  },
+  "gesture": {
+    "quiet_ms": 120,
+    "explicit_pinch_end_flushes": true,
+    "missing_pinch_end_watchdog_ms": 1000,
+    "vector_flights": 1,
+    "pending_replacements": 1,
+    "divider_resize_reuses_raster": true,
+    "full_anchor": "absolute clamped scroll",
+    "partial_anchor": "page-local point or gap fraction",
+    "cold_start_resize": "Retains normal frontend ownership until an image or active native request exists."
+  },
+  "source_sha256": {
+    "Cargo.toml": "ba398cdc048936c22e949c48abbf7d4753b79a210140baa8a72ace7f4a888622",
+    "src/preview_zoom_snapshot.rs": "f15dccbd2eec6d467d45a5cb406a8d301c2e885b865ae2aaa26b210aa3ad25b3",
+    "src/preview_zoom_snapshot.js": "05b821775e0cad4bbfb8de5f8941deab3e6808fd7fb68e1eed40941ffe582eaf",
+    "src/preview_snapshot_buffer.js": "738578140d83da10c760f9bd3f9a3f823b51aeffe1c9aeff38584f1ca9ff84c2",
+    "src/preview_navigation.js": "553c013bcd41b5e94994a4b9ee1b57202be5a73ff2f19eb31198f3984235f663",
+    "src/app/native_views.rs": "c545bd51f9ea0bbb817700b8d96b324dd1adcca0e3e34b0d903add2d13844624",
+    "tests/native_preview_zoom.rs": "b67451dc1aeb9ffe870e51f67ac0f175777351ee066a8045ec3074ed7d22801b",
+    "scripts/test-preview-navigation.mjs": "11ac44ddf24535990cdcacf350165727ba3f49d3175aee650730d97962c44143",
+    "scripts/test-preview-zoom-snapshot.mjs": "19a762ecbaaac947926373156931b7dd0c905e41b107dcf0db4f41485aabc73b",
+    "scripts/test-preview-e2e.cjs": "95da620fa99b93e374b701a222d5ec47ca1347ba50d5406b220befd9ddbd3027",
+    "scripts/desktop_ui_partial_journeys.py": "cf50668fef5e0d3703c056b71786a0ea8da87ae78ecfaf7c7cad1e766876bdc9"
+  },
+  "checks": {
+    "fmt": "passed",
+    "clippy_all_targets": "passed",
+    "rust": {
+      "passed": 1798,
+      "ignored": 44,
+      "failed": 0
+    },
+    "xtask": 17,
+    "javascript": 76,
+    "desktop_harness_contracts": 56,
+    "actual_frontend_full": "passed (before partial parameter/empty-paper assertions added)",
+    "actual_frontend_partial": "passed (actual partial flag asserted; final frontend/buffer source)",
+    "native_component": "passed; own-window input and resize, activation prohibited; not the composed editor journey",
+    "logs": ".tiptoptyp/profiles/zoom-buffer-final"
+  },
+  "native_component": {
+    "profile": "test (unoptimized + debuginfo)",
+    "binary_sha256": "4f075692bf41963f2c18fff0dab51fdd479fc0bcb50a41bd1c94f4c82d8d5b36",
+    "viewport": [
+      640,
+      420
+    ],
+    "warmup_seconds": 3,
+    "renderer_block_ms": 800,
+    "result": {
+      "blocked_ms": 800,
+      "during_block": [
+        {
+          "elapsed_ms": 351.80212500000005,
+          "native": {
+            "active": true,
+            "cached": true,
+            "deferred": true,
+            "enabled": true,
+            "handoffs": 0,
+            "hits": 4,
+            "image_origin": [
+              -320.0,
+              -420.0
+            ],
+            "image_size": [
+              1280.0,
+              1260.0
+            ],
+            "in_flight": null,
+            "inputs": 4,
+            "pending": 4,
+            "pinch": false,
+            "pixels": [
+              1990,
+              1959
+            ],
+            "revision": 4,
+            "scale": 1.4641000000000006,
+            "transform": [
+              1.4641000000000006,
+              -148.51200000000014,
+              -97.46100000000008
+            ]
+          },
+          "renderer_still_blocked": true,
+          "web_inputs": 0
+        }
+      ],
+      "final_scale": 1.4641000000000006,
+      "input_response_ms": [
+        0.2999580000000037,
+        0.13845799999998576,
+        0.0876660000000129,
+        0.11724999999995589
+      ],
+      "input_times_ms": [
+        106.287375,
+        162.487708,
+        224.860875,
+        285.432583
+      ],
+      "mode": "native-compositor",
+      "native": {
+        "active": false,
+        "cached": false,
+        "deferred": false,
+        "enabled": true,
+        "handoffs": 1,
+        "hits": 4,
+        "image_origin": [
+          -320.0,
+          -420.0
+        ],
+        "image_size": [
+          1280.0,
+          1260.0
+        ],
+        "in_flight": null,
+        "inputs": 4,
+        "pending": null,
+        "pinch": false,
+        "pixels": [
+          1990,
+          1959
+        ],
+        "revision": 4,
+        "scale": 1.4641000000000006,
+        "transform": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "posted_keys": 4,
+      "resize_during_block": {
+        "active": true,
+        "cached": true,
+        "deferred": true,
+        "enabled": true,
+        "handoffs": 2,
+        "hits": 9,
+        "image_origin": [
+          -320.0,
+          -420.0
+        ],
+        "image_size": [
+          1280.0,
+          1260.0
+        ],
+        "in_flight": null,
+        "inputs": 6,
+        "pending": 10,
+        "pinch": false,
+        "pixels": [
+          1990,
+          1959
+        ],
+        "revision": 10,
+        "scale": 0.1,
+        "transform": [
+          0.078125,
+          225.0,
+          0.0
+        ]
+      },
+      "resize_vector_requests": 1,
+      "response_times_ms": [
+        106.587333,
+        162.62616599999998,
+        224.948541,
+        285.549833
+      ],
+      "responsive_during_block": true,
+      "vector_requests": 1,
+      "viewport": [
+        640,
+        420
+      ],
+      "warmup_seconds": 3,
+      "web_inputs": 0,
+      "zoom_out": {
+        "active": true,
+        "cached": true,
+        "deferred": true,
+        "enabled": true,
+        "handoffs": 2,
+        "hits": 5,
+        "image_origin": [
+          -320.0,
+          -420.0
+        ],
+        "image_size": [
+          1280.0,
+          1260.0
+        ],
+        "in_flight": null,
+        "inputs": 6,
+        "pending": 6,
+        "pinch": false,
+        "pixels": [
+          1990,
+          1959
+        ],
+        "revision": 6,
+        "scale": 0.1,
+        "transform": [
+          0.1,
+          288.0,
+          0.0
+        ]
+      }
+    },
+    "limitations": [
+      "Vector completion is mocked; this establishes native isolation, opacity, horizontal centering and bounded request/handoff behavior, not dense-document final render latency.",
+      "Debug submission timings are retained as raw observations, not compared with prior optimized runs.",
+      "Isolated clip-layer pixels do not establish host/window vertical geometry or desktop composition."
+    ],
+    "browser_resize_events": true
+  },
+  "visuals": [
+    {
+      "path": ".tiptoptyp/screenshots/agent-review/zoom-buffer/native-buffer-final.png",
+      "sha256": "2e780de30bf7b07f58145bb09115046e53b2f296b1e2df36d3ef31968e07d353",
+      "inspected": true,
+      "kind": "isolated native clip layer"
+    },
+    {
+      "path": ".tiptoptyp/screenshots/agent-review/zoom-buffer/native-buffer-zoom-out.png",
+      "sha256": "0bbb05e1d8375adf5010cc0b36d2ff6b34715faa1f61978d35b417e1fef65e98",
+      "inspected": true,
+      "kind": "isolated native clip layer"
+    },
+    {
+      "path": ".tiptoptyp/screenshots/agent-review/zoom-buffer/browser-buffer-1791667202055.png",
+      "sha256": "663c62b04781a8a488db6bae2aa437999e9baa598343f41c192fb2fd3a3f2602",
+      "inspected": true,
+      "kind": "standalone Chromium buffer"
+    },
+    {
+      "path": ".tiptoptyp/screenshots/agent-review/zoom-buffer/browser-buffer-1791667449072.png",
+      "sha256": "663c62b04781a8a488db6bae2aa437999e9baa598343f41c192fb2fd3a3f2602",
+      "inspected": true,
+      "kind": "standalone Chromium buffer, actual partial mode"
+    }
+  ],
+  "release_comparison": {
+    "status": "unavailable",
+    "metadata": ".tiptoptyp/profiles/zoom-defer/20261010T202714Z/metadata.json",
+    "runs": [
+      {
+        "mode": "eager",
+        "sample": 1,
+        "exit_code": 0,
+        "evidence": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/desktop-ui-tests/run-83ol5_gp",
+        "passed": true,
+        "binary_sha256": "75d56ccd704545982f2441c07d59542303c0a0eb5b54444c355eac2ce15d4793",
+        "bursts": [
+          {
+            "time": 1213898.442479,
+            "action": "partial.zoom-burst",
+            "mode": "partial",
+            "count": 20,
+            "interval_ms": 18,
+            "warmup_seconds": 3,
+            "viewport": [
+              1400.0,
+              885.0
+            ],
+            "dark": true,
+            "page_dark": true,
+            "producer_ms": 544.069540919736,
+            "last_producer_to_sharp_ms": 1142.8921669721603,
+            "total_ms": 1686.9620829820633,
+            "vector_requests": 2,
+            "native_before": {
+              "active": false,
+              "cached": true,
+              "enabled": true,
+              "handoffs": 17,
+              "hits": 13,
+              "in_flight": null,
+              "inputs": 17,
+              "pending": null,
+              "pixels": [
+                1618,
+                2408
+              ],
+              "revision": 17,
+              "scale": 1.0,
+              "transform": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "native_after": {
+              "active": false,
+              "cached": false,
+              "enabled": true,
+              "handoffs": 18,
+              "hits": 33,
+              "in_flight": null,
+              "inputs": 37,
+              "pending": null,
+              "pixels": [
+                1618,
+                2408
+              ],
+              "revision": 37,
+              "scale": 6.72749994932561,
+              "transform": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            }
+          },
+          {
+            "time": 1213921.377875583,
+            "action": "partial.zoom-burst",
+            "mode": "full",
+            "count": 20,
+            "interval_ms": 18,
+            "warmup_seconds": 3,
+            "viewport": [
+              1400.0,
+              885.0
+            ],
+            "dark": true,
+            "page_dark": true,
+            "producer_ms": 540.9567500464618,
+            "last_producer_to_sharp_ms": 2288.685124833137,
+            "total_ms": 2829.6421670820564,
+            "vector_requests": 3,
+            "native_before": {
+              "active": false,
+              "cached": true,
+              "enabled": true,
+              "handoffs": 4,
+              "hits": 2,
+              "in_flight": null,
+              "inputs": 4,
+              "pending": null,
+              "pixels": [
+                1618,
+                2408
+              ],
+              "revision": 4,
+              "scale": 1.0,
+              "transform": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "native_after": {
+              "active": false,
+              "cached": false,
+              "enabled": true,
+              "handoffs": 5,
+              "hits": 22,
+              "in_flight": null,
+              "inputs": 24,
+              "pending": null,
+              "pixels": [
+                1618,
+                2408
+              ],
+              "revision": 24,
+              "scale": 6.72749994932561,
+              "transform": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "mode": "deferred",
+        "sample": 1,
+        "exit_code": 1,
+        "evidence": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/desktop-ui-tests/run-_pxxf35d",
+        "passed": false,
+        "binary_sha256": "acce292c79a03f8df17d61f0880305340cb169e9ba0be73ea6c10347bcf4fe12",
+        "bursts": [],
+        "excluded_reason": "Input focus moved to Codex before the third keyboard input; no in-flight/pending zoom remained, and the missing input never advanced native revision. Not a valid timing sample."
+      },
+      {
+        "mode": "deferred",
+        "sample": 1,
+        "exit_code": 1,
+        "evidence": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/desktop-ui-tests/run-fqj04gws",
+        "passed": false,
+        "binary_sha256": "acce292c79a03f8df17d61f0880305340cb169e9ba0be73ea6c10347bcf4fe12",
+        "bursts": [],
+        "excluded_reason": "Only three of twenty zoom keys reached the owned view after foreground focus switched to Codex. The three accepted inputs reached 1.331 scale and completed handoff, with no remaining vector flight/pending request. Not a valid timing sample."
+      }
+    ],
+    "reason": "Deferred samples were interrupted by foreground focus switching; user declined idle interval. No valid paired after measurement; no speedup claim."
+  },
+  "unavailable": [
+    {
+      "check": "final composed editor partial_zoom_stress journey, including added divider drags",
+      "command": "python3 scripts/test-desktop-ui.py --journey partial_zoom_stress --release --trace-preview",
+      "reason": "User is using the desktop and explicitly declined an idle interval. Historical successful eager runs do not cover the final buffer/defer changes."
+    },
+    {
+      "check": "physical trackpad pinch / composed preview bounds and visual transition",
+      "reason": "No authorized uninterrupted composed-app interaction/observation in this turn; root and isolated-layer PNGs cannot prove it."
+    }
+  ],
+  "release_build": {
+    "status": "passed",
+    "profile": "release",
+    "features": [
+      "desktop-ui-tests"
+    ],
+    "binary_sha256": "a43ea30450387298b47126f80c22a63e5d387f6d26380f0b46c4b5637f844686",
+    "version": "tiptoptyp Dev 0.1.0 (1de1cf7896a4-dirty.1791667857)"
+  }
+}

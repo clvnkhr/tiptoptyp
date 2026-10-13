@@ -1,0 +1,363 @@
+{
+  "date_local": "2026-10-11",
+  "created_utc": "2026-10-11T10:02:06.187167+00:00",
+  "workspace": "/Users/calvinkhor/Documents/GitHub/mytypst",
+  "change": "Serialize buffered pages directly and resolve each SVG definition once; no live-renderer deep copy or element/attribute traversal.",
+  "production_source_sha256": "195f8b5bcebb55a81ac92f5018530f61d29fe49750f4187ce3c3c0ea6cb169f7",
+  "baseline_source_sha256": "738578140d83da10c760f9bd3f9a3f823b51aeffe1c9aeff38584f1ca9ff84c2",
+  "scope": "Synchronous idle snapshot-buffer preparation in optimized native WKWebView, not final SVG rendering or GPU frame cadence.",
+  "comparison": [
+    {
+      "mode": "partial",
+      "fixture": "scripts/fixtures/tinymist-zoom-stress.typ",
+      "matched_metadata_keys": [
+        "platform",
+        "architecture",
+        "view_css_pixels",
+        "renderer_sha256",
+        "fixture_sha256",
+        "after_adapter_sha256",
+        "native_probe_sha256",
+        "native_probe_binary_sha256",
+        "warmup_seconds",
+        "recipe"
+      ],
+      "before_median_ms": 288.9999999999991,
+      "after_median_ms": 50,
+      "factor": 5.779999999999982,
+      "reduction_percent": 82.6989619377162,
+      "canonical_output_equivalent": true,
+      "ink_pages": 3,
+      "buffer_nodes": 79176,
+      "definitions": 116,
+      "before_times_ms": [
+        288.9999999999991,
+        277,
+        305,
+        274,
+        365,
+        267,
+        301,
+        261,
+        289
+      ],
+      "after_times_ms": [
+        54,
+        51,
+        50,
+        50,
+        49,
+        48.99999999999909,
+        50,
+        49.99999999999909,
+        45.99999999999909
+      ],
+      "before_receipt": ".tiptoptyp/profiles/partial-render-native/20261011T094717Z-9vxef3wm/result.json",
+      "metadata": {
+        "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+        "architecture": "arm64",
+        "scope": "Standalone optimized native WKWebView: synchronous idle SVG preparation only; excludes image rasterization/encoding, final SVG render latency and composed-editor cadence",
+        "view_css_pixels": [
+          900,
+          700
+        ],
+        "actual_backing_scale_recorded_in_results": true,
+        "renderer_binary": "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/tinymist-aarch64-apple-darwin",
+        "renderer_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+        "renderer_version": {
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/tinymist-aarch64-apple-darwin",
+            "--version"
+          ],
+          "exit_code": 0,
+          "output": "tinymist \nBuild Timestamp:     2026-06-22T10:37:22.819803000Z\nBuild Git Describe:  v0.15.2\nCommit SHA:          92babed1bc00540882effd29bc56ebc5986792c2\nCommit Date:         None\nCommit Branch:       None\nCargo Target Triple: aarch64-apple-darwin\nTypst Version:       0.15.0\nTypst Source:        git+https://github.com/Myriad-Dreamin/typst.git?tag=tinymist/v0.15.0#391c2dcd698aabf2917db0336868d16f197057d9"
+        },
+        "fixture": "scripts/fixtures/tinymist-zoom-stress.typ",
+        "fixture_sha256": "e6dd2f741269b617df5e5d8712d85301b99cf81a46fa2221467a3417fd383828",
+        "snapshot_buffer_sha256": "195f8b5bcebb55a81ac92f5018530f61d29fe49750f4187ce3c3c0ea6cb169f7",
+        "baseline_buffer_sha256": "738578140d83da10c760f9bd3f9a3f823b51aeffe1c9aeff38584f1ca9ff84c2",
+        "stress_fixture": true,
+        "max_svg_nodes": 320000,
+        "baseline_adapter": "/Users/calvinkhor/Documents/GitHub/mytypst/src/preview_navigation.js",
+        "baseline_adapter_sha256": "553c013bcd41b5e94994a4b9ee1b57202be5a73ff2f19eb31198f3984235f663",
+        "after_adapter": "/Users/calvinkhor/Documents/GitHub/mytypst/src/preview_navigation.js",
+        "after_adapter_sha256": "553c013bcd41b5e94994a4b9ee1b57202be5a73ff2f19eb31198f3984235f663",
+        "native_probe_sha256": "d95749007c877169c9d7402f70a7dc552774976905ef3786165d9ec5c624252e",
+        "runner_sha256": "8068d4a9e7e35463467fd1dc427de36f3e702f7f4cb6877ed3adf73fb5628cd2",
+        "native_probe_binary_sha256": "25a825fa2bf0af786c81598671543ade6beabc3dddb1d52ee285435d524dc353",
+        "native_probe_binary": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/partial-render-native/20261011T094326Z-xbd8q87b/Tinymist Partial Native QA.app/Contents/MacOS/partial-native-probe",
+        "native_build": [
+          "swiftc",
+          "-O",
+          "-module-cache-path",
+          "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/partial-render-native/20261011T094326Z-xbd8q87b/swift-module-cache",
+          "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/test-preview-partial-native.swift",
+          "-o",
+          "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/partial-render-native/20261011T094326Z-xbd8q87b/Tinymist Partial Native QA.app/Contents/MacOS/partial-native-probe"
+        ],
+        "swift_version": {
+          "command": [
+            "swiftc",
+            "--version"
+          ],
+          "exit_code": 0,
+          "output": "Apple Swift version 6.0.3 (swiftlang-6.0.3.1.10 clang-1600.0.30.1)\nTarget: arm64-apple-macosx14.0\nswift-driver version: 1.115.1"
+        },
+        "native_build_timeout_seconds": null,
+        "native_build_cleanup_policy": "No build executed; original receipt linked above",
+        "native_probe_reused": true,
+        "native_probe_reuse_metadata": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/partial-render-native/20261011T094326Z-xbd8q87b/metadata.json",
+        "revision": {
+          "command": [
+            "git",
+            "-C",
+            "/Users/calvinkhor/Documents/GitHub/mytypst",
+            "rev-parse",
+            "HEAD"
+          ],
+          "exit_code": 0,
+          "output": "1de1cf7896a47c6edc266444032722ab4831084f"
+        },
+        "power_settings": {
+          "command": [
+            "pmset",
+            "-g"
+          ],
+          "exit_code": 0,
+          "output": "System-wide power settings:\nCurrently in use:\n standby              1\n Sleep On Power Button 1\n hibernatefile        /var/vm/sleepimage\n powernap             1\n networkoversleep     0\n disksleep            10\n sleep                1 (sleep prevented by powerd, coreaudiod, coreaudiod)\n hibernatemode        3\n ttyskeepawake        1\n displaysleep         10 (display sleep prevented by Caffeine)\n tcpkeepalive         1\n lowpowermode         0\n womp                 1"
+        },
+        "warmup_seconds": 3,
+        "workload_warmups": 1,
+        "measured_samples": 9,
+        "lane_order": [
+          "partial"
+        ],
+        "per_sample_reset": "Page 18 at fit scale 1,900x700 view; source unchanged;50ms quiet interval between preparations",
+        "recipe": "One preparation warmup then N measured preparations; DOM validation and optional baseline canonical equivalence outside timed spans",
+        "frame_sample_bound": 2048,
+        "error_sample_bound": 32,
+        "phase_diagnostics_enabled": false,
+        "phase_diagnostics_policy": "When enabled: four resize/scroll/zoom/drain summaries reuse the single 2048-gap RAF buffer; counters and synchronous spans partition the combined totals. RAF gaps belong to the phase when their ending callback arrives, so boundary gaps can include work from the preceding phase. No extra RAF or idle loop.",
+        "snapshots": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/screenshots/agent-review/partial-render-native/20261011T094727Z-n6yt_ld5",
+        "screenshot_source": "WKWebView.takeSnapshot; no desktop capture",
+        "comparison_limits": "Independent server/view per lane; warmed active-workload comparison, not cold startup; Swift scheduling included; do not compare absolute values with Chromium or other machines"
+      },
+      "after_receipt": ".tiptoptyp/profiles/partial-render-native/20261011T094727Z-n6yt_ld5/result.json"
+    },
+    {
+      "mode": "full",
+      "fixture": "scripts/fixtures/tinymist-partial-large.typ",
+      "matched_metadata_keys": [
+        "platform",
+        "architecture",
+        "view_css_pixels",
+        "renderer_sha256",
+        "fixture_sha256",
+        "after_adapter_sha256",
+        "native_probe_sha256",
+        "native_probe_binary_sha256",
+        "warmup_seconds",
+        "recipe"
+      ],
+      "before_median_ms": 31,
+      "after_median_ms": 7,
+      "factor": 4.428571428571429,
+      "reduction_percent": 77.41935483870968,
+      "canonical_output_equivalent": true,
+      "ink_pages": 3,
+      "buffer_nodes": 6898,
+      "definitions": 78,
+      "before_times_ms": [
+        32,
+        32,
+        31,
+        35,
+        42,
+        28,
+        30,
+        27.99999999999909,
+        29
+      ],
+      "after_times_ms": [
+        7,
+        7,
+        7,
+        10.00000000000091,
+        6,
+        9,
+        11,
+        10.00000000000091,
+        6
+      ],
+      "before_receipt": ".tiptoptyp/profiles/partial-render-native/20261011T095005Z-j18ciidn/result.json",
+      "metadata": {
+        "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+        "architecture": "arm64",
+        "scope": "Standalone optimized native WKWebView: synchronous idle SVG preparation only; excludes image rasterization/encoding, final SVG render latency and composed-editor cadence",
+        "view_css_pixels": [
+          900,
+          700
+        ],
+        "actual_backing_scale_recorded_in_results": true,
+        "renderer_binary": "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/tinymist-aarch64-apple-darwin",
+        "renderer_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+        "renderer_version": {
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/tinymist-aarch64-apple-darwin",
+            "--version"
+          ],
+          "exit_code": 0,
+          "output": "tinymist \nBuild Timestamp:     2026-06-22T10:37:22.819803000Z\nBuild Git Describe:  v0.15.2\nCommit SHA:          92babed1bc00540882effd29bc56ebc5986792c2\nCommit Date:         None\nCommit Branch:       None\nCargo Target Triple: aarch64-apple-darwin\nTypst Version:       0.15.0\nTypst Source:        git+https://github.com/Myriad-Dreamin/typst.git?tag=tinymist/v0.15.0#391c2dcd698aabf2917db0336868d16f197057d9"
+        },
+        "fixture": "scripts/fixtures/tinymist-partial-large.typ",
+        "fixture_sha256": "463b5702f7eafb4104fdca89de88a7e72c14b7d697cd87159053de7efe76b24a",
+        "snapshot_buffer_sha256": "195f8b5bcebb55a81ac92f5018530f61d29fe49750f4187ce3c3c0ea6cb169f7",
+        "baseline_buffer_sha256": "738578140d83da10c760f9bd3f9a3f823b51aeffe1c9aeff38584f1ca9ff84c2",
+        "stress_fixture": false,
+        "max_svg_nodes": 30000,
+        "baseline_adapter": "/Users/calvinkhor/Documents/GitHub/mytypst/src/preview_navigation.js",
+        "baseline_adapter_sha256": "553c013bcd41b5e94994a4b9ee1b57202be5a73ff2f19eb31198f3984235f663",
+        "after_adapter": "/Users/calvinkhor/Documents/GitHub/mytypst/src/preview_navigation.js",
+        "after_adapter_sha256": "553c013bcd41b5e94994a4b9ee1b57202be5a73ff2f19eb31198f3984235f663",
+        "native_probe_sha256": "d95749007c877169c9d7402f70a7dc552774976905ef3786165d9ec5c624252e",
+        "runner_sha256": "8068d4a9e7e35463467fd1dc427de36f3e702f7f4cb6877ed3adf73fb5628cd2",
+        "native_probe_binary_sha256": "25a825fa2bf0af786c81598671543ade6beabc3dddb1d52ee285435d524dc353",
+        "native_probe_binary": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/partial-render-native/20261011T094326Z-xbd8q87b/Tinymist Partial Native QA.app/Contents/MacOS/partial-native-probe",
+        "native_build": [
+          "swiftc",
+          "-O",
+          "-module-cache-path",
+          "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/partial-render-native/20261011T094326Z-xbd8q87b/swift-module-cache",
+          "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/test-preview-partial-native.swift",
+          "-o",
+          "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/partial-render-native/20261011T094326Z-xbd8q87b/Tinymist Partial Native QA.app/Contents/MacOS/partial-native-probe"
+        ],
+        "swift_version": {
+          "command": [
+            "swiftc",
+            "--version"
+          ],
+          "exit_code": 0,
+          "output": "Apple Swift version 6.0.3 (swiftlang-6.0.3.1.10 clang-1600.0.30.1)\nTarget: arm64-apple-macosx14.0\nswift-driver version: 1.115.1"
+        },
+        "native_build_timeout_seconds": null,
+        "native_build_cleanup_policy": "No build executed; original receipt linked above",
+        "native_probe_reused": true,
+        "native_probe_reuse_metadata": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/partial-render-native/20261011T094326Z-xbd8q87b/metadata.json",
+        "revision": {
+          "command": [
+            "git",
+            "-C",
+            "/Users/calvinkhor/Documents/GitHub/mytypst",
+            "rev-parse",
+            "HEAD"
+          ],
+          "exit_code": 0,
+          "output": "1de1cf7896a47c6edc266444032722ab4831084f"
+        },
+        "power_settings": {
+          "command": [
+            "pmset",
+            "-g"
+          ],
+          "exit_code": 0,
+          "output": "System-wide power settings:\nCurrently in use:\n standby              1\n Sleep On Power Button 1\n hibernatefile        /var/vm/sleepimage\n powernap             1\n networkoversleep     0\n disksleep            10\n sleep                1 (sleep prevented by powerd, coreaudiod, coreaudiod)\n hibernatemode        3\n ttyskeepawake        1\n displaysleep         10 (display sleep prevented by Caffeine)\n tcpkeepalive         1\n lowpowermode         0\n womp                 1"
+        },
+        "warmup_seconds": 3,
+        "workload_warmups": 1,
+        "measured_samples": 9,
+        "lane_order": [
+          "full"
+        ],
+        "per_sample_reset": "Page 18 at fit scale 1,900x700 view; source unchanged;50ms quiet interval between preparations",
+        "recipe": "One preparation warmup then N measured preparations; DOM validation and optional baseline canonical equivalence outside timed spans",
+        "frame_sample_bound": 2048,
+        "error_sample_bound": 32,
+        "phase_diagnostics_enabled": false,
+        "phase_diagnostics_policy": "When enabled: four resize/scroll/zoom/drain summaries reuse the single 2048-gap RAF buffer; counters and synchronous spans partition the combined totals. RAF gaps belong to the phase when their ending callback arrives, so boundary gaps can include work from the preceding phase. No extra RAF or idle loop.",
+        "snapshots": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/screenshots/agent-review/partial-render-native/20261011T095011Z-w407j_b7",
+        "screenshot_source": "WKWebView.takeSnapshot; no desktop capture",
+        "comparison_limits": "Independent server/view per lane; warmed active-workload comparison, not cold startup; Swift scheduling included; do not compare absolute values with Chromium or other machines"
+      },
+      "after_receipt": ".tiptoptyp/profiles/partial-render-native/20261011T095011Z-w407j_b7/result.json"
+    }
+  ],
+  "resource_policy": {
+    "max_native_pixels": 4000000,
+    "max_html_characters": 20000000,
+    "idle_delay_ms": 150,
+    "snapshot_requested_on_input": false,
+    "new_idle_loop": false,
+    "persistent_definition_cache": false,
+    "note": "Each required definition is queued and serialized once per preparation. No second dense SVG tree in the live view. Native rasterization/encoding and retained-image limits unchanged; process RSS not measured."
+  },
+  "validation": {
+    "deterministic_js": "88 passed",
+    "native_output_equivalence": "partial dense + full standard passed",
+    "browser_real_tinymist": "full + partial passed",
+    "inspected_raster": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/screenshots/agent-review/zoom-buffer/browser-buffer-1791712448240.png",
+    "native_editor_journey": {
+      "passed": true,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-zj2nocly/result.json",
+      "version": "tiptoptyp Dev 0.1.0 (1de1cf7896a4-dirty.1791712668)",
+      "binary_sha256": "c675b80149e8ff766c3913097cbd0278dbff3311c3f5661b3fb0a9aeec5d1113",
+      "preflight": {
+        "accessibility": true,
+        "desktop": true,
+        "input": true,
+        "locked": false,
+        "screens": [
+          {
+            "height": 982,
+            "scale": 2,
+            "width": 1512
+          }
+        ]
+      },
+      "actual_backends": [
+        "Tinymist",
+        "Tinymist partial"
+      ],
+      "bounds_trace_lines": 2576,
+      "coverage": "Native mouse/keyboard zoom, 20-key bursts coalescing to one vector request, cached divider drags, distant-page navigation and backend switching; dense partial and standard full fixtures.",
+      "not_established": "Physical trackpad pinch, GPU presentation cadence or a matched whole-editor end-to-end performance improvement."
+    },
+    "required_checks": {
+      "format": "passed",
+      "strict_clippy_all_targets": "passed",
+      "default_tests": {
+        "passed": 1859,
+        "ignored": 50,
+        "test_workers": 4
+      },
+      "xtask_tests": 17,
+      "xtask_format": "passed",
+      "profiling_strict_clippy": "passed",
+      "profiling_tests": {
+        "passed": 1867,
+        "ignored": 50,
+        "test_workers": 4
+      }
+    },
+    "native_editor_initial_failure": {
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-fb766wuw/result.json",
+      "reason": "The journey sent End after a root divider drag without returning keyboard input to the preview. The recorded preview_keyboard_focused was false, native render ready and all prior partial/full zoom and divider checks passed.",
+      "correction": "Click the preview and require preview_keyboard_focused before the viewer-only key; rerun the same optimized executable."
+    },
+    "initial_broad_test_failure": {
+      "failed": 7,
+      "classification": "Existing fake-tool fixture startup timeouts at default test concurrency.",
+      "resolution": "34 Tinymist tests passed serially; the complete default and profiling suites passed with RUST_TEST_THREADS=4. No fixture timeout assertions changed or tests excluded."
+    },
+    "evidence_logs": ".tiptoptyp/profiles/buffer-preparation-20261011",
+    "browser_scope": "Fresh Chromium raster of serialized buffer inspected; glyphs and offset preserved. Full/partial live palette/raster and dependency integration tests passed. This is not composed-editor pixel evidence."
+  },
+  "limitations": [
+    "macOS14.6.1 arm64, low-power mode, 900x700 CSS pixels and 2x backing scale; same fixed inputs and optimized native binary within each pair.",
+    "9 measured preparations after one warmup; no builds or other profiling workloads during measured runs.",
+    "Partial uses dense 48-page unequal fractional papers. Full uses standard48-page fixture because full dense stress exceeds its existing resource budget.",
+    "Canonical output equality is tested at the same frame with definitions sorted; source/scroll/palette remain unchanged.",
+    "No claim of faster final Typst SVG rendering, presented GPU frames, physical pinch, cross-platform speed or whole-editor end-to-end improvement."
+  ],
+  "final_runner_sha256": "e1600abc38d6c4735e910ffaab2363845bb00dcd23fe624374b7856f8a232033"
+}

@@ -1,0 +1,1729 @@
+{
+  "date_local": "2026-10-11",
+  "completed_utc": "2026-10-10T23:53:15.941099+00:00",
+  "workspace": "/Users/calvinkhor/Documents/GitHub/mytypst",
+  "git_head": "1de1cf7896a47c6edc266444032722ab4831084f",
+  "scope": "Retain the last usable native raster across sharp handoff and idle refresh; stage replacement atomically, require native acceptance, reject source/input races, and bypass unavailable raster coverage immediately.",
+  "baseline": {
+    "source": ".tiptoptyp/profiles/zoom-reuse-baseline",
+    "module_sha256": "11e25749412665d32ca39b54bf3215b5477b66d9f93681796efb2b7f5edc4365",
+    "helper_sha256": "05b821775e0cad4bbfb8de5f8941deab3e6808fd7fb68e1eed40941ffe582eaf",
+    "failing_deterministic_repro": "/private/tmp/zoom-reuse-red.log; sharp handoff discarded the usable cache"
+  },
+  "sources": {
+    "src/preview_zoom_snapshot.rs": "665a76391fe6ef5c6f75ca1f22927da1ac16fdea58fbb300494aea725bf4181c",
+    "src/preview_zoom_snapshot.js": "4e8f7c99c1ac4e93c7ed2f01bccad641baedf9728eb10e4d55a3c03c87ae01f6",
+    "tests/native_preview_zoom.rs": "6cc489476e60859610f8f83ba41293753ecba323293b913039814b23c32c2f4b",
+    "scripts/test-preview-zoom-snapshot.mjs": "7a13e6899b7940c6593924a8b6d8ddf6101e9ac194b11a75a17ec384fd24d564",
+    "scripts/test-preview-zoom-native.py": "5966effa4fb072fa8821114fdafdfea5ea0b353d21a2e382e764d6220faa73d5",
+    "scripts/fixtures/tinymist-zoom-stress.typ": "e6dd2f741269b617df5e5d8712d85301b99cf81a46fa2221467a3417fd383828"
+  },
+  "build": {
+    "profile": "release: opt-level=3, thin LTO, codegen-units=1; identical Cargo compiler flags and dependencies for both comparison lanes",
+    "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+    "lane_builds": {
+      "before": {
+        "argv": [
+          "/Users/calvinkhor/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/rustc",
+          "--crate-name",
+          "native_preview_zoom",
+          "--edition=2024",
+          "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-reuse-measure/before.rs",
+          "--error-format=json",
+          "--json=diagnostic-rendered-ansi,artifacts,future-incompat",
+          "--emit=link",
+          "-C",
+          "opt-level=3",
+          "-C",
+          "lto=thin",
+          "-C",
+          "codegen-units=1",
+          "--cfg",
+          "test",
+          "--cfg",
+          "feature=\"desktop-ui-tests\"",
+          "--check-cfg",
+          "cfg(docsrs,test)",
+          "--check-cfg",
+          "cfg(feature, values(\"desktop-ui-tests\", \"native-ui-tests\", \"production\", \"profiling\"))",
+          "-C",
+          "metadata=3587d52abb905e1c",
+          "-C",
+          "strip=symbols",
+          "-L",
+          "dependency=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps",
+          "--extern",
+          "block2=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libblock2-268cf9d2e7ad1632.rlib",
+          "--extern",
+          "eframe=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libeframe-35661fec22f326d1.rlib",
+          "--extern",
+          "egui_kittest=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libegui_kittest-ac939f46367cca40.rlib",
+          "--extern",
+          "egui_ltreeview=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libegui_ltreeview-478591dabb6d97c3.rlib",
+          "--extern",
+          "encoding_rs=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libencoding_rs-c72dd5ac11c033bc.rlib",
+          "--extern",
+          "harfrust=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libharfrust-1592b2ff460a8d31.rlib",
+          "--extern",
+          "harper_core=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libharper_core-3e73cf23942f3fb1.rlib",
+          "--extern",
+          "harper_tex=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libharper_tex-8ec51a7d8f6c399f.rlib",
+          "--extern",
+          "harper_typst=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libharper_typst-652ed8477b3bd2cb.rlib",
+          "--extern",
+          "image=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libimage-c06af64dfc6c7b7f.rlib",
+          "--extern",
+          "libghostty_vt=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/liblibghostty_vt-5de6bb4d0eb87ec2.rlib",
+          "--extern",
+          "memmap2=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libmemmap2-1ed3d9f3067bf624.rlib",
+          "--extern",
+          "nix=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libnix-7bd4d02dabe722de.rlib",
+          "--extern",
+          "notify=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libnotify-9f9d3077fb7e7549.rlib",
+          "--extern",
+          "objc2=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libobjc2-4c5b041b0551eb5d.rlib",
+          "--extern",
+          "objc2_app_kit=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libobjc2_app_kit-bbd71fb037f87aa5.rlib",
+          "--extern",
+          "objc2_foundation=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libobjc2_foundation-064024f465338093.rlib",
+          "--extern",
+          "objc2_web_kit=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libobjc2_web_kit-0e3b748df712ea70.rlib",
+          "--extern",
+          "pdfium_render=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libpdfium_render-45e78bcb0c866fed.rlib",
+          "--extern",
+          "portable_pty=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libportable_pty-3d63b191c8381caa.rlib",
+          "--extern",
+          "pulldown_cmark=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libpulldown_cmark-898cc7d73cbd4b34.rlib",
+          "--extern",
+          "raw_window_handle=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libraw_window_handle-bdb5a5a181fda535.rlib",
+          "--extern",
+          "regex_automata=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libregex_automata-1dfd4d05119996c5.rlib",
+          "--extern",
+          "rfd=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/librfd-1013e9f81f3576e2.rlib",
+          "--extern",
+          "serde=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libserde-fe59788ff775b196.rlib",
+          "--extern",
+          "serde_json=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libserde_json-77e60027b6f356e7.rlib",
+          "--extern",
+          "serde_path_to_error=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libserde_path_to_error-b7925baf1c1353dd.rlib",
+          "--extern",
+          "shlex=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libshlex-8a34a1058b96256c.rlib",
+          "--extern",
+          "skrifa=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libskrifa-cf890bec0de59ecc.rlib",
+          "--extern",
+          "syntect=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libsyntect-73a66e842b7db49e.rlib",
+          "--extern",
+          "tempfile=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libtempfile-af8204b02ea5112e.rlib",
+          "--extern",
+          "tiptoptyp=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libtiptoptyp-1c7c22d1ad0db0f3.rlib",
+          "--extern",
+          "tiptoptyp_core=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libtiptoptyp_core-f204ca48954d315a.rlib",
+          "--extern",
+          "toml=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libtoml-a46ab44eeed2cf45.rlib",
+          "--extern",
+          "tract_onnx=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libtract_onnx-e7787b9957ed9374.rlib",
+          "--extern",
+          "typst_syntax=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libtypst_syntax-075081736fe51d88.rlib",
+          "--extern",
+          "ureq=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libureq-ac75315c48ddf90c.rlib",
+          "--extern",
+          "url=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/liburl-c4fff083b278c2b2.rlib",
+          "--extern",
+          "winit=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libwinit-526f5e65871e19d9.rlib",
+          "--extern",
+          "wry=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libwry-5a5c0b656b885aa2.rlib",
+          "-L",
+          "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/objc2-exception-helper-fbe83ac8f8ef6e34/out",
+          "-L",
+          "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/libghostty-vt-sys-b73abd1734179366/out/ghostty-install/lib",
+          "-L",
+          "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/tract-linalg-ffdb6d0f8ffcb525/out",
+          "-L",
+          "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/tract-linalg-ffdb6d0f8ffcb525/out",
+          "-L",
+          "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/tract-linalg-ffdb6d0f8ffcb525/out",
+          "-L",
+          "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/tract-linalg-ffdb6d0f8ffcb525/out",
+          "-L",
+          "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/tract-linalg-ffdb6d0f8ffcb525/out",
+          "-L",
+          "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/tract-linalg-ffdb6d0f8ffcb525/out",
+          "-L",
+          "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/ring-4713900efa1e00d0/out",
+          "-o",
+          "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-reuse-measure/native-before"
+        ],
+        "module_sha256": "83e2b079920b306fee016bb663bcba692fceb63cdb4ec0d5e59c9745b7641ac1",
+        "helper_sha256": "05b821775e0cad4bbfb8de5f8941deab3e6808fd7fb68e1eed40941ffe582eaf",
+        "harness_sha256": "83a40fa23ef87cdb1311e4a7629159dd0d4c5b5127cc2774b8fee6181b069794",
+        "binary_sha256": "58afd455060eddfe1837946dc3f5a3977331f9a7db3df6f455220a54432f6c2d"
+      },
+      "after": {
+        "argv": [
+          "/Users/calvinkhor/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/rustc",
+          "--crate-name",
+          "native_preview_zoom",
+          "--edition=2024",
+          "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-reuse-measure/after.rs",
+          "--error-format=json",
+          "--json=diagnostic-rendered-ansi,artifacts,future-incompat",
+          "--emit=link",
+          "-C",
+          "opt-level=3",
+          "-C",
+          "lto=thin",
+          "-C",
+          "codegen-units=1",
+          "--cfg",
+          "test",
+          "--cfg",
+          "feature=\"desktop-ui-tests\"",
+          "--check-cfg",
+          "cfg(docsrs,test)",
+          "--check-cfg",
+          "cfg(feature, values(\"desktop-ui-tests\", \"native-ui-tests\", \"production\", \"profiling\"))",
+          "-C",
+          "metadata=3587d52abb905e1c",
+          "-C",
+          "strip=symbols",
+          "-L",
+          "dependency=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps",
+          "--extern",
+          "block2=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libblock2-268cf9d2e7ad1632.rlib",
+          "--extern",
+          "eframe=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libeframe-35661fec22f326d1.rlib",
+          "--extern",
+          "egui_kittest=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libegui_kittest-ac939f46367cca40.rlib",
+          "--extern",
+          "egui_ltreeview=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libegui_ltreeview-478591dabb6d97c3.rlib",
+          "--extern",
+          "encoding_rs=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libencoding_rs-c72dd5ac11c033bc.rlib",
+          "--extern",
+          "harfrust=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libharfrust-1592b2ff460a8d31.rlib",
+          "--extern",
+          "harper_core=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libharper_core-3e73cf23942f3fb1.rlib",
+          "--extern",
+          "harper_tex=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libharper_tex-8ec51a7d8f6c399f.rlib",
+          "--extern",
+          "harper_typst=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libharper_typst-652ed8477b3bd2cb.rlib",
+          "--extern",
+          "image=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libimage-c06af64dfc6c7b7f.rlib",
+          "--extern",
+          "libghostty_vt=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/liblibghostty_vt-5de6bb4d0eb87ec2.rlib",
+          "--extern",
+          "memmap2=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libmemmap2-1ed3d9f3067bf624.rlib",
+          "--extern",
+          "nix=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libnix-7bd4d02dabe722de.rlib",
+          "--extern",
+          "notify=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libnotify-9f9d3077fb7e7549.rlib",
+          "--extern",
+          "objc2=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libobjc2-4c5b041b0551eb5d.rlib",
+          "--extern",
+          "objc2_app_kit=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libobjc2_app_kit-bbd71fb037f87aa5.rlib",
+          "--extern",
+          "objc2_foundation=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libobjc2_foundation-064024f465338093.rlib",
+          "--extern",
+          "objc2_web_kit=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libobjc2_web_kit-0e3b748df712ea70.rlib",
+          "--extern",
+          "pdfium_render=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libpdfium_render-45e78bcb0c866fed.rlib",
+          "--extern",
+          "portable_pty=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libportable_pty-3d63b191c8381caa.rlib",
+          "--extern",
+          "pulldown_cmark=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libpulldown_cmark-898cc7d73cbd4b34.rlib",
+          "--extern",
+          "raw_window_handle=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libraw_window_handle-bdb5a5a181fda535.rlib",
+          "--extern",
+          "regex_automata=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libregex_automata-1dfd4d05119996c5.rlib",
+          "--extern",
+          "rfd=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/librfd-1013e9f81f3576e2.rlib",
+          "--extern",
+          "serde=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libserde-fe59788ff775b196.rlib",
+          "--extern",
+          "serde_json=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libserde_json-77e60027b6f356e7.rlib",
+          "--extern",
+          "serde_path_to_error=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libserde_path_to_error-b7925baf1c1353dd.rlib",
+          "--extern",
+          "shlex=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libshlex-8a34a1058b96256c.rlib",
+          "--extern",
+          "skrifa=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libskrifa-cf890bec0de59ecc.rlib",
+          "--extern",
+          "syntect=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libsyntect-73a66e842b7db49e.rlib",
+          "--extern",
+          "tempfile=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libtempfile-af8204b02ea5112e.rlib",
+          "--extern",
+          "tiptoptyp=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libtiptoptyp-1c7c22d1ad0db0f3.rlib",
+          "--extern",
+          "tiptoptyp_core=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libtiptoptyp_core-f204ca48954d315a.rlib",
+          "--extern",
+          "toml=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libtoml-a46ab44eeed2cf45.rlib",
+          "--extern",
+          "tract_onnx=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libtract_onnx-e7787b9957ed9374.rlib",
+          "--extern",
+          "typst_syntax=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libtypst_syntax-075081736fe51d88.rlib",
+          "--extern",
+          "ureq=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libureq-ac75315c48ddf90c.rlib",
+          "--extern",
+          "url=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/liburl-c4fff083b278c2b2.rlib",
+          "--extern",
+          "winit=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libwinit-526f5e65871e19d9.rlib",
+          "--extern",
+          "wry=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libwry-5a5c0b656b885aa2.rlib",
+          "-L",
+          "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/objc2-exception-helper-fbe83ac8f8ef6e34/out",
+          "-L",
+          "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/libghostty-vt-sys-b73abd1734179366/out/ghostty-install/lib",
+          "-L",
+          "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/tract-linalg-ffdb6d0f8ffcb525/out",
+          "-L",
+          "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/tract-linalg-ffdb6d0f8ffcb525/out",
+          "-L",
+          "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/tract-linalg-ffdb6d0f8ffcb525/out",
+          "-L",
+          "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/tract-linalg-ffdb6d0f8ffcb525/out",
+          "-L",
+          "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/tract-linalg-ffdb6d0f8ffcb525/out",
+          "-L",
+          "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/tract-linalg-ffdb6d0f8ffcb525/out",
+          "-L",
+          "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/ring-4713900efa1e00d0/out",
+          "-o",
+          "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-reuse-measure/native-after"
+        ],
+        "module_sha256": "665a76391fe6ef5c6f75ca1f22927da1ac16fdea58fbb300494aea725bf4181c",
+        "helper_sha256": "4e8f7c99c1ac4e93c7ed2f01bccad641baedf9728eb10e4d55a3c03c87ae01f6",
+        "harness_sha256": "0df26fa5b53bf6a82dba8be49e6ccd10acf5c1dac1593556c1d2b5c13c04459a",
+        "binary_sha256": "c16d8d483c62368d466d649b108d2784890f0d11ffda5d15874f9c6afee4bd20"
+      }
+    },
+    "cargo_arguments": [
+      "/Users/calvinkhor/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/rustc",
+      "--crate-name",
+      "native_preview_zoom",
+      "--edition=2024",
+      "tests/native_preview_zoom.rs",
+      "--error-format=json",
+      "--json=diagnostic-rendered-ansi,artifacts,future-incompat",
+      "--emit=dep-info,link",
+      "-C",
+      "opt-level=3",
+      "-C",
+      "lto=thin",
+      "-C",
+      "codegen-units=1",
+      "--cfg",
+      "test",
+      "--cfg",
+      "feature=\"desktop-ui-tests\"",
+      "--check-cfg",
+      "cfg(docsrs,test)",
+      "--check-cfg",
+      "cfg(feature, values(\"desktop-ui-tests\", \"native-ui-tests\", \"production\", \"profiling\"))",
+      "-C",
+      "metadata=3587d52abb905e1c",
+      "-C",
+      "extra-filename=-a68776b8fcbd9cb4",
+      "--out-dir",
+      "/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps",
+      "-C",
+      "strip=symbols",
+      "-L",
+      "dependency=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps",
+      "--extern",
+      "block2=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libblock2-268cf9d2e7ad1632.rlib",
+      "--extern",
+      "eframe=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libeframe-35661fec22f326d1.rlib",
+      "--extern",
+      "egui_kittest=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libegui_kittest-ac939f46367cca40.rlib",
+      "--extern",
+      "egui_ltreeview=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libegui_ltreeview-478591dabb6d97c3.rlib",
+      "--extern",
+      "encoding_rs=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libencoding_rs-c72dd5ac11c033bc.rlib",
+      "--extern",
+      "harfrust=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libharfrust-1592b2ff460a8d31.rlib",
+      "--extern",
+      "harper_core=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libharper_core-3e73cf23942f3fb1.rlib",
+      "--extern",
+      "harper_tex=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libharper_tex-8ec51a7d8f6c399f.rlib",
+      "--extern",
+      "harper_typst=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libharper_typst-652ed8477b3bd2cb.rlib",
+      "--extern",
+      "image=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libimage-c06af64dfc6c7b7f.rlib",
+      "--extern",
+      "libghostty_vt=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/liblibghostty_vt-5de6bb4d0eb87ec2.rlib",
+      "--extern",
+      "memmap2=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libmemmap2-1ed3d9f3067bf624.rlib",
+      "--extern",
+      "nix=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libnix-7bd4d02dabe722de.rlib",
+      "--extern",
+      "notify=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libnotify-9f9d3077fb7e7549.rlib",
+      "--extern",
+      "objc2=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libobjc2-4c5b041b0551eb5d.rlib",
+      "--extern",
+      "objc2_app_kit=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libobjc2_app_kit-bbd71fb037f87aa5.rlib",
+      "--extern",
+      "objc2_foundation=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libobjc2_foundation-064024f465338093.rlib",
+      "--extern",
+      "objc2_web_kit=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libobjc2_web_kit-0e3b748df712ea70.rlib",
+      "--extern",
+      "pdfium_render=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libpdfium_render-45e78bcb0c866fed.rlib",
+      "--extern",
+      "portable_pty=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libportable_pty-3d63b191c8381caa.rlib",
+      "--extern",
+      "pulldown_cmark=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libpulldown_cmark-898cc7d73cbd4b34.rlib",
+      "--extern",
+      "raw_window_handle=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libraw_window_handle-bdb5a5a181fda535.rlib",
+      "--extern",
+      "regex_automata=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libregex_automata-1dfd4d05119996c5.rlib",
+      "--extern",
+      "rfd=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/librfd-1013e9f81f3576e2.rlib",
+      "--extern",
+      "serde=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libserde-fe59788ff775b196.rlib",
+      "--extern",
+      "serde_json=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libserde_json-77e60027b6f356e7.rlib",
+      "--extern",
+      "serde_path_to_error=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libserde_path_to_error-b7925baf1c1353dd.rlib",
+      "--extern",
+      "shlex=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libshlex-8a34a1058b96256c.rlib",
+      "--extern",
+      "skrifa=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libskrifa-cf890bec0de59ecc.rlib",
+      "--extern",
+      "syntect=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libsyntect-73a66e842b7db49e.rlib",
+      "--extern",
+      "tempfile=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libtempfile-af8204b02ea5112e.rlib",
+      "--extern",
+      "tiptoptyp=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libtiptoptyp-1c7c22d1ad0db0f3.rlib",
+      "--extern",
+      "tiptoptyp_core=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libtiptoptyp_core-f204ca48954d315a.rlib",
+      "--extern",
+      "toml=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libtoml-a46ab44eeed2cf45.rlib",
+      "--extern",
+      "tract_onnx=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libtract_onnx-e7787b9957ed9374.rlib",
+      "--extern",
+      "typst_syntax=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libtypst_syntax-075081736fe51d88.rlib",
+      "--extern",
+      "ureq=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libureq-ac75315c48ddf90c.rlib",
+      "--extern",
+      "url=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/liburl-c4fff083b278c2b2.rlib",
+      "--extern",
+      "winit=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libwinit-526f5e65871e19d9.rlib",
+      "--extern",
+      "wry=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/deps/libwry-5a5c0b656b885aa2.rlib",
+      "-L",
+      "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/objc2-exception-helper-fbe83ac8f8ef6e34/out",
+      "-L",
+      "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/libghostty-vt-sys-b73abd1734179366/out/ghostty-install/lib",
+      "-L",
+      "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/tract-linalg-ffdb6d0f8ffcb525/out",
+      "-L",
+      "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/tract-linalg-ffdb6d0f8ffcb525/out",
+      "-L",
+      "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/tract-linalg-ffdb6d0f8ffcb525/out",
+      "-L",
+      "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/tract-linalg-ffdb6d0f8ffcb525/out",
+      "-L",
+      "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/tract-linalg-ffdb6d0f8ffcb525/out",
+      "-L",
+      "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/tract-linalg-ffdb6d0f8ffcb525/out",
+      "-L",
+      "native=/Users/calvinkhor/Documents/GitHub/mytypst/target/release/build/ring-4713900efa1e00d0/out"
+    ],
+    "original_shared_harness_sha256": "6cc489476e60859610f8f83ba41293753ecba323293b913039814b23c32c2f4b",
+    "private_harness_differences": "Absolute module/helper include paths select preserved baseline or current production source. Baseline test-fixture include path is made absolute; runtime logic is unchanged.",
+    "app_binary_sha256": "c88754cddb9c98f42b91dda1f0a1caa912f8e55658b113cee3d5d17fa11eea82",
+    "local_compiler_cache": "Initial owned release build stalled in compiler-cache clients. Only that build and its descendants were stopped; no global cache daemon or other project was changed. Final builds used the real rustup compiler and matching rustdoc.",
+    "excluded_check": "First cache-bypass doctest attempt used Homebrew rustdoc with rustup-compiled dependencies; corrected toolchain rerun passed."
+  },
+  "measurements": {
+    "started_utc": "2026-10-10T23:51:38.145083+00:00",
+    "os": "ProductName:\t\tmacOS\nProductVersion:\t\t14.6.1\nBuildVersion:\t\t23G93\n",
+    "hardware": "Apple M2 Max",
+    "power": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=21037155)\t100%; charged; 0:00 remaining present: true\n",
+    "warmup_seconds": 3,
+    "viewport": [
+      640,
+      420
+    ],
+    "first_burst": {
+      "webcontent_block_ms": 800,
+      "owned_keys": 4
+    },
+    "second_gesture": {
+      "webcontent_block_ms": 800,
+      "native_actions": 1,
+      "starts_immediately_after_sharp_handoff": true
+    },
+    "activation_policy": "Prohibited; no global input",
+    "runs": [
+      {
+        "lane": "before",
+        "sample": 1,
+        "process_seconds": 5.154081708053127,
+        "binary_sha256": "58afd455060eddfe1837946dc3f5a3977331f9a7db3df6f455220a54432f6c2d",
+        "receipt": ".tiptoptyp/profiles/zoom-reuse-measure/before-1.json",
+        "handoff_probe": {
+          "after": {
+            "active": false,
+            "cached": false,
+            "capture_view": [
+              1.0,
+              1.0
+            ],
+            "deferred": false,
+            "enabled": true,
+            "handoffs": 2,
+            "hits": 4,
+            "image_layers": 0,
+            "image_origin": [
+              -320.0,
+              -420.0
+            ],
+            "image_size": [
+              1280.0,
+              1260.0
+            ],
+            "in_flight": null,
+            "inputs": 5,
+            "pending": null,
+            "pinch": false,
+            "pixels": [
+              1990,
+              1959
+            ],
+            "revision": 5,
+            "scale": 1.6105100000000008,
+            "transform": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "cached_after_sharp": false,
+          "cached_feedback_us": null,
+          "during_block": {
+            "active": false,
+            "cached": false,
+            "capture_view": [
+              1.0,
+              1.0
+            ],
+            "deferred": false,
+            "enabled": true,
+            "handoffs": 1,
+            "hits": 4,
+            "image_layers": 0,
+            "image_origin": [
+              -320.0,
+              -420.0
+            ],
+            "image_size": [
+              1280.0,
+              1260.0
+            ],
+            "in_flight": 5,
+            "inputs": 5,
+            "pending": null,
+            "pinch": false,
+            "pixels": [
+              1990,
+              1959
+            ],
+            "revision": 5,
+            "scale": 1.6105100000000008,
+            "transform": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "input_to_sharp_ms": 829.966875
+        }
+      },
+      {
+        "lane": "after",
+        "sample": 1,
+        "process_seconds": 4.955268291058019,
+        "binary_sha256": "c16d8d483c62368d466d649b108d2784890f0d11ffda5d15874f9c6afee4bd20",
+        "receipt": ".tiptoptyp/profiles/zoom-reuse-measure/after-1.json",
+        "handoff_probe": {
+          "after": {
+            "active": false,
+            "base_scale": 1.0,
+            "cached": true,
+            "capture_view": [
+              1.0,
+              1.0
+            ],
+            "capturing": false,
+            "deferred": false,
+            "enabled": true,
+            "handoffs": 2,
+            "hits": 5,
+            "image_layers": 1,
+            "image_origin": [
+              -320.0,
+              -420.0
+            ],
+            "image_size": [
+              1280.0,
+              1260.0
+            ],
+            "in_flight": null,
+            "inputs": 5,
+            "pending": null,
+            "pinch": false,
+            "pixels": [
+              1990,
+              1959
+            ],
+            "prepared": false,
+            "revision": 5,
+            "scale": 1.6105100000000008,
+            "source_paper": [
+              0.0,
+              0.0,
+              640.0,
+              1260.0
+            ],
+            "transform": [
+              1.6105100000000008,
+              -195.3632000000002,
+              -128.2071000000001
+            ]
+          },
+          "cached_after_sharp": true,
+          "cached_feedback_us": 42.208,
+          "during_block": {
+            "active": true,
+            "base_scale": 1.0,
+            "cached": true,
+            "capture_view": [
+              1.0,
+              1.0
+            ],
+            "capturing": false,
+            "deferred": true,
+            "enabled": true,
+            "handoffs": 1,
+            "hits": 5,
+            "image_layers": 1,
+            "image_origin": [
+              -320.0,
+              -420.0
+            ],
+            "image_size": [
+              1280.0,
+              1260.0
+            ],
+            "in_flight": null,
+            "inputs": 5,
+            "pending": 5,
+            "pinch": false,
+            "pixels": [
+              1990,
+              1959
+            ],
+            "prepared": false,
+            "revision": 5,
+            "scale": 1.6105100000000008,
+            "source_paper": [
+              0.0,
+              0.0,
+              640.0,
+              1260.0
+            ],
+            "transform": [
+              1.6105100000000008,
+              -195.3632000000002,
+              -128.2071000000001
+            ]
+          },
+          "input_to_sharp_ms": 824.267667
+        }
+      },
+      {
+        "lane": "before",
+        "sample": 2,
+        "process_seconds": 4.979058832861483,
+        "binary_sha256": "58afd455060eddfe1837946dc3f5a3977331f9a7db3df6f455220a54432f6c2d",
+        "receipt": ".tiptoptyp/profiles/zoom-reuse-measure/before-2.json",
+        "handoff_probe": {
+          "after": {
+            "active": false,
+            "cached": false,
+            "capture_view": [
+              1.0,
+              1.0
+            ],
+            "deferred": false,
+            "enabled": true,
+            "handoffs": 2,
+            "hits": 4,
+            "image_layers": 0,
+            "image_origin": [
+              -320.0,
+              -420.0
+            ],
+            "image_size": [
+              1280.0,
+              1260.0
+            ],
+            "in_flight": null,
+            "inputs": 5,
+            "pending": null,
+            "pinch": false,
+            "pixels": [
+              1990,
+              1959
+            ],
+            "revision": 5,
+            "scale": 1.6105100000000008,
+            "transform": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "cached_after_sharp": false,
+          "cached_feedback_us": null,
+          "during_block": {
+            "active": false,
+            "cached": false,
+            "capture_view": [
+              1.0,
+              1.0
+            ],
+            "deferred": false,
+            "enabled": true,
+            "handoffs": 1,
+            "hits": 4,
+            "image_layers": 0,
+            "image_origin": [
+              -320.0,
+              -420.0
+            ],
+            "image_size": [
+              1280.0,
+              1260.0
+            ],
+            "in_flight": 5,
+            "inputs": 5,
+            "pending": null,
+            "pinch": false,
+            "pixels": [
+              1990,
+              1959
+            ],
+            "revision": 5,
+            "scale": 1.6105100000000008,
+            "transform": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "input_to_sharp_ms": 827.462875
+        }
+      },
+      {
+        "lane": "after",
+        "sample": 2,
+        "process_seconds": 4.97125383396633,
+        "binary_sha256": "c16d8d483c62368d466d649b108d2784890f0d11ffda5d15874f9c6afee4bd20",
+        "receipt": ".tiptoptyp/profiles/zoom-reuse-measure/after-2.json",
+        "handoff_probe": {
+          "after": {
+            "active": false,
+            "base_scale": 1.0,
+            "cached": true,
+            "capture_view": [
+              1.0,
+              1.0
+            ],
+            "capturing": false,
+            "deferred": false,
+            "enabled": true,
+            "handoffs": 2,
+            "hits": 5,
+            "image_layers": 1,
+            "image_origin": [
+              -320.0,
+              -420.0
+            ],
+            "image_size": [
+              1280.0,
+              1260.0
+            ],
+            "in_flight": null,
+            "inputs": 5,
+            "pending": null,
+            "pinch": false,
+            "pixels": [
+              1990,
+              1959
+            ],
+            "prepared": false,
+            "revision": 5,
+            "scale": 1.6105100000000008,
+            "source_paper": [
+              0.0,
+              0.0,
+              640.0,
+              1260.0
+            ],
+            "transform": [
+              1.6105100000000008,
+              -195.3632000000002,
+              -128.2071000000001
+            ]
+          },
+          "cached_after_sharp": true,
+          "cached_feedback_us": 49.458,
+          "during_block": {
+            "active": true,
+            "base_scale": 1.0,
+            "cached": true,
+            "capture_view": [
+              1.0,
+              1.0
+            ],
+            "capturing": false,
+            "deferred": true,
+            "enabled": true,
+            "handoffs": 1,
+            "hits": 5,
+            "image_layers": 1,
+            "image_origin": [
+              -320.0,
+              -420.0
+            ],
+            "image_size": [
+              1280.0,
+              1260.0
+            ],
+            "in_flight": null,
+            "inputs": 5,
+            "pending": 5,
+            "pinch": false,
+            "pixels": [
+              1990,
+              1959
+            ],
+            "prepared": false,
+            "revision": 5,
+            "scale": 1.6105100000000008,
+            "source_paper": [
+              0.0,
+              0.0,
+              640.0,
+              1260.0
+            ],
+            "transform": [
+              1.6105100000000008,
+              -195.3632000000002,
+              -128.2071000000001
+            ]
+          },
+          "input_to_sharp_ms": 831.656875
+        }
+      },
+      {
+        "lane": "before",
+        "sample": 3,
+        "process_seconds": 4.9390835841186345,
+        "binary_sha256": "58afd455060eddfe1837946dc3f5a3977331f9a7db3df6f455220a54432f6c2d",
+        "receipt": ".tiptoptyp/profiles/zoom-reuse-measure/before-3.json",
+        "handoff_probe": {
+          "after": {
+            "active": false,
+            "cached": false,
+            "capture_view": [
+              1.0,
+              1.0
+            ],
+            "deferred": false,
+            "enabled": true,
+            "handoffs": 2,
+            "hits": 4,
+            "image_layers": 0,
+            "image_origin": [
+              -320.0,
+              -420.0
+            ],
+            "image_size": [
+              1280.0,
+              1260.0
+            ],
+            "in_flight": null,
+            "inputs": 5,
+            "pending": null,
+            "pinch": false,
+            "pixels": [
+              1990,
+              1959
+            ],
+            "revision": 5,
+            "scale": 1.6105100000000008,
+            "transform": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "cached_after_sharp": false,
+          "cached_feedback_us": null,
+          "during_block": {
+            "active": false,
+            "cached": false,
+            "capture_view": [
+              1.0,
+              1.0
+            ],
+            "deferred": false,
+            "enabled": true,
+            "handoffs": 1,
+            "hits": 4,
+            "image_layers": 0,
+            "image_origin": [
+              -320.0,
+              -420.0
+            ],
+            "image_size": [
+              1280.0,
+              1260.0
+            ],
+            "in_flight": 5,
+            "inputs": 5,
+            "pending": null,
+            "pinch": false,
+            "pixels": [
+              1990,
+              1959
+            ],
+            "revision": 5,
+            "scale": 1.6105100000000008,
+            "transform": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "input_to_sharp_ms": 829.5900419999999
+        }
+      },
+      {
+        "lane": "after",
+        "sample": 3,
+        "process_seconds": 4.9660822078585625,
+        "binary_sha256": "c16d8d483c62368d466d649b108d2784890f0d11ffda5d15874f9c6afee4bd20",
+        "receipt": ".tiptoptyp/profiles/zoom-reuse-measure/after-3.json",
+        "handoff_probe": {
+          "after": {
+            "active": false,
+            "base_scale": 1.0,
+            "cached": true,
+            "capture_view": [
+              1.0,
+              1.0
+            ],
+            "capturing": false,
+            "deferred": false,
+            "enabled": true,
+            "handoffs": 2,
+            "hits": 5,
+            "image_layers": 1,
+            "image_origin": [
+              -320.0,
+              -420.0
+            ],
+            "image_size": [
+              1280.0,
+              1260.0
+            ],
+            "in_flight": null,
+            "inputs": 5,
+            "pending": null,
+            "pinch": false,
+            "pixels": [
+              1990,
+              1959
+            ],
+            "prepared": false,
+            "revision": 5,
+            "scale": 1.6105100000000008,
+            "source_paper": [
+              0.0,
+              0.0,
+              640.0,
+              1260.0
+            ],
+            "transform": [
+              1.6105100000000008,
+              -195.3632000000002,
+              -128.2071000000001
+            ]
+          },
+          "cached_after_sharp": true,
+          "cached_feedback_us": 63.791,
+          "during_block": {
+            "active": true,
+            "base_scale": 1.0,
+            "cached": true,
+            "capture_view": [
+              1.0,
+              1.0
+            ],
+            "capturing": false,
+            "deferred": true,
+            "enabled": true,
+            "handoffs": 1,
+            "hits": 5,
+            "image_layers": 1,
+            "image_origin": [
+              -320.0,
+              -420.0
+            ],
+            "image_size": [
+              1280.0,
+              1260.0
+            ],
+            "in_flight": null,
+            "inputs": 5,
+            "pending": 5,
+            "pinch": false,
+            "pixels": [
+              1990,
+              1959
+            ],
+            "prepared": false,
+            "revision": 5,
+            "scale": 1.6105100000000008,
+            "source_paper": [
+              0.0,
+              0.0,
+              640.0,
+              1260.0
+            ],
+            "transform": [
+              1.6105100000000008,
+              -195.3632000000002,
+              -128.2071000000001
+            ]
+          },
+          "input_to_sharp_ms": 832.3502080000001
+        }
+      }
+    ]
+  },
+  "interpretation": {
+    "before": "All three back-to-back gestures had no retained cache. No native image update; sharp response 827\u2013830 ms during forced 800 ms WebContent block.",
+    "after": "All three retained a usable image. Native layer-update submission 42.208\u201363.791 microseconds; sharp response 824\u2013832 ms.",
+    "not_established": [
+      "GPU presented-frame cadence",
+      "whole-editor perceived smoothness",
+      "dense-document final-render latency speedup",
+      "CPU/RSS savings",
+      "physical trackpad pinch"
+    ]
+  },
+  "resource_bounds": {
+    "steady_admitted_pixels": 4000000,
+    "max_prepared_replacements": 1,
+    "max_capture_jobs_per_view": 1,
+    "admitted_plus_prepared_pixels": 8000000,
+    "approx_rgba_mebibytes": 30.517578125,
+    "limitations": "Excludes capture/GPU copies and allocator overhead; this is a pixel bound, not measured process memory. No input-triggered screenshot, resampling, per-input worker, or idle repaint loop added. Coverage guard does constant work for full mode and logarithmic page lookups for partial mode."
+  },
+  "checks": {
+    "focused": {
+      "passed": 25,
+      "failed": 0,
+      "ignored": 0
+    },
+    "rust": {
+      "passed": 1806,
+      "failed": 0,
+      "ignored": 44
+    },
+    "xtask": {
+      "passed": 17,
+      "failed": 0,
+      "ignored": 0
+    },
+    "fmt": "passed",
+    "clippy_all_targets": "passed",
+    "clippy_native_desktop_test": "passed",
+    "javascript": 82,
+    "desktop_harness_contracts": 56,
+    "release_native_build": "passed",
+    "text_diff_check": "Changed documentation and added source/test files passed; unrestricted check reports whitespace inside pre-existing unrelated todo.pdf binary, which was left untouched."
+  },
+  "native_checks": [
+    {
+      "receipt": ".tiptoptyp/profiles/zoom-reuse-native-final/mock.json",
+      "mode": "mock",
+      "actual_tinymist": false,
+      "partial": null,
+      "responsive_during_block": true,
+      "vector_requests": 1,
+      "refresh_race": {
+        "after": {
+          "active": false,
+          "base_scale": 1.6105100000000008,
+          "cached": true,
+          "capture_view": [
+            1.0,
+            1.0
+          ],
+          "capturing": false,
+          "deferred": false,
+          "enabled": true,
+          "handoffs": 2,
+          "hits": 5,
+          "image_layers": 1,
+          "image_origin": [
+            -320.0,
+            -420.0
+          ],
+          "image_size": [
+            1280.0,
+            1260.0
+          ],
+          "in_flight": null,
+          "inputs": 5,
+          "pending": null,
+          "pinch": false,
+          "pixels": [
+            1990,
+            1959
+          ],
+          "prepared": false,
+          "revision": 5,
+          "scale": 1.6105100000000008,
+          "source_paper": [
+            0.0,
+            0.0,
+            1030.7264404296875,
+            2029.2425537109375
+          ],
+          "transform": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "before": {
+          "active": false,
+          "base_scale": 1.0,
+          "cached": true,
+          "capture_view": [
+            1.0,
+            1.0
+          ],
+          "capturing": false,
+          "deferred": false,
+          "enabled": true,
+          "handoffs": 1,
+          "hits": 4,
+          "image_layers": 1,
+          "image_origin": [
+            -320.0,
+            -420.0
+          ],
+          "image_size": [
+            1280.0,
+            1260.0
+          ],
+          "in_flight": null,
+          "inputs": 4,
+          "pending": null,
+          "pinch": false,
+          "pixels": [
+            1990,
+            1959
+          ],
+          "prepared": false,
+          "revision": 4,
+          "scale": 1.4641000000000006,
+          "source_paper": [
+            0.0,
+            0.0,
+            640.0,
+            1260.0
+          ],
+          "transform": [
+            1.4641000000000006,
+            -148.51200000000014,
+            -97.46100000000008
+          ]
+        },
+        "prepared": {
+          "active": false,
+          "base_scale": 1.0,
+          "cached": true,
+          "capture_view": [
+            1.0,
+            1.0
+          ],
+          "capturing": false,
+          "deferred": false,
+          "enabled": true,
+          "handoffs": 1,
+          "hits": 4,
+          "image_layers": 1,
+          "image_origin": [
+            -320.0,
+            -420.0
+          ],
+          "image_size": [
+            1280.0,
+            1260.0
+          ],
+          "in_flight": null,
+          "inputs": 4,
+          "pending": null,
+          "pinch": false,
+          "pixels": [
+            1990,
+            1959
+          ],
+          "prepared": true,
+          "revision": 4,
+          "scale": 1.4641000000000006,
+          "source_paper": [
+            0.0,
+            0.0,
+            640.0,
+            1260.0
+          ],
+          "transform": [
+            1.4641000000000006,
+            -148.51200000000014,
+            -97.46100000000008
+          ]
+        },
+        "raced": {
+          "active": true,
+          "base_scale": 1.0,
+          "cached": true,
+          "capture_view": [
+            1.0,
+            1.0
+          ],
+          "capturing": false,
+          "deferred": true,
+          "enabled": true,
+          "handoffs": 1,
+          "hits": 5,
+          "image_layers": 1,
+          "image_origin": [
+            -320.0,
+            -420.0
+          ],
+          "image_size": [
+            1280.0,
+            1260.0
+          ],
+          "in_flight": null,
+          "inputs": 5,
+          "pending": 5,
+          "pinch": false,
+          "pixels": [
+            1990,
+            1959
+          ],
+          "prepared": false,
+          "revision": 5,
+          "scale": 1.6105100000000008,
+          "source_paper": [
+            0.0,
+            0.0,
+            640.0,
+            1260.0
+          ],
+          "transform": [
+            1.6105100000000008,
+            -195.3632000000002,
+            -128.2071000000001
+          ]
+        }
+      },
+      "uncovered_fallback": {
+        "active": false,
+        "base_scale": 1.6105100000000008,
+        "cached": false,
+        "capture_view": [
+          1.0,
+          1.0
+        ],
+        "capturing": false,
+        "deferred": false,
+        "enabled": true,
+        "handoffs": 2,
+        "hits": 5,
+        "image_layers": 0,
+        "image_origin": [
+          -320.0,
+          -420.0
+        ],
+        "image_size": [
+          1280.0,
+          1260.0
+        ],
+        "in_flight": 6,
+        "inputs": 6,
+        "pending": null,
+        "pinch": false,
+        "pixels": [
+          1990,
+          1959
+        ],
+        "prepared": false,
+        "revision": 6,
+        "scale": 0.1,
+        "source_paper": [
+          0.0,
+          0.0,
+          1030.7264404296875,
+          2029.2425537109375
+        ],
+        "transform": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "opacity_and_divider_changes": true,
+      "negative_keyboard_and_disable_release": "passed before probe exit"
+    },
+    {
+      "receipt": ".tiptoptyp/profiles/zoom-reuse-native-final/native-full.json",
+      "mode": "native-full",
+      "actual_tinymist": true,
+      "partial": false,
+      "responsive_during_block": true,
+      "vector_requests": 1,
+      "refresh_race": {
+        "after": {
+          "active": false,
+          "base_scale": 1.6105100000000008,
+          "cached": true,
+          "capture_view": [
+            1.0,
+            1.0
+          ],
+          "capturing": false,
+          "deferred": false,
+          "enabled": true,
+          "handoffs": 2,
+          "hits": 5,
+          "image_layers": 1,
+          "image_origin": [
+            -320.0,
+            -420.0
+          ],
+          "image_size": [
+            1280.0,
+            1260.0
+          ],
+          "in_flight": null,
+          "inputs": 5,
+          "pending": null,
+          "pinch": false,
+          "pixels": [
+            1990,
+            1959
+          ],
+          "prepared": false,
+          "revision": 5,
+          "scale": 1.6105100000000008,
+          "source_paper": [
+            -195.0,
+            -129.0,
+            1031.0,
+            64410.0
+          ],
+          "transform": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "before": {
+          "active": false,
+          "base_scale": 1.0,
+          "cached": true,
+          "capture_view": [
+            1.0,
+            1.0
+          ],
+          "capturing": false,
+          "deferred": false,
+          "enabled": true,
+          "handoffs": 1,
+          "hits": 4,
+          "image_layers": 1,
+          "image_origin": [
+            -320.0,
+            -420.0
+          ],
+          "image_size": [
+            1280.0,
+            1260.0
+          ],
+          "in_flight": null,
+          "inputs": 4,
+          "pending": null,
+          "pinch": false,
+          "pixels": [
+            1990,
+            1959
+          ],
+          "prepared": false,
+          "revision": 4,
+          "scale": 1.4641000000000006,
+          "source_paper": [
+            0.0,
+            -1.0,
+            640.0,
+            40143.0
+          ],
+          "transform": [
+            1.4641000000000006,
+            -148.51200000000014,
+            -97.46100000000008
+          ]
+        },
+        "prepared": {
+          "active": false,
+          "base_scale": 1.0,
+          "cached": true,
+          "capture_view": [
+            1.0,
+            1.0
+          ],
+          "capturing": false,
+          "deferred": false,
+          "enabled": true,
+          "handoffs": 1,
+          "hits": 4,
+          "image_layers": 1,
+          "image_origin": [
+            -320.0,
+            -420.0
+          ],
+          "image_size": [
+            1280.0,
+            1260.0
+          ],
+          "in_flight": null,
+          "inputs": 4,
+          "pending": null,
+          "pinch": false,
+          "pixels": [
+            1990,
+            1959
+          ],
+          "prepared": true,
+          "revision": 4,
+          "scale": 1.4641000000000006,
+          "source_paper": [
+            0.0,
+            -1.0,
+            640.0,
+            40143.0
+          ],
+          "transform": [
+            1.4641000000000006,
+            -148.51200000000014,
+            -97.46100000000008
+          ]
+        },
+        "raced": {
+          "active": true,
+          "base_scale": 1.0,
+          "cached": true,
+          "capture_view": [
+            1.0,
+            1.0
+          ],
+          "capturing": false,
+          "deferred": true,
+          "enabled": true,
+          "handoffs": 1,
+          "hits": 5,
+          "image_layers": 1,
+          "image_origin": [
+            -320.0,
+            -420.0
+          ],
+          "image_size": [
+            1280.0,
+            1260.0
+          ],
+          "in_flight": null,
+          "inputs": 5,
+          "pending": 5,
+          "pinch": false,
+          "pixels": [
+            1990,
+            1959
+          ],
+          "prepared": false,
+          "revision": 5,
+          "scale": 1.6105100000000008,
+          "source_paper": [
+            0.0,
+            -1.0,
+            640.0,
+            40143.0
+          ],
+          "transform": [
+            1.6105100000000008,
+            -195.3632000000002,
+            -128.2071000000001
+          ]
+        }
+      },
+      "uncovered_fallback": null,
+      "opacity_and_divider_changes": false,
+      "negative_keyboard_and_disable_release": "passed before probe exit"
+    },
+    {
+      "receipt": ".tiptoptyp/profiles/zoom-reuse-native-final/native-partial.json",
+      "mode": "native-partial",
+      "actual_tinymist": true,
+      "partial": true,
+      "responsive_during_block": true,
+      "vector_requests": 1,
+      "refresh_race": {
+        "after": {
+          "active": false,
+          "base_scale": 1.6105100000000008,
+          "cached": true,
+          "capture_view": [
+            1.0,
+            1.0
+          ],
+          "capturing": false,
+          "deferred": false,
+          "enabled": true,
+          "handoffs": 2,
+          "hits": 5,
+          "image_layers": 1,
+          "image_origin": [
+            -320.0,
+            -420.0
+          ],
+          "image_size": [
+            1280.0,
+            1260.0
+          ],
+          "in_flight": null,
+          "inputs": 5,
+          "pending": null,
+          "pinch": false,
+          "pixels": [
+            1990,
+            1959
+          ],
+          "prepared": false,
+          "revision": 5,
+          "scale": 1.6105100000000008,
+          "source_paper": [
+            -195.0,
+            -129.0,
+            1031.0,
+            64363.0
+          ],
+          "transform": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "before": {
+          "active": false,
+          "base_scale": 1.0,
+          "cached": true,
+          "capture_view": [
+            1.0,
+            1.0
+          ],
+          "capturing": false,
+          "deferred": false,
+          "enabled": true,
+          "handoffs": 1,
+          "hits": 4,
+          "image_layers": 2,
+          "image_origin": [
+            -320.0,
+            -420.0
+          ],
+          "image_size": [
+            1280.0,
+            1260.0
+          ],
+          "in_flight": null,
+          "inputs": 4,
+          "pending": null,
+          "pinch": false,
+          "pixels": [
+            1990,
+            1959
+          ],
+          "prepared": false,
+          "revision": 4,
+          "scale": 1.4641000000000006,
+          "source_paper": [
+            0.0,
+            -1.0,
+            640.0,
+            40143.0
+          ],
+          "transform": [
+            1.4641000000000006,
+            -148.51200000000014,
+            -97.4610000000001
+          ]
+        },
+        "prepared": {
+          "active": false,
+          "base_scale": 1.0,
+          "cached": true,
+          "capture_view": [
+            1.0,
+            1.0
+          ],
+          "capturing": false,
+          "deferred": false,
+          "enabled": true,
+          "handoffs": 1,
+          "hits": 4,
+          "image_layers": 2,
+          "image_origin": [
+            -320.0,
+            -420.0
+          ],
+          "image_size": [
+            1280.0,
+            1260.0
+          ],
+          "in_flight": null,
+          "inputs": 4,
+          "pending": null,
+          "pinch": false,
+          "pixels": [
+            1990,
+            1959
+          ],
+          "prepared": true,
+          "revision": 4,
+          "scale": 1.4641000000000006,
+          "source_paper": [
+            0.0,
+            -1.0,
+            640.0,
+            40143.0
+          ],
+          "transform": [
+            1.4641000000000006,
+            -148.51200000000014,
+            -97.4610000000001
+          ]
+        },
+        "raced": {
+          "active": true,
+          "base_scale": 1.0,
+          "cached": true,
+          "capture_view": [
+            1.0,
+            1.0
+          ],
+          "capturing": false,
+          "deferred": true,
+          "enabled": true,
+          "handoffs": 1,
+          "hits": 5,
+          "image_layers": 2,
+          "image_origin": [
+            -320.0,
+            -420.0
+          ],
+          "image_size": [
+            1280.0,
+            1260.0
+          ],
+          "in_flight": null,
+          "inputs": 5,
+          "pending": 5,
+          "pinch": false,
+          "pixels": [
+            1990,
+            1959
+          ],
+          "prepared": false,
+          "revision": 5,
+          "scale": 1.6105100000000008,
+          "source_paper": [
+            0.0,
+            -1.0,
+            640.0,
+            40143.0
+          ],
+          "transform": [
+            1.6105100000000008,
+            -195.3632000000002,
+            -128.20710000000017
+          ]
+        }
+      },
+      "uncovered_fallback": null,
+      "opacity_and_divider_changes": false,
+      "negative_keyboard_and_disable_release": "passed before probe exit"
+    }
+  ],
+  "visual_evidence": [
+    {
+      "path": ".tiptoptyp/screenshots/agent-review/zoom-reuse/native-buffer-zoom-out.png",
+      "sha256": "bd5cd19462d8d7f4472cbf5187b94a7855d6ec1334b48abbb252a255d28fd052",
+      "fresh_inspected": true,
+      "target": "isolated native clip-layer PNG, not composed editor window"
+    },
+    {
+      "path": ".tiptoptyp/screenshots/agent-review/zoom-edge/native-full-zoom-reuse-native-final.png",
+      "sha256": "684e26990f258ee7732d95d5ac87d0658fabdb5e7d9bf9b55c54ec5468c6a66f",
+      "fresh_inspected": true,
+      "target": "isolated native clip-layer PNG, not composed editor window"
+    },
+    {
+      "path": ".tiptoptyp/screenshots/agent-review/zoom-edge/native-partial-zoom-reuse-native-final.png",
+      "sha256": "684e26990f258ee7732d95d5ac87d0658fabdb5e7d9bf9b55c54ec5468c6a66f",
+      "fresh_inspected": true,
+      "target": "isolated native clip-layer PNG, not composed editor window"
+    }
+  ],
+  "visual_observation": "Retained ink, horizontally centered mock paper, opaque gutters, no transparency holes or dark seam. Isolated layer coordinates do not prove composed-window placement or screen-space vertical centering. No outer native preview bounds were changed.",
+  "unavailable_checks": [
+    {
+      "command": "python3 scripts/test-desktop-ui.py --journey partial_zoom_stress --release --trace-preview",
+      "reason": "User declined an idle foreground interval and continues using the desktop. Own-window probes prohibit activation and never post global input; they do not replace the full editor journey."
+    },
+    "Physical pinch and composed editor observation remain unavailable."
+  ],
+  "expected_native_contract_repro": ".tiptoptyp/profiles/zoom-reuse-native-final/mock-uncovered-contract-repro.log: old opacity test expected a proxy despite uncaptured paper; final harness tests fallback separately from covered zoom-out opacity.",
+  "commands": [
+    "cargo fmt --all -- --check",
+    "cargo clippy --all-targets -- -D warnings",
+    "cargo test --no-fail-fast",
+    "cargo test --manifest-path xtask/Cargo.toml",
+    "cargo clippy --test native_preview_zoom --features desktop-ui-tests -- -D warnings",
+    "node --test scripts/test-preview-zoom-snapshot.mjs scripts/test-preview-navigation.mjs scripts/test-desktop-preview-probe.mjs scripts/test-preview-native-probe.mjs",
+    "python3 scripts/test_desktop_ui_contract.py",
+    "cargo test --release --test native_preview_zoom --features desktop-ui-tests --no-run",
+    "python3 .tiptoptyp/profiles/zoom-reuse-measure/build.py",
+    "python3 .tiptoptyp/profiles/zoom-reuse-measure/measure.py",
+    "native-after --background --refresh-race",
+    "python3 scripts/test-preview-zoom-native.py --binary .tiptoptyp/profiles/zoom-reuse-measure/native-after --refresh-race --output .tiptoptyp/profiles/zoom-reuse-native-final"
+  ],
+  "cleanup": "Previous task cleaned main and xtask targets after saving evidence. No additional clean this task; rebuilt optimized application and probes in main checkout. Installed app was not replaced."
+}

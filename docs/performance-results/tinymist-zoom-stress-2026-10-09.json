@@ -1,0 +1,1315 @@
+{
+  "date": "2026-10-09",
+  "change": "One SVG layout for covered partial zoom, patch-lifetime cursor discovery, anchored first fallback fetch, logarithmic full-viewer page tracking.",
+  "userConfirmation": "The user identified physical trackpad pinch as the input and reported that the preceding fractional-size fix resolved it. No synthetic input is represented as a physical pinch test.",
+  "fixture": {
+    "path": "scripts/fixtures/tinymist-zoom-stress.typ",
+    "sha256": "e6dd2f741269b617df5e5d8712d85301b99cf81a46fa2221467a3417fd383828",
+    "description": "48 pages;14 dense 4\u00d74 matrices plus nested Gamma/integral estimates per page;210/230mm widths;297mm height;real links and update markers.",
+    "compiledPdfPages": 48,
+    "compiledPdfBytes": 5231903,
+    "maxPartialSvgNodes": 320000
+  },
+  "adapters": {
+    "beforeSha256": "f2895daf03362c9b804cd6c98fd3803498ff81eb4cf564fd7c481a29fa58c703",
+    "afterSha256": "12d49a4ff6ddc4636c07c66bd3427cc5204db116f69b024d51f64e41c9c73177"
+  },
+  "browser": {
+    "metadata": {
+      "platform": "darwin",
+      "arch": "arm64",
+      "probeSha256": "e664fd9fbfbdac15f4d3d1d0ad84104089aa9fb12a21a9a4f595fb87124c5a15",
+      "tinymistSha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+      "viewport": {
+        "width": 900,
+        "height": 700
+      },
+      "deviceScaleFactor": 1,
+      "warmupMs": 3000,
+      "workloadWarmups": 1,
+      "measuredSamples": 5,
+      "recipe": "36 resize steps (900\u2192650\u2192900), 24 scroll steps (3000px out/back), 10 Ctrl-wheel steps (\u221210\u00d75,+10\u00d75); 20ms input spacing; 800ms drain",
+      "sampleReset": "Outside timing/counters: 900\u00d7700 viewport, fit scale1, rendered page18 +15% page offset; 800ms settle and two stable RAFs; start state asserted and recorded for warmup and all five samples",
+      "measurement": "Synchronous renderer spans and browser RAF gaps; includes Playwright scheduling, excludes native WKWebView/GPU and compiler startup. No wall-time thresholds."
+    },
+    "version": "154.0.8037.98",
+    "before": {
+      "validated": true,
+      "failures": [],
+      "zoomSequencePatches": 2,
+      "initial": {
+        "name": "initial",
+        "pages": 48,
+        "populated": 2,
+        "nodes": 52636,
+        "canvases": 0,
+        "visible": [
+          0
+        ],
+        "pixels": [
+          5326
+        ],
+        "scrollTop": 0,
+        "scale": 1
+      },
+      "samples": [
+        {
+          "sample": 0,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 21275,
+            "anchorFraction": 0.14980915149116014,
+            "populated": 4,
+            "nodes": 105449
+          },
+          "workloadWallMs": 11734,
+          "rescale": 198,
+          "rerender": 37,
+          "viewport": 0,
+          "rescaleSyncMs": 1255.7999992370605,
+          "rerenderSyncMs": 137.19999980926514,
+          "frameCount": 142,
+          "frameGapP95Ms": 216.70000000000437,
+          "frameGapMaxMs": 350
+        },
+        {
+          "sample": 1,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 21275,
+            "anchorFraction": 0.14980915149116014,
+            "populated": 4,
+            "nodes": 105449
+          },
+          "workloadWallMs": 11115,
+          "rescale": 198,
+          "rerender": 37,
+          "viewport": 0,
+          "rescaleSyncMs": 1236.0999977588654,
+          "rerenderSyncMs": 135.8000020980835,
+          "frameCount": 134,
+          "frameGapP95Ms": 216.59999999999127,
+          "frameGapMaxMs": 366.6000000000058
+        },
+        {
+          "sample": 2,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 21275,
+            "anchorFraction": 0.14980915149116014,
+            "populated": 4,
+            "nodes": 105449
+          },
+          "workloadWallMs": 11217,
+          "rescale": 198,
+          "rerender": 37,
+          "viewport": 0,
+          "rescaleSyncMs": 1182.2000005245209,
+          "rerenderSyncMs": 142.0999994277954,
+          "frameCount": 142,
+          "frameGapP95Ms": 200.10000000000582,
+          "frameGapMaxMs": 366.6000000000058
+        },
+        {
+          "sample": 3,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 21275,
+            "anchorFraction": 0.14980915149116014,
+            "populated": 4,
+            "nodes": 105449
+          },
+          "workloadWallMs": 11419,
+          "rescale": 198,
+          "rerender": 37,
+          "viewport": 0,
+          "rescaleSyncMs": 1282.5000019073486,
+          "rerenderSyncMs": 137.69999957084656,
+          "frameCount": 139,
+          "frameGapP95Ms": 216.6999999999971,
+          "frameGapMaxMs": 366.6999999999971
+        },
+        {
+          "sample": 4,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 21275,
+            "anchorFraction": 0.14980915149116014,
+            "populated": 4,
+            "nodes": 105449
+          },
+          "workloadWallMs": 12114,
+          "rescale": 198,
+          "rerender": 37,
+          "viewport": 0,
+          "rescaleSyncMs": 1348.699998140335,
+          "rerenderSyncMs": 144.80000042915344,
+          "frameCount": 142,
+          "frameGapP95Ms": 216.79999999998836,
+          "frameGapMaxMs": 383.3000000000029
+        }
+      ],
+      "medians": {
+        "rescale": 198,
+        "rerender": 37,
+        "rescaleSyncMs": 1255.7999992370605,
+        "rerenderSyncMs": 137.69999957084656,
+        "frameGapP95Ms": 216.6999999999971,
+        "frameGapMaxMs": 366.6000000000058,
+        "workloadWallMs": 11419
+      }
+    },
+    "after": {
+      "validated": true,
+      "failures": [],
+      "zoomSequencePatches": 2,
+      "initial": {
+        "name": "initial",
+        "pages": 48,
+        "populated": 2,
+        "nodes": 52636,
+        "canvases": 0,
+        "visible": [
+          0
+        ],
+        "pixels": [
+          5326
+        ],
+        "scrollTop": 0,
+        "scale": 1
+      },
+      "samples": [
+        {
+          "sample": 0,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 21275,
+            "anchorFraction": 0.14980915149116014,
+            "populated": 4,
+            "nodes": 105449
+          },
+          "workloadWallMs": 11110,
+          "rescale": 188,
+          "rerender": 37,
+          "viewport": 0,
+          "rescaleSyncMs": 1198.3999993801117,
+          "rerenderSyncMs": 136.20000052452087,
+          "frameCount": 144,
+          "frameGapP95Ms": 200,
+          "frameGapMaxMs": 350.09999999999854
+        },
+        {
+          "sample": 1,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 21275,
+            "anchorFraction": 0.14980915149116014,
+            "populated": 4,
+            "nodes": 105449
+          },
+          "workloadWallMs": 11525,
+          "rescale": 188,
+          "rerender": 37,
+          "viewport": 0,
+          "rescaleSyncMs": 1371.7999992370605,
+          "rerenderSyncMs": 135.90000104904175,
+          "frameCount": 133,
+          "frameGapP95Ms": 233.1999999999971,
+          "frameGapMaxMs": 366.6000000000058
+        },
+        {
+          "sample": 2,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 21275,
+            "anchorFraction": 0.14980915149116014,
+            "populated": 4,
+            "nodes": 105449
+          },
+          "workloadWallMs": 11403,
+          "rescale": 188,
+          "rerender": 37,
+          "viewport": 0,
+          "rescaleSyncMs": 1250.8999998569489,
+          "rerenderSyncMs": 137.90000009536743,
+          "frameCount": 141,
+          "frameGapP95Ms": 216.60000000000582,
+          "frameGapMaxMs": 366.6999999999971
+        },
+        {
+          "sample": 3,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 21275,
+            "anchorFraction": 0.14980915149116014,
+            "populated": 4,
+            "nodes": 105449
+          },
+          "workloadWallMs": 11200,
+          "rescale": 188,
+          "rerender": 37,
+          "viewport": 0,
+          "rescaleSyncMs": 1261.3999981880188,
+          "rerenderSyncMs": 135.60000038146973,
+          "frameCount": 137,
+          "frameGapP95Ms": 216.6999999999971,
+          "frameGapMaxMs": 349.8999999999942
+        },
+        {
+          "sample": 4,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 21275,
+            "anchorFraction": 0.14980915149116014,
+            "populated": 4,
+            "nodes": 105449
+          },
+          "workloadWallMs": 11139,
+          "rescale": 188,
+          "rerender": 37,
+          "viewport": 0,
+          "rescaleSyncMs": 1241.7000002861023,
+          "rerenderSyncMs": 135.89999985694885,
+          "frameCount": 135,
+          "frameGapP95Ms": 216.60000000000582,
+          "frameGapMaxMs": 350.1000000000058
+        }
+      ],
+      "medians": {
+        "rescale": 188,
+        "rerender": 37,
+        "rescaleSyncMs": 1250.8999998569489,
+        "rerenderSyncMs": 135.90000104904175,
+        "frameGapP95Ms": 216.60000000000582,
+        "frameGapMaxMs": 350.1000000000058,
+        "workloadWallMs": 11200
+      }
+    }
+  },
+  "nativeWebKit": {
+    "metadata": {
+      "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+      "architecture": "arm64",
+      "scope": "Standalone native WKWebView, not the composed editor app; SVG renderer synchronous wall spans and active RAF gaps, not CPU/GPU time or compiler startup",
+      "view_css_pixels": [
+        900,
+        700
+      ],
+      "renderer_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+      "renderer_version": {
+        "command": [
+          "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/tinymist-aarch64-apple-darwin",
+          "--version"
+        ],
+        "exit_code": 0,
+        "output": "tinymist \nBuild Timestamp:     2026-06-22T10:37:22.819803000Z\nBuild Git Describe:  v0.15.2\nCommit SHA:          92babed1bc00540882effd29bc56ebc5986792c2\nCommit Date:         None\nCommit Branch:       None\nCargo Target Triple: aarch64-apple-darwin\nTypst Version:       0.15.0\nTypst Source:        git+https://github.com/Myriad-Dreamin/typst.git?tag=tinymist/v0.15.0#391c2dcd698aabf2917db0336868d16f197057d9"
+      },
+      "fixture_sha256": "e6dd2f741269b617df5e5d8712d85301b99cf81a46fa2221467a3417fd383828",
+      "native_probe_sha256": "c8f114579fac4e345d9bd0fb5e8854d875837e8248c37d853f21360a070d22f9",
+      "native_probe_binary_sha256": "3fafb2c3f2737b0d50783d3dc3c7176362f1796bef673d7a0f50ea299865901c",
+      "native_build": [
+        "swiftc",
+        "-O",
+        "-module-cache-path",
+        "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/partial-render-native/20261009T221955Z-77ffm3ab/swift-module-cache",
+        "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/test-preview-partial-native.swift",
+        "-o",
+        "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/partial-render-native/20261009T221955Z-77ffm3ab/Tinymist Partial Native QA.app/Contents/MacOS/partial-native-probe"
+      ],
+      "swift_version": {
+        "command": [
+          "swiftc",
+          "--version"
+        ],
+        "exit_code": 0,
+        "output": "Apple Swift version 6.0.3 (swiftlang-6.0.3.1.10 clang-1600.0.30.1)\nTarget: arm64-apple-macosx14.0\nswift-driver version: 1.115.1"
+      },
+      "warmup_seconds": 3,
+      "workload_warmups": 1,
+      "measured_samples": 3,
+      "per_sample_reset": "Before every workload warmup and measured sample:900\u00d7700 view,fit scale1,page18 plus15% offset,scrollLeft0,clear resize anchor;wait for2 stable RAF states before starting timing",
+      "recipe": "36 resize steps (900\u2192650\u2192900),24 scroll steps (3000px out/back),10 Ctrl-wheel steps (\u221210\u00d75,+10\u00d75);20ms input spacing;800ms drain;48-page source unchanged during measurements",
+      "phase_diagnostics_policy": "When enabled: four resize/scroll/zoom/drain summaries reuse the single 2048-gap RAF buffer; counters and synchronous spans partition the combined totals. RAF gaps belong to the phase when their ending callback arrives, so boundary gaps can include work from the preceding phase. No extra RAF or idle loop.",
+      "comparison_limits": "Independent server/view per lane; warmed active-workload comparison, not cold startup; Swift scheduling included; do not compare absolute values with Chromium or other machines"
+    },
+    "before": {
+      "passed": true,
+      "failures": [],
+      "backingScaleFactor": 2,
+      "samples": [
+        {
+          "endState": {
+            "canvases": 0,
+            "canvasMixins": 0,
+            "nodes": 105449,
+            "page": 17,
+            "pageFraction": 0.2464057087539575,
+            "pages": 48,
+            "partial": true,
+            "populated": 4,
+            "scale": 0.9999999999999999,
+            "scrollTop": 20215,
+            "viewport": [
+              900,
+              700
+            ],
+            "visible": [
+              {
+                "dummy": false,
+                "index": 17,
+                "inkNodes": 4732
+              }
+            ]
+          },
+          "frameCount": 110,
+          "frameGapMaxMs": 843,
+          "frameGapP95Ms": 508,
+          "frameSamplesDropped": 0,
+          "phases": [
+            {
+              "durationMs": 910,
+              "frameCount": 1,
+              "frameGapMaxMs": 70,
+              "frameGapP95Ms": 70,
+              "frameSamplesDropped": 0,
+              "phase": "resize",
+              "rerender": 1,
+              "rerenderSyncMs": 119,
+              "rescale": 4,
+              "rescaleSyncMs": 522,
+              "viewport": 0
+            },
+            {
+              "durationMs": 2391,
+              "frameCount": 50,
+              "frameGapMaxMs": 843,
+              "frameGapP95Ms": 444,
+              "frameSamplesDropped": 0,
+              "phase": "scroll",
+              "rerender": 3,
+              "rerenderSyncMs": 159,
+              "rescale": 11,
+              "rescaleSyncMs": 734,
+              "viewport": 0
+            },
+            {
+              "durationMs": 5035,
+              "frameCount": 10,
+              "frameGapMaxMs": 514,
+              "frameGapP95Ms": 514,
+              "frameSamplesDropped": 0,
+              "phase": "zoom",
+              "rerender": 1,
+              "rerenderSyncMs": 41,
+              "rescale": 22,
+              "rescaleSyncMs": 2.999999999996362,
+              "viewport": 0
+            },
+            {
+              "durationMs": 800,
+              "frameCount": 49,
+              "frameGapMaxMs": 519,
+              "frameGapP95Ms": 18,
+              "frameSamplesDropped": 0,
+              "phase": "drain",
+              "rerender": 0,
+              "rerenderSyncMs": 0,
+              "rescale": 0,
+              "rescaleSyncMs": 0,
+              "viewport": 0
+            }
+          ],
+          "rerender": 5,
+          "rerenderSyncMs": 319,
+          "rescale": 37,
+          "rescaleSyncMs": 1258.9999999999964,
+          "sample": 0,
+          "startState": {
+            "canvases": 0,
+            "canvasMixins": 0,
+            "nodes": 105449,
+            "page": 18,
+            "pageFraction": 0.14980950201240395,
+            "pages": 48,
+            "partial": true,
+            "populated": 4,
+            "scale": 1,
+            "scrollTop": 21275,
+            "viewport": [
+              900,
+              700
+            ],
+            "visible": [
+              {
+                "dummy": false,
+                "index": 18,
+                "inkNodes": 4732
+              }
+            ]
+          },
+          "viewport": 0,
+          "workloadWallMs": 9138
+        },
+        {
+          "endState": {
+            "canvases": 0,
+            "canvasMixins": 0,
+            "nodes": 105449,
+            "page": 17,
+            "pageFraction": 0.2464057087539575,
+            "pages": 48,
+            "partial": true,
+            "populated": 4,
+            "scale": 0.9999999999999999,
+            "scrollTop": 20215,
+            "viewport": [
+              900,
+              700
+            ],
+            "visible": [
+              {
+                "dummy": false,
+                "index": 17,
+                "inkNodes": 4732
+              }
+            ]
+          },
+          "frameCount": 112,
+          "frameGapMaxMs": 884,
+          "frameGapP95Ms": 507,
+          "frameSamplesDropped": 0,
+          "phases": [
+            {
+              "durationMs": 909,
+              "frameCount": 1,
+              "frameGapMaxMs": 68,
+              "frameGapP95Ms": 68,
+              "frameSamplesDropped": 0,
+              "phase": "resize",
+              "rerender": 1,
+              "rerenderSyncMs": 120,
+              "rescale": 4,
+              "rescaleSyncMs": 527,
+              "viewport": 0
+            },
+            {
+              "durationMs": 2403,
+              "frameCount": 52,
+              "frameGapMaxMs": 843,
+              "frameGapP95Ms": 450,
+              "frameSamplesDropped": 0,
+              "phase": "scroll",
+              "rerender": 3,
+              "rerenderSyncMs": 168,
+              "rescale": 11,
+              "rescaleSyncMs": 740.9999999999964,
+              "viewport": 0
+            },
+            {
+              "durationMs": 5412,
+              "frameCount": 10,
+              "frameGapMaxMs": 884,
+              "frameGapP95Ms": 884,
+              "frameSamplesDropped": 0,
+              "phase": "zoom",
+              "rerender": 1,
+              "rerenderSyncMs": 41,
+              "rescale": 22,
+              "rescaleSyncMs": 2,
+              "viewport": 0
+            },
+            {
+              "durationMs": 800,
+              "frameCount": 49,
+              "frameGapMaxMs": 519,
+              "frameGapP95Ms": 18,
+              "frameSamplesDropped": 0,
+              "phase": "drain",
+              "rerender": 0,
+              "rerenderSyncMs": 0,
+              "rescale": 0,
+              "rescaleSyncMs": 0,
+              "viewport": 0
+            }
+          ],
+          "rerender": 5,
+          "rerenderSyncMs": 329,
+          "rescale": 37,
+          "rescaleSyncMs": 1269.9999999999964,
+          "sample": 1,
+          "startState": {
+            "canvases": 0,
+            "canvasMixins": 0,
+            "nodes": 105449,
+            "page": 18,
+            "pageFraction": 0.14980950201240395,
+            "pages": 48,
+            "partial": true,
+            "populated": 4,
+            "scale": 1,
+            "scrollTop": 21275,
+            "viewport": [
+              900,
+              700
+            ],
+            "visible": [
+              {
+                "dummy": false,
+                "index": 18,
+                "inkNodes": 4732
+              }
+            ]
+          },
+          "viewport": 0,
+          "workloadWallMs": 9526
+        },
+        {
+          "endState": {
+            "canvases": 0,
+            "canvasMixins": 0,
+            "nodes": 105449,
+            "page": 17,
+            "pageFraction": 0.2464057087539575,
+            "pages": 48,
+            "partial": true,
+            "populated": 4,
+            "scale": 0.9999999999999999,
+            "scrollTop": 20215,
+            "viewport": [
+              900,
+              700
+            ],
+            "visible": [
+              {
+                "dummy": false,
+                "index": 17,
+                "inkNodes": 4732
+              }
+            ]
+          },
+          "frameCount": 110,
+          "frameGapMaxMs": 843,
+          "frameGapP95Ms": 508,
+          "frameSamplesDropped": 0,
+          "phases": [
+            {
+              "durationMs": 909,
+              "frameCount": 2,
+              "frameGapMaxMs": 63,
+              "frameGapP95Ms": 63,
+              "frameSamplesDropped": 0,
+              "phase": "resize",
+              "rerender": 1,
+              "rerenderSyncMs": 118,
+              "rescale": 4,
+              "rescaleSyncMs": 524.9999999999927,
+              "viewport": 0
+            },
+            {
+              "durationMs": 2400,
+              "frameCount": 49,
+              "frameGapMaxMs": 843,
+              "frameGapP95Ms": 454,
+              "frameSamplesDropped": 0,
+              "phase": "scroll",
+              "rerender": 3,
+              "rerenderSyncMs": 159.99999999999272,
+              "rescale": 11,
+              "rescaleSyncMs": 733.0000000000073,
+              "viewport": 0
+            },
+            {
+              "durationMs": 5062,
+              "frameCount": 10,
+              "frameGapMaxMs": 512,
+              "frameGapP95Ms": 512,
+              "frameSamplesDropped": 0,
+              "phase": "zoom",
+              "rerender": 1,
+              "rerenderSyncMs": 41,
+              "rescale": 22,
+              "rescaleSyncMs": 2,
+              "viewport": 0
+            },
+            {
+              "durationMs": 800,
+              "frameCount": 49,
+              "frameGapMaxMs": 520,
+              "frameGapP95Ms": 18,
+              "frameSamplesDropped": 0,
+              "phase": "drain",
+              "rerender": 0,
+              "rerenderSyncMs": 0,
+              "rescale": 0,
+              "rescaleSyncMs": 0,
+              "viewport": 0
+            }
+          ],
+          "rerender": 5,
+          "rerenderSyncMs": 318.9999999999927,
+          "rescale": 37,
+          "rescaleSyncMs": 1260,
+          "sample": 2,
+          "startState": {
+            "canvases": 0,
+            "canvasMixins": 0,
+            "nodes": 105449,
+            "page": 18,
+            "pageFraction": 0.14980950201240395,
+            "pages": 48,
+            "partial": true,
+            "populated": 4,
+            "scale": 1,
+            "scrollTop": 21275,
+            "viewport": [
+              900,
+              700
+            ],
+            "visible": [
+              {
+                "dummy": false,
+                "index": 18,
+                "inkNodes": 4732
+              }
+            ]
+          },
+          "viewport": 0,
+          "workloadWallMs": 9173
+        }
+      ],
+      "summary": {
+        "passed": true,
+        "sample_count": 3,
+        "median": {
+          "workloadWallMs": 9173,
+          "rescaleSyncMs": 1260,
+          "rerenderSyncMs": 319,
+          "frameGapP95Ms": 508,
+          "frameGapMaxMs": 843,
+          "rerender": 5,
+          "rescale": 37
+        },
+        "phases": {
+          "resize": {
+            "sample_count": 3,
+            "median": {
+              "durationMs": 909,
+              "rescale": 4,
+              "rerender": 1,
+              "viewport": 0,
+              "frameCount": 1,
+              "frameSamplesDropped": 0,
+              "rescaleSyncMs": 524.9999999999927,
+              "rerenderSyncMs": 119,
+              "frameGapP95Ms": 68,
+              "frameGapMaxMs": 68
+            }
+          },
+          "scroll": {
+            "sample_count": 3,
+            "median": {
+              "durationMs": 2400,
+              "rescale": 11,
+              "rerender": 3,
+              "viewport": 0,
+              "frameCount": 50,
+              "frameSamplesDropped": 0,
+              "rescaleSyncMs": 734,
+              "rerenderSyncMs": 159.99999999999272,
+              "frameGapP95Ms": 450,
+              "frameGapMaxMs": 843
+            }
+          },
+          "zoom": {
+            "sample_count": 3,
+            "median": {
+              "durationMs": 5062,
+              "rescale": 22,
+              "rerender": 1,
+              "viewport": 0,
+              "frameCount": 10,
+              "frameSamplesDropped": 0,
+              "rescaleSyncMs": 2,
+              "rerenderSyncMs": 41,
+              "frameGapP95Ms": 514,
+              "frameGapMaxMs": 514
+            }
+          },
+          "drain": {
+            "sample_count": 3,
+            "median": {
+              "durationMs": 800,
+              "rescale": 0,
+              "rerender": 0,
+              "viewport": 0,
+              "frameCount": 49,
+              "frameSamplesDropped": 0,
+              "rescaleSyncMs": 0,
+              "rerenderSyncMs": 0,
+              "frameGapP95Ms": 18,
+              "frameGapMaxMs": 519
+            }
+          }
+        }
+      }
+    },
+    "after": {
+      "passed": true,
+      "failures": [],
+      "backingScaleFactor": 2,
+      "samples": [
+        {
+          "endState": {
+            "canvases": 0,
+            "canvasMixins": 0,
+            "nodes": 105449,
+            "page": 17,
+            "pageFraction": 0.2464057087539575,
+            "pages": 48,
+            "partial": true,
+            "populated": 4,
+            "scale": 0.9999999999999999,
+            "scrollTop": 20215,
+            "viewport": [
+              900,
+              700
+            ],
+            "visible": [
+              {
+                "dummy": false,
+                "index": 17,
+                "inkNodes": 4732
+              }
+            ]
+          },
+          "frameCount": 113,
+          "frameGapMaxMs": 1169,
+          "frameGapP95Ms": 288,
+          "frameSamplesDropped": 0,
+          "phases": [
+            {
+              "durationMs": 904,
+              "frameCount": 1,
+              "frameGapMaxMs": 67,
+              "frameGapP95Ms": 67,
+              "frameSamplesDropped": 0,
+              "phase": "resize",
+              "rerender": 1,
+              "rerenderSyncMs": 118,
+              "rescale": 4,
+              "rescaleSyncMs": 524,
+              "viewport": 0
+            },
+            {
+              "durationMs": 2791,
+              "frameCount": 53,
+              "frameGapMaxMs": 1169,
+              "frameGapP95Ms": 446,
+              "frameSamplesDropped": 0,
+              "phase": "scroll",
+              "rerender": 3,
+              "rerenderSyncMs": 162.00000000000364,
+              "rescale": 11,
+              "rescaleSyncMs": 725,
+              "viewport": 0
+            },
+            {
+              "durationMs": 2905,
+              "frameCount": 10,
+              "frameGapMaxMs": 506,
+              "frameGapP95Ms": 506,
+              "frameSamplesDropped": 0,
+              "phase": "zoom",
+              "rerender": 1,
+              "rerenderSyncMs": 43.99999999999636,
+              "rescale": 12,
+              "rescaleSyncMs": 1,
+              "viewport": 0
+            },
+            {
+              "durationMs": 801,
+              "frameCount": 49,
+              "frameGapMaxMs": 288,
+              "frameGapP95Ms": 18,
+              "frameSamplesDropped": 0,
+              "phase": "drain",
+              "rerender": 0,
+              "rerenderSyncMs": 0,
+              "rescale": 0,
+              "rescaleSyncMs": 0,
+              "viewport": 0
+            }
+          ],
+          "rerender": 5,
+          "rerenderSyncMs": 324,
+          "rescale": 27,
+          "rescaleSyncMs": 1250,
+          "sample": 0,
+          "startState": {
+            "canvases": 0,
+            "canvasMixins": 0,
+            "nodes": 105449,
+            "page": 18,
+            "pageFraction": 0.14980950201240395,
+            "pages": 48,
+            "partial": true,
+            "populated": 4,
+            "scale": 1,
+            "scrollTop": 21275,
+            "viewport": [
+              900,
+              700
+            ],
+            "visible": [
+              {
+                "dummy": false,
+                "index": 18,
+                "inkNodes": 4732
+              }
+            ]
+          },
+          "viewport": 0,
+          "workloadWallMs": 7403
+        },
+        {
+          "endState": {
+            "canvases": 0,
+            "canvasMixins": 0,
+            "nodes": 105449,
+            "page": 17,
+            "pageFraction": 0.2464057087539575,
+            "pages": 48,
+            "partial": true,
+            "populated": 4,
+            "scale": 0.9999999999999999,
+            "scrollTop": 20215,
+            "viewport": [
+              900,
+              700
+            ],
+            "visible": [
+              {
+                "dummy": false,
+                "index": 17,
+                "inkNodes": 4732
+              }
+            ]
+          },
+          "frameCount": 115,
+          "frameGapMaxMs": 859,
+          "frameGapP95Ms": 290,
+          "frameSamplesDropped": 0,
+          "phases": [
+            {
+              "durationMs": 921.9999999999964,
+              "frameCount": 1,
+              "frameGapMaxMs": 66,
+              "frameGapP95Ms": 66,
+              "frameSamplesDropped": 0,
+              "phase": "resize",
+              "rerender": 1,
+              "rerenderSyncMs": 119.99999999999636,
+              "rescale": 4,
+              "rescaleSyncMs": 533.0000000000036,
+              "viewport": 0
+            },
+            {
+              "durationMs": 2477,
+              "frameCount": 54,
+              "frameGapMaxMs": 859,
+              "frameGapP95Ms": 483,
+              "frameSamplesDropped": 0,
+              "phase": "scroll",
+              "rerender": 3,
+              "rerenderSyncMs": 170,
+              "rescale": 11,
+              "rescaleSyncMs": 766.0000000000036,
+              "viewport": 0
+            },
+            {
+              "durationMs": 2918,
+              "frameCount": 10,
+              "frameGapMaxMs": 501,
+              "frameGapP95Ms": 501,
+              "frameSamplesDropped": 0,
+              "phase": "zoom",
+              "rerender": 1,
+              "rerenderSyncMs": 42,
+              "rescale": 12,
+              "rescaleSyncMs": 0,
+              "viewport": 0
+            },
+            {
+              "durationMs": 800,
+              "frameCount": 50,
+              "frameGapMaxMs": 291,
+              "frameGapP95Ms": 18,
+              "frameSamplesDropped": 0,
+              "phase": "drain",
+              "rerender": 0,
+              "rerenderSyncMs": 0,
+              "rescale": 0,
+              "rescaleSyncMs": 0,
+              "viewport": 0
+            }
+          ],
+          "rerender": 5,
+          "rerenderSyncMs": 331.99999999999636,
+          "rescale": 27,
+          "rescaleSyncMs": 1299.0000000000073,
+          "sample": 1,
+          "startState": {
+            "canvases": 0,
+            "canvasMixins": 0,
+            "nodes": 105449,
+            "page": 18,
+            "pageFraction": 0.14980950201240395,
+            "pages": 48,
+            "partial": true,
+            "populated": 4,
+            "scale": 1,
+            "scrollTop": 21275,
+            "viewport": [
+              900,
+              700
+            ],
+            "visible": [
+              {
+                "dummy": false,
+                "index": 18,
+                "inkNodes": 4732
+              }
+            ]
+          },
+          "viewport": 0,
+          "workloadWallMs": 7119
+        },
+        {
+          "endState": {
+            "canvases": 0,
+            "canvasMixins": 0,
+            "nodes": 105449,
+            "page": 17,
+            "pageFraction": 0.2464057087539575,
+            "pages": 48,
+            "partial": true,
+            "populated": 4,
+            "scale": 0.9999999999999999,
+            "scrollTop": 20215,
+            "viewport": [
+              900,
+              700
+            ],
+            "visible": [
+              {
+                "dummy": false,
+                "index": 17,
+                "inkNodes": 4732
+              }
+            ]
+          },
+          "frameCount": 112,
+          "frameGapMaxMs": 863,
+          "frameGapP95Ms": 287,
+          "frameSamplesDropped": 0,
+          "phases": [
+            {
+              "durationMs": 926.9999999999927,
+              "frameCount": 1,
+              "frameGapMaxMs": 68,
+              "frameGapP95Ms": 68,
+              "frameSamplesDropped": 0,
+              "phase": "resize",
+              "rerender": 1,
+              "rerenderSyncMs": 120.99999999999272,
+              "rescale": 4,
+              "rescaleSyncMs": 535.0000000000073,
+              "viewport": 0
+            },
+            {
+              "durationMs": 2419,
+              "frameCount": 52,
+              "frameGapMaxMs": 863,
+              "frameGapP95Ms": 452,
+              "frameSamplesDropped": 0,
+              "phase": "scroll",
+              "rerender": 3,
+              "rerenderSyncMs": 161,
+              "rescale": 11,
+              "rescaleSyncMs": 748.0000000000073,
+              "viewport": 0
+            },
+            {
+              "durationMs": 2902,
+              "frameCount": 10,
+              "frameGapMaxMs": 502,
+              "frameGapP95Ms": 502,
+              "frameSamplesDropped": 0,
+              "phase": "zoom",
+              "rerender": 1,
+              "rerenderSyncMs": 41,
+              "rescale": 12,
+              "rescaleSyncMs": 0,
+              "viewport": 0
+            },
+            {
+              "durationMs": 801,
+              "frameCount": 49,
+              "frameGapMaxMs": 287,
+              "frameGapP95Ms": 18,
+              "frameSamplesDropped": 0,
+              "phase": "drain",
+              "rerender": 0,
+              "rerenderSyncMs": 0,
+              "rescale": 0,
+              "rescaleSyncMs": 0,
+              "viewport": 0
+            }
+          ],
+          "rerender": 5,
+          "rerenderSyncMs": 322.9999999999927,
+          "rescale": 27,
+          "rescaleSyncMs": 1283.0000000000146,
+          "sample": 2,
+          "startState": {
+            "canvases": 0,
+            "canvasMixins": 0,
+            "nodes": 105449,
+            "page": 18,
+            "pageFraction": 0.14980950201240395,
+            "pages": 48,
+            "partial": true,
+            "populated": 4,
+            "scale": 1,
+            "scrollTop": 21275,
+            "viewport": [
+              900,
+              700
+            ],
+            "visible": [
+              {
+                "dummy": false,
+                "index": 18,
+                "inkNodes": 4732
+              }
+            ]
+          },
+          "viewport": 0,
+          "workloadWallMs": 7051
+        }
+      ],
+      "summary": {
+        "passed": true,
+        "sample_count": 3,
+        "median": {
+          "workloadWallMs": 7119,
+          "rescaleSyncMs": 1283.0000000000146,
+          "rerenderSyncMs": 324,
+          "frameGapP95Ms": 288,
+          "frameGapMaxMs": 863,
+          "rerender": 5,
+          "rescale": 27
+        },
+        "phases": {
+          "resize": {
+            "sample_count": 3,
+            "median": {
+              "durationMs": 921.9999999999964,
+              "rescale": 4,
+              "rerender": 1,
+              "viewport": 0,
+              "frameCount": 1,
+              "frameSamplesDropped": 0,
+              "rescaleSyncMs": 533.0000000000036,
+              "rerenderSyncMs": 119.99999999999636,
+              "frameGapP95Ms": 67,
+              "frameGapMaxMs": 67
+            }
+          },
+          "scroll": {
+            "sample_count": 3,
+            "median": {
+              "durationMs": 2477,
+              "rescale": 11,
+              "rerender": 3,
+              "viewport": 0,
+              "frameCount": 53,
+              "frameSamplesDropped": 0,
+              "rescaleSyncMs": 748.0000000000073,
+              "rerenderSyncMs": 162.00000000000364,
+              "frameGapP95Ms": 452,
+              "frameGapMaxMs": 863
+            }
+          },
+          "zoom": {
+            "sample_count": 3,
+            "median": {
+              "durationMs": 2905,
+              "rescale": 12,
+              "rerender": 1,
+              "viewport": 0,
+              "frameCount": 10,
+              "frameSamplesDropped": 0,
+              "rescaleSyncMs": 0,
+              "rerenderSyncMs": 42,
+              "frameGapP95Ms": 502,
+              "frameGapMaxMs": 502
+            }
+          },
+          "drain": {
+            "sample_count": 3,
+            "median": {
+              "durationMs": 801,
+              "rescale": 0,
+              "rerender": 0,
+              "viewport": 0,
+              "frameCount": 49,
+              "frameSamplesDropped": 0,
+              "rescaleSyncMs": 0,
+              "rerenderSyncMs": 0,
+              "frameGapP95Ms": 18,
+              "frameGapMaxMs": 288
+            }
+          }
+        }
+      }
+    }
+  },
+  "localReceipts": {
+    "browserBefore": ".tiptoptyp/profiles/zoom-stress-before.json",
+    "browserAfter": ".tiptoptyp/profiles/zoom-stress-after.json",
+    "nativeBefore": ".tiptoptyp/profiles/partial-render-native/20261009T221955Z-77ffm3ab/result.json",
+    "nativeAfter": ".tiptoptyp/profiles/partial-render-native/20261009T222212Z-2ctzg15a/result.json"
+  },
+  "limits": [
+    "Matched engine comparisons only; Chromium and WebKit numbers must not be compared against each other.",
+    "Native zoom phase duration is inclusive wall time with engine scheduling and fixed input waits, not CPU time or key-to-pixel/pinch latency.",
+    "Three native and five browser warmed samples on one macOS ARM64 machine; no cold-start, other-hardware or cross-platform guarantee.",
+    "Native zoom p95 worst-step gaps remain about 0.5 seconds because expensive refills still stall; the ten-step sequence is shorter, not uniformly instantaneous.",
+    "Chromium combined frame gaps are essentially unchanged despite less layout work.",
+    "Initial draft optimization fetched an unanchored fallback destination and needed extra patches; it was excluded, fixed by a failing first-fetch regression, and the final adapter was measured again.",
+    "Fresh inspected standalone browser/WebKit PNGs verify fixture ink; they are not composed editor screenshots."
+  ],
+  "nativeInteraction": {
+    "passed": true,
+    "version": "tiptoptyp Dev 0.1.0 (1de1cf7896a4-dirty.1791584816)",
+    "binary_sha256": "ec20b2be8148923c05793aae52ace2d3b116eddb019a36381a0fb4316e00898f",
+    "preflight": "{\"accessibility\":true,\"desktop\":true,\"input\":true,\"locked\":false,\"screens\":[{\"height\":982,\"scale\":2,\"width\":1512}]}",
+    "build_profile": "release",
+    "journeys": [
+      "partial_zoom_stress"
+    ],
+    "receipt": ".tiptoptyp/desktop-ui-tests/run-8ehs8c0k",
+    "densePartialCoverageStates": 26,
+    "partialButtonZoomSteps": 12,
+    "partialKeyboardZoomSteps": 4,
+    "standardFixtureFullKeyboardZoomSteps": 3,
+    "standardFullLastPage": 47,
+    "restoredOriginalTabPreviewAndBackend": true,
+    "scope": "Native input and fresh read-only renderer observations; full smoke uses the standard fixture; not physical pinch automation or composed-window screenshot evidence."
+  },
+  "denseFullCapacityFailure": {
+    "status": "failed",
+    "before": ".tiptoptyp/profiles/partial-render-native/20261009T224209Z-wqlg4d2_/metadata.json",
+    "after": ".tiptoptyp/profiles/partial-render-native/20261009T223836Z-40wg79op/metadata.json",
+    "nativeProbeBudgetSeconds": 125,
+    "bothExceededBudget": true,
+    "baselineCpuSample": ".tiptoptyp/profiles/zoom-stress-full-capacity/before-webkit.sample.txt",
+    "sampleDurationSeconds": 2,
+    "sampledBaselineResidentKiB": 4178960,
+    "sampledHotStack": "WebCore SVG geometry/compositing from scrolling on the main thread",
+    "scope": "Diagnostic CPU sample and point-in-time memory observation, not a controlled CPU-time or memory benchmark. Dense full mode did not pass; the native full smoke fixture is explicitly smaller."
+  },
+  "verification": {
+    "rustPassed": 1780,
+    "rustIgnored": 44,
+    "xtaskPassed": 17,
+    "javascriptPassed": 53,
+    "pythonHarnessPassed": 56,
+    "fmt": "passed",
+    "clippyAllTargetsStrict": "passed",
+    "smallFullBrowserIntegration": "passed",
+    "browserStressBeforeAfter": "passed",
+    "nativePartialStressBeforeAfter": "passed"
+  }
+}

@@ -1,0 +1,2204 @@
+{
+  "date": "2026-10-09",
+  "host_processor": "Apple M2 Max",
+  "scope": "Follow-up optimizations to the optional partial renderer; safe identity-filter and pseudo-link initialization ports to full mode. Active frontend frame delivery, not compiler/CPU/GPU/cold startup or cross-platform guarantee.",
+  "final_adapter_sha256": "06c0dba75e657f3806efaa7bc47274b0437e207291b3c7f47085bb515cdcbb33",
+  "browser_partial": {
+    "order": [
+      "before",
+      "after"
+    ],
+    "before": {
+      "receipt": ".tiptoptyp/profiles/partial-optimize-2026-10-09/final943-before-partial.json",
+      "metadata": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "fixture": "scripts/fixtures/tinymist-partial-large.typ",
+        "fixtureSha256": "463b5702f7eafb4104fdca89de88a7e72c14b7d697cd87159053de7efe76b24a",
+        "probeSha256": "94320b2b06a9a4e1deba9e40ed711fc3ab4b8a8a4e89bd1a22315f97a4aa5131",
+        "tinymistSha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+        "adapterSha256": "16ddbf247e87cc9f4aa2fefc2fdf1f9c4a7cbea32fc92508ec2aa7905181a343",
+        "viewport": {
+          "width": 900,
+          "height": 700
+        },
+        "deviceScaleFactor": 1,
+        "warmupMs": 3000,
+        "workloadWarmups": 1,
+        "measuredSamples": 5,
+        "sampleReset": "Outside timing/counters: 900\u00d7700 viewport, fit scale1, rendered page18 +15% page offset; 800ms settle and two stable RAFs; start state asserted and recorded for warmup and all five samples",
+        "recipe": "36 resize steps (900\u2192650\u2192900), 24 scroll steps (3000px out/back), 10 Ctrl-wheel steps (\u221210\u00d75,+10\u00d75); 20ms input spacing; 800ms drain",
+        "measurement": "Synchronous renderer spans and browser RAF gaps; includes Playwright scheduling, excludes native WKWebView/GPU and compiler startup. No wall-time thresholds.",
+        "validated": true
+      },
+      "browser": "154.0.8037.98",
+      "effective_partial": true,
+      "samples": [
+        {
+          "sample": 0,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 22396,
+            "anchorFraction": 0.1503255208333351,
+            "populated": 5,
+            "nodes": 11363
+          },
+          "workloadWallMs": 2723,
+          "rescale": 254,
+          "rerender": 70,
+          "viewport": 0,
+          "rescaleSyncMs": 150.10000109672546,
+          "rerenderSyncMs": 91.3999993801117,
+          "frameCount": 140,
+          "frameGapP95Ms": 33.39999999999782,
+          "frameGapMaxMs": 49.900000000001455
+        },
+        {
+          "sample": 1,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 22396,
+            "anchorFraction": 0.1503255208333351,
+            "populated": 5,
+            "nodes": 11363
+          },
+          "workloadWallMs": 2778,
+          "rescale": 245,
+          "rerender": 67,
+          "viewport": 0,
+          "rescaleSyncMs": 146.09999918937683,
+          "rerenderSyncMs": 90.8999993801117,
+          "frameCount": 146,
+          "frameGapP95Ms": 33.39999999999782,
+          "frameGapMaxMs": 50
+        },
+        {
+          "sample": 2,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 22396,
+            "anchorFraction": 0.1503255208333351,
+            "populated": 5,
+            "nodes": 11363
+          },
+          "workloadWallMs": 2858,
+          "rescale": 248,
+          "rerender": 68,
+          "viewport": 0,
+          "rescaleSyncMs": 150.70000004768372,
+          "rerenderSyncMs": 94.00000071525574,
+          "frameCount": 144,
+          "frameGapP95Ms": 33.400000000001455,
+          "frameGapMaxMs": 50.099999999998545
+        },
+        {
+          "sample": 3,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 22396,
+            "anchorFraction": 0.1503255208333351,
+            "populated": 5,
+            "nodes": 11363
+          },
+          "workloadWallMs": 2848,
+          "rescale": 239,
+          "rerender": 65,
+          "viewport": 0,
+          "rescaleSyncMs": 149.30000066757202,
+          "rerenderSyncMs": 89.49999904632568,
+          "frameCount": 150,
+          "frameGapP95Ms": 33.30000000000291,
+          "frameGapMaxMs": 50
+        },
+        {
+          "sample": 4,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 22396,
+            "anchorFraction": 0.1503255208333351,
+            "populated": 5,
+            "nodes": 11363
+          },
+          "workloadWallMs": 2763,
+          "rescale": 239,
+          "rerender": 65,
+          "viewport": 0,
+          "rescaleSyncMs": 140.400000333786,
+          "rerenderSyncMs": 89.70000052452087,
+          "frameCount": 148,
+          "frameGapP95Ms": 33.30000000000291,
+          "frameGapMaxMs": 50
+        }
+      ],
+      "median": {
+        "frameGapP95Ms": 33.39999999999782,
+        "workloadWallMs": 2778,
+        "rescaleSyncMs": 149.30000066757202,
+        "rerenderSyncMs": 90.8999993801117,
+        "rescale": 245,
+        "rerender": 67
+      },
+      "idle_before": {
+        "rescale": 239,
+        "rerender": 65,
+        "viewport": 0
+      },
+      "idle_after": {
+        "rescale": 239,
+        "rerender": 65,
+        "viewport": 0
+      },
+      "errors": [],
+      "failures": []
+    },
+    "after": {
+      "receipt": ".tiptoptyp/profiles/partial-optimize-2026-10-09/final943-after-partial.json",
+      "metadata": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "fixture": "scripts/fixtures/tinymist-partial-large.typ",
+        "fixtureSha256": "463b5702f7eafb4104fdca89de88a7e72c14b7d697cd87159053de7efe76b24a",
+        "probeSha256": "94320b2b06a9a4e1deba9e40ed711fc3ab4b8a8a4e89bd1a22315f97a4aa5131",
+        "tinymistSha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+        "adapterSha256": "06c0dba75e657f3806efaa7bc47274b0437e207291b3c7f47085bb515cdcbb33",
+        "viewport": {
+          "width": 900,
+          "height": 700
+        },
+        "deviceScaleFactor": 1,
+        "warmupMs": 3000,
+        "workloadWarmups": 1,
+        "measuredSamples": 5,
+        "sampleReset": "Outside timing/counters: 900\u00d7700 viewport, fit scale1, rendered page18 +15% page offset; 800ms settle and two stable RAFs; start state asserted and recorded for warmup and all five samples",
+        "recipe": "36 resize steps (900\u2192650\u2192900), 24 scroll steps (3000px out/back), 10 Ctrl-wheel steps (\u221210\u00d75,+10\u00d75); 20ms input spacing; 800ms drain",
+        "measurement": "Synchronous renderer spans and browser RAF gaps; includes Playwright scheduling, excludes native WKWebView/GPU and compiler startup. No wall-time thresholds.",
+        "validated": true
+      },
+      "browser": "154.0.8037.98",
+      "effective_partial": true,
+      "samples": [
+        {
+          "sample": 0,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 22396,
+            "anchorFraction": 0.1503255208333351,
+            "populated": 5,
+            "nodes": 11363
+          },
+          "workloadWallMs": 2690,
+          "rescale": 132,
+          "rerender": 15,
+          "viewport": 0,
+          "rescaleSyncMs": 197.8999993801117,
+          "rerenderSyncMs": 42.99999976158142,
+          "frameCount": 155,
+          "frameGapP95Ms": 16.799999999999272,
+          "frameGapMaxMs": 50
+        },
+        {
+          "sample": 1,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 22396,
+            "anchorFraction": 0.1503255208333351,
+            "populated": 5,
+            "nodes": 11363
+          },
+          "workloadWallMs": 2733,
+          "rescale": 138,
+          "rerender": 17,
+          "viewport": 0,
+          "rescaleSyncMs": 201.09999990463257,
+          "rerenderSyncMs": 44.70000100135803,
+          "frameCount": 157,
+          "frameGapP95Ms": 16.799999999999272,
+          "frameGapMaxMs": 50
+        },
+        {
+          "sample": 2,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 22396,
+            "anchorFraction": 0.1503255208333351,
+            "populated": 5,
+            "nodes": 11363
+          },
+          "workloadWallMs": 2718,
+          "rescale": 138,
+          "rerender": 17,
+          "viewport": 0,
+          "rescaleSyncMs": 205.10000109672546,
+          "rerenderSyncMs": 45.399999380111694,
+          "frameCount": 156,
+          "frameGapP95Ms": 16.799999999999272,
+          "frameGapMaxMs": 49.900000000001455
+        },
+        {
+          "sample": 3,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 22396,
+            "anchorFraction": 0.1503255208333351,
+            "populated": 5,
+            "nodes": 11363
+          },
+          "workloadWallMs": 2720,
+          "rescale": 138,
+          "rerender": 17,
+          "viewport": 0,
+          "rescaleSyncMs": 201.10000157356262,
+          "rerenderSyncMs": 44.99999952316284,
+          "frameCount": 157,
+          "frameGapP95Ms": 16.799999999999272,
+          "frameGapMaxMs": 50.099999999998545
+        },
+        {
+          "sample": 4,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 22396,
+            "anchorFraction": 0.1503255208333351,
+            "populated": 5,
+            "nodes": 11363
+          },
+          "workloadWallMs": 2677,
+          "rescale": 135,
+          "rerender": 16,
+          "viewport": 0,
+          "rescaleSyncMs": 201.80000138282776,
+          "rerenderSyncMs": 43.700000047683716,
+          "frameCount": 154,
+          "frameGapP95Ms": 16.799999999995634,
+          "frameGapMaxMs": 50
+        }
+      ],
+      "median": {
+        "frameGapP95Ms": 16.799999999999272,
+        "workloadWallMs": 2718,
+        "rescaleSyncMs": 201.10000157356262,
+        "rerenderSyncMs": 44.70000100135803,
+        "rescale": 138,
+        "rerender": 17
+      },
+      "idle_before": {
+        "rescale": 135,
+        "rerender": 16,
+        "viewport": 0
+      },
+      "idle_after": {
+        "rescale": 135,
+        "rerender": 16,
+        "viewport": 0
+      },
+      "errors": [],
+      "failures": []
+    },
+    "p95_gap_reduction_percent": 49.700598802394104
+  },
+  "browser_full": {
+    "order": [
+      "before",
+      "after"
+    ],
+    "before": {
+      "receipt": ".tiptoptyp/profiles/partial-optimize-2026-10-09/full-before-browser.json",
+      "metadata": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "fixture": "scripts/fixtures/tinymist-partial-large.typ",
+        "fixtureSha256": "463b5702f7eafb4104fdca89de88a7e72c14b7d697cd87159053de7efe76b24a",
+        "probeSha256": "94320b2b06a9a4e1deba9e40ed711fc3ab4b8a8a4e89bd1a22315f97a4aa5131",
+        "tinymistSha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+        "adapterSha256": "c7ba6f593cb9d1435301cb79897331cc2f42a9d16ed39c84cb239c44d5608d27",
+        "viewport": {
+          "width": 900,
+          "height": 700
+        },
+        "deviceScaleFactor": 1,
+        "warmupMs": 3000,
+        "workloadWarmups": 1,
+        "measuredSamples": 5,
+        "sampleReset": "Outside timing/counters: 900\u00d7700 viewport, fit scale1, rendered page18 +15% page offset; 800ms settle and two stable RAFs; start state asserted and recorded for warmup and all five samples",
+        "recipe": "36 resize steps (900\u2192650\u2192900), 24 scroll steps (3000px out/back), 10 Ctrl-wheel steps (\u221210\u00d75,+10\u00d75); 20ms input spacing; 800ms drain",
+        "measurement": "Synchronous renderer spans and browser RAF gaps; includes Playwright scheduling, excludes native WKWebView/GPU and compiler startup. No wall-time thresholds.",
+        "validated": true
+      },
+      "browser": "154.0.8037.98",
+      "effective_partial": false,
+      "samples": [
+        {
+          "sample": 0,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 22396,
+            "anchorFraction": 0.1503255208333351,
+            "populated": 48,
+            "nodes": 106937
+          },
+          "workloadWallMs": 10762,
+          "rescale": 47,
+          "rerender": 1,
+          "viewport": 1,
+          "rescaleSyncMs": 1246.700002193451,
+          "rerenderSyncMs": 5.6000001430511475,
+          "frameCount": 132,
+          "frameGapP95Ms": 200.09999999999854,
+          "frameGapMaxMs": 233.3000000000029
+        },
+        {
+          "sample": 1,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 22396,
+            "anchorFraction": 0.1503255208333351,
+            "populated": 48,
+            "nodes": 106937
+          },
+          "workloadWallMs": 10599,
+          "rescale": 47,
+          "rerender": 1,
+          "viewport": 1,
+          "rescaleSyncMs": 1351.0000002384186,
+          "rerenderSyncMs": 2.0999999046325684,
+          "frameCount": 135,
+          "frameGapP95Ms": 233.29999999999563,
+          "frameGapMaxMs": 250.09999999999854
+        },
+        {
+          "sample": 2,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 22396,
+            "anchorFraction": 0.1503255208333351,
+            "populated": 48,
+            "nodes": 106937
+          },
+          "workloadWallMs": 9831,
+          "rescale": 47,
+          "rerender": 1,
+          "viewport": 1,
+          "rescaleSyncMs": 1209.5999994277954,
+          "rerenderSyncMs": 2,
+          "frameCount": 135,
+          "frameGapP95Ms": 183.3000000000029,
+          "frameGapMaxMs": 183.40000000000146
+        },
+        {
+          "sample": 3,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 22396,
+            "anchorFraction": 0.1503255208333351,
+            "populated": 48,
+            "nodes": 106937
+          },
+          "workloadWallMs": 9889,
+          "rescale": 47,
+          "rerender": 1,
+          "viewport": 1,
+          "rescaleSyncMs": 1182.4999992847443,
+          "rerenderSyncMs": 1.7999999523162842,
+          "frameCount": 133,
+          "frameGapP95Ms": 183.3000000000029,
+          "frameGapMaxMs": 183.40000000000873
+        },
+        {
+          "sample": 4,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 22396,
+            "anchorFraction": 0.1503255208333351,
+            "populated": 48,
+            "nodes": 106937
+          },
+          "workloadWallMs": 10173,
+          "rescale": 47,
+          "rerender": 1,
+          "viewport": 1,
+          "rescaleSyncMs": 1246.7999997138977,
+          "rerenderSyncMs": 6.3999998569488525,
+          "frameCount": 133,
+          "frameGapP95Ms": 199.89999999999418,
+          "frameGapMaxMs": 216.60000000000582
+        }
+      ],
+      "median": {
+        "frameGapP95Ms": 199.89999999999418,
+        "workloadWallMs": 10173,
+        "rescaleSyncMs": 1246.700002193451,
+        "rerenderSyncMs": 2.0999999046325684,
+        "rescale": 47,
+        "rerender": 1
+      },
+      "idle_before": {
+        "rescale": 47,
+        "rerender": 1,
+        "viewport": 1
+      },
+      "idle_after": {
+        "rescale": 47,
+        "rerender": 1,
+        "viewport": 1
+      },
+      "errors": [],
+      "failures": []
+    },
+    "after": {
+      "receipt": ".tiptoptyp/profiles/partial-optimize-2026-10-09/full-after-browser.json",
+      "metadata": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "fixture": "scripts/fixtures/tinymist-partial-large.typ",
+        "fixtureSha256": "463b5702f7eafb4104fdca89de88a7e72c14b7d697cd87159053de7efe76b24a",
+        "probeSha256": "94320b2b06a9a4e1deba9e40ed711fc3ab4b8a8a4e89bd1a22315f97a4aa5131",
+        "tinymistSha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+        "adapterSha256": "06c0dba75e657f3806efaa7bc47274b0437e207291b3c7f47085bb515cdcbb33",
+        "viewport": {
+          "width": 900,
+          "height": 700
+        },
+        "deviceScaleFactor": 1,
+        "warmupMs": 3000,
+        "workloadWarmups": 1,
+        "measuredSamples": 5,
+        "sampleReset": "Outside timing/counters: 900\u00d7700 viewport, fit scale1, rendered page18 +15% page offset; 800ms settle and two stable RAFs; start state asserted and recorded for warmup and all five samples",
+        "recipe": "36 resize steps (900\u2192650\u2192900), 24 scroll steps (3000px out/back), 10 Ctrl-wheel steps (\u221210\u00d75,+10\u00d75); 20ms input spacing; 800ms drain",
+        "measurement": "Synchronous renderer spans and browser RAF gaps; includes Playwright scheduling, excludes native WKWebView/GPU and compiler startup. No wall-time thresholds.",
+        "validated": true
+      },
+      "browser": "154.0.8037.98",
+      "effective_partial": false,
+      "samples": [
+        {
+          "sample": 0,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 22396,
+            "anchorFraction": 0.1503255208333351,
+            "populated": 48,
+            "nodes": 106937
+          },
+          "workloadWallMs": 9533,
+          "rescale": 47,
+          "rerender": 1,
+          "viewport": 1,
+          "rescaleSyncMs": 1297.199999332428,
+          "rerenderSyncMs": 2,
+          "frameCount": 132,
+          "frameGapP95Ms": 183.3000000000029,
+          "frameGapMaxMs": 200
+        },
+        {
+          "sample": 1,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 22396,
+            "anchorFraction": 0.1503255208333351,
+            "populated": 48,
+            "nodes": 106937
+          },
+          "workloadWallMs": 9103,
+          "rescale": 47,
+          "rerender": 1,
+          "viewport": 1,
+          "rescaleSyncMs": 1276.0000002384186,
+          "rerenderSyncMs": 6.5,
+          "frameCount": 135,
+          "frameGapP95Ms": 166.8000000000029,
+          "frameGapMaxMs": 183.3000000000029
+        },
+        {
+          "sample": 2,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 22396,
+            "anchorFraction": 0.1503255208333351,
+            "populated": 48,
+            "nodes": 106937
+          },
+          "workloadWallMs": 9589,
+          "rescale": 47,
+          "rerender": 1,
+          "viewport": 1,
+          "rescaleSyncMs": 1284.3999989032745,
+          "rerenderSyncMs": 5.799999952316284,
+          "frameCount": 138,
+          "frameGapP95Ms": 183.29999999999563,
+          "frameGapMaxMs": 216.59999999999854
+        },
+        {
+          "sample": 3,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 22396,
+            "anchorFraction": 0.1503255208333351,
+            "populated": 48,
+            "nodes": 106937
+          },
+          "workloadWallMs": 9860,
+          "rescale": 47,
+          "rerender": 1,
+          "viewport": 1,
+          "rescaleSyncMs": 1262.3999998569489,
+          "rerenderSyncMs": 5.799999952316284,
+          "frameCount": 134,
+          "frameGapP95Ms": 199.90000000000873,
+          "frameGapMaxMs": 233.40000000000873
+        },
+        {
+          "sample": 4,
+          "startState": {
+            "viewport": {
+              "width": 900,
+              "height": 700
+            },
+            "scale": 1,
+            "page": 18,
+            "visible": [
+              18
+            ],
+            "scrollTop": 22396,
+            "anchorFraction": 0.1503255208333351,
+            "populated": 48,
+            "nodes": 106937
+          },
+          "workloadWallMs": 11658,
+          "rescale": 47,
+          "rerender": 1,
+          "viewport": 1,
+          "rescaleSyncMs": 1553.7000000476837,
+          "rerenderSyncMs": 5.300000190734863,
+          "frameCount": 135,
+          "frameGapP95Ms": 233.39999999999418,
+          "frameGapMaxMs": 250
+        }
+      ],
+      "median": {
+        "frameGapP95Ms": 183.3000000000029,
+        "workloadWallMs": 9589,
+        "rescaleSyncMs": 1284.3999989032745,
+        "rerenderSyncMs": 5.799999952316284,
+        "rescale": 47,
+        "rerender": 1
+      },
+      "idle_before": {
+        "rescale": 47,
+        "rerender": 1,
+        "viewport": 1
+      },
+      "idle_after": {
+        "rescale": 47,
+        "rerender": 1,
+        "viewport": 1
+      },
+      "errors": [],
+      "failures": []
+    },
+    "p95_gap_reduction_percent": 8.304152076033889
+  },
+  "native_partial_before_shared_full_ports": {
+    "order": [
+      "after",
+      "before"
+    ],
+    "before": {
+      "receipt": ".tiptoptyp/profiles/partial-render-native/20261009T160520Z-8rxqv39n/result.json",
+      "metadata": {
+        "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+        "architecture": "arm64",
+        "view_css_pixels": [
+          900,
+          700
+        ],
+        "renderer_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+        "renderer_version": {
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/tinymist-aarch64-apple-darwin",
+            "--version"
+          ],
+          "exit_code": 0,
+          "output": "tinymist \nBuild Timestamp:     2026-06-22T10:37:22.819803000Z\nBuild Git Describe:  v0.15.2\nCommit SHA:          92babed1bc00540882effd29bc56ebc5986792c2\nCommit Date:         None\nCommit Branch:       None\nCargo Target Triple: aarch64-apple-darwin\nTypst Version:       0.15.0\nTypst Source:        git+https://github.com/Myriad-Dreamin/typst.git?tag=tinymist/v0.15.0#391c2dcd698aabf2917db0336868d16f197057d9"
+        },
+        "fixture": "scripts/fixtures/tinymist-partial-large.typ",
+        "fixture_sha256": "463b5702f7eafb4104fdca89de88a7e72c14b7d697cd87159053de7efe76b24a",
+        "after_adapter_sha256": "16ddbf247e87cc9f4aa2fefc2fdf1f9c4a7cbea32fc92508ec2aa7905181a343",
+        "native_probe_sha256": "1bd3022ad8ac07ebf448870372dfadc1d8daf4ff85aca587497dbfa40339d790",
+        "runner_sha256": "923ad902312f4188be76fe50d4a6d9f6c83d2489464a13a396180ccbbb167498",
+        "native_probe_binary_sha256": "fb8fc9b926be40cd94fa500707a1b249ad1bb4501c4909fbde5cbe2571723a80",
+        "native_build": [
+          "swiftc",
+          "-O",
+          "-module-cache-path",
+          "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/partial-render-native/20261009T160312Z-44ck4348/swift-module-cache",
+          "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/test-preview-partial-native.swift",
+          "-o",
+          "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/partial-render-native/20261009T160312Z-44ck4348/Tinymist Partial Native QA.app/Contents/MacOS/partial-native-probe"
+        ],
+        "swift_version": {
+          "command": [
+            "swiftc",
+            "--version"
+          ],
+          "exit_code": 0,
+          "output": "Apple Swift version 6.0.3 (swiftlang-6.0.3.1.10 clang-1600.0.30.1)\nTarget: arm64-apple-macosx14.0\nswift-driver version: 1.115.1"
+        },
+        "native_probe_reused": true,
+        "native_probe_reuse_metadata": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/partial-render-native/20261009T160312Z-44ck4348/metadata.json",
+        "power_settings": {
+          "command": [
+            "pmset",
+            "-g"
+          ],
+          "exit_code": 0,
+          "output": "System-wide power settings:\nCurrently in use:\n standby              1\n Sleep On Power Button 1\n hibernatefile        /var/vm/sleepimage\n powernap             1\n networkoversleep     0\n disksleep            10\n sleep                1 (sleep prevented by powerd, coreaudiod, coreaudiod)\n hibernatemode        3\n ttyskeepawake        1\n displaysleep         10\n tcpkeepalive         1\n lowpowermode         0\n womp                 1"
+        },
+        "warmup_seconds": 3,
+        "workload_warmups": 1,
+        "measured_samples": 5,
+        "per_sample_reset": "Before every workload warmup and measured sample:900\u00d7700 view,fit scale1,page18 plus15% offset,scrollLeft0,clear resize anchor;wait for2 stable RAF states before starting timing",
+        "recipe": "36 resize steps (900\u2192650\u2192900),24 scroll steps (3000px out/back),10 Ctrl-wheel steps (\u221210\u00d75,+10\u00d75);20ms input spacing;800ms drain;48-page source unchanged during measurements",
+        "frame_sample_bound": 2048,
+        "phase_diagnostics_enabled": true,
+        "phase_diagnostics_policy": "When enabled: four resize/scroll/zoom/drain summaries reuse the single 2048-gap RAF buffer; counters and synchronous spans partition the combined totals. RAF gaps belong to the phase when their ending callback arrives, so boundary gaps can include work from the preceding phase. No extra RAF or idle loop.",
+        "revision": {
+          "command": [
+            "git",
+            "-C",
+            "/Users/calvinkhor/Documents/GitHub/mytypst",
+            "rev-parse",
+            "HEAD"
+          ],
+          "exit_code": 0,
+          "output": "1de1cf7896a47c6edc266444032722ab4831084f"
+        }
+      },
+      "backing_scale_factor": 2,
+      "samples": [
+        {
+          "frameCount": 81,
+          "frameGapMaxMs": 155,
+          "frameGapP95Ms": 111,
+          "frameSamplesDropped": 0,
+          "rerender": 20,
+          "rerenderSyncMs": 64.00000000000182,
+          "rescale": 72,
+          "rescaleSyncMs": 332.9999999999982,
+          "sample": 0,
+          "startState": {
+            "canvases": 0,
+            "canvasMixins": 0,
+            "nodes": 11363,
+            "page": 18,
+            "pageFraction": 0.14950820823120914,
+            "pages": 48,
+            "partial": true,
+            "populated": 5,
+            "scale": 1,
+            "scrollTop": 22395,
+            "viewport": [
+              900,
+              700
+            ],
+            "visible": [
+              {
+                "dummy": false,
+                "index": 18,
+                "inkNodes": 436
+              }
+            ]
+          },
+          "viewport": 0,
+          "workloadWallMs": 2518
+        },
+        {
+          "frameCount": 76,
+          "frameGapMaxMs": 153,
+          "frameGapP95Ms": 118,
+          "frameSamplesDropped": 0,
+          "rerender": 20,
+          "rerenderSyncMs": 58,
+          "rescale": 72,
+          "rescaleSyncMs": 326.9999999999982,
+          "sample": 1,
+          "startState": {
+            "canvases": 0,
+            "canvasMixins": 0,
+            "nodes": 9129,
+            "page": 18,
+            "pageFraction": 0.14950820823120914,
+            "pages": 48,
+            "partial": true,
+            "populated": 4,
+            "scale": 1,
+            "scrollTop": 22395,
+            "viewport": [
+              900,
+              700
+            ],
+            "visible": [
+              {
+                "dummy": false,
+                "index": 18,
+                "inkNodes": 436
+              }
+            ]
+          },
+          "viewport": 0,
+          "workloadWallMs": 2483
+        },
+        {
+          "frameCount": 71,
+          "frameGapMaxMs": 155,
+          "frameGapP95Ms": 123,
+          "frameSamplesDropped": 0,
+          "rerender": 20,
+          "rerenderSyncMs": 83.00000000000728,
+          "rescale": 71,
+          "rescaleSyncMs": 272,
+          "sample": 2,
+          "startState": {
+            "canvases": 0,
+            "canvasMixins": 0,
+            "nodes": 9129,
+            "page": 18,
+            "pageFraction": 0.14950820823120914,
+            "pages": 48,
+            "partial": true,
+            "populated": 4,
+            "scale": 1,
+            "scrollTop": 22395,
+            "viewport": [
+              900,
+              700
+            ],
+            "visible": [
+              {
+                "dummy": false,
+                "index": 18,
+                "inkNodes": 436
+              }
+            ]
+          },
+          "viewport": 0,
+          "workloadWallMs": 2550.9999999999964
+        },
+        {
+          "frameCount": 78,
+          "frameGapMaxMs": 134,
+          "frameGapP95Ms": 114,
+          "frameSamplesDropped": 0,
+          "rerender": 21,
+          "rerenderSyncMs": 36.000000000007276,
+          "rescale": 75,
+          "rescaleSyncMs": 287.99999999999636,
+          "sample": 3,
+          "startState": {
+            "canvases": 0,
+            "canvasMixins": 0,
+            "nodes": 11363,
+            "page": 18,
+            "pageFraction": 0.14950820823120914,
+            "pages": 48,
+            "partial": true,
+            "populated": 5,
+            "scale": 1,
+            "scrollTop": 22395,
+            "viewport": [
+              900,
+              700
+            ],
+            "visible": [
+              {
+                "dummy": false,
+                "index": 18,
+                "inkNodes": 436
+              }
+            ]
+          },
+          "viewport": 0,
+          "workloadWallMs": 2487
+        },
+        {
+          "frameCount": 81,
+          "frameGapMaxMs": 125,
+          "frameGapP95Ms": 108,
+          "frameSamplesDropped": 0,
+          "rerender": 21,
+          "rerenderSyncMs": 55,
+          "rescale": 76,
+          "rescaleSyncMs": 281.00000000000364,
+          "sample": 4,
+          "startState": {
+            "canvases": 0,
+            "canvasMixins": 0,
+            "nodes": 11363,
+            "page": 18,
+            "pageFraction": 0.14950820823120914,
+            "pages": 48,
+            "partial": true,
+            "populated": 5,
+            "scale": 1,
+            "scrollTop": 22395,
+            "viewport": [
+              900,
+              700
+            ],
+            "visible": [
+              {
+                "dummy": false,
+                "index": 18,
+                "inkNodes": 436
+              }
+            ]
+          },
+          "viewport": 0,
+          "workloadWallMs": 2583.0000000000036
+        }
+      ],
+      "summary": {
+        "passed": true,
+        "sample_count": 5,
+        "median": {
+          "workloadWallMs": 2518,
+          "rescaleSyncMs": 287.99999999999636,
+          "rerenderSyncMs": 58,
+          "frameGapP95Ms": 114,
+          "frameGapMaxMs": 153,
+          "rerender": 20,
+          "rescale": 72
+        },
+        "phases": {
+          "resize": {
+            "sample_count": 5,
+            "median": {
+              "durationMs": 774,
+              "rescale": 46,
+              "rerender": 13,
+              "viewport": 0,
+              "frameCount": 7,
+              "frameSamplesDropped": 0,
+              "rescaleSyncMs": 269,
+              "rerenderSyncMs": 28.000000000003638,
+              "frameGapP95Ms": 153,
+              "frameGapMaxMs": 153
+            }
+          },
+          "scroll": {
+            "sample_count": 5,
+            "median": {
+              "durationMs": 647,
+              "rescale": 10,
+              "rerender": 3,
+              "viewport": 0,
+              "frameCount": 23,
+              "frameSamplesDropped": 0,
+              "rescaleSyncMs": 36.00000000000364,
+              "rerenderSyncMs": 26.99999999999818,
+              "frameGapP95Ms": 118,
+              "frameGapMaxMs": 129
+            }
+          },
+          "zoom": {
+            "sample_count": 5,
+            "median": {
+              "durationMs": 304,
+              "rescale": 12,
+              "rerender": 3,
+              "viewport": 0,
+              "frameCount": 3,
+              "frameSamplesDropped": 0,
+              "rescaleSyncMs": 0,
+              "rerenderSyncMs": 6.999999999998181,
+              "frameGapP95Ms": 98,
+              "frameGapMaxMs": 98
+            }
+          },
+          "drain": {
+            "sample_count": 5,
+            "median": {
+              "durationMs": 800.0000000000036,
+              "rescale": 4,
+              "rerender": 1,
+              "viewport": 0,
+              "frameCount": 43,
+              "frameSamplesDropped": 0,
+              "rescaleSyncMs": 0,
+              "rerenderSyncMs": 1,
+              "frameGapP95Ms": 18,
+              "frameGapMaxMs": 87
+            }
+          }
+        }
+      },
+      "idle": {
+        "errors": [],
+        "quiet": true,
+        "rerender": 0,
+        "rescale": 0,
+        "state": {
+          "canvases": 0,
+          "canvasMixins": 0,
+          "nodes": 11363,
+          "page": 17,
+          "pageFraction": 0.24509660309436215,
+          "pages": 48,
+          "partial": true,
+          "populated": 5,
+          "scale": 1,
+          "scrollTop": 21278,
+          "viewport": [
+            900,
+            700
+          ],
+          "visible": [
+            {
+              "dummy": false,
+              "index": 17,
+              "inkNodes": 436
+            }
+          ]
+        },
+        "viewport": 0
+      },
+      "failures": []
+    },
+    "after": {
+      "receipt": ".tiptoptyp/profiles/partial-render-native/20261009T160312Z-44ck4348/result.json",
+      "metadata": {
+        "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+        "architecture": "arm64",
+        "view_css_pixels": [
+          900,
+          700
+        ],
+        "renderer_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+        "renderer_version": {
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/tinymist-aarch64-apple-darwin",
+            "--version"
+          ],
+          "exit_code": 0,
+          "output": "tinymist \nBuild Timestamp:     2026-06-22T10:37:22.819803000Z\nBuild Git Describe:  v0.15.2\nCommit SHA:          92babed1bc00540882effd29bc56ebc5986792c2\nCommit Date:         None\nCommit Branch:       None\nCargo Target Triple: aarch64-apple-darwin\nTypst Version:       0.15.0\nTypst Source:        git+https://github.com/Myriad-Dreamin/typst.git?tag=tinymist/v0.15.0#391c2dcd698aabf2917db0336868d16f197057d9"
+        },
+        "fixture": "scripts/fixtures/tinymist-partial-large.typ",
+        "fixture_sha256": "463b5702f7eafb4104fdca89de88a7e72c14b7d697cd87159053de7efe76b24a",
+        "after_adapter_sha256": "c7ba6f593cb9d1435301cb79897331cc2f42a9d16ed39c84cb239c44d5608d27",
+        "native_probe_sha256": "1bd3022ad8ac07ebf448870372dfadc1d8daf4ff85aca587497dbfa40339d790",
+        "runner_sha256": "923ad902312f4188be76fe50d4a6d9f6c83d2489464a13a396180ccbbb167498",
+        "native_probe_binary_sha256": "fb8fc9b926be40cd94fa500707a1b249ad1bb4501c4909fbde5cbe2571723a80",
+        "native_build": [
+          "swiftc",
+          "-O",
+          "-module-cache-path",
+          "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/partial-render-native/20261009T160312Z-44ck4348/swift-module-cache",
+          "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/test-preview-partial-native.swift",
+          "-o",
+          "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/partial-render-native/20261009T160312Z-44ck4348/Tinymist Partial Native QA.app/Contents/MacOS/partial-native-probe"
+        ],
+        "swift_version": {
+          "command": [
+            "swiftc",
+            "--version"
+          ],
+          "exit_code": 0,
+          "output": "Apple Swift version 6.0.3 (swiftlang-6.0.3.1.10 clang-1600.0.30.1)\nTarget: arm64-apple-macosx14.0\nswift-driver version: 1.115.1"
+        },
+        "native_probe_reused": false,
+        "native_probe_reuse_metadata": null,
+        "power_settings": {
+          "command": [
+            "pmset",
+            "-g"
+          ],
+          "exit_code": 0,
+          "output": "System-wide power settings:\nCurrently in use:\n standby              1\n Sleep On Power Button 1\n hibernatefile        /var/vm/sleepimage\n powernap             1\n networkoversleep     0\n disksleep            10\n sleep                1 (sleep prevented by powerd, coreaudiod, coreaudiod)\n hibernatemode        3\n ttyskeepawake        1\n displaysleep         10\n tcpkeepalive         1\n lowpowermode         0\n womp                 1"
+        },
+        "warmup_seconds": 3,
+        "workload_warmups": 1,
+        "measured_samples": 5,
+        "per_sample_reset": "Before every workload warmup and measured sample:900\u00d7700 view,fit scale1,page18 plus15% offset,scrollLeft0,clear resize anchor;wait for2 stable RAF states before starting timing",
+        "recipe": "36 resize steps (900\u2192650\u2192900),24 scroll steps (3000px out/back),10 Ctrl-wheel steps (\u221210\u00d75,+10\u00d75);20ms input spacing;800ms drain;48-page source unchanged during measurements",
+        "frame_sample_bound": 2048,
+        "phase_diagnostics_enabled": true,
+        "phase_diagnostics_policy": "When enabled: four resize/scroll/zoom/drain summaries reuse the single 2048-gap RAF buffer; counters and synchronous spans partition the combined totals. RAF gaps belong to the phase when their ending callback arrives, so boundary gaps can include work from the preceding phase. No extra RAF or idle loop.",
+        "revision": {
+          "command": [
+            "git",
+            "-C",
+            "/Users/calvinkhor/Documents/GitHub/mytypst",
+            "rev-parse",
+            "HEAD"
+          ],
+          "exit_code": 0,
+          "output": "1de1cf7896a47c6edc266444032722ab4831084f"
+        }
+      },
+      "backing_scale_factor": 2,
+      "samples": [
+        {
+          "frameCount": 102,
+          "frameGapMaxMs": 96,
+          "frameGapP95Ms": 78,
+          "frameSamplesDropped": 0,
+          "rerender": 11,
+          "rerenderSyncMs": 41.00000000000182,
+          "rescale": 72,
+          "rescaleSyncMs": 682,
+          "sample": 0,
+          "startState": {
+            "canvases": 0,
+            "canvasMixins": 0,
+            "nodes": 11363,
+            "page": 18,
+            "pageFraction": 0.14950820823120914,
+            "pages": 48,
+            "partial": true,
+            "populated": 5,
+            "scale": 1,
+            "scrollTop": 22395,
+            "viewport": [
+              900,
+              700
+            ],
+            "visible": [
+              {
+                "dummy": false,
+                "index": 18,
+                "inkNodes": 436
+              }
+            ]
+          },
+          "viewport": 0,
+          "workloadWallMs": 2601
+        },
+        {
+          "frameCount": 106,
+          "frameGapMaxMs": 83,
+          "frameGapP95Ms": 79,
+          "frameSamplesDropped": 0,
+          "rerender": 13,
+          "rerenderSyncMs": 67,
+          "rescale": 78,
+          "rescaleSyncMs": 690,
+          "sample": 1,
+          "startState": {
+            "canvases": 0,
+            "canvasMixins": 0,
+            "nodes": 11363,
+            "page": 18,
+            "pageFraction": 0.14950820823120914,
+            "pages": 48,
+            "partial": true,
+            "populated": 5,
+            "scale": 1,
+            "scrollTop": 22395,
+            "viewport": [
+              900,
+              700
+            ],
+            "visible": [
+              {
+                "dummy": false,
+                "index": 18,
+                "inkNodes": 436
+              }
+            ]
+          },
+          "viewport": 0,
+          "workloadWallMs": 2800
+        },
+        {
+          "frameCount": 106,
+          "frameGapMaxMs": 88,
+          "frameGapP95Ms": 78,
+          "frameSamplesDropped": 0,
+          "rerender": 13,
+          "rerenderSyncMs": 65.00000000000364,
+          "rescale": 78,
+          "rescaleSyncMs": 694.9999999999927,
+          "sample": 2,
+          "startState": {
+            "canvases": 0,
+            "canvasMixins": 0,
+            "nodes": 11363,
+            "page": 18,
+            "pageFraction": 0.14950820823120914,
+            "pages": 48,
+            "partial": true,
+            "populated": 5,
+            "scale": 1,
+            "scrollTop": 22395,
+            "viewport": [
+              900,
+              700
+            ],
+            "visible": [
+              {
+                "dummy": false,
+                "index": 18,
+                "inkNodes": 436
+              }
+            ]
+          },
+          "viewport": 0,
+          "workloadWallMs": 2806
+        },
+        {
+          "frameCount": 102,
+          "frameGapMaxMs": 88,
+          "frameGapP95Ms": 80,
+          "frameSamplesDropped": 0,
+          "rerender": 13,
+          "rerenderSyncMs": 46,
+          "rescale": 78,
+          "rescaleSyncMs": 711,
+          "sample": 3,
+          "startState": {
+            "canvases": 0,
+            "canvasMixins": 0,
+            "nodes": 11363,
+            "page": 18,
+            "pageFraction": 0.14950820823120914,
+            "pages": 48,
+            "partial": true,
+            "populated": 5,
+            "scale": 1,
+            "scrollTop": 22395,
+            "viewport": [
+              900,
+              700
+            ],
+            "visible": [
+              {
+                "dummy": false,
+                "index": 18,
+                "inkNodes": 436
+              }
+            ]
+          },
+          "viewport": 0,
+          "workloadWallMs": 2686
+        },
+        {
+          "frameCount": 106,
+          "frameGapMaxMs": 85,
+          "frameGapP95Ms": 77,
+          "frameSamplesDropped": 0,
+          "rerender": 13,
+          "rerenderSyncMs": 61.00000000000364,
+          "rescale": 78,
+          "rescaleSyncMs": 691.9999999999964,
+          "sample": 4,
+          "startState": {
+            "canvases": 0,
+            "canvasMixins": 0,
+            "nodes": 11363,
+            "page": 18,
+            "pageFraction": 0.14950820823120914,
+            "pages": 48,
+            "partial": true,
+            "populated": 5,
+            "scale": 1,
+            "scrollTop": 22395,
+            "viewport": [
+              900,
+              700
+            ],
+            "visible": [
+              {
+                "dummy": false,
+                "index": 18,
+                "inkNodes": 436
+              }
+            ]
+          },
+          "viewport": 0,
+          "workloadWallMs": 2813
+        }
+      ],
+      "summary": {
+        "passed": true,
+        "sample_count": 5,
+        "median": {
+          "workloadWallMs": 2800,
+          "rescaleSyncMs": 691.9999999999964,
+          "rerenderSyncMs": 61.00000000000364,
+          "frameGapP95Ms": 78,
+          "frameGapMaxMs": 88,
+          "rerender": 13,
+          "rescale": 78
+        },
+        "phases": {
+          "resize": {
+            "sample_count": 5,
+            "median": {
+              "durationMs": 820,
+              "rescale": 47,
+              "rerender": 9,
+              "viewport": 0,
+              "frameCount": 10,
+              "frameSamplesDropped": 0,
+              "rescaleSyncMs": 689.0000000000036,
+              "rerenderSyncMs": 10.000000000003638,
+              "frameGapP95Ms": 88,
+              "frameGapMaxMs": 88
+            }
+          },
+          "scroll": {
+            "sample_count": 5,
+            "median": {
+              "durationMs": 663,
+              "rescale": 9,
+              "rerender": 3,
+              "viewport": 0,
+              "frameCount": 35,
+              "frameSamplesDropped": 0,
+              "rescaleSyncMs": 0,
+              "rerenderSyncMs": 46.00000000000364,
+              "frameGapP95Ms": 65,
+              "frameGapMaxMs": 78
+            }
+          },
+          "zoom": {
+            "sample_count": 5,
+            "median": {
+              "durationMs": 515,
+              "rescale": 22,
+              "rerender": 1,
+              "viewport": 0,
+              "frameCount": 10,
+              "frameSamplesDropped": 0,
+              "rescaleSyncMs": 0,
+              "rerenderSyncMs": 6,
+              "frameGapP95Ms": 56,
+              "frameGapMaxMs": 56
+            }
+          },
+          "drain": {
+            "sample_count": 5,
+            "median": {
+              "durationMs": 801,
+              "rescale": 0,
+              "rerender": 0,
+              "viewport": 0,
+              "frameCount": 49,
+              "frameSamplesDropped": 0,
+              "rescaleSyncMs": 0,
+              "rerenderSyncMs": 0,
+              "frameGapP95Ms": 18,
+              "frameGapMaxMs": 50
+            }
+          }
+        }
+      },
+      "idle": {
+        "errors": [],
+        "quiet": true,
+        "rerender": 0,
+        "rescale": 0,
+        "state": {
+          "canvases": 0,
+          "canvasMixins": 0,
+          "nodes": 11363,
+          "page": 18,
+          "pageFraction": 0.13807029973447713,
+          "pages": 48,
+          "partial": true,
+          "populated": 5,
+          "scale": 1,
+          "scrollTop": 22381,
+          "viewport": [
+            900,
+            700
+          ],
+          "visible": [
+            {
+              "dummy": false,
+              "index": 18,
+              "inkNodes": 436
+            }
+          ]
+        },
+        "viewport": 0
+      },
+      "failures": []
+    },
+    "p95_gap_reduction_percent": 31.57894736842105
+  },
+  "final_browser_acceptance": [
+    {
+      "receipt": ".tiptoptyp/profiles/partial-optimize-2026-10-09/strict-final-partial-acceptance.json",
+      "adapter_sha256": "06c0dba75e657f3806efaa7bc47274b0437e207291b3c7f47085bb515cdcbb33",
+      "probe_sha256": "de605d06540e9fbbe6de7b742704e84523b9fb772c02e13371e94e0d9bbea21e",
+      "mode": "partial",
+      "passed": true,
+      "palette_checks": [
+        {
+          "name": "identity",
+          "bg": [
+            255,
+            255,
+            255
+          ],
+          "fg": [
+            0,
+            0,
+            0
+          ],
+          "filter": "none",
+          "pages": 48,
+          "canvases": 0,
+          "canvasMixins": 0,
+          "clipsIntact": true,
+          "expectedStripe": [
+            36,
+            30,
+            20
+          ],
+          "pixels": {
+            "paper": {
+              "inBounds": true,
+              "matching": 9,
+              "center": [
+                255,
+                255,
+                255,
+                255
+              ]
+            },
+            "stripe": {
+              "inBounds": true,
+              "matching": 9,
+              "center": [
+                36,
+                30,
+                20,
+                255
+              ]
+            }
+          },
+          "capture": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/screenshots/agent-review/partial-optimize/1791571844970-partial-identity.png",
+          "kind": "standalone Chromium viewport; not composed native editor"
+        },
+        {
+          "name": "dark",
+          "bg": [
+            38,
+            38,
+            38
+          ],
+          "fg": [
+            235,
+            219,
+            178
+          ],
+          "filter": "url(\"#tiptoptyp-palette\")",
+          "pages": 48,
+          "canvases": 0,
+          "canvasMixins": 0,
+          "clipsIntact": true,
+          "expectedStripe": [
+            207,
+            198,
+            167
+          ],
+          "pixels": {
+            "paper": {
+              "inBounds": true,
+              "matching": 9,
+              "center": [
+                38,
+                38,
+                38,
+                255
+              ]
+            },
+            "stripe": {
+              "inBounds": true,
+              "matching": 9,
+              "center": [
+                207,
+                197,
+                167,
+                255
+              ]
+            }
+          },
+          "capture": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/screenshots/agent-review/partial-optimize/1791571844970-partial-dark.png",
+          "kind": "standalone Chromium viewport; not composed native editor"
+        },
+        {
+          "name": "tinted",
+          "bg": [
+            238,
+            245,
+            252
+          ],
+          "fg": [
+            20,
+            40,
+            70
+          ],
+          "filter": "url(\"#tiptoptyp-palette\")",
+          "pages": 48,
+          "canvases": 0,
+          "canvasMixins": 0,
+          "clipsIntact": true,
+          "expectedStripe": [
+            51,
+            64,
+            84
+          ],
+          "pixels": {
+            "paper": {
+              "inBounds": true,
+              "matching": 9,
+              "center": [
+                238,
+                245,
+                252,
+                255
+              ]
+            },
+            "stripe": {
+              "inBounds": true,
+              "matching": 9,
+              "center": [
+                50,
+                64,
+                84,
+                255
+              ]
+            }
+          }
+        },
+        {
+          "name": "inverted",
+          "bg": [
+            0,
+            0,
+            0
+          ],
+          "fg": [
+            255,
+            255,
+            255
+          ],
+          "filter": "url(\"#tiptoptyp-palette\")",
+          "pages": 48,
+          "canvases": 0,
+          "canvasMixins": 0,
+          "clipsIntact": true,
+          "expectedStripe": [
+            219,
+            225,
+            235
+          ],
+          "pixels": {
+            "paper": {
+              "inBounds": true,
+              "matching": 9,
+              "center": [
+                0,
+                0,
+                0,
+                255
+              ]
+            },
+            "stripe": {
+              "inBounds": true,
+              "matching": 9,
+              "center": [
+                219,
+                225,
+                235,
+                255
+              ]
+            }
+          }
+        },
+        {
+          "name": "identity-restored",
+          "bg": [
+            255,
+            255,
+            255
+          ],
+          "fg": [
+            0,
+            0,
+            0
+          ],
+          "filter": "none",
+          "pages": 48,
+          "canvases": 0,
+          "canvasMixins": 0,
+          "clipsIntact": true,
+          "expectedStripe": [
+            36,
+            30,
+            20
+          ],
+          "pixels": {
+            "paper": {
+              "inBounds": true,
+              "matching": 9,
+              "center": [
+                255,
+                255,
+                255,
+                255
+              ]
+            },
+            "stripe": {
+              "inBounds": true,
+              "matching": 9,
+              "center": [
+                36,
+                30,
+                20,
+                255
+              ]
+            }
+          },
+          "capture": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/screenshots/agent-review/partial-optimize/1791571844970-partial-identity-restored.png",
+          "kind": "standalone Chromium viewport; not composed native editor"
+        }
+      ],
+      "geometry_checks": {
+        "target": {
+          "page": 42,
+          "x": 250,
+          "y": 250
+        },
+        "source": {
+          "partial": true,
+          "scale": 1,
+          "pointer": {
+            "x": 450,
+            "y": 266.00273437500437
+          },
+          "expectedY": 266.4,
+          "scrollTop": 52011,
+          "attempts": 45,
+          "visible": true,
+          "inside": true,
+          "sourceError": 0.3972656249956117,
+          "settled": true
+        },
+        "checks": [
+          {
+            "name": "reuse",
+            "deltaY": -12,
+            "forcedNormalPatch": false,
+            "frames": [
+              {
+                "frame": 1,
+                "scale": 1.0242903178906215,
+                "point": {
+                  "x": 450.00000000000006,
+                  "y": 266.44077239799867
+                },
+                "error": 0.4380380229943057,
+                "backgroundRestored": true,
+                "visible": [
+                  42
+                ],
+                "canvases": 0,
+                "canvasMixins": 0
+              },
+              {
+                "frame": 2,
+                "scale": 1.0242903178906215,
+                "point": {
+                  "x": 450.00000000000006,
+                  "y": 266.44077239799867
+                },
+                "error": 0.4380380229943057,
+                "backgroundRestored": true,
+                "visible": [
+                  42
+                ],
+                "canvases": 0,
+                "canvasMixins": 0
+              }
+            ]
+          },
+          {
+            "name": "normal-patch-fallback",
+            "deltaY": -12,
+            "forcedNormalPatch": true,
+            "frames": [
+              {
+                "frame": 1,
+                "scale": 1.0491706553244704,
+                "point": {
+                  "x": 450.5,
+                  "y": 266.0018502172079
+                },
+                "error": 0.500000781734398,
+                "backgroundRestored": true,
+                "visible": [
+                  42
+                ],
+                "canvases": 0,
+                "canvasMixins": 0
+              },
+              {
+                "frame": 2,
+                "scale": 1.0491706553244704,
+                "point": {
+                  "x": 450.5,
+                  "y": 266.0018502172079
+                },
+                "error": 0.500000781734398,
+                "backgroundRestored": true,
+                "visible": [
+                  42
+                ],
+                "canvases": 0,
+                "canvasMixins": 0
+              }
+            ]
+          },
+          {
+            "name": "reverse-reuse",
+            "deltaY": 12,
+            "forcedNormalPatch": false,
+            "frames": [
+              {
+                "frame": 1,
+                "scale": 1.0242903178906213,
+                "point": {
+                  "x": 450.00000000000006,
+                  "y": 266.44077239799867
+                },
+                "error": 0.4380380229943057,
+                "backgroundRestored": true,
+                "visible": [
+                  42
+                ],
+                "canvases": 0,
+                "canvasMixins": 0
+              },
+              {
+                "frame": 2,
+                "scale": 1.0242903178906213,
+                "point": {
+                  "x": 450.00000000000006,
+                  "y": 266.44077239799867
+                },
+                "error": 0.4380380229943057,
+                "backgroundRestored": true,
+                "visible": [
+                  42
+                ],
+                "canvases": 0,
+                "canvasMixins": 0
+              }
+            ]
+          },
+          {
+            "name": "reverse-normal-patch-fallback",
+            "deltaY": 12,
+            "forcedNormalPatch": true,
+            "frames": [
+              {
+                "frame": 1,
+                "scale": 0.9999999999999998,
+                "point": {
+                  "x": 450,
+                  "y": 266.00273437500437
+                },
+                "error": 0,
+                "backgroundRestored": true,
+                "visible": [
+                  42
+                ],
+                "canvases": 0,
+                "canvasMixins": 0
+              },
+              {
+                "frame": 2,
+                "scale": 0.9999999999999998,
+                "point": {
+                  "x": 450,
+                  "y": 266.00273437500437
+                },
+                "error": 0,
+                "backgroundRestored": true,
+                "visible": [
+                  42
+                ],
+                "canvases": 0,
+                "canvasMixins": 0
+              }
+            ]
+          }
+        ]
+      },
+      "captures": [
+        {
+          "path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/screenshots/agent-review/partial-render/1791571844941-partial-initial.png",
+          "kind": "standalone Chromium viewport; not composed native editor",
+          "sourceSha256": "463b5702f7eafb4104fdca89de88a7e72c14b7d697cd87159053de7efe76b24a"
+        },
+        {
+          "path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/screenshots/agent-review/partial-render/1791571856701-partial-source-replacement.png",
+          "kind": "standalone Chromium viewport; not composed native editor",
+          "sourceSha256": "7220c4b1693b1bebff61e0687f629a8628213c6ccbabf52a6d370eb50d41ff7a"
+        }
+      ],
+      "inspected_palette_captures": [
+        "dark",
+        "identity-restored"
+      ]
+    },
+    {
+      "receipt": ".tiptoptyp/profiles/partial-optimize-2026-10-09/strict-final-full-acceptance.json",
+      "adapter_sha256": "06c0dba75e657f3806efaa7bc47274b0437e207291b3c7f47085bb515cdcbb33",
+      "probe_sha256": "de605d06540e9fbbe6de7b742704e84523b9fb772c02e13371e94e0d9bbea21e",
+      "mode": "full",
+      "passed": true,
+      "palette_checks": [
+        {
+          "name": "identity",
+          "bg": [
+            255,
+            255,
+            255
+          ],
+          "fg": [
+            0,
+            0,
+            0
+          ],
+          "filter": "none",
+          "pages": 48,
+          "canvases": 0,
+          "canvasMixins": 0,
+          "clipsIntact": true,
+          "expectedStripe": [
+            36,
+            30,
+            20
+          ],
+          "pixels": {
+            "paper": {
+              "inBounds": true,
+              "matching": 9,
+              "center": [
+                255,
+                255,
+                255,
+                255
+              ]
+            },
+            "stripe": {
+              "inBounds": true,
+              "matching": 9,
+              "center": [
+                36,
+                30,
+                20,
+                255
+              ]
+            }
+          },
+          "capture": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/screenshots/agent-review/partial-optimize/1791571758129-full-identity.png",
+          "kind": "standalone Chromium viewport; not composed native editor"
+        },
+        {
+          "name": "dark",
+          "bg": [
+            38,
+            38,
+            38
+          ],
+          "fg": [
+            235,
+            219,
+            178
+          ],
+          "filter": "url(\"#tiptoptyp-palette\")",
+          "pages": 48,
+          "canvases": 0,
+          "canvasMixins": 0,
+          "clipsIntact": true,
+          "expectedStripe": [
+            207,
+            198,
+            167
+          ],
+          "pixels": {
+            "paper": {
+              "inBounds": true,
+              "matching": 9,
+              "center": [
+                38,
+                38,
+                38,
+                255
+              ]
+            },
+            "stripe": {
+              "inBounds": true,
+              "matching": 9,
+              "center": [
+                207,
+                197,
+                167,
+                255
+              ]
+            }
+          },
+          "capture": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/screenshots/agent-review/partial-optimize/1791571758129-full-dark.png",
+          "kind": "standalone Chromium viewport; not composed native editor"
+        },
+        {
+          "name": "tinted",
+          "bg": [
+            238,
+            245,
+            252
+          ],
+          "fg": [
+            20,
+            40,
+            70
+          ],
+          "filter": "url(\"#tiptoptyp-palette\")",
+          "pages": 48,
+          "canvases": 0,
+          "canvasMixins": 0,
+          "clipsIntact": true,
+          "expectedStripe": [
+            51,
+            64,
+            84
+          ],
+          "pixels": {
+            "paper": {
+              "inBounds": true,
+              "matching": 9,
+              "center": [
+                238,
+                245,
+                252,
+                255
+              ]
+            },
+            "stripe": {
+              "inBounds": true,
+              "matching": 9,
+              "center": [
+                50,
+                64,
+                84,
+                255
+              ]
+            }
+          }
+        },
+        {
+          "name": "inverted",
+          "bg": [
+            0,
+            0,
+            0
+          ],
+          "fg": [
+            255,
+            255,
+            255
+          ],
+          "filter": "url(\"#tiptoptyp-palette\")",
+          "pages": 48,
+          "canvases": 0,
+          "canvasMixins": 0,
+          "clipsIntact": true,
+          "expectedStripe": [
+            219,
+            225,
+            235
+          ],
+          "pixels": {
+            "paper": {
+              "inBounds": true,
+              "matching": 9,
+              "center": [
+                0,
+                0,
+                0,
+                255
+              ]
+            },
+            "stripe": {
+              "inBounds": true,
+              "matching": 9,
+              "center": [
+                219,
+                225,
+                235,
+                255
+              ]
+            }
+          }
+        },
+        {
+          "name": "identity-restored",
+          "bg": [
+            255,
+            255,
+            255
+          ],
+          "fg": [
+            0,
+            0,
+            0
+          ],
+          "filter": "none",
+          "pages": 48,
+          "canvases": 0,
+          "canvasMixins": 0,
+          "clipsIntact": true,
+          "expectedStripe": [
+            36,
+            30,
+            20
+          ],
+          "pixels": {
+            "paper": {
+              "inBounds": true,
+              "matching": 9,
+              "center": [
+                255,
+                255,
+                255,
+                255
+              ]
+            },
+            "stripe": {
+              "inBounds": true,
+              "matching": 9,
+              "center": [
+                36,
+                30,
+                20,
+                255
+              ]
+            }
+          },
+          "capture": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/screenshots/agent-review/partial-optimize/1791571758129-full-identity-restored.png",
+          "kind": "standalone Chromium viewport; not composed native editor"
+        }
+      ],
+      "geometry_checks": null,
+      "captures": [
+        {
+          "path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/screenshots/agent-review/partial-render/1791571758094-full-initial.png",
+          "kind": "standalone Chromium viewport; not composed native editor",
+          "sourceSha256": "463b5702f7eafb4104fdca89de88a7e72c14b7d697cd87159053de7efe76b24a"
+        },
+        {
+          "path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/screenshots/agent-review/partial-render/1791571773504-full-source-replacement.png",
+          "kind": "standalone Chromium viewport; not composed native editor",
+          "sourceSha256": "7220c4b1693b1bebff61e0687f629a8628213c6ccbabf52a6d370eb50d41ff7a"
+        }
+      ],
+      "inspected_palette_captures": [
+        "dark",
+        "identity-restored"
+      ]
+    }
+  ],
+  "limits": [
+    "The native partial pair measured c7ba6f593cb9d1435301cb79897331cc2f42a9d16ed39c84cb239c44d5608d27, before the shared full-mode ports; final 06c0 adapter has separate final browser acceptance and matched browser timings.",
+    "Native baseline has four populated page nodes in two sample starts and five in others; physical viewport/page/scale/offset and visible ink match. Do not claim identical full DOM state.",
+    "Native median workload wall time rose 2518\u21922800ms and rescale synchronous wall span 288\u2192692ms. Lower p95 gaps are smoother frame delivery, not reduced total work/CPU. Nested synchronous spans are inclusive and must not be summed.",
+    "Full browser per-sample p95 ranges overlap substantially; 199.9\u2192183.3ms is a modest local result, not a statistical guarantee.",
+    "Exact white background/black ink workload. Dark/tinted/inverted palette correctness verified separately; these timings do not predict their performance.",
+    "Browser and WebKit differ in event scheduling and device scale; do not compare absolute timings across engines.",
+    "Earlier browser measurements used an async Playwright wait predicate that did not actually poll; only the final94320b probe pair is selected here.",
+    "Standalone snapshots do not establish composed editor appearance. The subsequent default-promotion native journey passed in run-nxohoeg1; earlier failed/unavailable attempts remain in the audit.",
+    "Selected browser timing pairs use probe94320b with matching final physical start-state assertions; it validated only the second stability observation as rendered. Final test-only probe de605d validates both observations, including viewport size; its full/partial acceptance passed separately. The old samples do not prove this stronger first-observation contract."
+  ],
+  "checks": {
+    "formatting": "passed",
+    "clippy_all_targets": "passed",
+    "rust": {
+      "passed": 1779,
+      "ignored": 44
+    },
+    "xtask": {
+      "passed": 17
+    },
+    "clippy_profiling": "passed",
+    "rust_profiling": {
+      "passed": 1787,
+      "ignored": 44
+    },
+    "node_contracts": {
+      "passed": 48
+    },
+    "python_contracts": {
+      "passed": 53
+    },
+    "browser_helper_self_test": "passed",
+    "native_runner_self_test": "passed",
+    "final_native_app": "passed in subsequent default-promotion run-nxohoeg1 using final06c0 shared adapter; debug native interaction evidence, not a timing or visual-composition result"
+  }
+}

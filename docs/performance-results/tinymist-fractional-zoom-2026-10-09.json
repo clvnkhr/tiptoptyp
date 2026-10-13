@@ -1,0 +1,350 @@
+{
+  "date": "2026-10-09",
+  "change": "Normalize partial-render layout to ceil-rounded SVG paper dimensions, retain unrounded compiled coordinates for render-window bounds.",
+  "metadata": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "fixture": "scripts/fixtures/tinymist-partial-large.typ",
+    "fixtureSha256": "a1879bee6a54b0c46c51b28032dc6c71aae5767f86ff89908396e901930119d4",
+    "probeSha256": "835f7572f3e7cb2577d73c665ae20d17f0b8f120ca1cc9983ad173460ba868eb",
+    "tinymistSha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+    "viewport": {
+      "width": 900,
+      "height": 700
+    },
+    "deviceScaleFactor": 1,
+    "warmupMs": 3000,
+    "workloadWarmups": 1,
+    "measuredSamples": 5,
+    "sampleReset": "Outside timing/counters: 900\u00d7700 viewport, fit scale1, rendered page18 +15% page offset; 800ms settle and two stable RAFs; start state asserted and recorded for warmup and all five samples",
+    "recipe": "36 resize steps (900\u2192650\u2192900), 24 scroll steps (3000px out/back), 10 Ctrl-wheel steps (\u221210\u00d75,+10\u00d75); 20ms input spacing; 800ms drain"
+  },
+  "browser": "154.0.8037.98",
+  "before": {
+    "adapterSha256": "06c0dba75e657f3806efaa7bc47274b0437e207291b3c7f47085bb515cdcbb33",
+    "failures": [
+      "zoom geometry: covered fractional zoom rebuilt SVG 1 times"
+    ],
+    "zoomSequencePatches": 19,
+    "samples": [
+      {
+        "sample": 0,
+        "startState": {
+          "viewport": {
+            "width": 900,
+            "height": 700
+          },
+          "scale": 1,
+          "page": 18,
+          "visible": [
+            18
+          ],
+          "scrollTop": 23257,
+          "anchorFraction": 0.14971571180555718,
+          "populated": 4,
+          "nodes": 9129
+        },
+        "workloadWallMs": 2598,
+        "rescale": 221,
+        "rerender": 59,
+        "viewport": 0,
+        "rescaleSyncMs": 113.00000143051147,
+        "rerenderSyncMs": 61.09999942779541,
+        "frameCount": 154,
+        "frameGapP95Ms": 16.700000000000728,
+        "frameGapMaxMs": 33.30000000000291
+      },
+      {
+        "sample": 1,
+        "startState": {
+          "viewport": {
+            "width": 900,
+            "height": 700
+          },
+          "scale": 1,
+          "page": 18,
+          "visible": [
+            18
+          ],
+          "scrollTop": 23257,
+          "anchorFraction": 0.14971571180555718,
+          "populated": 4,
+          "nodes": 9129
+        },
+        "workloadWallMs": 2599,
+        "rescale": 221,
+        "rerender": 59,
+        "viewport": 0,
+        "rescaleSyncMs": 123.90000033378601,
+        "rerenderSyncMs": 60.29999923706055,
+        "frameCount": 154,
+        "frameGapP95Ms": 16.799999999999272,
+        "frameGapMaxMs": 33.29999999999927
+      },
+      {
+        "sample": 2,
+        "startState": {
+          "viewport": {
+            "width": 900,
+            "height": 700
+          },
+          "scale": 1,
+          "page": 18,
+          "visible": [
+            18
+          ],
+          "scrollTop": 23257,
+          "anchorFraction": 0.14971571180555718,
+          "populated": 4,
+          "nodes": 9129
+        },
+        "workloadWallMs": 2610,
+        "rescale": 218,
+        "rerender": 58,
+        "viewport": 0,
+        "rescaleSyncMs": 127.59999871253967,
+        "rerenderSyncMs": 60.200000524520874,
+        "frameCount": 154,
+        "frameGapP95Ms": 16.799999999999272,
+        "frameGapMaxMs": 33.400000000001455
+      },
+      {
+        "sample": 3,
+        "startState": {
+          "viewport": {
+            "width": 900,
+            "height": 700
+          },
+          "scale": 1,
+          "page": 18,
+          "visible": [
+            18
+          ],
+          "scrollTop": 23257,
+          "anchorFraction": 0.14971571180555718,
+          "populated": 4,
+          "nodes": 9129
+        },
+        "workloadWallMs": 2585,
+        "rescale": 218,
+        "rerender": 58,
+        "viewport": 0,
+        "rescaleSyncMs": 116.09999966621399,
+        "rerenderSyncMs": 60.69999957084656,
+        "frameCount": 153,
+        "frameGapP95Ms": 16.700000000004366,
+        "frameGapMaxMs": 33.400000000001455
+      },
+      {
+        "sample": 4,
+        "startState": {
+          "viewport": {
+            "width": 900,
+            "height": 700
+          },
+          "scale": 1,
+          "page": 18,
+          "visible": [
+            18
+          ],
+          "scrollTop": 23257,
+          "anchorFraction": 0.14971571180555718,
+          "populated": 4,
+          "nodes": 9129
+        },
+        "workloadWallMs": 2579,
+        "rescale": 221,
+        "rerender": 59,
+        "viewport": 0,
+        "rescaleSyncMs": 113.10000133514404,
+        "rerenderSyncMs": 61.599998474121094,
+        "frameCount": 154,
+        "frameGapP95Ms": 16.799999999995634,
+        "frameGapMaxMs": 16.80000000000291
+      }
+    ],
+    "medians": {
+      "rerender": 59,
+      "rescale": 221,
+      "rescaleSyncMs": 116.09999966621399,
+      "rerenderSyncMs": 60.69999957084656,
+      "frameGapP95Ms": 16.799999999995634,
+      "workloadWallMs": 2598
+    }
+  },
+  "after": {
+    "adapterSha256": "f2895daf03362c9b804cd6c98fd3803498ff81eb4cf564fd7c481a29fa58c703",
+    "failures": [],
+    "zoomSequencePatches": 2,
+    "samples": [
+      {
+        "sample": 0,
+        "startState": {
+          "viewport": {
+            "width": 900,
+            "height": 700
+          },
+          "scale": 1,
+          "page": 18,
+          "visible": [
+            18
+          ],
+          "scrollTop": 23257,
+          "anchorFraction": 0.14971571180555718,
+          "populated": 4,
+          "nodes": 9129
+        },
+        "workloadWallMs": 2575,
+        "rescale": 138,
+        "rerender": 17,
+        "viewport": 0,
+        "rescaleSyncMs": 149.10000109672546,
+        "rerenderSyncMs": 27.40000033378601,
+        "frameCount": 152,
+        "frameGapP95Ms": 16.799999999999272,
+        "frameGapMaxMs": 33.29999999999927
+      },
+      {
+        "sample": 1,
+        "startState": {
+          "viewport": {
+            "width": 900,
+            "height": 700
+          },
+          "scale": 1,
+          "page": 18,
+          "visible": [
+            18
+          ],
+          "scrollTop": 23257,
+          "anchorFraction": 0.14971571180555718,
+          "populated": 4,
+          "nodes": 9129
+        },
+        "workloadWallMs": 2582,
+        "rescale": 135,
+        "rerender": 16,
+        "viewport": 0,
+        "rescaleSyncMs": 146.70000052452087,
+        "rerenderSyncMs": 26.59999990463257,
+        "frameCount": 153,
+        "frameGapP95Ms": 16.700000000000728,
+        "frameGapMaxMs": 33.30000000000291
+      },
+      {
+        "sample": 2,
+        "startState": {
+          "viewport": {
+            "width": 900,
+            "height": 700
+          },
+          "scale": 1,
+          "page": 18,
+          "visible": [
+            18
+          ],
+          "scrollTop": 23257,
+          "anchorFraction": 0.14971571180555718,
+          "populated": 4,
+          "nodes": 9129
+        },
+        "workloadWallMs": 2563,
+        "rescale": 138,
+        "rerender": 17,
+        "viewport": 0,
+        "rescaleSyncMs": 141.79999899864197,
+        "rerenderSyncMs": 28.90000033378601,
+        "frameCount": 151,
+        "frameGapP95Ms": 16.799999999999272,
+        "frameGapMaxMs": 33.30000000000291
+      },
+      {
+        "sample": 3,
+        "startState": {
+          "viewport": {
+            "width": 900,
+            "height": 700
+          },
+          "scale": 1,
+          "page": 18,
+          "visible": [
+            18
+          ],
+          "scrollTop": 23257,
+          "anchorFraction": 0.14971571180555718,
+          "populated": 4,
+          "nodes": 9129
+        },
+        "workloadWallMs": 2567,
+        "rescale": 135,
+        "rerender": 16,
+        "viewport": 0,
+        "rescaleSyncMs": 159.40000081062317,
+        "rerenderSyncMs": 26.999999284744263,
+        "frameCount": 152,
+        "frameGapP95Ms": 16.799999999995634,
+        "frameGapMaxMs": 33.5
+      },
+      {
+        "sample": 4,
+        "startState": {
+          "viewport": {
+            "width": 900,
+            "height": 700
+          },
+          "scale": 1,
+          "page": 18,
+          "visible": [
+            18
+          ],
+          "scrollTop": 23257,
+          "anchorFraction": 0.14971571180555718,
+          "populated": 4,
+          "nodes": 9129
+        },
+        "workloadWallMs": 2573,
+        "rescale": 132,
+        "rerender": 15,
+        "viewport": 0,
+        "rescaleSyncMs": 162.00000023841858,
+        "rerenderSyncMs": 26.50000023841858,
+        "frameCount": 152,
+        "frameGapP95Ms": 16.700000000004366,
+        "frameGapMaxMs": 33.200000000004366
+      }
+    ],
+    "medians": {
+      "rerender": 16,
+      "rescale": 135,
+      "rescaleSyncMs": 149.10000109672546,
+      "rerenderSyncMs": 26.999999284744263,
+      "frameGapP95Ms": 16.799999999995634,
+      "workloadWallMs": 2573
+    },
+    "fullModeAcceptanceFailures": []
+  },
+  "limits": [
+    "Chromium renderer workload; no native WebKit frame-time claim.",
+    "Baseline intentionally used measure-only because its covered-zoom cache contract fails; its reported zoom and physical scale still accumulated.",
+    "After run includes additional untimed pointer-geometry acceptance; both lanes then restore the same source and reset fitted page 18 before each timed sample.",
+    "Frame-gap median is unchanged; this demonstrates less renderer work, not smoother native gestures.",
+    "The user-reported tiny-only symptom was not reproduced with buttons or keys on the installed build; a physical trackpad pinch still needs separate reproduction."
+  ],
+  "localReceipts": {
+    "before": ".tiptoptyp/profiles/fractional-zoom-before-final.json",
+    "after": ".tiptoptyp/profiles/fractional-zoom-after.json"
+  },
+  "nativeInteraction": {
+    "receipt": ".tiptoptyp/desktop-ui-tests/run-m8tiph7t/result.json",
+    "passed": true,
+    "journeys": [
+      "partial_preview"
+    ],
+    "version": "tiptoptyp Dev 0.1.0 (1de1cf7896a4-dirty.1791580715)",
+    "binarySha256": "471471ec2e79969809fe1ee0a18d4e06d1323962f885c48fb1bf9f2c983f1ffd",
+    "profile": "optimized release with desktop-ui-tests inspection",
+    "fixtureTransform": "48-page source: width 210mm, height 297mm; original 632pt marker retained (no native pixel assertions)",
+    "fixtureSha256": "4138eb47f8948a3dde6692af56a59601e16f4e1f46e6cc24d70aff19fd3c0675",
+    "checks": "Fresh default actual partial renderer, End/Outline/wheel refill, six zoom-in/six zoom-out buttons, four native Cmd+= steps, Cmd+0 fit, actual rendered paper scale, full\u2192partial switching; no physical pinch input."
+  }
+}

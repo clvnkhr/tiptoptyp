@@ -1,0 +1,910 @@
+{
+  "date": "2026-10-10",
+  "change": "Native Core Animation viewport-image transforms and AppKit input isolation from Tinymist WebContent. No PNG/base64/DOM decoding or CPU pixel resampling during production zoom.",
+  "settings": {
+    "key": "preview_zoom_snapshot",
+    "label": "Smooth Tinymist zoom",
+    "default": true,
+    "platform": "macOS",
+    "viewers": [
+      "Tinymist partial",
+      "Tinymist full"
+    ]
+  },
+  "capture_contract": {
+    "idle_delay_ms": 150,
+    "max_pixels": 4000000,
+    "native_rounding_budget_pixels": 3900000,
+    "target_display_density_multiplier": 2,
+    "in_flight_captures_per_view": 1,
+    "retained_native_rasters": 1,
+    "zoom_starts_capture": false,
+    "production_disk_writes": false
+  },
+  "render_queue": {
+    "in_flight_requests": 1,
+    "latest_pending_replacement": 1,
+    "synchronous_wasm_cancellation": false,
+    "moving_anchor_and_residual_pan_preserved": true
+  },
+  "component_measurement": {
+    "metadata": {
+      "started_utc": "20261010T193803Z",
+      "profile": "release",
+      "binary_sha256": "5b47a180db74ee4e4df8d9b4528132b145ef31550ed99942a2050d6122e87611",
+      "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+      "os": "ProductName:\t\tmacOS\nProductVersion:\t\t14.6.1\nBuildVersion:\t\t23G93\n",
+      "hardware": "Mac14,5\n12\n34359738368\n",
+      "power": "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=21037155)\t46%; discharging; 12:11 remaining present: true\n",
+      "power_settings": "Battery Power:\n Sleep On Power Button 1\n lowpowermode         1\n standby              1\n ttyskeepawake        1\n hibernatemode        3\n powernap             1\n hibernatefile        /var/vm/sleepimage\n displaysleep         2\n womp                 0\n networkoversleep     0\n sleep                1\n lessbright           1\n tcpkeepalive         1\n disksleep            10\nAC Power:\n Sleep On Power Button 1\n lowpowermode         0\n standby              1\n ttyskeepawake        1\n hibernatemode        3\n powernap             1\n hibernatefile        /var/vm/sleepimage\n displaysleep         10\n womp                 1\n networkoversleep     0\n sleep                1\n tcpkeepalive         1\n disksleep            10\n",
+      "viewport": [
+        640,
+        420
+      ],
+      "warmup_seconds": 3,
+      "renderer_block_ms": 800,
+      "workload": "Four owned Cmd+= key events at 100/160/220/280ms during an 800ms WebContent busy loop; same native binary and fixture in both lanes.",
+      "source_sha256": {
+        "src/preview_zoom_snapshot.rs": "d2af51e501438a4326c3c30b0b82d064ce2554a274ee1d1851b3de8947f1eab8",
+        "src/preview_zoom_snapshot.js": "2b3e15cc7324d541c5d944dafb69a293a1298234879b8c3fd066f63886eba0a7",
+        "src/preview_navigation.js": "a9ed256c45ad05444af507e2b5145edd7216dd24bb537bdc645990ef3b704d53",
+        "tests/native_preview_zoom.rs": "75a8b4ccee9140c058e166d7dedf955a36c0b8fc0207b9164f2ba29e01239909"
+      },
+      "samples": [
+        {
+          "mode": "web-thread",
+          "sample": 1,
+          "exit_code": 0,
+          "receipt": ".tiptoptyp/profiles/zoom-isolation/20261010T193803Z/web-thread-1.json"
+        },
+        {
+          "mode": "native-compositor",
+          "sample": 1,
+          "exit_code": 0,
+          "receipt": ".tiptoptyp/profiles/zoom-isolation/20261010T193803Z/native-compositor-1.json"
+        },
+        {
+          "mode": "web-thread",
+          "sample": 2,
+          "exit_code": 0,
+          "receipt": ".tiptoptyp/profiles/zoom-isolation/20261010T193803Z/web-thread-2.json"
+        },
+        {
+          "mode": "native-compositor",
+          "sample": 2,
+          "exit_code": 0,
+          "receipt": ".tiptoptyp/profiles/zoom-isolation/20261010T193803Z/native-compositor-2.json"
+        },
+        {
+          "mode": "web-thread",
+          "sample": 3,
+          "exit_code": 0,
+          "receipt": ".tiptoptyp/profiles/zoom-isolation/20261010T193803Z/web-thread-3.json"
+        },
+        {
+          "mode": "native-compositor",
+          "sample": 3,
+          "exit_code": 0,
+          "receipt": ".tiptoptyp/profiles/zoom-isolation/20261010T193803Z/native-compositor-3.json"
+        }
+      ]
+    },
+    "summary": {
+      "web-thread": {
+        "runs": 3,
+        "inputs": 12,
+        "median_input_response_ms": 608.3791455,
+        "min_input_response_ms": 516.5835419999999,
+        "max_input_response_ms": 698.960083,
+        "responsive_runs": 0,
+        "vector_requests": [
+          0,
+          0,
+          0
+        ]
+      },
+      "native-compositor": {
+        "runs": 3,
+        "inputs": 12,
+        "median_input_response_ms": 0.15645849999998518,
+        "min_input_response_ms": 0.1111250000000723,
+        "max_input_response_ms": 0.4435409999999962,
+        "responsive_runs": 3,
+        "vector_requests": [
+          2,
+          2,
+          2
+        ]
+      }
+    },
+    "samples": [
+      {
+        "blocked_ms": 800,
+        "during_block": [
+          {
+            "elapsed_ms": 400.87962500000003,
+            "native": {
+              "active": false,
+              "cached": false,
+              "enabled": false,
+              "handoffs": 0,
+              "hits": 0,
+              "in_flight": null,
+              "inputs": 0,
+              "pending": null,
+              "pixels": [
+                0,
+                0
+              ],
+              "revision": 0,
+              "scale": 1.0,
+              "transform": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "renderer_still_blocked": true,
+            "web_inputs": 0
+          }
+        ],
+        "final_scale": 1.0,
+        "input_response_ms": [
+          694.562791,
+          641.024583,
+          577.862667,
+          516.5835419999999
+        ],
+        "input_times_ms": [
+          101.31770900000001,
+          160.009959,
+          223.173,
+          284.452917
+        ],
+        "mode": "web-thread",
+        "native": {
+          "active": false,
+          "cached": false,
+          "enabled": false,
+          "handoffs": 0,
+          "hits": 0,
+          "in_flight": null,
+          "inputs": 0,
+          "pending": null,
+          "pixels": [
+            0,
+            0
+          ],
+          "revision": 0,
+          "scale": 1.0,
+          "transform": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "posted_keys": 4,
+        "response_times_ms": [
+          795.8805,
+          801.034542,
+          801.035667,
+          801.0364589999999
+        ],
+        "responsive_during_block": false,
+        "vector_requests": 0,
+        "viewport": [
+          640,
+          420
+        ],
+        "warmup_seconds": 3,
+        "web_inputs": 4
+      },
+      {
+        "blocked_ms": 800,
+        "during_block": [
+          {
+            "elapsed_ms": 401.189917,
+            "native": {
+              "active": true,
+              "cached": true,
+              "enabled": true,
+              "handoffs": 0,
+              "hits": 4,
+              "in_flight": 1,
+              "inputs": 4,
+              "pending": 4,
+              "pixels": [
+                2436,
+                1598
+              ],
+              "revision": 4,
+              "scale": 1.4641000000000006,
+              "transform": [
+                1.4641000000000006,
+                -148.51200000000014,
+                -97.46100000000008
+              ]
+            },
+            "renderer_still_blocked": true,
+            "web_inputs": 0
+          }
+        ],
+        "final_scale": 1.4641000000000006,
+        "input_response_ms": [
+          0.4319160000000011,
+          0.16466699999998013,
+          0.14091700000000174,
+          0.15724999999997635
+        ],
+        "input_times_ms": [
+          105.383417,
+          164.758375,
+          224.217583,
+          280.401417
+        ],
+        "mode": "native-compositor",
+        "native": {
+          "active": false,
+          "cached": false,
+          "enabled": true,
+          "handoffs": 1,
+          "hits": 4,
+          "in_flight": null,
+          "inputs": 4,
+          "pending": null,
+          "pixels": [
+            2436,
+            1598
+          ],
+          "revision": 4,
+          "scale": 1.4641000000000006,
+          "transform": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "posted_keys": 4,
+        "response_times_ms": [
+          105.815333,
+          164.92304199999998,
+          224.3585,
+          280.55866699999996
+        ],
+        "responsive_during_block": true,
+        "vector_requests": 2,
+        "viewport": [
+          640,
+          420
+        ],
+        "warmup_seconds": 3,
+        "web_inputs": 0
+      },
+      {
+        "blocked_ms": 800,
+        "during_block": [
+          {
+            "elapsed_ms": 405.10066700000004,
+            "native": {
+              "active": false,
+              "cached": false,
+              "enabled": false,
+              "handoffs": 0,
+              "hits": 0,
+              "in_flight": null,
+              "inputs": 0,
+              "pending": null,
+              "pixels": [
+                0,
+                0
+              ],
+              "revision": 0,
+              "scale": 1.0,
+              "transform": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "renderer_still_blocked": true,
+            "web_inputs": 0
+          }
+        ],
+        "final_scale": 1.0,
+        "input_response_ms": [
+          698.960083,
+          636.505458,
+          580.252833,
+          520.801584
+        ],
+        "input_times_ms": [
+          103.04691700000001,
+          165.50300000000001,
+          221.756375,
+          281.208458
+        ],
+        "mode": "web-thread",
+        "native": {
+          "active": false,
+          "cached": false,
+          "enabled": false,
+          "handoffs": 0,
+          "hits": 0,
+          "in_flight": null,
+          "inputs": 0,
+          "pending": null,
+          "pixels": [
+            0,
+            0
+          ],
+          "revision": 0,
+          "scale": 1.0,
+          "transform": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "posted_keys": 4,
+        "response_times_ms": [
+          802.0070000000001,
+          802.008458,
+          802.009208,
+          802.010042
+        ],
+        "responsive_during_block": false,
+        "vector_requests": 0,
+        "viewport": [
+          640,
+          420
+        ],
+        "warmup_seconds": 3,
+        "web_inputs": 4
+      },
+      {
+        "blocked_ms": 800,
+        "during_block": [
+          {
+            "elapsed_ms": 403.725375,
+            "native": {
+              "active": true,
+              "cached": true,
+              "enabled": true,
+              "handoffs": 0,
+              "hits": 4,
+              "in_flight": 1,
+              "inputs": 4,
+              "pending": 4,
+              "pixels": [
+                2436,
+                1598
+              ],
+              "revision": 4,
+              "scale": 1.4641000000000006,
+              "transform": [
+                1.4641000000000006,
+                -148.51200000000014,
+                -97.46100000000008
+              ]
+            },
+            "renderer_still_blocked": true,
+            "web_inputs": 0
+          }
+        ],
+        "final_scale": 1.4641000000000006,
+        "input_response_ms": [
+          0.3626249999999942,
+          0.1726250000000107,
+          0.13249999999999318,
+          0.14008300000000418
+        ],
+        "input_times_ms": [
+          102.705416,
+          161.382958,
+          224.970708,
+          281.92400000000004
+        ],
+        "mode": "native-compositor",
+        "native": {
+          "active": false,
+          "cached": false,
+          "enabled": true,
+          "handoffs": 1,
+          "hits": 4,
+          "in_flight": null,
+          "inputs": 4,
+          "pending": null,
+          "pixels": [
+            2436,
+            1598
+          ],
+          "revision": 4,
+          "scale": 1.4641000000000006,
+          "transform": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "posted_keys": 4,
+        "response_times_ms": [
+          103.068041,
+          161.555583,
+          225.103208,
+          282.06408300000004
+        ],
+        "responsive_during_block": true,
+        "vector_requests": 2,
+        "viewport": [
+          640,
+          420
+        ],
+        "warmup_seconds": 3,
+        "web_inputs": 0
+      },
+      {
+        "blocked_ms": 800,
+        "during_block": [
+          {
+            "elapsed_ms": 400.453125,
+            "native": {
+              "active": false,
+              "cached": false,
+              "enabled": false,
+              "handoffs": 0,
+              "hits": 0,
+              "in_flight": null,
+              "inputs": 0,
+              "pending": null,
+              "pixels": [
+                0,
+                0
+              ],
+              "revision": 0,
+              "scale": 1.0,
+              "transform": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "renderer_still_blocked": true,
+            "web_inputs": 0
+          }
+        ],
+        "final_scale": 1.0,
+        "input_response_ms": [
+          696.385875,
+          637.6185,
+          575.709375,
+          518.522208
+        ],
+        "input_times_ms": [
+          104.771583,
+          163.54,
+          225.454708,
+          282.64275
+        ],
+        "mode": "web-thread",
+        "native": {
+          "active": false,
+          "cached": false,
+          "enabled": false,
+          "handoffs": 0,
+          "hits": 0,
+          "in_flight": null,
+          "inputs": 0,
+          "pending": null,
+          "pixels": [
+            0,
+            0
+          ],
+          "revision": 0,
+          "scale": 1.0,
+          "transform": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "posted_keys": 4,
+        "response_times_ms": [
+          801.157458,
+          801.1585,
+          801.164083,
+          801.164958
+        ],
+        "responsive_during_block": false,
+        "vector_requests": 0,
+        "viewport": [
+          640,
+          420
+        ],
+        "warmup_seconds": 3,
+        "web_inputs": 4
+      },
+      {
+        "blocked_ms": 800,
+        "during_block": [
+          {
+            "elapsed_ms": 404.656542,
+            "native": {
+              "active": true,
+              "cached": true,
+              "enabled": true,
+              "handoffs": 0,
+              "hits": 4,
+              "in_flight": 1,
+              "inputs": 4,
+              "pending": 4,
+              "pixels": [
+                2436,
+                1598
+              ],
+              "revision": 4,
+              "scale": 1.4641000000000006,
+              "transform": [
+                1.4641000000000006,
+                -148.51200000000014,
+                -97.46100000000008
+              ]
+            },
+            "renderer_still_blocked": true,
+            "web_inputs": 0
+          }
+        ],
+        "final_scale": 1.4641000000000006,
+        "input_response_ms": [
+          0.4435409999999962,
+          0.1272080000000244,
+          0.155666999999994,
+          0.1111250000000723
+        ],
+        "input_times_ms": [
+          100.958459,
+          161.154959,
+          225.341667,
+          281.184334
+        ],
+        "mode": "native-compositor",
+        "native": {
+          "active": false,
+          "cached": false,
+          "enabled": true,
+          "handoffs": 1,
+          "hits": 4,
+          "in_flight": null,
+          "inputs": 4,
+          "pending": null,
+          "pixels": [
+            2436,
+            1598
+          ],
+          "revision": 4,
+          "scale": 1.4641000000000006,
+          "transform": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "posted_keys": 4,
+        "response_times_ms": [
+          101.402,
+          161.28216700000002,
+          225.497334,
+          281.29545900000005
+        ],
+        "responsive_during_block": true,
+        "vector_requests": 2,
+        "viewport": [
+          640,
+          420
+        ],
+        "warmup_seconds": 3,
+        "web_inputs": 0
+      }
+    ],
+    "limitations": [
+      "Controlled 800ms JavaScript block on a small SVG fixture, with mocked vector-completion timing; not a dense Typst final-render benchmark.",
+      "Input response is the native layer-transform submission observed by the AppKit test loop, not GPU presentation latency.",
+      "Four owned AppKit key events per sample; physical trackpad pinch was not automated.",
+      "No competing build or other test workload ran during these matched samples.",
+      "Three-second warmup, same optimized binary and 640x420 point viewport in both lanes."
+    ]
+  },
+  "real_app": {
+    "evidence": ".tiptoptyp/desktop-ui-tests/run-bimbqtl8",
+    "passed": true,
+    "version": "tiptoptyp Dev 0.1.0 (1de1cf7896a4-dirty.1791654976)",
+    "binary_sha256": "75d56ccd704545982f2441c07d59542303c0a0eb5b54444c355eac2ce15d4793",
+    "build_profile": "release",
+    "preflight": {
+      "accessibility": true,
+      "desktop": true,
+      "input": true,
+      "locked": false,
+      "screens": [
+        {
+          "height": 982,
+          "scale": 2,
+          "width": 1512
+        }
+      ]
+    },
+    "journey": "partial_zoom_stress",
+    "fresh_partial_coverage_states": 26,
+    "native_image_checks": [
+      {
+        "time": 1210996.54318,
+        "action": "partial.native-zoom",
+        "before": {
+          "active": false,
+          "cached": true,
+          "enabled": true,
+          "handoffs": 12,
+          "hits": 12,
+          "in_flight": null,
+          "inputs": 12,
+          "pending": null,
+          "pixels": [
+            1618,
+            2408
+          ],
+          "revision": 12,
+          "scale": 1.0000000000000002,
+          "transform": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "after": {
+          "active": false,
+          "cached": false,
+          "enabled": true,
+          "handoffs": 16,
+          "hits": 13,
+          "in_flight": null,
+          "inputs": 16,
+          "pending": null,
+          "pixels": [
+            1618,
+            2408
+          ],
+          "revision": 16,
+          "scale": 1.4641000000000008,
+          "transform": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      {
+        "time": 1211011.5796135,
+        "action": "partial.full-native-zoom",
+        "before": {
+          "active": false,
+          "cached": true,
+          "enabled": true,
+          "handoffs": 0,
+          "hits": 0,
+          "in_flight": null,
+          "inputs": 0,
+          "pending": null,
+          "pixels": [
+            1618,
+            2408
+          ],
+          "revision": 0,
+          "scale": 1.0,
+          "transform": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "after": {
+          "active": false,
+          "cached": false,
+          "enabled": true,
+          "handoffs": 2,
+          "hits": 1,
+          "in_flight": null,
+          "inputs": 3,
+          "pending": null,
+          "pixels": [
+            1618,
+            2408
+          ],
+          "revision": 3,
+          "scale": 1.3310000000000004,
+          "transform": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      }
+    ],
+    "cache_checks": [
+      {
+        "time": 1210972.192778375,
+        "action": "partial.zoom-cache",
+        "phase": "initial-higher-resolution",
+        "state": {
+          "active": false,
+          "cached": true,
+          "captures": 1,
+          "capturing": false,
+          "enabled": true,
+          "failures": 0,
+          "handoffs": 0,
+          "hits": 0,
+          "misses": 0,
+          "pixels": [
+            1618,
+            2408
+          ]
+        }
+      },
+      {
+        "time": 1210974.323990583,
+        "action": "partial.zoom-cache",
+        "phase": "disabled-releases-image",
+        "state": {
+          "active": false,
+          "cached": false,
+          "captures": 1,
+          "capturing": false,
+          "enabled": false,
+          "failures": 0,
+          "handoffs": 0,
+          "hits": 0,
+          "misses": 0,
+          "pixels": null
+        }
+      },
+      {
+        "time": 1210976.799735333,
+        "action": "partial.zoom-cache",
+        "phase": "reenabled-captures",
+        "state": {
+          "active": false,
+          "cached": true,
+          "captures": 2,
+          "capturing": false,
+          "enabled": true,
+          "failures": 0,
+          "handoffs": 0,
+          "hits": 0,
+          "misses": 0,
+          "pixels": [
+            1618,
+            2408
+          ]
+        }
+      },
+      {
+        "time": 1210993.717616,
+        "action": "partial.zoom-cache",
+        "phase": "keyboard-idle-image",
+        "state": {
+          "active": false,
+          "cached": true,
+          "captures": 18,
+          "capturing": false,
+          "enabled": true,
+          "failures": 0,
+          "handoffs": 12,
+          "hits": 12,
+          "misses": 0,
+          "pixels": [
+            1618,
+            2408
+          ]
+        }
+      },
+      {
+        "time": 1210996.516916208,
+        "action": "partial.zoom-cache",
+        "phase": "native-keyboard-cache-hit",
+        "state": {
+          "active": false,
+          "cached": false,
+          "captures": 19,
+          "capturing": false,
+          "enabled": true,
+          "failures": 0,
+          "handoffs": 16,
+          "hits": 13,
+          "misses": 3,
+          "pixels": null
+        }
+      },
+      {
+        "time": 1211008.835036708,
+        "action": "partial.zoom-cache",
+        "phase": "full-idle-image",
+        "state": {
+          "active": false,
+          "cached": true,
+          "captures": 1,
+          "capturing": false,
+          "enabled": true,
+          "failures": 0,
+          "handoffs": 0,
+          "hits": 0,
+          "misses": 0,
+          "pixels": [
+            1618,
+            2408
+          ]
+        }
+      },
+      {
+        "time": 1211011.543284208,
+        "action": "partial.zoom-cache",
+        "phase": "full-keyboard-cache-hit",
+        "state": {
+          "active": false,
+          "cached": false,
+          "captures": 1,
+          "capturing": false,
+          "enabled": true,
+          "failures": 0,
+          "handoffs": 3,
+          "hits": 1,
+          "misses": 2,
+          "pixels": null
+        }
+      }
+    ],
+    "bounds_trace_examples": [
+      "ui.preview.bounds available=(838.5,30.0)-(1400.0,861.0) clip=(838.5,30.0)-(1400.0,861.0) egui=(842.5,30.0)-(1400.0,861.0) native=(842.5,30.0)-(1400.0,861.0) viewport=(0.0,0.0)-(1400.0,885.0) zoom=1.000 egui_ppp=2.000 native_ppp=2.000"
+    ],
+    "scope": "Real native buttons and keys; dense 48-page fixture in partial mode and standard 48-page fixture in full mode. Backend, image use, latest sharp geometry, settings release/reenable, distant coverage, and session restoration passed. This is not physical pinch or composed-desktop visual proof."
+  },
+  "visual_evidence": {
+    "images": [
+      ".tiptoptyp/screenshots/agent-review/zoom-isolation/20261010T193803Z/native-overlay-1.png",
+      ".tiptoptyp/screenshots/agent-review/zoom-isolation/20261010T193803Z/native-overlay-2.png",
+      ".tiptoptyp/screenshots/agent-review/zoom-isolation/20261010T193803Z/native-overlay-3.png"
+    ],
+    "fresh_images_inspected": 3,
+    "scope": "Native owned CALayer framebuffer captured during the renderer block; scaled text/ink is upright and clipped at the viewport. It is not a whole editor-window screenshot.",
+    "whole_window_observation": "Unavailable: the Cua app-selection/observation call stalled until the temporary Journey.app had exited, then returned file-not-found."
+  },
+  "checks": {
+    "rust_passed": 1789,
+    "rust_ignored": 44,
+    "xtask_passed": 17,
+    "javascript_passed": 64,
+    "desktop_contracts_passed": 56,
+    "native_component_runs_passed": 6,
+    "fmt": "passed",
+    "strict_clippy_all_targets": "passed",
+    "native_probe_self_tests": "passed"
+  },
+  "implementation_sha256": {
+    "src/preview_zoom_snapshot.rs": "d2af51e501438a4326c3c30b0b82d064ce2554a274ee1d1851b3de8947f1eab8",
+    "src/preview_zoom_snapshot.js": "2b3e15cc7324d541c5d944dafb69a293a1298234879b8c3fd066f63886eba0a7",
+    "src/preview_navigation.js": "a9ed256c45ad05444af507e2b5145edd7216dd24bb537bdc645990ef3b704d53",
+    "src/app/native_views.rs": "508a73c8b60324645157c2a3460439e22ba987ff6e4f782458caff96875c61ef",
+    "src/app/preview_controls.rs": "f803c11b6aa251b59afa7ba280b07b462f1e096bb148ac73a00ea2b3f7cb14e1",
+    "tests/native_preview_zoom.rs": "75a8b4ccee9140c058e166d7dedf955a36c0b8fc0207b9164f2ba29e01239909",
+    "scripts/desktop_ui_partial_journeys.py": "9a68802da50722df7e15c3c54f4f3cde7f6ed825ae33ea564266fcfd6b7dd1fa"
+  },
+  "rejected_or_unavailable_checks": [
+    {
+      "evidence": ".tiptoptyp/profiles/zoom-isolation/20261010T171900Z",
+      "status": "preliminary native component handoff failed while desktop locked",
+      "reason": "Native inputs responded during the block, but final handoff did not finish. The preliminary probe also used the default 200x200 child bounds and lacked foreground-equivalent background scheduling, so its timings are excluded from the matched final comparison."
+    },
+    {
+      "status": "external cached test runner stalled",
+      "resolution": "Stopped only the owned stalled test processes, then reran the complete Rust and xtask suites through the repository cargo-run-clean runner."
+    }
+  ]
+}

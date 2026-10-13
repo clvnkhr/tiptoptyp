@@ -1,0 +1,2666 @@
+{
+  "updated_utc": "2026-10-12T18:20:25.816837+00:00",
+  "workspace": "/Users/calvinkhor/Documents/GitHub/mytypst",
+  "git_head": "1de1cf7896a47c6edc266444032722ab4831084f",
+  "dirty_tree": true,
+  "scope": "Stable page-local divider/zoom handoff in both SVG modes, fixed full-mode page gaps without WASM rerender, retained raster through recapture/temporary uncovered views, zero-delta wheel phases, geometry-aware capture validity, uncached full zoom and stale source-point safety. Delayed duplicate DOM resize notifications preserve the native flight paint acknowledgement and cannot create an ownerless active gesture.",
+  "environment": {
+    "os": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "macos": "14.6.1",
+    "architecture": "arm64",
+    "viewport": [
+      640,
+      420
+    ],
+    "warmup_seconds": 3,
+    "profile": "release:opt-level3, thin LTO, codegen-units1; identical compiler flags/dependencies within each comparison"
+  },
+  "sources": {
+    "src/preview_navigation.js": "a92e54d00c816a563b3b020dc0cd47a4447db4c7673408d90d5fed74ba3abde0",
+    "src/preview_zoom_snapshot.rs": "3dbc23f7ad7658d456732dbf4b3dd77de063ffa53425f0d7a29fab0fda307d63",
+    "src/preview_zoom_snapshot.js": "72a7dd9a4102092d1dc8ddc8f61d54e06a066b8f00127c6140d592de00b16ea6",
+    "src/app/desktop_preview_probe.js": "eae2066edb6cd79a5a4fd2571656135b755ed9830e7ce9c6476730f25e82ae8c",
+    "tests/native_preview_zoom.rs": "bc732abfb29f2d906e6532dc30f4aa5351c37811e6031e312518bc57e7947e41",
+    "scripts/test-preview-navigation.mjs": "cf0640a6e1f92f8b62f90201e44f026b483151ee4b32f6120f66ea39c5866ecc",
+    "scripts/test-preview-zoom-snapshot.mjs": "3b2c75dc2fc858c551e23820f57f81589e58222f5b224e7629ff8b5354ae89b6",
+    "scripts/test-preview-zoom-native.py": "df249dd890fd21b787bb8fc19026b0c3d2916157a99cb2dc93623f7cd068393b",
+    "scripts/desktop_ui_partial_journeys.py": "7ca2fd292cde83f6c728a7e5a2e3b0c63cf420192107a8cb449df88309d11176",
+    "scripts/test-desktop-preview-probe.mjs": "9efef4c51c68497980d45941a698fccae61a3e1d4b6a6518fb1cb053c7959893"
+  },
+  "final_build": {
+    "metadata_file": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/comparison-build.json",
+    "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+    "lanes": {
+      "before": {
+        "harness_sha256": "bc732abfb29f2d906e6532dc30f4aa5351c37811e6031e312518bc57e7947e41",
+        "binary_sha256": "4195558cc79996c9ea3f797a7d76547e171a64e1734e3974e65f57d8382abf35",
+        "sources": {
+          "native_window.rs": "200ff3c652e639452069d3dce3803a4f66c2eb34e5736eeea1d4aef46113413a",
+          "preview_zoom_snapshot.rs": "665a76391fe6ef5c6f75ca1f22927da1ac16fdea58fbb300494aea725bf4181c",
+          "preview_zoom_snapshot.js": "4e8f7c99c1ac4e93c7ed2f01bccad641baedf9728eb10e4d55a3c03c87ae01f6",
+          "preview_snapshot_buffer.js": "195f8b5bcebb55a81ac92f5018530f61d29fe49750f4187ce3c3c0ea6cb169f7",
+          "preview_navigation.js": "553c013bcd41b5e94994a4b9ee1b57202be5a73ff2f19eb31198f3984235f663"
+        }
+      },
+      "after": {
+        "harness_sha256": "bc732abfb29f2d906e6532dc30f4aa5351c37811e6031e312518bc57e7947e41",
+        "binary_sha256": "f0c59d697d92daa14ac7ad46318d9bee424508e0baa7fef87375f35ac833dc2f",
+        "sources": {
+          "native_window.rs": "200ff3c652e639452069d3dce3803a4f66c2eb34e5736eeea1d4aef46113413a",
+          "preview_zoom_snapshot.rs": "3dbc23f7ad7658d456732dbf4b3dd77de063ffa53425f0d7a29fab0fda307d63",
+          "preview_zoom_snapshot.js": "72a7dd9a4102092d1dc8ddc8f61d54e06a066b8f00127c6140d592de00b16ea6",
+          "preview_snapshot_buffer.js": "195f8b5bcebb55a81ac92f5018530f61d29fe49750f4187ce3c3c0ea6cb169f7",
+          "preview_navigation.js": "a92e54d00c816a563b3b020dc0cd47a4447db4c7673408d90d5fed74ba3abde0"
+        }
+      }
+    }
+  },
+  "strict_ink_three_after_build": {
+    "metadata_file": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/comparison-build-ink-three-after.json",
+    "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+    "lanes": {
+      "before": {
+        "harness_sha256": "3748332ecf616995eecf0764c71b47cb3cf9b0d604e7cdce11624f9faa7c299f",
+        "binary_sha256": "9a33e3c35f67844b8ee347afd37b013e653bd92c494fa692fb1f46d68c5c3a14",
+        "sources": {
+          "native_window.rs": "200ff3c652e639452069d3dce3803a4f66c2eb34e5736eeea1d4aef46113413a",
+          "preview_zoom_snapshot.rs": "665a76391fe6ef5c6f75ca1f22927da1ac16fdea58fbb300494aea725bf4181c",
+          "preview_zoom_snapshot.js": "4e8f7c99c1ac4e93c7ed2f01bccad641baedf9728eb10e4d55a3c03c87ae01f6",
+          "preview_snapshot_buffer.js": "195f8b5bcebb55a81ac92f5018530f61d29fe49750f4187ce3c3c0ea6cb169f7",
+          "preview_navigation.js": "553c013bcd41b5e94994a4b9ee1b57202be5a73ff2f19eb31198f3984235f663"
+        }
+      },
+      "after": {
+        "harness_sha256": "3748332ecf616995eecf0764c71b47cb3cf9b0d604e7cdce11624f9faa7c299f",
+        "binary_sha256": "5215964686f5a03e82da5d144a8d409589eab5c9a713d9c0cb5f25437fe240b2",
+        "sources": {
+          "native_window.rs": "200ff3c652e639452069d3dce3803a4f66c2eb34e5736eeea1d4aef46113413a",
+          "preview_zoom_snapshot.rs": "3dbc23f7ad7658d456732dbf4b3dd77de063ffa53425f0d7a29fab0fda307d63",
+          "preview_zoom_snapshot.js": "81492aca88b77d0ff56d540d029cbf2b140c6b9db502d555b2f9820b84b77e7f",
+          "preview_snapshot_buffer.js": "195f8b5bcebb55a81ac92f5018530f61d29fe49750f4187ce3c3c0ea6cb169f7",
+          "preview_navigation.js": "a53d730dd89214e3d19aa56d3967e25bcdce011cbbef4bc14713d18bd913ae86"
+        }
+      }
+    }
+  },
+  "cache_retention_matched_build": {
+    "metadata_file": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/comparison-build-partial-matched.json",
+    "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+    "lanes": {
+      "before": {
+        "harness_sha256": "879f2069729aa087d820ff02a63ca51eabd7bffccb1989029112575cdc204d8b",
+        "binary_sha256": "e2ba4b6a76b56757d7afdca319081c138e761be39970c0d785f1704cf08b7ca8",
+        "sources": {
+          "native_window.rs": "200ff3c652e639452069d3dce3803a4f66c2eb34e5736eeea1d4aef46113413a",
+          "preview_zoom_snapshot.rs": "665a76391fe6ef5c6f75ca1f22927da1ac16fdea58fbb300494aea725bf4181c",
+          "preview_zoom_snapshot.js": "4e8f7c99c1ac4e93c7ed2f01bccad641baedf9728eb10e4d55a3c03c87ae01f6",
+          "preview_snapshot_buffer.js": "195f8b5bcebb55a81ac92f5018530f61d29fe49750f4187ce3c3c0ea6cb169f7",
+          "preview_navigation.js": "553c013bcd41b5e94994a4b9ee1b57202be5a73ff2f19eb31198f3984235f663"
+        }
+      },
+      "after": {
+        "harness_sha256": "879f2069729aa087d820ff02a63ca51eabd7bffccb1989029112575cdc204d8b",
+        "binary_sha256": "206aa1ccfdb02af1136d5133e01ae36dc0e576bb6f1bbbf411a06b2f9825adc3",
+        "sources": {
+          "native_window.rs": "200ff3c652e639452069d3dce3803a4f66c2eb34e5736eeea1d4aef46113413a",
+          "preview_zoom_snapshot.rs": "a812d2998a71f7f9e61ae6b6b5e2a275033aeb4ef5bcaee0379303e54ef77dc3",
+          "preview_zoom_snapshot.js": "7169a6bbe5f3a2b9a1f51b82da8120fd06776d4db8c67b23c90e1d59938f98d7",
+          "preview_snapshot_buffer.js": "195f8b5bcebb55a81ac92f5018530f61d29fe49750f4187ce3c3c0ea6cb169f7",
+          "preview_navigation.js": "0dfccdbf89c4c20788dc01f2f840360453aaf565cff38ad2ec8c4d5dd0e960ca"
+        }
+      }
+    }
+  },
+  "reproductions": {
+    "partial_page180_second_repair": "/private/tmp/ttt-native-divider-anchor-before.log:3 failing 512-page contracts",
+    "full_late_anchor": "/private/tmp/ttt-full-absolute-anchor-before.log:2 failing contracts",
+    "full_fixed_gap_ink": "/private/tmp/ttt-full-ink-before.log:3 failing contracts",
+    "uncached_full_wheel_and_keyboard": "/private/tmp/ttt-full-uncached-before.log:4 failing page/gap contracts",
+    "stale_full_gap_after_source_shrink": "/private/tmp/ttt-full-stale-gap-before.log:TypeError reproduced after48\u21922pages",
+    "geometry_capture_validity": "/private/tmp/ttt-zoom-geometry-validity-repro",
+    "retired_native_geometry": "/private/tmp/ttt-zoom-20261012-retention-red.log",
+    "duplicate_resize_cancels_ready": "/private/tmp/ttt-zoom-20261012-resize-handoff-red.log: expected native revision1 acknowledgement was missing",
+    "both_duplicate_resize_cases": {
+      "log": "/private/tmp/ttt-zoom-20261012-both-resize-red.log",
+      "result": "26 pass, 2 expected failures with only resize() restored to its pre-fix implementation",
+      "scope": "Replay of old state transition, not an additional native run"
+    }
+  },
+  "corrected_full_baseline_geometry_only": {
+    "metadata": {
+      "started_utc": "2026-10-12T16:22:22.546483+00:00",
+      "command": [
+        "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/transition-before",
+        "--background",
+        "--transition-regression"
+      ],
+      "returncode": 101,
+      "process_seconds": 10.724235540954396,
+      "checks": {
+        "native_process": false,
+        "actual_tinymist": true,
+        "actual_partial": true,
+        "responsive_during_block": true,
+        "one_final_vector_request": true,
+        "transition_regression": false
+      },
+      "binary_sha256": "8fae6b9d499df5246598e33457b416ef8d8228c9d5a9ce911d6e31a92d11c791",
+      "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+      "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-partial-large.typ",
+      "fixture_sha256": "463b5702f7eafb4104fdca89de88a7e72c14b7d697cd87159053de7efe76b24a",
+      "viewport": [
+        640,
+        420
+      ],
+      "warmup_seconds": 3,
+      "input": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+      "window_mode": "Prohibited throughout; floating level3 owned window ordered front without making key or activating app",
+      "not_established": "physical trackpad pinch or GPU presentation",
+      "receipt": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/ink-baseline-corrected/native-full.json"
+    },
+    "actual_partial": false,
+    "passed": false,
+    "failures": [
+      "560-point divider handoff moved content: paper=[0.2000000000000135, -21.76000000000022, 0.6000000000000227], ink=[-5.57649644057642, 0.019069466779001232], top-source=-0.3918614237329541, anchor=None, scroll=None",
+      "640-point divider handoff moved content: paper=[0.2000000000000135, 0.5600000000013097, 0.39999999999997726], ink=[18.84109125406161, 0.010034286949235138], top-source=-25.212262925434974, anchor=None, scroll=None",
+      "out-of-buffer zoom permanently discarded reusable pixels/geometry",
+      "return into the cached buffer failed to reuse its raster"
+    ],
+    "steps": [
+      {
+        "kind": "divider",
+        "width": 560.0,
+        "paper_error_css_pixels": [
+          0.2000000000000135,
+          -21.76000000000022,
+          0.6000000000000227
+        ],
+        "anchor_error_css_pixels": null,
+        "scroll_error_css_pixels": null,
+        "ink_error_css_pixels": [
+          -5.57649644057642,
+          0.019069466779001232
+        ],
+        "viewport_top_source_error_css_pixels": -0.3918614237329541,
+        "expected_page18_ink_top_height": [
+          -127.92364453124969,
+          792.064
+        ],
+        "actual_page18_ink_top_height": [
+          -133.5001409718261,
+          792.083069466779
+        ],
+        "piecewise": false
+      },
+      {
+        "kind": "divider",
+        "width": 640.0,
+        "paper_error_css_pixels": [
+          0.2000000000000135,
+          0.5600000000013097,
+          0.39999999999997726
+        ],
+        "anchor_error_css_pixels": null,
+        "scroll_error_css_pixels": null,
+        "ink_error_css_pixels": [
+          18.84109125406161,
+          0.010034286949235138
+        ],
+        "viewport_top_source_error_css_pixels": -25.212262925434974,
+        "expected_page18_ink_top_height": [
+          -146.0555937500007,
+          905.216
+        ],
+        "actual_page18_ink_top_height": [
+          -127.21450249593909,
+          905.2260342869492
+        ],
+        "piecewise": false
+      },
+      {
+        "kind": "successive-gesture",
+        "index": 0,
+        "factor": 1.05
+      },
+      {
+        "kind": "successive-gesture",
+        "index": 1,
+        "factor": 0.9523809523809523
+      },
+      {
+        "kind": "successive-gesture",
+        "index": 2,
+        "factor": 1.05
+      },
+      {
+        "kind": "coverage-excursion"
+      }
+    ]
+  },
+  "matched_retention_partial": {
+    "before": [
+      {
+        "metadata": {
+          "started_utc": "2026-10-12T15:29:46.813601+00:00",
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/transition-before",
+            "--background",
+            "--transition-regression"
+          ],
+          "returncode": 101,
+          "process_seconds": 14.511043125065044,
+          "checks": {
+            "native_process": false,
+            "actual_tinymist": true,
+            "actual_partial": true,
+            "responsive_during_block": true,
+            "one_final_vector_request": true,
+            "transition_regression": false
+          },
+          "binary_sha256": "e2ba4b6a76b56757d7afdca319081c138e761be39970c0d785f1704cf08b7ca8",
+          "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+          "fixture_sha256": "e6dd2f741269b617df5e5d8712d85301b99cf81a46fa2221467a3417fd383828",
+          "viewport": [
+            640,
+            420
+          ],
+          "warmup_seconds": 3,
+          "input": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+          "window_mode": "Prohibited throughout; owned window ordered front without making key or activating app",
+          "not_established": "physical trackpad pinch or GPU presentation",
+          "receipt": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/matched-before-1/native-partial.json"
+        },
+        "actual_partial": true,
+        "passed": false,
+        "failures": [
+          "out-of-buffer zoom permanently discarded reusable pixels/geometry",
+          "return into the cached buffer failed to reuse its raster"
+        ],
+        "steps": [
+          {
+            "kind": "divider",
+            "width": 560.0,
+            "first_input_to_cached_submission_us": 156.625,
+            "input_to_sharp_ms": 1131.119917,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.17000000000007276,
+              0.6000000000000227
+            ],
+            "anchor_error_css_pixels": null,
+            "scroll_error_css_pixels": null
+          },
+          {
+            "kind": "divider",
+            "width": 640.0,
+            "first_input_to_cached_submission_us": 135.083,
+            "input_to_sharp_ms": 914.098292,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.47999999999956344,
+              0.39999999999997726
+            ],
+            "anchor_error_css_pixels": null,
+            "scroll_error_css_pixels": null
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 0,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 46.458999999999996,
+            "input_to_sharp_ms": 501.05012500000004
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 1,
+            "factor": 0.9523809523809523,
+            "first_input_to_cached_submission_us": 16.458000000000002,
+            "input_to_sharp_ms": 502.54004100000003
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 2,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 18.708000000000002,
+            "input_to_sharp_ms": 496.17358299999995
+          },
+          {
+            "kind": "coverage-excursion",
+            "first_input_to_cached_submission_us": null
+          }
+        ],
+        "capture_timings": {
+          "capture_to_admit_or_reject_ms": [
+            {
+              "ms": 952.704375,
+              "outcome": "admit"
+            },
+            {
+              "ms": 788.9625420000001,
+              "outcome": "admit"
+            }
+          ],
+          "dropped": 0,
+          "sample_cap": 32,
+          "scope": "SVG preparation is synchronous WebContent wall time; capture-to-admit/reject includes native rasterization and callback/validation scheduling; neither is GPU presentation",
+          "svg_buffer_preparation_ms": [
+            58.0,
+            68.0
+          ]
+        }
+      },
+      {
+        "metadata": {
+          "started_utc": "2026-10-12T15:30:15.918974+00:00",
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/transition-before",
+            "--background",
+            "--transition-regression"
+          ],
+          "returncode": 101,
+          "process_seconds": 14.21644995897077,
+          "checks": {
+            "native_process": false,
+            "actual_tinymist": true,
+            "actual_partial": true,
+            "responsive_during_block": true,
+            "one_final_vector_request": true,
+            "transition_regression": false
+          },
+          "binary_sha256": "e2ba4b6a76b56757d7afdca319081c138e761be39970c0d785f1704cf08b7ca8",
+          "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+          "fixture_sha256": "e6dd2f741269b617df5e5d8712d85301b99cf81a46fa2221467a3417fd383828",
+          "viewport": [
+            640,
+            420
+          ],
+          "warmup_seconds": 3,
+          "input": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+          "window_mode": "Prohibited throughout; owned window ordered front without making key or activating app",
+          "not_established": "physical trackpad pinch or GPU presentation",
+          "receipt": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/matched-before-2/native-partial.json"
+        },
+        "actual_partial": true,
+        "passed": false,
+        "failures": [
+          "out-of-buffer zoom permanently discarded reusable pixels/geometry",
+          "return into the cached buffer failed to reuse its raster"
+        ],
+        "steps": [
+          {
+            "kind": "divider",
+            "width": 560.0,
+            "first_input_to_cached_submission_us": 169.625,
+            "input_to_sharp_ms": 1130.8766249999999,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.17000000000007276,
+              0.6000000000000227
+            ],
+            "anchor_error_css_pixels": null,
+            "scroll_error_css_pixels": null
+          },
+          {
+            "kind": "divider",
+            "width": 640.0,
+            "first_input_to_cached_submission_us": 142.0,
+            "input_to_sharp_ms": 921.900291,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.47999999999956344,
+              0.39999999999997726
+            ],
+            "anchor_error_css_pixels": null,
+            "scroll_error_css_pixels": null
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 0,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 46.833,
+            "input_to_sharp_ms": 493.76041599999996
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 1,
+            "factor": 0.9523809523809523,
+            "first_input_to_cached_submission_us": 30.5,
+            "input_to_sharp_ms": 500.18275
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 2,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 22.291999999999998,
+            "input_to_sharp_ms": 491.624625
+          },
+          {
+            "kind": "coverage-excursion",
+            "first_input_to_cached_submission_us": null
+          }
+        ],
+        "capture_timings": {
+          "capture_to_admit_or_reject_ms": [
+            {
+              "ms": 924.305958,
+              "outcome": "admit"
+            },
+            {
+              "ms": 795.6825,
+              "outcome": "admit"
+            }
+          ],
+          "dropped": 0,
+          "sample_cap": 32,
+          "scope": "SVG preparation is synchronous WebContent wall time; capture-to-admit/reject includes native rasterization and callback/validation scheduling; neither is GPU presentation",
+          "svg_buffer_preparation_ms": [
+            59.0,
+            69.0
+          ]
+        }
+      },
+      {
+        "metadata": {
+          "started_utc": "2026-10-12T15:30:44.776339+00:00",
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/transition-before",
+            "--background",
+            "--transition-regression"
+          ],
+          "returncode": 101,
+          "process_seconds": 14.242423165822402,
+          "checks": {
+            "native_process": false,
+            "actual_tinymist": true,
+            "actual_partial": true,
+            "responsive_during_block": true,
+            "one_final_vector_request": true,
+            "transition_regression": false
+          },
+          "binary_sha256": "e2ba4b6a76b56757d7afdca319081c138e761be39970c0d785f1704cf08b7ca8",
+          "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+          "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-zoom-stress.typ",
+          "fixture_sha256": "e6dd2f741269b617df5e5d8712d85301b99cf81a46fa2221467a3417fd383828",
+          "viewport": [
+            640,
+            420
+          ],
+          "warmup_seconds": 3,
+          "input": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+          "window_mode": "Prohibited throughout; owned window ordered front without making key or activating app",
+          "not_established": "physical trackpad pinch or GPU presentation",
+          "receipt": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/matched-before-3/native-partial.json"
+        },
+        "actual_partial": true,
+        "passed": false,
+        "failures": [
+          "out-of-buffer zoom permanently discarded reusable pixels/geometry",
+          "return into the cached buffer failed to reuse its raster"
+        ],
+        "steps": [
+          {
+            "kind": "divider",
+            "width": 560.0,
+            "first_input_to_cached_submission_us": 223.5,
+            "input_to_sharp_ms": 1154.382416,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.17000000000007276,
+              0.6000000000000227
+            ],
+            "anchor_error_css_pixels": null,
+            "scroll_error_css_pixels": null
+          },
+          {
+            "kind": "divider",
+            "width": 640.0,
+            "first_input_to_cached_submission_us": 141.0,
+            "input_to_sharp_ms": 920.6601250000001,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.47999999999956344,
+              0.39999999999997726
+            ],
+            "anchor_error_css_pixels": null,
+            "scroll_error_css_pixels": null
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 0,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 68.791,
+            "input_to_sharp_ms": 497.801958
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 1,
+            "factor": 0.9523809523809523,
+            "first_input_to_cached_submission_us": 17.708000000000002,
+            "input_to_sharp_ms": 503.551125
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 2,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 23.25,
+            "input_to_sharp_ms": 500.83849999999995
+          },
+          {
+            "kind": "coverage-excursion",
+            "first_input_to_cached_submission_us": null
+          }
+        ],
+        "capture_timings": {
+          "capture_to_admit_or_reject_ms": [
+            {
+              "ms": 957.6834170000001,
+              "outcome": "admit"
+            },
+            {
+              "ms": 792.885,
+              "outcome": "admit"
+            }
+          ],
+          "dropped": 0,
+          "sample_cap": 32,
+          "scope": "SVG preparation is synchronous WebContent wall time; capture-to-admit/reject includes native rasterization and callback/validation scheduling; neither is GPU presentation",
+          "svg_buffer_preparation_ms": [
+            57.999999999999886,
+            69.0
+          ]
+        }
+      }
+    ],
+    "after": [
+      {
+        "metadata": {
+          "started_utc": "2026-10-12T15:30:01.589731+00:00",
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/transition-after",
+            "--background",
+            "--transition-regression"
+          ],
+          "returncode": 0,
+          "process_seconds": 14.011688041035086,
+          "checks": {
+            "native_process": true,
+            "actual_tinymist": true,
+            "actual_partial": true,
+            "responsive_during_block": true,
+            "one_final_vector_request": true,
+            "transition_regression": true
+          },
+          "binary_sha256": "206aa1ccfdb02af1136d5133e01ae36dc0e576bb6f1bbbf411a06b2f9825adc3",
+          "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+          "fixture_sha256": "e6dd2f741269b617df5e5d8712d85301b99cf81a46fa2221467a3417fd383828",
+          "viewport": [
+            640,
+            420
+          ],
+          "warmup_seconds": 3,
+          "input": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+          "window_mode": "Prohibited throughout; owned window ordered front without making key or activating app",
+          "not_established": "physical trackpad pinch or GPU presentation",
+          "receipt": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/matched-after-1/native-partial.json"
+        },
+        "actual_partial": true,
+        "passed": true,
+        "failures": [],
+        "steps": [
+          {
+            "kind": "divider",
+            "width": 560.0,
+            "first_input_to_cached_submission_us": 162.25,
+            "input_to_sharp_ms": 849.5896670000001,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.17000000000007276,
+              0.6000000000000227
+            ],
+            "anchor_error_css_pixels": [
+              0.2000000000000135,
+              0.16999999999825377
+            ],
+            "scroll_error_css_pixels": null
+          },
+          {
+            "kind": "divider",
+            "width": 640.0,
+            "first_input_to_cached_submission_us": 178.875,
+            "input_to_sharp_ms": 914.449208,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.47999999999956344,
+              0.39999999999997726
+            ],
+            "anchor_error_css_pixels": [
+              0.2000000000000135,
+              0.47999999999774445
+            ],
+            "scroll_error_css_pixels": null
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 0,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 41.625,
+            "input_to_sharp_ms": 502.813583
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 1,
+            "factor": 0.9523809523809523,
+            "first_input_to_cached_submission_us": 19.708,
+            "input_to_sharp_ms": 494.87679099999997
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 2,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 22.0,
+            "input_to_sharp_ms": 498.93266600000004
+          },
+          {
+            "kind": "coverage-excursion",
+            "first_input_to_cached_submission_us": 83.083
+          }
+        ],
+        "capture_timings": {
+          "capture_to_admit_or_reject_ms": [
+            {
+              "ms": 903.0969170000001,
+              "outcome": "admit"
+            },
+            {
+              "ms": 780.023,
+              "outcome": "admit"
+            }
+          ],
+          "dropped": 0,
+          "sample_cap": 32,
+          "scope": "SVG preparation is synchronous WebContent wall time; capture-to-admit/reject includes native rasterization and callback/validation scheduling; neither is GPU presentation",
+          "svg_buffer_preparation_ms": [
+            58.0,
+            69.0
+          ]
+        }
+      },
+      {
+        "metadata": {
+          "started_utc": "2026-10-12T15:30:30.388234+00:00",
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/transition-after",
+            "--background",
+            "--transition-regression"
+          ],
+          "returncode": 0,
+          "process_seconds": 14.120706249959767,
+          "checks": {
+            "native_process": true,
+            "actual_tinymist": true,
+            "actual_partial": true,
+            "responsive_during_block": true,
+            "one_final_vector_request": true,
+            "transition_regression": true
+          },
+          "binary_sha256": "206aa1ccfdb02af1136d5133e01ae36dc0e576bb6f1bbbf411a06b2f9825adc3",
+          "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+          "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-zoom-stress.typ",
+          "fixture_sha256": "e6dd2f741269b617df5e5d8712d85301b99cf81a46fa2221467a3417fd383828",
+          "viewport": [
+            640,
+            420
+          ],
+          "warmup_seconds": 3,
+          "input": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+          "window_mode": "Prohibited throughout; owned window ordered front without making key or activating app",
+          "not_established": "physical trackpad pinch or GPU presentation",
+          "receipt": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/matched-after-2/native-partial.json"
+        },
+        "actual_partial": true,
+        "passed": true,
+        "failures": [],
+        "steps": [
+          {
+            "kind": "divider",
+            "width": 560.0,
+            "first_input_to_cached_submission_us": 147.125,
+            "input_to_sharp_ms": 844.921417,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.17000000000007276,
+              0.6000000000000227
+            ],
+            "anchor_error_css_pixels": [
+              0.2000000000000135,
+              0.16999999999825377
+            ],
+            "scroll_error_css_pixels": null
+          },
+          {
+            "kind": "divider",
+            "width": 640.0,
+            "first_input_to_cached_submission_us": 208.041,
+            "input_to_sharp_ms": 925.1777500000001,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.47999999999956344,
+              0.39999999999997726
+            ],
+            "anchor_error_css_pixels": [
+              0.2000000000000135,
+              0.47999999999774445
+            ],
+            "scroll_error_css_pixels": null
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 0,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 37.542,
+            "input_to_sharp_ms": 500.46354199999996
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 1,
+            "factor": 0.9523809523809523,
+            "first_input_to_cached_submission_us": 19.166,
+            "input_to_sharp_ms": 507.10200000000003
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 2,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 25.292,
+            "input_to_sharp_ms": 500.46562500000005
+          },
+          {
+            "kind": "coverage-excursion",
+            "first_input_to_cached_submission_us": 74.83300000000001
+          }
+        ],
+        "capture_timings": {
+          "capture_to_admit_or_reject_ms": [
+            {
+              "ms": 949.737958,
+              "outcome": "admit"
+            },
+            {
+              "ms": 779.338125,
+              "outcome": "admit"
+            }
+          ],
+          "dropped": 0,
+          "sample_cap": 32,
+          "scope": "SVG preparation is synchronous WebContent wall time; capture-to-admit/reject includes native rasterization and callback/validation scheduling; neither is GPU presentation",
+          "svg_buffer_preparation_ms": [
+            60.0,
+            68.0
+          ]
+        }
+      },
+      {
+        "metadata": {
+          "started_utc": "2026-10-12T15:30:59.336608+00:00",
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/transition-after",
+            "--background",
+            "--transition-regression"
+          ],
+          "returncode": 0,
+          "process_seconds": 13.999930874910206,
+          "checks": {
+            "native_process": true,
+            "actual_tinymist": true,
+            "actual_partial": true,
+            "responsive_during_block": true,
+            "one_final_vector_request": true,
+            "transition_regression": true
+          },
+          "binary_sha256": "206aa1ccfdb02af1136d5133e01ae36dc0e576bb6f1bbbf411a06b2f9825adc3",
+          "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+          "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-zoom-stress.typ",
+          "fixture_sha256": "e6dd2f741269b617df5e5d8712d85301b99cf81a46fa2221467a3417fd383828",
+          "viewport": [
+            640,
+            420
+          ],
+          "warmup_seconds": 3,
+          "input": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+          "window_mode": "Prohibited throughout; owned window ordered front without making key or activating app",
+          "not_established": "physical trackpad pinch or GPU presentation",
+          "receipt": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/matched-after-3/native-partial.json"
+        },
+        "actual_partial": true,
+        "passed": true,
+        "failures": [],
+        "steps": [
+          {
+            "kind": "divider",
+            "width": 560.0,
+            "first_input_to_cached_submission_us": 156.25,
+            "input_to_sharp_ms": 848.573792,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.17000000000007276,
+              0.6000000000000227
+            ],
+            "anchor_error_css_pixels": [
+              0.2000000000000135,
+              0.16999999999825377
+            ],
+            "scroll_error_css_pixels": null
+          },
+          {
+            "kind": "divider",
+            "width": 640.0,
+            "first_input_to_cached_submission_us": 190.333,
+            "input_to_sharp_ms": 916.652958,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.47999999999956344,
+              0.39999999999997726
+            ],
+            "anchor_error_css_pixels": [
+              0.2000000000000135,
+              0.47999999999774445
+            ],
+            "scroll_error_css_pixels": null
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 0,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 40.542,
+            "input_to_sharp_ms": 497.822167
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 1,
+            "factor": 0.9523809523809523,
+            "first_input_to_cached_submission_us": 22.0,
+            "input_to_sharp_ms": 507.01525000000004
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 2,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 19.583,
+            "input_to_sharp_ms": 499.21979100000004
+          },
+          {
+            "kind": "coverage-excursion",
+            "first_input_to_cached_submission_us": 80.0
+          }
+        ],
+        "capture_timings": {
+          "capture_to_admit_or_reject_ms": [
+            {
+              "ms": 665.7185420000001,
+              "outcome": "admit"
+            },
+            {
+              "ms": 777.7525830000001,
+              "outcome": "admit"
+            }
+          ],
+          "dropped": 0,
+          "sample_cap": 32,
+          "scope": "SVG preparation is synchronous WebContent wall time; capture-to-admit/reject includes native rasterization and callback/validation scheduling; neither is GPU presentation",
+          "svg_buffer_preparation_ms": [
+            59.0,
+            70.00000000000091
+          ]
+        }
+      }
+    ]
+  },
+  "strict_ink_three_after": {
+    "partial": [
+      {
+        "metadata": {
+          "started_utc": "2026-10-12T16:07:08.810809+00:00",
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/transition-after",
+            "--background",
+            "--transition-regression"
+          ],
+          "returncode": 0,
+          "process_seconds": 13.91686850017868,
+          "checks": {
+            "native_process": true,
+            "actual_tinymist": true,
+            "actual_partial": true,
+            "responsive_during_block": true,
+            "one_final_vector_request": true,
+            "transition_regression": true
+          },
+          "binary_sha256": "5215964686f5a03e82da5d144a8d409589eab5c9a713d9c0cb5f25437fe240b2",
+          "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+          "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-zoom-stress.typ",
+          "fixture_sha256": "e6dd2f741269b617df5e5d8712d85301b99cf81a46fa2221467a3417fd383828",
+          "viewport": [
+            640,
+            420
+          ],
+          "warmup_seconds": 3,
+          "input": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+          "window_mode": "Prohibited throughout; floating level3 owned window ordered front without making key or activating app",
+          "not_established": "physical trackpad pinch or GPU presentation",
+          "receipt": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/ink-after-1/native-partial.json"
+        },
+        "actual_partial": true,
+        "passed": true,
+        "failures": [],
+        "steps": [
+          {
+            "kind": "divider",
+            "width": 560.0,
+            "first_input_to_cached_submission_us": 517.7909999999999,
+            "input_to_sharp_ms": 849.609625,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.17000000000007276,
+              0.6000000000000227
+            ],
+            "anchor_error_css_pixels": [
+              0.2000000000000135,
+              0.16999999999825377
+            ],
+            "scroll_error_css_pixels": null,
+            "ink_error_css_pixels": [
+              0.29944015711842553,
+              0.007108850806957889
+            ],
+            "viewport_top_source_error_css_pixels": 0.43906576879561127,
+            "expected_page18_ink_top_height": [
+              -122.04975460122549,
+              752.117791411043
+            ],
+            "actual_page18_ink_top_height": [
+              -121.75031444410706,
+              752.1249002618499
+            ],
+            "piecewise": true
+          },
+          {
+            "kind": "divider",
+            "width": 640.0,
+            "first_input_to_cached_submission_us": 158.625,
+            "input_to_sharp_ms": 900.151958,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.47999999999956344,
+              0.39999999999997726
+            ],
+            "anchor_error_css_pixels": [
+              0.2000000000000135,
+              0.47999999999774445
+            ],
+            "scroll_error_css_pixels": null,
+            "ink_error_css_pixels": [
+              0.8421265878325528,
+              0.01987836157968559
+            ],
+            "viewport_top_source_error_css_pixels": -0.5017963116276059,
+            "expected_page18_ink_top_height": [
+              -139.34257668711254,
+              859.5631901840492
+            ],
+            "actual_page18_ink_top_height": [
+              -138.50045009928,
+              859.5830685456289
+            ],
+            "piecewise": true
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 0,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 78.667,
+            "input_to_sharp_ms": 492.13924999999995
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 1,
+            "factor": 0.9523809523809523,
+            "first_input_to_cached_submission_us": 19.0,
+            "input_to_sharp_ms": 491.299625
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 2,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 21.375,
+            "input_to_sharp_ms": 505.552083
+          },
+          {
+            "kind": "coverage-excursion",
+            "first_input_to_cached_submission_us": 71.667
+          }
+        ],
+        "capture_timings": {
+          "capture_to_admit_or_reject_ms": [
+            {
+              "ms": 680.8915410000001,
+              "outcome": "admit"
+            },
+            {
+              "ms": 797.6076250000001,
+              "outcome": "admit"
+            }
+          ],
+          "dropped": 0,
+          "sample_cap": 32,
+          "scope": "SVG preparation is synchronous WebContent wall time; capture-to-admit/reject includes native rasterization and callback/validation scheduling; neither is GPU presentation",
+          "svg_buffer_preparation_ms": [
+            49.0,
+            70.0
+          ]
+        }
+      },
+      {
+        "metadata": {
+          "started_utc": "2026-10-12T16:07:51.636829+00:00",
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/transition-after",
+            "--background",
+            "--transition-regression"
+          ],
+          "returncode": 0,
+          "process_seconds": 13.592761375010014,
+          "checks": {
+            "native_process": true,
+            "actual_tinymist": true,
+            "actual_partial": true,
+            "responsive_during_block": true,
+            "one_final_vector_request": true,
+            "transition_regression": true
+          },
+          "binary_sha256": "5215964686f5a03e82da5d144a8d409589eab5c9a713d9c0cb5f25437fe240b2",
+          "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+          "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-zoom-stress.typ",
+          "fixture_sha256": "e6dd2f741269b617df5e5d8712d85301b99cf81a46fa2221467a3417fd383828",
+          "viewport": [
+            640,
+            420
+          ],
+          "warmup_seconds": 3,
+          "input": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+          "window_mode": "Prohibited throughout; floating level3 owned window ordered front without making key or activating app",
+          "not_established": "physical trackpad pinch or GPU presentation",
+          "receipt": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/ink-after-2/native-partial.json"
+        },
+        "actual_partial": true,
+        "passed": true,
+        "failures": [],
+        "steps": [
+          {
+            "kind": "divider",
+            "width": 560.0,
+            "first_input_to_cached_submission_us": 257.125,
+            "input_to_sharp_ms": 817.550375,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.17000000000007276,
+              0.6000000000000227
+            ],
+            "anchor_error_css_pixels": [
+              0.2000000000000135,
+              0.16999999999825377
+            ],
+            "scroll_error_css_pixels": null,
+            "ink_error_css_pixels": [
+              0.29944015711842553,
+              0.007108850806957889
+            ],
+            "viewport_top_source_error_css_pixels": 0.43906576879561127,
+            "expected_page18_ink_top_height": [
+              -122.04975460122549,
+              752.117791411043
+            ],
+            "actual_page18_ink_top_height": [
+              -121.75031444410706,
+              752.1249002618499
+            ],
+            "piecewise": true
+          },
+          {
+            "kind": "divider",
+            "width": 640.0,
+            "first_input_to_cached_submission_us": 147.542,
+            "input_to_sharp_ms": 880.069542,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.47999999999956344,
+              0.39999999999997726
+            ],
+            "anchor_error_css_pixels": [
+              0.2000000000000135,
+              0.47999999999774445
+            ],
+            "scroll_error_css_pixels": null,
+            "ink_error_css_pixels": [
+              0.8421265878325528,
+              0.01987836157968559
+            ],
+            "viewport_top_source_error_css_pixels": -0.5017963116276059,
+            "expected_page18_ink_top_height": [
+              -139.34257668711254,
+              859.5631901840492
+            ],
+            "actual_page18_ink_top_height": [
+              -138.50045009928,
+              859.5830685456289
+            ],
+            "piecewise": true
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 0,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 41.75,
+            "input_to_sharp_ms": 493.33425
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 1,
+            "factor": 0.9523809523809523,
+            "first_input_to_cached_submission_us": 28.458000000000002,
+            "input_to_sharp_ms": 494.141917
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 2,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 23.0,
+            "input_to_sharp_ms": 496.11370900000003
+          },
+          {
+            "kind": "coverage-excursion",
+            "first_input_to_cached_submission_us": 51.459
+          }
+        ],
+        "capture_timings": {
+          "capture_to_admit_or_reject_ms": [
+            {
+              "ms": 651.030625,
+              "outcome": "admit"
+            },
+            {
+              "ms": 753.534125,
+              "outcome": "admit"
+            }
+          ],
+          "dropped": 0,
+          "sample_cap": 32,
+          "scope": "SVG preparation is synchronous WebContent wall time; capture-to-admit/reject includes native rasterization and callback/validation scheduling; neither is GPU presentation",
+          "svg_buffer_preparation_ms": [
+            48.0,
+            68.00000000000091
+          ]
+        }
+      },
+      {
+        "metadata": {
+          "started_utc": "2026-10-12T16:08:34.998776+00:00",
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/transition-after",
+            "--background",
+            "--transition-regression"
+          ],
+          "returncode": 0,
+          "process_seconds": 13.979459958150983,
+          "checks": {
+            "native_process": true,
+            "actual_tinymist": true,
+            "actual_partial": true,
+            "responsive_during_block": true,
+            "one_final_vector_request": true,
+            "transition_regression": true
+          },
+          "binary_sha256": "5215964686f5a03e82da5d144a8d409589eab5c9a713d9c0cb5f25437fe240b2",
+          "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+          "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-zoom-stress.typ",
+          "fixture_sha256": "e6dd2f741269b617df5e5d8712d85301b99cf81a46fa2221467a3417fd383828",
+          "viewport": [
+            640,
+            420
+          ],
+          "warmup_seconds": 3,
+          "input": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+          "window_mode": "Prohibited throughout; floating level3 owned window ordered front without making key or activating app",
+          "not_established": "physical trackpad pinch or GPU presentation",
+          "receipt": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/ink-after-3/native-partial.json"
+        },
+        "actual_partial": true,
+        "passed": true,
+        "failures": [],
+        "steps": [
+          {
+            "kind": "divider",
+            "width": 560.0,
+            "first_input_to_cached_submission_us": 152.708,
+            "input_to_sharp_ms": 854.9556249999999,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.17000000000007276,
+              0.6000000000000227
+            ],
+            "anchor_error_css_pixels": [
+              0.2000000000000135,
+              0.16999999999825377
+            ],
+            "scroll_error_css_pixels": null,
+            "ink_error_css_pixels": [
+              0.29944015711842553,
+              0.007108850806957889
+            ],
+            "viewport_top_source_error_css_pixels": 0.43906576879561127,
+            "expected_page18_ink_top_height": [
+              -122.04975460122549,
+              752.117791411043
+            ],
+            "actual_page18_ink_top_height": [
+              -121.75031444410706,
+              752.1249002618499
+            ],
+            "piecewise": true
+          },
+          {
+            "kind": "divider",
+            "width": 640.0,
+            "first_input_to_cached_submission_us": 138.0,
+            "input_to_sharp_ms": 916.190583,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.47999999999956344,
+              0.39999999999997726
+            ],
+            "anchor_error_css_pixels": [
+              0.2000000000000135,
+              0.47999999999774445
+            ],
+            "scroll_error_css_pixels": null,
+            "ink_error_css_pixels": [
+              0.8421265878325528,
+              0.01987836157968559
+            ],
+            "viewport_top_source_error_css_pixels": -0.5017963116276059,
+            "expected_page18_ink_top_height": [
+              -139.34257668711254,
+              859.5631901840492
+            ],
+            "actual_page18_ink_top_height": [
+              -138.50045009928,
+              859.5830685456289
+            ],
+            "piecewise": true
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 0,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 43.5,
+            "input_to_sharp_ms": 507.906458
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 1,
+            "factor": 0.9523809523809523,
+            "first_input_to_cached_submission_us": 50.667,
+            "input_to_sharp_ms": 501.395083
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 2,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 25.334,
+            "input_to_sharp_ms": 498.831167
+          },
+          {
+            "kind": "coverage-excursion",
+            "first_input_to_cached_submission_us": 53.0
+          }
+        ],
+        "capture_timings": {
+          "capture_to_admit_or_reject_ms": [
+            {
+              "ms": 658.5020000000001,
+              "outcome": "admit"
+            },
+            {
+              "ms": 787.152125,
+              "outcome": "admit"
+            }
+          ],
+          "dropped": 0,
+          "sample_cap": 32,
+          "scope": "SVG preparation is synchronous WebContent wall time; capture-to-admit/reject includes native rasterization and callback/validation scheduling; neither is GPU presentation",
+          "svg_buffer_preparation_ms": [
+            50.0,
+            69.0
+          ]
+        }
+      }
+    ],
+    "full": [
+      {
+        "metadata": {
+          "started_utc": "2026-10-12T16:07:22.995428+00:00",
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/transition-after",
+            "--background",
+            "--transition-regression"
+          ],
+          "returncode": 0,
+          "process_seconds": 12.834079041844234,
+          "checks": {
+            "native_process": true,
+            "actual_tinymist": true,
+            "actual_partial": true,
+            "responsive_during_block": true,
+            "one_final_vector_request": true,
+            "transition_regression": true
+          },
+          "binary_sha256": "5215964686f5a03e82da5d144a8d409589eab5c9a713d9c0cb5f25437fe240b2",
+          "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+          "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-partial-large.typ",
+          "fixture_sha256": "463b5702f7eafb4104fdca89de88a7e72c14b7d697cd87159053de7efe76b24a",
+          "viewport": [
+            640,
+            420
+          ],
+          "warmup_seconds": 3,
+          "input": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+          "window_mode": "Prohibited throughout; floating level3 owned window ordered front without making key or activating app",
+          "not_established": "physical trackpad pinch or GPU presentation",
+          "receipt": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/ink-after-1/native-full.json"
+        },
+        "actual_partial": false,
+        "passed": true,
+        "failures": [],
+        "steps": [
+          {
+            "kind": "divider",
+            "width": 560.0,
+            "first_input_to_cached_submission_us": 213.0,
+            "input_to_sharp_ms": 1149.695542,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.4399999999986903,
+              0.6000000000000227
+            ],
+            "anchor_error_css_pixels": [
+              0.20034187442968054,
+              0.7906485646781221
+            ],
+            "scroll_error_css_pixels": null,
+            "ink_error_css_pixels": [
+              0.7878590281732443,
+              0.019069466779001232
+            ],
+            "viewport_top_source_error_css_pixels": -0.26680181901197175,
+            "expected_page18_ink_top_height": [
+              -128.28799999999936,
+              792.064
+            ],
+            "actual_page18_ink_top_height": [
+              -127.50014097182611,
+              792.083069466779
+            ],
+            "piecewise": true
+          },
+          {
+            "kind": "divider",
+            "width": 640.0,
+            "first_input_to_cached_submission_us": 174.666,
+            "input_to_sharp_ms": 1171.8887499999998,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.3599999999969441,
+              0.39999999999997726
+            ],
+            "anchor_error_css_pixels": [
+              0.20020368680866163,
+              0.5983904507156694
+            ],
+            "scroll_error_css_pixels": null,
+            "ink_error_css_pixels": [
+              0.5969037883762383,
+              0.012984546350594428
+            ],
+            "viewport_top_source_error_css_pixels": 0.3049133973560534,
+            "expected_page18_ink_top_height": [
+              -146.47199999999722,
+              905.216
+            ],
+            "actual_page18_ink_top_height": [
+              -145.87509621162098,
+              905.2289845463506
+            ],
+            "piecewise": true
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 0,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 57.542,
+            "input_to_sharp_ms": 873.15325
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 1,
+            "factor": 0.9523809523809523,
+            "first_input_to_cached_submission_us": 20.542,
+            "input_to_sharp_ms": 495.27158399999996
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 2,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 30.333,
+            "input_to_sharp_ms": 498.22387499999996
+          },
+          {
+            "kind": "coverage-excursion",
+            "first_input_to_cached_submission_us": 121.5
+          }
+        ],
+        "capture_timings": {
+          "capture_to_admit_or_reject_ms": [
+            {
+              "ms": 230.731583,
+              "outcome": "admit"
+            },
+            {
+              "ms": 128.53720900000002,
+              "outcome": "admit"
+            }
+          ],
+          "dropped": 0,
+          "sample_cap": 32,
+          "scope": "SVG preparation is synchronous WebContent wall time; capture-to-admit/reject includes native rasterization and callback/validation scheduling; neither is GPU presentation",
+          "svg_buffer_preparation_ms": [
+            5.0,
+            8.0
+          ]
+        }
+      },
+      {
+        "metadata": {
+          "started_utc": "2026-10-12T16:08:05.483866+00:00",
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/transition-after",
+            "--background",
+            "--transition-regression"
+          ],
+          "returncode": 0,
+          "process_seconds": 13.708124374970794,
+          "checks": {
+            "native_process": true,
+            "actual_tinymist": true,
+            "actual_partial": true,
+            "responsive_during_block": true,
+            "one_final_vector_request": true,
+            "transition_regression": true
+          },
+          "binary_sha256": "5215964686f5a03e82da5d144a8d409589eab5c9a713d9c0cb5f25437fe240b2",
+          "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+          "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-partial-large.typ",
+          "fixture_sha256": "463b5702f7eafb4104fdca89de88a7e72c14b7d697cd87159053de7efe76b24a",
+          "viewport": [
+            640,
+            420
+          ],
+          "warmup_seconds": 3,
+          "input": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+          "window_mode": "Prohibited throughout; floating level3 owned window ordered front without making key or activating app",
+          "not_established": "physical trackpad pinch or GPU presentation",
+          "receipt": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/ink-after-2/native-full.json"
+        },
+        "actual_partial": false,
+        "passed": true,
+        "failures": [],
+        "steps": [
+          {
+            "kind": "divider",
+            "width": 560.0,
+            "first_input_to_cached_submission_us": 251.167,
+            "input_to_sharp_ms": 1165.1798330000001,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.4399999999986903,
+              0.6000000000000227
+            ],
+            "anchor_error_css_pixels": [
+              0.20034187442968054,
+              0.7906485646781221
+            ],
+            "scroll_error_css_pixels": null,
+            "ink_error_css_pixels": [
+              0.7878590281732443,
+              0.019069466779001232
+            ],
+            "viewport_top_source_error_css_pixels": -0.26680181901197175,
+            "expected_page18_ink_top_height": [
+              -128.28799999999936,
+              792.064
+            ],
+            "actual_page18_ink_top_height": [
+              -127.50014097182611,
+              792.083069466779
+            ],
+            "piecewise": true
+          },
+          {
+            "kind": "divider",
+            "width": 640.0,
+            "first_input_to_cached_submission_us": 177.209,
+            "input_to_sharp_ms": 1186.542375,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.3599999999969441,
+              0.39999999999997726
+            ],
+            "anchor_error_css_pixels": [
+              0.20020368680866163,
+              0.5983904507156694
+            ],
+            "scroll_error_css_pixels": null,
+            "ink_error_css_pixels": [
+              0.5969037883762383,
+              0.012984546350594428
+            ],
+            "viewport_top_source_error_css_pixels": 0.3049133973560534,
+            "expected_page18_ink_top_height": [
+              -146.47199999999722,
+              905.216
+            ],
+            "actual_page18_ink_top_height": [
+              -145.87509621162098,
+              905.2289845463506
+            ],
+            "piecewise": true
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 0,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 41.709,
+            "input_to_sharp_ms": 849.8772919999999
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 1,
+            "factor": 0.9523809523809523,
+            "first_input_to_cached_submission_us": 20.792,
+            "input_to_sharp_ms": 911.0275
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 2,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 24.708000000000002,
+            "input_to_sharp_ms": 850.2207910000001
+          },
+          {
+            "kind": "coverage-excursion",
+            "first_input_to_cached_submission_us": 53.542
+          }
+        ],
+        "capture_timings": {
+          "capture_to_admit_or_reject_ms": [
+            {
+              "ms": 221.557375,
+              "outcome": "admit"
+            },
+            {
+              "ms": 135.471,
+              "outcome": "admit"
+            }
+          ],
+          "dropped": 0,
+          "sample_cap": 32,
+          "scope": "SVG preparation is synchronous WebContent wall time; capture-to-admit/reject includes native rasterization and callback/validation scheduling; neither is GPU presentation",
+          "svg_buffer_preparation_ms": [
+            5.0,
+            8.0
+          ]
+        }
+      },
+      {
+        "metadata": {
+          "started_utc": "2026-10-12T16:08:49.229608+00:00",
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/transition-after",
+            "--background",
+            "--transition-regression"
+          ],
+          "returncode": 0,
+          "process_seconds": 13.337324999971315,
+          "checks": {
+            "native_process": true,
+            "actual_tinymist": true,
+            "actual_partial": true,
+            "responsive_during_block": true,
+            "one_final_vector_request": true,
+            "transition_regression": true
+          },
+          "binary_sha256": "5215964686f5a03e82da5d144a8d409589eab5c9a713d9c0cb5f25437fe240b2",
+          "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+          "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-partial-large.typ",
+          "fixture_sha256": "463b5702f7eafb4104fdca89de88a7e72c14b7d697cd87159053de7efe76b24a",
+          "viewport": [
+            640,
+            420
+          ],
+          "warmup_seconds": 3,
+          "input": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+          "window_mode": "Prohibited throughout; floating level3 owned window ordered front without making key or activating app",
+          "not_established": "physical trackpad pinch or GPU presentation",
+          "receipt": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/ink-after-3/native-full.json"
+        },
+        "actual_partial": false,
+        "passed": true,
+        "failures": [],
+        "steps": [
+          {
+            "kind": "divider",
+            "width": 560.0,
+            "first_input_to_cached_submission_us": 291.166,
+            "input_to_sharp_ms": 1153.37925,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.4399999999986903,
+              0.6000000000000227
+            ],
+            "anchor_error_css_pixels": [
+              0.20034187442968054,
+              0.7906485646781221
+            ],
+            "scroll_error_css_pixels": null,
+            "ink_error_css_pixels": [
+              0.7878590281732443,
+              0.019069466779001232
+            ],
+            "viewport_top_source_error_css_pixels": -0.26680181901197175,
+            "expected_page18_ink_top_height": [
+              -128.28799999999936,
+              792.064
+            ],
+            "actual_page18_ink_top_height": [
+              -127.50014097182611,
+              792.083069466779
+            ],
+            "piecewise": true
+          },
+          {
+            "kind": "divider",
+            "width": 640.0,
+            "first_input_to_cached_submission_us": 171.292,
+            "input_to_sharp_ms": 1194.105792,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.3599999999969441,
+              0.39999999999997726
+            ],
+            "anchor_error_css_pixels": [
+              0.20020368680866163,
+              0.5983904507156694
+            ],
+            "scroll_error_css_pixels": null,
+            "ink_error_css_pixels": [
+              0.5969037883762383,
+              0.012984546350594428
+            ],
+            "viewport_top_source_error_css_pixels": 0.3049133973560534,
+            "expected_page18_ink_top_height": [
+              -146.47199999999722,
+              905.216
+            ],
+            "actual_page18_ink_top_height": [
+              -145.87509621162098,
+              905.2289845463506
+            ],
+            "piecewise": true
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 0,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 51.542,
+            "input_to_sharp_ms": 852.661667
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 1,
+            "factor": 0.9523809523809523,
+            "first_input_to_cached_submission_us": 23.583000000000002,
+            "input_to_sharp_ms": 498.90525
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 2,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 23.916,
+            "input_to_sharp_ms": 958.5665
+          },
+          {
+            "kind": "coverage-excursion",
+            "first_input_to_cached_submission_us": 56.625
+          }
+        ],
+        "capture_timings": {
+          "capture_to_admit_or_reject_ms": [
+            {
+              "ms": 222.868875,
+              "outcome": "admit"
+            },
+            {
+              "ms": 129.9675,
+              "outcome": "admit"
+            }
+          ],
+          "dropped": 0,
+          "sample_cap": 32,
+          "scope": "SVG preparation is synchronous WebContent wall time; capture-to-admit/reject includes native rasterization and callback/validation scheduling; neither is GPU presentation",
+          "svg_buffer_preparation_ms": [
+            5.0,
+            7.0
+          ]
+        }
+      }
+    ]
+  },
+  "summary": {
+    "after_max_ink_error_css_pixels": {
+      "partial": 0.8421265878325528,
+      "full": 0.7878590281732443
+    },
+    "return_submission_us": {
+      "partial": [
+        71.667,
+        51.459,
+        53.0
+      ],
+      "full": [
+        121.5,
+        53.542,
+        56.625
+      ]
+    },
+    "dense_partial_svg_preparation_ms": [
+      49.0,
+      70.0,
+      48.0,
+      68.00000000000091,
+      50.0,
+      69.0
+    ],
+    "dense_partial_capture_to_admission_ms": [
+      680.8915410000001,
+      797.6076250000001,
+      651.030625,
+      753.534125,
+      658.5020000000001,
+      787.152125
+    ],
+    "final_real_divider_max_error_css_pixels": 0.4292287230491638,
+    "final_native_max_ink_error_css_pixels": {
+      "partial": 0.8421265878325528,
+      "full": 0.7878590281732443
+    }
+  },
+  "real_app": {
+    "passed": true,
+    "result_file": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/desktop-ui-tests/run-ggn_p9d3/result.json",
+    "version": "tiptoptyp Dev 0.1.0 (1de1cf7896a4-dirty.1791828163)",
+    "binary_sha256": "a4d0e71f0c6a353d5ad91bb747bf9900cbf90a0e7c8423ecd0f9210c10bd75ad",
+    "build_profile": "release",
+    "build_log": "/private/tmp/ttt-zoom-20261012-resize-handoff-main-build.log",
+    "journeys": [
+      "partial_zoom_stress"
+    ],
+    "divider_observations": [
+      {
+        "action": "partial.cached-divider",
+        "mode": "partial",
+        "delta": 60,
+        "active_frames": 8,
+        "anchor_error_css_pixels": [
+          0.0,
+          0.05579584836975027
+        ]
+      },
+      {
+        "action": "partial.cached-divider",
+        "mode": "partial",
+        "delta": -60,
+        "active_frames": 10,
+        "anchor_error_css_pixels": [
+          0.0,
+          0.42324697971361047
+        ]
+      },
+      {
+        "action": "partial.cached-divider",
+        "mode": "partial",
+        "delta": 60,
+        "active_frames": 9,
+        "anchor_error_css_pixels": [
+          0.0,
+          0.05579584836975027
+        ]
+      },
+      {
+        "action": "partial.cached-divider",
+        "mode": "partial",
+        "delta": -60,
+        "active_frames": 8,
+        "anchor_error_css_pixels": [
+          0.0,
+          0.42324697971361047
+        ]
+      },
+      {
+        "action": "partial.cached-divider",
+        "mode": "partial",
+        "delta": 60,
+        "active_frames": 8,
+        "anchor_error_css_pixels": [
+          0.0,
+          0.05579584836975027
+        ]
+      },
+      {
+        "action": "partial.cached-divider",
+        "mode": "partial",
+        "delta": -60,
+        "active_frames": 9,
+        "anchor_error_css_pixels": [
+          0.0,
+          0.42324697971361047
+        ]
+      },
+      {
+        "action": "partial.cached-divider",
+        "mode": "full",
+        "delta": 60,
+        "active_frames": 10,
+        "anchor_error_css_pixels": [
+          0.0,
+          0.29264760017405234
+        ]
+      },
+      {
+        "action": "partial.cached-divider",
+        "mode": "full",
+        "delta": -60,
+        "active_frames": 11,
+        "anchor_error_css_pixels": [
+          0.0,
+          0.4292287230491638
+        ]
+      },
+      {
+        "action": "partial.cached-divider",
+        "mode": "full",
+        "delta": 60,
+        "active_frames": 11,
+        "anchor_error_css_pixels": [
+          0.0,
+          0.2926476001739502
+        ]
+      },
+      {
+        "action": "partial.cached-divider",
+        "mode": "full",
+        "delta": -60,
+        "active_frames": 12,
+        "anchor_error_css_pixels": [
+          0.0,
+          0.4292287230491638
+        ]
+      },
+      {
+        "action": "partial.cached-divider",
+        "mode": "full",
+        "delta": 60,
+        "active_frames": 9,
+        "anchor_error_css_pixels": [
+          0.0,
+          0.2926476001739502
+        ]
+      },
+      {
+        "action": "partial.cached-divider",
+        "mode": "full",
+        "delta": -60,
+        "active_frames": 9,
+        "anchor_error_css_pixels": [
+          0.0,
+          0.4292287230491638
+        ]
+      }
+    ],
+    "bounds_trace_file": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/final-real-journey-preview-bounds.log",
+    "bounds_trace_lines": 3175,
+    "composition_visual_verified": false,
+    "earlier_failed_attempts": [
+      {
+        "result_file": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/desktop-ui-tests/run-x9cq1ixd/result.json",
+        "failure": "divider bitmap did not hand off to current sharp SVG",
+        "fixed": "Duplicate DOM resize canceled paint/ready acknowledgement; red deterministic contract and repeated final transitions cover this."
+      },
+      {
+        "result_file": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/desktop-ui-tests/run-e8z9eyub/result.json",
+        "failure": "timed out: native controls open in partial mode",
+        "status": "Unexplained single-click failure; identical build and same controls path passed on retry. Retained for follow-up, not a pass."
+      }
+    ]
+  },
+  "checks": {
+    "rust_tests": 1885,
+    "ignored_not_passes": 50,
+    "rust_test_log": "/private/tmp/ttt-zoom-20261012-resize-rust-tests.log",
+    "javascript_tests": 106,
+    "javascript_log": "/private/tmp/ttt-zoom-20261012-resize-handoff-js.log",
+    "fmt": "passed /private/tmp/ttt-zoom-20261012-resize-final-fmt.log",
+    "clippy_default": "passed /private/tmp/ttt-zoom-20261012-resize-clippy.log",
+    "clippy_desktop_all_targets": "passed /private/tmp/ttt-zoom-20261012-resize-native-clippy.log",
+    "xtask_tests": 17,
+    "python_contracts": 56,
+    "python_contracts_log": "/private/tmp/ttt-zoom-20261012-handoff-python.log",
+    "xtask_log": "/private/tmp/ttt-zoom-20261012-resize-xtask.log",
+    "profiling_clippy": "passed /private/tmp/ttt-zoom-20261012-resize-profiling-clippy.log",
+    "profiling_tests": 1893,
+    "profiling_test_log": "/private/tmp/ttt-zoom-20261012-resize-profiling-tests.log"
+  },
+  "visual_evidence": {
+    "inspected": [
+      ".tiptoptyp/screenshots/agent-review/zoom-edge/native-partial-accepted-after-1.png",
+      ".tiptoptyp/screenshots/agent-review/zoom-edge/native-full-ink-floating-check.png",
+      ".tiptoptyp/screenshots/agent-review/zoom-edge/native-partial-resize-after.png",
+      ".tiptoptyp/screenshots/agent-review/zoom-edge/native-full-resize-after.png"
+    ],
+    "kind": "fresh isolated native clip-layer PNGs showing ink and opaque clipping, not composed desktop"
+  },
+  "limits": [
+    "Physical trackpad pinch and GPU presentation are not measured. Native timings are AppKit layer submission; input is owned key events/injected production zoom operations.",
+    "Full uses standard48-page fixture; partial uses dense48-page fixture. No cross-mode throughput comparison. Densefull previously exceeded handoff budget.",
+    "Three strict after runs preceded cache-disabled full zoom/stale-point safety changes; exact binaries and sources retained. Those changes do not alter the native bitmap transform.",
+    "Corrected full baseline reproduced geometry failure during a production build: its timings are excluded. Three earlier matched partial retention runs remain valid component evidence.",
+    "Root-paper-only green receipts are superseded by actual ink checks. Hidden/activation/stale observation/JSON int-vs-float descriptor mismatch failures are excluded, not production regressions.",
+    "Capture-to-admission spans include rasterization and callback/validation scheduling. Keeping warmed pixels avoids this wait; no final-render speedup is claimed.",
+    "Current release real-app journey and matched native probes passed after duplicate-resize fix. One intermittent controls-opening click failure remains unexplained and is retained as a separate failed attempt."
+  ],
+  "final_matched_native": {
+    "partial": {
+      "before": {
+        "metadata": {
+          "started_utc": "2026-10-12T18:11:06.518337+00:00",
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/transition-before",
+            "--background",
+            "--transition-regression"
+          ],
+          "returncode": 101,
+          "process_seconds": 14.439843874890357,
+          "checks": {
+            "native_process": false,
+            "actual_tinymist": true,
+            "actual_partial": true,
+            "responsive_during_block": true,
+            "one_final_vector_request": true,
+            "transition_regression": false
+          },
+          "binary_sha256": "4195558cc79996c9ea3f797a7d76547e171a64e1734e3974e65f57d8382abf35",
+          "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+          "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-zoom-stress.typ",
+          "fixture_sha256": "e6dd2f741269b617df5e5d8712d85301b99cf81a46fa2221467a3417fd383828",
+          "viewport": [
+            640,
+            420
+          ],
+          "warmup_seconds": 3,
+          "input": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+          "window_mode": "Prohibited throughout; floating level3 owned window ordered front without making key or activating app",
+          "not_established": "physical trackpad pinch or GPU presentation",
+          "receipt": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/resize-before/native-partial.json"
+        },
+        "actual_partial": true,
+        "passed": false,
+        "failures": [
+          "out-of-buffer zoom permanently discarded reusable pixels/geometry",
+          "return into the cached buffer failed to reuse its raster"
+        ],
+        "steps": [
+          {
+            "kind": "reset"
+          },
+          {
+            "kind": "off-center-zoom"
+          },
+          {
+            "kind": "divider",
+            "width": 560.0,
+            "first_input_to_cached_submission_us": 197.084,
+            "input_to_sharp_ms": 1125.8490000000002,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.17000000000007276,
+              0.6000000000000227
+            ],
+            "anchor_error_css_pixels": null,
+            "scroll_error_css_pixels": null,
+            "ink_error_css_pixels": [
+              0.29944015711842553,
+              0.007108850806957889
+            ],
+            "viewport_top_source_error_css_pixels": 0.43906576879561127,
+            "expected_page18_ink_top_height": [
+              -122.04975460122549,
+              752.117791411043
+            ],
+            "actual_page18_ink_top_height": [
+              -121.75031444410706,
+              752.1249002618499
+            ],
+            "piecewise": true
+          },
+          {
+            "kind": "divider",
+            "width": 640.0,
+            "first_input_to_cached_submission_us": 179.292,
+            "input_to_sharp_ms": 934.047959,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.47999999999956344,
+              0.39999999999997726
+            ],
+            "anchor_error_css_pixels": null,
+            "scroll_error_css_pixels": null,
+            "ink_error_css_pixels": [
+              0.8421265878325528,
+              0.01987836157968559
+            ],
+            "viewport_top_source_error_css_pixels": -0.5017963116276059,
+            "expected_page18_ink_top_height": [
+              -139.34257668711254,
+              859.5631901840492
+            ],
+            "actual_page18_ink_top_height": [
+              -138.50045009928,
+              859.5830685456289
+            ],
+            "piecewise": true
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 0,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 37.542,
+            "input_to_sharp_ms": 518.812959
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 1,
+            "factor": 0.9523809523809523,
+            "first_input_to_cached_submission_us": 24.583000000000002,
+            "input_to_sharp_ms": 508.984875
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 2,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 29.5,
+            "input_to_sharp_ms": 520.856042
+          },
+          {
+            "kind": "coverage-excursion",
+            "first_input_to_cached_submission_us": null
+          },
+          {
+            "kind": "coverage-return-sharp"
+          }
+        ],
+        "capture_timings": {
+          "svg_buffer_preparation_ms": [
+            49.0,
+            67.00000000000091
+          ],
+          "capture_to_admit_or_reject_ms": [
+            {
+              "ms": 703.601833,
+              "outcome": "admit"
+            },
+            {
+              "ms": 791.0266660000001,
+              "outcome": "admit"
+            }
+          ],
+          "scope": "SVG preparation is synchronous WebContent wall time; capture-to-admit/reject includes native rasterization and callback/validation scheduling; neither is GPU presentation",
+          "sample_cap": 32,
+          "dropped": 0
+        }
+      },
+      "after": {
+        "metadata": {
+          "started_utc": "2026-10-12T18:12:35.737994+00:00",
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/transition-after",
+            "--background",
+            "--transition-regression"
+          ],
+          "returncode": 0,
+          "process_seconds": 14.315195125062019,
+          "checks": {
+            "native_process": true,
+            "actual_tinymist": true,
+            "actual_partial": true,
+            "responsive_during_block": true,
+            "one_final_vector_request": true,
+            "transition_regression": true
+          },
+          "binary_sha256": "f0c59d697d92daa14ac7ad46318d9bee424508e0baa7fef87375f35ac833dc2f",
+          "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+          "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-zoom-stress.typ",
+          "fixture_sha256": "e6dd2f741269b617df5e5d8712d85301b99cf81a46fa2221467a3417fd383828",
+          "viewport": [
+            640,
+            420
+          ],
+          "warmup_seconds": 3,
+          "input": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+          "window_mode": "Prohibited throughout; floating level3 owned window ordered front without making key or activating app",
+          "not_established": "physical trackpad pinch or GPU presentation",
+          "receipt": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/resize-after/native-partial.json"
+        },
+        "actual_partial": true,
+        "passed": true,
+        "failures": [],
+        "steps": [
+          {
+            "kind": "reset"
+          },
+          {
+            "kind": "off-center-zoom"
+          },
+          {
+            "kind": "divider",
+            "width": 560.0,
+            "first_input_to_cached_submission_us": 244.37500000000003,
+            "input_to_sharp_ms": 854.120042,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.17000000000007276,
+              0.6000000000000227
+            ],
+            "anchor_error_css_pixels": [
+              0.2000000000000135,
+              0.16999999999825377
+            ],
+            "scroll_error_css_pixels": null,
+            "ink_error_css_pixels": [
+              0.29944015711842553,
+              0.007108850806957889
+            ],
+            "viewport_top_source_error_css_pixels": 0.43906576879561127,
+            "expected_page18_ink_top_height": [
+              -122.04975460122549,
+              752.117791411043
+            ],
+            "actual_page18_ink_top_height": [
+              -121.75031444410706,
+              752.1249002618499
+            ],
+            "piecewise": true
+          },
+          {
+            "kind": "divider",
+            "width": 640.0,
+            "first_input_to_cached_submission_us": 162.375,
+            "input_to_sharp_ms": 907.102166,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.47999999999956344,
+              0.39999999999997726
+            ],
+            "anchor_error_css_pixels": [
+              0.2000000000000135,
+              0.47999999999774445
+            ],
+            "scroll_error_css_pixels": null,
+            "ink_error_css_pixels": [
+              0.8421265878325528,
+              0.01987836157968559
+            ],
+            "viewport_top_source_error_css_pixels": -0.5017963116276059,
+            "expected_page18_ink_top_height": [
+              -139.34257668711254,
+              859.5631901840492
+            ],
+            "actual_page18_ink_top_height": [
+              -138.50045009928,
+              859.5830685456289
+            ],
+            "piecewise": true
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 0,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 41.041000000000004,
+            "input_to_sharp_ms": 513.3357910000001
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 1,
+            "factor": 0.9523809523809523,
+            "first_input_to_cached_submission_us": 16.125,
+            "input_to_sharp_ms": 519.158584
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 2,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 21.5,
+            "input_to_sharp_ms": 526.5626249999999
+          },
+          {
+            "kind": "coverage-excursion",
+            "first_input_to_cached_submission_us": 60.958999999999996
+          },
+          {
+            "kind": "coverage-return-sharp"
+          }
+        ],
+        "capture_timings": {
+          "svg_buffer_preparation_ms": [
+            50.0,
+            67.0
+          ],
+          "capture_to_admit_or_reject_ms": [
+            {
+              "ms": 727.343125,
+              "outcome": "admit"
+            },
+            {
+              "ms": 806.683625,
+              "outcome": "admit"
+            }
+          ],
+          "scope": "SVG preparation is synchronous WebContent wall time; capture-to-admit/reject includes native rasterization and callback/validation scheduling; neither is GPU presentation",
+          "sample_cap": 32,
+          "dropped": 0
+        }
+      }
+    },
+    "full": {
+      "before": {
+        "metadata": {
+          "started_utc": "2026-10-12T18:13:17.781305+00:00",
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/transition-before",
+            "--background",
+            "--transition-regression"
+          ],
+          "returncode": 101,
+          "process_seconds": 10.773011791985482,
+          "checks": {
+            "native_process": false,
+            "actual_tinymist": true,
+            "actual_partial": true,
+            "responsive_during_block": true,
+            "one_final_vector_request": true,
+            "transition_regression": false
+          },
+          "binary_sha256": "4195558cc79996c9ea3f797a7d76547e171a64e1734e3974e65f57d8382abf35",
+          "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+          "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-partial-large.typ",
+          "fixture_sha256": "463b5702f7eafb4104fdca89de88a7e72c14b7d697cd87159053de7efe76b24a",
+          "viewport": [
+            640,
+            420
+          ],
+          "warmup_seconds": 3,
+          "input": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+          "window_mode": "Prohibited throughout; floating level3 owned window ordered front without making key or activating app",
+          "not_established": "physical trackpad pinch or GPU presentation",
+          "receipt": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/resize-before/native-full.json"
+        },
+        "actual_partial": false,
+        "passed": false,
+        "failures": [
+          "560-point divider handoff moved content: paper=[0.2000000000000135, -21.76000000000022, 0.6000000000000227], ink=[-5.57649644057642, 0.019069466779001232], top-source=-0.3918614237329541, anchor=None, scroll=None",
+          "640-point divider handoff moved content: paper=[0.2000000000000135, 0.5600000000013097, 0.39999999999997726], ink=[18.84109125406161, 0.010034286949235138], top-source=-25.212262925434974, anchor=None, scroll=None",
+          "out-of-buffer zoom permanently discarded reusable pixels/geometry",
+          "return into the cached buffer failed to reuse its raster"
+        ],
+        "steps": [
+          {
+            "kind": "reset"
+          },
+          {
+            "kind": "off-center-zoom"
+          },
+          {
+            "kind": "divider",
+            "width": 560.0,
+            "first_input_to_cached_submission_us": 247.5,
+            "input_to_sharp_ms": 655.213375,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              -21.76000000000022,
+              0.6000000000000227
+            ],
+            "anchor_error_css_pixels": null,
+            "scroll_error_css_pixels": null,
+            "ink_error_css_pixels": [
+              -5.57649644057642,
+              0.019069466779001232
+            ],
+            "viewport_top_source_error_css_pixels": -0.3918614237329541,
+            "expected_page18_ink_top_height": [
+              -127.92364453124969,
+              792.064
+            ],
+            "actual_page18_ink_top_height": [
+              -133.5001409718261,
+              792.083069466779
+            ],
+            "piecewise": false
+          },
+          {
+            "kind": "divider",
+            "width": 640.0,
+            "first_input_to_cached_submission_us": 186.75,
+            "input_to_sharp_ms": 477.038417,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.5600000000013097,
+              0.39999999999997726
+            ],
+            "anchor_error_css_pixels": null,
+            "scroll_error_css_pixels": null,
+            "ink_error_css_pixels": [
+              18.84109125406161,
+              0.010034286949235138
+            ],
+            "viewport_top_source_error_css_pixels": -25.212262925434974,
+            "expected_page18_ink_top_height": [
+              -146.0555937500007,
+              905.216
+            ],
+            "actual_page18_ink_top_height": [
+              -127.21450249593909,
+              905.2260342869492
+            ],
+            "piecewise": false
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 0,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 61.208,
+            "input_to_sharp_ms": 485.33625
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 1,
+            "factor": 0.9523809523809523,
+            "first_input_to_cached_submission_us": 20.75,
+            "input_to_sharp_ms": 472.843166
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 2,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 19.583,
+            "input_to_sharp_ms": 490.426083
+          },
+          {
+            "kind": "coverage-excursion",
+            "first_input_to_cached_submission_us": null
+          },
+          {
+            "kind": "coverage-return-sharp"
+          }
+        ],
+        "capture_timings": {
+          "svg_buffer_preparation_ms": [
+            5.0,
+            8.0
+          ],
+          "capture_to_admit_or_reject_ms": [
+            {
+              "ms": 232.5685,
+              "outcome": "admit"
+            },
+            {
+              "ms": 132.604625,
+              "outcome": "admit"
+            }
+          ],
+          "scope": "SVG preparation is synchronous WebContent wall time; capture-to-admit/reject includes native rasterization and callback/validation scheduling; neither is GPU presentation",
+          "sample_cap": 32,
+          "dropped": 0
+        }
+      },
+      "after": {
+        "metadata": {
+          "started_utc": "2026-10-12T18:14:20.446750+00:00",
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/transition-after",
+            "--background",
+            "--transition-regression"
+          ],
+          "returncode": 0,
+          "process_seconds": 13.381121749989688,
+          "checks": {
+            "native_process": true,
+            "actual_tinymist": true,
+            "actual_partial": true,
+            "responsive_during_block": true,
+            "one_final_vector_request": true,
+            "transition_regression": true
+          },
+          "binary_sha256": "f0c59d697d92daa14ac7ad46318d9bee424508e0baa7fef87375f35ac833dc2f",
+          "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+          "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-partial-large.typ",
+          "fixture_sha256": "463b5702f7eafb4104fdca89de88a7e72c14b7d697cd87159053de7efe76b24a",
+          "viewport": [
+            640,
+            420
+          ],
+          "warmup_seconds": 3,
+          "input": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+          "window_mode": "Prohibited throughout; floating level3 owned window ordered front without making key or activating app",
+          "not_established": "physical trackpad pinch or GPU presentation",
+          "receipt": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/resize-after/native-full.json"
+        },
+        "actual_partial": false,
+        "passed": true,
+        "failures": [],
+        "steps": [
+          {
+            "kind": "reset"
+          },
+          {
+            "kind": "off-center-zoom"
+          },
+          {
+            "kind": "divider",
+            "width": 560.0,
+            "first_input_to_cached_submission_us": 300.042,
+            "input_to_sharp_ms": 1165.998125,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.4399999999986903,
+              0.6000000000000227
+            ],
+            "anchor_error_css_pixels": [
+              0.20034187442968054,
+              0.7906485646781221
+            ],
+            "scroll_error_css_pixels": null,
+            "ink_error_css_pixels": [
+              0.7878590281732443,
+              0.019069466779001232
+            ],
+            "viewport_top_source_error_css_pixels": -0.26680181901197175,
+            "expected_page18_ink_top_height": [
+              -128.28799999999936,
+              792.064
+            ],
+            "actual_page18_ink_top_height": [
+              -127.50014097182611,
+              792.083069466779
+            ],
+            "piecewise": true
+          },
+          {
+            "kind": "divider",
+            "width": 640.0,
+            "first_input_to_cached_submission_us": 168.75,
+            "input_to_sharp_ms": 1202.6180829999998,
+            "paper_error_css_pixels": [
+              0.2000000000000135,
+              0.3599999999969441,
+              0.39999999999997726
+            ],
+            "anchor_error_css_pixels": [
+              0.20020368680866163,
+              0.5983904507156694
+            ],
+            "scroll_error_css_pixels": null,
+            "ink_error_css_pixels": [
+              0.5969037883762383,
+              0.012984546350594428
+            ],
+            "viewport_top_source_error_css_pixels": 0.3049133973560534,
+            "expected_page18_ink_top_height": [
+              -146.47199999999722,
+              905.216
+            ],
+            "actual_page18_ink_top_height": [
+              -145.87509621162098,
+              905.2289845463506
+            ],
+            "piecewise": true
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 0,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 92.042,
+            "input_to_sharp_ms": 882.1405
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 1,
+            "factor": 0.9523809523809523,
+            "first_input_to_cached_submission_us": 28.25,
+            "input_to_sharp_ms": 484.648625
+          },
+          {
+            "kind": "successive-gesture",
+            "index": 2,
+            "factor": 1.05,
+            "first_input_to_cached_submission_us": 24.959,
+            "input_to_sharp_ms": 951.92725
+          },
+          {
+            "kind": "coverage-excursion",
+            "first_input_to_cached_submission_us": 64.708
+          },
+          {
+            "kind": "coverage-return-sharp"
+          }
+        ],
+        "capture_timings": {
+          "svg_buffer_preparation_ms": [
+            5.0,
+            8.0
+          ],
+          "capture_to_admit_or_reject_ms": [
+            {
+              "ms": 228.75079100000002,
+              "outcome": "admit"
+            },
+            {
+              "ms": 134.32250000000002,
+              "outcome": "admit"
+            }
+          ],
+          "scope": "SVG preparation is synchronous WebContent wall time; capture-to-admit/reject includes native rasterization and callback/validation scheduling; neither is GPU presentation",
+          "sample_cap": 32,
+          "dropped": 0
+        }
+      }
+    }
+  },
+  "previous_shared_layout_real_app": {
+    "passed": true,
+    "result_file": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/desktop-ui-tests/run-ttkvb_uk/result.json",
+    "version": "tiptoptyp Dev 0.1.0 (1de1cf7896a4-dirty.1791820618)",
+    "binary_sha256": "a94675690f32cc365ce5d24f3e1bab2fc3be6a68694921de1a4eb8d2077426be",
+    "verified_build_profile": "release; /private/tmp/ttt-zoom-20261012-ink-main-build.log",
+    "wrapper_declared_profile": "debug (omitted --release with --executable); original receipt preserved, actual optimized build verified separately",
+    "journeys": [
+      "partial_zoom_stress"
+    ],
+    "divider_observations": [
+      {
+        "action": "partial.cached-divider",
+        "mode": "partial",
+        "delta": 60,
+        "active_frames": 10,
+        "anchor_error_css_pixels": [
+          0.0,
+          0.05579584836975027
+        ]
+      },
+      {
+        "action": "partial.cached-divider",
+        "mode": "partial",
+        "delta": -60,
+        "active_frames": 8,
+        "anchor_error_css_pixels": [
+          0.0,
+          0.42324697971361047
+        ]
+      },
+      {
+        "action": "partial.cached-divider",
+        "mode": "full",
+        "delta": 60,
+        "active_frames": 10,
+        "anchor_error_css_pixels": [
+          0.0,
+          0.29264760017405234
+        ]
+      },
+      {
+        "action": "partial.cached-divider",
+        "mode": "full",
+        "delta": -60,
+        "active_frames": 10,
+        "anchor_error_css_pixels": [
+          0.0,
+          0.4292287230491638
+        ]
+      }
+    ],
+    "bounds_trace_file": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261012/real-journey-preview-bounds.log",
+    "bounds_trace_lines": 2461,
+    "composition_visual_verified": false,
+    "latest_build_rerun": {
+      "status": "historical locked attempt; superseded by current successful rerun",
+      "command": "python3 scripts/test-desktop-ui.py --release --journey partial_zoom_stress --executable target/release/tiptoptyp --trace-preview",
+      "log": "/private/tmp/ttt-zoom-20261012-final-real-journey.log",
+      "changes_since_pass": "uncached full-mode point restoration and stale source-point guards; deterministic tests pass; cached layout path unchanged"
+    }
+  }
+}

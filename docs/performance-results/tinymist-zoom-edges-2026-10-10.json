@@ -1,0 +1,316 @@
+{
+  "date_utc": "2026-10-10",
+  "workspace": "/Users/calvinkhor/Documents/GitHub/mytypst",
+  "change": "Correct cached partial-renderer edge geometry, viewport-bound texture slices, remove per-event forced flush, park the capture view and reject stale navigation callbacks.",
+  "environment": {
+    "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "macos": "14.6.1",
+    "rust": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8",
+    "source_sha256": {
+      "src/preview_zoom_snapshot.rs": "11e25749412665d32ca39b54bf3215b5477b66d9f93681796efb2b7f5edc4365",
+      "src/preview_navigation.js": "553c013bcd41b5e94994a4b9ee1b57202be5a73ff2f19eb31198f3984235f663",
+      "src/preview_zoom_snapshot.js": "05b821775e0cad4bbfb8de5f8941deab3e6808fd7fb68e1eed40941ffe582eaf",
+      "src/preview_snapshot_buffer.js": "738578140d83da10c760f9bd3f9a3f823b51aeffe1c9aeff38584f1ca9ff84c2",
+      "tests/native_preview_zoom.rs": "50a7284ceccec7649f98be1a0e6fe6c99a5e3076b3a15fd47c9d3322626b0efe",
+      "tests/fixtures/tinymist-zoom-edges.json": "8d11c421d2397dc5f0aa47c262790c5d44a0a6b1f123b74840f7f29575f82006",
+      "scripts/test-preview-zoom-edges.cjs": "4af1531bbd94e342b63772508288b4b67b6d8d230f0b41a7411c06911dfe7066",
+      "scripts/test-preview-zoom-native.py": "81f6bbc9badbace2837338006174b27fb9db6de54fad8274877ac8c9c9f386ca",
+      "scripts/fixtures/tinymist-zoom-stress.typ": "e6dd2f741269b617df5e5d8712d85301b99cf81a46fa2221467a3417fd383828"
+    },
+    "verified_native_binary_sha256": "f49518cf19e86ecae450422da354bcd5704f2e8f23558d9d6f3353294720eae6",
+    "baseline_native_binary_sha256": "7aa25537111583b0ad24df0930986fa37852442a69bf9efc24d5a86371d9ea65",
+    "tinymist_version": "tinymist \nBuild Timestamp:     2026-06-22T10:37:22.819803000Z\nBuild Git Describe:  v0.15.2\nCommit SHA:          92babed1bc00540882effd29bc56ebc5986792c2\nCommit Date:         None\nCommit Branch:       None\nCargo Target Triple: aarch64-apple-darwin\nTypst Version:       0.15.0\nTypst Source:        git+https://github.com/Myriad-Dreamin/typst.git?tag=tinymist/v0.15.0#391c2dcd698aabf2917db0336868d16f197057d9",
+    "hardware_model": "Mac14,5"
+  },
+  "build": {
+    "start_utc": "2026-10-10T22:54:28Z",
+    "optimized_build_log": "/private/tmp/zoom-edge-release-final.log",
+    "binaries": {
+      "tiptoptyp": "2ec5057e112d9dfedd5e03307bc5bdb101f1c4bc952de06337f54f0eaf1b1737",
+      "native_preview_zoom": "f49518cf19e86ecae450422da354bcd5704f2e8f23558d9d6f3353294720eae6"
+    }
+  },
+  "baseline": {
+    "production_module_sha256": "f15dccbd2eec6d467d45a5cb406a8d301c2e885b865ae2aaa26b210aa3ad25b3",
+    "app_sha256": "669489e6082544dedd254d5e6326ea3cd7ac5ea1fbe456afdceef706ac8ac187",
+    "native_probe_sha256": "7aa25537111583b0ad24df0930986fa37852442a69bf9efc24d5a86371d9ea65"
+  },
+  "reproduction": {
+    "actual_tinymist": "0.15.2",
+    "dense_fixture_pages": 48,
+    "viewport": [
+      900,
+      700
+    ],
+    "scale": 0.5,
+    "edge": "bottom",
+    "partial_document_height_before": 56259,
+    "partial_document_height_after": 28365,
+    "incorrect_uniform_cached_height": 28130,
+    "error_px": 235,
+    "failing_test": "partial_bottom_edge_keeps_fixed_page_gaps",
+    "log": ".tiptoptyp/profiles/zoom-edge-final/zoom-edge-red.log"
+  },
+  "bounds": {
+    "maximum_raster_pixels": 4000000,
+    "layer_frames": "Every submitted image frame is intersected with the visible viewport; normalized contentsRect selects corresponding texels.",
+    "image_storage": "Page layers share one immutable CGImage; no explicit pixel copy/resampling on input.",
+    "ten_thousand_page_test_slices": 3,
+    "maximum_capture_slices": 256,
+    "capture_view_between_captures": [
+      1,
+      1
+    ],
+    "page_lookup": "binary search; projection O(1)",
+    "view_creation": "One passive reused view per cache; removed when hidden/disabled.",
+    "explicit_per_input_transaction_flush": false
+  },
+  "measurements": {
+    "scope": "AppKit/Core Animation update submission only; not presented frames, GPU work or final vector latency.",
+    "profile": "release",
+    "viewport": [
+      640,
+      420
+    ],
+    "fixture": "native production cache with deterministic mocked vector completion; white page and SVG text, 3.9 million pixel buffered raster",
+    "warmup_seconds": 3,
+    "warmup_events": 128,
+    "workload": "Five batches of 2000 alternating 1% cached zooms anchored at bottom-right; baseline/final interleaved for three runs; same viewport, fixture and optimized profile.",
+    "samples": {
+      "baseline": {
+        "runs": [
+          {
+            "run": 1,
+            "batch_submission_ms": [
+              31.622833000000004,
+              23.664749999999998,
+              20.036709,
+              19.248334,
+              21.033875000000002
+            ],
+            "events_per_batch": 2000,
+            "median_us_per_input": 10.516937500000001,
+            "cached": true,
+            "inputs": 10128,
+            "pixels": [
+              1990,
+              1959
+            ]
+          },
+          {
+            "run": 2,
+            "batch_submission_ms": [
+              34.003541999999996,
+              27.638167000000003,
+              22.190291000000002,
+              18.940625,
+              18.737541999999998
+            ],
+            "events_per_batch": 2000,
+            "median_us_per_input": 11.095145500000001,
+            "cached": true,
+            "inputs": 10128,
+            "pixels": [
+              1990,
+              1959
+            ]
+          },
+          {
+            "run": 3,
+            "batch_submission_ms": [
+              33.733417,
+              24.284542,
+              21.443458,
+              19.038834,
+              18.987666
+            ],
+            "events_per_batch": 2000,
+            "median_us_per_input": 10.721729,
+            "cached": true,
+            "inputs": 10128,
+            "pixels": [
+              1990,
+              1959
+            ]
+          }
+        ],
+        "pooled_median_us_per_input": 10.721729
+      },
+      "final": {
+        "runs": [
+          {
+            "run": 1,
+            "batch_submission_ms": [
+              37.263334,
+              29.271583,
+              21.860833,
+              20.973,
+              19.128167
+            ],
+            "events_per_batch": 2000,
+            "median_us_per_input": 10.9304165,
+            "cached": true,
+            "inputs": 10128,
+            "pixels": [
+              1990,
+              1959
+            ]
+          },
+          {
+            "run": 2,
+            "batch_submission_ms": [
+              36.949459,
+              19.759999999999998,
+              20.384,
+              19.746042,
+              19.004375
+            ],
+            "events_per_batch": 2000,
+            "median_us_per_input": 9.879999999999999,
+            "cached": true,
+            "inputs": 10128,
+            "pixels": [
+              1990,
+              1959
+            ]
+          },
+          {
+            "run": 3,
+            "batch_submission_ms": [
+              33.249291,
+              26.151875,
+              19.942917,
+              19.464916,
+              19.266667
+            ],
+            "events_per_batch": 2000,
+            "median_us_per_input": 9.9714585,
+            "cached": true,
+            "inputs": 10128,
+            "pixels": [
+              1990,
+              1959
+            ]
+          }
+        ],
+        "pooled_median_us_per_input": 10.192
+      }
+    },
+    "interpretation": "No clear CPU speedup: small differences and run variation. Bounds/resource changes are deterministic invariants, not a measured GPU/FPS/RSS gain.",
+    "build_note": "Timed final probe was built before a syntax-only collapsed-if correction in the PNG capture branch outside the benchmark. Final verification probe was rebuilt after that lint correction; production source and measured input path are unchanged."
+  },
+  "checks": {
+    "fmt": "passed",
+    "clippy_all_targets": "passed",
+    "clippy_opt_in_native_test": "passed",
+    "rust": {
+      "passed": 1804,
+      "ignored": 44,
+      "failed": 0
+    },
+    "xtask": 17,
+    "javascript": 76,
+    "desktop_harness_contracts": 56,
+    "actual_frontend_edge_cases": 24,
+    "focused_geometry_state_tests": 23,
+    "optimized_native_mock": "passed; retained ink after parking, bounded inputs/handoff, opaque zoom-out and four child-width changes",
+    "actual_native_backends": [
+      {
+        "mode": "full",
+        "receipt": ".tiptoptyp/profiles/zoom-edge-native-optimized-final/native-full.json",
+        "actual_tinymist": true,
+        "effective_partial": false,
+        "responsive_during_block": true,
+        "renderer_block_ms": 800,
+        "native_hits_during_block": 4,
+        "capture_view_during_block": [
+          1.0,
+          1.0
+        ],
+        "layers": 1,
+        "vector_flights_during_block": null,
+        "final_vector_requests": 1,
+        "handoffs": 1,
+        "profile": "release",
+        "binary_sha256": "f49518cf19e86ecae450422da354bcd5704f2e8f23558d9d6f3353294720eae6"
+      },
+      {
+        "mode": "partial",
+        "receipt": ".tiptoptyp/profiles/zoom-edge-native-optimized-final/native-partial.json",
+        "actual_tinymist": true,
+        "effective_partial": true,
+        "responsive_during_block": true,
+        "renderer_block_ms": 800,
+        "native_hits_during_block": 4,
+        "capture_view_during_block": [
+          1.0,
+          1.0
+        ],
+        "layers": 2,
+        "vector_flights_during_block": null,
+        "final_vector_requests": 1,
+        "handoffs": 1,
+        "profile": "release",
+        "binary_sha256": "f49518cf19e86ecae450422da354bcd5704f2e8f23558d9d6f3353294720eae6"
+      }
+    ],
+    "logs": ".tiptoptyp/profiles/zoom-edge-final"
+  },
+  "visuals": [
+    {
+      "path": ".tiptoptyp/screenshots/agent-review/zoom-edge/native-mock-final.png",
+      "sha256": "2e780de30bf7b07f58145bb09115046e53b2f296b1e2df36d3ef31968e07d353",
+      "inspected": true,
+      "kind": "isolated native clip-layer capture; not the composed editor"
+    },
+    {
+      "path": ".tiptoptyp/screenshots/agent-review/zoom-edge/native-full-zoom-edge-native-optimized-final.png",
+      "sha256": "684e26990f258ee7732d95d5ac87d0658fabdb5e7d9bf9b55c54ec5468c6a66f",
+      "inspected": true,
+      "kind": "isolated native clip-layer capture; not the composed editor"
+    },
+    {
+      "path": ".tiptoptyp/screenshots/agent-review/zoom-edge/native-partial-zoom-edge-native-optimized-final.png",
+      "sha256": "684e26990f258ee7732d95d5ac87d0658fabdb5e7d9bf9b55c54ec5468c6a66f",
+      "inspected": true,
+      "kind": "isolated native clip-layer capture; not the composed editor"
+    },
+    {
+      "path": ".tiptoptyp/screenshots/agent-review/zoom-edge/native-buffer-zoom-out.png",
+      "sha256": "0bbb05e1d8375adf5010cc0b36d2ff6b34715faa1f61978d35b417e1fef65e98",
+      "inspected": true,
+      "kind": "isolated native clip-layer capture; not the composed editor"
+    }
+  ],
+  "unavailable": [
+    {
+      "check": "composed editor partial_zoom_stress journey including divider drag",
+      "command": "python3 scripts/test-desktop-ui.py --journey partial_zoom_stress --release --trace-preview",
+      "reason": "The user is using the desktop and declined an idle foreground interval. Background probes do not replace that journey."
+    },
+    {
+      "check": "physical trackpad pinch, composed screen-space placement and presented-frame smoothness",
+      "reason": "No uninterrupted composed-app interaction/observation in this task; isolated layer pixels do not establish it."
+    }
+  ],
+  "cleanup": {
+    "status": "passed",
+    "completed_utc": "2026-10-10T23:02:54Z",
+    "results": [
+      {
+        "target": "workspace",
+        "command": "cargo clean",
+        "exit_code": 0,
+        "output": "Removed 54434 files, 32.8GiB total"
+      },
+      {
+        "target": "xtask",
+        "command": "cargo clean --manifest-path xtask/Cargo.toml",
+        "exit_code": 0,
+        "output": "Removed 1707 files, 78.9MiB total"
+      }
+    ],
+    "preserved_evidence": ".tiptoptyp/profiles/zoom-edge-final"
+  }
+}
