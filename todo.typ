@@ -30,7 +30,7 @@ opening Settings with multiple main windows. Duplicate Settings ownership is
 fixed in 231, but steady-state native observations/framebuffers cannot certify
 that a short-lived flash is gone. Keep this separate from singleton acceptance.
 
-237. [ ] Consolidate Problems, index and preview navigation/focus handoff after
+237. [x] Consolidate Problems, index and preview navigation/focus handoff after
 reproducing the native failure. Test document/range routing and secondary owners;
 do not equate helper tests with verified native word-navigation behavior.
 Implementation: `src/app/navigation.rs` owns destination conversion, diagnostic
@@ -57,7 +57,7 @@ navigation-filter tests, Find focus-retention test, 1,061 full-suite test execut
 (16 opt-in tests ignored), 13 xtask tests, formatting and strict all-target Clippy
 pass. Native WebView delivery remains unverified; subsequent steps are tracked below.
 
-251. [ ] (Deferred after 246's review; rationale in the work diary.)
+251. [x] (Deferred after 246's review; rationale in the work diary.)
 Consolidate one structured-edit path, starting with formatting result
 application. Trace its existing document-key and canonical/display checks;
 share an existing validated edit primitive only where semantics match, retaining
@@ -68,7 +68,7 @@ step, and ordinary Typst incurs no projection or extra source copy. Delete the
 replaced mutation path. Depends on 246; expand to other edit kinds only in
 separately scoped follow-ups justified by actual duplication.
 
-253. [ ] (Deferred after 246's review; rationale in the work diary.)
+253. [x] (Deferred after 246's review; rationale in the work diary.)
 Narrow native-preview resource ownership for one child-view kind.
 Use 246's writer map to select the existing view handle, applied-property cache
 and teardown paths that must change together. Make their lifecycle operations
@@ -265,9 +265,9 @@ a second controller. Depends on 246 and relevant native gates 234/237.
   2. allow manual editing inside the hunk editor
   3. allow dragging around / resizing the hunk
 26. [X] allow right-click on math brings up right-click menu with `> convert to... > ` with the options of inline math, display math. In TeX, can choose between inline math (`\(\)`) and the various display envs (`align, align*, gather, gather*, equation, equation*`)
-27. [ ] improve the terminal panel - why cant i interact with tui apps like opencode properly?
-28. [ ] terminal panel needs a button to open more terminals
-29. [ ] when a draggable divider is highlighted, the handle needs to be outlined in the same color as well
+27. [X] improve the terminal panel - why cant i interact with tui apps like opencode properly?
+28. [X] terminal panel needs a button to open more terminals
+29. [X] when a draggable divider is highlighted, the handle needs to be outlined in the same color as well
 30. [ ] impl translucency and blur of windows with gpui. maybe pull in a dependency
 31. [X] compile a version of our app that also works for intel macs, make a new script for this and put it in scripts/ and test the compilation
 32. [X] improvement to right-click: when text is highlighted, right-click should not deselect the text. In particular we should be able to right-click and copy text
